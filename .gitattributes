@@ -12,3 +12,11 @@
 # It has no extension, so pin it explicitly.
 packaging/aur/PKGBUILD text eol=lf
 
+
+# Encryption test-infra files are consumed by Docker/Linux containers (keyring keys, JSON manifest,
+# my.cnf, Dockerfiles) -- a CRLF checkout breaks file_key_management/keyring parsing. Force LF.
+scripts/test-infra/encryption/** text eol=lf
+
+# DataDirectory test-infra files (Dockerfiles, my.cnf) are consumed by Docker/Linux containers the same
+# way -- a CRLF checkout breaks my.cnf parsing. Force LF.
+scripts/test-infra/datadir/** text eol=lf

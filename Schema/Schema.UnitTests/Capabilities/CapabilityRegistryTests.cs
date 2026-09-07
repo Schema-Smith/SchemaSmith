@@ -32,6 +32,7 @@ namespace Schema.UnitTests.Capabilities
             "table access method (PG15)",
             "VIRTUAL generated column (PG18)",
             "table without its PERIOD FOR clause",
+            "table without its WITH SYSTEM VERSIONING clause",
             "column without its WITHOUT SYSTEM VERSIONING clause",
             "CDC (database not enabled)",
             "Change Tracking (database not enabled)",

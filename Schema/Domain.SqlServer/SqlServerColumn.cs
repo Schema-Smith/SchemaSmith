@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using Newtonsoft.Json;
+using System.ComponentModel;
 
 namespace Schema.Domain.SqlServer
 {
@@ -31,6 +32,7 @@ namespace Schema.Domain.SqlServer
 
         [SchemaProperty(Pattern = "DETERMINISTIC|RANDOMIZED|NONE")]
         [JsonProperty(Order = 106)]
+        [DefaultValue("NONE")]
         public string EncryptionType { get; set; } = "NONE";
 
         [JsonProperty(Order = 107)]

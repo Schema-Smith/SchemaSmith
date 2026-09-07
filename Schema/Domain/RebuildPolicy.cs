@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using Newtonsoft.Json;
+using System.ComponentModel;
 
 namespace Schema.Domain
 {
@@ -17,6 +18,7 @@ namespace Schema.Domain
                           "alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of " +
                           "pending changes reaches Threshold, which is then required.")]
         [JsonProperty(Order = 1)]
+        [DefaultValue("NEVER")]
         public string Mode { get; set; } = "NEVER";
 
         [SchemaProperty(Minimum = 1,

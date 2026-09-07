@@ -66,6 +66,7 @@ public static class SettingsContract
             SettingsKeys.DropForeignKeysRemovedFromProduct, SettingsKeys.DropCheckConstraintsRemovedFromProduct,
             SettingsKeys.DropExcludeConstraintsRemovedFromProduct, SettingsKeys.DropStatisticsRemovedFromProduct,
             SettingsKeys.DropIndexesRemovedFromProduct, SettingsKeys.DropPeriodsRemovedFromProduct,
+            SettingsKeys.DropEventsRemovedFromProduct, SettingsKeys.DropSchemaBoundDependents,
             SettingsKeys.RebuildPolicyMode, SettingsKeys.RebuildPolicyThreshold,
             SettingsKeys.RebuildPolicyOnOrderMismatch, SettingsKeys.SystemVersioningAlterHistory,
             SettingsKeys.PreventDrop, SettingsKeys.UpdateTables,
@@ -80,6 +81,7 @@ public static class SettingsContract
         [
             SettingsKeys.ProductKeys.Name, SettingsKeys.ProductKeys.Path,
             SettingsKeys.ProductKeys.CheckConstraintStyle,
+            SettingsKeys.ProductKeys.ObjectOrder, SettingsKeys.ProductKeys.PreserveExistingOrder,
             SettingsKeys.TemplateKeys.Name, SettingsKeys.TemplateKeys.SchemaIdentificationScript,
             SettingsKeys.OrphanHandling.Mode, SettingsKeys.FolderMapping, SettingsKeys.LogHygiene,
             SettingsKeys.ScriptTokens, SettingsKeys.TemplatePath

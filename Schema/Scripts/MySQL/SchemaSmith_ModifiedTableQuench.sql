@@ -235,10 +235,193 @@ BEGIN
            AND t.PartitionMethod IS NOT NULL
            AND (lp.PARTITION_METHOD IS NULL
                 OR UPPER(lp.PARTITION_METHOD) <> t.PartitionMethod
-                OR SchemaSmith_NormalizePartitionExpression(lp.PARTITION_EXPRESSION) <> SchemaSmith_NormalizePartitionExpression(t.PartitionExpression));
+                OR SchemaSmith_NormalizePartitionExpression(lp.PARTITION_EXPRESSION) <> SchemaSmith_NormalizePartitionExpression(t.PartitionExpression)
+                -- Partition COUNT change (HASH/KEY declare a count, not named partitions): re-partitioning
+                -- from N to M buckets rewrites every row, so it is refused like a method/expression change.
+                -- Gated on a declared count so RANGE/LIST (named partitions, no declared count) is untouched.
+                OR (t.PartitionCount IS NOT NULL AND t.PartitionCount > 0
+                    AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS pc
+                          WHERE CONVERT(pc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                            AND CONVERT(pc.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
+                            AND pc.PARTITION_NAME IS NOT NULL) <> t.PartitionCount));
 
         IF ROW_COUNT() > 0 THEN
             SET @ss_msg = 'Declared partitioning does not match the deployed table -- see the run log. Repartitioning rewrites every row and is refused.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+        END IF;
+    END IF;
+
+    -- =======================
+    -- STEP -0.4: TABLESPACE -- REFUSE A MOVE (MySQL only, F2b)
+    -- =======================
+    -- Placement, exactly like partitioning (STEP -0.5 above), SQL Server FileGroup and PostgreSQL
+    -- Tablespace: applied at CREATE only, never migrated by a state diff. ALTER TABLE ... TABLESPACE
+    -- relocates the table's whole data file, and a state-based diff cannot tell "meant to move it" apart
+    -- from "stale/typo'd package" -- so a mismatch is reported and refused, never applied.
+    --
+    -- Read through the per-engine SchemaSmith_TableTablespace PROCEDURE (not a function -- see that
+    -- script for why: its MySQL body reaches INFORMATION_SCHEMA.INNODB_TABLES/INNODB_TABLESPACES only
+    -- through dynamic SQL, which MySQL disallows inside a stored FUNCTION, so it takes its schema/table
+    -- and an OUT param instead of returning a value). Being a procedure, it cannot be called inline inside
+    -- a SELECT/subquery the way STEP -0.5's partitioning check reads INFORMATION_SCHEMA.PARTITIONS
+    -- directly -- so this step CALLs it once per candidate table in a cursor loop rather than a single
+    -- set-based comparison.
+    --
+    -- VERSION() NOT LIKE '%MariaDB%' guards the whole block, matching the CREATE-time emit gate in
+    -- MissingTableAndColumnQuench: MariaDB has no general tablespaces, so SchemaSmith_TableTablespace's
+    -- MariaDb override always sets its OUT param NULL. Without this guard, a package that carries a
+    -- MySQL-authored Tablespace value into a shared/MariaDB deploy (harmless everywhere else -- the emit
+    -- gate above already suppresses it) would compare that declared value against an always-NULL deployed
+    -- read and FALSE-REFUSE every redeploy on MariaDB, forever, for a property MariaDB can never satisfy.
+    --
+    -- An UNSET declared Tablespace (NULL/'') means "SchemaSmith does not manage this table's tablespace
+    -- placement" -- not a declaration that the table has none -- so only a DECLARED, non-empty value is
+    -- compared; matching (or both unset) is a no-op. Guarded by the outer EXISTS so the cursor loop (and
+    -- its per-table CALL) only runs at all when some table actually declares a tablespace.
+    --
+    -- Fires REGARDLESS of p_WhatIf, ahead of the p_WhatIf branch below -- mirroring STEP -0.5 above and
+    -- STEP 7.5's DROP SYSTEM VERSIONING refuse further down: there is no safe "preview" of a refusal.
+    IF EXISTS (SELECT 1 FROM _SchemaSmith_Tables
+               WHERE NewTable = 0 AND Tablespace IS NOT NULL AND Tablespace != '' AND VERSION() NOT LIKE '%MariaDB%') THEN
+        -- Reset explicitly: this session variable is only ASSIGNED below when a mismatch is found, so on
+        -- a pooled connection a stale value from an earlier, unrelated call would otherwise survive a
+        -- clean pass and fire a false SIGNAL after the loop.
+        SET @ss_tablespace_refuse_table = NULL;
+
+        BEGIN
+            DECLARE v_TtsDone INT DEFAULT FALSE;
+            DECLARE v_TtsTableName VARCHAR(128);
+            DECLARE v_TtsDeclared VARCHAR(64);
+            DECLARE v_TtsDeployed VARCHAR(64);
+            DECLARE cur_TablespaceCandidates CURSOR FOR
+                SELECT t.TableName, t.Tablespace
+                FROM _SchemaSmith_Tables t
+                WHERE t.NewTable = 0
+                  AND t.Tablespace IS NOT NULL AND t.Tablespace != ''
+                  AND VERSION() NOT LIKE '%MariaDB%';
+
+            DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_TtsDone = TRUE;
+
+            OPEN cur_TablespaceCandidates;
+
+            tablespace_refuse_loop: LOOP
+                FETCH cur_TablespaceCandidates INTO v_TtsTableName, v_TtsDeclared;
+                IF v_TtsDone THEN
+                    LEAVE tablespace_refuse_loop;
+                END IF;
+
+                SET v_TtsDeployed = NULL;
+                CALL SchemaSmith_TableTablespace(p_DatabaseName, SchemaSmith_StripBacktickWrapping(v_TtsTableName), v_TtsDeployed);
+
+                IF COALESCE(v_TtsDeployed, '') <> v_TtsDeclared THEN
+                    -- Log every offending table (not just the one named in the SIGNAL below), same shape
+                    -- as the partitioning guard above.
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(),
+                        CONCAT('  Declared tablespace does not match the deployed table (refused -- SchemaSmith will not move a table between tablespaces): ',
+                               SchemaSmith_StripBacktickWrapping(v_TtsTableName),
+                               ' declares ', v_TtsDeclared,
+                               ', deployed ', COALESCE(v_TtsDeployed, '(none)')));
+
+                    -- SIGNAL MESSAGE_TEXT is capped at 128 characters (see STEP 7.5 and STEP 8's comments
+                    -- on the same limit) -- name only the FIRST offender here, truncated defensively; the
+                    -- run log above carries every offender and the full declared/deployed detail.
+                    IF @ss_tablespace_refuse_table IS NULL THEN
+                        SET @ss_tablespace_refuse_table = LEFT(SchemaSmith_StripBacktickWrapping(v_TtsTableName), 40);
+                    END IF;
+                END IF;
+            END LOOP;
+
+            CLOSE cur_TablespaceCandidates;
+        END;
+
+        IF @ss_tablespace_refuse_table IS NOT NULL THEN
+            SET @ss_msg = CONCAT('Table ', @ss_tablespace_refuse_table, ': declared tablespace differs from deployed (refused) -- use a migration.');
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+        END IF;
+    END IF;
+
+    -- =======================
+    -- STEP -0.35: DATA DIRECTORY -- REFUSE A MOVE (both engines, F2c)
+    -- =======================
+    -- Placement, same posture as STEP -0.4's Tablespace immediately above (and partitioning at STEP -0.5,
+    -- SQL Server FileGroup, PostgreSQL Tablespace): applied at CREATE only, never migrated by a state diff.
+    -- DATA DIRECTORY names the physical location of the table's data file, and a state-based diff cannot
+    -- tell "meant to move it" apart from "stale/typo'd package" -- so a mismatch is reported and refused,
+    -- never applied.
+    --
+    -- Read through the per-engine SchemaSmith_TableDataDirectory PROCEDURE -- same OUT-param shape as
+    -- SchemaSmith_TableTablespace and for the same reason on the MySQL side (dynamic SQL cannot live in a
+    -- FUNCTION); it cannot be called inline inside a SELECT/subquery, so this step CALLs it once per
+    -- candidate table in a cursor loop rather than a single set-based comparison.
+    --
+    -- UNLIKE STEP -0.4, no VERSION() NOT LIKE '%MariaDB%' guard: DATA DIRECTORY is a real InnoDB clause on
+    -- BOTH engines (MariaDB has no general tablespaces at all, but it does support DATA DIRECTORY), and
+    -- SchemaSmith_TableDataDirectory has a real MariaDb body -- not an always-NULL override -- so the same
+    -- false-refuse trap STEP -0.4's guard exists to avoid does not apply here.
+    --
+    -- An UNSET declared DataDirectory (NULL/'') means "SchemaSmith does not manage this table's data-file
+    -- placement" -- not a declaration that the table has none -- so only a DECLARED, non-empty value is
+    -- compared; matching (or both unset) is a no-op. Guarded by the outer EXISTS so the cursor loop (and
+    -- its per-table CALL) only runs at all when some table actually declares a directory.
+    --
+    -- Fires REGARDLESS of p_WhatIf, ahead of the p_WhatIf branch below -- same reasoning as STEP -0.4: there
+    -- is no safe "preview" of a refusal, and this pre-check runs before any CREATE/ALTER is attempted, so a
+    -- refused redeploy never touches the table.
+    IF EXISTS (SELECT 1 FROM _SchemaSmith_Tables
+               WHERE NewTable = 0 AND DataDirectory IS NOT NULL AND DataDirectory != '') THEN
+        -- Reset explicitly: this session variable is only ASSIGNED below when a mismatch is found, so on
+        -- a pooled connection a stale value from an earlier, unrelated call would otherwise survive a
+        -- clean pass and fire a false SIGNAL after the loop.
+        SET @ss_datadirectory_refuse_table = NULL;
+
+        BEGIN
+            DECLARE v_TddDone INT DEFAULT FALSE;
+            DECLARE v_TddTableName VARCHAR(128);
+            DECLARE v_TddDeclared VARCHAR(512);
+            DECLARE v_TddDeployed VARCHAR(512);
+            DECLARE cur_DataDirectoryCandidates CURSOR FOR
+                SELECT t.TableName, t.DataDirectory
+                FROM _SchemaSmith_Tables t
+                WHERE t.NewTable = 0
+                  AND t.DataDirectory IS NOT NULL AND t.DataDirectory != '';
+
+            DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_TddDone = TRUE;
+
+            OPEN cur_DataDirectoryCandidates;
+
+            datadirectory_refuse_loop: LOOP
+                FETCH cur_DataDirectoryCandidates INTO v_TddTableName, v_TddDeclared;
+                IF v_TddDone THEN
+                    LEAVE datadirectory_refuse_loop;
+                END IF;
+
+                SET v_TddDeployed = NULL;
+                CALL SchemaSmith_TableDataDirectory(p_DatabaseName, SchemaSmith_StripBacktickWrapping(v_TddTableName), v_TddDeployed);
+
+                IF COALESCE(v_TddDeployed, '') <> v_TddDeclared THEN
+                    -- Log every offending table (not just the one named in the SIGNAL below), same shape
+                    -- as the tablespace guard above.
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(),
+                        CONCAT('  Declared data directory does not match the deployed table (refused -- SchemaSmith will not move a table between data directories): ',
+                               SchemaSmith_StripBacktickWrapping(v_TddTableName),
+                               ' declares ', v_TddDeclared,
+                               ', deployed ', COALESCE(v_TddDeployed, '(none)')));
+
+                    -- SIGNAL MESSAGE_TEXT is capped at 128 characters (see STEP -0.4, STEP 7.5 and STEP 8's
+                    -- comments on the same limit) -- name only the FIRST offender here, truncated
+                    -- defensively; the run log above carries every offender and the full declared/deployed
+                    -- detail.
+                    IF @ss_datadirectory_refuse_table IS NULL THEN
+                        SET @ss_datadirectory_refuse_table = LEFT(SchemaSmith_StripBacktickWrapping(v_TddTableName), 40);
+                    END IF;
+                END IF;
+            END LOOP;
+
+            CLOSE cur_DataDirectoryCandidates;
+        END;
+
+        IF @ss_datadirectory_refuse_table IS NOT NULL THEN
+            SET @ss_msg = CONCAT('Table ', @ss_datadirectory_refuse_table, ': declared data directory differs from deployed (refused) -- use a migration.');
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         END IF;
     END IF;
@@ -1942,6 +2125,119 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     END IF;
 
     -- =======================
+    -- STEP 6.5: ALTER TABLE ENCRYPTION (F2a)
+    -- =======================
+    -- At-rest tablespace encryption is ALTERable the same way ROW_FORMAT is (STEP 6 directly above) --
+    -- unlike system versioning (STEP 7.5 below), there is no data-loss direction to refuse: toggling
+    -- either engine's encryption clause rebuilds the tablespace in place, it does not purge anything, so
+    -- both directions (declared-on/deployed-off AND declared-off/deployed-on) converge symmetrically here.
+    --
+    -- Deployed state is read via SchemaSmith_CreateOption over INFORMATION_SCHEMA.TABLES.CREATE_OPTIONS --
+    -- a plain column, safe on both engines (see that function's own header) -- so this whole step needs
+    -- no @@system-variable or MariaDB-only catalog reference despite living in the file shared by both
+    -- engines. VERSION() picks the engine-specific branch at execution time, exactly like the CREATE-path
+    -- emit in MissingTableAndColumnQuench.
+    --
+    -- A server without an encryption keyring rejects the ALTER with its own error -- that is server
+    -- configuration, not a version floor SchemaSmith can degrade around (like a missing filegroup), so no
+    -- SchemaSmith_Supports... gate exists for this step.
+    IF p_WhatIf = 1 THEN
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table encryption');
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
+                      CASE WHEN VERSION() NOT LIKE '%MariaDB%'
+                           THEN CONCAT(' ENCRYPTION=''', t.Encryption, '''')
+                           ELSE CONCAT(' ENCRYPTED=', CASE WHEN t.Encrypted = 1 THEN 'YES' ELSE 'NO' END,
+                                       CASE WHEN t.Encrypted = 1 AND t.EncryptionKeyId IS NOT NULL
+                                            THEN CONCAT(' ENCRYPTION_KEY_ID=', t.EncryptionKeyId) ELSE '' END)
+                      END)
+        FROM _SchemaSmith_Tables t
+        INNER JOIN INFORMATION_SCHEMA.TABLES ist
+            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        WHERE t.NewTable = 0
+          -- BINARY on BOTH sides of every option comparison, deliberately. COALESCE(fn(), '<literal>')
+          -- combines the function's return collation (the database default, fixed when the function was
+          -- created) with the literal's (the routine's stored collation_connection). When those two
+          -- differ, MariaDB/MySQL resolve the COALESCE to the charset's BINARY collation with
+          -- coercibility NONE -- which can then be compared against nothing at all, and the whole
+          -- ModifiedTableQuench dies with "Illegal mix of collations (utf8mb4_bin,NONE) and
+          -- (<db collation>,IMPLICIT) for operation '<>'".
+          --
+          -- Not hypothetical, and not rare: it fails EVERY deploy into a database whose collation differs
+          -- from the connection default. The shipped demos (utf8mb4_unicode_ci) hit it on both the 10.2
+          -- floor and 11.4; the integration suite missed it only because its TestMain happens to match.
+          -- Both operands are already UPPER-ed (or plain digits), so an exact binary compare is the
+          -- intended semantic regardless -- this is the same idiom the column comparisons above use.
+          AND (
+              (VERSION() NOT LIKE '%MariaDB%'
+               AND t.Encryption IS NOT NULL AND t.Encryption != ''
+               AND BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION'), 'N')) != BINARY UPPER(t.Encryption))
+              OR
+              (VERSION() LIKE '%MariaDB%'
+               AND (
+                   (CASE WHEN BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTED'), 'NO')) = BINARY 'YES' THEN 1 ELSE 0 END) != t.Encrypted
+                   OR (t.Encrypted = 1 AND t.EncryptionKeyId IS NOT NULL
+                       AND BINARY COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION_KEY_ID'), '') != BINARY CAST(t.EncryptionKeyId AS CHAR))
+               ))
+          );
+    ELSE
+        BEGIN
+            DECLARE v_EncryptionDone INT DEFAULT FALSE;
+            DECLARE v_EncryptionSql TEXT;
+            DECLARE cur_EncryptionChanges CURSOR FOR
+                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
+                              CASE WHEN VERSION() NOT LIKE '%MariaDB%'
+                                   THEN CONCAT(' ENCRYPTION=''', t.Encryption, '''')
+                                   ELSE CONCAT(' ENCRYPTED=', CASE WHEN t.Encrypted = 1 THEN 'YES' ELSE 'NO' END,
+                                               CASE WHEN t.Encrypted = 1 AND t.EncryptionKeyId IS NOT NULL
+                                                    THEN CONCAT(' ENCRYPTION_KEY_ID=', t.EncryptionKeyId) ELSE '' END)
+                              END) AS AlterEncryptionStatement
+                FROM _SchemaSmith_Tables t
+                INNER JOIN INFORMATION_SCHEMA.TABLES ist
+                    ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+                    AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                WHERE t.NewTable = 0
+                  -- BINARY on both sides -- see the identical predicate in the p_WhatIf branch above for
+                  -- why (COALESCE across two collations resolves to utf8mb4_bin/NONE and then compares
+                  -- against nothing, killing every deploy into a differently-collated database).
+                  AND (
+                      (VERSION() NOT LIKE '%MariaDB%'
+                       AND t.Encryption IS NOT NULL AND t.Encryption != ''
+                       AND BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION'), 'N')) != BINARY UPPER(t.Encryption))
+                      OR
+                      (VERSION() LIKE '%MariaDB%'
+                       AND (
+                           (CASE WHEN BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTED'), 'NO')) = BINARY 'YES' THEN 1 ELSE 0 END) != t.Encrypted
+                           OR (t.Encrypted = 1 AND t.EncryptionKeyId IS NOT NULL
+                               AND BINARY COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION_KEY_ID'), '') != BINARY CAST(t.EncryptionKeyId AS CHAR))
+                       ))
+                  );
+
+            DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_EncryptionDone = TRUE;
+
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table encryption');
+            SET v_EncryptionDone = FALSE;
+            OPEN cur_EncryptionChanges;
+
+            encryption_changes_loop: LOOP
+                FETCH cur_EncryptionChanges INTO v_EncryptionSql;
+                IF v_EncryptionDone THEN
+                    LEAVE encryption_changes_loop;
+                END IF;
+
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Change encryption: ', v_EncryptionSql));
+                SET @exec_sql = v_EncryptionSql;
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+            END LOOP;
+
+            CLOSE cur_EncryptionChanges;
+        END;
+    END IF;
+
+    -- =======================
     -- STEP 7: ALTER TABLE AUTO_INCREMENT
     -- =======================
     -- Set auto-increment seed when declared value is higher than the live value (set-if-higher, idempotent).
@@ -1992,6 +2288,239 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             END LOOP;
 
             CLOSE cur_AutoIncChanges;
+        END;
+    END IF;
+
+    -- =======================
+    -- STEP 7.5: SYSTEM VERSIONING CONVERGENCE (EXISTING TABLES)
+    -- =======================
+    -- F1S1 (MissingTableAndColumnQuench) handles a NEW table's WITH SYSTEM VERSIONING clause. This step
+    -- converges an EXISTING table (t.NewTable = 0) whose declared _SchemaSmith_Tables.IsSystemVersioned
+    -- disagrees with what is deployed (INFORMATION_SCHEMA.TABLES.TABLE_TYPE = 'SYSTEM VERSIONED'). The
+    -- two directions are NOT symmetric, by design:
+    --
+    --   declared 1 / deployed 0 -> CONVERGE. ADD SYSTEM VERSIONING is additive (MariaDB implicitly adds
+    --   the hidden ROW_START/ROW_END columns) and destroys nothing, so it is applied the same way the
+    --   other table-attribute converge steps above are (Engine/Collation/Comment/RowFormat/AutoIncrement)
+    --   -- gated on SchemaSmith_SupportsSystemVersioning(), mirroring the CREATE path's gate. Below that
+    --   gate (MariaDB <10.3, or MySQL at any version) this is NOT a silent no-op: a dedicated degrade
+    --   block below (mirroring F1S1's NewTable=1 degrade in MissingTableAndColumnQuench) fails or warns
+    --   per UnsupportedFeaturePolicy exactly like the CREATE path does.
+    --
+    --   declared 0 / deployed 1 -> REFUSE, never DROP. MariaDB's DROP SYSTEM VERSIONING purges the row
+    --   history outright, and a state diff cannot tell "never wanted this" apart from "still want the
+    --   history, just stopped declaring it". This is a data-loss guard, not a version degrade, so it
+    --   fires REGARDLESS of UnsupportedFeaturePolicy and BEFORE the p_WhatIf branch below -- there is no
+    --   safe "preview" of a refusal, it must abort the run in both modes, mirroring STEP -0.5's
+    --   partitioning refuse further up this procedure. It does not break round-trip: extraction only
+    --   ever emits IsSystemVersioned when true (SchemaSmith_GenerateTableJson), so a re-extracted package
+    --   of a versioned table always re-declares it -- this only fires on a deliberate hand-edit that
+    --   removes the property from an otherwise-versioned table's package.
+    --
+    -- NO SystemVersioningAlterHistory OPT-IN for the ADD direction (investigated against
+    -- SchemaSmith_SetSystemVersioningAlterHistory.sql / STEP 2.96 above): that session variable exists
+    -- because "MariaDB refuses every column DDL on a system-versioned table by default" (ERROR 4119, "Not
+    -- allowed for system-versioned ... Change @@system_versioning_alter_history to proceed with ALTER") --
+    -- it governs ALTERs against a table that IS ALREADY versioned. A table converging here is NOT YET
+    -- versioned at the moment this ALTER runs, so that restriction does not apply and KEEP is never
+    -- required just to add versioning to a plain table. (The REFUSE direction never emits DROP SYSTEM
+    -- VERSIONING at all, so it needs no opt-in either -- the whole point is that statement never runs.)
+    --
+    -- SIGNAL MESSAGE_TEXT is capped at 128 characters (see STEP 8's comment on the same limit). Unlike
+    -- the partitioning/PreventDrop guards, which can name arbitrarily many offending tables and so keep
+    -- the SIGNAL generic and push detail to the run log, this refuse only ever names the single first
+    -- offender and truncates it defensively -- comfortably inside the cap even at MySQL's 64-character
+    -- identifier ceiling -- so the exception message itself names the table.
+    SET @ss_sysver_refuse_table := (
+        SELECT LEFT(SchemaSmith_StripBacktickWrapping(t.TableName), 40)
+        FROM _SchemaSmith_Tables t
+        INNER JOIN INFORMATION_SCHEMA.TABLES ist
+            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        WHERE t.NewTable = 0
+          AND t.IsSystemVersioned = 0
+          AND ist.TABLE_TYPE = 'SYSTEM VERSIONED'
+        LIMIT 1
+    );
+
+    IF @ss_sysver_refuse_table IS NOT NULL THEN
+        -- Log every offending table (not just the first named in the SIGNAL below) to the run log, same
+        -- shape as the partitioning/PreventDrop guards.
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  Table is system-versioned and no longer declared -- DROP SYSTEM VERSIONING refused (would purge row history): ',
+               SchemaSmith_StripBacktickWrapping(t.TableName))
+        FROM _SchemaSmith_Tables t
+        INNER JOIN INFORMATION_SCHEMA.TABLES ist
+            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        WHERE t.NewTable = 0
+          AND t.IsSystemVersioned = 0
+          AND ist.TABLE_TYPE = 'SYSTEM VERSIONED';
+
+        SET @ss_msg = CONCAT('Table ', @ss_sysver_refuse_table, ': DROP SYSTEM VERSIONING refused (data loss) -- use a migration.');
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+    END IF;
+
+    -- =========================================================================
+    -- Below-floor degrade: declared 1 / deployed 0, but SchemaSmith_SupportsSystemVersioning() = 0
+    -- (below MariaDB 10.3, or MySQL at any version). Mirrors SchemaSmith_MissingTableAndColumnQuench's
+    -- F1S1 degrade block EXACTLY (same message text, same ObjectType wording, same fail/warn split) --
+    -- that block is scoped to t.NewTable = 1 only, so an EXISTING ordinary table whose package NEWLY
+    -- declares IsSystemVersioned was falling through both there and here with no report and no
+    -- UnsupportedFeaturePolicy=fail honored, silently losing the declared attribute exactly like the gap
+    -- F1S1's block exists to close for CREATE. Runs unconditionally (both WhatIf and live, ahead of the
+    -- converge cursor below), matching F1S1's placement ahead of its own p_WhatIf branch.
+    -- =========================================================================
+    IF SchemaSmith_SupportsSystemVersioning() = 0
+       AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables t
+                   INNER JOIN INFORMATION_SCHEMA.TABLES ist
+                       ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+                       AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                   WHERE t.NewTable = 0
+                     AND t.IsSystemVersioned = 1
+                     AND ist.TABLE_TYPE != 'SYSTEM VERSIONED') THEN
+        IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail' THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), CONCAT('  System versioning requires MariaDB 10.3 (MySQL unsupported) (UnsupportedFeaturePolicy=fail): ',
+                   SchemaSmith_StripBacktickWrapping(t.TableName))
+            FROM _SchemaSmith_Tables t
+            INNER JOIN INFORMATION_SCHEMA.TABLES ist
+                ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+                AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+            WHERE t.NewTable = 0
+              AND t.IsSystemVersioned = 1
+              AND ist.TABLE_TYPE != 'SYSTEM VERSIONED';
+            SET @ss_msg = 'System versioning needs MariaDB 10.3 (UnsupportedFeaturePolicy=fail). See the run log.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+        ELSE
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), CONCAT('  Table deployed without system versioning (requires MariaDB 10.3, MySQL unsupported - downgraded): ',
+                   SchemaSmith_StripBacktickWrapping(t.TableName))
+            FROM _SchemaSmith_Tables t
+            INNER JOIN INFORMATION_SCHEMA.TABLES ist
+                ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+                AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+            WHERE t.NewTable = 0
+              AND t.IsSystemVersioned = 1
+              AND ist.TABLE_TYPE != 'SYSTEM VERSIONED';
+            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+            SELECT CONNECTION_ID(), 'table without its WITH SYSTEM VERSIONING clause',
+                   SchemaSmith_StripBacktickWrapping(t.TableName), 'downgraded'
+            FROM _SchemaSmith_Tables t
+            INNER JOIN INFORMATION_SCHEMA.TABLES ist
+                ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+                AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+            WHERE t.NewTable = 0
+              AND t.IsSystemVersioned = 1
+              AND ist.TABLE_TYPE != 'SYSTEM VERSIONED';
+        END IF;
+    END IF;
+
+    -- Converge direction: declared 1 / deployed 0. Same WhatIf-preview / live-cursor shape as the
+    -- Engine/Collation/Comment/RowFormat/AutoIncrement steps above; no ChangeAudit row, matching those
+    -- (only the column-level and table-drop passes elsewhere in this file audit their WhatIf twin).
+    IF p_WhatIf = 1 THEN
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add system versioning to existing tables');
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ADD SYSTEM VERSIONING')
+        FROM _SchemaSmith_Tables t
+        INNER JOIN INFORMATION_SCHEMA.TABLES ist
+            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        WHERE t.NewTable = 0
+          AND t.IsSystemVersioned = 1
+          AND ist.TABLE_TYPE != 'SYSTEM VERSIONED'
+          AND SchemaSmith_SupportsSystemVersioning() = 1;
+    ELSE
+        BEGIN
+            DECLARE v_AddVersioningDone INT DEFAULT FALSE;
+            DECLARE v_AddVersioningSql TEXT;
+            DECLARE cur_AddVersioning CURSOR FOR
+                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ADD SYSTEM VERSIONING') AS AlterAddVersioningStatement
+                FROM _SchemaSmith_Tables t
+                INNER JOIN INFORMATION_SCHEMA.TABLES ist
+                    ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+                    AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                WHERE t.NewTable = 0
+                  AND t.IsSystemVersioned = 1
+                  AND ist.TABLE_TYPE != 'SYSTEM VERSIONED'
+                  AND SchemaSmith_SupportsSystemVersioning() = 1;
+
+            DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_AddVersioningDone = TRUE;
+
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add system versioning to existing tables');
+            SET v_AddVersioningDone = FALSE;
+            OPEN cur_AddVersioning;
+
+            add_versioning_loop: LOOP
+                FETCH cur_AddVersioning INTO v_AddVersioningSql;
+                IF v_AddVersioningDone THEN
+                    LEAVE add_versioning_loop;
+                END IF;
+
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Add system versioning: ', v_AddVersioningSql));
+                SET @exec_sql = v_AddVersioningSql;
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+            END LOOP;
+
+            CLOSE cur_AddVersioning;
+        END;
+    END IF;
+
+    -- =======================
+    -- STEP 7.6: APPLY PER-COLUMN "WITHOUT SYSTEM VERSIONING" AFTER VERSIONING (#408 / F1S2)
+    -- =======================
+    -- STEP 3's per-column exclusion drift is gated on the table ALREADY reading SYSTEM VERSIONED, and STEP 3
+    -- runs BEFORE STEP 7.5 -- so a table CONVERGING to versioned in THIS deploy had its declared column
+    -- exclusions skipped, and a newly-added excluded column had its clause stripped at ADD COLUMN time
+    -- (MissingTableAndColumnQuench, to avoid ERROR 4124 on a not-yet-versioned table). Now that STEP 7.5 has
+    -- versioned the table, apply the exclusion to any declared-excluded column that does not yet carry it.
+    -- Idempotent (fires only where the deployed column lacks the clause), so it is a harmless no-op for the
+    -- columns STEP 3 already handled on already-versioned tables. Requires the SystemVersioningAlterHistory
+    -- opt-in (STEP 2.96): MariaDB refuses column DDL on a versioned table without it (ERROR 4119). The gate
+    -- reads the OPT-IN MODE from the @ss_system_versioning_alter_history user variable (what STEP 2.96 passes
+    -- to the per-engine setter), NOT the @@system_versioning_alter_history SYSTEM variable -- MySQL rejects a
+    -- routine that merely mentions that MariaDB-only system variable at CREATE time (ERROR 1193, even in an
+    -- unreachable branch; see STEP 2.96's note), which would break kindle on MySQL. When the opt-in is off
+    -- this is skipped and the exclusion converges on a later deploy, like any exclusion change on a versioned
+    -- table. SchemaSmith_SupportsSystemVersioning() is already 0 on MySQL, so this whole block is MariaDB-only.
+    IF SchemaSmith_SupportsSystemVersioning() = 1 AND UPPER(COALESCE(@ss_system_versioning_alter_history, '')) = 'KEEP' AND p_WhatIf = 0 THEN
+        BEGIN
+            DECLARE v_ExclDone INT DEFAULT FALSE;
+            DECLARE v_ExclSql TEXT;
+            DECLARE cur_Excl CURSOR FOR
+                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+                              ' MODIFY COLUMN ', c.ColumnScript)
+                FROM _SchemaSmith_Columns c
+                INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+                INNER JOIN INFORMATION_SCHEMA.TABLES ist
+                    ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+                    AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
+                INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
+                    ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
+                    AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
+                    AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+                WHERE t.NewTable = 0
+                  AND c.IsWithoutSystemVersioning = 1
+                  AND ist.TABLE_TYPE = 'SYSTEM VERSIONED'
+                  AND isc.EXTRA NOT LIKE '%WITHOUT SYSTEM VERSIONING%';
+
+            DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_ExclDone = TRUE;
+
+            SET v_ExclDone = FALSE;
+            OPEN cur_Excl;
+            excl_loop: LOOP
+                FETCH cur_Excl INTO v_ExclSql;
+                IF v_ExclDone THEN LEAVE excl_loop; END IF;
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Apply WITHOUT SYSTEM VERSIONING: ', v_ExclSql));
+                SET @exec_sql = v_ExclSql;
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+            END LOOP;
+            CLOSE cur_Excl;
         END;
     END IF;
 

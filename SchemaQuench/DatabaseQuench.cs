@@ -1811,9 +1811,16 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
     {
         if (_product.Platform.GetBasePlatform() != Platform.MySQL) return;
         var events = IterationEventSchema;
-        // An empty list is overwhelmingly the common case -- skip rather than pay a round trip per
-        // database for a feature most packages do not use.
-        if (string.IsNullOrWhiteSpace(events) || events.Trim() == "[]") return;
+        // An empty/absent list is overwhelmingly the common case -- skip the round trip UNLESS we are
+        // dropping events by absence, in which case a product that used to own events and now declares
+        // none still needs the drop-by-absence pass to run against an empty declared set. Fall through
+        // with a canonical "[]" so EventQuench drops the previously-owned events rather than silently
+        // leaving them behind.
+        if (string.IsNullOrWhiteSpace(events) || events.Trim() == "[]")
+        {
+            if (!DropRemovedEvents) return;
+            events = "[]";
+        }
 
         SafeProgressLog("  Quenching scheduled events");
         var whatIf = _whatIfOnly == "1" ? 1 : 0;

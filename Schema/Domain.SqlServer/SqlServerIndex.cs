@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using Newtonsoft.Json;
+using System.ComponentModel;
 
 namespace Schema.Domain.SqlServer
 {
@@ -10,6 +11,7 @@ namespace Schema.Domain.SqlServer
         public string FilterExpression { get; set; }
 
         [JsonProperty(Order = 101)]
+        [DefaultValue("NONE")]
         public string CompressionType { get; set; } = "NONE";
 
         // Valid on an index as well as a table (probed on 2022), and alterable via ALTER INDEX ... REBUILD.

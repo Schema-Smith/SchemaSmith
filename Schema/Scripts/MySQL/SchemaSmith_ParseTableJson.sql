@@ -76,6 +76,19 @@ BEGIN
         KeyBlockSize INT DEFAULT NULL,
         PageCompressed TINYINT DEFAULT 0,
         PageCompressionLevel INT DEFAULT NULL,
+        Encryption VARCHAR(1) DEFAULT NULL,
+        Encrypted TINYINT DEFAULT 0,
+        EncryptionKeyId INT DEFAULT NULL,
+        -- The InnoDB general tablespace this table is placed in (F2b), MySQL only. Placement, applied only
+        -- at CREATE -- an existing table whose declared value disagrees with what is deployed is refused
+        -- by ModifiedTableQuench (STEP -0.4), never converged. 64 chars matches MySQL's own identifier
+        -- ceiling, which a general tablespace name is subject to.
+        Tablespace VARCHAR(64) DEFAULT NULL,
+        -- The filesystem directory this table's InnoDB data file is placed in (F2c), both engines.
+        -- Placement, applied only at CREATE -- an existing table whose declared value disagrees with what
+        -- is deployed is refused by ModifiedTableQuench, never converged. 512 chars matches the OUT param
+        -- width on SchemaSmith_TableDataDirectory, itself sized to a comfortable filesystem-path ceiling.
+        DataDirectory VARCHAR(512) DEFAULT NULL,
         -- Partitioning (#partitioning, K3). Flat on the table rather than a child table because there is at
         -- most ONE of each per table; the per-partition list lives in _SchemaSmith_Partitions below.
         PartitionMethod VARCHAR(20) DEFAULT NULL,
@@ -106,6 +119,10 @@ BEGIN
         RebuildPolicyOnOrderMismatch TINYINT DEFAULT NULL,
         RebuildPolicySpecified TINYINT DEFAULT 0,
         PreventDrop TINYINT DEFAULT 0,
+        -- F1S1: table-level system versioning (MariaDB WITH SYSTEM VERSIONING). Read here so a new
+        -- table's CREATE can emit the clause; converging an EXISTING table's versioning is a separate
+        -- later task, so this flag is only consulted where t.NewTable = 1.
+        IsSystemVersioned TINYINT DEFAULT 0,
         KEY ix_tables_name (TableName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -117,7 +134,7 @@ BEGIN
     SET v_TblIdx = 0;
     WHILE v_TblIdx < v_TblCnt DO
         IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name'))) IS NOT NULL THEN
-            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, PartitionMethod, PartitionExpression, PartitionCount, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop)
+            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned)
             SELECT
                 SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name')))) AS TableName,
                 COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Engine')))), ''), 'InnoDB') AS Engine,
@@ -131,6 +148,14 @@ BEGIN
                 SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].KeyBlockSize'))) AS KeyBlockSize,
                 COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].PageCompressed'))), 0) AS PageCompressed,
                 SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].PageCompressionLevel'))) AS PageCompressionLevel,
+                NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Encryption')))), '') AS Encryption,
+                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Encrypted'))), 0) AS Encrypted,
+                SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].EncryptionKeyId'))) AS EncryptionKeyId,
+                NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Tablespace')))), '') AS Tablespace,
+                -- Strip a trailing '/' on the DECLARED value so it matches SchemaSmith_TableDataDirectory's
+                -- deployed read, which normalizes it off (both engines). Without this, a declared '/x/'
+                -- compares unequal to the deployed '/x' and the move-refuse fires on every redeploy forever.
+                NULLIF(TRIM(TRAILING '/' FROM TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].DataDirectory'))))), '') AS DataDirectory,
                 UPPER(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.Method')))), '')) AS PartitionMethod,
                 NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.Expression')))), '') AS PartitionExpression,
                 SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.PartitionCount'))) AS PartitionCount,
@@ -154,7 +179,8 @@ BEGIN
                 -- applying. JSON_TYPE returns 'NULL' there and SQL NULL when the path is absent entirely,
                 -- so both fall out as 0.
                 COALESCE(JSON_TYPE(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].RebuildPolicy'))) = 'OBJECT', 0) AS RebuildPolicySpecified,
-                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].PreventDrop'))), 0) AS PreventDrop;
+                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].PreventDrop'))), 0) AS PreventDrop,
+                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].IsSystemVersioned'))), 0) AS IsSystemVersioned;
         END IF;
         SET v_TblIdx = v_TblIdx + 1;
     END WHILE;

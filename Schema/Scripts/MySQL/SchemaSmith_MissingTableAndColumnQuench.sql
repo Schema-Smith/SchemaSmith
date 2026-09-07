@@ -78,6 +78,17 @@ BEGIN
                 CASE WHEN t.PageCompressed = 1 AND t.PageCompressionLevel IS NOT NULL AND VERSION() LIKE '%MariaDB%'
                      THEN CONCAT(' PAGE_COMPRESSION_LEVEL=', t.PageCompressionLevel)
                      ELSE '' END,
+                -- At-rest encryption (F2a), same engine-gated shape as the compression pair above:
+                -- MySQL's ENCRYPTION='Y'|'N' string vs MariaDB's ENCRYPTED=YES bool (+ ENCRYPTION_KEY_ID).
+                CASE WHEN t.Encryption IS NOT NULL AND t.Encryption != '' AND VERSION() NOT LIKE '%MariaDB%'
+                     THEN CONCAT(' ENCRYPTION=''', t.Encryption, '''')
+                     ELSE '' END,
+                CASE WHEN t.Encrypted = 1 AND VERSION() LIKE '%MariaDB%'
+                     THEN ' ENCRYPTED=YES'
+                     ELSE '' END,
+                CASE WHEN t.Encrypted = 1 AND t.EncryptionKeyId IS NOT NULL AND VERSION() LIKE '%MariaDB%'
+                     THEN CONCAT(' ENCRYPTION_KEY_ID=', t.EncryptionKeyId)
+                     ELSE '' END,
                 CASE WHEN t.AutoIncrementValue IS NOT NULL
                      THEN CONCAT(' AUTO_INCREMENT=', t.AutoIncrementValue)
                      ELSE '' END,
@@ -85,6 +96,27 @@ BEGIN
                 -- the embedded single quotes) -- see SchemaSmith_IndexOnlyQuench.sql.
                 CASE WHEN t.Comment IS NOT NULL AND t.Comment != ''
                      THEN CONCAT(' COMMENT=''', REPLACE(t.Comment, '''', ''''''), '''')
+                     ELSE '' END,
+                -- General tablespace placement (F2b), MySQL only -- like the CREATE_OPTIONS four above,
+                -- engine-gated in SQL as well as by the domain's Platforms scoping, because a
+                -- hand-authored package can still name this on a MariaDB target and MariaDB has no general
+                -- tablespaces at all. UNQUOTED (`TABLESPACE name`, not `TABLESPACE='name'`) -- MySQL's own
+                -- grammar for this clause, unlike the KEY=VALUE CREATE_OPTIONS above. Applied only here, on
+                -- CREATE: an existing table whose declared value disagrees with what is deployed is
+                -- refused by ModifiedTableQuench (STEP -0.4), never converged -- a move is a full data-file
+                -- relocation, the same posture partitioning and system versioning's DROP direction take.
+                CASE WHEN t.Tablespace IS NOT NULL AND t.Tablespace != '' AND VERSION() NOT LIKE '%MariaDB%'
+                     THEN CONCAT(' TABLESPACE ', t.Tablespace)
+                     ELSE '' END,
+                -- InnoDB DATA DIRECTORY placement (F2c), BOTH engines -- unlike Tablespace above, no
+                -- VERSION() guard: both MySQL and MariaDB support this clause. Applied only here, on
+                -- CREATE: an existing table whose declared value disagrees with what is deployed is
+                -- refused by ModifiedTableQuench, never converged -- a move is a full data-file relocation,
+                -- the same posture Tablespace above takes. MySQL requires the directory to already be
+                -- listed in the server's innodb_directories or CREATE fails with its own ERROR 3121 -- that
+                -- is user server configuration, like a missing filegroup, not something to gate here.
+                CASE WHEN t.DataDirectory IS NOT NULL AND t.DataDirectory != ''
+                     THEN CONCAT(' DATA DIRECTORY=''', REPLACE(t.DataDirectory, '''', ''''''), '''')
                      ELSE '' END,
                 -- Partitioning (#partitioning, K3). LAST in the statement, which is where MySQL's own
                 -- CREATE TABLE grammar puts it -- after every table option.
@@ -109,7 +141,14 @@ BEGIN
                                              FROM _SchemaSmith_Partitions pt
                                             WHERE pt.TableName = t.TableName), ''),
                                  ')')
-                     END
+                     END,
+                -- System versioning (MariaDB WITH SYSTEM VERSIONING, F1S1). A trailing table SUFFIX
+                -- keyword, not a KEY=VALUE option, so it goes last -- after PARTITION BY, which is where
+                -- MariaDB's own grammar places it. Gated on the EXISTING SchemaSmith_SupportsSystemVersioning()
+                -- (MariaDB 10.3+; MySQL never): below the floor the clause is suppressed here so the table
+                -- still deploys as an ordinary table -- see the degrade guard below, which reports the loss.
+                CASE WHEN t.IsSystemVersioned = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
+                     THEN ' WITH SYSTEM VERSIONING' ELSE '' END
             ) AS CreateTableStatement
         FROM _SchemaSmith_Tables t
         INNER JOIN _SchemaSmith_Columns c ON c.TableName = t.TableName
@@ -117,7 +156,8 @@ BEGIN
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)
         GROUP BY t.TableName, t.VariantName, t.Engine, t.RowFormat, t.Compression, t.KeyBlockSize,
-                 t.PageCompressed, t.PageCompressionLevel, t.AutoIncrementValue, t.Comment,
+                 t.PageCompressed, t.PageCompressionLevel, t.Encryption, t.Encrypted, t.EncryptionKeyId,
+                 t.AutoIncrementValue, t.Comment, t.Tablespace, t.DataDirectory,
                  t.PartitionMethod, t.PartitionExpression, t.PartitionCount;
 
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_Done = TRUE;
@@ -353,6 +393,49 @@ BEGIN
         END IF;
     END IF;
 
+    -- =========================================================================
+    -- Degrade table-level system versioning below MariaDB 10.3 / on MySQL at any version (F1S1). Mirrors
+    -- the per-column history exclusion guard directly above, and for the same reason: the CREATE TABLE
+    -- CONCAT above suppresses the trailing WITH SYSTEM VERSIONING clause when the gate is 0, so a new
+    -- table declaring IsSystemVersioned would otherwise deploy as an ORDINARY table -- silently losing
+    -- the versioning the package asked for. Suppressing that silently is the failure this guard exists
+    -- to prevent.
+    --
+    -- Skip, not Reduced: the WHOLE table's versioning is dropped here, not merely a part of it (unlike
+    -- the column-level exclusion above, which loses only the exclusion while the column itself survives).
+    --
+    -- Scope: t.NewTable = 1 only. Converging an EXISTING table's versioning (ALTER ADD/DROP SYSTEM
+    -- VERSIONING) is a separate later task, not built here.
+    -- =========================================================================
+    IF SchemaSmith_SupportsSystemVersioning() = 0
+       AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables t
+                   WHERE t.NewTable = 1
+                     AND t.IsSystemVersioned = 1) THEN
+        IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail' THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), CONCAT('  System versioning requires MariaDB 10.3 (MySQL unsupported) (UnsupportedFeaturePolicy=fail): ',
+                   SchemaSmith_StripBacktickWrapping(t.TableName))
+            FROM _SchemaSmith_Tables t
+            WHERE t.NewTable = 1
+              AND t.IsSystemVersioned = 1;
+            SET @ss_msg = 'System versioning needs MariaDB 10.3 (UnsupportedFeaturePolicy=fail). See the run log.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+        ELSE
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), CONCAT('  Table deployed without system versioning (requires MariaDB 10.3, MySQL unsupported - downgraded): ',
+                   SchemaSmith_StripBacktickWrapping(t.TableName))
+            FROM _SchemaSmith_Tables t
+            WHERE t.NewTable = 1
+              AND t.IsSystemVersioned = 1;
+            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+            SELECT CONNECTION_ID(), 'table without its WITH SYSTEM VERSIONING clause',
+                   SchemaSmith_StripBacktickWrapping(t.TableName), 'downgraded'
+            FROM _SchemaSmith_Tables t
+            WHERE t.NewTable = 1
+              AND t.IsSystemVersioned = 1;
+        END IF;
+    END IF;
+
 
     IF p_WhatIf = 1 THEN
         -- WhatIf mode: output the actual SQL that would be executed
@@ -419,11 +502,29 @@ BEGIN
                       CASE WHEN t.PageCompressed = 1 AND t.PageCompressionLevel IS NOT NULL AND VERSION() LIKE '%MariaDB%'
                            THEN CONCAT(' PAGE_COMPRESSION_LEVEL=', t.PageCompressionLevel)
                            ELSE '' END,
+                      -- At-rest encryption (F2a) -- must match the real-path cur_NewTables CONCAT above exactly.
+                      CASE WHEN t.Encryption IS NOT NULL AND t.Encryption != '' AND VERSION() NOT LIKE '%MariaDB%'
+                           THEN CONCAT(' ENCRYPTION=''', t.Encryption, '''')
+                           ELSE '' END,
+                      CASE WHEN t.Encrypted = 1 AND VERSION() LIKE '%MariaDB%'
+                           THEN ' ENCRYPTED=YES'
+                           ELSE '' END,
+                      CASE WHEN t.Encrypted = 1 AND t.EncryptionKeyId IS NOT NULL AND VERSION() LIKE '%MariaDB%'
+                           THEN CONCAT(' ENCRYPTION_KEY_ID=', t.EncryptionKeyId)
+                           ELSE '' END,
                       CASE WHEN t.AutoIncrementValue IS NOT NULL
                            THEN CONCAT(' AUTO_INCREMENT=', t.AutoIncrementValue)
                            ELSE '' END,
                       CASE WHEN t.Comment IS NOT NULL AND t.Comment != ''
                            THEN CONCAT(' COMMENT=''', REPLACE(t.Comment, '''', ''''''), '''')
+                           ELSE '' END,
+                      -- General tablespace placement (F2b) -- must match the real-path cur_NewTables CONCAT above exactly.
+                      CASE WHEN t.Tablespace IS NOT NULL AND t.Tablespace != '' AND VERSION() NOT LIKE '%MariaDB%'
+                           THEN CONCAT(' TABLESPACE ', t.Tablespace)
+                           ELSE '' END,
+                      -- DATA DIRECTORY placement (F2c) -- must match the real-path cur_NewTables CONCAT above exactly.
+                      CASE WHEN t.DataDirectory IS NOT NULL AND t.DataDirectory != ''
+                           THEN CONCAT(' DATA DIRECTORY=''', REPLACE(t.DataDirectory, '''', ''''''), '''')
                            ELSE '' END,
                       -- Partitioning (#partitioning, K3) -- must match the real-path emit above exactly,
                       -- or the WhatIf preview shows a statement the live run would not issue.
@@ -440,14 +541,19 @@ BEGIN
                                                    FROM _SchemaSmith_Partitions pt
                                                   WHERE pt.TableName = t.TableName), ''),
                                        ')')
-                           END)
+                           END,
+                      -- Must match the real-path emit above exactly, or the WhatIf preview shows a
+                      -- statement the live run would not issue.
+                      CASE WHEN t.IsSystemVersioned = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
+                           THEN ' WITH SYSTEM VERSIONING' ELSE '' END)
         FROM _SchemaSmith_Tables t
         INNER JOIN _SchemaSmith_Columns c ON c.TableName = t.TableName
         WHERE t.NewTable = 1
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)
         GROUP BY t.TableName, t.VariantName, t.Engine, t.RowFormat, t.Compression, t.KeyBlockSize,
-                 t.PageCompressed, t.PageCompressionLevel, t.AutoIncrementValue, t.Comment,
+                 t.PageCompressed, t.PageCompressionLevel, t.Encryption, t.Encrypted, t.EncryptionKeyId,
+                 t.AutoIncrementValue, t.Comment, t.Tablespace, t.DataDirectory,
                  t.PartitionMethod, t.PartitionExpression, t.PartitionCount;
 
         -- Step 2: Show ALTER TABLE ADD COLUMN for new columns on existing tables (set-based;
@@ -456,9 +562,16 @@ BEGIN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add missing columns to existing tables');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
-                      ' ADD COLUMN ', c.ColumnScript)
+                      ' ADD COLUMN ',
+                      -- WhatIf preview must match the real run: strip WITHOUT SYSTEM VERSIONING on a
+                      -- not-yet-versioned table exactly as the ELSE branch's exec does (MariaDB 4124).
+                      CASE WHEN ist.TABLE_TYPE = 'SYSTEM VERSIONED' THEN c.ColumnScript
+                           ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        LEFT JOIN INFORMATION_SCHEMA.TABLES ist
+            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
         WHERE t.NewTable = 0
           AND c.NewColumn = 1
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
@@ -714,10 +827,16 @@ BEGIN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Add column: ',
                       CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
-                             ' ADD COLUMN ', c.ColumnScript),
+                             ' ADD COLUMN ',
+                             -- Match the exec below: strip WITHOUT SYSTEM VERSIONING on a not-yet-versioned table.
+                             CASE WHEN ist.TABLE_TYPE = 'SYSTEM VERSIONED' THEN c.ColumnScript
+                                  ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END),
                       CASE WHEN COALESCE(c.VariantName, '') <> '' THEN CONCAT(' (variant: ', c.VariantName, ')') ELSE '' END)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        LEFT JOIN INFORMATION_SCHEMA.TABLES ist
+            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
         WHERE t.NewTable = 0
           AND c.NewColumn = 1
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
@@ -730,14 +849,27 @@ BEGIN
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_AddColumnStmts (Stmt)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
-                      GROUP_CONCAT(CONCAT('ADD COLUMN ', c.ColumnScript) ORDER BY c.OrdinalPosition SEPARATOR ', '))
+                      -- Strip WITHOUT SYSTEM VERSIONING from the ADD COLUMN clause when the target table is
+                      -- not (yet) system-versioned: MariaDB refuses that clause on an ALTER ADD COLUMN
+                      -- against a non-versioned table (ERROR 4124), which aborts the whole deploy for a table
+                      -- that is only CONVERGING to versioned in this same run (STEP 7.5 of ModifiedTableQuench
+                      -- adds the versioning AFTER this pass). The clause is valid inline on CREATE (unchanged)
+                      -- and on ADD COLUMN against an already-versioned table (kept). The column's exclusion is
+                      -- (re)applied post-versioning by ModifiedTableQuench's exclusion pass.
+                      GROUP_CONCAT(CONCAT('ADD COLUMN ',
+                          CASE WHEN ist.TABLE_TYPE = 'SYSTEM VERSIONED' THEN c.ColumnScript
+                               ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END)
+                          ORDER BY c.OrdinalPosition SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        LEFT JOIN INFORMATION_SCHEMA.TABLES ist
+            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
+            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
         WHERE t.NewTable = 0
           AND c.NewColumn = 1
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)
-        GROUP BY c.TableName;
+        GROUP BY c.TableName, ist.TABLE_TYPE;
 
         SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts);
         WHILE @v_addcol_id IS NOT NULL DO

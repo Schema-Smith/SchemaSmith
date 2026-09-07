@@ -37,9 +37,11 @@ namespace Schema.Domain
         public List<ProductFolder> ScriptFolders { get; set; } = [];
 
         [JsonProperty(Order = 6)]
+        [DefaultValue("{{repo_path}}/.git/HEAD")]
         public string BranchNameFile { get; set; } = "{{repo_path}}/.git/HEAD";
 
         [JsonProperty(Order = 7)]
+        [DefaultValue("ref: refs/heads/")]
         public string BeforeBranchNameMask { get; set; } = "ref: refs/heads/";
 
         [JsonProperty(Order = 8)]

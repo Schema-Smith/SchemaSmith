@@ -17,7 +17,10 @@ namespace SchemaQuench.IntegrationTests.MariaDb;
 /// already there — a hard failure on a table SchemaSmith had itself just been asked to manage.
 /// <para>
 /// MariaDB-only by nature: MySQL has no system versioning, so this shape cannot occur there.
-/// Managing the versioning attribute is a separate feature; this is only about the table being visible.
+/// The package declares <c>IsSystemVersioned: true</c> so it matches the live table's versioning: this
+/// test is only about the table being <em>visible</em> (recognised as existing, not re-created). Declaring
+/// it false or omitting it against an already-versioned table is a data-loss refuse, covered separately by
+/// <see cref="SystemVersioningDeployTests.AnExistingSystemVersionedTableRefusesToDropVersioningWhenNoLongerDeclared"/>.
 /// </para>
 /// </summary>
 [Category("MariaDb")]
@@ -33,6 +36,7 @@ public class SystemVersionedTableVisibilityTests : BaseTableQuenchTests
     private static string TableJson() => $$"""
         [{
             "Name": "{{TableName}}",
+            "IsSystemVersioned": true,
             "Columns": [
                 { "Name": "Id", "DataType": "INT", "Nullable": false },
                 { "Name": "Val", "DataType": "INT", "Nullable": true }

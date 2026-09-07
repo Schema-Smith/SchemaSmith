@@ -2,6 +2,7 @@
 
 using Newtonsoft.Json;
 using Schema.Delivery;
+using System.ComponentModel;
 
 namespace Schema.Domain.PostgreSQL
 {
@@ -21,6 +22,7 @@ namespace Schema.Domain.PostgreSQL
 
         [SchemaProperty(Pattern = "FULL|PARTIAL|SIMPLE")]
         [JsonProperty(Order = 103)]
+        [DefaultValue("FULL")]
         public string MatchType { get; set; } = "FULL";
     }
 }

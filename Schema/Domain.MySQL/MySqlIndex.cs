@@ -9,6 +9,7 @@ namespace Schema.Domain.MySQL
     {
         [SchemaProperty(Pattern = "BTREE|HASH|FULLTEXT|SPATIAL")]
         [JsonProperty(Order = 100)]
+        [DefaultValue("BTREE")]
         public string IndexType { get; set; } = "BTREE";
 
         [JsonProperty(Order = 101)]

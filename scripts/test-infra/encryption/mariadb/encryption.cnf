@@ -1,0 +1,5 @@
+[mariadb]
+plugin-load-add=file_key_management
+file-key-management-filename=/etc/mysql/keyfile.txt
+innodb-encrypt-tables=ON
+innodb-encryption-threads=1

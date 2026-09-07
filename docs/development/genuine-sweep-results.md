@@ -143,3 +143,37 @@ Server Linux image exists -- so this file is the standing evidence that it ran, 
 | SQL Server @ 14331 | Passed!  - Failed:     0, Passed:     4, Skipped:     4, Total:     8, Duration: 29 s - Schema.IntegrationTests.dll (net10.0) | 4 passed / 4 skipped |
 | SQL Server @ 14332 | Passed!  - Failed:     0, Passed:     4, Skipped:     4, Total:     8, Duration: 26 s - Schema.IntegrationTests.dll (net10.0) | 4 passed / 4 skipped |
 | SQL Server @ 14333 | Passed!  - Failed:     0, Passed:     4, Skipped:     4, Total:     8, Duration: 9 s - Schema.IntegrationTests.dll (net10.0) | 4 passed / 4 skipped |
+
+## 2026-09-06T00:19:39Z - commit 1c40a0d1
+
+| Target | Result | Expected |
+|---|---|---|
+| SQL Server @ 14330 | Passed!  - Failed:     0, Passed:     4, Skipped:     4, Total:     8, Duration: 12 s - Schema.IntegrationTests.dll (net10.0) | 4 passed / 4 skipped |
+| SQL Server @ 14331 | Passed!  - Failed:     0, Passed:     4, Skipped:     4, Total:     8, Duration: 25 s - Schema.IntegrationTests.dll (net10.0) | 4 passed / 4 skipped |
+| SQL Server @ 14332 | Passed!  - Failed:     0, Passed:     4, Skipped:     4, Total:     8, Duration: 26 s - Schema.IntegrationTests.dll (net10.0) | 4 passed / 4 skipped |
+| SQL Server @ 14333 | Passed!  - Failed:     0, Passed:     4, Skipped:     4, Total:     8, Duration: 7 s - Schema.IntegrationTests.dll (net10.0) | 4 passed / 4 skipped |
+
+## 2026-09-06T10:24:40Z - modern bands - commit 4629da33
+
+| Target | Result | Expected |
+|---|---|---|
+| mcr.microsoft.com/mssql/server:2017-latest (14.0.3540.1) @ 14340 | Passed! - 0 failed, 683 passed across 4 assemblies + SEMANTIC COVERAGE SKIPPED (no semanticsdb) | full SqlServer category, 0 failed |
+| mcr.microsoft.com/mssql/server:2022-latest (16.0.4265.3) @ 14342 | Passed! - 0 failed, 697 passed across 4 assemblies | full SqlServer category, 0 failed |
+| mcr.microsoft.com/mssql/server:2025-latest (17.0.4075.5) @ 14345 | Passed! - 0 failed, 699 passed across 4 assemblies | full SqlServer category, 0 failed |
+
+## 2026-09-06T20:44:09Z - commit 5ffd7ac3
+
+| Target | Result | Expected |
+|---|---|---|
+| SQL Server @ 14330 | Passed!  - Failed:     0, Passed:     4, Skipped:     4, Total:     8, Duration: 15 s - Schema.IntegrationTests.dll (net10.0) | 4 passed / 4 skipped |
+| SQL Server @ 14331 | Passed!  - Failed:     0, Passed:     4, Skipped:     4, Total:     8, Duration: 1 m 39 s - Schema.IntegrationTests.dll (net10.0) | 4 passed / 4 skipped |
+| SQL Server @ 14332 | Passed!  - Failed:     0, Passed:     4, Skipped:     4, Total:     8, Duration: 30 s - Schema.IntegrationTests.dll (net10.0) | 4 passed / 4 skipped |
+| SQL Server @ 14333 | Passed!  - Failed:     0, Passed:     4, Skipped:     4, Total:     8, Duration: 9 s - Schema.IntegrationTests.dll (net10.0) | 4 passed / 4 skipped |
+
+## 2026-09-06T20:55:13Z - modern bands - commit 24aa9fdf
+
+| Target | Result | Expected |
+|---|---|---|
+| mcr.microsoft.com/mssql/server:2017-latest (14.0.3540.1) @ 14340 | Passed! - 0 failed, 683 passed across 4 assemblies + SEMANTIC COVERAGE SKIPPED (no semanticsdb) | full SqlServer category, 0 failed |
+| mcr.microsoft.com/mssql/server:2022-latest (16.0.4265.3) @ 14342 | Passed! - 0 failed, 697 passed across 4 assemblies | full SqlServer category, 0 failed |
+| mcr.microsoft.com/mssql/server:2025-latest (17.0.4075.5) @ 14345 | Passed! - 0 failed, 699 passed across 4 assemblies | full SqlServer category, 0 failed |

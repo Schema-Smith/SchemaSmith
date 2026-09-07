@@ -31,6 +31,23 @@ BEGIN TRY
     RAISERROR('Table %s declares filegroup %s, which does not exist on this database. SchemaSmith does not create filegroups -- create it on the target first, or correct the declared name.', 16, 1, @v_FGTable, @v_FGName)
   END
 
+  -- Memory-optimized (Hekaton) prerequisites (#J1 / #9). A memory-optimized table needs In-Memory OLTP
+  -- support (SERVERPROPERTY('IsXTPSupported') = 1) AND a MEMORY_OPTIMIZED_DATA filegroup (sys.filegroups
+  -- type 'FX'). SchemaSmith creates neither and deliberately does NOT degrade a memory-optimized table to an
+  -- ordinary disk table (that would silently change its durability and concurrency semantics). Fail here, by
+  -- name and BEFORE any DDL, with a clear message rather than letting the raw CREATE error surface -- the
+  -- same detect-don't-create posture the filegroup check above takes.
+  RAISERROR('Validate memory-optimized prerequisites', 10, 100) WITH NOWAIT
+  IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) WHERE t.NewTable = 1 AND t.[MemoryOptimized] = 1)
+     AND (CONVERT(INT, ISNULL(SERVERPROPERTY('IsXTPSupported'), 0)) <> 1
+          OR NOT EXISTS (SELECT 1 FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[type] = 'FX'))
+  BEGIN
+    DECLARE @v_MoTable NVARCHAR(1010)
+    SELECT TOP 1 @v_MoTable = t.[Schema] + '.' + t.[Name]
+      FROM #Tables t WITH (NOLOCK) WHERE t.NewTable = 1 AND t.[MemoryOptimized] = 1
+    RAISERROR('Table %s is memory-optimized, but this database cannot host one: it needs In-Memory OLTP support (SERVERPROPERTY(''IsXTPSupported'') = 1) and a MEMORY_OPTIMIZED_DATA filegroup. SchemaSmith creates neither and does not degrade a memory-optimized table to a disk table (that would change its durability). Add the filegroup / use a supporting edition, or drop MemoryOptimized.', 16, 1, @v_MoTable)
+  END
+
   -- Partition placement (#partitioning, K1). Three checks, all BEFORE any DDL, because each one produces
   -- either a wrong physical layout or an engine error that names nothing useful.
   --

@@ -51,6 +51,72 @@ public class CoherenceCheckTests
     private static Finding[] RunOn(SqlServerTable table) =>
         new CoherenceCheck().Run(Context(TemplateWithTables("T", table))).ToArray();
 
+    private static Finding[] RunOnMy(Schema.Domain.MySQL.MySqlTable table)
+    {
+        var template = new Template { Name = "T" };
+        template.Tables.Add(table);
+        var product = new Product { Name = "Acme", Platform = Platform.MySQL, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    [Test]
+    public void MemoryOptimizedWithFileGroup_IsError()
+    {
+        // #18 / SS-XTP-001: a memory-optimized table cannot also declare disk placement.
+        var table = new SqlServerTable
+        {
+            Name = "Hot", Schema = "dbo", MemoryOptimized = true, FileGroup = "SECONDARY",
+            Columns = { new SqlServerColumn { Name = "Id", DataType = "int" } }
+        };
+        var finding = RunOn(table).Single(f => f.Code == "SS-XTP-001");
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Error));
+            Assert.That(finding.Message, Does.Contain("FileGroup"));
+        });
+    }
+
+    [Test]
+    public void MemoryOptimizedWithNoPlacement_IsClean()
+    {
+        var table = new SqlServerTable
+        {
+            Name = "Hot", Schema = "dbo", MemoryOptimized = true,
+            Columns = { new SqlServerColumn { Name = "Id", DataType = "int" } }
+        };
+        Assert.That(RunOn(table).Any(f => f.Code == "SS-XTP-001"), Is.False);
+    }
+
+    [Test]
+    public void RangePartitioningWithNoPartitions_IsError()
+    {
+        // #19 / SS-PART-003: RANGE/LIST need named partitions.
+        var table = new Schema.Domain.MySQL.MySqlTable
+        {
+            Name = "Sales",
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = "RANGE", Expression = "year(created)" },
+            Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "Id", DataType = "int" } }
+        };
+        Assert.That(RunOnMy(table).Single(f => f.Code == "SS-PART-003").Severity, Is.EqualTo(Severity.Error));
+    }
+
+    [Test]
+    public void HashPartitionWithABoundary_IsError()
+    {
+        // #19 / SS-PART-004: a HASH/KEY partition has no VALUES boundary.
+        var table = new Schema.Domain.MySQL.MySqlTable
+        {
+            Name = "Spread",
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning
+            {
+                Method = "HASH", Expression = "id",
+                Partitions = { new Schema.Domain.MySQL.MySqlPartition { Name = "p0", Values = "100" } }
+            },
+            Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "Id", DataType = "int" } }
+        };
+        Assert.That(RunOnMy(table).Single(f => f.Code == "SS-PART-004").Severity, Is.EqualTo(Severity.Error));
+    }
+
     [Test]
     public void BackfillWithoutDefault_IsWarning()
     {

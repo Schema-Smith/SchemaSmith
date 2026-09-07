@@ -39,6 +39,15 @@ ERROR [SS-TOK-001] .../dbo.Customer.json: .../dbo.Customer.json: references unde
 > something you did wrong, and it's transcribed here exactly so your own output matches. Your `SS-TOK-001` will
 > show the real path where you cloned the repo, twice, in place of the `...` above.
 
+<!-- TRAINING-RELEASE-PIN: --Validate duplicate location prefix.
+     The boards in this README transcribe the DOUBLED location that every released CLI emits, because the lab
+     asks the learner to diff their own output against them -- a hand-cleaned board would be wrong today. A
+     later CLI prints the location once, at which point these boards become wrong the other way. When the
+     installed `schemaquench --version` no longer doubles it: re-run --Validate on the fixture for EACH of the
+     four engines, replace the boards with the single-prefix output, drop the "repeat themselves" note above,
+     and delete this comment. Re-run all four while you are in here, not just SQL Server. -->
+
+
 Three real errors, no database touched:
 
 - **`SS-DUP-001`** — `OrderItem` has two `[Quantity]` columns and neither is gated. A duplicate that would blow up at `CREATE TABLE`.

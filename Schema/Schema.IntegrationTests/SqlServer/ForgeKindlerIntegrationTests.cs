@@ -103,14 +103,42 @@ public class ForgeKindlerIntegrationTests
 
             ForgeKindler.KindleTheForge(command, Platform.SqlServer); // absent stamp => kindles
 
+            // A version-less kindle DETECTS the server version rather than assuming 0 ("OLD") -- see
+            // Kindle_WithoutServerVersion_DetectsIt_RatherThanStampingAsVersionZero -- so the stamp
+            // reflects the detected version, not 0.
+            var detected = TargetVersionDetector.Detect(command, Platform.SqlServer).ServerComparable;
             Assert.That(ForgeKindler.ReadStamp(command, Platform.SqlServer),
-                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.SqlServer)),
-                "A fresh kindle must write the current content stamp.");
+                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, serverMajorVersion: detected)),
+                "A fresh kindle must write the current content stamp for the detected server version.");
         }
         finally
         {
             ForgeKindler.KindleTheForge(command, Platform.SqlServer, forceReKindle: true);
         }
+    }
+
+    [Test]
+    public void Kindle_WithoutServerVersion_DetectsIt_RatherThanStampingAsVersionZero()
+    {
+        // Footgun regression. KindleTheForge with no serverMajorVersion must DETECT the server version,
+        // never fall back to 0 ("assume OLD"). A version-0 kindle composes the pre-2025 xml_compression
+        // reference (CONVERT(BIT, NULL)) into GenerateTableJSON and turns the drift guard off -- so on a
+        // real SQL Server 2025 box extraction emitted no XmlCompression and TurningItOff never converged.
+        // Sibling SqlServer fixtures kindle without a version, so this poisoned the shared procs for the
+        // XmlCompression tests; only the modern-band sweep (2025) exercised it. Detecting here kills the
+        // footgun at the source: no caller can silently downgrade the version-gated helpers.
+        using var command = _connection.CreateCommand();
+        var detected = TargetVersionDetector.Detect(command, Platform.SqlServer).ServerComparable;
+        Assume.That(detected, Is.GreaterThan(0), "the server version must be detectable for this test to bite");
+
+        ForgeKindler.KindleTheForge(command, Platform.SqlServer, forceReKindle: true, serverMajorVersion: 0);
+
+        Assert.That(ForgeKindler.ReadStamp(command, Platform.SqlServer),
+            Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, serverMajorVersion: detected)),
+            "a version-less kindle must stamp with the DETECTED version");
+        Assert.That(ForgeKindler.ReadStamp(command, Platform.SqlServer),
+            Is.Not.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, serverMajorVersion: 0)),
+            "and specifically NOT the version-0 stamp -- proving detection actually happened (non-vacuous)");
     }
 
     [Test]

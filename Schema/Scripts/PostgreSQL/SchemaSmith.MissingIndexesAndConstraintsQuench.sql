@@ -338,6 +338,44 @@ BEGIN
                              AND pol.policyname = tp."Name");
   END IF;
 
+  -- Re-converge an EXISTING policy whose exact-comparable attributes drifted from the declaration:
+  -- Permissive (PERMISSIVE/RESTRICTIVE), Command (ALL/SELECT/...) and the Roles set. These are real,
+  -- security-relevant changes that previously no-op'd silently. PostgreSQL has no ALTER for them, so it is
+  -- DROP + CREATE -- which also reapplies the declared USING / WITH CHECK expressions. An expression-ONLY
+  -- change is still not detected (comparing normalised expression text is the separate false-change problem
+  -- noted above); Roles is compared as a normalised, order-insensitive, lower-cased set.
+  RAISE NOTICE 'Re-converge Changed Row Level Security Policies';
+  SELECT STRING_AGG('DROP POLICY ' || QUOTE_IDENT(tp."Name") || ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") || ';' || CHR(10) ||
+                    'CREATE POLICY ' || QUOTE_IDENT(tp."Name") ||
+                    ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") ||
+                    ' AS ' || tp."Permissive" ||
+                    ' FOR ' || tp."Command" ||
+                    ' TO ' || tp."Roles" ||
+                    CASE WHEN NULLIF(TRIM(tp."UsingExpression"), '') IS NOT NULL
+                         THEN ' USING (' || tp."UsingExpression" || ')' ELSE '' END ||
+                    CASE WHEN NULLIF(TRIM(tp."WithCheckExpression"), '') IS NOT NULL
+                         THEN ' WITH CHECK (' || tp."WithCheckExpression" || ')' ELSE '' END || ';' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''policy'', ''' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''', ''modified'');', CHR(10))
+    INTO sql_script
+    FROM temp_policies tp
+    JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
+    WHERE UPPER(pol.permissive) <> tp."Permissive"
+       OR UPPER(pol.cmd) <> tp."Command"
+       OR (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
+          <> (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1));
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
+  IF p_WhatIf THEN
+    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+      SELECT pg_backend_pid(), 'policy', tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name", 'wouldModify'
+        FROM temp_policies tp
+        JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
+        WHERE UPPER(pol.permissive) <> tp."Permissive"
+           OR UPPER(pol.cmd) <> tp."Command"
+           OR (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
+              <> (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1));
+  END IF;
+
   -- A policy that is no longer declared is DROPPED, and deliberately without an opt-out flag: a stale
   -- policy is a live access-control rule, so leaving one behind is a security posture nobody declared.
   -- That is a stronger reason to drop than exists for an index or a statistic.

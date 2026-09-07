@@ -261,8 +261,20 @@ public abstract class SchemaTongsSharedTests
             // DISABLE and SLAVESIDE_DISABLED contains DISABLE, so an unanchored check would pass on the
             // raw catalog value this translation exists to replace.
             Assert.That(disabledJson, Does.Contain("\"Status\": \"DISABLE\""), disabledJson);
-            Assert.That(enabledJson, Does.Contain("\"Status\": \"ENABLE\""), enabledJson);
             Assert.That(slaveDisabledJson, Does.Contain("\"Status\": \"DISABLE ON SLAVE\""), slaveDisabledJson);
+
+            // ENABLE is the DECLARED default now, so an enabled event omits the key entirely rather than
+            // restating it -- an omitted Status means ENABLE on the way back in. This still guards the #391
+            // translation just as tightly as asserting the literal did: a broken translation emits the raw
+            // catalog spelling "ENABLED", which is NOT the default and would therefore be written to the
+            // file. So "no Status key at all" can only be produced by a translation that got it right.
+            //
+            // Assert the file was written FIRST. An absence check passes vacuously against a null string,
+            // so without this the whole assertion would go green if extraction stopped emitting the event
+            // altogether -- the loudest possible regression, silently.
+            Assert.That(enabledJson, Is.Not.Null.And.Contains("\"Name\""),
+                "the enabled event must actually have been extracted before its Status can be meaningfully absent");
+            Assert.That(enabledJson, Does.Not.Contain("\"Status\""), enabledJson);
 
             config["ShouldCast:Events"] = "false";
             FactoryContainer.Clear();

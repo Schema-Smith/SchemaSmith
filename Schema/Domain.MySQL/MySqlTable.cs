@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json;
 using Schema.Delivery;
+using System.ComponentModel;
 
 namespace Schema.Domain.MySQL
 {
@@ -29,6 +30,7 @@ namespace Schema.Domain.MySQL
         }
 
         [JsonProperty(Order = 100)]
+        [DefaultValue("InnoDB")]
         public string Engine { get; set; } = "InnoDB";
 
         [SchemaProperty(Pattern = "Dynamic|Compact|Compressed|Redundant|Fixed")]
@@ -72,5 +74,46 @@ namespace Schema.Domain.MySQL
         // verified thereafter; see MySqlPartitioning for why it is never migrated.
         [JsonProperty(Order = 109, NullValueHandling = NullValueHandling.Ignore)]
         public MySqlPartitioning Partitioning { get; set; }
+
+        // InnoDB at-rest (transparent tablespace) encryption. MariaDB spells the same idea ENCRYPTED=YES/NO
+        // (a bool, plus an optional ENCRYPTION_KEY_ID) -- see MariaDbTable.Encrypted -- rather than MySQL's
+        // ENCRYPTION='Y'/'N' string, so this stays scoped to MySQL rather than offer MariaDB a setting its
+        // grammar rejects. Order starts at 115, not 110: MariaDbTable (a subclass of this type) already
+        // occupies 110-114, so anything added here must clear that range or collide (SharedTypeSerializationOrderTests).
+        [SchemaProperty(Pattern = "Y|N", Platforms = [Platform.MySQL],
+            Description = "MySQL only. InnoDB at-rest tablespace encryption ('Y' or 'N'). MariaDB spells this ENCRYPTED=YES/NO instead.")]
+        [JsonProperty(Order = 115, NullValueHandling = NullValueHandling.Ignore)]
+        public string Encryption { get; set; }
+
+        // The InnoDB GENERAL tablespace (CREATE TABLESPACE ... ADD DATAFILE) this table is placed in --
+        // placement, like SQL Server FileGroup and PostgreSQL Tablespace, applied only at CREATE. MariaDB
+        // has no general tablespaces at any version (CREATE TABLESPACE is a syntax error there), so this
+        // stays MySQL-only rather than offer MariaDB a setting its grammar rejects -- same shape as
+        // Encryption above. Order 118, not 116: MariaDbTable (a subclass of this type) already occupies
+        // 110-114/116/117, so anything added here must clear that range or collide
+        // (SharedTypeSerializationOrderTests).
+        // Pattern restricts to unquoted-identifier chars: the value is concatenated UNQUOTED into a
+        // dynamically-built CREATE TABLE (`TABLESPACE <name>`), so anything outside a legal tablespace
+        // identifier is either invalid DDL or an injection vector -- reject it at validation.
+        [SchemaProperty(Platforms = [Platform.MySQL], Pattern = "^[A-Za-z0-9_$]+$",
+            Description = "MySQL only. The InnoDB general tablespace this table is placed in; applied at create, a move is refused.")]
+        [JsonProperty(Order = 118, NullValueHandling = NullValueHandling.Ignore)]
+        public string Tablespace { get; set; }
+
+        // The filesystem directory an InnoDB table's data file is placed in (DATA DIRECTORY='<path>'),
+        // both engines -- unlike Tablespace above (MySQL-only general tablespaces), both MySQL and MariaDB
+        // support this clause. Placement, applied only at CREATE; a declared change on an existing table
+        // is refused, never applied as a move -- the same posture as Tablespace, SQL Server FileGroup and
+        // PostgreSQL Tablespace. Order 119, not 116: MariaDbTable (a subclass of this type) already
+        // occupies 110-114/116/117, so anything added here must clear that range or collide
+        // (SharedTypeSerializationOrderTests).
+        // Pattern forbids a single quote: the value is emitted inside a single-quoted DDL literal (escaped
+        // on write, but belt-and-suspenders) AND read back on MariaDB by parsing CREATE_OPTIONS up to the
+        // first quote -- a quote in the path could not survive that round-trip anyway, so it is rejected at
+        // validation rather than silently truncated into a redeploy-refusing mismatch.
+        [SchemaProperty(Platforms = [Platform.MySQL, Platform.MariaDb], Pattern = "^[^']+$",
+            Description = "The filesystem directory the table's data file is placed in (InnoDB DATA DIRECTORY); applied at create, a move is refused. MySQL requires the directory to be listed in the server's innodb_directories.")]
+        [JsonProperty(Order = 119, NullValueHandling = NullValueHandling.Ignore)]
+        public string DataDirectory { get; set; }
     }
 }

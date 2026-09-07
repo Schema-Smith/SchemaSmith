@@ -408,7 +408,17 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_TablePartitioningJson (#partitioning K3 -- the catalog-to-package read. One
         //   shared definition rather than the MySQL-stub/MariaDb-override shape TablePeriodsJson needs,
         //   because INFORMATION_SCHEMA.PARTITIONS exists on every supported version of both engines).
-        Assert.That(mysql.Length, Is.EqualTo(59));
+        // +1 = SchemaSmith_TableTablespace (F2b -- the MySQL general-tablespace placement read. MySQL-only
+        //   (MariaDb has no general tablespaces); a PROCEDURE with dynamic SQL because INNODB_TABLES is
+        //   8.0+-only and MySQL disallows PREPARE in a FUNCTION. This line and the count were BOTH missed
+        //   when F2b landed -- the script was registered but this assertion stayed at 59 -- so F2c corrects
+        //   the arithmetic to include both.).
+        // +1 = SchemaSmith_TableDataDirectory (F2c -- the DATA DIRECTORY placement read, both engines.
+        //   MySQL's body needs the same PROCEDURE/dynamic-SQL shape as SchemaSmith_TableTablespace above
+        //   (INNODB_DATAFILES is 8.0+-only); the MariaDb per-file override reads CREATE_OPTIONS instead --
+        //   one net script name added to this shared list either way, since the override resolves through
+        //   ResourceLoader rather than adding a second list entry).
+        Assert.That(mysql.Length, Is.EqualTo(61));
     }
 
     [Test]

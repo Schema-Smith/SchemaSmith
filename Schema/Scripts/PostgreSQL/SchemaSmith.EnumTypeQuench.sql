@@ -39,6 +39,15 @@ BEGIN
          ARRAY(SELECT JSON_ARRAY_ELEMENTS_TEXT(elem -> 'Values')) AS "Values"
     FROM src, JSON_ARRAY_ELEMENTS(arr) AS elem;
 
+  -- Evaluate ShouldApplyExpression: drop enum types whose condition is false so a conditional variant is
+  -- SKIPPED rather than always applied (the value was parsed but never acted on). Always executes, even
+  -- under --WhatIf -- this filters the internal working set, it is not user-visible DDL.
+  SELECT STRING_AGG('DELETE FROM temp_enum_types WHERE "Schema" = ''' || "Schema" || ''' AND "Name" = ''' || "Name" || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+    INTO sql_script
+    FROM temp_enum_types
+    WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, false);
+
   -- Create the ones that do not exist yet, values and order intact.
   RAISE NOTICE 'Add Missing Enum Types';
   SELECT STRING_AGG('RAISE NOTICE ''  Create enum type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
@@ -109,6 +118,34 @@ BEGIN
     IF NOT p_WhatIf THEN
       INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
         VALUES (pg_backend_pid(), 'enum value', bad."Schema" || '.' || bad."Name" || '.' || bad.val, 'wouldDrop');
+    END IF;
+  END LOOP;
+
+  -- A pure REORDER of existing values: the values present on BOTH sides appear in a different relative order
+  -- than the package declares. PostgreSQL sorts and compares enum values by declared position
+  -- (enumsortorder), so order is behavioural (ORDER BY / < > / MIN/MAX on an enum column all depend on it) --
+  -- but it cannot be changed without recreating the type (dropping every dependent column), exactly like a
+  -- value removal. So it is REPORTED by name, never performed. Compares only the COMMON values' relative
+  -- order, so a value legitimately added mid-list (handled above) is not mistaken for a reorder.
+  FOR bad IN
+    SELECT t."Schema", t."Name"
+      FROM temp_enum_types t
+      JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'e'
+      JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
+     WHERE (SELECT ARRAY_AGG(d.v ORDER BY d.ord)
+              FROM UNNEST(t."Values") WITH ORDINALITY AS d(v, ord)
+             WHERE EXISTS (SELECT 1 FROM pg_enum e WHERE e.enumtypid = ty.oid AND e.enumlabel = d.v))
+           IS DISTINCT FROM
+           (SELECT ARRAY_AGG(e.enumlabel::TEXT ORDER BY e.enumsortorder)
+              FROM pg_enum e
+             WHERE e.enumtypid = ty.oid AND e.enumlabel = ANY(t."Values"))
+     ORDER BY t."Schema", t."Name"
+  LOOP
+    RAISE WARNING 'Enum type %.% declares its values in a different order than the server has. PostgreSQL sorts and compares enum values by declared position, so the order is behavioural — but it cannot be changed without recreating the type (and dropping every column that uses it), so it is left as-is. Recreate the type by hand to reorder.',
+      bad."Schema", bad."Name";
+    IF NOT p_WhatIf THEN
+      INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+        VALUES (pg_backend_pid(), 'enum type', bad."Schema" || '.' || bad."Name", 'wouldModify');
     END IF;
   END LOOP;
 END $$;

@@ -35,8 +35,18 @@ BEGIN
          (elem ->> 'MinValue')::BIGINT AS "MinValue",
          (elem ->> 'MaxValue')::BIGINT AS "MaxValue",
          COALESCE((elem ->> 'Cache')::BIGINT, 1) AS "Cache",
-         COALESCE((elem ->> 'Cycle')::BOOLEAN, false) AS "Cycle"
+         COALESCE((elem ->> 'Cycle')::BOOLEAN, false) AS "Cycle",
+         COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression"
     FROM src, JSON_ARRAY_ELEMENTS(arr) AS elem;
+
+  -- Evaluate ShouldApplyExpression: drop sequences whose condition is false so a conditional variant is
+  -- SKIPPED rather than silently always applied. Always executes, even under --WhatIf -- this filters the
+  -- internal working set, it is not user-visible DDL.
+  SELECT STRING_AGG('DELETE FROM temp_sequences WHERE "Schema" = ''' || "Schema" || ''' AND "Name" = ''' || "Name" || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+    INTO sql_script
+    FROM temp_sequences
+    WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, false);
 
   RAISE NOTICE 'Add Missing Sequences';
   SELECT STRING_AGG('RAISE NOTICE ''  Create sequence ' || s."Schema" || '.' || s."Name" || ''';' || CHR(10) ||
@@ -67,8 +77,17 @@ BEGIN
                     'ALTER SEQUENCE "' || s."Schema" || '"."' || s."Name" || '"' ||
                     CASE WHEN FORMAT_TYPE(q.seqtypid, NULL) <> s."DataType" THEN ' AS ' || s."DataType" ELSE '' END ||
                     CASE WHEN q.seqincrement <> s."Increment" THEN ' INCREMENT BY ' || s."Increment" ELSE '' END ||
-                    CASE WHEN s."MinValue" IS NOT NULL AND q.seqmin <> s."MinValue" THEN ' MINVALUE ' || s."MinValue" ELSE '' END ||
-                    CASE WHEN s."MaxValue" IS NOT NULL AND q.seqmax <> s."MaxValue" THEN ' MAXVALUE ' || s."MaxValue" ELSE '' END ||
+                    CASE WHEN s."MinValue" IS NOT NULL AND q.seqmin <> s."MinValue" THEN ' MINVALUE ' || s."MinValue"
+                         -- Declared value CLEARED (back to unset) but the server still carries a non-default
+                         -- bound: reset it. NO MINVALUE/NO MAXVALUE restore PostgreSQL's own default (1 or the
+                         -- type min for ascending/descending), gated on "not already default" so an unchanged
+                         -- sequence emits nothing. (Start has no NO-START primitive and only affects a future
+                         -- RESTART, so a cleared Start is deliberately not reset here.)
+                         WHEN s."MinValue" IS NULL AND q.seqmin <> (CASE WHEN q.seqincrement > 0 THEN 1 ELSE (CASE FORMAT_TYPE(q.seqtypid, NULL) WHEN 'smallint' THEN -32768 WHEN 'integer' THEN -2147483648 ELSE -9223372036854775808 END) END) THEN ' NO MINVALUE'
+                         ELSE '' END ||
+                    CASE WHEN s."MaxValue" IS NOT NULL AND q.seqmax <> s."MaxValue" THEN ' MAXVALUE ' || s."MaxValue"
+                         WHEN s."MaxValue" IS NULL AND q.seqmax <> (CASE WHEN q.seqincrement > 0 THEN (CASE FORMAT_TYPE(q.seqtypid, NULL) WHEN 'smallint' THEN 32767 WHEN 'integer' THEN 2147483647 ELSE 9223372036854775807 END) ELSE -1 END) THEN ' NO MAXVALUE'
+                         ELSE '' END ||
                     CASE WHEN s."Start" IS NOT NULL AND q.seqstart <> s."Start" THEN ' START WITH ' || s."Start" ELSE '' END ||
                     CASE WHEN q.seqcache <> s."Cache" THEN ' CACHE ' || s."Cache" ELSE '' END ||
                     CASE WHEN q.seqcycle <> s."Cycle" THEN CASE WHEN s."Cycle" THEN ' CYCLE' ELSE ' NO CYCLE' END ELSE '' END ||
@@ -83,7 +102,9 @@ BEGIN
    WHERE FORMAT_TYPE(q.seqtypid, NULL) <> s."DataType"
       OR q.seqincrement <> s."Increment"
       OR (s."MinValue" IS NOT NULL AND q.seqmin <> s."MinValue")
+      OR (s."MinValue" IS NULL AND q.seqmin <> (CASE WHEN q.seqincrement > 0 THEN 1 ELSE (CASE FORMAT_TYPE(q.seqtypid, NULL) WHEN 'smallint' THEN -32768 WHEN 'integer' THEN -2147483648 ELSE -9223372036854775808 END) END))
       OR (s."MaxValue" IS NOT NULL AND q.seqmax <> s."MaxValue")
+      OR (s."MaxValue" IS NULL AND q.seqmax <> (CASE WHEN q.seqincrement > 0 THEN (CASE FORMAT_TYPE(q.seqtypid, NULL) WHEN 'smallint' THEN 32767 WHEN 'integer' THEN 2147483647 ELSE 9223372036854775807 END) ELSE -1 END))
       OR (s."Start" IS NOT NULL AND q.seqstart <> s."Start")
       OR q.seqcache <> s."Cache"
       OR q.seqcycle <> s."Cycle";

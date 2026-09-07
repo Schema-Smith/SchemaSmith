@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using Newtonsoft.Json;
+using System.ComponentModel;
 
 namespace Schema.Domain.PostgreSQL
 {
@@ -31,6 +32,7 @@ namespace Schema.Domain.PostgreSQL
         [SchemaProperty(Pattern = "smallint|integer|bigint",
             Description = "The sequence's data type: smallint, integer or bigint. Defaults to bigint, matching PostgreSQL.")]
         [JsonProperty(Order = 3)]
+        [DefaultValue("bigint")]
         public string DataType { get; set; } = "bigint";
 
         [SchemaProperty(Description = "The value the sequence starts from when it is created or restarted. NOT the current value — that is data, and SchemaSmith never resets it.")]
@@ -39,6 +41,7 @@ namespace Schema.Domain.PostgreSQL
 
         [SchemaProperty(Description = "Step between values. Negative for a descending sequence.")]
         [JsonProperty(Order = 5)]
+        [DefaultValue(1L)]
         public long Increment { get; set; } = 1;
 
         [JsonProperty(Order = 6, NullValueHandling = NullValueHandling.Ignore)]
@@ -49,6 +52,7 @@ namespace Schema.Domain.PostgreSQL
 
         [SchemaProperty(Minimum = 1, Description = "How many values are pre-allocated per session. Higher values are faster but leave larger gaps after a crash.")]
         [JsonProperty(Order = 8)]
+        [DefaultValue(1L)]
         public long Cache { get; set; } = 1;
 
         [SchemaProperty(Description = "When true the sequence wraps to MinValue after reaching MaxValue instead of erroring.")]

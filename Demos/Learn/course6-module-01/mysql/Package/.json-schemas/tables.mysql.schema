@@ -452,6 +452,21 @@
         "Expression"
       ]
     },
+    "Encryption": {
+      "type": "string",
+      "pattern": "Y|N",
+      "description": "MySQL only. InnoDB at-rest tablespace encryption ('Y' or 'N'). MariaDB spells this ENCRYPTED=YES/NO instead. MySQL only."
+    },
+    "Tablespace": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_$]+$",
+      "description": "MySQL only. The InnoDB general tablespace this table is placed in; applied at create, a move is refused. MySQL only."
+    },
+    "DataDirectory": {
+      "type": "string",
+      "pattern": "^[^']+$",
+      "description": "The filesystem directory the table's data file is placed in (InnoDB DATA DIRECTORY); applied at create, a move is refused. MySQL requires the directory to be listed in the server's innodb_directories. MySQL and MariaDB only."
+    },
     "Extensions": {}
   },
   "additionalProperties": false,

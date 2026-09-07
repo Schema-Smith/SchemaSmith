@@ -264,7 +264,11 @@ public static class RepositoryHelper
         : t == typeof(CheckConstraint) ? PlatformDeserializer.GetCheckConstraintType(platform)
         : t;
 
-    private static Type GetTypeForSchemaFile(string fileName, Platform platform)
+    // internal, not private: SchemaFileMappingParityTests compares this against JsonSchemaCheck's
+    // duplicate TYPE-FOR-TYPE. Asserting only that the duplicate resolves *something* let the MariaDB
+    // tables row drift silently -- it returned MySqlTable, threw nothing, and every MariaDB package
+    // reported a false SS-STALE-001 because the committed schema was generated from MariaDbTable.
+    internal static Type GetTypeForSchemaFile(string fileName, Platform platform)
     {
         var objectPart = fileName.Split('.')[0]; // "products", "templates", "tables", "indexedviews", "materializedviews"
 

@@ -80,5 +80,27 @@ namespace Schema.Domain.MariaDb
         [JsonProperty(Order = 112)]
         public bool? DropPeriodsRemovedFromProduct { get; set; }
 
+        /// <summary>
+        /// InnoDB at-rest (transparent tablespace) encryption -- MariaDB's <c>ENCRYPTED=YES/NO</c>, its
+        /// equivalent of MySQL's <see cref="MySqlTable.Encryption"/> string option, which it does not
+        /// support. Lives here rather than on the shared <see cref="MySqlTable"/> for the same reason as
+        /// <see cref="PageCompressed"/>: on the shared type it would appear in <c>tables.mysql.schema</c>
+        /// as well, offering MySQL users a setting whose grammar it rejects.
+        /// <para>
+        /// A server without an encryption keyring plugin rejects <c>ENCRYPTED=YES</c> with its own error --
+        /// that is engine/server configuration, not a version floor, so it is not gated here the way a
+        /// version-crossed feature would be.
+        /// </para>
+        /// </summary>
+        [SchemaProperty(Description = "MariaDB only. InnoDB at-rest tablespace encryption. MariaDB's equivalent of MySQL's Encryption option, which it does not support.")]
+        [JsonProperty(Order = 116)]
+        public bool Encrypted { get; set; }
+
+        // Meaningless without Encrypted, same relationship PageCompressionLevel has to PageCompressed above.
+        [SchemaProperty(Minimum = 1,
+            Description = "MariaDB only. ENCRYPTION_KEY_ID for the table. Ignored unless Encrypted is set.")]
+        [JsonProperty(Order = 117, NullValueHandling = NullValueHandling.Ignore)]
+        public int? EncryptionKeyId { get; set; }
+
     }
 }

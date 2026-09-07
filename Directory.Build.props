@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <Version>2.6.0-dev</Version>
+    <Version>2.6.0</Version>
     <!-- ICU runtime version bundled with self-contained Linux publish output of CLI tools.
          Single source of truth — referenced by Directory.Packages.props, the three CLI csprojs'
          AppLocalIcu RuntimeHostConfigurationOption, and the release.yml ICU_VERSION env var

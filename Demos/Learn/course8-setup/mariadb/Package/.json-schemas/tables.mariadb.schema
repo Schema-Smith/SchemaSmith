@@ -486,6 +486,20 @@
       "maximum": 9.0,
       "description": "MariaDB only. Compression level 1-9 for PageCompressed. Ignored unless PageCompressed is set."
     },
+    "Encrypted": {
+      "type": "boolean",
+      "description": "MariaDB only. InnoDB at-rest tablespace encryption. MariaDB's equivalent of MySQL's Encryption option, which it does not support."
+    },
+    "EncryptionKeyId": {
+      "type": "integer",
+      "minimum": 1.0,
+      "description": "MariaDB only. ENCRYPTION_KEY_ID for the table. Ignored unless Encrypted is set."
+    },
+    "DataDirectory": {
+      "type": "string",
+      "pattern": "^[^']+$",
+      "description": "The filesystem directory the table's data file is placed in (InnoDB DATA DIRECTORY); applied at create, a move is refused. MySQL requires the directory to be listed in the server's innodb_directories. MySQL and MariaDB only."
+    },
     "Extensions": {}
   },
   "additionalProperties": false,

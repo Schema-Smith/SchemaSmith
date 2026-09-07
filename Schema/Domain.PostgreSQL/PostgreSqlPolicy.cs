@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using Newtonsoft.Json;
+using System.ComponentModel;
 
 namespace Schema.Domain.PostgreSQL
 {
@@ -28,10 +29,12 @@ namespace Schema.Domain.PostgreSQL
         /// </summary>
         [SchemaProperty(Pattern = "PERMISSIVE|RESTRICTIVE")]
         [JsonProperty(Order = 2)]
+        [DefaultValue("PERMISSIVE")]
         public string Permissive { get; set; } = "PERMISSIVE";
 
         [SchemaProperty(Pattern = "ALL|SELECT|INSERT|UPDATE|DELETE")]
         [JsonProperty(Order = 3)]
+        [DefaultValue("ALL")]
         public string Command { get; set; } = "ALL";
 
         /// <summary>
@@ -40,6 +43,7 @@ namespace Schema.Domain.PostgreSQL
         /// not exist fails with PostgreSQL's own error.
         /// </summary>
         [JsonProperty(Order = 4)]
+        [DefaultValue("PUBLIC")]
         public string Roles { get; set; } = "PUBLIC";
 
         /// <summary>

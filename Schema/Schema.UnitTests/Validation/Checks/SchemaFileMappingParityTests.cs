@@ -41,4 +41,29 @@ public class SchemaFileMappingParityTests
             }
         }
     }
+
+    /// <summary>
+    /// Resolving *something* is not parity. The validator regenerates a schema from the type it picks and
+    /// DeepEquals it against the committed file, which the repository generated from ITS type -- so the two
+    /// must be the SAME type, not merely both resolvable. Asserting no-throw let MariaDB tables drift:
+    /// JsonSchemaCheck folded MariaDb to its MySQL base and returned MySqlTable, which throws nothing but
+    /// omits every MariaDbTable-only property (IsSystemVersioned, Periods, Encrypted, PageCompressed...),
+    /// so every MariaDB package reported a permanent false SS-STALE-001 while its committed schema was
+    /// perfectly current. Assert the outcome that actually matters.
+    /// </summary>
+    [Test]
+    public void EverySchemaFile_ResolvesToTheSameTypeInBothMappings()
+    {
+        foreach (var platform in Platforms)
+        {
+            foreach (var fileName in RepositoryHelper.GetSchemaFileNames(platform))
+            {
+                Assert.That(JsonSchemaCheck.GetTypeForSchemaFile(fileName, platform),
+                    Is.EqualTo(RepositoryHelper.GetTypeForSchemaFile(fileName, platform)),
+                    $"'{fileName}' for {platform} resolves to a DIFFERENT domain type in JsonSchemaCheck than "
+                    + "in RepositoryHelper. The validator would compare the committed schema against one "
+                    + "generated from the wrong type and report a false SS-STALE-001 forever.");
+            }
+        }
+    }
 }

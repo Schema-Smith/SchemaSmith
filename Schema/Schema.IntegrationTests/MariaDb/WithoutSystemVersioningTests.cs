@@ -132,6 +132,28 @@ public class WithoutSystemVersioningTests
         Exec($"CALL SchemaSmith_TableQuench('WithoutSvProductMdb', '{_testDb}', '{json}', 0, 0, 0)");
     }
 
+    // Converge an EXISTING ordinary table to versioned AND add a NEW excluded column, in one deploy —
+    // the #1/#13 scenario: previously the ADD COLUMN carried WITHOUT SYSTEM VERSIONING against a
+    // not-yet-versioned table and aborted with MariaDB ERROR 4124.
+    private void DeployConvergeAddingExcludedColumn()
+    {
+        var table = new MariaDbTable
+        {
+            Name = $"`{TableName}`",
+            Engine = "InnoDB",
+            IsSystemVersioned = true,
+            Columns =
+            [
+                new MariaDbColumn { Name = "`id`", DataType = "INT", Nullable = false },
+                new MariaDbColumn { Name = "`payload`", DataType = "INT", Nullable = true },
+                new MariaDbColumn { Name = "`notes`", DataType = "INT", Nullable = true, WithoutSystemVersioning = true }
+            ],
+            Indexes = [new Schema.Domain.Index { Name = $"`pk_{TableName}`", PrimaryKey = true, Unique = true, IndexColumns = "`id`" }]
+        };
+        var json = ("[" + JsonConvert.SerializeObject(table) + "]").Replace("'", "''");
+        Exec($"CALL SchemaSmith_TableQuench('WithoutSvProductMdb', '{_testDb}', '{json}', 0, 0, 0)");
+    }
+
     /// <summary>
     /// Creates the versioned table directly, because SchemaSmith cannot: IsSystemVersioned is
     /// extract-only today -- nothing in any deploy script emits WITH SYSTEM VERSIONING, so a package
@@ -157,9 +179,11 @@ public class WithoutSystemVersioningTests
                 ) ENGINE=InnoDB WITH SYSTEM VERSIONING");
     }
 
-    private bool ColumnIsExcluded() =>
+    private bool ColumnIsExcluded() => ColumnIsExcluded("payload");
+
+    private bool ColumnIsExcluded(string column) =>
         (ScalarStr($@"SELECT EXTRA FROM INFORMATION_SCHEMA.COLUMNS
-           WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{TableName}' AND COLUMN_NAME = 'payload'") ?? "")
+           WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{TableName}' AND COLUMN_NAME = '{column}'") ?? "")
         .Contains("WITHOUT SYSTEM VERSIONING", StringComparison.OrdinalIgnoreCase);
 
     private long DowngradedAuditCount() => Scalar(
@@ -185,6 +209,33 @@ public class WithoutSystemVersioningTests
 
         Assert.That(ColumnIsExcluded(), Is.True,
             "the column has to actually carry the exclusion, not merely deploy without error");
+    }
+
+    [Test]
+    public void ConvergingToVersioned_WhileAddingAnExcludedColumn_DoesNotAbort_AndAppliesTheExclusion()
+    {
+        // #1 + #13: an existing ORDINARY table converging to versioned AND gaining a NEW excluded column in
+        // the SAME deploy. Previously the ADD COLUMN carried WITHOUT SYSTEM VERSIONING against a
+        // not-yet-versioned table and aborted the whole deploy with MariaDB ERROR 4124; and even avoiding
+        // that, STEP 3 could not apply the exclusion the same deploy (it is gated on the table already being
+        // versioned, which does not happen until STEP 7.5).
+        if (Scalar("SELECT SchemaSmith_SupportsSystemVersioning()") == 0)
+            Assert.Ignore("MariaDB < 10.3: system versioning unavailable.");
+        AllowVersionedAlter(); // opt-in so STEP 7.6's post-versioning column MODIFY is permitted (else 4119)
+
+        Deploy(versionedTable: false, excludeColumn: false); // a plain, non-versioned table (id, payload)
+
+        Assert.DoesNotThrow(() => DeployConvergeAddingExcludedColumn(),
+            "converging to versioned while adding an excluded column must not abort (was MariaDB ERROR 4124)");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Scalar($@"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{TableName}' AND TABLE_TYPE = 'SYSTEM VERSIONED'"),
+                Is.EqualTo(1), "the table must actually be system-versioned after the converge");
+            Assert.That(ColumnIsExcluded("notes"), Is.True,
+                "the newly-added excluded column must carry WITHOUT SYSTEM VERSIONING once the table is versioned");
+        });
     }
 
     [Test]

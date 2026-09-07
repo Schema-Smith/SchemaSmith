@@ -140,12 +140,15 @@ BEGIN
         -- exist. Recorded for every declared event, not only changed ones, so adopting one that already
         -- matched still records who owns it.
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
+            -- Every interpolated value is quote-escaped (doubled '') the same way the Comment field is
+            -- above: a database, event, product or template name containing a single quote would
+            -- otherwise break -- or inject into -- this generated INSERT.
             SELECT Id * 10 + 3,
                    CONCAT('INSERT INTO SchemaSmith_ProductOwnership (ObjectType, ObjectSchema, ObjectName, ProductName, TemplateName) ',
-                          'SELECT ''EVENT'', ''', p_DatabaseName, ''', ''', Name, ''', ''', p_ProductName, ''', ''', COALESCE(p_TemplateName, ''), ''' ',
+                          'SELECT ''EVENT'', ''', REPLACE(p_DatabaseName, '''', ''''''), ''', ''', REPLACE(Name, '''', ''''''), ''', ''', REPLACE(p_ProductName, '''', ''''''), ''', ''', REPLACE(COALESCE(p_TemplateName, ''), '''', ''''''), ''' ',
                           'FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM SchemaSmith_ProductOwnership po WHERE po.ObjectType = ''EVENT'' ',
-                          'AND CONVERT(po.ObjectSchema USING utf8mb4) COLLATE utf8mb4_general_ci = ''', p_DatabaseName, ''' ',
-                          'AND CONVERT(po.ObjectName USING utf8mb4) COLLATE utf8mb4_general_ci = ''', Name, ''')')
+                          'AND CONVERT(po.ObjectSchema USING utf8mb4) COLLATE utf8mb4_general_ci = ''', REPLACE(p_DatabaseName, '''', ''''''), ''' ',
+                          'AND CONVERT(po.ObjectName USING utf8mb4) COLLATE utf8mb4_general_ci = ''', REPLACE(Name, '''', ''''''), ''')')
               FROM _SchemaSmith_Events WHERE ShouldApply = 1;
 
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)

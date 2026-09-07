@@ -95,9 +95,13 @@ Per-table options, column attributes, and table-scoped behavior beyond the basic
 | Tablespace placement (table + index) | n/a | ✓ | n/a | n/a | `Tablespace`; create-time only, a move is refused |
 | Partition placement (table + index) | ✓ | n/a | n/a | n/a | `PartitionScheme` + `PartitionColumn`; a scheme NAME, never created — applied at create, a change is refused |
 | Partitioning (RANGE / LIST / HASH / KEY, incl. COLUMNS) | n/a | n/a | ✓ | ✓ | `Partitioning`; applied at create, a change is refused — repartitioning rewrites every row |
+| System-versioned table | n/a | n/a | n/a | ✓ | `IsSystemVersioned`; created WITH SYSTEM VERSIONING, existing table converges via ALTER ADD; removing it is refused (MariaDB purges history on DROP); MariaDB 10.3+ |
 | Per-column history exclusion | n/a | n/a | n/a | ✓ | `WithoutSystemVersioning` on a system-versioned table |
 | InnoDB page compression | n/a | n/a | ✓ | ✓ | MySQL `Compression`; MariaDB `PageCompressed` + `PageCompressionLevel` |
 | Compressed-page size | n/a | n/a | ✓ | ✓ | `KeyBlockSize`, with `RowFormat: COMPRESSED` |
+| At-rest table encryption | n/a | n/a | ✓ | ✓ | MySQL `Encryption`; MariaDB `Encrypted` + `EncryptionKeyId`; converges by rebuild; needs a server keyring |
+| General tablespace placement | n/a | n/a | ✓ | n/a | `Tablespace` (InnoDB general tablespace); create-time only, a move is refused |
+| Data-directory placement | n/a | n/a | ✓ | ✓ | `DataDirectory` (InnoDB `DATA DIRECTORY`); create-time only, a move is refused; MySQL needs `innodb_directories` |
 | Scheduled events (declarative) | n/a | n/a | ✓ | ✓ | `Events/*.json`; compared, converges, drop-by-absence via `DropEventsRemovedFromProduct` |
 | Domain types (declarative) | n/a | ✓ | n/a | n/a | `Domain Types/*.json`; constraints, default and NOT NULL converge in place — a base-type change is refused |
 | Enum types (declarative) | n/a | ✓ | n/a | n/a | `Enum Types/*.json`; values compared and added in declared order |
@@ -199,6 +203,7 @@ The deployment engine. Templates run in 9 ordered execution slots, with state-ba
 | ForeignKeyQuench | ✓ | ✓ | ✓ | ✓ | |
 | ParseTableJsonIntoTempTables | ✓ | ✓ | ✓ | ✓ | |
 | IndexOnlyQuench mode | ✓ | ✓ | ✓ | ✓ | Template `IndexOnlyTableQuenches` |
+| `RebuildPolicy` (rebuild instead of per-column ALTER) | ✓ | ✓ | ✓ | ✓ | `Mode` NEVER / ALWAYS / THRESHOLD, plus `Threshold` and `OnOrderMismatch`; declarable on a table, template, product or the environment (`RebuildPolicyMode`, `RebuildPolicyThreshold`, `RebuildPolicyOnOrderMismatch`) and the nearest level that declares one wins WHOLE. Refused when the live state cannot be reconstructed from the declared definition — system versioning, CDC, replication, Change Tracking, partitioning |
 | IndexedViewQuench (diff-based) | ✓ | n/a | n/a | n/a | |
 | MaterializedViewQuench + MissingMaterializedViewIndexesQuench | n/a | ✓ | n/a | n/a | |
 | ShouldApplyExpression evaluation | ✓ | ✓ | ✓ | ✓ | |

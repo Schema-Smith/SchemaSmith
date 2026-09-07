@@ -55,6 +55,20 @@ public static class ForgeKindler
         AcquireKindleLock(command, platform); // throws ArgumentException for unsupported platforms (before the try)
         try
         {
+            // Footgun kill: a caller that does not supply the server version must NOT silently get the
+            // serverMajorVersion == 0 ("assume OLD") branch on a modern server. That branch composes the
+            // pre-2025 xml_compression reference (CONVERT(BIT, NULL)) into GenerateTableJSON and disables
+            // the drift guard -- so on a real SQL Server 2025 box a version-less kindle stripped
+            // XmlCompression from every extraction and never converged TurningItOff. "Not supplied" must
+            // mean "detect it", never "guess old". SQL Server only: it is the sole platform whose kindle
+            // tokens are version-sensitive, and TargetVersionDetector reads ProductVersion, which is safe
+            // on every supported floor (2008R2+). Best-effort: an undetectable version falls back to 0,
+            // i.e. the prior behaviour, so this can only ever improve correctness, never regress it. The
+            // detected value flows into ComputeKindleStamp below and KindleScripts, keeping the stamp and
+            // the resolved helpers consistent (a disagreement between them was the original 2025 defect).
+            if (platform == Platform.SqlServer && serverMajorVersion == 0)
+                serverMajorVersion = TargetVersionDetector.TryDetect(command, Platform.SqlServer)?.ServerComparable ?? 0;
+
             var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy);
             var current = ReadStamp(command, platform);
             if (!forceReKindle && string.Equals(current, expected, StringComparison.Ordinal))
@@ -455,6 +469,21 @@ public static class ForgeKindler
                 // Must follow SchemaSmith_RebuildBlockedReason (it calls it to refuse) and the identifier
                 // helpers above, and precede the quench procedures that will elect a rebuild.
                 new("SchemaSmith_RebuildTable.sql"),
+                // The general-tablespace placement read (F2b). A PROCEDURE with an OUT param, not a
+                // function -- its MySQL body reaches INNODB_TABLES/INNODB_TABLESPACES only through dynamic
+                // SQL (PREPARE/EXECUTE), which MySQL disallows inside a stored FUNCTION and which is the
+                // only way to keep those MySQL-8.0+-only view names from binding at CREATE time and
+                // breaking kindle on the MySQL 5.7 floor; MariaDb's override sets the OUT param NULL
+                // unconditionally. Must precede BOTH GenerateTableJson (CALLs it for extraction) and
+                // ModifiedTableQuench (CALLs it in the tablespace-move refuse guard), which is why it sits
+                // just ahead of the former.
+                new("SchemaSmith_TableTablespace.sql"),
+                // The DATA DIRECTORY placement read (F2c), both engines -- unlike SchemaSmith_TableTablespace
+                // above (MySQL-only), the MariaDb per-file override here resolves through the same
+                // ResourceLoader variant fallback. Must precede BOTH GenerateTableJson (CALLs it for
+                // extraction) and ModifiedTableQuench (CALLs it in the move-refuse guard), same ordering
+                // reason as its sibling immediately above.
+                new("SchemaSmith_TableDataDirectory.sql"),
                 new("SchemaSmith_GenerateTableJson.sql"),
                 new("SchemaSmith_ParseTableJson.sql"),
                 new("SchemaSmith_MissingTableAndColumnQuench.sql"),

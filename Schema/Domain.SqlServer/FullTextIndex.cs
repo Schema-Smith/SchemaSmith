@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using Newtonsoft.Json;
+using System.ComponentModel;
 
 namespace Schema.Domain.SqlServer
 {
@@ -15,9 +16,11 @@ namespace Schema.Domain.SqlServer
         public string KeyIndex { get; set; }
 
         [JsonProperty(Order = 3)]
+        [DefaultValue("AUTO")]
         public string ChangeTracking { get; set; } = "AUTO";
 
         [JsonProperty(Order = 4)]
+        [DefaultValue("SYSTEM")]
         public string StopList { get; set; } = "SYSTEM";
 
         [SchemaProperty(Required = true)]

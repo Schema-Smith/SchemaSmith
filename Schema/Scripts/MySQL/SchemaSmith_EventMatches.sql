@@ -71,7 +71,10 @@ BEGIN
   ELSE
     -- The interval is compared case-insensitively and whitespace-normalised: "1 DAY", "1  day" and
     -- "1 Day" are the same schedule, and rebuilding an event over its capitalisation would be absurd.
-    IF UPPER(REPLACE(COALESCE(p_Interval, ''), '  ', ' ')) <> UPPER(COALESCE(v_interval, '')) THEN RETURN 0; END IF;
+    -- Collapse ANY run of spaces to one (the swap trick: space -> '<>', cancel adjacent '><', '<>' -> space),
+    -- not just a single doubled-space pass -- a non-recursive REPLACE('  ',' ') leaves "1   DAY" (3 spaces)
+    -- as "1  DAY" and spuriously reports the event changed. Works on MySQL 5.7 (no REGEXP_REPLACE needed).
+    IF UPPER(REPLACE(REPLACE(REPLACE(COALESCE(p_Interval, ''), ' ', '<>'), '><', ''), '<>', ' ')) <> UPPER(COALESCE(v_interval, '')) THEN RETURN 0; END IF;
     -- STARTS AND ENDS ARE ONLY COMPARED WHEN THE PACKAGE DECLARES THEM, and that is not tidiness --
     -- it is the difference between working and rebuilding forever.
     --

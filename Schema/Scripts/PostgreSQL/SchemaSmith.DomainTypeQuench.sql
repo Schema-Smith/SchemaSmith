@@ -39,8 +39,18 @@ BEGIN
          elem ->> 'DataType' AS "DataType",
          COALESCE((elem ->> 'NotNull')::BOOLEAN, false) AS "NotNull",
          elem ->> 'Default' AS "Default",
+         COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
          elem -> 'CheckConstraints' AS "CheckConstraints"
     FROM src, JSON_ARRAY_ELEMENTS(arr) AS elem;
+
+  -- Evaluate ShouldApplyExpression BEFORE the constraints are flattened below: drop domain types whose
+  -- condition is false so a conditional variant is SKIPPED rather than silently always applied. Always
+  -- executes, even under --WhatIf -- this filters the internal working set, it is not user-visible DDL.
+  SELECT STRING_AGG('DELETE FROM temp_domain_types WHERE "Schema" = ''' || "Schema" || ''' AND "Name" = ''' || "Name" || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+    INTO sql_script
+    FROM temp_domain_types
+    WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, false);
 
   -- The declared constraints, flattened once so every pass below reads the same working set.
   DROP TABLE IF EXISTS temp_domain_checks;

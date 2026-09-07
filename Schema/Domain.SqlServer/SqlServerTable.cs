@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json;
 using Schema.Delivery;
+using System.ComponentModel;
 
 namespace Schema.Domain.SqlServer
 {
@@ -55,6 +56,7 @@ namespace Schema.Domain.SqlServer
         public string Schema { get; set; }
 
         [JsonProperty(Order = 101)]
+        [DefaultValue("NONE")]
         public string CompressionType { get; set; } = "NONE";
 
         // XML_COMPRESSION, the sibling of DATA_COMPRESSION above and independent of it -- a table can be
@@ -221,9 +223,12 @@ namespace Schema.Domain.SqlServer
         // tables"). SchemaSmith emits them inline and the ordinary index passes skip the table.
         //
         // Requires a MEMORY_OPTIMIZED_DATA filegroup on the database and an edition/version that supports
-        // the engine (SERVERPROPERTY('IsXTPSupported') = 1). SchemaSmith creates neither; a table asking
-        // for this without them is reported through UnsupportedFeaturePolicy rather than failing the raw
-        // CREATE -- the same detect-don't-create posture FileGroup and the temporal history table take.
+        // the engine (SERVERPROPERTY('IsXTPSupported') = 1). SchemaSmith creates neither, and — unlike the
+        // version-gated performance features — a memory-optimized table is NOT degraded to an ordinary disk
+        // table when they are absent: that would silently change the table's durability and concurrency
+        // semantics (deliberately-not-implemented, 2026-09-03). Instead a pre-deploy validation FAILS the run
+        // by name with a clear "requires In-Memory OLTP support + a MEMORY_OPTIMIZED_DATA filegroup" message
+        // (better than the raw engine error), before any DDL is attempted.
         [JsonProperty(Order = 121, NullValueHandling = NullValueHandling.Ignore)]
         public bool MemoryOptimized { get; set; }
 

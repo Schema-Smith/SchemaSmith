@@ -51,6 +51,8 @@
     // "DropExcludeConstraintsRemovedFromProduct": false, // Drop exclude constraints removed from the product definition (PostgreSQL only) — absent = inherit the product/template/table value (default: drop)
     // "DropStatisticsRemovedFromProduct": false, // Drop statistics removed from the product definition (SQL Server + PostgreSQL) — absent = inherit the product/template/table value (default: drop)
     // "DropIndexesRemovedFromProduct": false, // Drop product-owned indexes removed from the product definition (distinct from DropUnknownIndexes, which targets out-of-band indexes) — absent = inherit the product/template/table value (default: drop)
+    // "DropEventsRemovedFromProduct": false, // MySQL/MariaDB. Drop a scheduled event that is on the server but not in the product definition — default off
+    // "DropSchemaBoundDependents": false, // SQL Server. When a column change is blocked by a schema-bound view/function, drop the blocking module then recreate it from your package — absent = inherit the product/template value (default off); you re-grant any permissions on the recreated module
     // "PreventDrop": true, // No-drop protection tier: this environment never drops an object for being absent from the product (every Drop…RemovedFromProduct pass + DropUnknownIndexes is suppressed); each skipped drop is logged and reported in a PreventDropSummary manifest, and the run completes normally. Transient drop-then-recreate that applies a declared change is unaffected. Default off.
     // "DropPeriodsRemovedFromProduct": true, // MariaDB. Drop an application-time period that is on the
     //     table but not in the package. THE ONE DROP FLAG THAT DEFAULTS TO OFF: extraction omits the

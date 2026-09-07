@@ -1932,8 +1932,10 @@ public class ProductQuench
                 ConfigBool(_config, SettingsKeys.DropSchemaBoundDependents), _product.DropSchemaBoundDependents,
                 template.DropSchemaBoundDependents, defaultValue: false),
             // Environment-level only for now: an event is a template-scoped object, so there is no
-            // per-table or per-object level for this to cascade from.
-            DropRemovedEvents = ConfigBool(_config, SettingsKeys.DropEventsRemovedFromProduct) ?? false
+            // per-table or per-object level for this to cascade from. Forced OFF under the no-drop
+            // protection tier (PreventDrop) exactly like every other drop-by-absence pass -- the tier's
+            // contract is that nothing is dropped for being absent from the product, events included.
+            DropRemovedEvents = !_protectedMode && (ConfigBool(_config, SettingsKeys.DropEventsRemovedFromProduct) ?? false)
         };
         var workUnitStopwatch = Stopwatch.StartNew();
         quench.Execute();

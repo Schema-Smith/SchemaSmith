@@ -148,6 +148,38 @@ public class SettingsContractDriftTests
     }
 
     /// <summary>
+    /// The gap that let <c>DropEventsRemovedFromProduct</c> ship missing from the contract.
+    /// <para><see cref="EveryConfigurationKeyReadByProductCode_IsRegisteredInTheContract"/> scans for
+    /// string-LITERAL reads, but <see cref="NoProductCodeReadsConfigurationByStringLiteral"/> forces every
+    /// read through a <see cref="SettingsKeys"/> constant — so a key read the sanctioned way
+    /// (<c>ConfigBool(_config, SettingsKeys.DropEventsRemovedFromProduct)</c>) has no literal for the drift
+    /// scan to catch, and nothing else asserted that a referenced constant is in the contract. A consumer
+    /// validating a settings file against an incomplete contract rejects a perfectly valid setting — the
+    /// contract is invalid. This closes that direction: every constant product code actually reads must be
+    /// registered.</para>
+    /// </summary>
+    [Test]
+    public void EveryConfigurationKeyReferencedByProductCode_IsRegisteredInTheContract()
+    {
+        var root = RepoRoot();
+        Assert.That(root, Is.Not.Null);
+
+        var accepted = SettingsContract.AllAcceptedKeys().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var unregistered = ReferencedKeyValues(root)
+            .Where(k => !accepted.Contains(k))
+            .Where(k => !SettingsContract.IsOpenSection(k))
+            .Where(k => !IsScopedSubKey(k))
+            .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        Assert.That(unregistered, Is.Empty,
+            "These configuration keys are read by product code through a SettingsKeys constant but are not " +
+            "registered in SettingsContract, so the contract is incomplete — a consumer validating a settings " +
+            "file against it would reject a valid setting:" + Environment.NewLine +
+            string.Join(Environment.NewLine, unregistered.Select(k => "  " + k)));
+    }
+
+    /// <summary>
     /// The other direction: a registered key nothing reads is dead weight that quietly accumulates,
     /// and a contract carrying settings the tools ignore is exactly the unreliable promise this
     /// mechanism exists to avoid.

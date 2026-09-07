@@ -132,6 +132,15 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
   EXEC sp_executesql N'SELECT @p_Ledger = CASE ledger_type_desc WHEN ''APPEND_ONLY_LEDGER_TABLE'' THEN ''AppendOnly'' WHEN ''UPDATABLE_LEDGER_TABLE'' THEN ''Updatable'' END FROM sys.tables WITH (NOLOCK) WHERE [object_id] = @p_ObjId',
     N'@p_ObjId INT, @p_Ledger NVARCHAR(12) OUTPUT', @p_ObjId = @v_ObjectId, @p_Ledger = @v_Ledger OUTPUT
 
+-- Memory-optimized (Hekaton) is 2014 (major 12); is_memory_optimized / durability_desc are 2014 columns,
+-- staged behind the >= 12 guard (like @v_GraphType/@v_Ledger) and simply 0/NULL below it, where a
+-- memory-optimized table cannot exist. Without this the XML tier (compat-100 / genuine 2014) extracted a
+-- memory-optimized table as an ordinary one -- the JSON twin reads these; the XML twin did not (#J1/#8).
+DECLARE @v_MemoryOptimized BIT = 0, @v_Durability NVARCHAR(20) = NULL
+IF SchemaSmith.fn_ServerMajorVersion() >= 12
+  EXEC sp_executesql N'SELECT @p_Mo = ISNULL(is_memory_optimized, 0), @p_Dur = CASE WHEN is_memory_optimized = 1 THEN durability_desc END FROM sys.tables WITH (NOLOCK) WHERE [object_id] = @p_ObjId',
+    N'@p_ObjId INT, @p_Mo BIT OUTPUT, @p_Dur NVARCHAR(20) OUTPUT', @p_ObjId = @v_ObjectId, @p_Mo = @v_MemoryOptimized OUTPUT, @p_Dur = @v_Durability OUTPUT
+
 CREATE TABLE #GraphCols ([column_id] INT NOT NULL)
 IF SchemaSmith.fn_ServerMajorVersion() >= 14
   EXEC sp_executesql N'INSERT INTO #GraphCols ([column_id]) SELECT column_id FROM sys.columns WITH (NOLOCK) WHERE graph_type IS NOT NULL AND [object_id] = @p_ObjId',
@@ -147,6 +156,14 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 11
 CREATE TABLE #SemanticCols ([object_id] INT NOT NULL, column_id INT NOT NULL)
 IF SchemaSmith.fn_ServerMajorVersion() >= 11
   EXEC sp_executesql N'INSERT INTO #SemanticCols ([object_id], column_id) SELECT [object_id], column_id FROM sys.fulltext_index_columns WITH (NOLOCK) WHERE statistical_semantics = 1 AND [object_id] = @p_ObjId',
+    N'@p_ObjId INT', @p_ObjId = @v_ObjectId
+
+-- sys.hash_indexes is 2014 (major 12) -- a memory-optimized hash index's bucket_count. Staged behind the
+-- >= 12 guard and empty below it, where hash indexes cannot exist, so the index subquery below can LEFT JOIN
+-- it unconditionally (#J1/#8; the JSON twin reads bucket_count as a scalar subquery).
+CREATE TABLE #HashIndexMeta ([index_id] INT NOT NULL, [bucket_count] BIGINT NULL)
+IF SchemaSmith.fn_ServerMajorVersion() >= 12
+  EXEC sp_executesql N'INSERT INTO #HashIndexMeta ([index_id], [bucket_count]) SELECT index_id, bucket_count FROM sys.hash_indexes WITH (NOLOCK) WHERE [object_id] = @p_ObjId',
     N'@p_ObjId INT', @p_ObjId = @v_ObjectId
 ;WITH XMLNAMESPACES ('http://james.newtonking.com/projects/json' AS json)
 SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
@@ -209,6 +226,10 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        CASE WHEN st.is_tracked_by_cdc = 1 THEN 'true' ELSE 'false' END AS [EnableCDC],
        @v_GraphType AS [GraphType],
        @v_Ledger AS [Ledger],
+       -- Memory-optimized round-trip (#J1/#8): emit only when true, matching the JSON twin. Read into
+       -- @v_MemoryOptimized/@v_Durability via the version-gated pre-stage above (0/NULL below 2014).
+       CASE WHEN @v_MemoryOptimized = 1 THEN 'true' END AS [MemoryOptimized],
+       CASE WHEN @v_MemoryOptimized = 1 THEN @v_Durability END AS [Durability],
        -- Table-level Change Tracking round-trip -- emitted only when ON, like IsTemporal above.
        CASE WHEN ctt.[object_id] IS NOT NULL THEN 'true' END AS [EnableChangeTracking],
        CASE WHEN ctt.is_track_columns_updated_on = 1 THEN 'true' END AS [TrackColumnsUpdated],
@@ -288,6 +309,10 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                   FROM sys.partitions AS p WITH (NOLOCK)
                   WHERE p.[object_id] = si.[object_id]
                     AND p.index_id = si.index_id) AS [CompressionType],
+               -- Memory-optimized hash-index bucket count (#J1/#8): emit only for a hash index, matching the
+               -- JSON twin. #HashIndexMeta is empty below 2014, so this is NULL (dropped) on the old binaries
+               -- the XML tier also serves.
+               (SELECT him.[bucket_count] FROM #HashIndexMeta him WHERE him.[index_id] = si.index_id) AS [BucketCount],
                -- Same emit-only-when-non-default rule as the table-level [FileGroup] above -- see JSON twin.
                (SELECT '[' + fg.[name] + ']'
                   FROM sys.filegroups fg WITH (NOLOCK)

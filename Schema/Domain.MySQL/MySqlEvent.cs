@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using Newtonsoft.Json;
+using System.ComponentModel;
 
 namespace Schema.Domain.MySQL
 {
@@ -38,6 +39,7 @@ namespace Schema.Domain.MySQL
         /// </summary>
         [SchemaProperty(Pattern = "EVERY|AT", Required = true)]
         [JsonProperty(Order = 3)]
+        [DefaultValue("EVERY")]
         public string ScheduleType { get; set; } = "EVERY";
 
         /// <summary>For <c>EVERY</c>: the interval, e.g. <c>"1 DAY"</c> or <c>"30 MINUTE"</c>. Ignored for <c>AT</c>.</summary>
@@ -66,6 +68,7 @@ namespace Schema.Domain.MySQL
         /// </summary>
         [SchemaProperty(Pattern = "ENABLE|DISABLE|DISABLE ON SLAVE")]
         [JsonProperty(Order = 8)]
+        [DefaultValue("ENABLE")]
         public string Status { get; set; } = "ENABLE";
 
         /// <summary>

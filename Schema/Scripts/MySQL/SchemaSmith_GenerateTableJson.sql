@@ -20,9 +20,22 @@ BEGIN
     DECLARE v_foreign_keys LONGTEXT;
     DECLARE v_check_constraints LONGTEXT;
     DECLARE v_fulltext_indexes LONGTEXT;
+    DECLARE v_tablespace VARCHAR(64);
+    DECLARE v_datadirectory VARCHAR(512);
 
     -- Set session variables for proper GROUP_CONCAT handling
     SET SESSION group_concat_max_len = 1000000;
+
+    -- SchemaSmith_TableTablespace is a PROCEDURE (OUT param), not a function -- it needs dynamic SQL to
+    -- keep INFORMATION_SCHEMA.INNODB_TABLES/INNODB_TABLESPACES out of anything bound at CREATE time (see
+    -- that script), and MySQL does not allow PREPARE/EXECUTE inside a stored FUNCTION (ERROR 1336). CALLed
+    -- once here, ahead of the JSON_OBJECT SELECT below, which references the OUT result by variable.
+    CALL SchemaSmith_TableTablespace(p_Schema, p_Table, v_tablespace);
+
+    -- SchemaSmith_TableDataDirectory (F2c), both engines: MySQL's body needs the same PROCEDURE/dynamic-SQL
+    -- shape as SchemaSmith_TableTablespace above (INNODB_DATAFILES is 8.0+ and MySQL disallows PREPARE
+    -- inside a FUNCTION), so it is CALLed the same way -- once here, ahead of the JSON_OBJECT SELECT.
+    CALL SchemaSmith_TableDataDirectory(p_Schema, p_Table, v_datadirectory);
 
     -- NULLIF(x, '') is NOT used inside JSON_OBJECT here. On MySQL 5.7 it collapses to a BOOLEAN --
     -- JSON_OBJECT emits `false` in place of the value -- so a table/column/index comment and a
@@ -47,6 +60,30 @@ BEGIN
         'PageCompressed', CASE WHEN SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'PAGE_COMPRESSED') = '1'
                                THEN TRUE ELSE NULL END,
         'PageCompressionLevel', SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'PAGE_COMPRESSION_LEVEL'),
+        -- At-rest encryption, same CREATE_OPTIONS family as the compression four above. MySQL records
+        -- ENCRYPTION in CREATE_OPTIONS only when ='Y' -- ='N'/default is ABSENT -- so absent means
+        -- unencrypted default, same convention as every other property in this block. MySQL only,
+        -- like Compression above.
+        'Encryption', CASE WHEN VERSION() LIKE '%MariaDB%' THEN NULL
+                           ELSE SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'ENCRYPTION') END,
+        -- MariaDB only, like PageCompressed above. Verified live 2026-09-04: ENCRYPTED=YES surfaces as
+        -- `ENCRYPTED`=YES in CREATE_OPTIONS.
+        'Encrypted', CASE WHEN SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'ENCRYPTED') = 'YES'
+                          THEN TRUE ELSE NULL END,
+        'EncryptionKeyId', SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'ENCRYPTION_KEY_ID'),
+        -- The InnoDB general tablespace this table is placed in (F2b), MySQL only. NOT in CREATE_OPTIONS
+        -- (unlike the block above) -- read via the per-engine SchemaSmith_TableTablespace CALL above (a
+        -- PROCEDURE, not a function -- see its script for why), whose MySQL body reads
+        -- INFORMATION_SCHEMA.INNODB_TABLES/INNODB_TABLESPACES through dynamic SQL and whose MariaDb
+        -- override always sets NULL, keeping this shared proc kindle-safe on MariaDB (no bare reference to
+        -- either MySQL-only view here). NULL for a table in the implicit per-table tablespace -- the
+        -- overwhelming majority -- so it needs the same JSON_REMOVE strip below as the CREATE_OPTIONS four.
+        'Tablespace', v_tablespace,
+        -- The filesystem directory this table's InnoDB data file is placed in (F2c), both engines. NULL
+        -- for the overwhelming majority of tables (no declared placement), so it needs the same
+        -- JSON_REMOVE strip below as Tablespace above -- a table in no directory extracts exactly as it
+        -- did before this shipped.
+        'DataDirectory', v_datadirectory,
         -- MariaDB only, and NULL (stripped by the JSON_REMOVE pass) everywhere else, so a MySQL package
         -- never carries a property its schema does not declare.
         'IsSystemVersioned', CASE WHEN t.TABLE_TYPE = 'SYSTEM VERSIONED' THEN TRUE ELSE NULL END,
@@ -384,6 +421,16 @@ WHERE tc.TABLE_SCHEMA = @v_ccSchema
         CASE WHEN COALESCE(JSON_TYPE(JSON_EXTRACT(v_json, '$.KeyBlockSize')), 'NULL') = 'NULL' THEN '$.KeyBlockSize' ELSE '$.___dummy___' END,
         CASE WHEN COALESCE(JSON_TYPE(JSON_EXTRACT(v_json, '$.PageCompressed')), 'NULL') = 'NULL' THEN '$.PageCompressed' ELSE '$.___dummy___' END,
         CASE WHEN COALESCE(JSON_TYPE(JSON_EXTRACT(v_json, '$.PageCompressionLevel')), 'NULL') = 'NULL' THEN '$.PageCompressionLevel' ELSE '$.___dummy___' END,
+        -- The encryption three, same treatment: absent means the table declares none, and a MariaDB
+        -- package must not carry Encryption (nor a MySQL one Encrypted/EncryptionKeyId) at all.
+        CASE WHEN COALESCE(JSON_TYPE(JSON_EXTRACT(v_json, '$.Encryption')), 'NULL') = 'NULL' THEN '$.Encryption' ELSE '$.___dummy___' END,
+        CASE WHEN COALESCE(JSON_TYPE(JSON_EXTRACT(v_json, '$.Encrypted')), 'NULL') = 'NULL' THEN '$.Encrypted' ELSE '$.___dummy___' END,
+        CASE WHEN COALESCE(JSON_TYPE(JSON_EXTRACT(v_json, '$.EncryptionKeyId')), 'NULL') = 'NULL' THEN '$.EncryptionKeyId' ELSE '$.___dummy___' END,
+        -- Tablespace (F2b): absent means the table lives in its own implicit per-table tablespace, and a
+        -- package must not carry the key at all -- the no-churn contract every property in this block shares.
+        CASE WHEN COALESCE(JSON_TYPE(JSON_EXTRACT(v_json, '$.Tablespace')), 'NULL') = 'NULL' THEN '$.Tablespace' ELSE '$.___dummy___' END,
+        -- DataDirectory (F2c): absent means no declared placement, same no-churn contract as Tablespace.
+        CASE WHEN COALESCE(JSON_TYPE(JSON_EXTRACT(v_json, '$.DataDirectory')), 'NULL') = 'NULL' THEN '$.DataDirectory' ELSE '$.___dummy___' END,
         -- Empty array, not null: the function returns '[]' for a table with no periods, and an
         -- ordinary table's package must not carry the key at all -- nor must any MySQL package,
         -- whose schema does not declare this property.
