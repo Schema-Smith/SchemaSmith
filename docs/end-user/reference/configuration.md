@@ -662,7 +662,12 @@ Two situations make a rebuild the better move:
 | Environment | `RebuildPolicyMode` / `RebuildPolicyThreshold` / `RebuildPolicyOnOrderMismatch` in `SchemaQuench.settings.json` | (inherit) |
 | Product | `RebuildPolicy` in `Product.json` | (inherit) |
 | Template | `RebuildPolicy` in `Template.json` | (inherit) |
-| Table | `RebuildPolicy` in a table’s `.json` file | `{ "Mode": "NEVER" }` |
+| Table | `RebuildPolicy` in a table’s `.json` file | (inherit) |
+
+A tier that declares nothing defers to the nearest level above that does. `{ "Mode": "NEVER" }` is the
+floor only when **no** tier declares a policy — a table that declares nothing does not get `NEVER`, it
+gets whatever its template, product or environment declared. When a level does declare one, it wins
+whole; see *The levels replace, they do not blend* below.
 
 ```json
 // Tables/dbo.Orders.json — rebuild once three or more column modifications pile up
@@ -780,16 +785,26 @@ like at the time.
 That is a decision about your data retention, not a detail of syntax, so SchemaSmith will not make it
 for you.
 
+| Scope | Where to set | Default |
+|---|---|---|
+| Environment | `SystemVersioningAlterHistory` in `SchemaQuench.settings.json` (or the `SmithySettings_SystemVersioningAlterHistory` environment variable, or `--SystemVersioningAlterHistory=KEEP` on the command line) | _unset_ |
+
 | Setting | Effect |
 |---|---|
 | _unset_ (default) | The engine refuses the column change, exactly as it does today. |
 | `KEEP` | The change proceeds and the stored history is rewritten to match. |
 
 ```json
+// SchemaQuench.settings.json — an environment setting, not a package property
 {
   "SystemVersioningAlterHistory": "KEEP"
 }
 ```
+
+> **Note:** this is an environment setting only. It has no product, template or table tier, so it does
+> not belong in `Product.json`, `Template.json`, or a table's `.json` — the surrounding examples in this
+> section are table JSON, and this one is not. Since v2.6.0 the generated `.json-schemas` reject it as an
+> unexpected property, so putting it in a package fails `--Validate` with `SS-JSON-001` and exit `2`.
 
 Leaving it unset costs nothing on a healthy deploy: the refusal only fires when a change genuinely
 requires rewriting history, never on a re-deploy where the table already matches its definition. If
@@ -1008,6 +1023,22 @@ The environment tier is new in this release. Previously `DropUnknownIndexes` was
 > **Note:** Default `false` at all tiers preserves existing behavior — if you haven't set any tier, index-drop-by-absence is off, consistent with prior releases. The environment tier adds an opt-in or opt-out guardrail without changing the per-package default.
 
 For package-side configuration and adoption guidance, see [DropUnknownIndexes](schema-packages.md#properties) in the Schema Packages reference.
+
+---
+
+## DropEventsRemovedFromProduct
+
+Controls whether SchemaQuench drops a scheduled event that exists on the server but no longer appears in the package. Scheduled events are a **MySQL and MariaDB** feature. Unlike the rest of the `Drop…RemovedFromProduct` family, this one has a single tier: an event is a template-scoped object, so there is no per-table or per-object level for it to cascade from.
+
+| Scope | Where to set | Default |
+|---|---|---|
+| Environment | `DropEventsRemovedFromProduct` in `SchemaQuench.settings.json` (or `SmithySettings_DropEventsRemovedFromProduct` environment variable) | `false` |
+
+It defaults to off for the same reason `DropPeriodsRemovedFromProduct` does: a package with no `Events` entry is not necessarily saying "this database has no events" — it may simply predate declared events. Removal also reaches only events SchemaSmith created; one made by hand, or by a scripted `Events/` file, is never touched. Under the no-drop protection tier ([`PreventDrop`](schemaquench.md#preventdrop) set for the environment) the flag is forced off along with every other drop-by-absence pass.
+
+> **Note:** this is an environment setting only. Setting `DropEventsRemovedFromProduct` in `Product.json` or `Template.json` is silently ignored — it is not a package property and appears in no generated `.json-schemas` file.
+
+For the package side of declared events, see [Scheduled Event JSON Format](schema-packages.md#scheduled-event-json-format-mysql--mariadb) in the Schema Packages reference.
 
 ---
 
