@@ -16,6 +16,13 @@ DECLARE
   table_json TEXT = CASE WHEN LEFT(p_TableDefinitions, 1) = '[' THEN p_TableDefinitions ELSE '[' || p_TableDefinitions || ']' END;
   sql_script TEXT = '';
 BEGIN
+    -- Dropped first like every other temp table in this procedure. A PostgreSQL TEMPORARY table lives for
+    -- the SESSION, not the call, so without this a second IndexOnlyQuench on the same connection dies with
+    -- 42P07, "relation temp_tables already exists" -- the first call works and every later one fails.
+    -- temp_indexes, temp_statistics and temp_indexes_to_drop below have always had their DROP; this one
+    -- was the odd one out, and the omission was unreachable while the emitted CALL was missing
+    -- p_ProductName and the procedure could never run at all on PostgreSQL.
+    DROP TABLE IF EXISTS temp_tables;
     CREATE TEMPORARY TABLE temp_tables AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
     SELECT elem ->> 'Schema' AS "Schema",
