@@ -1,0 +1,30 @@
+{
+  "Schema": "public",
+  "Name": "ledgerentry",
+  "Columns": [
+    {
+      "Name": "entryid",
+      "DataType": "int8",
+      "Nullable": false
+    },
+    {
+      "Name": "entryyear",
+      "DataType": "int4",
+      "Nullable": false
+    },
+    {
+      "Name": "amount",
+      "DataType": "numeric(18,2)",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_ledgerentry",
+      "IndexColumns": "entryid,entryyear",
+      "PrimaryKey": true,
+      "Unique": true
+    }
+  ],
+  "Tablespace": "pg_default"
+}

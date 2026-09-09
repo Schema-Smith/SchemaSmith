@@ -1,0 +1,549 @@
+{
+  "type": "object",
+  "properties": {
+    "Name": {
+      "type": "string"
+    },
+    "Columns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "DataType": {
+            "type": "string"
+          },
+          "Nullable": {
+            "type": "boolean"
+          },
+          "Default": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "OldName": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "GenerationExpression": {
+            "type": "string"
+          },
+          "Collation": {
+            "type": "string"
+          },
+          "Generated": {
+            "type": "string"
+          },
+          "Virtual": {
+            "type": "boolean"
+          },
+          "Storage": {
+            "type": "string"
+          },
+          "Compression": {
+            "type": "string"
+          },
+          "CheckExpression": {
+            "type": "string"
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "DataType"
+        ]
+      }
+    },
+    "Indexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "PrimaryKey": {
+            "type": "boolean"
+          },
+          "Unique": {
+            "type": "boolean"
+          },
+          "UniqueConstraint": {
+            "type": "boolean"
+          },
+          "IndexColumns": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "FilterExpression": {
+            "type": "string"
+          },
+          "Clustered": {
+            "type": "boolean"
+          },
+          "IncludeColumns": {
+            "type": "string"
+          },
+          "AccessMethod": {
+            "type": "string"
+          },
+          "FillFactor": {
+            "type": "integer",
+            "minimum": 0.0,
+            "maximum": 100.0
+          },
+          "NullsNotDistinct": {
+            "type": "boolean"
+          },
+          "Deferrable": {
+            "type": "boolean"
+          },
+          "InitiallyDeferred": {
+            "type": "boolean"
+          },
+          "UpdateFillFactor": {
+            "type": "boolean"
+          },
+          "Tablespace": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "PostgreSQL only. The tablespace this index lives on. Omit to leave placement unmanaged — an omitted value does NOT mean the database default, and an index does not automatically follow its table. Create-time only: moving an existing index rebuilds it, so a declared tablespace that differs from where the index already lives is refused rather than moved."
+          },
+          "StorageParameters": {
+            "type": "object"
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "IndexColumns"
+        ]
+      }
+    },
+    "ForeignKeys": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Columns": {
+            "type": "string"
+          },
+          "RelatedTable": {
+            "type": "string"
+          },
+          "RelatedColumns": {
+            "type": "string"
+          },
+          "DeleteAction": {
+            "type": "string",
+            "pattern": "^(NO ACTION|RESTRICT|CASCADE|SET NULL|SET DEFAULT)?$"
+          },
+          "UpdateAction": {
+            "type": "string",
+            "pattern": "^(NO ACTION|RESTRICT|CASCADE|SET NULL|SET DEFAULT)?$"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "RelatedTableSchema": {
+            "type": "string"
+          },
+          "Deferrable": {
+            "type": "boolean"
+          },
+          "InitiallyDeferred": {
+            "type": "boolean"
+          },
+          "MatchType": {
+            "type": "string",
+            "pattern": "FULL|PARTIAL|SIMPLE"
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Columns",
+          "RelatedTable",
+          "RelatedColumns"
+        ]
+      }
+    },
+    "CheckConstraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Expression": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Deferrable": {
+            "type": "boolean"
+          },
+          "InitiallyDeferred": {
+            "type": "boolean"
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Expression"
+        ]
+      }
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "DataDelivery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ContentFile": {
+              "type": "string"
+            },
+            "MergeType": {
+              "type": "string",
+              "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+            },
+            "MatchColumns": {
+              "type": "string"
+            },
+            "MergeFilter": {
+              "type": "string"
+            },
+            "MergeDisableTriggers": {
+              "type": "boolean"
+            },
+            "MergeDisableRules": {
+              "type": "boolean"
+            },
+            "MergeUpdateDescendents": {
+              "type": "boolean"
+            },
+            "ShouldApplyExpression": {
+              "type": "string"
+            },
+            "VariantName": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "Optional label for a conditional data-delivery variant — names the intent behind its ShouldApplyExpression, appears in deployment logging when the delivery applies, and identifies which array variant a DataTongs re-extraction reconciles."
+            },
+            "ContentEncoding": {
+              "type": "string",
+              "pattern": "Json|Xml"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ContentFile": {
+                "type": "string"
+              },
+              "MergeType": {
+                "type": "string",
+                "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+              },
+              "MatchColumns": {
+                "type": "string"
+              },
+              "MergeFilter": {
+                "type": "string"
+              },
+              "MergeDisableTriggers": {
+                "type": "boolean"
+              },
+              "MergeDisableRules": {
+                "type": "boolean"
+              },
+              "MergeUpdateDescendents": {
+                "type": "boolean"
+              },
+              "ShouldApplyExpression": {
+                "type": "string"
+              },
+              "VariantName": {
+                "type": "string",
+                "maxLength": 128,
+                "description": "Optional label for a conditional data-delivery variant — names the intent behind its ShouldApplyExpression, appears in deployment logging when the delivery applies, and identifies which array variant a DataTongs re-extraction reconciles."
+              },
+              "ContentEncoding": {
+                "type": "string",
+                "pattern": "Json|Xml"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+    },
+    "DropColumnsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropColumnsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropForeignKeysRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropForeignKeysRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropCheckConstraintsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropCheckConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropExcludeConstraintsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropExcludeConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting. PostgreSQL only."
+    },
+    "DropStatisticsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropStatisticsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropIndexesRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropIndexesRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "OldName": {
+      "type": "string"
+    },
+    "PreventDrop": {
+      "type": "boolean",
+      "description": "When true, this table is protected from drop-by-absence and the protection is sticky: it is persisted in SchemaSmith's ownership tracking so a protected table that is later removed from the product package is skipped (never silently dropped) rather than reconciled away. Set false and re-deploy while the table is still in the package to clear the protection before an intended removal. Default false."
+    },
+    "RebuildPolicy": {
+      "type": "object",
+      "properties": {
+        "Mode": {
+          "type": "string",
+          "pattern": "NEVER|ALWAYS|THRESHOLD",
+          "description": "When to rebuild the table instead of altering it in place. NEVER (the default) always alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of pending changes reaches Threshold, which is then required."
+        },
+        "Threshold": {
+          "type": "integer",
+          "minimum": 1.0,
+          "description": "Required when Mode is THRESHOLD: the number of pending changes at which the table is rebuilt rather than altered in place. Ignored for every other Mode."
+        },
+        "OnOrderMismatch": {
+          "type": "boolean",
+          "description": "Rebuild when the deployed column order does not match the authored column order. An independent trigger that composes with Mode rather than replacing it — a table can ask for both a threshold and an order-mismatch rebuild."
+        }
+      },
+      "additionalProperties": false,
+      "description": "When set, overrides the template-, product- and environment-level RebuildPolicy for this table only. Null inherits from the nearest level that declares one. The winning policy applies whole — a policy declared here does NOT pick up fields it omits from a higher level."
+    },
+    "Schema": {
+      "type": "string"
+    },
+    "Statistics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Kind": {
+            "type": "string"
+          },
+          "StatisticsColumns": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "StatisticsColumns"
+        ]
+      }
+    },
+    "ExcludeConstraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "AccessMethod": {
+            "type": "string"
+          },
+          "ExcludeColumns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "Column": {
+                  "type": "string"
+                },
+                "Operator": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Column",
+                "Operator"
+              ]
+            }
+          },
+          "FilterExpression": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "Deferrable": {
+            "type": "boolean"
+          },
+          "InitiallyDeferred": {
+            "type": "boolean"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "ExcludeColumns"
+        ]
+      }
+    },
+    "Policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Permissive": {
+            "type": "string",
+            "pattern": "PERMISSIVE|RESTRICTIVE"
+          },
+          "Command": {
+            "type": "string",
+            "pattern": "ALL|SELECT|INSERT|UPDATE|DELETE"
+          },
+          "Roles": {
+            "type": "string"
+          },
+          "UsingExpression": {
+            "type": "string"
+          },
+          "WithCheckExpression": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name"
+        ]
+      }
+    },
+    "RowLevelSecurity": {
+      "type": "boolean"
+    },
+    "ForceRowLevelSecurity": {
+      "type": "boolean"
+    },
+    "AccessMethod": {
+      "type": "string"
+    },
+    "PersistenceType": {
+      "type": "string"
+    },
+    "UpdateFillFactor": {
+      "type": "boolean"
+    },
+    "FillFactor": {
+      "type": "integer",
+      "minimum": 0.0,
+      "maximum": 100.0
+    },
+    "ReplicaIdentity": {
+      "type": "string",
+      "pattern": "DEFAULT|FULL|NOTHING|INDEX",
+      "description": "PostgreSQL only. The table's REPLICA IDENTITY, which determines what a logical-replication publication sends for an UPDATE or DELETE — and whether either is permitted at all on a published table. INDEX requires ReplicaIdentityIndex. Omit to leave the server's current setting alone."
+    },
+    "ReplicaIdentityIndex": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "PostgreSQL only. Names the unique index backing ReplicaIdentity = INDEX. The index must be unique, non-partial and over NOT NULL columns; PostgreSQL rejects anything else."
+    },
+    "Tablespace": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "PostgreSQL only. The tablespace the table's data lives on. Omit to leave placement unmanaged — an omitted value does NOT mean the database default. Create-time only: moving an existing table rewrites it, so a declared tablespace that differs from where the table already lives is refused rather than moved."
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name"
+  ]
+}

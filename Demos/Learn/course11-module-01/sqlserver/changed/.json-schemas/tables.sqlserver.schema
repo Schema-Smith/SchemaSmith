@@ -1,0 +1,628 @@
+{
+  "type": "object",
+  "properties": {
+    "Name": {
+      "type": "string"
+    },
+    "Columns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "DataType": {
+            "type": "string"
+          },
+          "Nullable": {
+            "type": "boolean"
+          },
+          "Default": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "OldName": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "CheckExpression": {
+            "type": "string"
+          },
+          "ComputedExpression": {
+            "type": "string"
+          },
+          "Persisted": {
+            "type": "boolean"
+          },
+          "Sparse": {
+            "type": "boolean"
+          },
+          "Collation": {
+            "type": "string"
+          },
+          "DataMaskFunction": {
+            "type": "string"
+          },
+          "EncryptionType": {
+            "type": "string",
+            "pattern": "DETERMINISTIC|RANDOMIZED|NONE"
+          },
+          "EncryptionKey": {
+            "type": "string"
+          },
+          "EncryptionAlgorithm": {
+            "type": "string"
+          },
+          "IsColumnSet": {
+            "type": "boolean"
+          },
+          "BackfillExistingRows": {
+            "type": "boolean",
+            "description": "SQL Server only. When adding this column to an existing table, apply its Default to rows that are already there. Without it a nullable column's existing rows stay NULL. Requires Default; ignored when the column is created with the table."
+          },
+          "FileStream": {
+            "type": "boolean"
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "DataType"
+        ]
+      }
+    },
+    "Indexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "PrimaryKey": {
+            "type": "boolean"
+          },
+          "Unique": {
+            "type": "boolean"
+          },
+          "UniqueConstraint": {
+            "type": "boolean"
+          },
+          "IndexColumns": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "FilterExpression": {
+            "type": "string"
+          },
+          "CompressionType": {
+            "type": "string"
+          },
+          "Clustered": {
+            "type": "boolean"
+          },
+          "ColumnStore": {
+            "type": "boolean"
+          },
+          "FillFactor": {
+            "type": "integer",
+            "minimum": 0.0,
+            "maximum": 100.0
+          },
+          "IncludeColumns": {
+            "type": "string"
+          },
+          "UpdateFillFactor": {
+            "type": "boolean"
+          },
+          "FileGroup": {
+            "type": "string"
+          },
+          "IgnoreDuplicateKey": {
+            "type": "boolean"
+          },
+          "PadIndex": {
+            "type": "boolean"
+          },
+          "PartitionScheme": {
+            "type": "string"
+          },
+          "XmlCompression": {
+            "type": "boolean",
+            "description": "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022, but only EXTRACTABLE from 2025** — sys.partitions.xml_compression does not exist before then, so on 2022-2024 SchemaTongs carries the value forward from the package it is refreshing rather than dropping it."
+          },
+          "PartitionColumn": {
+            "type": "string"
+          },
+          "BucketCount": {
+            "type": "integer",
+            "minimum": 1.0,
+            "description": "BUCKET_COUNT for a HASH index on a memory-optimized table. Required for a hash index, ignored elsewhere. SQL Server rounds it up to the next power of two."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ColumnStore": {
+                  "const": true
+                }
+              },
+              "required": [
+                "ColumnStore"
+              ]
+            },
+            "else": {
+              "required": [
+                "IndexColumns"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ForeignKeys": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Columns": {
+            "type": "string"
+          },
+          "RelatedTable": {
+            "type": "string"
+          },
+          "RelatedColumns": {
+            "type": "string"
+          },
+          "DeleteAction": {
+            "type": "string",
+            "pattern": "^(NO ACTION|RESTRICT|CASCADE|SET NULL|SET DEFAULT)?$"
+          },
+          "UpdateAction": {
+            "type": "string",
+            "pattern": "^(NO ACTION|RESTRICT|CASCADE|SET NULL|SET DEFAULT)?$"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "RelatedTableSchema": {
+            "type": "string"
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Columns",
+          "RelatedTable",
+          "RelatedColumns"
+        ]
+      }
+    },
+    "CheckConstraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Expression": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Expression"
+        ]
+      }
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "DataDelivery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ContentFile": {
+              "type": "string"
+            },
+            "MergeType": {
+              "type": "string",
+              "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+            },
+            "MatchColumns": {
+              "type": "string"
+            },
+            "MergeFilter": {
+              "type": "string"
+            },
+            "MergeDisableTriggers": {
+              "type": "boolean"
+            },
+            "MergeDisableRules": {
+              "type": "boolean"
+            },
+            "MergeUpdateDescendents": {
+              "type": "boolean"
+            },
+            "ShouldApplyExpression": {
+              "type": "string"
+            },
+            "VariantName": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "Optional label for a conditional data-delivery variant — names the intent behind its ShouldApplyExpression, appears in deployment logging when the delivery applies, and identifies which array variant a DataTongs re-extraction reconciles."
+            },
+            "ContentEncoding": {
+              "type": "string",
+              "pattern": "Json|Xml"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ContentFile": {
+                "type": "string"
+              },
+              "MergeType": {
+                "type": "string",
+                "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+              },
+              "MatchColumns": {
+                "type": "string"
+              },
+              "MergeFilter": {
+                "type": "string"
+              },
+              "MergeDisableTriggers": {
+                "type": "boolean"
+              },
+              "MergeDisableRules": {
+                "type": "boolean"
+              },
+              "MergeUpdateDescendents": {
+                "type": "boolean"
+              },
+              "ShouldApplyExpression": {
+                "type": "string"
+              },
+              "VariantName": {
+                "type": "string",
+                "maxLength": 128,
+                "description": "Optional label for a conditional data-delivery variant — names the intent behind its ShouldApplyExpression, appears in deployment logging when the delivery applies, and identifies which array variant a DataTongs re-extraction reconciles."
+              },
+              "ContentEncoding": {
+                "type": "string",
+                "pattern": "Json|Xml"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+    },
+    "DropColumnsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropColumnsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropForeignKeysRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropForeignKeysRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropCheckConstraintsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropCheckConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropExcludeConstraintsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropExcludeConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting. PostgreSQL only."
+    },
+    "DropStatisticsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropStatisticsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropIndexesRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropIndexesRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "OldName": {
+      "type": "string"
+    },
+    "PreventDrop": {
+      "type": "boolean",
+      "description": "When true, this table is protected from drop-by-absence and the protection is sticky: it is persisted in SchemaSmith's ownership tracking so a protected table that is later removed from the product package is skipped (never silently dropped) rather than reconciled away. Set false and re-deploy while the table is still in the package to clear the protection before an intended removal. Default false."
+    },
+    "RebuildPolicy": {
+      "type": "object",
+      "properties": {
+        "Mode": {
+          "type": "string",
+          "pattern": "NEVER|ALWAYS|THRESHOLD",
+          "description": "When to rebuild the table instead of altering it in place. NEVER (the default) always alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of pending changes reaches Threshold, which is then required."
+        },
+        "Threshold": {
+          "type": "integer",
+          "minimum": 1.0,
+          "description": "Required when Mode is THRESHOLD: the number of pending changes at which the table is rebuilt rather than altered in place. Ignored for every other Mode."
+        },
+        "OnOrderMismatch": {
+          "type": "boolean",
+          "description": "Rebuild when the deployed column order does not match the authored column order. An independent trigger that composes with Mode rather than replacing it — a table can ask for both a threshold and an order-mismatch rebuild."
+        }
+      },
+      "additionalProperties": false,
+      "description": "When set, overrides the template-, product- and environment-level RebuildPolicy for this table only. Null inherits from the nearest level that declares one. The winning policy applies whole — a policy declared here does NOT pick up fields it omits from a higher level."
+    },
+    "Schema": {
+      "type": "string"
+    },
+    "CompressionType": {
+      "type": "string"
+    },
+    "IsTemporal": {
+      "type": "boolean"
+    },
+    "XmlIndexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "IsPrimary": {
+            "type": "boolean"
+          },
+          "Column": {
+            "type": "string"
+          },
+          "PrimaryIndex": {
+            "type": "string"
+          },
+          "SecondaryIndexType": {
+            "type": "string",
+            "pattern": "VALUE|PATH|PROPERTY"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Column"
+        ]
+      }
+    },
+    "Statistics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Columns": {
+            "type": "string"
+          },
+          "SampleSize": {
+            "type": "integer",
+            "minimum": 0.0,
+            "maximum": 100.0
+          },
+          "FilterExpression": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Columns"
+        ]
+      }
+    },
+    "FullTextIndex": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "FullTextCatalog": {
+              "type": "string"
+            },
+            "KeyIndex": {
+              "type": "string"
+            },
+            "ChangeTracking": {
+              "type": "string"
+            },
+            "StopList": {
+              "type": "string"
+            },
+            "Columns": {
+              "type": "string"
+            },
+            "ShouldApplyExpression": {
+              "type": "string"
+            },
+            "VariantName": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+            },
+            "Extensions": {}
+          },
+          "additionalProperties": false,
+          "required": [
+            "FullTextCatalog",
+            "KeyIndex",
+            "Columns"
+          ]
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "FullTextCatalog": {
+                "type": "string"
+              },
+              "KeyIndex": {
+                "type": "string"
+              },
+              "ChangeTracking": {
+                "type": "string"
+              },
+              "StopList": {
+                "type": "string"
+              },
+              "Columns": {
+                "type": "string"
+              },
+              "ShouldApplyExpression": {
+                "type": "string"
+              },
+              "VariantName": {
+                "type": "string",
+                "maxLength": 128,
+                "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+              },
+              "Extensions": {}
+            },
+            "additionalProperties": false,
+            "required": [
+              "FullTextCatalog",
+              "KeyIndex",
+              "Columns"
+            ]
+          }
+        }
+      ]
+    },
+    "UpdateFillFactor": {
+      "type": "boolean"
+    },
+    "EnableCDC": {
+      "type": "boolean"
+    },
+    "HistoryTableSchema": {
+      "type": "string"
+    },
+    "HistoryTableName": {
+      "type": "string"
+    },
+    "HistoryRetentionPeriod": {
+      "type": "string"
+    },
+    "FileGroup": {
+      "type": "string"
+    },
+    "EnableChangeTracking": {
+      "type": "boolean"
+    },
+    "TrackColumnsUpdated": {
+      "type": "boolean"
+    },
+    "FileStreamFileGroup": {
+      "type": "string"
+    },
+    "GraphType": {
+      "type": "string",
+      "pattern": "None|Node|Edge"
+    },
+    "Ledger": {
+      "type": "string",
+      "pattern": "Off|AppendOnly|Updatable"
+    },
+    "TextImageFileGroup": {
+      "type": "string"
+    },
+    "XmlCompression": {
+      "type": "boolean",
+      "description": "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022, but only EXTRACTABLE from 2025** — sys.partitions.xml_compression does not exist before then, so on 2022-2024 SchemaTongs carries the value forward from the package it is refreshing rather than dropping it."
+    },
+    "PartitionScheme": {
+      "type": "string"
+    },
+    "PartitionColumn": {
+      "type": "string"
+    },
+    "MemoryOptimized": {
+      "type": "boolean"
+    },
+    "Durability": {
+      "type": "string",
+      "pattern": "SCHEMA_AND_DATA|SCHEMA_ONLY",
+      "description": "Memory-optimized durability: SCHEMA_AND_DATA (default, data persists) or SCHEMA_ONLY (rows are transient). Only meaningful with MemoryOptimized. Create-time only."
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name"
+  ]
+}

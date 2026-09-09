@@ -1,0 +1,32 @@
+{
+  "Schema": "[dbo]",
+  "Name": "[LedgerEntry]",
+  "Columns": [
+    {
+      "Name": "[EntryId]",
+      "DataType": "BIGINT",
+      "Nullable": false
+    },
+    {
+      "Name": "[EntryYear]",
+      "DataType": "INT",
+      "Nullable": false
+    },
+    {
+      "Name": "[Amount]",
+      "DataType": "DECIMAL(18,2)",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_LedgerEntry]",
+      "IndexColumns": "[EntryId],[EntryYear]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "Clustered": true
+    }
+  ],
+  "PartitionScheme": "ps_vault_year",
+  "PartitionColumn": "[EntryYear]"
+}

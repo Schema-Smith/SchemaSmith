@@ -1,0 +1,509 @@
+{
+  "type": "object",
+  "properties": {
+    "Name": {
+      "type": "string"
+    },
+    "Columns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "DataType": {
+            "type": "string"
+          },
+          "Nullable": {
+            "type": "boolean"
+          },
+          "Default": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "OldName": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "GenerationExpression": {
+            "type": "string"
+          },
+          "AutoIncrement": {
+            "type": "boolean"
+          },
+          "Generated": {
+            "type": "string",
+            "pattern": "STORED|VIRTUAL"
+          },
+          "CharacterSet": {
+            "type": "string"
+          },
+          "Collation": {
+            "type": "string"
+          },
+          "Comment": {
+            "type": "string"
+          },
+          "CheckExpression": {
+            "type": "string"
+          },
+          "Invisible": {
+            "type": "boolean"
+          },
+          "Srid": {
+            "type": "integer"
+          },
+          "OnUpdateCurrentTimestamp": {
+            "type": "string"
+          },
+          "WithoutSystemVersioning": {
+            "type": "boolean",
+            "description": "MariaDB only. Excludes this column from the row history of a system-versioned table: an UPDATE that changes only this column writes no history row. Meaningless on a table that is not system-versioned — MariaDB accepts the clause there and silently discards it."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "DataType"
+        ]
+      }
+    },
+    "Indexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "PrimaryKey": {
+            "type": "boolean"
+          },
+          "Unique": {
+            "type": "boolean"
+          },
+          "UniqueConstraint": {
+            "type": "boolean"
+          },
+          "IndexColumns": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "IndexType": {
+            "type": "string",
+            "pattern": "BTREE|HASH|FULLTEXT|SPATIAL"
+          },
+          "Visible": {
+            "type": "boolean"
+          },
+          "Comment": {
+            "type": "string"
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "IndexColumns"
+        ]
+      }
+    },
+    "ForeignKeys": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Columns": {
+            "type": "string"
+          },
+          "RelatedTable": {
+            "type": "string"
+          },
+          "RelatedColumns": {
+            "type": "string"
+          },
+          "DeleteAction": {
+            "type": "string",
+            "pattern": "^(NO ACTION|RESTRICT|CASCADE|SET NULL|SET DEFAULT)?$"
+          },
+          "UpdateAction": {
+            "type": "string",
+            "pattern": "^(NO ACTION|RESTRICT|CASCADE|SET NULL|SET DEFAULT)?$"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "RelatedTableSchema": {
+            "type": "string"
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Columns",
+          "RelatedTable",
+          "RelatedColumns"
+        ]
+      }
+    },
+    "CheckConstraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Expression": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Expression"
+        ]
+      }
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "DataDelivery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ContentFile": {
+              "type": "string"
+            },
+            "MergeType": {
+              "type": "string",
+              "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+            },
+            "MatchColumns": {
+              "type": "string"
+            },
+            "MergeFilter": {
+              "type": "string"
+            },
+            "MergeDisableTriggers": {
+              "type": "boolean"
+            },
+            "MergeDisableRules": {
+              "type": "boolean"
+            },
+            "MergeUpdateDescendents": {
+              "type": "boolean"
+            },
+            "ShouldApplyExpression": {
+              "type": "string"
+            },
+            "VariantName": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "Optional label for a conditional data-delivery variant — names the intent behind its ShouldApplyExpression, appears in deployment logging when the delivery applies, and identifies which array variant a DataTongs re-extraction reconciles."
+            },
+            "ContentEncoding": {
+              "type": "string",
+              "pattern": "Json|Xml"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ContentFile": {
+                "type": "string"
+              },
+              "MergeType": {
+                "type": "string",
+                "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+              },
+              "MatchColumns": {
+                "type": "string"
+              },
+              "MergeFilter": {
+                "type": "string"
+              },
+              "MergeDisableTriggers": {
+                "type": "boolean"
+              },
+              "MergeDisableRules": {
+                "type": "boolean"
+              },
+              "MergeUpdateDescendents": {
+                "type": "boolean"
+              },
+              "ShouldApplyExpression": {
+                "type": "string"
+              },
+              "VariantName": {
+                "type": "string",
+                "maxLength": 128,
+                "description": "Optional label for a conditional data-delivery variant — names the intent behind its ShouldApplyExpression, appears in deployment logging when the delivery applies, and identifies which array variant a DataTongs re-extraction reconciles."
+              },
+              "ContentEncoding": {
+                "type": "string",
+                "pattern": "Json|Xml"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+    },
+    "DropColumnsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropColumnsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropForeignKeysRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropForeignKeysRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropCheckConstraintsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropCheckConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropExcludeConstraintsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropExcludeConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting. PostgreSQL only."
+    },
+    "DropStatisticsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropStatisticsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropIndexesRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropIndexesRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "OldName": {
+      "type": "string"
+    },
+    "PreventDrop": {
+      "type": "boolean",
+      "description": "When true, this table is protected from drop-by-absence and the protection is sticky: it is persisted in SchemaSmith's ownership tracking so a protected table that is later removed from the product package is skipped (never silently dropped) rather than reconciled away. Set false and re-deploy while the table is still in the package to clear the protection before an intended removal. Default false."
+    },
+    "RebuildPolicy": {
+      "type": "object",
+      "properties": {
+        "Mode": {
+          "type": "string",
+          "pattern": "NEVER|ALWAYS|THRESHOLD",
+          "description": "When to rebuild the table instead of altering it in place. NEVER (the default) always alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of pending changes reaches Threshold, which is then required."
+        },
+        "Threshold": {
+          "type": "integer",
+          "minimum": 1.0,
+          "description": "Required when Mode is THRESHOLD: the number of pending changes at which the table is rebuilt rather than altered in place. Ignored for every other Mode."
+        },
+        "OnOrderMismatch": {
+          "type": "boolean",
+          "description": "Rebuild when the deployed column order does not match the authored column order. An independent trigger that composes with Mode rather than replacing it — a table can ask for both a threshold and an order-mismatch rebuild."
+        }
+      },
+      "additionalProperties": false,
+      "description": "When set, overrides the template-, product- and environment-level RebuildPolicy for this table only. Null inherits from the nearest level that declares one. The winning policy applies whole — a policy declared here does NOT pick up fields it omits from a higher level."
+    },
+    "Engine": {
+      "type": "string"
+    },
+    "RowFormat": {
+      "type": "string",
+      "pattern": "Dynamic|Compact|Compressed|Redundant|Fixed"
+    },
+    "CharacterSet": {
+      "type": "string"
+    },
+    "Collation": {
+      "type": "string"
+    },
+    "Comment": {
+      "type": "string"
+    },
+    "AutoIncrementValue": {
+      "type": "integer",
+      "minimum": 1.0
+    },
+    "FullTextIndexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Columns": {
+            "type": "string"
+          },
+          "Parser": {
+            "type": "string"
+          },
+          "Comment": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Columns"
+        ]
+      }
+    },
+    "KeyBlockSize": {
+      "type": "integer",
+      "minimum": 1.0,
+      "maximum": 16.0,
+      "description": "InnoDB compressed-page size in KB (1, 2, 4, 8 or 16). Only meaningful with RowFormat = COMPRESSED."
+    },
+    "Partitioning": {
+      "type": "object",
+      "properties": {
+        "Method": {
+          "type": "string",
+          "pattern": "RANGE|LIST|HASH|KEY|RANGE COLUMNS|LIST COLUMNS",
+          "description": "RANGE, LIST, HASH, KEY, RANGE COLUMNS or LIST COLUMNS."
+        },
+        "Expression": {
+          "type": "string",
+          "description": "The partitioning expression, or a comma-separated column list for the COLUMNS methods. Compared with backticks, whitespace and case normalized away, because the engines disagree on how they report it."
+        },
+        "PartitionCount": {
+          "type": "integer",
+          "minimum": 1.0,
+          "description": "Number of partitions for HASH and KEY. Not used by RANGE or LIST, which name each partition and its boundary explicitly."
+        },
+        "Partitions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "Name": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "Values": {
+                "type": "string",
+                "description": "The VALUES LESS THAN boundary for RANGE, or the VALUES IN list for LIST. Omitted for HASH and KEY, which have no boundary."
+              },
+              "Extensions": {}
+            },
+            "additionalProperties": false,
+            "required": [
+              "Name"
+            ]
+          }
+        },
+        "Extensions": {}
+      },
+      "additionalProperties": false,
+      "required": [
+        "Method",
+        "Expression"
+      ]
+    },
+    "IsSystemVersioned": {
+      "type": "boolean"
+    },
+    "Periods": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "StartColumn": {
+            "type": "string"
+          },
+          "EndColumn": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "DropPeriodsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "MariaDB only. When set, overrides the environment-level DropPeriodsRemovedFromProduct for this table. Defaults to off, unlike the other drop-by-absence flags, because a package that predates periods or was extracted below MariaDB 11.4 cannot declare the periods its table actually has."
+    },
+    "PageCompressed": {
+      "type": "boolean",
+      "description": "MariaDB only. InnoDB page compression for the table. MariaDB's equivalent of MySQL's COMPRESSION option, which it does not support."
+    },
+    "PageCompressionLevel": {
+      "type": "integer",
+      "minimum": 1.0,
+      "maximum": 9.0,
+      "description": "MariaDB only. Compression level 1-9 for PageCompressed. Ignored unless PageCompressed is set."
+    },
+    "Encrypted": {
+      "type": "boolean",
+      "description": "MariaDB only. InnoDB at-rest tablespace encryption. MariaDB's equivalent of MySQL's Encryption option, which it does not support."
+    },
+    "EncryptionKeyId": {
+      "type": "integer",
+      "minimum": 1.0,
+      "description": "MariaDB only. ENCRYPTION_KEY_ID for the table. Ignored unless Encrypted is set."
+    },
+    "DataDirectory": {
+      "type": "string",
+      "pattern": "^[^']+$",
+      "description": "The filesystem directory the table's data file is placed in (InnoDB DATA DIRECTORY); applied at create, a move is refused. MySQL requires the directory to be listed in the server's innodb_directories. MySQL and MariaDB only."
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name"
+  ]
+}

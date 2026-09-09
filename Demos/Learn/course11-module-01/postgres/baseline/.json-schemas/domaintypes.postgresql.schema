@@ -1,0 +1,59 @@
+{
+  "type": "object",
+  "properties": {
+    "Name": {
+      "type": "string",
+      "maxLength": 63
+    },
+    "Schema": {
+      "type": "string"
+    },
+    "DataType": {
+      "type": "string",
+      "description": "The underlying type, with its modifier where it has one (integer, character varying(20)). Create-time only: PostgreSQL has no ALTER DOMAIN ... TYPE, so a change is refused rather than attempted."
+    },
+    "NotNull": {
+      "type": "boolean"
+    },
+    "Default": {
+      "type": "string",
+      "description": "Default expression applied to a column of this domain that declares no default of its own. Converges in place."
+    },
+    "CheckConstraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string",
+            "maxLength": 63
+          },
+          "Expression": {
+            "type": "string",
+            "description": "The predicate, using VALUE for the value under test (VALUE > 0). Without the surrounding CHECK (...)."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Expression"
+        ]
+      }
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name",
+    "DataType"
+  ]
+}

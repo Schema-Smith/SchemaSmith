@@ -1,0 +1,46 @@
+{
+  "Name": "LedgerEntry",
+  "Columns": [
+    {
+      "Name": "EntryId",
+      "DataType": "bigint",
+      "Nullable": false
+    },
+    {
+      "Name": "EntryYear",
+      "DataType": "int",
+      "Nullable": false
+    },
+    {
+      "Name": "Amount",
+      "DataType": "decimal(18,2)",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "IndexColumns": "EntryId,EntryYear",
+      "PrimaryKey": true,
+      "Unique": true
+    }
+  ],
+  "Partitioning": {
+    "Method": "RANGE",
+    "Expression": "EntryId",
+    "Partitions": [
+      {
+        "Name": "p2024",
+        "Values": "2025"
+      },
+      {
+        "Name": "p2025",
+        "Values": "2026"
+      },
+      {
+        "Name": "p2026",
+        "Values": "2027"
+      }
+    ]
+  }
+}
