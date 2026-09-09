@@ -1,0 +1,21 @@
+{
+  "Source": {
+    "Server": "localhost",
+    "User": "postgres",
+    "Password": "Learn!Passw0rd",
+    "Database": "cookbook_r14",
+    "Platform": "PostgreSQL",
+    "ConnectionProperties": {},
+    "Port": "15432"
+  },
+  "Product": {
+    "Path": "./Package",
+    "Name": "Cookbook"
+  },
+  "Template": {
+    "Name": "Main"
+  },
+  "OrphanHandling": {
+    "Mode": "Detect"
+  }
+}

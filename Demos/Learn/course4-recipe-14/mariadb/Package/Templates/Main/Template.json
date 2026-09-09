@@ -1,0 +1,37 @@
+{
+  "Name": "Main",
+  "DatabaseIdentificationScript": "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'cookbook_r14'",
+  "ScriptFolders": [
+    {
+      "FolderPath": "Views",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Views"
+    },
+    {
+      "FolderPath": "Functions",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Functions"
+    },
+    {
+      "FolderPath": "Procedures",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Procedures"
+    },
+    {
+      "FolderPath": "Triggers",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Triggers"
+    },
+    {
+      "FolderPath": "Sequences",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Sequences"
+    },
+    {
+      "FolderPath": "Events",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Events"
+    }
+  ],
+  "ScriptTokens": {}
+}

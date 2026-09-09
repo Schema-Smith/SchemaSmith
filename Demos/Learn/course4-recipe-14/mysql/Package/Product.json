@@ -1,0 +1,13 @@
+{
+  "Name": "Cookbook",
+  "ValidationScript": "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'cookbook_r14') THEN 1 ELSE 0 END",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptTokens": {
+    "MainDb": "cookbook_r14"
+  },
+  "ScriptFolders": [],
+  "AfterBranchNameMask": "",
+  "Platform": "MySQL"
+}

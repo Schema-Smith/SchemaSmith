@@ -1,0 +1,11 @@
+SET ANSI_NULLS ON
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE OR ALTER   PROCEDURE [dbo].[usp_customer_lookup] AS
+
+BEGIN
+  SELECT 1 AS customer_id;
+END
+
+GO

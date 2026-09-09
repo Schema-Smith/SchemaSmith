@@ -1,0 +1,22 @@
+{
+  "Source": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "Database": "cookbook_r14",
+    "Platform": "SqlServer",
+    "ConnectionProperties": {
+      "TrustServerCertificate": "True"
+    }
+  },
+  "Product": {
+    "Path": "./Package",
+    "Name": "Cookbook"
+  },
+  "Template": {
+    "Name": "Main"
+  },
+  "OrphanHandling": {
+    "Mode": "Detect"
+  }
+}

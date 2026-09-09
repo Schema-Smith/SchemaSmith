@@ -1,0 +1,21 @@
+{
+  "Source": {
+    "Server": "localhost",
+    "User": "root",
+    "Password": "Learn!Passw0rd",
+    "Database": "cookbook_r14",
+    "Platform": "MySQL",
+    "ConnectionProperties": {},
+    "Port": "13306"
+  },
+  "Product": {
+    "Path": "./Package",
+    "Name": "Cookbook"
+  },
+  "Template": {
+    "Name": "Main"
+  },
+  "OrphanHandling": {
+    "Mode": "Detect"
+  }
+}

@@ -1,0 +1,11 @@
+SET ANSI_NULLS ON
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE OR ALTER   PROCEDURE [dbo].[usp_invoice_total] AS
+
+BEGIN
+  SELECT 1 AS invoice_total;
+END
+
+GO

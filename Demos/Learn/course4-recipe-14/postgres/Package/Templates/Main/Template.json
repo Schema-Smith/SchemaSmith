@@ -1,0 +1,82 @@
+{
+  "Name": "Main",
+  "DatabaseIdentificationScript": "SELECT datname FROM pg_database WHERE datname = 'cookbook_r14'",
+  "ScriptFolders": [
+    {
+      "FolderPath": "Views",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Views"
+    },
+    {
+      "FolderPath": "Functions",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Functions"
+    },
+    {
+      "FolderPath": "Procedures",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Procedures"
+    },
+    {
+      "FolderPath": "Triggers",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Triggers"
+    },
+    {
+      "FolderPath": "Schemas",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Schemas"
+    },
+    {
+      "FolderPath": "Domain Types",
+      "QuenchSlot": "Objects",
+      "ObjectType": "DomainTypes"
+    },
+    {
+      "FolderPath": "Enum Types",
+      "QuenchSlot": "Objects",
+      "ObjectType": "EnumTypes"
+    },
+    {
+      "FolderPath": "Composite Types",
+      "QuenchSlot": "Objects",
+      "ObjectType": "CompositeTypes"
+    },
+    {
+      "FolderPath": "Trigger Functions",
+      "QuenchSlot": "Objects",
+      "ObjectType": "TriggerFunctions"
+    },
+    {
+      "FolderPath": "Window Functions",
+      "QuenchSlot": "Objects",
+      "ObjectType": "WindowFunctions"
+    },
+    {
+      "FolderPath": "Aggregates",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Aggregates"
+    },
+    {
+      "FolderPath": "Sequences",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Sequences"
+    },
+    {
+      "FolderPath": "Rules",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Rules"
+    },
+    {
+      "FolderPath": "Collations",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Collations"
+    },
+    {
+      "FolderPath": "Publications",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Publications"
+    }
+  ],
+  "ScriptTokens": {}
+}

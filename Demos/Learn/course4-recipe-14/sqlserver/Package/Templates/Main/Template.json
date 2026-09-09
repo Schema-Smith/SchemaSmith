@@ -1,0 +1,77 @@
+{
+  "Name": "Main",
+  "DatabaseIdentificationScript": "SELECT name FROM sys.databases WHERE name = 'cookbook_r14'",
+  "ScriptFolders": [
+    {
+      "FolderPath": "Views",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Views"
+    },
+    {
+      "FolderPath": "Functions",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Functions"
+    },
+    {
+      "FolderPath": "Procedures",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Procedures"
+    },
+    {
+      "FolderPath": "Triggers",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Triggers"
+    },
+    {
+      "FolderPath": "Schemas",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Schemas"
+    },
+    {
+      "FolderPath": "DataTypes",
+      "QuenchSlot": "Objects",
+      "ObjectType": "DataTypes"
+    },
+    {
+      "FolderPath": "FullTextCatalogs",
+      "QuenchSlot": "Objects",
+      "ObjectType": "FullTextCatalogs"
+    },
+    {
+      "FolderPath": "FullTextStopLists",
+      "QuenchSlot": "Objects",
+      "ObjectType": "FullTextStopLists"
+    },
+    {
+      "FolderPath": "XMLSchemaCollections",
+      "QuenchSlot": "Objects",
+      "ObjectType": "XMLSchemaCollections"
+    },
+    {
+      "FolderPath": "DDLTriggers",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "DDLTriggers"
+    },
+    {
+      "FolderPath": "Synonyms",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Synonyms"
+    },
+    {
+      "FolderPath": "SchemaBound Views",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "SchemaBoundViews"
+    },
+    {
+      "FolderPath": "SchemaBound Functions",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "SchemaBoundFunctions"
+    },
+    {
+      "FolderPath": "Sequences",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Sequences"
+    }
+  ],
+  "ScriptTokens": {}
+}
