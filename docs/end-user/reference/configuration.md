@@ -833,7 +833,7 @@ A period on the table that the package no longer declares is only removed if you
 | _unset_ (default) | The period stays, even though the package does not mention it. |
 | `true` | The period is dropped. |
 
-**This is the only drop-by-absence setting that defaults to off, and the reason matters.** A package
+**This defaults to off, unlike most of the `Drop…RemovedFromProduct` family, and the reason matters.** A package
 that has no `Periods` entry is not necessarily saying "this table has no period" — it may simply never
 have been able to say otherwise. Packages written before periods were supported have no such entry, and
 neither does one extracted from MariaDB 10.4.3–11.3, where the server cannot report periods at all.
