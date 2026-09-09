@@ -338,6 +338,119 @@ jobs:
             schema: Demos/Learn/module-04/mariadb/solution/.json-schemas/templates.mariadb.schema
             files: Demos/Learn/module-04/mariadb/solution/Templates/*/Template.json
 
+          # ── Learn / course6-module-03 – Extensions governance gate, all engines ──
+
+          - name: Learn-course6-module-03-sqlserver-Tables
+            schema: Demos/Learn/course6-module-03/sqlserver/Package/.json-schemas/tables.sqlserver.schema
+            files: Demos/Learn/course6-module-03/sqlserver/Package/Templates/**/Tables/**/*.json
+
+          - name: Learn-course6-module-03-sqlserver-Products
+            schema: Demos/Learn/course6-module-03/sqlserver/Package/.json-schemas/products.sqlserver.schema
+            files: Demos/Learn/course6-module-03/sqlserver/Package/Product.json
+
+          - name: Learn-course6-module-03-sqlserver-Templates
+            schema: Demos/Learn/course6-module-03/sqlserver/Package/.json-schemas/templates.sqlserver.schema
+            files: Demos/Learn/course6-module-03/sqlserver/Package/Templates/*/Template.json
+
+          - name: Learn-course6-module-03-postgres-Tables
+            schema: Demos/Learn/course6-module-03/postgres/Package/.json-schemas/tables.postgresql.schema
+            files: Demos/Learn/course6-module-03/postgres/Package/Templates/**/Tables/**/*.json
+
+          - name: Learn-course6-module-03-postgres-Products
+            schema: Demos/Learn/course6-module-03/postgres/Package/.json-schemas/products.postgresql.schema
+            files: Demos/Learn/course6-module-03/postgres/Package/Product.json
+
+          - name: Learn-course6-module-03-postgres-Templates
+            schema: Demos/Learn/course6-module-03/postgres/Package/.json-schemas/templates.postgresql.schema
+            files: Demos/Learn/course6-module-03/postgres/Package/Templates/*/Template.json
+
+          - name: Learn-course6-module-03-mysql-Tables
+            schema: Demos/Learn/course6-module-03/mysql/Package/.json-schemas/tables.mysql.schema
+            files: Demos/Learn/course6-module-03/mysql/Package/Templates/**/Tables/**/*.json
+
+          - name: Learn-course6-module-03-mysql-Products
+            schema: Demos/Learn/course6-module-03/mysql/Package/.json-schemas/products.mysql.schema
+            files: Demos/Learn/course6-module-03/mysql/Package/Product.json
+
+          - name: Learn-course6-module-03-mysql-Templates
+            schema: Demos/Learn/course6-module-03/mysql/Package/.json-schemas/templates.mysql.schema
+            files: Demos/Learn/course6-module-03/mysql/Package/Templates/*/Template.json
+
+          - name: Learn-course6-module-03-mariadb-Tables
+            schema: Demos/Learn/course6-module-03/mariadb/Package/.json-schemas/tables.mariadb.schema
+            files: Demos/Learn/course6-module-03/mariadb/Package/Templates/**/Tables/**/*.json
+
+          - name: Learn-course6-module-03-mariadb-Products
+            schema: Demos/Learn/course6-module-03/mariadb/Package/.json-schemas/products.mariadb.schema
+            files: Demos/Learn/course6-module-03/mariadb/Package/Product.json
+
+          - name: Learn-course6-module-03-mariadb-Templates
+            schema: Demos/Learn/course6-module-03/mariadb/Package/.json-schemas/templates.mariadb.schema
+            files: Demos/Learn/course6-module-03/mariadb/Package/Templates/*/Template.json
+
+          # ── Learn / course4-recipe-09 – Extensions-driven data dictionary ─────────
+
+          - name: Learn-course4-recipe-09-sqlserver-Tables
+            schema: Demos/Learn/course4-recipe-09/sqlserver/Package/.json-schemas/tables.sqlserver.schema
+            files: Demos/Learn/course4-recipe-09/sqlserver/Package/Templates/**/Tables/**/*.json
+
+          - name: Learn-course4-recipe-09-sqlserver-Products
+            schema: Demos/Learn/course4-recipe-09/sqlserver/Package/.json-schemas/products.sqlserver.schema
+            files: Demos/Learn/course4-recipe-09/sqlserver/Package/Product.json
+
+          - name: Learn-course4-recipe-09-sqlserver-Templates
+            schema: Demos/Learn/course4-recipe-09/sqlserver/Package/.json-schemas/templates.sqlserver.schema
+            files: Demos/Learn/course4-recipe-09/sqlserver/Package/Templates/*/Template.json
+
+          - name: Learn-course4-recipe-09-postgres-Tables
+            schema: Demos/Learn/course4-recipe-09/postgres/Package/.json-schemas/tables.postgresql.schema
+            files: Demos/Learn/course4-recipe-09/postgres/Package/Templates/**/Tables/**/*.json
+
+          - name: Learn-course4-recipe-09-postgres-Products
+            schema: Demos/Learn/course4-recipe-09/postgres/Package/.json-schemas/products.postgresql.schema
+            files: Demos/Learn/course4-recipe-09/postgres/Package/Product.json
+
+          - name: Learn-course4-recipe-09-postgres-Templates
+            schema: Demos/Learn/course4-recipe-09/postgres/Package/.json-schemas/templates.postgresql.schema
+            files: Demos/Learn/course4-recipe-09/postgres/Package/Templates/*/Template.json
+
+          - name: Learn-course4-recipe-09-mysql-Tables
+            schema: Demos/Learn/course4-recipe-09/mysql/Package/.json-schemas/tables.mysql.schema
+            files: Demos/Learn/course4-recipe-09/mysql/Package/Templates/**/Tables/**/*.json
+
+          - name: Learn-course4-recipe-09-mysql-Products
+            schema: Demos/Learn/course4-recipe-09/mysql/Package/.json-schemas/products.mysql.schema
+            files: Demos/Learn/course4-recipe-09/mysql/Package/Product.json
+
+          - name: Learn-course4-recipe-09-mysql-Templates
+            schema: Demos/Learn/course4-recipe-09/mysql/Package/.json-schemas/templates.mysql.schema
+            files: Demos/Learn/course4-recipe-09/mysql/Package/Templates/*/Template.json
+
+          - name: Learn-course4-recipe-09-mariadb-Tables
+            schema: Demos/Learn/course4-recipe-09/mariadb/Package/.json-schemas/tables.mariadb.schema
+            files: Demos/Learn/course4-recipe-09/mariadb/Package/Templates/**/Tables/**/*.json
+
+          - name: Learn-course4-recipe-09-mariadb-Products
+            schema: Demos/Learn/course4-recipe-09/mariadb/Package/.json-schemas/products.mariadb.schema
+            files: Demos/Learn/course4-recipe-09/mariadb/Package/Product.json
+
+          - name: Learn-course4-recipe-09-mariadb-Templates
+            schema: Demos/Learn/course4-recipe-09/mariadb/Package/.json-schemas/templates.mariadb.schema
+            files: Demos/Learn/course4-recipe-09/mariadb/Package/Templates/*/Template.json
+
+          # ── Learn / course4-recipe-10 – Extensions-driven replication (SQL Server) ─
+
+          - name: Learn-course4-recipe-10-sqlserver-Tables
+            schema: Demos/Learn/course4-recipe-10/sqlserver/Package/.json-schemas/tables.sqlserver.schema
+            files: Demos/Learn/course4-recipe-10/sqlserver/Package/Templates/**/Tables/**/*.json
+
+          - name: Learn-course4-recipe-10-sqlserver-Products
+            schema: Demos/Learn/course4-recipe-10/sqlserver/Package/.json-schemas/products.sqlserver.schema
+            files: Demos/Learn/course4-recipe-10/sqlserver/Package/Product.json
+
+          - name: Learn-course4-recipe-10-sqlserver-Templates
+            schema: Demos/Learn/course4-recipe-10/sqlserver/Package/.json-schemas/templates.sqlserver.schema
+            files: Demos/Learn/course4-recipe-10/sqlserver/Package/Templates/*/Template.json
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
