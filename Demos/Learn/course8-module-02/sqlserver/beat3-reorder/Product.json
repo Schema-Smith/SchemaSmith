@@ -1,0 +1,10 @@
+{
+  "Name": "Shop",
+  "ValidationScript": "SELECT CAST(1 AS BIT)",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptTokens": {},
+  "ScriptFolders": [],
+  "Platform": "SqlServer"
+}

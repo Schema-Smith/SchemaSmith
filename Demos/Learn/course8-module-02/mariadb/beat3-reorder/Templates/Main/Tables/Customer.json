@@ -1,0 +1,64 @@
+{
+  "Name": "`Customer`",
+  "Columns": [
+    {
+      "Name": "`CustomerId`",
+      "DataType": "int",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "`FullName`",
+      "DataType": "varchar(200)",
+      "Nullable": true,
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "CharacterSet": "utf8mb4"
+    },
+    {
+      "Name": "`Email`",
+      "DataType": "varchar(256)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "CharacterSet": "utf8mb4"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "UniqueConstraint": true,
+      "IndexColumns": "`CustomerId`",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "IndexType": "BTREE"
+    },
+    {
+      "Name": "IX_Customer_Email",
+      "PrimaryKey": false,
+      "Unique": false,
+      "IndexColumns": "`Email`",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "IndexType": "BTREE"
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": "",
+  "Engine": "InnoDB",
+  "RowFormat": "Dynamic",
+  "CharacterSet": "utf8mb4",
+  "Collation": "utf8mb4_unicode_ci",
+  "FullTextIndexes": [],
+  "RebuildPolicy": {
+    "Mode": "NEVER",
+    "OnOrderMismatch": true
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "Target": {
+    "Server": "localhost",
+    "Port": "13306",
+    "User": "root",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": {},
+    "Databases": [
+      "diag_structure"
+    ]
+  },
+  "WhatIfONLY": false,
+  "SchemaPackagePath": "./beat3-reorder",
+  "KindleTheForge": true,
+  "ArtifactPath": "./artifacts",
+  "CheckpointDirectory": "./checkpoints"
+}

@@ -1,0 +1,18 @@
+{
+  "Target": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": {
+      "TrustServerCertificate": "True"
+    },
+    "Databases": [
+      "diag_structure"
+    ]
+  },
+  "WhatIfONLY": false,
+  "SchemaPackagePath": "./beat3-reorder",
+  "KindleTheForge": true,
+  "ArtifactPath": "./artifacts",
+  "CheckpointDirectory": "./checkpoints"
+}

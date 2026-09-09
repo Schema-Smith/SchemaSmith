@@ -1,0 +1,55 @@
+{
+  "Schema": "public",
+  "Name": "customer",
+  "Columns": [
+    {
+      "Name": "customerid",
+      "DataType": "int4",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "fullname",
+      "DataType": "text",
+      "Nullable": true,
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "email",
+      "DataType": "text",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_customer",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "customerid",
+      "ShouldApplyExpression": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "ix_customer_email",
+      "PrimaryKey": false,
+      "Unique": false,
+      "IndexColumns": "email",
+      "ShouldApplyExpression": "",
+      "VariantName": ""
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": "",
+  "RebuildPolicy": {
+    "Mode": "NEVER",
+    "OnOrderMismatch": true
+  }
+}

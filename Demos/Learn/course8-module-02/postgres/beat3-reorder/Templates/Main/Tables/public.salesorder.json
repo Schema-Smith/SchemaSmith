@@ -1,0 +1,60 @@
+{
+  "Schema": "public",
+  "Name": "salesorder",
+  "Columns": [
+    {
+      "Name": "customerid",
+      "DataType": "int4",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "orderdate",
+      "DataType": "timestamp",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "orderid",
+      "DataType": "int4",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "status",
+      "DataType": "varchar(20)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_salesorder",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "orderid",
+      "ShouldApplyExpression": "",
+      "VariantName": ""
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "fk_salesorder_customer",
+      "Columns": "customerid",
+      "RelatedTable": "customer",
+      "RelatedColumns": "customerid",
+      "DeleteAction": "",
+      "UpdateAction": "",
+      "ShouldApplyExpression": "",
+      "VariantName": ""
+    }
+  ],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": ""
+}

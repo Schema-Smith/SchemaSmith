@@ -1,0 +1,86 @@
+{
+  "Name": "[SalesOrder]",
+  "Columns": [
+    {
+      "Name": "[CustomerId]",
+      "DataType": "INT",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
+      "EncryptionType": "NONE",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    },
+    {
+      "Name": "[OrderDate]",
+      "DataType": "DATETIME2(7)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
+      "EncryptionType": "NONE",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    },
+    {
+      "Name": "[OrderId]",
+      "DataType": "INT",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
+      "EncryptionType": "NONE",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    },
+    {
+      "Name": "[Status]",
+      "DataType": "VARCHAR(20)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
+      "EncryptionType": "NONE",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_SalesOrder]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "[OrderId]",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "CompressionType": "NONE",
+      "Clustered": true
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "[FK_SalesOrder_Customer]",
+      "Columns": "[CustomerId]",
+      "RelatedTable": "[Customer]",
+      "RelatedColumns": "[CustomerId]",
+      "DeleteAction": "NO ACTION",
+      "UpdateAction": "NO ACTION",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "RelatedTableSchema": "[dbo]"
+    }
+  ],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": "",
+  "Schema": "[dbo]",
+  "CompressionType": "NONE",
+  "XmlIndexes": [],
+  "Statistics": []
+}

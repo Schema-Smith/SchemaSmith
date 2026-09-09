@@ -1,0 +1,99 @@
+{
+  "Name": "`OrderItem`",
+  "Columns": [
+    {
+      "Name": "`OrderItemId`",
+      "DataType": "int",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "`OrderId`",
+      "DataType": "int",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "`ProductId`",
+      "DataType": "int",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "`Quantity`",
+      "DataType": "int",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "`UnitPrice`",
+      "DataType": "decimal(10,2)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "FK_OrderItem_Product",
+      "IndexColumns": "`ProductId`",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "IndexType": "BTREE"
+    },
+    {
+      "Name": "FK_OrderItem_SalesOrder",
+      "IndexColumns": "`OrderId`",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "IndexType": "BTREE"
+    },
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "UniqueConstraint": true,
+      "IndexColumns": "`OrderItemId`",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "IndexType": "BTREE"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "FK_OrderItem_Product",
+      "Columns": "`ProductId`",
+      "RelatedTable": "`Product`",
+      "RelatedColumns": "`ProductId`",
+      "DeleteAction": "NO ACTION",
+      "UpdateAction": "NO ACTION",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "RelatedTableSchema": ""
+    },
+    {
+      "Name": "FK_OrderItem_SalesOrder",
+      "Columns": "`OrderId`",
+      "RelatedTable": "`SalesOrder`",
+      "RelatedColumns": "`OrderId`",
+      "DeleteAction": "NO ACTION",
+      "UpdateAction": "NO ACTION",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "RelatedTableSchema": ""
+    }
+  ],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": "",
+  "Engine": "InnoDB",
+  "RowFormat": "Dynamic",
+  "CharacterSet": "utf8mb4",
+  "Collation": "utf8mb4_0900_ai_ci",
+  "FullTextIndexes": []
+}

@@ -1,0 +1,83 @@
+{
+  "Name": "Main",
+  "DatabaseIdentificationScript": "SELECT datname FROM pg_database WHERE datname = 'diag_structure'",
+  "ScriptFolders": [
+    {
+      "FolderPath": "Before Scripts"
+    },
+    {
+      "FolderPath": "Schemas",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Schemas"
+    },
+    {
+      "FolderPath": "Domain Types",
+      "QuenchSlot": "Objects",
+      "ObjectType": "DomainTypes"
+    },
+    {
+      "FolderPath": "Enum Types",
+      "QuenchSlot": "Objects",
+      "ObjectType": "EnumTypes"
+    },
+    {
+      "FolderPath": "Composite Types",
+      "QuenchSlot": "Objects",
+      "ObjectType": "CompositeTypes"
+    },
+    {
+      "FolderPath": "Functions",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Functions"
+    },
+    {
+      "FolderPath": "Trigger Functions",
+      "QuenchSlot": "Objects",
+      "ObjectType": "TriggerFunctions"
+    },
+    {
+      "FolderPath": "Window Functions",
+      "QuenchSlot": "Objects",
+      "ObjectType": "WindowFunctions"
+    },
+    {
+      "FolderPath": "Aggregates",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Aggregates"
+    },
+    {
+      "FolderPath": "Procedures",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Procedures"
+    },
+    {
+      "FolderPath": "Sequences",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Sequences"
+    },
+    {
+      "FolderPath": "Rules",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Rules"
+    },
+    {
+      "FolderPath": "Triggers",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Triggers"
+    },
+    {
+      "FolderPath": "Views",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Views"
+    },
+    {
+      "FolderPath": "Table Data",
+      "QuenchSlot": "TableData"
+    },
+    {
+      "FolderPath": "After Scripts",
+      "QuenchSlot": "After"
+    }
+  ],
+  "ScriptTokens": {}
+}

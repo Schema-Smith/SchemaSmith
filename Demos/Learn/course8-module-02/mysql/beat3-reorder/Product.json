@@ -1,0 +1,10 @@
+{
+  "Name": "Shop",
+  "ValidationScript": "SELECT 1",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptTokens": {},
+  "ScriptFolders": [],
+  "Platform": "MySQL"
+}

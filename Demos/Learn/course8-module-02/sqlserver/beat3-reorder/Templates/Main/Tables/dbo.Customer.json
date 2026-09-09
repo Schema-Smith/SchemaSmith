@@ -1,0 +1,77 @@
+{
+  "Name": "[Customer]",
+  "Columns": [
+    {
+      "Name": "[CustomerId]",
+      "DataType": "INT",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
+      "EncryptionType": "NONE",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    },
+    {
+      "Name": "[FullName]",
+      "DataType": "NVARCHAR(200)",
+      "Nullable": true,
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
+      "EncryptionType": "NONE",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    },
+    {
+      "Name": "[Email]",
+      "DataType": "NVARCHAR(256)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
+      "EncryptionType": "NONE",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_Customer]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "[CustomerId]",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "CompressionType": "NONE",
+      "Clustered": true
+    },
+    {
+      "Name": "[IX_Customer_Email]",
+      "PrimaryKey": false,
+      "Unique": false,
+      "IndexColumns": "[Email]",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "CompressionType": "NONE",
+      "Clustered": false
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": "",
+  "Schema": "[dbo]",
+  "CompressionType": "NONE",
+  "XmlIndexes": [],
+  "Statistics": [],
+  "RebuildPolicy": {
+    "Mode": "NEVER",
+    "OnOrderMismatch": true
+  }
+}

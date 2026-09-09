@@ -1,0 +1,68 @@
+{
+  "Name": "Main",
+  "DatabaseIdentificationScript": "SELECT [Name] FROM sys.databases WHERE [Name] = 'diag_structure'",
+  "ScriptFolders": [
+    {
+      "FolderPath": "Before Scripts"
+    },
+    {
+      "FolderPath": "Schemas",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Schemas"
+    },
+    {
+      "FolderPath": "DataTypes",
+      "QuenchSlot": "Objects",
+      "ObjectType": "DataTypes"
+    },
+    {
+      "FolderPath": "FullTextCatalogs",
+      "QuenchSlot": "Objects",
+      "ObjectType": "FullTextCatalogs"
+    },
+    {
+      "FolderPath": "FullTextStopLists",
+      "QuenchSlot": "Objects",
+      "ObjectType": "FullTextStopLists"
+    },
+    {
+      "FolderPath": "XMLSchemaCollections",
+      "QuenchSlot": "Objects",
+      "ObjectType": "XMLSchemaCollections"
+    },
+    {
+      "FolderPath": "Functions",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Functions"
+    },
+    {
+      "FolderPath": "Views",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Views"
+    },
+    {
+      "FolderPath": "Procedures",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Procedures"
+    },
+    {
+      "FolderPath": "Triggers",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Triggers"
+    },
+    {
+      "FolderPath": "DDLTriggers",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "DDLTriggers"
+    },
+    {
+      "FolderPath": "Table Data",
+      "QuenchSlot": "TableData"
+    },
+    {
+      "FolderPath": "After Scripts",
+      "QuenchSlot": "After"
+    }
+  ],
+  "ScriptTokens": {}
+}

@@ -1,0 +1,43 @@
+{
+  "Name": "Main",
+  "DatabaseIdentificationScript": "SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME = 'diag_structure'",
+  "ScriptFolders": [
+    {
+      "FolderPath": "Before Scripts"
+    },
+    {
+      "FolderPath": "Events",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Events"
+    },
+    {
+      "FolderPath": "Functions",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Functions"
+    },
+    {
+      "FolderPath": "Procedures",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Procedures"
+    },
+    {
+      "FolderPath": "Triggers",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Triggers"
+    },
+    {
+      "FolderPath": "Views",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Views"
+    },
+    {
+      "FolderPath": "Table Data",
+      "QuenchSlot": "TableData"
+    },
+    {
+      "FolderPath": "After Scripts",
+      "QuenchSlot": "After"
+    }
+  ],
+  "ScriptTokens": {}
+}

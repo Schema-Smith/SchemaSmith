@@ -1,0 +1,75 @@
+{
+  "Name": "`SalesOrder`",
+  "Columns": [
+    {
+      "Name": "`OrderId`",
+      "DataType": "int",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "`CustomerId`",
+      "DataType": "int",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "`OrderDate`",
+      "DataType": "datetime",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "`Status`",
+      "DataType": "varchar(20)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "CharacterSet": "utf8mb4"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "FK_SalesOrder_Customer",
+      "IndexColumns": "`CustomerId`",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "IndexType": "BTREE"
+    },
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "UniqueConstraint": true,
+      "IndexColumns": "`OrderId`",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "IndexType": "BTREE"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "FK_SalesOrder_Customer",
+      "Columns": "`CustomerId`",
+      "RelatedTable": "`Customer`",
+      "RelatedColumns": "`CustomerId`",
+      "DeleteAction": "NO ACTION",
+      "UpdateAction": "NO ACTION",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "RelatedTableSchema": ""
+    }
+  ],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": "",
+  "Engine": "InnoDB",
+  "RowFormat": "Dynamic",
+  "CharacterSet": "utf8mb4",
+  "Collation": "utf8mb4_unicode_ci",
+  "FullTextIndexes": []
+}
