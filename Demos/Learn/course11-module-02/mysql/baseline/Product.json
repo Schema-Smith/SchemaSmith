@@ -1,0 +1,9 @@
+{
+  "Name": "Vault",
+  "ValidationScript": "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'vault_m2') THEN 1 ELSE 0 END",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptFolders": [],
+  "Platform": "MySQL"
+}

@@ -1,0 +1,30 @@
+{
+  "Schema": "[dbo]",
+  "Name": "[AuditTrail]",
+  "Columns": [
+    {
+      "Name": "[AuditId]",
+      "DataType": "BIGINT",
+      "Nullable": false
+    },
+    {
+      "Name": "[Actor]",
+      "DataType": "NVARCHAR(128)",
+      "Nullable": false
+    },
+    {
+      "Name": "[OccurredAt]",
+      "DataType": "DATETIME2",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_AuditTrail]",
+      "IndexColumns": "[AuditId]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "Clustered": true
+    }
+  ]
+}

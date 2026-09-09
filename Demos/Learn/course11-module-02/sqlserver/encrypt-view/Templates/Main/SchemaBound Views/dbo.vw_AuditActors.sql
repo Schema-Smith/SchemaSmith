@@ -1,0 +1,2 @@
+CREATE OR ALTER VIEW dbo.vw_AuditActors WITH ENCRYPTION, SCHEMABINDING AS
+  SELECT AuditId, Actor FROM dbo.AuditTrail;

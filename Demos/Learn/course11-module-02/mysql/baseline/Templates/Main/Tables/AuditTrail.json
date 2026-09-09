@@ -1,0 +1,42 @@
+{
+  "Name": "AuditTrail",
+  "Columns": [
+    {
+      "Name": "AuditId",
+      "DataType": "bigint",
+      "Nullable": false
+    },
+    {
+      "Name": "Actor",
+      "DataType": "varchar(64)",
+      "Nullable": false
+    },
+    {
+      "Name": "OccurredAt",
+      "DataType": "datetime",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "IndexColumns": "AuditId,OccurredAt",
+      "PrimaryKey": true,
+      "Unique": true
+    }
+  ],
+  "Partitioning": {
+    "Method": "RANGE",
+    "Expression": "YEAR(OccurredAt)",
+    "Partitions": [
+      {
+        "Name": "p2025",
+        "Values": "2026"
+      },
+      {
+        "Name": "p2026",
+        "Values": "2027"
+      }
+    ]
+  }
+}
