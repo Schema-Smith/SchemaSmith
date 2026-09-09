@@ -404,8 +404,10 @@ BEGIN
     -- Skip, not Reduced: the WHOLE table's versioning is dropped here, not merely a part of it (unlike
     -- the column-level exclusion above, which loses only the exclusion while the column itself survives).
     --
-    -- Scope: t.NewTable = 1 only. Converging an EXISTING table's versioning (ALTER ADD/DROP SYSTEM
-    -- VERSIONING) is a separate later task, not built here.
+    -- Scope: t.NewTable = 1 only -- THIS FILE's scope, not the product's. An existing table's
+    -- versioning IS converged, by ModifiedTableQuench STEP 7.5 (ALTER ... ADD SYSTEM VERSIONING
+    -- applies; DROP is refused, because dropping it discards the history). This previously read as a
+    -- statement about the product rather than about this pass.
     -- =========================================================================
     IF SchemaSmith_SupportsSystemVersioning() = 0
        AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables t

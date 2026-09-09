@@ -120,8 +120,9 @@ BEGIN
         RebuildPolicySpecified TINYINT DEFAULT 0,
         PreventDrop TINYINT DEFAULT 0,
         -- F1S1: table-level system versioning (MariaDB WITH SYSTEM VERSIONING). Read here so a new
-        -- table's CREATE can emit the clause; converging an EXISTING table's versioning is a separate
-        -- later task, so this flag is only consulted where t.NewTable = 1.
+        -- table's CREATE can emit the clause. An EXISTING table's versioning IS converged, by
+        -- ModifiedTableQuench STEP 7.5 -- which reads this same flag -- so this is not a NewTable = 1
+        -- value. (It said it was: that was true when written and stopped being true when 7.5 shipped.)
         IsSystemVersioned TINYINT DEFAULT 0,
         KEY ix_tables_name (TableName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -3872,7 +3872,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             -- authored before periods existed -- or extracted from 10.4.3-11.3, where the catalog cannot
             -- report them -- reads as "no periods declared" while the table plainly has one. Dropping on
             -- that absence would remove a declaration the package never had the chance to make, which is
-            -- why this is the one drop-by-absence flag that defaults to FALSE.
+            -- why this is one of the two Drop...RemovedFromProduct flags that default to FALSE --
+            -- DropEventsRemovedFromProduct is the other, for the same reason a package may predate
+            -- the feature, and DropUnknownIndexes defaults off as well.
             --
             -- Ordered before the ADD below so a period whose COLUMNS changed is replaced in a single
             -- deploy -- drop then add -- rather than the add colliding with the period already there.
