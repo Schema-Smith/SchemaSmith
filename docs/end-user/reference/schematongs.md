@@ -458,7 +458,7 @@ On subsequent runs against an existing package, SchemaTongs overwrites object sc
 
 ### Helper procedures
 
-On every run, SchemaTongs deploys (or updates) lightweight helper procedures in the source database under the `SchemaSmith` schema. These procedures generate the JSON representation of tables and views and are used internally by the extraction adapter. They're read-only, schema-prefixed, and excluded from extraction output.
+SchemaTongs maintains lightweight helper procedures in the source database under the `SchemaSmith` schema -- installing or refreshing them on every run where writes are allowed, and, against a read-only target, verifying them instead (see [Extracting from a Read-Only Replica](#extracting-from-a-read-only-replica)). These procedures generate the JSON representation of tables and views and are used internally by the extraction adapter. They're read-only, schema-prefixed, and excluded from extraction output.
 
 ---
 
