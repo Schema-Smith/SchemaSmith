@@ -92,7 +92,7 @@ Failing here is deliberate. Without the pre-flight, a below-floor source dies de
 
 SchemaTongs installs a small set of helper procedures into the database it reads from, and refreshes them whenever they are out of date. That needs write access — which the copy you most want to extract from often will not give you. A SQL Server Availability Group readable secondary, a PostgreSQL hot standby, and a MySQL/MariaDB replica are all read-only by design, and they are precisely the copies you are allowed to query hard without upsetting anyone.
 
-Against a read-only target SchemaTongs **verifies the helpers instead of installing them**, then extracts as normal. Three outcomes:
+Against a read-only target SchemaTongs **verifies the helpers instead of installing them**, then extracts as normal. Four outcomes:
 
 | What it finds | What happens |
 |---|---|
