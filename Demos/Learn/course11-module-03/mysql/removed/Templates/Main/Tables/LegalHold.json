@@ -1,0 +1,18 @@
+{
+  "Name": "LegalHold",
+  "Columns": [
+    {
+      "Name": "HoldId",
+      "DataType": "int",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "IndexColumns": "HoldId",
+      "PrimaryKey": true,
+      "Unique": true
+    }
+  ]
+}

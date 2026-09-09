@@ -1,0 +1,9 @@
+{
+  "Name": "Vault",
+  "ValidationScript": "SELECT CASE WHEN EXISTS (SELECT 1 FROM sys.databases WHERE name = 'vault_m3') THEN 1 ELSE 0 END",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptFolders": [],
+  "Platform": "SqlServer"
+}

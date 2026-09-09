@@ -1,0 +1,37 @@
+{
+  "Name": "LedgerEntry",
+  "Columns": [
+    {
+      "Name": "EntryId",
+      "DataType": "bigint",
+      "Nullable": false
+    },
+    {
+      "Name": "EntryYear",
+      "DataType": "int",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "IndexColumns": "EntryId,EntryYear",
+      "PrimaryKey": true,
+      "Unique": true
+    }
+  ],
+  "Partitioning": {
+    "Method": "RANGE",
+    "Expression": "EntryYear",
+    "Partitions": [
+      {
+        "Name": "p2025",
+        "Values": "2026"
+      },
+      {
+        "Name": "p2026",
+        "Values": "2027"
+      }
+    ]
+  }
+}

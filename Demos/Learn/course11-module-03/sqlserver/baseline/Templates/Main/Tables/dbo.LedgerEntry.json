@@ -1,0 +1,27 @@
+{
+  "Schema": "[dbo]",
+  "Name": "[LedgerEntry]",
+  "PartitionScheme": "ps_vault_year",
+  "PartitionColumn": "[EntryYear]",
+  "Columns": [
+    {
+      "Name": "[EntryId]",
+      "DataType": "BIGINT",
+      "Nullable": false
+    },
+    {
+      "Name": "[EntryYear]",
+      "DataType": "INT",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_LedgerEntry]",
+      "IndexColumns": "[EntryId],[EntryYear]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "Clustered": true
+    }
+  ]
+}

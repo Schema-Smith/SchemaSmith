@@ -1,0 +1,17 @@
+{
+  "Target": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": {
+      "TrustServerCertificate": "True"
+    },
+    "Databases": [
+      "vault_m3"
+    ]
+  },
+  "WhatIfONLY": false,
+  "SchemaPackagePath": "./protected",
+  "KindleTheForge": true,
+  "DropTablesRemovedFromProduct": true
+}

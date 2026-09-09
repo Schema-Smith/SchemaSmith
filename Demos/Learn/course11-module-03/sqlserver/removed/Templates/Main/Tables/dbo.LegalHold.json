@@ -1,0 +1,19 @@
+{
+  "Schema": "[dbo]",
+  "Name": "[LegalHold]",
+  "Columns": [
+    {
+      "Name": "[HoldId]",
+      "DataType": "INT",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_LegalHold]",
+      "IndexColumns": "[HoldId]",
+      "PrimaryKey": true,
+      "Unique": true
+    }
+  ]
+}
