@@ -941,14 +941,23 @@ For full guidance, see [DropCheckConstraintsRemovedFromProduct](schemaquench.md#
 
 ## DropExcludeConstraintsRemovedFromProduct
 
-Controls whether SchemaQuench drops EXCLUDE constraints that exist in the database but no longer appear in the table JSON. EXCLUDE constraints are a **PostgreSQL** feature; this flag has no effect on SQL Server, MySQL, or MariaDB. Four tiers compose to produce the effective value, resolved environment → product → template → table.
+Controls whether SchemaQuench drops EXCLUDE constraints that exist in the database but no longer appear in the table JSON. EXCLUDE constraints are a **PostgreSQL** feature, so this flag belongs in a PostgreSQL package. Four tiers compose to produce the effective value, resolved environment → product → template → table.
 
 | Scope | Where to set | Default |
 |---|---|---|
 | Environment | `DropExcludeConstraintsRemovedFromProduct` in `SchemaQuench.settings.json` (or `SmithySettings_DropExcludeConstraintsRemovedFromProduct` environment variable) | `true` |
-| Product | `DropExcludeConstraintsRemovedFromProduct` in `Product.json` | (inherit) |
-| Template | `DropExcludeConstraintsRemovedFromProduct` in `Template.json` | (inherit) |
-| Table | `DropExcludeConstraintsRemovedFromProduct` in a table's `.json` file | (inherit) |
+| Product | `DropExcludeConstraintsRemovedFromProduct` in `Product.json` — **PostgreSQL packages only** | (inherit) |
+| Template | `DropExcludeConstraintsRemovedFromProduct` in `Template.json` — **PostgreSQL packages only** | (inherit) |
+| Table | `DropExcludeConstraintsRemovedFromProduct` in a table's `.json` file — PostgreSQL only | (inherit) |
+
+> **Warning:** since v2.6.0 the generated `.json-schemas` are filtered per engine, and the SQL Server, MySQL
+> and MariaDB `products.*` / `templates.*` schemas no longer carry this property. Leaving it in a
+> non-PostgreSQL `Product.json` or `Template.json` is no longer harmless: `--Validate` reports it as an
+> unexpected property (`SS-JSON-001`, Error) and exits `2`, which fails a CI gate. Deployment itself is
+> unaffected — the package still loads — so this bites validation, not a running deploy. Delete the
+> property from those packages; it never did anything on those engines. The environment tier lives in the
+> settings file, which these package schemas do not cover, and the table tier still carries the property
+> on all four engines — annotated `PostgreSQL only.`
 
 Same explicit-false-sticky semantics as the other drop-control flags; only by-absence removal is gated (a modified exclude constraint still reconciles).
 
