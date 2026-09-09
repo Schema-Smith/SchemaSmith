@@ -11,6 +11,7 @@ AS $$
 DECLARE
   sql_script TEXT;
   bad RECORD;
+  declared_canonical TEXT;
 BEGIN
   -- Converges declared domain types.
   --
@@ -87,6 +88,15 @@ BEGIN
   --
   -- format_type() renders the modifier too (character varying(20)), which is exactly what extraction
   -- emits, so a round-tripped package compares equal rather than looking like a type change.
+  --
+  -- THE STRING COMPARISON BELOW IS A FAST PATH, NOT THE ANSWER. It settles the round-tripped case at no
+  -- cost, and every disagreement it reports is then re-checked against the engine. On its own it was
+  -- wrong: PostgreSQL canonicalises type ALIASES on storage, so a domain declared VARCHAR(256) is stored
+  -- and reported as character varying(256) and could NEVER compare equal. The refusal fired on a domain
+  -- the same run had just created moments earlier -- creating it, then refusing its own creation, and
+  -- telling the user to "migrate it with a script" for an object that had not existed. INT, INT8, BOOL,
+  -- DECIMAL and TIMESTAMPTZ were all undeployable; TEXT worked, which is what proved it was aliasing
+  -- rather than case.
   FOR bad IN
     SELECT t."Schema", t."Name", t."DataType" AS declared,
            FORMAT_TYPE(ty.typbasetype, ty.typtypmod) AS deployed
@@ -95,8 +105,43 @@ BEGIN
       JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
      WHERE LOWER(TRIM(t."DataType")) <> LOWER(FORMAT_TYPE(ty.typbasetype, ty.typtypmod))
   LOOP
-    RAISE EXCEPTION 'Domain type %.% declares base type "%", but is currently deployed as "%". PostgreSQL has no ALTER DOMAIN ... TYPE -- changing it means dropping the domain and every column that uses it. Migrate it with a script, or correct the declared type to match.',
-      bad."Schema", bad."Name", bad.declared, bad.deployed;
+    -- to_regtype FIRST, and it is doing two jobs. It reports whether this server knows the declared type
+    -- at all -- returning NULL for a well-formed but unknown name, so an unrecognised type is refused by
+    -- name instead of surfacing as a bogus base-type change. And it is the INJECTION GATE for the EXECUTE
+    -- below: it parses its argument as a type name and RAISES on anything that is not one, so nothing
+    -- malformed ever reaches format().
+    IF to_regtype(bad.declared) IS NULL THEN
+      RAISE EXCEPTION 'Domain type %.% declares base type "%", which this server does not recognise as a type. Check the spelling against the PostgreSQL type list.',
+        bad."Schema", bad."Name", bad.declared;
+    END IF;
+
+    -- Canonicalise the DECLARED spelling by asking the engine, rather than carrying an alias table.
+    -- PostgreSQL owns that mapping and it moves between versions, so a hand-maintained copy would be a
+    -- fourth place for the same knowledge to drift.
+    --
+    -- A throwaway relation rather than to_regtype alone, because to_regtype resolves the base type and
+    -- DISCARDS the modifier -- it renders varchar(256) as "character varying", which would compare equal
+    -- to a domain deployed as character varying(512) and wave a real narrowing straight through. Nor is
+    -- the modifier something to split off the string by hand: format_type renders timestamptz(3) as
+    -- "timestamp(3) with time zone", with the modifier in the MIDDLE, so trailing-paren surgery reads it
+    -- as having none. This is the same class of mistake the type-argument CASE has already been
+    -- duplicated into three times.
+    --
+    -- The cost is one temp relation per DISAGREEING domain, which is zero on a steady-state deploy: the
+    -- fast path above has already excluded every domain whose declaration matches what is deployed.
+    DROP TABLE IF EXISTS _ss_domain_type_probe;
+    EXECUTE FORMAT('CREATE TEMP TABLE _ss_domain_type_probe (c %s)', bad.declared);
+    SELECT FORMAT_TYPE(a.atttypid, a.atttypmod) INTO declared_canonical
+      FROM pg_attribute a
+     WHERE a.attrelid = '_ss_domain_type_probe'::regclass AND a.attname = 'c';
+    DROP TABLE _ss_domain_type_probe;
+
+    -- Both sides are now the engine's own rendering, so this compares like with like. A genuine base-type
+    -- change still lands here and is still refused -- resolving aliases must not weaken that.
+    IF declared_canonical IS DISTINCT FROM bad.deployed THEN
+      RAISE EXCEPTION 'Domain type %.% declares base type "%", but is currently deployed as "%". PostgreSQL has no ALTER DOMAIN ... TYPE -- changing it means dropping the domain and every column that uses it. Migrate it with a script, or correct the declared type to match.',
+        bad."Schema", bad."Name", bad.declared, bad.deployed;
+    END IF;
   END LOOP;
 
   -- NOT NULL and DEFAULT, each emitted only when it actually differs so an unchanged domain produces no
