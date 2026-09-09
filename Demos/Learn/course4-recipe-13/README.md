@@ -106,9 +106,10 @@ modules, aimed at a deployment that installed only some of them, fails rather th
 subset. If you need that, gate the table with `ShouldApplyExpression` and let the package decide
 explicitly.
 
-> **Known documentation error (SchemaSmith 2.6.0):** the reference currently says "Tables that don't
-> exist are silently skipped." They are not, on any engine tested. Reported; the behaviour above is
-> what the tool actually does, and is the better default.
+> The reference used to say "Tables that don't exist are silently skipped" — they are not, on any
+> engine tested. That was reported from this lab and [corrected](https://github.com/Schema-Smith/SchemaSmith/blob/main/docs/end-user/reference/schema-packages.md):
+> the docs now say a declared table absent from the target **fails the deploy**, and point at
+> `ShouldApplyExpression` as the supported way to cover a vendor's optional modules.
 
 ## Cleanup
 

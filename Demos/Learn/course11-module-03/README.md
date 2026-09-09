@@ -83,13 +83,14 @@ mistake. **And it fails closed rather than skipping.** A skipped drop with a war
 with a green pipeline and a table you believe is gone; exit 2 puts the decision in front of a human
 while they are still looking.
 
-> **A note on why this guard exists, stated correctly.** The reference currently explains it as
+> **Why the guard protects a table SchemaSmith built.** Before 2.6.0 the reference explained this as
 > "SchemaSmith has no partitioning support of its own, so a partitioned table is one someone
-> partitioned by hand." That was true before 2.6.0. It is not now — **SchemaSmith created the
-> partitioned table in this lab**, from your package. The rationale that actually holds is the one in
-> the error message: a partitioned table holds data spread across partitions, and no declaration can
-> assert that data is disposable. That is true whoever built the table. (Reported as a documentation
-> defect.)
+> partitioned by hand." Declarative partitioning made that premise false — **SchemaSmith created the
+> partitioned table in this lab**, from your package — and the docs were
+> [corrected](https://github.com/Schema-Smith/SchemaSmith/blob/main/docs/end-user/reference/schemaquench.md)
+> from this lab. They now argue from the rationale that actually holds: a partitioned table holds data
+> spread across every partition, and no declaration can tell SchemaSmith that data is disposable. A
+> hand-partitioned table and one SchemaSmith deployed are **equally protected**.
 
 ## Step 4: Say what you meant
 
