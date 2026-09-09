@@ -1,0 +1,10 @@
+{
+  "Name": "app_session_archive",
+  "Columns": [
+    { "Name": "session_id", "DataType": "bigint", "Nullable": false },
+    { "Name": "started_at", "DataType": "datetime", "Nullable": false }
+  ],
+  "Indexes": [
+    { "Name": "PRIMARY", "IndexColumns": "session_id", "PrimaryKey": true, "Unique": true }
+  ]
+}

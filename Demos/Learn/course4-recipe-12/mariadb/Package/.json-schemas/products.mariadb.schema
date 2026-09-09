@@ -1,0 +1,119 @@
+{
+  "type": "object",
+  "properties": {
+    "Name": {
+      "type": "string"
+    },
+    "ValidationScript": {
+      "type": "string",
+      "description": "Recommended. SQL run after deployment to validate the product; skipped when unset."
+    },
+    "TemplateOrder": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "ScriptTokens": {
+      "type": "object"
+    },
+    "ScriptFolders": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "FolderPath": {
+            "type": "string"
+          },
+          "ServerToQuench": {
+            "type": "integer"
+          },
+          "QuenchSlot": {
+            "type": "string",
+            "pattern": "Before|After|None"
+          },
+          "ObjectType": {
+            "type": "string",
+            "pattern": "None|Views|Functions|Procedures|Triggers|Schemas|DataTypes|FullTextCatalogs|FullTextStopLists|XMLSchemaCollections|DDLTriggers|IndexedViews|Synonyms|SchemaBoundViews|SchemaBoundFunctions|DomainTypes|EnumTypes|CompositeTypes|TriggerFunctions|WindowFunctions|Aggregates|Sequences|Rules|MaterializedViews|Collations|Publications|Events"
+          },
+          "ShouldApplyExpression": {
+            "type": "string",
+            "description": "Optional SQL predicate evaluated against the target at deployment time. Blank deploys the folder; a non-blank expression must return a boolean — true deploys the folder, false skips it (logged). Evaluated per target in the target engine's SQL; may read server properties, an environment-type function, a control table, or resolved tokens."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "FolderPath"
+        ]
+      }
+    },
+    "BranchNameFile": {
+      "type": "string"
+    },
+    "BeforeBranchNameMask": {
+      "type": "string"
+    },
+    "AfterBranchNameMask": {
+      "type": "string"
+    },
+    "DropUnknownIndexes": {
+      "type": "boolean"
+    },
+    "BaselineValidationScript": {
+      "type": "string"
+    },
+    "VersionStampScript": {
+      "type": "string"
+    },
+    "Platform": {
+      "type": "string",
+      "pattern": "Unknown|PostgreSQL|SqlServer|MySQL|MariaDb"
+    },
+    "MinimumVersion": {
+      "type": "string"
+    },
+    "CheckConstraintStyle": {
+      "type": "string",
+      "pattern": "ColumnLevel|TableLevel"
+    },
+    "DropTablesRemovedFromProduct": {
+      "type": "boolean"
+    },
+    "DropColumnsRemovedFromProduct": {
+      "type": "boolean"
+    },
+    "DropForeignKeysRemovedFromProduct": {
+      "type": "boolean"
+    },
+    "DropCheckConstraintsRemovedFromProduct": {
+      "type": "boolean"
+    },
+    "DropIndexesRemovedFromProduct": {
+      "type": "boolean"
+    },
+    "RebuildPolicy": {
+      "type": "object",
+      "properties": {
+        "Mode": {
+          "type": "string",
+          "pattern": "NEVER|ALWAYS|THRESHOLD",
+          "description": "When to rebuild the table instead of altering it in place. NEVER (the default) always alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of pending changes reaches Threshold, which is then required."
+        },
+        "Threshold": {
+          "type": "integer",
+          "minimum": 1.0,
+          "description": "Required when Mode is THRESHOLD: the number of pending changes at which the table is rebuilt rather than altered in place. Ignored for every other Mode."
+        },
+        "OnOrderMismatch": {
+          "type": "boolean",
+          "description": "Rebuild when the deployed column order does not match the authored column order. An independent trigger that composes with Mode rather than replacing it — a table can ask for both a threshold and an order-mismatch rebuild."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name"
+  ]
+}

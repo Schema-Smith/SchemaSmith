@@ -1,0 +1,12 @@
+{
+  "Target": {
+    "Server": "localhost",
+    "Port": "13307",
+    "User": "root",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": {}
+  },
+  "WhatIfONLY": false,
+  "SchemaPackagePath": "./Package",
+  "KindleTheForge": true
+}

@@ -1,0 +1,8 @@
+{
+  "Name": "purge_old_sessions",
+  "ScheduleType": "EVERY",
+  "Interval": "1 DAY",
+  "Status": "ENABLE",
+  "Comment": "Trim session rows older than the retention window",
+  "Definition": "DELETE FROM app_session WHERE started_at < NOW() - INTERVAL 30 DAY"
+}

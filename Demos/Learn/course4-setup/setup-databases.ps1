@@ -25,6 +25,7 @@ $databases = @(
     'cookbook_r8'
     'cookbook_r9'
     'cookbook_r11'
+    'cookbook_r12'
 )
 
 foreach ($engine in Get-LabEngines) {

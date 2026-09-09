@@ -1,0 +1,8 @@
+{
+  "Name": "archive_old_sessions",
+  "ScheduleType": "EVERY",
+  "Interval": "7 DAY",
+  "Status": "ENABLE",
+  "Comment": "Weekly archive sweep -- the second event, so drop-by-absence has something to compare against",
+  "Definition": "INSERT INTO app_session_archive (session_id, started_at) SELECT session_id, started_at FROM app_session WHERE started_at < NOW() - INTERVAL 90 DAY"
+}
