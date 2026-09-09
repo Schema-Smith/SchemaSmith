@@ -326,9 +326,7 @@ The canonical use is anti-rollback protection. Pair `BaselineValidationScript` w
 ```json
 {
   "VersionStampScript": "UPDATE dbo.DeploymentInfo SET Version = '{{ReleaseVersion}}'",
-  "BaselineValidationScript": "SELECT CAST(CASE WHEN EXISTS(
-      SELECT 1 FROM dbo.DeploymentInfo WHERE Version = '{{PreviousVersion}}'
-  ) THEN 1 ELSE 0 END AS BIT)"
+  "BaselineValidationScript": "SELECT CAST(CASE WHEN EXISTS(SELECT 1 FROM dbo.DeploymentInfo WHERE Version = '{{PreviousVersion}}') THEN 1 ELSE 0 END AS BIT)"
 }
 ```
 
