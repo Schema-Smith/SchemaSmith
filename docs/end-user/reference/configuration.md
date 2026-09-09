@@ -1045,7 +1045,7 @@ Controls whether SchemaQuench drops a scheduled event that exists on the server 
 
 It defaults to off for the same reason `DropPeriodsRemovedFromProduct` does: a package with no `Events` entry is not necessarily saying "this database has no events" — it may simply predate declared events. Removal also reaches only events SchemaSmith created; one made by hand, or by a scripted `Events/` file, is never touched. Under the no-drop protection tier ([`PreventDrop`](schemaquench.md#preventdrop) set for the environment) the flag is forced off along with every other drop-by-absence pass.
 
-> **Note:** this is an environment setting only. Setting `DropEventsRemovedFromProduct` in `Product.json` or `Template.json` is silently ignored — it is not a package property and appears in no generated `.json-schemas` file.
+> **Note:** this is an environment setting only. `DropEventsRemovedFromProduct` is not a package property and appears in no generated `.json-schemas` file, so leaving it in a `Product.json` or `Template.json` does not quietly do nothing: the package still loads and the deploy is unaffected, but `--Validate` reports it as an unexpected property (`SS-JSON-001`, Error) and exits `2`, which fails a CI gate. Set it in `SchemaQuench.settings.json` (or via the environment variable) instead.
 
 For the package side of declared events, see [Scheduled Event JSON Format](schema-packages.md#scheduled-event-json-format-mysql--mariadb) in the Schema Packages reference.
 
