@@ -1,0 +1,17 @@
+{
+  "Name": "vendor_order",
+  "Indexes": [
+    {
+      "Name": "IX_vendor_order_customer_placed",
+      "IndexColumns": "customer_ref,placed_at",
+      "PrimaryKey": false,
+      "Unique": false
+    },
+    {
+      "Name": "IX_vendor_order_status",
+      "IndexColumns": "status",
+      "PrimaryKey": false,
+      "Unique": false
+    }
+  ]
+}

@@ -38,6 +38,7 @@ databases=(
   cookbook_r9
   cookbook_r11
   cookbook_r12
+  cookbook_r13
 )
 
 engines="$(lab_engines)" || exit 1

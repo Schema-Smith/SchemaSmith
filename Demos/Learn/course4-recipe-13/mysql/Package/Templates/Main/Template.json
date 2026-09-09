@@ -1,0 +1,5 @@
+{
+  "Name": "Main",
+  "IndexOnlyTableQuenches": true,
+  "DatabaseIdentificationScript": "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'cookbook_r13'"
+}

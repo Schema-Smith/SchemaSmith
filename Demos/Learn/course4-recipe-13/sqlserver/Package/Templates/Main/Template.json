@@ -1,0 +1,5 @@
+{
+  "Name": "Main",
+  "IndexOnlyTableQuenches": true,
+  "DatabaseIdentificationScript": "SELECT name FROM sys.databases WHERE name = 'cookbook_r13'"
+}
