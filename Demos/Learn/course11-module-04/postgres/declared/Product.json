@@ -1,0 +1,9 @@
+{
+  "Name": "Vault",
+  "ValidationScript": "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_database WHERE datname = 'vault_m4') THEN 1 ELSE 0 END",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptFolders": [],
+  "Platform": "PostgreSQL"
+}

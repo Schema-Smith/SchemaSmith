@@ -1,0 +1,24 @@
+{
+  "Schema": "public",
+  "Name": "retaineddocument",
+  "Columns": [
+    {
+      "Name": "docid",
+      "DataType": "int8",
+      "Nullable": false
+    },
+    {
+      "Name": "body",
+      "DataType": "text",
+      "Nullable": true
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_retaineddocument",
+      "IndexColumns": "docid",
+      "PrimaryKey": true,
+      "Unique": true
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "properties": {
+    "Name": {
+      "type": "string",
+      "maxLength": 63
+    },
+    "Schema": {
+      "type": "string"
+    },
+    "Values": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The enum's labels, in order. Order matters — PostgreSQL compares and sorts enum values by declared position. New labels are added in place; removing or reordering existing ones needs the type recreated, so SchemaSmith reports rather than attempts it."
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name",
+    "Values"
+  ]
+}
