@@ -12,6 +12,7 @@ DECLARE
   sql_script TEXT;
   bad RECORD;
   declared_canonical TEXT;
+  dom RECORD;
 BEGIN
   -- Converges declared domain types.
   --
@@ -193,6 +194,82 @@ BEGIN
    WHERE NOT EXISTS (SELECT 1 FROM pg_constraint c
                       WHERE c.contypid = ty.oid AND c.contype = 'c' AND c.conname = ck."ConstraintName");
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
+  -- A constraint whose NAME is unchanged but whose EXPRESSION was edited. Both passes around this one key
+  -- on the name alone -- "Add Missing" skips a name that exists, "Drop Removed" skips a name that is still
+  -- declared -- so an edited expression fell between them and was silently ignored at exit 0. That is the
+  -- exact failure mode the declarative form exists to replace: a user who moved a guarded CREATE DOMAIN
+  -- script into a package to escape the silent no-op got the silent no-op back, now with a success report
+  -- and no script to blame. The reference promises CHECK, default and nullability all converge; the other
+  -- two did.
+  --
+  -- THE COMPARISON CANNOT BE TEXTUAL, and that is the whole difficulty. pg_get_constraintdef returns the
+  -- engine's rendering, not what was authored: VALUE LIKE '%@%.%' comes back as
+  -- CHECK ((VALUE ~~ '%@%.%'::text)) -- operator rewritten, cast added, parens added. Comparing that
+  -- against the authored text would never be equal, so every deploy would drop and recreate every
+  -- constraint forever. That is a worse defect than the one being fixed, and it is the same false-change
+  -- class already tracked separately for expression indexes and check constraints on tables.
+  --
+  -- So the DECLARED side is canonicalised by the engine too, and then like is compared with like. A domain
+  -- in pg_temp, carrying this domain's declared constraints against its own base type, renders each one
+  -- exactly as the real domain would -- verified identical before relying on it. pg_temp makes it
+  -- session-local, so concurrent deploys to the same database cannot collide on the name.
+  --
+  -- The base type comes from the DEPLOYED domain rather than the declaration: a genuine base-type change
+  -- has already been refused above, so at this point they agree, and rendering against what is actually
+  -- deployed is what makes the comparison meaningful.
+  --
+  -- PostgreSQL has no ALTER DOMAIN ... ALTER CONSTRAINT for an expression, so converging means DROP then
+  -- ADD. Safe for a check: it removes and restores a rule, touches no data, and no column depends on the
+  -- constraint the way one depends on the domain itself.
+  --
+  -- THE PROBE IS FOUND BY CATALOG LOOKUP, NOT BY 'pg_temp._ss_domain_check_probe'::regtype. That cast is a
+  -- constant, resolved when plpgsql PLANS the statement and cached with the plan for the life of the
+  -- session -- so the second call on a session holds the OID of a probe the first call already dropped,
+  -- matches nothing, and silently converges nothing. It is invisible in isolation and appears the moment
+  -- connections are pooled and reused, which is every real deployment. pg_my_temp_schema() resolves at
+  -- execution instead. Both DROPs go through EXECUTE for the same reason.
+  RAISE NOTICE 'Fixup Modified Domain Constraints';
+  sql_script := '';
+  FOR dom IN
+    SELECT t."Schema", t."Name", FORMAT_TYPE(ty.typbasetype, ty.typtypmod) AS basetype
+      FROM temp_domain_types t
+      JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
+      JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
+     WHERE EXISTS (SELECT 1 FROM temp_domain_checks ck
+                    WHERE ck."Schema" = t."Schema" AND ck."Name" = t."Name")
+  LOOP
+    EXECUTE 'DROP DOMAIN IF EXISTS pg_temp._ss_domain_check_probe CASCADE';
+    EXECUTE FORMAT('CREATE DOMAIN pg_temp._ss_domain_check_probe AS %s %s',
+                   dom.basetype,
+                   (SELECT STRING_AGG(FORMAT('CONSTRAINT %I CHECK (%s)', ck."ConstraintName", ck."Expression"), ' ')
+                      FROM temp_domain_checks ck
+                     WHERE ck."Schema" = dom."Schema" AND ck."Name" = dom."Name"));
+
+    sql_script := sql_script || COALESCE((
+      SELECT STRING_AGG(
+               'RAISE NOTICE ''  Altering constraint ' || probe.conname || ' on domain type ' || dom."Schema" || '.' || dom."Name" || ''';' || CHR(10) ||
+               'ALTER DOMAIN "' || dom."Schema" || '"."' || dom."Name" || '" DROP CONSTRAINT "' || probe.conname || '";' || CHR(10) ||
+               'ALTER DOMAIN "' || dom."Schema" || '"."' || dom."Name" || '" ADD CONSTRAINT "' || probe.conname || '" ' || probe.def || ';' || CHR(10) ||
+               'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
+               'VALUES (pg_backend_pid(), ''domain constraint'', ''' || dom."Schema" || '.' || dom."Name" || '.' || probe.conname || ''', ''modified'');', CHR(10))
+        FROM (SELECT pc.conname, PG_GET_CONSTRAINTDEF(pc.oid) AS def
+                FROM pg_constraint pc
+                JOIN pg_type pt ON pt.oid = pc.contypid
+                               AND pt.typname = '_ss_domain_check_probe'
+                               AND pt.typnamespace = PG_MY_TEMP_SCHEMA()
+               WHERE pc.contype = 'c') probe
+        JOIN (SELECT c.conname, PG_GET_CONSTRAINTDEF(c.oid) AS def
+                FROM pg_constraint c
+                JOIN pg_type ty2 ON ty2.oid = c.contypid AND ty2.typname = dom."Name" AND ty2.typtype = 'd'
+                JOIN pg_namespace n2 ON n2.oid = ty2.typnamespace AND n2.nspname = dom."Schema"
+               WHERE c.contype = 'c') live
+          ON live.conname = probe.conname
+       WHERE live.def IS DISTINCT FROM probe.def), '');
+
+    EXECUTE 'DROP DOMAIN IF EXISTS pg_temp._ss_domain_check_probe CASCADE';
+  END LOOP;
+  CALL "SchemaSmith"."ExecuteOrDebug"(NULLIF(sql_script, ''), p_WhatIf);
 
   -- A constraint the package no longer declares is DROPPED, which is the one place this type differs from
   -- the enum -- and safely so: it removes a rule, not data, and nothing depends on it.
