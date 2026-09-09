@@ -57,6 +57,13 @@ BEGIN
                             ELSE SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'COMPRESSION') END,
         'KeyBlockSize', SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'KEY_BLOCK_SIZE'),
         -- MariaDB only, like IsSystemVersioned below.
+        --
+        -- These two compare a FUNCTION'S RETURN against a string literal, which is the one shape in
+        -- this block that can raise 'Illegal mix of collations'. Both sides are COERCIBLE, so neither
+        -- outranks the other, and they only agree because SchemaSmith_CreateOption declares
+        -- CHARACTER SET utf8mb4 on its RETURNS -- see that script for what happened when it did not.
+        -- A catalog COLUMN against a literal is safe whatever the collations, because the column is
+        -- IMPLICIT and wins, which is why nothing else here needs anything.
         'PageCompressed', CASE WHEN SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'PAGE_COMPRESSED') = '1'
                                THEN TRUE ELSE NULL END,
         'PageCompressionLevel', SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'PAGE_COMPRESSION_LEVEL'),
