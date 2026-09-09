@@ -257,7 +257,7 @@ Each platform's supported keys come straight from its official client library (`
 
 Some databases aren't yours to ALTER. A database receiving replicated data is owned by the producer; you can tune indexes for your query patterns, but you can't touch the table structure. A third-party product installs its own schema; you need a supplementary index or a custom view to make it perform, but modifying the vendor's tables isn't an option.
 
-`IndexOnlyTableQuenches` is the escape hatch. Set it to `true` on a template and SchemaQuench shifts into index-only mode for that template: it skips table creation, column changes, foreign keys, and check constraints entirely -- and if a table in your JSON doesn't exist on the target, it's silently skipped rather than created. What it keeps managing: indexes, statistics, XML indexes, full-text indexes. Scripted objects (procedures, views, functions) still deploy as usual, so you can ship custom views and stored procedures alongside your supplementary indexes.
+`IndexOnlyTableQuenches` is the escape hatch. Set it to `true` on a template and SchemaQuench shifts into index-only mode for that template: it skips table creation, column changes, foreign keys, and check constraints entirely. What it keeps managing: indexes, statistics, XML indexes, full-text indexes. Scripted objects (procedures, views, functions) still deploy as usual, so you can ship custom views and stored procedures alongside your supplementary indexes.
 
 ```json
 {
@@ -272,6 +272,8 @@ Some databases aren't yours to ALTER. A database receiving replicated data is ow
 - **Third-party products.** You can't ALTER the vendor's tables, but you can add indexes to improve your usage. Put your index definitions in a template with `IndexOnlyTableQuenches`, and SchemaSmith manages those objects cleanly alongside your own schema.
 
 This works across SQL Server, PostgreSQL, MySQL, and MariaDB -- wherever you can add indexes to tables you don't control, SchemaQuench manages them.
+
+> **Warning:** index-only mode does not make a declared table optional. If a table in your JSON is not present on the target, the deploy **fails** -- it does not pass over the table. That matters most for the third-party case, where a vendor's optional modules may be installed on some deployments and not others: one package covering all of them needs a `ShouldApplyExpression` on each table so the absent ones are skipped deliberately.
 
 > **Note:** `IndexOnlyTableQuenches` is a template-level flag (default `false`). Each template in your product runs independently, so you can mix an index-only template for the third-party schema alongside a normal template for your own tables, all in one product.
 
