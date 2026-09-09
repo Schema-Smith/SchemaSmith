@@ -891,7 +891,7 @@ A `false` at either the environment or product level suppresses the drop pass fo
 
 For an alternative that keeps auto-drops on while still protecting data, see [Recyclebin -- Soft-Drop and Restore Hooks](recyclebin.md) (posture 2: drop-but-recoverable via the `SchemaSmith.CustomTableDrop` / `SchemaSmith.CustomTableRestore` hooks).
 
-**Partitioned tables are never dropped by absence -- the run fails instead.** SchemaSmith has no partitioning support of its own, so a partitioned table is one someone partitioned by hand, typically once it had grown large enough to need it. Dropping such a table by absence would destroy data spread across every partition, so a guard inspects each table selected for drop-by-absence and, on finding it partitioned, refuses to drop it and **fails the run closed** (exit code `2`) rather than proceeding. The failure names the table and tells you to drop it manually or mark it `PreventDrop`:
+**Partitioned tables are never dropped by absence -- the run fails instead.** A partitioned table holds data spread across every partition, and no declaration can tell SchemaSmith that data is disposable. So a guard inspects each table selected for drop-by-absence and, on finding it partitioned, refuses to drop it and **fails the run closed** (exit code `2`) rather than proceeding. This applies however the table came to be partitioned -- one a DBA partitioned by hand and one SchemaSmith itself deployed from a declared `Partitioning` block (MySQL/MariaDB) or `PartitionScheme` / `PartitionColumn` (SQL Server) are equally protected. The failure names the table and tells you to drop it manually or mark it `PreventDrop`:
 
 ```
 Partitioned table(s) skipped by drop-by-absence guard; drop manually or mark PreventDrop.
