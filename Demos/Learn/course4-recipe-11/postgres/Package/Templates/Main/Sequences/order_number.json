@@ -1,0 +1,9 @@
+{
+  "Schema": "public",
+  "Name": "order_number",
+  "DataType": "bigint",
+  "Start": 1000,
+  "Increment": 1,
+  "Cache": 1,
+  "Cycle": false
+}

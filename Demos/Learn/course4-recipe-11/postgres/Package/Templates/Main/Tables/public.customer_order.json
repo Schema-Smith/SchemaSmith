@@ -1,0 +1,13 @@
+{
+  "Schema": "public",
+  "Name": "customer_order",
+  "Columns": [
+    { "Name": "order_id", "DataType": "int8", "Nullable": false, "Default": "nextval('order_number'::regclass)" },
+    { "Name": "customer_email", "DataType": "\"public\".\"email_address\"", "Nullable": false },
+    { "Name": "status", "DataType": "public.order_status", "Nullable": false, "Default": "'placed'::order_status" },
+    { "Name": "placed_at", "DataType": "timestamp", "Nullable": false, "Default": "CURRENT_TIMESTAMP" }
+  ],
+  "Indexes": [
+    { "Name": "pk_customer_order", "IndexColumns": "order_id", "PrimaryKey": true, "Unique": true }
+  ]
+}

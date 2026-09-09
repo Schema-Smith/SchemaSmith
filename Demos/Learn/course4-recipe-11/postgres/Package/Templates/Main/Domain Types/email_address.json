@@ -1,0 +1,9 @@
+{
+  "Schema": "public",
+  "Name": "email_address",
+  "DataType": "character varying(256)",
+  "NotNull": true,
+  "CheckConstraints": [
+    { "Name": "email_address_has_at", "Expression": "VALUE LIKE '%@%'" }
+  ]
+}

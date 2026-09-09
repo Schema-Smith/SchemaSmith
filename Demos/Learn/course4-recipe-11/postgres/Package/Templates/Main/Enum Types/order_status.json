@@ -1,0 +1,5 @@
+{
+  "Schema": "public",
+  "Name": "order_status",
+  "Values": ["placed", "picked", "shipped", "delivered"]
+}
