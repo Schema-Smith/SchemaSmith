@@ -15,19 +15,20 @@ maps to a course like this:
 | **Course 1 · First deployment** | `module-01` … `module-04` | Install & connect, first package, WhatIf, extract an existing schema |
 | **Course 2 · Going deeper** | `level2-module-01` … `level2-module-06` | Products, template fan-out, conditional deployment, script tokens, data delivery, custom metadata |
 | **Course 3 · Ship it / operate it** | `course3-module-01` … `course3-module-05` | Team workflow, CI/CD gating, rollback, capstone (full dev→prod lifecycle + recyclebin recovery) |
-| **Course 4 · Recipes** | `course4-recipe-01` … `course4-recipe-09` | A cookbook of task-focused recipes |
+| **Course 4 · Recipes** | `course4-recipe-01` … `course4-recipe-10` | A cookbook of task-focused recipes |
 | **Course 5 · Switching tools** | `course5-module-01` … `course5-module-05` | Migrating from another migration tool |
 | **Course 6 · Production & least privilege** | `course6-module-01` … `course6-module-06` | Operating in CI under least privilege |
 | **Course 7 · Fleet fan-out** | `course7-module-01` … `course7-module-06` | One schema across a fleet of per-tenant databases |
 | **Course 8 · Troubleshooting & recovery** | `course8-module-01` … `course8-module-06` | The when-a-deploy-fails playbook |
 | **Course 9 · Polyglot shop** | `course9-module-01` … `course9-module-05` | All engines at once, each service independently deployable |
+| **Course 10 · Mixed-version fleet** | `course10-module-01` … `course10-module-05`, plus the `course10-xml-data-delivery` bonus recipe | One package across servers that are not all on the same version |
 
 > **Heads-up on the folder names** — they use three conventions. Course 1's labs are the bare
 > `module-*` folders; **Course 2's are the `level2-*` folders** (the site calls it "Course 2 · Going
-> deeper" — the `level2` prefix is historical); Courses 3–9 are `courseN-*`. So the lab **after
+> deeper" — the `level2` prefix is historical); Courses 3–10 are `courseN-*`. So the lab **after
 > `module-04`** (the last Course 1 lab) is **`level2-module-01`**, then on through `course3-*` and up.
 
-Courses 3–9 each include a `courseN-setup` folder — run it once before that course's modules.
+Courses 3–10 each include a `courseN-setup` folder — run it once before that course's modules.
 
 ## Prerequisites
 
