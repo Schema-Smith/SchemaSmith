@@ -22,13 +22,14 @@ maps to a course like this:
 | **Course 8 · Troubleshooting & recovery** | `course8-module-01` … `course8-module-06` | The when-a-deploy-fails playbook |
 | **Course 9 · Polyglot shop** | `course9-module-01` … `course9-module-05` | All engines at once, each service independently deployable |
 | **Course 10 · Mixed-version fleet** | `course10-module-01` … `course10-module-05`, plus the `course10-xml-data-delivery` bonus recipe | One package across servers that are not all on the same version |
+| **Course 11 · What SchemaSmith Refuses To Do** | `course11-module-01` (in progress) | The boundary: what a declarative tool converges, refuses by name, and degrades-and-reports |
 
 > **Heads-up on the folder names** — they use three conventions. Course 1's labs are the bare
 > `module-*` folders; **Course 2's are the `level2-*` folders** (the site calls it "Course 2 · Going
-> deeper" — the `level2` prefix is historical); Courses 3–10 are `courseN-*`. So the lab **after
+> deeper" — the `level2` prefix is historical); Courses 3–11 are `courseN-*`. So the lab **after
 > `module-04`** (the last Course 1 lab) is **`level2-module-01`**, then on through `course3-*` and up.
 
-Courses 3–10 each include a `courseN-setup` folder — run it once before that course's modules.
+Courses 3–11 each include a `courseN-setup` folder — run it once before that course's modules.
 
 ## Prerequisites
 
