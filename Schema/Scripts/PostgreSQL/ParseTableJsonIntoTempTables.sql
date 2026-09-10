@@ -113,7 +113,46 @@
                              WHEN "DataType" ILIKE 'character%' THEN REGEXP_REPLACE("DataType", 'character', 'CHAR', 'i')
                              WHEN "DataType" ILIKE 'decimal%' THEN REGEXP_REPLACE("DataType", 'decimal', 'NUMERIC', 'i')
                              WHEN "DataType" ILIKE 'bpchar%' THEN REGEXP_REPLACE("DataType", 'bpchar', 'CHAR', 'i')
+                             -- The four SQL-standard datetime spellings. The catalog reports udt_name --
+                             -- timestamptz, timetz, timestamp, time -- and these were the gap this list's
+                             -- own note predicted: it "was written against reported cases, not derived from
+                             -- the engine's synonym table". Auditing it against the engine found all four
+                             -- churning, and they are not exotic spellings: they are what the SQL standard
+                             -- says, what pg_dump writes, and what most ORMs generate.
+                             --
+                             -- Matched by regex rather than by literal, because the precision sits in the
+                             -- MIDDLE -- timestamp(3) with time zone -- so no whole-string equality or
+                             -- prefix rule reaches them. The precision is carried across verbatim and an
+                             -- array suffix is preserved, since _timestamptz has already been folded to
+                             -- timestamptz[] by the pass above.
+                             WHEN "DataType" ~* '^\s*timestamp\s*(\([0-9]+\))?\s*with\s+time\s+zone\s*(\[\])?\s*$'
+                                  THEN 'TIMESTAMPTZ' || COALESCE(SUBSTRING("DataType" FROM '\([0-9]+\)'), '')
+                                       || CASE WHEN "DataType" LIKE '%[]%' THEN '[]' ELSE '' END
+                             WHEN "DataType" ~* '^\s*timestamp\s*(\([0-9]+\))?\s*without\s+time\s+zone\s*(\[\])?\s*$'
+                                  THEN 'TIMESTAMP' || COALESCE(SUBSTRING("DataType" FROM '\([0-9]+\)'), '')
+                                       || CASE WHEN "DataType" LIKE '%[]%' THEN '[]' ELSE '' END
+                             WHEN "DataType" ~* '^\s*time\s*(\([0-9]+\))?\s*with\s+time\s+zone\s*(\[\])?\s*$'
+                                  THEN 'TIMETZ' || COALESCE(SUBSTRING("DataType" FROM '\([0-9]+\)'), '')
+                                       || CASE WHEN "DataType" LIKE '%[]%' THEN '[]' ELSE '' END
+                             WHEN "DataType" ~* '^\s*time\s*(\([0-9]+\))?\s*without\s+time\s+zone\s*(\[\])?\s*$'
+                                  THEN 'TIME' || COALESCE(SUBSTRING("DataType" FROM '\([0-9]+\)'), '')
+                                       || CASE WHEN "DataType" LIKE '%[]%' THEN '[]' ELSE '' END
                              ELSE "DataType" END;
+
+    -- Family defaults, applied AFTER the synonym fold so both spellings of a type reach one rule.
+    -- ColumnTypeArguments renders the catalog side bare when the value equals the family default, so an
+    -- explicitly-declared default has to be dropped here or it compares unequal to its own deployment --
+    -- and the column is re-altered on every deploy for declaring what it already is.
+    --   6 is the datetime family's default precision; 1 is BIT's default length ('bit' IS 'bit(1)').
+    -- BIT VARYING is deliberately excluded: bare 'bit varying' is UNLIMITED, so 'bit varying(1)' is a
+    -- different type, not a verbose spelling of the same one.
+    UPDATE temp_columns
+       SET "DataType" = REGEXP_REPLACE("DataType", '\(6\)', '')
+     WHERE "DataType" ~* '^(TIMESTAMPTZ|TIMESTAMP|TIMETZ|TIME)\(6\)';
+
+    UPDATE temp_columns
+       SET "DataType" = REGEXP_REPLACE("DataType", '\(1\)', '')
+     WHERE "DataType" ~* '^BIT\(1\)';
 
     SELECT STRING_AGG('DELETE FROM temp_columns WHERE "_RowId" = ' || "_RowId"::TEXT || ' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
       INTO sql_script
