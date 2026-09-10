@@ -289,7 +289,10 @@ public class ForgeKindlerTests
         //   Kindled after fn_RebuildBlockedReason, which it calls to refuse, and before the quench procedures).
         // + Kindling_ProductOwnership_Table (#J1 -- ownership fallback for SQL Server memory-optimized tables,
         //   which reject the ProductName extended property; the same table-based ownership PostgreSQL/MySQL use).
-        Assert.That(sqlServer.Length, Is.EqualTo(35));
+        // + SchemaSmith.fn_NormalizeDataType (#12 -- folds declared type synonyms onto the spelling sys.types
+        //   reports back, so a column authored INTEGER stops being rewritten on every deploy. Replaces the ten
+        //   scattered REPLACE(..., 'ROWVERSION', 'TIMESTAMP') calls across the JSON parse and its XML twin).
+        Assert.That(sqlServer.Length, Is.EqualTo(36));
         // PostgreSQL: 35 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + Kindling_ProductOwnership_IndexMigration
         // (one-owner enforcement, #270 TRANSITIONAL) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)

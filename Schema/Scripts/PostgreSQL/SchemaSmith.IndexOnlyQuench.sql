@@ -33,6 +33,15 @@ BEGIN
            COALESCE((elem ->> 'ForceRowLevelSecurity')::BOOLEAN, false) AS "ForceRowLevelSecurity",
            COALESCE(elem ->> 'AccessMethod', '') AS "AccessMethod",
            COALESCE(elem ->> 'PersistenceType', '') AS "PersistenceType",
+           -- ReplicaIdentityQuench runs immediately after this procedure in the SAME emitted batch
+           -- (DatabaseQuench's PostgreSQL index-only branch) and reads both of these off temp_tables --
+           -- its very first statement does, so a missing column is not a quiet degrade but
+           -- 42703 at exit 2 AFTER the indexes have been created. This procedure builds its OWN
+           -- temp_tables rather than reusing ParseTableJsonIntoTempTables', so every column a
+           -- batch-mate reads has to be declared in both. Same rule the temp_indexes comment below
+           -- states for index columns. Empty string means "not declared, leave the server alone".
+           COALESCE(UPPER(elem ->> 'ReplicaIdentity'), '') AS "ReplicaIdentity",
+           COALESCE(elem ->> 'ReplicaIdentityIndex', '') AS "ReplicaIdentityIndex",
            CASE WHEN p_UpdateFillFactor THEN true ELSE COALESCE((elem ->> 'UpdateFillFactor')::BOOLEAN, false) END AS "UpdateFillFactor",
            (elem ->> 'DropIndexesRemovedFromProduct')::BOOLEAN AS "DropIndexesRemovedFromProduct"
       FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem;
@@ -150,7 +159,12 @@ BEGIN
                          AND i."Name" != ei."IndexName"
                          AND i."IndexColumns" = ei."IndexColumns"
                          AND COALESCE(i."IncludeColumns", '') = COALESCE(ei."IncludeColumns", '')
-                         AND COALESCE(i."Unique", FALSE) = ei."Unique"
+                         -- #285: a PRIMARY KEY is unique in the catalog whether or not the package
+                         -- says so, so a naturally-authored PK (PrimaryKey: true, no Unique) failed
+                         -- this join and a RENAME fell through to drop+recreate. Same disjunction the
+                         -- modified-index detection already uses.
+                         AND (COALESCE(i."Unique", FALSE) OR COALESCE(i."PrimaryKey", FALSE)
+                              OR COALESCE(i."UniqueConstraint", FALSE)) = ei."Unique"
                          AND COALESCE(i."UniqueConstraint", FALSE) = ei."UniqueConstraint"
                          AND COALESCE(i."PrimaryKey", FALSE) = ei."PrimaryKey"
                          AND COALESCE(i."FilterExpression", '') = COALESCE(ei."FilterExpression", '')

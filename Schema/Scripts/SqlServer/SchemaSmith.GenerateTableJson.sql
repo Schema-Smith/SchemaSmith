@@ -10,11 +10,11 @@ CREATE PROCEDURE SchemaSmith.GenerateTableJSON
   @p_ObjectOrder SYSNAME = 'Name'
   -- 'Name' (default, alphabetical) or 'Physical' (the table's own column order).
   --
-  -- COLUMNS ONLY at this layer, which is why the parameter is broader than what it does here.
-  -- It carries SchemaTongs' Product:ObjectOrder setting, and that setting also orders indexes,
-  -- foreign keys, check constraints, statistics and XML indexes -- but those are sequenced by the
-  -- caller after this proc returns, not here. Called by hand, this argument reorders the Columns
-  -- array and nothing else.
+  -- COLUMNS ONLY, and that is the whole story rather than a layering detail. Indexes, foreign keys,
+  -- check constraints, statistics and XML indexes are ALWAYS emitted in name order below, whatever
+  -- this argument says: 'Physical' has no meaning for a set with no physical sequence. This proc is
+  -- the only thing that orders them -- nothing re-sequences the lists after it returns. A comment
+  -- here used to say the caller did, and it was describing a helper that had no callers.
 AS
 SET NOCOUNT ON
 DECLARE @v_DatabaseCollation NVARCHAR(200) = CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS NVARCHAR(200))

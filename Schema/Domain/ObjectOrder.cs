@@ -14,11 +14,12 @@ namespace Schema.Domain
     /// is a separate opt-in.
     /// </para>
     /// <para>
-    /// Scope differs by layer, which is worth knowing before reading the SQL. This setting orders
-    /// <c>Columns</c>, <c>Indexes</c>, <c>ForeignKeys</c>, <c>CheckConstraints</c> and, on SQL Server,
-    /// <c>Statistics</c> and <c>XmlIndexes</c>. The stored-procedure parameter that carries it
-    /// (<c>@p_ObjectOrder</c>, or <c>@SchemaSmith_ObjectOrder</c> on MySQL/MariaDB) sorts
-    /// <b>columns only</b> — the remaining lists are sequenced here, after extraction returns.
+    /// <b>This setting orders <c>Columns</c> and nothing else.</b> Indexes, foreign keys, check
+    /// constraints and — where the engine has them — statistics, XML indexes and fulltext indexes are
+    /// always emitted in name order by the generator, whatever this is set to: they are sets, with no
+    /// physical sequence for <see cref="Physical"/> to mean anything about. The stored-procedure
+    /// parameter that carries this (<c>@p_ObjectOrder</c>, or <c>@SchemaSmith_ObjectOrder</c> on
+    /// MySQL/MariaDB) therefore has exactly the same scope the setting does.
     /// </para>
     /// </summary>
     [JsonConverter(typeof(StringEnumConverter))]

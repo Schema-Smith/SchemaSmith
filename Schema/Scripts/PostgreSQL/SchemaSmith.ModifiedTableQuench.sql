@@ -477,7 +477,15 @@ BEGIN
       SELECT t."Schema" AS "TableSchema",
              t."Name" AS "TableName",
              con.conname AS "CheckName",
-             REGEXP_REPLACE(pg_catalog.PG_GET_CONSTRAINTDEF(con.oid), '^CHECK \(\((.+)\)\)$', '\1') AS "Expression"
+             -- SAME RULE EXTRACTION USES (GenerateTableJson's check-constraint read), and it has to be:
+             -- when the two disagree, a constraint round-trips into a package that the comparison then
+             -- reports as changed on every deploy. This was a regex requiring DOUBLE parens, but
+             -- pg_get_constraintdef renders SINGLE parens for a bare boolean column or a top-level
+             -- function call -- so CHECK (flag) and CHECK (starts_with(tag, 'a')) never had the prefix
+             -- stripped and could never compare equal, while CHECK ((length(tag) > 0)) did.
+             -- StripParenWrapping counts balanced parens instead of pattern-matching a fixed depth,
+             -- so it is right for both shapes. SUBSTRING(... FROM 6) drops the leading "CHECK ".
+             "SchemaSmith"."StripParenWrapping"(SUBSTRING(pg_catalog.PG_GET_CONSTRAINTDEF(con.oid) FROM 6)) AS "Expression"
         FROM temp_tables t
         JOIN pg_catalog.pg_constraint con ON con.conrelid = to_regclass('"' || t."Schema" || '"' ||  '.' || '"' ||  t."Name" || '"')
         WHERE con.contype = 'c';
@@ -834,7 +842,12 @@ BEGIN
                          AND i."Name" != ei."IndexName"
                          AND i."IndexColumns" = ei."IndexColumns"
                          AND COALESCE(i."IncludeColumns", '') = COALESCE(ei."IncludeColumns", '')
-                         AND COALESCE(i."Unique", FALSE) = ei."Unique"
+                         -- #285: a PRIMARY KEY is unique in the catalog whether or not the package
+                         -- says so, so a naturally-authored PK (PrimaryKey: true, no Unique) failed
+                         -- this join and a RENAME fell through to drop+recreate. Same disjunction the
+                         -- modified-index detection already uses.
+                         AND (COALESCE(i."Unique", FALSE) OR COALESCE(i."PrimaryKey", FALSE)
+                              OR COALESCE(i."UniqueConstraint", FALSE)) = ei."Unique"
                          AND COALESCE(i."UniqueConstraint", FALSE) = ei."UniqueConstraint"
                          AND COALESCE(i."PrimaryKey", FALSE) = ei."PrimaryKey"
                          AND COALESCE(i."FilterExpression", '') = COALESCE(ei."FilterExpression", '')

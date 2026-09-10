@@ -125,6 +125,128 @@ namespace Schema.UnitTests.Domain
             Assert.That(template.IndexedViews[0].Schema, Is.EqualTo("{{SchemaName}}"));
         }
 
+        // The three declarative PostgreSQL types (2.6.0) resolve exactly like a materialized view. Before
+        // this they were never visited at all: EnumTypeQuench/DomainTypeQuench/SequenceQuench each default a
+        // null Schema with COALESCE(..., 'public'), so under a SCHEMA TEMPLATE an object authored without an
+        // explicit Schema was created in public on every tenant rather than in the tenant's own schema --
+        // silently, at exit 0.
+        [Test]
+        public void Resolve_PostgreSqlEnumType_UnsetSchema_ResolvesToPublic_InRegularTemplate()
+        {
+            var obj = new PostgreSqlEnumType { Name = "enumtype_test" };
+
+            SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: false, Platform.PostgreSQL);
+
+            Assert.That(obj.Schema, Is.EqualTo("public"));
+        }
+
+        [Test]
+        public void Resolve_PostgreSqlEnumType_UnsetSchema_ResolvesToSchemaNameToken_InSchemaTemplate()
+        {
+            var obj = new PostgreSqlEnumType { Name = "enumtype_test" };
+
+            SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: true, Platform.PostgreSQL);
+
+            Assert.That(obj.Schema, Is.EqualTo("{{SchemaName}}"),
+                "an unset Schema under a schema template must become the tenant token -- left null it "
+                + "reaches the quench, which COALESCEs it to public on every tenant");
+        }
+
+        [Test]
+        public void Resolve_PostgreSqlEnumType_HardLiteralInSchemaTemplate_Rejected()
+        {
+            var obj = new PostgreSqlEnumType { Name = "enumtype_test", Schema = "public" };
+
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: true, Platform.PostgreSQL));
+
+            Assert.That(ex.Message, Does.Contain("enumtype_test"));
+            Assert.That(ex.Message, Does.Contain("enum type"),
+                "the message must name the KIND, or a package author with several object types cannot tell "
+                + "which declaration to correct");
+        }
+
+        // The three declarative PostgreSQL types (2.6.0) resolve exactly like a materialized view. Before
+        // this they were never visited at all: EnumTypeQuench/DomainTypeQuench/SequenceQuench each default a
+        // null Schema with COALESCE(..., 'public'), so under a SCHEMA TEMPLATE an object authored without an
+        // explicit Schema was created in public on every tenant rather than in the tenant's own schema --
+        // silently, at exit 0.
+        [Test]
+        public void Resolve_PostgreSqlDomainType_UnsetSchema_ResolvesToPublic_InRegularTemplate()
+        {
+            var obj = new PostgreSqlDomainType { Name = "domaintype_test" };
+
+            SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: false, Platform.PostgreSQL);
+
+            Assert.That(obj.Schema, Is.EqualTo("public"));
+        }
+
+        [Test]
+        public void Resolve_PostgreSqlDomainType_UnsetSchema_ResolvesToSchemaNameToken_InSchemaTemplate()
+        {
+            var obj = new PostgreSqlDomainType { Name = "domaintype_test" };
+
+            SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: true, Platform.PostgreSQL);
+
+            Assert.That(obj.Schema, Is.EqualTo("{{SchemaName}}"),
+                "an unset Schema under a schema template must become the tenant token -- left null it "
+                + "reaches the quench, which COALESCEs it to public on every tenant");
+        }
+
+        [Test]
+        public void Resolve_PostgreSqlDomainType_HardLiteralInSchemaTemplate_Rejected()
+        {
+            var obj = new PostgreSqlDomainType { Name = "domaintype_test", Schema = "public" };
+
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: true, Platform.PostgreSQL));
+
+            Assert.That(ex.Message, Does.Contain("domaintype_test"));
+            Assert.That(ex.Message, Does.Contain("domain type"),
+                "the message must name the KIND, or a package author with several object types cannot tell "
+                + "which declaration to correct");
+        }
+
+        // The three declarative PostgreSQL types (2.6.0) resolve exactly like a materialized view. Before
+        // this they were never visited at all: EnumTypeQuench/DomainTypeQuench/SequenceQuench each default a
+        // null Schema with COALESCE(..., 'public'), so under a SCHEMA TEMPLATE an object authored without an
+        // explicit Schema was created in public on every tenant rather than in the tenant's own schema --
+        // silently, at exit 0.
+        [Test]
+        public void Resolve_PostgreSqlSequence_UnsetSchema_ResolvesToPublic_InRegularTemplate()
+        {
+            var obj = new PostgreSqlSequence { Name = "sequence_test" };
+
+            SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: false, Platform.PostgreSQL);
+
+            Assert.That(obj.Schema, Is.EqualTo("public"));
+        }
+
+        [Test]
+        public void Resolve_PostgreSqlSequence_UnsetSchema_ResolvesToSchemaNameToken_InSchemaTemplate()
+        {
+            var obj = new PostgreSqlSequence { Name = "sequence_test" };
+
+            SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: true, Platform.PostgreSQL);
+
+            Assert.That(obj.Schema, Is.EqualTo("{{SchemaName}}"),
+                "an unset Schema under a schema template must become the tenant token -- left null it "
+                + "reaches the quench, which COALESCEs it to public on every tenant");
+        }
+
+        [Test]
+        public void Resolve_PostgreSqlSequence_HardLiteralInSchemaTemplate_Rejected()
+        {
+            var obj = new PostgreSqlSequence { Name = "sequence_test", Schema = "public" };
+
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: true, Platform.PostgreSQL));
+
+            Assert.That(ex.Message, Does.Contain("sequence_test"));
+            Assert.That(ex.Message, Does.Contain("sequence"),
+                "the message must name the KIND, or a package author with several object types cannot tell "
+                + "which declaration to correct");
+        }
         [Test]
         public void Resolve_Template_PostgreSql_SchemaTemplate_AppliesSchemaNameTokenDefaults()
         {
@@ -141,6 +263,9 @@ namespace Schema.UnitTests.Domain
             });
             template.Tables.Add(table);
             template.MaterializedViews.Add(new PostgreSqlMaterializedView { Name = "mv_active" });
+            template.EnumTypes.Add(new PostgreSqlEnumType { Name = "order_status" });
+            template.DomainTypes.Add(new PostgreSqlDomainType { Name = "email_address" });
+            template.Sequences.Add(new PostgreSqlSequence { Name = "order_seq" });
             template.Product = new Product { Platform = Platform.PostgreSQL };
 
             SchemaDefaultResolver.Resolve(template);
@@ -150,6 +275,18 @@ namespace Schema.UnitTests.Domain
             Assert.That(((PostgreSqlForeignKey)table.ForeignKeys[1]).RelatedTableSchema, Is.EqualTo("public"),
                 "Cross-schema FK with explicit literal must be preserved.");
             Assert.That(template.MaterializedViews[0].Schema, Is.EqualTo("{{SchemaName}}"));
+            // The three declarative types were never walked, so they stayed null and the quench put
+            // them in public on every tenant. This is the assertion the defect fails.
+            Assert.Multiple(() =>
+            {
+                Assert.That(template.EnumTypes[0].Schema, Is.EqualTo("{{SchemaName}}"),
+                    "an enum type in a schema template belongs to the tenant, not to public");
+                Assert.That(template.DomainTypes[0].Schema, Is.EqualTo("{{SchemaName}}"),
+                    "a domain type in a schema template belongs to the tenant, not to public");
+                Assert.That(template.Sequences[0].Schema, Is.EqualTo("{{SchemaName}}"),
+                    "a sequence in a schema template belongs to the tenant -- a shared sequence would "
+                    + "hand every tenant numbers from the same counter");
+            });
         }
 
         [Test]

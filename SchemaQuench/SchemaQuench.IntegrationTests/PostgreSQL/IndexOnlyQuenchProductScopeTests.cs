@@ -167,16 +167,23 @@ public class IndexOnlyQuenchProductScopeTests : BaseTableQuenchTests
     // ---- drivers and live-state readers ---------------------------------------
 
     /// <summary>
-    /// Mirrors the argument list DatabaseQuench emits for the PostgreSQL index-only branch, including
-    /// p_ProductName. Kept explicit rather than reusing the base helper, which hard-codes a different
-    /// flag set -- and note that the base helper has always passed p_ProductName, which is exactly why
-    /// integration coverage never caught the omission.
+    /// Mirrors the batch DatabaseQuench emits for the PostgreSQL index-only branch: ALL THREE calls, in
+    /// order, with the arguments it actually sends. Kept explicit rather than reusing the base helper,
+    /// which hard-codes a different flag set -- and note that the base helper has always passed
+    /// p_ProductName, which is exactly why integration coverage never caught that omission.
+    /// <para><b>Reproduce the WHOLE batch, not the calls you are interested in.</b> The first version of
+    /// this helper emitted IndexOnlyQuench and FixupIndexOwnership but dropped ReplicaIdentityQuench
+    /// from between them, so it went green while the real emitted batch still died at
+    /// <c>42703: column "ReplicaIdentity" does not exist</c> -- after creating the indexes, at exit 2.
+    /// That is the same class of blind spot as the base helper's, made a second time: a test that
+    /// exercises a string SchemaQuench does not emit proves nothing about what it does.</para>
     /// </summary>
     private void RunIndexOnly(IDbCommand cmd, string json, string product, bool dropRemoved = false)
     {
         var defs = json.Replace("'", "''");
         cmd.CommandText = $@"
 CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{product}', p_TableDefinitions := '{defs}', p_DropUnknownIndexes := false, p_DropIndexesRemovedFromProduct := {(dropRemoved ? "true" : "false")}, p_WhatIf := false, p_UpdateFillFactor := true, p_CaptureWouldDrop := false);
+CALL ""SchemaSmith"".""ReplicaIdentityQuench""(p_WhatIf := false);
 CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{product}');
 ";
         cmd.ExecuteNonQuery();

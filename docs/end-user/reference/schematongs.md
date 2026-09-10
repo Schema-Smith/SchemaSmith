@@ -207,7 +207,7 @@ The `--ConnectionString` switch bypasses all `Source` settings entirely. When pr
 | `Product:Path` | string | _(required)_ | Directory where the schema package is created or updated. |
 | `Product:Name` | string | _(directory name)_ | Product name written to `Product.json`. If blank, defaults to the last segment of `Product:Path`. |
 | `Product:CheckConstraintStyle` | string | `ColumnLevel` | Controls how check constraints are written when creating a new `Product.json`. See [CheckConstraintStyle](#checkconstraintstyle). |
-| `Product:ObjectOrder` | string | `Name` | Sequence used for a table's object lists when there is nothing to preserve. `Name` sorts alphabetically; `Physical` uses the table's own column order. See [Column and object order](#column-and-object-order). |
+| `Product:ObjectOrder` | string | `Name` | Sequence used for a table's **column list** when there is nothing to preserve. `Name` sorts alphabetically; `Physical` uses the table's own column order. Every other list is always name-ordered. See [Column and object order](#column-and-object-order). |
 | `Product:PreserveExistingOrder` | bool | `true` | When a table file already exists, keep the order it already had. See [Column and object order](#column-and-object-order). |
 | `Template:Name` | string | Source database name | Template name. Creates the template directory under `Templates/<Name>/`. Defaults to the `Source:Database` value when not specified. |
 

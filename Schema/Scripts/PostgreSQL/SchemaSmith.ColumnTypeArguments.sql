@@ -31,5 +31,23 @@ AS $$
               THEN '(' || p_NumericPrecision || CASE WHEN COALESCE(p_NumericScale, 0) != 0 THEN ', ' || p_NumericScale ELSE '' END || ')'
               WHEN UPPER(p_UdtName) IN ('TIMESTAMP', 'TIMESTAMPTZ', 'TIME', 'TIMETZ') AND COALESCE(p_DatetimePrecision, 6) != 6
               THEN '(' || p_DatetimePrecision || ')'
+              -- BIT and BIT VARYING carry a LENGTH, in character_maximum_length like the char family, and
+              -- this function dropped it on the floor: not one of the arms above matches ('BIT' does not
+              -- end in CHAR). Two consequences, and the second is the serious one. (1) A column declared
+              -- bit(8) compared against a catalog rendering of bare 'bit' and re-altered on every deploy.
+              -- (2) EXTRACTION reads this same function, so a bit(8) column extracted as 'bit' and
+              -- redeploying that package built bit(1) -- a silent truncation to one bit, not a diff.
+              --
+              -- The two types need different rules because their defaults differ. Bare 'bit varying' is
+              -- UNLIMITED and 'bit varying(1)' holds at most one bit -- genuinely different types -- so any
+              -- reported length is emitted. Bare 'bit' IS 'bit(1)' -- the same type spelled two ways, and
+              -- the catalog reports 1 for both -- so a length of 1 is emitted as nothing, matching the
+              -- convention the datetime arm above already uses for its family default. The authored side
+              -- folds 'BIT(1)' to 'BIT' to meet it (ParseTableJsonIntoTempTables), so both spellings
+              -- converge on the same rendering from either direction.
+              WHEN UPPER(p_UdtName) = 'VARBIT' AND p_CharacterMaxLength IS NOT NULL
+              THEN '(' || p_CharacterMaxLength || ')'
+              WHEN UPPER(p_UdtName) = 'BIT' AND COALESCE(p_CharacterMaxLength, 1) != 1
+              THEN '(' || p_CharacterMaxLength || ')'
               ELSE '' END
 $$;

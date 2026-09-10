@@ -198,9 +198,10 @@ BEGIN
         -- differently depending on which engine it came from, so a package re-extracted elsewhere showed
         -- a whole-file diff that was pure noise. Name order is also stable against a source table whose
         -- ordinal order changes, which is the determinism the sort exists for.
-        -- Column sequence: 'Name' (default) or 'Physical', the table's own order. COLUMNS ONLY here --
-        -- the same Product:ObjectOrder setting also orders indexes, foreign keys and check
-        -- constraints, but the caller sequences those after this proc returns. MySQL stored procedures
+        -- Column sequence: 'Name' (default) or 'Physical', the table's own order. COLUMNS ONLY, and
+        -- that is the whole story rather than a layering detail -- indexes, foreign keys, check
+        -- constraints and fulltext indexes are ALWAYS emitted in name order below, whatever this says.
+        -- Nothing re-sequences the lists after this proc returns. MySQL stored procedures
         -- cannot carry default parameter values, so adding a parameter would break every existing caller --
         -- including the hand-written CALL this proc exists to serve. A session variable keeps those working
         -- unchanged; SQL Server and PostgreSQL take a defaulted parameter instead, which they support.
@@ -254,8 +255,19 @@ BEGIN
     -- of those run unconditionally on every target regardless of version, so REGEXP_REPLACE there
     -- would actually be invoked on 5.7 and fail -- an execution-time constraint, not a compile-time
     -- one, and not the situation here.
+    -- ORDER BY idx_name -- and the same on the foreign key, check constraint and fulltext aggregations
+    -- below -- is the ONLY thing that makes these lists deterministic. INFORMATION_SCHEMA hands rows back
+    -- in whatever order the plan produces; without an explicit sort, GROUP_CONCAT concatenates them in
+    -- that order and it is not name order and not even stable. MEASURED: MariaDB 11.4 emitted a table's
+    -- check constraints in creation order (zzz, mmm, aaa), and MySQL 8.0 emitted the SAME table's two
+    -- different ways across two runs. SQL Server and PostgreSQL have always sorted these by name in their
+    -- own generators; this is the Rule 20 parity gap (#10).
+    --
+    -- Name order is NOT what Product:ObjectOrder selects here. These are sets, not sequences -- there is
+    -- no physical order to preserve -- so they sort by name unconditionally, exactly as the other two
+    -- engines do. What the setting orders is Columns, and only Columns.
     IF SchemaSmith_SupportsFunctionalIndex() = 1 THEN
-        SELECT CONCAT('[', IFNULL(GROUP_CONCAT(idx_json SEPARATOR ','), ''), ']') INTO v_indexes
+        SELECT CONCAT('[', IFNULL(GROUP_CONCAT(idx_json ORDER BY idx_name SEPARATOR ','), ''), ']') INTO v_indexes
         FROM (
             SELECT JSON_OBJECT(
                 'Name', s.INDEX_NAME,
@@ -281,7 +293,8 @@ BEGIN
                 ),
                 'Visible', CASE WHEN SchemaSmith_IndexIsVisible(p_Schema, p_Table, s.INDEX_NAME) = 1 THEN TRUE ELSE FALSE END,
                 'Comment', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
-            ) AS idx_json
+            ) AS idx_json,
+                   s.INDEX_NAME AS idx_name
             FROM INFORMATION_SCHEMA.STATISTICS s
             WHERE s.TABLE_SCHEMA = p_Schema
               AND s.TABLE_NAME = p_Table
@@ -289,7 +302,7 @@ BEGIN
             GROUP BY s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
         ) idx_subquery;
     ELSE
-        SELECT CONCAT('[', IFNULL(GROUP_CONCAT(idx_json SEPARATOR ','), ''), ']') INTO v_indexes
+        SELECT CONCAT('[', IFNULL(GROUP_CONCAT(idx_json ORDER BY idx_name SEPARATOR ','), ''), ']') INTO v_indexes
         FROM (
             SELECT JSON_OBJECT(
                 'Name', s.INDEX_NAME,
@@ -307,7 +320,8 @@ BEGIN
                 ),
                 'Visible', CASE WHEN SchemaSmith_IndexIsVisible(p_Schema, p_Table, s.INDEX_NAME) = 1 THEN TRUE ELSE FALSE END,
                 'Comment', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
-            ) AS idx_json
+            ) AS idx_json,
+                   s.INDEX_NAME AS idx_name
             FROM INFORMATION_SCHEMA.STATISTICS s
             WHERE s.TABLE_SCHEMA = p_Schema
               AND s.TABLE_NAME = p_Table
@@ -317,7 +331,7 @@ BEGIN
     END IF;
 
     -- Get foreign keys
-    SELECT CONCAT('[', IFNULL(GROUP_CONCAT(fk_json SEPARATOR ','), ''), ']') INTO v_foreign_keys
+    SELECT CONCAT('[', IFNULL(GROUP_CONCAT(fk_json ORDER BY fk_name SEPARATOR ','), ''), ']') INTO v_foreign_keys
     FROM (
         SELECT JSON_OBJECT(
             'Name', tc.CONSTRAINT_NAME,
@@ -342,7 +356,8 @@ BEGIN
             ),
             'DeleteAction', rc.DELETE_RULE,
             'UpdateAction', rc.UPDATE_RULE
-        ) AS fk_json
+        ) AS fk_json,
+               tc.CONSTRAINT_NAME AS fk_name
         FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
           ON tc.CONSTRAINT_SCHEMA = rc.CONSTRAINT_SCHEMA
@@ -363,7 +378,7 @@ BEGIN
         ''Name'', cc.CONSTRAINT_NAME,
         ''Expression'', REPLACE(REGEXP_REPLACE(cc.CHECK_CLAUSE, ''_utf8mb4|_utf8mb3|_utf8|_latin1|_binary'', ''''), ''\\\\'''''', '''''''')
     )
-    SEPARATOR '',''
+    ORDER BY cc.CONSTRAINT_NAME SEPARATOR '',''
 ), ''''), '']'') INTO @v_ccResult
 FROM INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
 JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
@@ -381,13 +396,14 @@ WHERE tc.TABLE_SCHEMA = @v_ccSchema
     END IF;
 
     -- Get fulltext indexes
-    SELECT CONCAT('[', IFNULL(GROUP_CONCAT(ft_json SEPARATOR ','), ''), ']') INTO v_fulltext_indexes
+    SELECT CONCAT('[', IFNULL(GROUP_CONCAT(ft_json ORDER BY ft_name SEPARATOR ','), ''), ']') INTO v_fulltext_indexes
     FROM (
         SELECT JSON_OBJECT(
             'Name', s.INDEX_NAME,
             'Columns', GROUP_CONCAT(CONCAT('`', s.COLUMN_NAME, '`') ORDER BY s.SEQ_IN_INDEX SEPARATOR ','),
             'Comment', CASE WHEN MAX(s.INDEX_COMMENT) = '' THEN NULL ELSE MAX(s.INDEX_COMMENT) END
-        ) AS ft_json
+        ) AS ft_json,
+               s.INDEX_NAME AS ft_name
         FROM INFORMATION_SCHEMA.STATISTICS s
         WHERE s.TABLE_SCHEMA = p_Schema
           AND s.TABLE_NAME = p_Table

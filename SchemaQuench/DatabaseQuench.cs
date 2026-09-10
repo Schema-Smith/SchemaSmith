@@ -1111,10 +1111,18 @@ public class DatabaseQuench
         // consumes the serialized table-definition JSON literally. Slice 1's SchemaDefaultResolver
         // defaults schema-template tables / views to "{{SchemaName}}", which means the JSON carries
         // the token verbatim — substitute here so each iteration sees a fully-qualified DDL payload.
+        //
+        // EVERY MODEL PAYLOAD BELONGS IN THIS LIST -- it must stay in step with the version-token
+        // block in ApplyVersionTokens, which already covers all seven. A payload resolved to the
+        // token and never substituted is WORSE than one never resolved: instead of a null Schema
+        // that each quench COALESCEs to the platform default, the engine is handed the literal
+        // "{{SchemaName}}" as a schema name. Domain types were missing here, which is exactly that,
+        // and it went unnoticed because the five neighbours were right.
         _iteration.TableSchema = (_template.TableSchema ?? "").Replace("{{SchemaName}}", _schemaName);
         _iteration.MaterializedViewSchema = (_template.MaterializedViewSchema ?? "").Replace("{{SchemaName}}", _schemaName);
         _iteration.IndexedViewSchema = (_template.IndexedViewSchema ?? "").Replace("{{SchemaName}}", _schemaName);
         _iteration.EventSchema = (_template.EventSchema ?? "").Replace("{{SchemaName}}", _schemaName);
+        _iteration.DomainTypeSchema = (_template.DomainTypeSchema ?? "").Replace("{{SchemaName}}", _schemaName);
         _iteration.EnumTypeSchema = (_template.EnumTypeSchema ?? "").Replace("{{SchemaName}}", _schemaName);
         _iteration.SequenceSchema = (_template.SequenceSchema ?? "").Replace("{{SchemaName}}", _schemaName);
     }

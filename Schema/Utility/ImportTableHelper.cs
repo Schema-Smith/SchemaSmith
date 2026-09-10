@@ -170,6 +170,13 @@ public static class ImportTableHelper
         }
     }
 
+    // ApplyObjectOrder used to live here: a public method, no callers, that re-sorted the extracted
+    // lists by name. It was removed rather than wired up. Every generator already emits the non-column
+    // lists in name order -- unconditionally, because they are sets with no physical sequence to
+    // preserve -- so for ObjectOrder.Name it would have re-sorted an already-sorted list, and for
+    // ObjectOrder.Physical it did nothing at all. Its real cost was the comments it justified: three
+    // generators claimed "the caller sequences those after this proc returns", which was how MySQL's
+    // missing ORDER BY survived unnoticed (#10). MySQL now sorts them like the other two engines.
     /// <summary>
     /// Re-sequences the freshly extracted lists to match the file being replaced, for entries that still
     /// exist. Entries the file did not have are appended in <paramref name="fallbackOrder"/>; entries that
@@ -180,28 +187,6 @@ public static class ImportTableHelper
     /// of a hand-authored package, where the sequence usually carries meaning.
     /// </para>
     /// </summary>
-    /// <summary>
-    /// Applies the configured default ordering to a freshly extracted table. Only <see cref="ObjectOrder.Name"/>
-    /// does anything: <see cref="ObjectOrder.Physical"/> means "as the table has them", which is the order
-    /// extraction already produced, so there is nothing to re-sort.
-    /// </summary>
-    public static void ApplyObjectOrder(Table extracted, ObjectOrder order)
-    {
-        if (extracted == null || order != ObjectOrder.Name) return;
-        SortByName(extracted.Columns);
-        SortByName(extracted.Indexes);
-        SortByName(extracted.ForeignKeys);
-        SortByName(extracted.CheckConstraints);
-        if (extracted is SqlServerTable ss)
-        {
-            SortByName(ss.Statistics);
-            SortByName(ss.XmlIndexes);
-        }
-    }
-
-    private static void SortByName<T>(List<T> items) =>
-        items?.Sort((a, b) => string.Compare(NameKey(a), NameKey(b), StringComparison.OrdinalIgnoreCase));
-
     public static void PreserveListOrder(Table extracted, Table original, ObjectOrder fallbackOrder)
     {
         if (extracted == null || original == null) return;

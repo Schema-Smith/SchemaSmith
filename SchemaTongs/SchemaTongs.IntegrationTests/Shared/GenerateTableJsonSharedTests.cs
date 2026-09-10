@@ -578,6 +578,98 @@ CREATE TABLE `{_integrationDb}`.`TestPhysicalOrder` (
         conn.Close();
     }
 
+    [Test]
+    public void ShouldOrderIndexesForeignKeysAndCheckConstraintsByName()
+    {
+        // #10. Product:ObjectOrder orders COLUMNS. Every other list is a set -- there is no physical
+        // sequence to preserve -- so all three engines emit them in name order unconditionally. SQL Server
+        // and PostgreSQL always did. MySQL and MariaDB had NO ORDER BY on any of them, so the sequence was
+        // whatever the INFORMATION_SCHEMA plan happened to produce.
+        //
+        // MEASURED before the fix: MariaDB 11.4 returned this table's check constraints in creation order
+        // (zzz, mmm, aaa), and MySQL 8.0 returned the SAME table's two different ways on two runs. A first
+        // extraction therefore recorded an arbitrary order, and a later one could reshuffle the file with
+        // no schema change behind it.
+        //
+        // Everything below is created in deliberately reverse-alphabetical order, so creation order and
+        // name order cannot be mistaken for one another.
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+
+        cmd.CommandText = $@"
+CREATE TABLE `{_integrationDb}`.`TestOrderParent` (
+    `pid` INT NOT NULL PRIMARY KEY,
+    `qid` INT NOT NULL,
+    `rid` INT NOT NULL,
+    UNIQUE KEY `uq_q` (`qid`),
+    UNIQUE KEY `uq_r` (`rid`)
+) ENGINE=InnoDB;
+";
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = $@"
+CREATE TABLE `{_integrationDb}`.`TestOrderChild` (
+    `id` INT NOT NULL PRIMARY KEY,
+    `zcol` INT NULL, `mcol` INT NULL, `acol` INT NULL,
+    `fz` INT NULL, `fm` INT NULL, `fa` INT NULL
+) ENGINE=InnoDB;
+";
+        cmd.ExecuteNonQuery();
+
+        foreach (var ddl in new[]
+                 {
+                     $"CREATE INDEX `zzz_idx` ON `{_integrationDb}`.`TestOrderChild` (`zcol`)",
+                     $"CREATE INDEX `mmm_idx` ON `{_integrationDb}`.`TestOrderChild` (`mcol`)",
+                     $"CREATE INDEX `aaa_idx` ON `{_integrationDb}`.`TestOrderChild` (`acol`)",
+                     $"ALTER TABLE `{_integrationDb}`.`TestOrderChild` ADD CONSTRAINT `zzz_fk` FOREIGN KEY (`fz`) REFERENCES `{_integrationDb}`.`TestOrderParent` (`pid`)",
+                     $"ALTER TABLE `{_integrationDb}`.`TestOrderChild` ADD CONSTRAINT `mmm_fk` FOREIGN KEY (`fm`) REFERENCES `{_integrationDb}`.`TestOrderParent` (`qid`)",
+                     $"ALTER TABLE `{_integrationDb}`.`TestOrderChild` ADD CONSTRAINT `aaa_fk` FOREIGN KEY (`fa`) REFERENCES `{_integrationDb}`.`TestOrderParent` (`rid`)"
+                 })
+        {
+            cmd.CommandText = ddl;
+            cmd.ExecuteNonQuery();
+        }
+
+        if (TargetSupportsCheckConstraints)
+            foreach (var name in new[] { "zzz", "mmm", "aaa" })
+            {
+                cmd.CommandText = $"ALTER TABLE `{_integrationDb}`.`TestOrderChild` ADD CONSTRAINT `{name}_chk` CHECK (`{name[0]}col` > 0)";
+                cmd.ExecuteNonQuery();
+            }
+
+        var table = GenerateTable(cmd, _integrationDb, "TestOrderChild");
+
+        // The FK constraints each carry a backing index of the same name, so both lists are covered by one
+        // table. PRIMARY sorts on 'P', between the m- and z- names.
+        var expectedIndexes = new[] { "aaa_fk", "aaa_idx", "mmm_fk", "mmm_idx", "PRIMARY", "zzz_fk", "zzz_idx" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(table.Indexes.Select(i => i.Name.Trim('`')), Is.EqualTo(expectedIndexes),
+                "indexes must extract in name order -- they were created in reverse-alphabetical order, so "
+                + "any other sequence means the generator is emitting whatever the plan returned");
+            Assert.That(table.ForeignKeys.Select(f => f.Name.Trim('`')), Is.EqualTo(new[] { "aaa_fk", "mmm_fk", "zzz_fk" }),
+                "foreign keys must extract in name order, not creation order");
+            if (TargetSupportsCheckConstraints)
+                Assert.That(table.CheckConstraints.Select(c => c.Name.Trim('`')), Is.EqualTo(new[] { "aaa_chk", "mmm_chk", "zzz_chk" }),
+                    "check constraints must extract in name order -- this is the one MariaDB reliably got "
+                    + "wrong before #10, returning them in creation order");
+        });
+
+        // 'Physical' is a column preference and must leave these sets exactly where they were. If it moved
+        // them, the sort would be reading the setting when it has nothing to say about a set.
+        cmd.CommandText = "SET @SchemaSmith_ObjectOrder = 'Physical'";
+        cmd.ExecuteNonQuery();
+        var physical = GenerateTable(cmd, _integrationDb, "TestOrderChild");
+        cmd.CommandText = "SET @SchemaSmith_ObjectOrder = 'Name'";
+        cmd.ExecuteNonQuery();
+
+        Assert.That(physical.Indexes.Select(i => i.Name.Trim('`')), Is.EqualTo(expectedIndexes),
+            "ObjectOrder=Physical must not reorder a set -- it selects the COLUMN sequence and nothing else");
+
+        conn.Close();
+    }
+
     private MySqlTable GenerateTable(IDbCommand cmd, string schema, string table)
     {
         return (MySqlTable)PlatformDeserializer.DeserializeTable(GenerateTableJson(cmd, schema, table), Platform);
