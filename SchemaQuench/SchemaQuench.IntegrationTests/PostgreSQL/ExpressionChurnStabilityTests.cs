@@ -115,6 +115,88 @@ public class ExpressionChurnStabilityTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // Defect 2: the compare snapshot built IndexColumns by joining pg_attribute on attnum = element.
+    // An EXPRESSION key has indkey element 0, which matches no attribute, so the key was dropped from
+    // the snapshot entirely while the authored side carried lower(name) -- never equal, so every
+    // expression index was dropped and recreated on every deploy.
+    //
+    // Authored as EXTRACTION emits it -- bare, no wrapping parens -- because that is the canonical
+    // form by definition: a package refreshed by SchemaTongs contains exactly this, so this is the
+    // text a real re-deploy compares.
+    [TestCase("lower(name)", TestName = "ExpressionIndex_SingleExpressionKey_DoesNotChurn")]
+    [TestCase("tag,lower(name)", TestName = "ExpressionIndex_ColumnThenExpressionKey_DoesNotChurn")]
+    public void ExpressionIndex_AuthoredAsExtractionEmitsIt_IsStableAcrossThreePasses(string indexColumns)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"IxChurn_{uid}";
+        var table = $"ix_churn_{uid}";
+        var index = $"ix_expr_{uid}";
+        var defs = TableWithIndex(table, index, indexColumns);
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, defs, productName: product);
+            var first = IndexOid(cmd, index);
+            Assert.That(first, Is.GreaterThan(0), "Setup: the expression index must deploy.");
+
+            RunTableQuenchProc(cmd, defs, productName: product);
+            RunTableQuenchProc(cmd, defs, productName: product);
+
+            Assert.That(IndexOid(cmd, index), Is.EqualTo(first),
+                "the expression index was dropped and recreated on an unchanged declaration -- the "
+                + "compare snapshot could not see its expression key, so it churned on every deploy");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    // The other half of defect 2, and the sharper half. For a PURE expression index the snapshot
+    // returned NULL rather than a wrong value, so the compare saw no difference at all -- which means
+    // it did not churn, it failed to notice. An expression that genuinely CHANGED was therefore left
+    // deployed as it was. Stopping the churn and restoring detection are the same fix; this pins the
+    // half that a stability test cannot see.
+    [Test]
+    public void ChangingAnIndexExpression_IsDetectedAndApplied()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"IxChange_{uid}";
+        var table = $"ix_change_{uid}";
+        var index = $"ix_chg_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, TableWithIndex(table, index, "lower(name)"), productName: product);
+            Assert.That(LiveIndexDef(cmd, index), Does.Contain("lower"), "Setup: the index must deploy.");
+
+            RunTableQuenchProc(cmd, TableWithIndex(table, index, "upper(name)"), productName: product);
+
+            Assert.That(LiveIndexDef(cmd, index), Does.Contain("upper"),
+                "the declared expression changed and the deployed index still uses the old one -- the "
+                + "snapshot could not see the expression key, so the compare had nothing to disagree "
+                + "with and silently left it alone");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
     // ---- fixtures -------------------------------------------------------------
 
     // Authored the way a user writes it: the CHECK carries no defensive outer parens, and the
@@ -148,6 +230,21 @@ public class ExpressionChurnStabilityTests : BaseTableQuenchTests
 ]
 """;
 
+    private static string TableWithIndex(string table, string index, string indexColumns) => $$"""
+[
+  {
+    "Schema": "public",
+    "Name": "{{table}}",
+    "Columns": [
+      { "Name": "id", "DataType": "INT4", "Nullable": false },
+      { "Name": "name", "DataType": "TEXT", "Nullable": true },
+      { "Name": "tag", "DataType": "TEXT", "Nullable": true }
+    ],
+    "Indexes": [ { "Name": "{{index}}", "IndexColumns": "{{indexColumns}}" } ]
+  }
+]
+""";
+
     // ---- live-state readers ---------------------------------------------------
 
     private void DropTable(IDbCommand cmd, string table)
@@ -164,6 +261,12 @@ SELECT COALESCE((SELECT c.oid FROM pg_constraint c
                    JOIN pg_class t ON t.oid = c.conrelid
                   WHERE t.relname = '{table}' AND c.conname = '{constraint}'), 0)::bigint";
         return Convert.ToInt64(cmd.ExecuteScalar());
+    }
+
+    private string LiveIndexDef(IDbCommand cmd, string index)
+    {
+        cmd.CommandText = $"SELECT COALESCE(pg_get_indexdef(oid), '') FROM pg_class WHERE relname = '{index}' AND relkind = 'i'";
+        return cmd.ExecuteScalar() as string ?? "";
     }
 
     private long IndexOid(IDbCommand cmd, string index)

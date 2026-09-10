@@ -30,12 +30,28 @@ BEGIN
            -- indoption[idx-1]. Read 1-based it returned the NEXT key's flags (and nothing for the last),
            -- so a DESC key never reported DESC here and the index was re-created on every deploy. Every
            -- other site in this codebase already uses the 0-based form -- this was the only one that did not.
-           (SELECT STRING_AGG(a.attname || CASE WHEN (idx.indoption[idx-1] & 1) = 1 THEN ' DESC' ELSE '' END, ',' ORDER BY idx)
-              FROM pg_attribute a
-              CROSS JOIN LATERAL UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
-              WHERE a.attrelid = idx.indrelid
-                AND idx <= idx.indnkeyatts
-                AND a.attnum = element) AS "IndexColumns",
+           -- SAME RULE EXTRACTION USES (GenerateTableJson's index read), and it has to be: when the
+           -- snapshot and extraction disagree, an index round-trips into a package that the compare
+           -- then reports as changed on every deploy.
+           --
+           -- This joined pg_attribute on attnum = element. An EXPRESSION key has indkey element 0,
+           -- which matches no attribute, so the key was dropped from the snapshot entirely while the
+           -- authored side carried lower(name) -- never equal, so every expression index churned.
+           -- PG_GET_INDEXDEF(indexrelid, n, true) renders both shapes uniformly (lower(name) for an
+           -- expression, tag for a column) and needs no join at all. Verified against a real
+           -- extraction: SchemaTongs writes "lower(name)" and "tag,lower(name)" -- bare, no wrapping
+           -- parens -- so that spelling IS the canonical authored form, not a choice made here.
+           --
+           -- It also carries extraction's NULLS FIRST/LAST handling, which this side lacked: the
+           -- snapshot omitted the modifier while extraction emitted it, so a DESC key with non-default
+           -- null ordering was a second way to churn. TRIM(BOTH '"') because PG_GET_INDEXDEF quotes
+           -- identifiers it considers to need it and the authored side does not.
+           (SELECT STRING_AGG(TRIM(BOTH '"' FROM PG_GET_INDEXDEF(idx.indexrelid, idx::int4, true)) ||
+                              CASE WHEN (idx.indoption[idx-1] & 1) = 1 THEN ' DESC' || CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN '' ELSE ' NULLS LAST' END
+                                   ELSE CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN ' NULLS FIRST' ELSE '' END
+                                  END, ',' ORDER BY idx)
+              FROM UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
+             WHERE idx <= idx.indnkeyatts) AS "IndexColumns",
            (SELECT STRING_AGG(a.attname, ',' ORDER BY idx)
               FROM pg_attribute a
               CROSS JOIN LATERAL UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
