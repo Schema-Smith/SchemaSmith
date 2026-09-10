@@ -140,9 +140,9 @@
          -- re-quench against a column declared with the default precision sees
          -- false drift and emits a destructive ALTER COLUMN that cascades to
          -- any dependent computed columns and indexes.
-         [DataType] = CASE WHEN UPPER(LTRIM(RTRIM(REPLACE(c.[DataType], 'ROWVERSION', 'TIMESTAMP')))) IN ('DATETIME2', 'TIME', 'DATETIMEOFFSET')
-                            THEN UPPER(LTRIM(RTRIM(REPLACE(c.[DataType], 'ROWVERSION', 'TIMESTAMP')))) + '(7)'
-                            ELSE REPLACE(c.[DataType], 'ROWVERSION', 'TIMESTAMP') END,
+         [DataType] = CASE WHEN UPPER(LTRIM(RTRIM(SchemaSmith.fn_NormalizeDataType(c.[DataType])))) IN ('DATETIME2', 'TIME', 'DATETIMEOFFSET')
+                            THEN UPPER(LTRIM(RTRIM(SchemaSmith.fn_NormalizeDataType(c.[DataType])))) + '(7)'
+                            ELSE SchemaSmith.fn_NormalizeDataType(c.[DataType]) END,
          [Nullable] = ISNULL(c.[Nullable], 0),
          c.[Default], c.[CheckExpression], c.[ComputedExpression], [Persisted] = ISNULL(c.[Persisted], 0),
          [Sparse] = ISNULL(c.[Sparse], 0), [FileStream] = ISNULL(c.[FileStream], 0), [IsColumnSet] = ISNULL(c.[IsColumnSet], 0), [BackfillExistingRows] = ISNULL(c.[BackfillExistingRows], 0), [Collation] = RTRIM(ISNULL(c.[Collation], '')), [DataMaskFunction] = RTRIM(ISNULL(c.[DataMaskFunction], '')),
@@ -166,9 +166,9 @@
               -- (see MissingTableAndColumnQuench.sql). A column set added to a table that already has
               -- standalone sparse columns from a prior deploy is left to the engine's own (clear) rejection
               -- rather than pre-validated here.
-              WHEN ISNULL([IsColumnSet], 0) = 1 THEN UPPER(REPLACE(c.[DataType], 'ROWVERSION', 'TIMESTAMP')) + ' COLUMN_SET FOR ALL_SPARSE_COLUMNS'
+              WHEN ISNULL([IsColumnSet], 0) = 1 THEN UPPER(SchemaSmith.fn_NormalizeDataType(c.[DataType])) + ' COLUMN_SET FOR ALL_SPARSE_COLUMNS'
               -- Otherwise build the column definition
-              ELSE UPPER(REPLACE(c.[DataType], 'ROWVERSION', 'TIMESTAMP')) +
+              ELSE UPPER(SchemaSmith.fn_NormalizeDataType(c.[DataType])) +
                    CASE WHEN ISNULL([FileStream], 0) = 1 THEN ' FILESTREAM' ELSE '' END +
                    CASE WHEN RTRIM(ISNULL([Collation], '')) NOT IN ('IGNORE', '') THEN ' COLLATE ' + [Collation] ELSE '' END +
                    CASE WHEN ISNULL([Sparse], 0) = 1 THEN ' SPARSE' ELSE '' END +

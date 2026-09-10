@@ -303,6 +303,53 @@ BEGIN
         SET v_ColOuterIdx = v_ColOuterIdx + 1;
     END WHILE;
 
+    -- =========================================================================
+    -- DATA-TYPE SYNONYM NORMALIZATION (Rule 20 parity with PostgreSQL)
+    -- =========================================================================
+    -- Every engine has type synonyms, and the catalog reports the BASE name whatever the package
+    -- declared. A column authored INTEGER is reported int, so the comparison saw a difference that
+    -- was not one and drop/recreated the column on EVERY quench. PostgreSQL has had this mapping
+    -- since its parse step; MySQL and MariaDB had case folding and no mapping at all.
+    --
+    -- Applied HERE, at parse time, for the same reason PostgreSQL does: the authored side is
+    -- normalized once, before anything compares, rather than at each of the eight comparison sites.
+    -- The catalog side needs nothing -- it is already canonical.
+    --
+    -- MEASURED, NOT ASSUMED. Each mapping below is what the engine itself reports back for a column
+    -- declared with the synonym, probed on MySQL 8.0 and MariaDB 11.4 (identical on both):
+    --
+    --     INTEGER -> int        DEC(10,2)     -> decimal(10,2)   BOOL    -> tinyint(1)
+    --     FIXED   -> decimal    NUMERIC(10,2) -> decimal(10,2)   BOOLEAN -> tinyint(1)
+    --     CHARACTER VARYING(50) -> varchar(50)                   CHARACTER(10) -> char(10)
+    --
+    -- NATIONAL CHARACTER is DELIBERATELY NOT MAPPED even though it also reports char(n): it carries
+    -- an implied character set, and collapsing it to CHAR would make a genuine charset difference
+    -- compare equal. A false no-change is worse than the churn this removes.
+    --
+    -- The parenthesised part is never touched -- only the leading keyword is rewritten -- which is the
+    -- same trap SchemaSmith_UpperDataType exists for: a naive rewrite turns enum('web') into
+    -- ENUM('WEB') and silently changes the column's allowed values. Ordering matters below:
+    -- CHARACTER VARYING must be tested before CHARACTER, or the prefix match eats it.
+    UPDATE _SchemaSmith_Columns
+    SET DataType =
+        CASE
+            WHEN UPPER(TRIM(DataType)) = 'INTEGER' THEN 'INT'
+            WHEN UPPER(TRIM(DataType)) = 'BOOL' THEN 'TINYINT(1)'
+            WHEN UPPER(TRIM(DataType)) = 'BOOLEAN' THEN 'TINYINT(1)'
+            WHEN UPPER(TRIM(DataType)) LIKE 'CHARACTER VARYING%'
+                 THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('CHARACTER VARYING') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'CHARACTER%'
+                 THEN CONCAT('CHAR', SUBSTRING(TRIM(DataType), LENGTH('CHARACTER') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NUMERIC%'
+                 THEN CONCAT('DECIMAL', SUBSTRING(TRIM(DataType), LENGTH('NUMERIC') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'FIXED%'
+                 THEN CONCAT('DECIMAL', SUBSTRING(TRIM(DataType), LENGTH('FIXED') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'DEC(%' OR UPPER(TRIM(DataType)) = 'DEC'
+                 THEN CONCAT('DECIMAL', SUBSTRING(TRIM(DataType), LENGTH('DEC') + 1))
+            ELSE DataType
+        END
+    WHERE DataType IS NOT NULL;
+
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Identify new columns');
 
     -- Snapshot existing columns into a temp table (same optimizer workaround as tables)
