@@ -136,10 +136,13 @@ for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r12 "SELECT GROUP_CONCAT(EV
 product owns; an event some DBA wrote at 2am is not yours to delete, and the tool does not pretend
 otherwise. Restore the file and re-quench to bring the archive sweep back.
 
-> **Known limitation (SchemaSmith 2.6.0):** removing the **last** declared event does not drop it —
-> with an empty `Events/` folder the by-absence comparison is skipped entirely, so the event stays
-> deployed. That is why this step removes one of two events rather than the only one. It is a reported
-> defect, not the designed behaviour; this lab will be updated when it ships fixed.
+<!-- TRAINING-RELEASE-PIN #415 -- on 2.7.0, delete this note; Step 4 can then remove the only declared
+     event rather than one of two. Verified fixed on main 2026-09-10. -->
+> **Known limitation on 2.6.0, fixed on `main` and shipping in 2.7.0.** Removing the **last** declared
+> event does not drop it on 2.6.0 — an empty `Events/` folder skips the by-absence comparison entirely,
+> so the event stays deployed. That is why this step removes one of two rather than the only one.
+> Reported from this lab and fixed; on 2.7.0 an empty `Events/` folder means "declare none", and
+> ownership still holds — a hand-created event survives it.
 
 ## Cleanup
 

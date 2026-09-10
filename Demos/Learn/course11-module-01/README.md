@@ -121,12 +121,16 @@ a deployed table because the change rewrites the table:
 And the irreversible table *types*, which behave identically because the engine has no `ALTER` for
 them at all: memory-optimized durability and inline-index shape, `Ledger`, `GraphType`.
 
-> **Known gap (SchemaSmith 2.6.0):** on MySQL and MariaDB, adding a **boundary partition** to the
-> `Partitions` list — next year's `p2027`, say — is currently neither applied nor refused; the run
-> reports success and the partition never appears. That matters because RANGE without a `MAXVALUE`
-> catch-all rejects the insert once the calendar reaches it (`ERROR 1526: Table has no partition for
-> value 2027`). The comparison covers `Method` and `Expression`, which is what Step 2 exercises. This
-> is a reported defect; the lab will be updated when it ships fixed.
+<!-- TRAINING-RELEASE-PIN #415 -- on 2.7.0, delete this note and add the append beat: a partition above
+     the deployed maximum is APPLIED, while removal, a moved boundary, a reorder, an insert below the
+     maximum and an append onto a MAXVALUE tail are all refused. Verified on main 2026-09-10. -->
+> **Known gap on 2.6.0, fixed on `main` and shipping in 2.7.0.** On MySQL and MariaDB, adding a
+> **boundary partition** to the `Partitions` list — next year's `p2027`, say — is neither applied nor
+> refused on 2.6.0; the run reports success and the partition never appears. That matters because RANGE
+> without a `MAXVALUE` catch-all rejects the insert once the calendar reaches it (`ERROR 1526: Table has
+> no partition for value 2027`). Reported from this lab and fixed: on 2.7.0 a partition **above the
+> deployed maximum is applied** with `ADD PARTITION`, which moves no existing row, while every other
+> difference stays refused. Step 2's `Expression` beat is correct on both versions.
 
 ## Cleanup
 

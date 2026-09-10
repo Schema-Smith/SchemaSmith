@@ -116,10 +116,14 @@ The domain converges the same way. Set `"NotNull": false` and add
 Both moved. Put them back and re-quench, and they move back — the declaration is the truth, and the
 database follows it in either direction.
 
-> **Known limitation (SchemaSmith 2.6.0):** editing a domain check constraint's `Expression` while
-> leaving its `Name` alone is currently ignored — the constraint is reconciled by name only, and the
-> run reports success. Rename the constraint when you change its expression and it applies correctly.
-> This is a reported defect, not the designed behaviour; this lab will be updated when it ships fixed.
+<!-- TRAINING-RELEASE-PIN #415 -- on 2.7.0, delete this note, declare VARCHAR(256) in email_address.json,
+     and move the convergence beat in Step 3 onto the domain CHECK. Verified fixed on main 2026-09-10. -->
+> **Two things this lab works around on 2.6.0, both fixed on `main` and shipping in 2.7.0.**
+> **(1)** The domain declares `character varying(256)` rather than `VARCHAR(256)` — on 2.6.0 a type
+> *alias* can never deploy. **(2)** Editing a domain check constraint's `Expression` while leaving its
+> `Name` alone is ignored on 2.6.0, which is why Step 3's convergence beat uses `NotNull`/`Default` and
+> the enum instead. Both were reported from this lab and fixed; on 2.7.0 the alias deploys and the
+> `CHECK` converges, and this lab will teach those directly.
 
 ## Step 4: Watch it refuse the things it cannot do
 

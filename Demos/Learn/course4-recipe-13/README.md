@@ -9,10 +9,15 @@ nothing else.
 The table in this lab is created **outside the package**, by a script standing in for the vendor. The
 package never declares its columns — only the indexes you want on it.
 
-> **PostgreSQL is not in this lab, and not for a design reason.** `IndexOnlyTableQuenches` is currently
-> broken on PostgreSQL: the generated `CALL` omits a required argument and every deploy fails with
-> `42883 … procedure SchemaSmith.IndexOnlyQuench(…) does not exist`. That is a reported defect, and the
-> PostgreSQL folder will be added here when it ships fixed. SQL Server, MySQL and MariaDB are unaffected.
+<!-- TRAINING-RELEASE-PIN #415 -- the p_ProductName fix landed on main 2026-09-10 but index-only still
+     fails on PostgreSQL at 42703 (ReplicaIdentity); add the postgres/ folder once THAT lands too. -->
+> **PostgreSQL is not in this lab, and not for a design reason.** `IndexOnlyTableQuenches` does not yet
+> work there. The original fault — the generated `CALL` omitting a required argument, failing with
+> `42883 … procedure SchemaSmith.IndexOnlyQuench(…) does not exist` — was reported from this lab and is
+> fixed on `main`. Re-certifying against that fix surfaced a second fault behind it: the indexes are
+> created and the run then fails with `42703: column "ReplicaIdentity" does not exist`. Also reported.
+> The PostgreSQL folder joins this lab when that lands. SQL Server, MySQL and MariaDB are unaffected on
+> every version.
 
 ## Before you start
 
