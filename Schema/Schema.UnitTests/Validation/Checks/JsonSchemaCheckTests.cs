@@ -199,6 +199,36 @@ public class JsonSchemaCheckTests
         Assert.That(findings.Any(f => f.Code == "SS-JSON-001"), Is.False);
     }
 
+    // A malformed committed schema falls back to a freshly generated one, which carries NO
+    // hand-authored Extensions fragment -- so any custom-property governance the user wrote is not
+    // enforced on that run. The failure is directional: validation still PASSES, so the rule reads
+    // as satisfied when it was never evaluated. SS-STALE-002 must therefore name that consequence,
+    // not just report that the file is malformed -- "your governance did not run" is what a reader
+    // acts on, "your schema is malformed" is not.
+    [Test]
+    public void MalformedCommittedSchema_SaysAuthoredGovernanceDidNotRun()
+    {
+        // FileContent sets both Exists and ReadAllText, so this is a committed file that is present
+        // and unparseable -- the SS-STALE-002 path, distinct from a missing file.
+        FileContent(TablesSchemaPath, "{ this is not valid json");
+
+        var tableFile = TableFilePath();
+        JsonFiles(tableFile);
+        FileContent(tableFile, @"{ ""Name"": ""Customer"", ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"" } ] }");
+
+        var findings = new JsonSchemaCheck().Run(Context()).ToList();
+
+        var malformed = findings.SingleOrDefault(f => f.Code == "SS-STALE-002");
+        Assert.That(malformed, Is.Not.Null, "an unparseable committed schema must be reported");
+        Assert.Multiple(() =>
+        {
+            Assert.That(malformed.Message, Does.Contain("governance"),
+                "the finding must name the governance consequence -- a reader who is only told the file "
+                + "is malformed has no reason to suspect their own Extensions rules stopped being enforced");
+            Assert.That(malformed.Message, Does.Contain("NOT applied"));
+        });
+    }
+
     // ---- Regression: #326 — a table named "Product" (MySQL-style file layout: no schema
     // prefix, so the table file is just Tables/Product.json) must classify as a TABLE, never
     // as the product manifest, purely on directory context. ----

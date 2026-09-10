@@ -127,6 +127,16 @@ public sealed class JsonSchemaCheck : ISchemaCheck
     // Returns null (nothing usable committed) for both a missing file and a file that fails to
     // parse — the malformed case additionally records a finding, since an unparseable committed
     // schema is a broken artifact worth surfacing, not a silent skip.
+    //
+    // THE MESSAGE NAMES THE GOVERNANCE CONSEQUENCE, not just the malformed file. A freshly
+    // generated schema carries no hand-authored Extensions fragment, so falling back to one
+    // silently stops enforcing any required/enum rule the user wrote onto a custom property —
+    // and the failure is DIRECTIONAL: validation still passes, so the user's own governance rule
+    // reads as satisfied when it was never evaluated. "Your schema is malformed" is not the
+    // consequence a reader would act on; "your governance did not run" is. Stated
+    // unconditionally because an unparseable file cannot be inspected for whether it carried a
+    // fragment — the sentence is true either way, and a false reassurance would be worse than a
+    // redundant warning.
     private static JObject ReadCommittedSchema(IFile file, string schemaPath, List<Finding> findings)
     {
         if (!file.Exists(schemaPath)) return null;
@@ -138,7 +148,9 @@ public sealed class JsonSchemaCheck : ISchemaCheck
         catch
         {
             findings.Add(new Finding(Severity.Error, MalformedCommittedCode, StaleCategory, schemaPath,
-                $"Committed .json-schemas file is malformed — validated against a freshly generated schema instead. Regenerate via --WriteSchemasOnly."));
+                $"Committed .json-schemas file is malformed — validated against a freshly generated schema instead, " +
+                $"so any custom-property governance authored in this file (Extensions required/enum rules) was NOT applied this run. " +
+                $"Regenerate via --WriteSchemasOnly."));
             return null;
         }
     }
