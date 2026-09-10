@@ -72,6 +72,14 @@ SmithySettings_Product__Path="$(pwd)/sqlserver/Package" schematongs --WriteSchem
 
 Both the **table-level** and **column-level** `Extensions` fragments survive the round-trip — your `OwningTeam` and `DataClassification` rules are still enforced after regeneration. Governance is regeneration-safe at both levels.
 
+> **One thing to know about the file your governance lives in.** These rules are *inside*
+> `.json-schemas/tables.<platform>.schema`. If that file is ever committed **malformed** — a bad merge, a
+> truncated write — it cannot be parsed, so the rules cannot be recovered and validation falls back to a
+> freshly generated schema that has never heard of them. The failure is directional: a table violating
+> your own enum rule then validates **clean**, because the rule was never evaluated. `--Validate` reports
+> it as `SS-STALE-002`, and [Module 6, Scenario 5b](../course6-module-06) walks the whole thing. Worth
+> knowing now, while you are the one authoring the fragment.
+
 ## Scenario 5 — wire it into CI
 
 `ci/validate-schemas.yml` is a copy-ready workflow. Copy it into your repository's `.github/workflows/` and adjust the paths to your package layout. Each matrix entry names a schema file and a glob of JSON files; `GrantBirki/json-yaml-validate` validates them on every pull request and comments on failures — no database, no credentials. The SchemaSmith repository's own `.github/workflows/validate-demo-schemas.yml` is the same pattern at production scale across all four engines.

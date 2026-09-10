@@ -121,6 +121,82 @@ The editor `.json-schemas` that give you red-squiggle validation in your IDE are
 > the current model *merged with* your recovered fragment, so your rules keep applying while the file is
 > stale. Staleness is still an error worth fixing; it is no longer a hole in your governance.
 
+## Scenario 5b — when your schemas are *malformed*, not merely stale
+
+Staleness has a sibling, and it is the more dangerous of the two. A stale file still parses — SchemaSmith
+can read the governance you authored into it. A **malformed** one cannot be read at all, so there is
+nothing to recover, and validation falls back to a freshly generated schema that has never heard of your
+rules.
+
+Induce it. Replace `sqlserver/Package/.json-schemas/tables.sqlserver.schema` with something that is not
+JSON at all:
+
+```bash
+printf '{ "not valid json
+' > sqlserver/Package/.json-schemas/tables.sqlserver.schema
+```
+
+Re-run `--Validate`:
+
+```
+ERROR [SS-STALE-002] .../tables.sqlserver.schema: Committed .json-schemas file is malformed - validated
+against a freshly generated schema instead, so any custom-property governance authored in this file
+(Extensions required/enum rules) was NOT applied this run. Regenerate via --WriteSchemasOnly.
+```
+
+Exit `2`. Now clear it — and this is where the malformed case stops behaving like the stale one.
+
+**The finding's own advice does not work here.** Do exactly what it says and you get a stack trace:
+
+```bash
+cd sqlserver/Package && schematongs --WriteSchemasOnly
+# EXCEPTION - Newtonsoft.Json.JsonReaderException: Unterminated string. Expected delimiter: "
+# exit 3
+```
+
+`--WriteSchemasOnly` **reads** the committed schema before rewriting it, so it can preserve the
+`Extensions` fragment you authored — which is the behaviour you want in every other situation, and
+exactly the behaviour that cannot cope with a file it is unable to parse. **Delete the unreadable file
+first, then regenerate:**
+
+```bash
+cd sqlserver/Package && rm .json-schemas/tables.sqlserver.schema && schematongs --WriteSchemasOnly && cd ../..
+```
+
+Exit `0`, the schema is rebuilt, and `--Validate` is clean again. **Note what deleting cost you:** the
+authored governance that lived in that file is gone with it, and you re-apply the fragment by hand —
+which is the whole reason the finding warns you it was not enforced. (The circular advice is a reported
+rough edge; the remedy above is what works today.)
+
+### Why the wording earns its length
+
+Read what the finding is telling you, because "your file is malformed" is not the part you act on.
+
+The `Extensions` governance from [Module 3](../course6-module-03) — `OwningTeam` restricted to an approved
+list, every column carrying a `DataClassification` — lives **inside** that schema file. When the file
+cannot be parsed, those rules are not enforced. And the failure is **directional**: a table violating your
+own enum rule now validates *clean*, because the rule was never evaluated. Your governance reads as
+satisfied precisely when it has stopped working.
+
+Prove it to yourself with two runs. Set a table's `OwningTeam` to something outside the approved list:
+
+```
+schema intact     → ERROR [SS-JSON-001] ... value for 'OwningTeam' not in allowed enumeration
+schema malformed  → that finding is GONE. Only SS-STALE-002 remains.
+```
+
+Same package, same violation, and the one finding that mattered has vanished. That is why the message
+names the consequence rather than the cause — and why it says so **unconditionally**, even for a package
+that authored no governance at all: an unparseable file cannot be inspected to find out whether it
+carried any, and a false reassurance would be worse than a redundant warning.
+
+<!-- TRAINING-RELEASE-PIN #415 -- the governance sentence arrived in #415. On 2.6.0 the finding reads
+     "...validated against a freshly generated schema instead. Regenerate via --WriteSchemasOnly." with
+     no governance clause. Delete this note at 2.7.0. Certified on main 2026-09-10. -->
+> **On SchemaSmith 2.6.0 this finding is shorter** — it stops after "validated against a freshly generated
+> schema instead" and never mentions governance. Same exit code, same fallback, same silent
+> non-enforcement; you simply were not told about the part that matters. From 2.7.0 it says so.
+
 ## Scenario 6 — make it a gate
 
 `ci/validate.yml` is a copy-ready GitHub Actions workflow. Copy it into your repository's `.github/workflows/` and adjust the package path. It runs `--Validate` on every pull request; the exit-2-on-error behavior fails the PR automatically — no database, no credentials, no matrix of engine containers. Because it needs no live engine, it's the cheapest gate you have: run it first, ahead of anything that connects.
