@@ -170,12 +170,21 @@ public class JsonSchemaCheckTests
         Assert.That(findings, Is.Empty);
     }
 
+    // A stale committed schema is an error, and structural validation NO LONGER SKIPS THE TYPE.
+    // It is validated against the CURRENT model merged with the governance recovered from the stale
+    // file -- so the user's own Extensions rules keep being enforced, while structure is judged by
+    // the model that will actually deploy.
+    //
+    // This test previously asserted the opposite (SkipsStructural). The skip existed so a stale
+    // SCHEMA would not produce misleading findings; that reasoning does not apply to the merged
+    // schema, whose structure is the current model. The consequence, accepted deliberately: a
+    // package authored against the old model now surfaces findings it did not before -- which is
+    // the honest report, because those files really are invalid against what ships.
     [Test]
-    public void StaleCommittedSchema_IsError_AndSkipsStructural()
+    public void StaleCommittedSchema_IsError_AndStillValidatesAgainstTheCurrentModel()
     {
         // Committed schema is deliberately out of date: the current model generates "DataType" as
-        // a Column property (Required), but the committed file omits it entirely — as if the
-        // domain model gained a property since --WriteSchemasOnly was last run.
+        // a Column property (Required), but the committed file omits it entirely.
         var schema = FreshTablesSchema();
         var columnProps = ColumnItemsProperties(schema);
         columnProps.Remove("DataType");
@@ -183,20 +192,24 @@ public class JsonSchemaCheckTests
         required.Remove(required.Single(t => t.ToString() == "DataType"));
         CommitTablesSchema(schema);
 
-        // This JSON file would ALSO fail structurally against the (correct) fresh schema — missing
-        // "Name" — but staleness must short-circuit Pass 2 so no SS-JSON-001 is emitted for tables.
+        // Missing "Name", so it is genuinely invalid against the CURRENT model.
         var tableFile = TableFilePath();
         JsonFiles(tableFile);
         FileContent(tableFile, @"{ ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"" } ] }");
 
         var findings = new JsonSchemaCheck().Run(Context()).ToList();
 
-        Assert.That(findings, Has.Exactly(1).Items);
-        Assert.That(findings[0].Code, Is.EqualTo("SS-STALE-001"));
-        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
-        Assert.That(findings[0].Category, Is.EqualTo("Staleness"));
-        Assert.That(findings[0].Location, Is.EqualTo(TablesSchemaPath));
-        Assert.That(findings.Any(f => f.Code == "SS-JSON-001"), Is.False);
+        var stale = findings.SingleOrDefault(f => f.Code == "SS-STALE-001");
+        Assert.Multiple(() =>
+        {
+            Assert.That(stale, Is.Not.Null, "a stale committed schema must still be reported");
+            Assert.That(stale.Severity, Is.EqualTo(Severity.Error));
+            Assert.That(stale.Category, Is.EqualTo("Staleness"));
+            Assert.That(stale.Location, Is.EqualTo(TablesSchemaPath));
+            Assert.That(findings.Any(f => f.Code == "SS-JSON-001"), Is.True,
+                "structural validation must still run for a stale type -- the file is missing Name, "
+                + "which is invalid against the model that will deploy. Skipping it hid that");
+        });
     }
 
     // A malformed committed schema falls back to a freshly generated one, which carries NO
@@ -205,6 +218,9 @@ public class JsonSchemaCheckTests
     // as satisfied when it was never evaluated. SS-STALE-002 must therefore name that consequence,
     // not just report that the file is malformed -- "your governance did not run" is what a reader
     // acts on, "your schema is malformed" is not.
+    //
+    // Unlike the STALE path, nothing can be recovered here: a fragment cannot be parsed out of JSON
+    // that does not parse. Saying so is the whole remedy.
     [Test]
     public void MalformedCommittedSchema_SaysAuthoredGovernanceDidNotRun()
     {
@@ -226,6 +242,46 @@ public class JsonSchemaCheckTests
                 "the finding must name the governance consequence -- a reader who is only told the file "
                 + "is malformed has no reason to suspect their own Extensions rules stopped being enforced");
             Assert.That(malformed.Message, Does.Contain("NOT applied"));
+        });
+    }
+
+    // THE POINT OF RECOVERING GOVERNANCE FROM A STALE FILE. The committed schema is out of date
+    // structurally AND carries a hand-authored Extensions rule. The rule must still be enforced:
+    // skipping the type meant a package could violate its own governance and be told nothing, while
+    // the only finding pointed at the schema file rather than at the violation.
+    [Test]
+    public void StaleCommittedSchema_StillEnforcesItsAuthoredGovernance()
+    {
+        var schema = FreshTablesSchema();
+        ColumnItemsProperties(schema)["Extensions"] = new JObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JObject
+            {
+                ["DataClassification"] = new JObject { ["type"] = "string", ["enum"] = new JArray("Public", "PII") }
+            },
+            ["additionalProperties"] = false
+        };
+        // ...and make it stale as well, by dropping a property the current model generates.
+        var columnProps = ColumnItemsProperties(schema);
+        columnProps.Remove("DataType");
+        var required = (JArray)schema["properties"]!["Columns"]!["items"]!["required"]!;
+        required.Remove(required.Single(t => t.ToString() == "DataType"));
+        CommitTablesSchema(schema);
+
+        var tableFile = TableFilePath();
+        JsonFiles(tableFile);
+        FileContent(tableFile, @"{ ""Name"": ""Customer"", ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"", ""Extensions"": { ""DataClassification"": ""Nope"" } } ] }");
+
+        var findings = new JsonSchemaCheck().Run(Context()).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Any(f => f.Code == "SS-STALE-001"), Is.True,
+                "the file is still stale and must still say so");
+            Assert.That(findings.Any(f => f.Code == "SS-JSON-001" && f.Message.Contains("DataClassification")), Is.True,
+                "the authored governance rule must be enforced even though the file is stale -- that is "
+                + "the whole reason a stale file is still read as a governance source");
         });
     }
 

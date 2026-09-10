@@ -67,7 +67,6 @@ public sealed class JsonSchemaCheck : ISchemaCheck
         var schemaDir = Path.Combine(ctx.PackagePath, ".json-schemas");
 
         var findings = new List<Finding>();
-        var staleTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var schemaByType = new Dictionary<string, JsonSchema>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var fileName in RepositoryHelper.GetSchemaFileNames(ctx.Platform))
@@ -93,8 +92,21 @@ public sealed class JsonSchemaCheck : ISchemaCheck
             if (!JToken.DeepEquals(merged, committed))
             {
                 findings.Add(new Finding(Severity.Error, StaleCode, StaleCategory, schemaPath,
-                    $"Committed .json-schemas are stale — regenerate via --WriteSchemasOnly."));
-                staleTypes.Add(typeName); // short-circuit: structural validation skips this type entirely
+                    $"Committed .json-schemas are stale — regenerate via --WriteSchemasOnly. " +
+                    $"Structural validation used the current model merged with this file's authored " +
+                    $"custom-property governance."));
+
+                // A STALE FILE IS STILL A VALID GOVERNANCE SOURCE, even though it is not a valid
+                // structural one. `merged` is the CURRENT model carrying the Extensions fragment
+                // recovered from the committed file, so validating against it enforces the user's own
+                // required/enum rules while judging structure by the model that actually ships.
+                //
+                // This type used to be skipped entirely, to avoid misleading findings from a stale
+                // schema. That reasoning does not apply to `merged`: the structure here is the current
+                // model, not the stale file. The cost is that a package authored against the OLD model
+                // can now surface findings that were previously suppressed -- which is the honest
+                // report, since those files really are invalid against what will be deployed.
+                schemaByType[typeName] = LoadNJsonSchema(merged);
                 continue;
             }
 
@@ -110,7 +122,7 @@ public sealed class JsonSchemaCheck : ISchemaCheck
         foreach (var jsonFile in jsonFiles)
         {
             var typeName = MapFileToType(jsonFile);
-            if (typeName == null || staleTypes.Contains(typeName)) continue;
+            if (typeName == null) continue;
             if (!schemaByType.TryGetValue(typeName, out var schema)) continue;
 
             var text = SafeReadText(file, jsonFile);
