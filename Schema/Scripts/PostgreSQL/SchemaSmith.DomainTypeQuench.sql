@@ -11,6 +11,8 @@ AS $$
 DECLARE
   sql_script TEXT;
   bad RECORD;
+  declared_canonical TEXT;
+  dom RECORD;
 BEGIN
   -- Converges declared domain types.
   --
@@ -87,6 +89,15 @@ BEGIN
   --
   -- format_type() renders the modifier too (character varying(20)), which is exactly what extraction
   -- emits, so a round-tripped package compares equal rather than looking like a type change.
+  --
+  -- THE STRING COMPARISON BELOW IS A FAST PATH, NOT THE ANSWER. It settles the round-tripped case at no
+  -- cost, and every disagreement it reports is then re-checked against the engine. On its own it was
+  -- wrong: PostgreSQL canonicalises type ALIASES on storage, so a domain declared VARCHAR(256) is stored
+  -- and reported as character varying(256) and could NEVER compare equal. The refusal fired on a domain
+  -- the same run had just created moments earlier -- creating it, then refusing its own creation, and
+  -- telling the user to "migrate it with a script" for an object that had not existed. INT, INT8, BOOL,
+  -- DECIMAL and TIMESTAMPTZ were all undeployable; TEXT worked, which is what proved it was aliasing
+  -- rather than case.
   FOR bad IN
     SELECT t."Schema", t."Name", t."DataType" AS declared,
            FORMAT_TYPE(ty.typbasetype, ty.typtypmod) AS deployed
@@ -95,8 +106,43 @@ BEGIN
       JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
      WHERE LOWER(TRIM(t."DataType")) <> LOWER(FORMAT_TYPE(ty.typbasetype, ty.typtypmod))
   LOOP
-    RAISE EXCEPTION 'Domain type %.% declares base type "%", but is currently deployed as "%". PostgreSQL has no ALTER DOMAIN ... TYPE -- changing it means dropping the domain and every column that uses it. Migrate it with a script, or correct the declared type to match.',
-      bad."Schema", bad."Name", bad.declared, bad.deployed;
+    -- to_regtype FIRST, and it is doing two jobs. It reports whether this server knows the declared type
+    -- at all -- returning NULL for a well-formed but unknown name, so an unrecognised type is refused by
+    -- name instead of surfacing as a bogus base-type change. And it is the INJECTION GATE for the EXECUTE
+    -- below: it parses its argument as a type name and RAISES on anything that is not one, so nothing
+    -- malformed ever reaches format().
+    IF to_regtype(bad.declared) IS NULL THEN
+      RAISE EXCEPTION 'Domain type %.% declares base type "%", which this server does not recognise as a type. Check the spelling against the PostgreSQL type list.',
+        bad."Schema", bad."Name", bad.declared;
+    END IF;
+
+    -- Canonicalise the DECLARED spelling by asking the engine, rather than carrying an alias table.
+    -- PostgreSQL owns that mapping and it moves between versions, so a hand-maintained copy would be a
+    -- fourth place for the same knowledge to drift.
+    --
+    -- A throwaway relation rather than to_regtype alone, because to_regtype resolves the base type and
+    -- DISCARDS the modifier -- it renders varchar(256) as "character varying", which would compare equal
+    -- to a domain deployed as character varying(512) and wave a real narrowing straight through. Nor is
+    -- the modifier something to split off the string by hand: format_type renders timestamptz(3) as
+    -- "timestamp(3) with time zone", with the modifier in the MIDDLE, so trailing-paren surgery reads it
+    -- as having none. This is the same class of mistake the type-argument CASE has already been
+    -- duplicated into three times.
+    --
+    -- The cost is one temp relation per DISAGREEING domain, which is zero on a steady-state deploy: the
+    -- fast path above has already excluded every domain whose declaration matches what is deployed.
+    DROP TABLE IF EXISTS _ss_domain_type_probe;
+    EXECUTE FORMAT('CREATE TEMP TABLE _ss_domain_type_probe (c %s)', bad.declared);
+    SELECT FORMAT_TYPE(a.atttypid, a.atttypmod) INTO declared_canonical
+      FROM pg_attribute a
+     WHERE a.attrelid = '_ss_domain_type_probe'::regclass AND a.attname = 'c';
+    DROP TABLE _ss_domain_type_probe;
+
+    -- Both sides are now the engine's own rendering, so this compares like with like. A genuine base-type
+    -- change still lands here and is still refused -- resolving aliases must not weaken that.
+    IF declared_canonical IS DISTINCT FROM bad.deployed THEN
+      RAISE EXCEPTION 'Domain type %.% declares base type "%", but is currently deployed as "%". PostgreSQL has no ALTER DOMAIN ... TYPE -- changing it means dropping the domain and every column that uses it. Migrate it with a script, or correct the declared type to match.',
+        bad."Schema", bad."Name", bad.declared, bad.deployed;
+    END IF;
   END LOOP;
 
   -- NOT NULL and DEFAULT, each emitted only when it actually differs so an unchanged domain produces no
@@ -148,6 +194,82 @@ BEGIN
    WHERE NOT EXISTS (SELECT 1 FROM pg_constraint c
                       WHERE c.contypid = ty.oid AND c.contype = 'c' AND c.conname = ck."ConstraintName");
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
+  -- A constraint whose NAME is unchanged but whose EXPRESSION was edited. Both passes around this one key
+  -- on the name alone -- "Add Missing" skips a name that exists, "Drop Removed" skips a name that is still
+  -- declared -- so an edited expression fell between them and was silently ignored at exit 0. That is the
+  -- exact failure mode the declarative form exists to replace: a user who moved a guarded CREATE DOMAIN
+  -- script into a package to escape the silent no-op got the silent no-op back, now with a success report
+  -- and no script to blame. The reference promises CHECK, default and nullability all converge; the other
+  -- two did.
+  --
+  -- THE COMPARISON CANNOT BE TEXTUAL, and that is the whole difficulty. pg_get_constraintdef returns the
+  -- engine's rendering, not what was authored: VALUE LIKE '%@%.%' comes back as
+  -- CHECK ((VALUE ~~ '%@%.%'::text)) -- operator rewritten, cast added, parens added. Comparing that
+  -- against the authored text would never be equal, so every deploy would drop and recreate every
+  -- constraint forever. That is a worse defect than the one being fixed, and it is the same false-change
+  -- class already tracked separately for expression indexes and check constraints on tables.
+  --
+  -- So the DECLARED side is canonicalised by the engine too, and then like is compared with like. A domain
+  -- in pg_temp, carrying this domain's declared constraints against its own base type, renders each one
+  -- exactly as the real domain would -- verified identical before relying on it. pg_temp makes it
+  -- session-local, so concurrent deploys to the same database cannot collide on the name.
+  --
+  -- The base type comes from the DEPLOYED domain rather than the declaration: a genuine base-type change
+  -- has already been refused above, so at this point they agree, and rendering against what is actually
+  -- deployed is what makes the comparison meaningful.
+  --
+  -- PostgreSQL has no ALTER DOMAIN ... ALTER CONSTRAINT for an expression, so converging means DROP then
+  -- ADD. Safe for a check: it removes and restores a rule, touches no data, and no column depends on the
+  -- constraint the way one depends on the domain itself.
+  --
+  -- THE PROBE IS FOUND BY CATALOG LOOKUP, NOT BY 'pg_temp._ss_domain_check_probe'::regtype. That cast is a
+  -- constant, resolved when plpgsql PLANS the statement and cached with the plan for the life of the
+  -- session -- so the second call on a session holds the OID of a probe the first call already dropped,
+  -- matches nothing, and silently converges nothing. It is invisible in isolation and appears the moment
+  -- connections are pooled and reused, which is every real deployment. pg_my_temp_schema() resolves at
+  -- execution instead. Both DROPs go through EXECUTE for the same reason.
+  RAISE NOTICE 'Fixup Modified Domain Constraints';
+  sql_script := '';
+  FOR dom IN
+    SELECT t."Schema", t."Name", FORMAT_TYPE(ty.typbasetype, ty.typtypmod) AS basetype
+      FROM temp_domain_types t
+      JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
+      JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
+     WHERE EXISTS (SELECT 1 FROM temp_domain_checks ck
+                    WHERE ck."Schema" = t."Schema" AND ck."Name" = t."Name")
+  LOOP
+    EXECUTE 'DROP DOMAIN IF EXISTS pg_temp._ss_domain_check_probe CASCADE';
+    EXECUTE FORMAT('CREATE DOMAIN pg_temp._ss_domain_check_probe AS %s %s',
+                   dom.basetype,
+                   (SELECT STRING_AGG(FORMAT('CONSTRAINT %I CHECK (%s)', ck."ConstraintName", ck."Expression"), ' ')
+                      FROM temp_domain_checks ck
+                     WHERE ck."Schema" = dom."Schema" AND ck."Name" = dom."Name"));
+
+    sql_script := sql_script || COALESCE((
+      SELECT STRING_AGG(
+               'RAISE NOTICE ''  Altering constraint ' || probe.conname || ' on domain type ' || dom."Schema" || '.' || dom."Name" || ''';' || CHR(10) ||
+               'ALTER DOMAIN "' || dom."Schema" || '"."' || dom."Name" || '" DROP CONSTRAINT "' || probe.conname || '";' || CHR(10) ||
+               'ALTER DOMAIN "' || dom."Schema" || '"."' || dom."Name" || '" ADD CONSTRAINT "' || probe.conname || '" ' || probe.def || ';' || CHR(10) ||
+               'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
+               'VALUES (pg_backend_pid(), ''domain constraint'', ''' || dom."Schema" || '.' || dom."Name" || '.' || probe.conname || ''', ''modified'');', CHR(10))
+        FROM (SELECT pc.conname, PG_GET_CONSTRAINTDEF(pc.oid) AS def
+                FROM pg_constraint pc
+                JOIN pg_type pt ON pt.oid = pc.contypid
+                               AND pt.typname = '_ss_domain_check_probe'
+                               AND pt.typnamespace = PG_MY_TEMP_SCHEMA()
+               WHERE pc.contype = 'c') probe
+        JOIN (SELECT c.conname, PG_GET_CONSTRAINTDEF(c.oid) AS def
+                FROM pg_constraint c
+                JOIN pg_type ty2 ON ty2.oid = c.contypid AND ty2.typname = dom."Name" AND ty2.typtype = 'd'
+                JOIN pg_namespace n2 ON n2.oid = ty2.typnamespace AND n2.nspname = dom."Schema"
+               WHERE c.contype = 'c') live
+          ON live.conname = probe.conname
+       WHERE live.def IS DISTINCT FROM probe.def), '');
+
+    EXECUTE 'DROP DOMAIN IF EXISTS pg_temp._ss_domain_check_probe CASCADE';
+  END LOOP;
+  CALL "SchemaSmith"."ExecuteOrDebug"(NULLIF(sql_script, ''), p_WhatIf);
 
   -- A constraint the package no longer declares is DROPPED, which is the one place this type differs from
   -- the enum -- and safely so: it removes a rule, not data, and nothing depends on it.

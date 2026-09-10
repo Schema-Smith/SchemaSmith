@@ -7,7 +7,14 @@ DROP FUNCTION IF EXISTS `SchemaSmith_CreateOption`;
 DELIMITER //
 
 CREATE FUNCTION `SchemaSmith_CreateOption`(p_Options TEXT, p_Key VARCHAR(64))
-RETURNS VARCHAR(256)
+-- CHARACTER SET DECLARED, and it is load-bearing rather than tidiness. Without it the return takes the
+-- DATABASE's default charset and collation, while a string literal it is compared against carries the
+-- collation_connection captured when the calling routine was created -- the SERVER default. Against a
+-- database made with an explicit COLLATE those differ, both sides are COERCIBLE so neither outranks the
+-- other, and the comparison dies with 'Illegal mix of collations ... for operation =' -- which aborted
+-- SchemaTongs on every table of such a database. This was the ONLY helper here missing the declaration;
+-- every sibling already carries CHARSET utf8mb4, which is why only this one's callers ever broke.
+RETURNS VARCHAR(256) CHARACTER SET utf8mb4
 DETERMINISTIC
 NO SQL
 BEGIN

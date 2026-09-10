@@ -79,11 +79,18 @@ namespace Schema.Domain.SqlServer
         /// <c>BUCKET_COUNT</c> for a HASH index on a memory-optimized table (#J1). A HASH index needs one --
         /// it sizes the hash table -- and it is meaningless on any other index. Its presence is also what
         /// tells SchemaSmith to emit the index as <c>NONCLUSTERED HASH</c> rather than a range index.
-        /// <para>Unlike the table's <c>MEMORY_OPTIMIZED</c>/<c>DURABILITY</c>, this one converges:
-        /// <c>ALTER TABLE … ALTER INDEX … REBUILD WITH (BUCKET_COUNT = n)</c> is supported and the new count
-        /// is readable back from <c>sys.hash_indexes</c> (verified live). SQL Server rounds the requested
-        /// count up to the next power of two, so the comparison is against the rounded value the catalog
-        /// reports, not the raw request.</para>
+        /// <para><b>Applied at CREATE, and a change is REFUSED</b> -- the same posture as the table's
+        /// <c>MEMORY_OPTIMIZED</c>/<c>DURABILITY</c>. Nothing here emits
+        /// <c>ALTER TABLE … ALTER INDEX … REBUILD WITH (BUCKET_COUNT = n)</c>: the only two places
+        /// <c>BUCKET_COUNT</c> appears in <c>Schema/Scripts</c> are the extraction read in
+        /// <c>GenerateTableJson</c> and the inline emit in <c>MissingTableAndColumnQuench</c>, and
+        /// <c>ChangingBucketCountOnADeployedMemoryOptimizedTable_IsRefused</c> asserts the refusal.</para>
+        /// <para>This comment previously claimed the opposite -- that the rebuild "is supported ... (verified
+        /// live)" -- which is the inverse of what ships. Corrected rather than implemented: the refusal is
+        /// the right behaviour, and a maintainer trusting the old text could have "restored" a convergence
+        /// path the tests forbid.</para>
+        /// <para>SQL Server rounds a requested count up to the next power of two, so a comparison would be
+        /// against the rounded value the catalog reports rather than the raw request.</para>
         /// </summary>
         [SchemaProperty(Minimum = 1,
             Description = "BUCKET_COUNT for a HASH index on a memory-optimized table. Required for a hash index, ignored elsewhere. SQL Server rounds it up to the next power of two.")]

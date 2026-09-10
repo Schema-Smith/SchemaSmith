@@ -245,10 +245,201 @@ BEGIN
                             AND CONVERT(pc.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
                             AND pc.PARTITION_NAME IS NOT NULL) <> t.PartitionCount));
 
-        IF ROW_COUNT() > 0 THEN
+        SET @ss_part_refusals = ROW_COUNT();
+
+        -- ---- the named Partitions array (RANGE/LIST) ------------------------------------------------
+        -- The comparison above settles the partitioning SCHEME -- method, expression, and the bucket count
+        -- HASH/KEY declare. It says nothing about the ordered boundary list, and that silence was a defect:
+        -- adding next year's partition to the package did nothing AND reported nothing, so a team added it
+        -- in December, saw exit 0, and started failing INSERTs on 1 January with "Table has no partition
+        -- for value 2027". Silence is the one answer that could not be right.
+        --
+        -- APPENDING ABOVE THE CURRENT MAXIMUM IS THE ONE PARTITIONING CHANGE THAT IS APPLIED. It is the
+        -- exception to the refuse-everything posture above because it is the one that does not rewrite
+        -- anything: ALTER TABLE ... ADD PARTITION on a new top range creates an empty partition and moves
+        -- no existing row. Every other difference -- a removal, a moved boundary, a partition inserted
+        -- between two deployed ones -- redistributes or destroys rows, cannot be derived from a state diff
+        -- (SPLIT? MERGE? rename?), and takes the refusal path.
+        --
+        -- THE TEST IS A PREFIX TEST, which is what makes "is this an append?" answerable without guessing
+        -- intent: the declared list must agree with the deployed list position-for-position for as far as
+        -- the deployed list goes; anything declared beyond that is an append. A removal shortens the
+        -- deployed side, a reorder or a mid-list insert breaks the prefix, and a moved boundary breaks it
+        -- on the value -- so all three fall out of one comparison rather than three special cases.
+        --
+        -- Gated on t.PartitionCount IS NULL so HASH/KEY are untouched: they declare a count, carry no
+        -- named partitions, and are already handled by the count comparison above.
+        --
+        -- The declared Ordinal is 0-BASED (ParseTableJson counts from 0) while PARTITION_ORDINAL_POSITION
+        -- is 1-based, hence the +1 throughout. Declared table names are backtick-wrapped and catalog names
+        -- are not, hence SchemaSmith_StripBacktickWrapping.
+        --
+        -- PARTITION_DESCRIPTION and the declared Values are compared directly: both MySQL 8.0 and MariaDB
+        -- 11.4 report a bare numeric boundary as "100" and the catch-all as "MAXVALUE", which is exactly
+        -- what a package writes. Probed on both before relying on it. TRIM/UPPER guard whitespace and the
+        -- MAXVALUE keyword's case rather than normalising anything structural -- a comparison that is
+        -- clever here would churn the table on every deploy, which is worse than the defect it closes.
+        --
+        -- A separate work table, rather than subqueries against _SchemaSmith_Partitions in one statement:
+        -- MySQL cannot reference the same TEMPORARY table twice in a single statement (error 1137,
+        -- "Can't reopen table"), which the declared-vs-deployed comparison would otherwise need.
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PartitionVerdict;
+        CREATE TEMPORARY TABLE _SchemaSmith_PartitionVerdict (
+            TableName VARCHAR(128) NOT NULL PRIMARY KEY,
+            DeclaredCount INT NOT NULL,
+            DeployedCount INT NOT NULL,
+            PrefixMismatch VARCHAR(128) DEFAULT NULL,
+            RemovedName VARCHAR(128) DEFAULT NULL,
+            DeployedEndsMaxValue TINYINT NOT NULL DEFAULT 0
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+        INSERT INTO _SchemaSmith_PartitionVerdict (TableName, DeclaredCount, DeployedCount, DeployedEndsMaxValue)
+        SELECT t.TableName,
+               (SELECT COUNT(*) FROM _SchemaSmith_Partitions dp
+                 WHERE CONVERT(dp.TableName USING utf8mb4) = CONVERT(t.TableName USING utf8mb4)),
+               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS pc
+                 WHERE CONVERT(pc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                   AND CONVERT(pc.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
+                   AND pc.PARTITION_NAME IS NOT NULL),
+               COALESCE((SELECT MAX(UPPER(TRIM(COALESCE(pm.PARTITION_DESCRIPTION, ''))) = 'MAXVALUE')
+                           FROM INFORMATION_SCHEMA.PARTITIONS pm
+                          WHERE CONVERT(pm.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                            AND CONVERT(pm.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
+                            AND pm.PARTITION_NAME IS NOT NULL), 0)
+          FROM _SchemaSmith_Tables t
+         WHERE t.NewTable = 0
+           AND t.PartitionMethod IS NOT NULL
+           AND t.PartitionCount IS NULL;
+
+        -- The first declared partition that disagrees with the deployed partition in the same position.
+        -- MIN over the ordinal picks the EARLIEST disagreement, so the message names the partition a
+        -- reader should look at first rather than an arbitrary one.
+        UPDATE _SchemaSmith_PartitionVerdict v
+           SET v.PrefixMismatch = (
+               SELECT dp.PartitionName
+                 FROM _SchemaSmith_Partitions dp
+                 JOIN INFORMATION_SCHEMA.PARTITIONS lp
+                   ON CONVERT(lp.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                  AND CONVERT(lp.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(dp.TableName) USING utf8mb4)
+                  AND lp.PARTITION_NAME IS NOT NULL
+                  AND lp.PARTITION_ORDINAL_POSITION = dp.Ordinal + 1
+                WHERE CONVERT(dp.TableName USING utf8mb4) = CONVERT(v.TableName USING utf8mb4)
+                  AND (CONVERT(dp.PartitionName USING utf8mb4) <> CONVERT(lp.PARTITION_NAME USING utf8mb4)
+                       OR UPPER(TRIM(COALESCE(dp.PartitionValues, ''))) <> UPPER(TRIM(COALESCE(lp.PARTITION_DESCRIPTION, ''))))
+                ORDER BY dp.Ordinal
+                LIMIT 1);
+
+        -- A deployed partition the package no longer names at all. Diagnosed SEPARATELY from the prefix
+        -- test and reported AHEAD of it, because removing one from the middle necessarily breaks the
+        -- prefix too -- and "pmax is not what is deployed in that position" is a true but unhelpful way to
+        -- say "you deleted p1". The reader needs the partition that went missing, not the one that shifted
+        -- up to fill the hole.
+        UPDATE _SchemaSmith_PartitionVerdict v
+           SET v.RemovedName = (
+               SELECT lp.PARTITION_NAME
+                 FROM INFORMATION_SCHEMA.PARTITIONS lp
+                WHERE CONVERT(lp.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                  AND CONVERT(lp.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(v.TableName) USING utf8mb4)
+                  AND lp.PARTITION_NAME IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Partitions dp
+                                   WHERE CONVERT(dp.TableName USING utf8mb4) = CONVERT(v.TableName USING utf8mb4)
+                                     AND CONVERT(dp.PartitionName USING utf8mb4) = CONVERT(lp.PARTITION_NAME USING utf8mb4))
+                ORDER BY lp.PARTITION_ORDINAL_POSITION
+                LIMIT 1)
+         WHERE v.DeclaredCount > 0;
+
+        -- Refuse: a partition dropped from the declaration, a broken prefix (reorder, mid-list insert,
+        -- moved boundary), or an append onto a MAXVALUE tail -- nothing sits above MAXVALUE, so that one
+        -- is a REORGANIZE and the engine would reject the ADD outright.
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(),
+               CONCAT('  Declared partitions do not match the deployed table (refused -- ',
+                      CASE WHEN v.RemovedName IS NOT NULL
+                             THEN CONCAT('partition ', v.RemovedName,
+                                         ' is deployed but no longer declared; dropping it would destroy '
+                                         'every row in it')
+                           WHEN v.PrefixMismatch IS NOT NULL
+                             THEN CONCAT('partition ', v.PrefixMismatch,
+                                         ' differs from the partition deployed in that position; moving or '
+                                         'renaming a boundary redistributes rows')
+                           ELSE 'nothing can be added above a MAXVALUE partition; this is a REORGANIZE, '
+                                'not an append' END,
+                      '): ', SchemaSmith_StripBacktickWrapping(v.TableName),
+                      ' declares ', v.DeclaredCount, ' partition(s), deployed has ', v.DeployedCount)
+          FROM _SchemaSmith_PartitionVerdict v
+         WHERE v.DeclaredCount > 0
+           AND (v.RemovedName IS NOT NULL
+                OR v.PrefixMismatch IS NOT NULL
+                OR (v.DeclaredCount > v.DeployedCount AND v.DeployedEndsMaxValue = 1));
+
+        SET @ss_part_refusals = @ss_part_refusals + ROW_COUNT();
+
+        IF @ss_part_refusals > 0 THEN
             SET @ss_msg = 'Declared partitioning does not match the deployed table -- see the run log. Repartitioning rewrites every row and is refused.';
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         END IF;
+
+        -- ---- apply the appends ----------------------------------------------------------------------
+        -- Only reached when every declared table's prefix agrees, so the sole remaining difference is one
+        -- or more partitions declared beyond the end of the deployed list. Emitted one ALTER per partition
+        -- in ascending order: RANGE boundaries must ascend, and adding them out of order is rejected.
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PartitionAdds;
+        CREATE TEMPORARY TABLE _SchemaSmith_PartitionAdds (
+            RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
+            TableName VARCHAR(128) NOT NULL,
+            PartitionName VARCHAR(128) NOT NULL,
+            PartitionValues TEXT DEFAULT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+        INSERT INTO _SchemaSmith_PartitionAdds (TableName, PartitionName, PartitionValues)
+        SELECT dp.TableName, dp.PartitionName, dp.PartitionValues
+          FROM _SchemaSmith_Partitions dp
+          JOIN _SchemaSmith_PartitionVerdict v
+            ON CONVERT(v.TableName USING utf8mb4) = CONVERT(dp.TableName USING utf8mb4)
+         WHERE dp.Ordinal + 1 > v.DeployedCount
+           AND v.DeployedCount > 0
+         ORDER BY dp.TableName, dp.Ordinal;
+
+        IF (SELECT COUNT(*) FROM _SchemaSmith_PartitionAdds) > 0 THEN
+            SET @ss_add_done = 0;
+            WHILE @ss_add_done = 0 DO
+                SELECT RowId, TableName, PartitionName, PartitionValues
+                  INTO @ss_add_id, @ss_add_table, @ss_add_name, @ss_add_values
+                  FROM _SchemaSmith_PartitionAdds ORDER BY RowId LIMIT 1;
+
+                IF @ss_add_id IS NULL THEN
+                    SET @ss_add_done = 1;
+                ELSE
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  Adding partition ', @ss_add_name, ' to ',
+                                                    SchemaSmith_StripBacktickWrapping(@ss_add_table)));
+
+                    IF p_WhatIf = 0 THEN
+                        SET @ss_sql = CONCAT('ALTER TABLE `', p_DatabaseName, '`.`',
+                                             SchemaSmith_StripBacktickWrapping(@ss_add_table),
+                                             '` ADD PARTITION (PARTITION `', @ss_add_name,
+                                             '` VALUES LESS THAN ',
+                                             CASE WHEN UPPER(TRIM(COALESCE(@ss_add_values, ''))) = 'MAXVALUE'
+                                                  THEN 'MAXVALUE'
+                                                  ELSE CONCAT('(', @ss_add_values, ')') END, ')');
+                        PREPARE ss_add_stmt FROM @ss_sql;
+                        EXECUTE ss_add_stmt;
+                        DEALLOCATE PREPARE ss_add_stmt;
+                    END IF;
+
+                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+                    VALUES (CONNECTION_ID(), 'partition',
+                            CONCAT(SchemaSmith_StripBacktickWrapping(@ss_add_table), '.', @ss_add_name),
+                            CASE WHEN p_WhatIf = 1 THEN 'wouldCreate' ELSE 'created' END);
+
+                    DELETE FROM _SchemaSmith_PartitionAdds WHERE RowId = @ss_add_id;
+                    SET @ss_add_id = NULL;
+                END IF;
+            END WHILE;
+        END IF;
+
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PartitionAdds;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PartitionVerdict;
     END IF;
 
     -- =======================
@@ -3681,7 +3872,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             -- authored before periods existed -- or extracted from 10.4.3-11.3, where the catalog cannot
             -- report them -- reads as "no periods declared" while the table plainly has one. Dropping on
             -- that absence would remove a declaration the package never had the chance to make, which is
-            -- why this is the one drop-by-absence flag that defaults to FALSE.
+            -- why this is one of the two Drop...RemovedFromProduct flags that default to FALSE --
+            -- DropEventsRemovedFromProduct is the other, for the same reason a package may predate
+            -- the feature, and DropUnknownIndexes defaults off as well.
             --
             -- Ordered before the ADD below so a period whose COLUMNS changed is replaced in a single
             -- deploy -- drop then add -- rather than the add colliding with the period already there.

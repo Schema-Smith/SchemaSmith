@@ -363,6 +363,252 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // ---- partition list (K3 boundary maintenance) -----------------------------
+
+    // The comparison above covers Method, Expression and -- for HASH/KEY -- the declared PartitionCount.
+    // It did NOT cover the named Partitions array, so adding next year's boundary partition to the package
+    // did nothing and said nothing: exit 0, no partition line in the log, table unchanged. RANGE without a
+    // MAXVALUE catch-all then REJECTS the insert once the calendar reaches it ("Table has no partition for
+    // value 2027"), so a team that adds the partition in December, sees a green deploy and moves on starts
+    // failing writes on 1 January.
+    //
+    // Appending above the current maximum is the one partitioning change that should be APPLIED rather than
+    // refused: ALTER TABLE ... ADD PARTITION moves no existing row. Everything else in the array -- removal,
+    // a moved boundary, a partition inserted below the maximum -- redistributes or destroys rows and takes
+    // the same refusal path the Expression case already uses. Silence was the one option that could not be
+    // right.
+
+    [Test]
+    public void TableQuench_ADeclaredPartitionAboveTheDeployedMaximum_IsAdded()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartAddProduct_{uid}";
+        var table = $"PartAddTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithRangePartitions(table,
+                """[ { "Name": "p0", "Values": "100" }, { "Name": "p1", "Values": "200" } ]"""),
+                productName: product);
+            Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("p0,p1"), "Setup: two range partitions.");
+
+            RunTableQuenchProc(cmd, WithRangePartitions(table,
+                """[ { "Name": "p0", "Values": "100" }, { "Name": "p1", "Values": "200" }, { "Name": "p2", "Values": "300" } ]"""),
+                productName: product);
+
+            Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("p0,p1,p2"),
+                "appending a boundary partition above the current maximum moves no rows -- ADD PARTITION "
+                + "is safe, and it is the common 'add next year' case the feature exists to serve");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    [Test]
+    public void TableQuench_AddingAPartitionIsIdempotent()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartIdemProduct_{uid}";
+        var table = $"PartIdemTable_{uid}";
+        var defs = WithRangePartitions(table,
+            """[ { "Name": "p0", "Values": "100" }, { "Name": "p1", "Values": "200" } ]""");
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, defs, productName: product);
+            RunTableQuenchProc(cmd, defs, productName: product);
+            RunTableQuenchProc(cmd, defs, productName: product);
+
+            Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("p0,p1"),
+                "three passes over an unchanged declaration must add nothing -- a comparison that is not "
+                + "stable would churn the table on every deploy, which is the defect class this must "
+                + "not introduce while closing another");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    [Test]
+    public void TableQuench_ARemovedPartition_IsRefusedByName()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartRemoveProduct_{uid}";
+        var table = $"PartRemoveTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithRangePartitioning(table), productName: product);
+            Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("p0,p1,pmax"), "Setup: three partitions.");
+
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+
+            Assert.Throws<MySqlException>(() => RunTableQuenchProc(cmd, WithRangePartitions(table,
+                """[ { "Name": "p0", "Values": "100" }, { "Name": "pmax", "Values": "MAXVALUE" } ]"""),
+                productName: product),
+                "dropping a RANGE partition destroys every row in it -- refuse, never apply");
+
+            cmd.CommandText = "SELECT GROUP_CONCAT(Message SEPARATOR ' | ') FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            var log = cmd.ExecuteScalar()?.ToString() ?? "";
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(log, Does.Contain(table),
+                    $"the run log must name the offending table -- SIGNAL MESSAGE_TEXT is capped at 128 "
+                    + $"characters, so the detail goes there. Log: {log}");
+                Assert.That(log, Does.Contain("p1"),
+                    $"and it must name the PARTITION, not just the table -- 'something about partitioning "
+                    + $"differs' is not actionable on a table with a dozen of them. Log: {log}");
+                Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("p0,p1,pmax"),
+                    "and NOTHING may have changed");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    [Test]
+    public void TableQuench_AChangedPartitionBoundary_IsRefusedByName()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartBoundProduct_{uid}";
+        var table = $"PartBoundTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithRangePartitions(table,
+                """[ { "Name": "p0", "Values": "100" }, { "Name": "p1", "Values": "200" } ]"""),
+                productName: product);
+
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+
+            Assert.Throws<MySqlException>(() => RunTableQuenchProc(cmd, WithRangePartitions(table,
+                """[ { "Name": "p0", "Values": "150" }, { "Name": "p1", "Values": "200" } ]"""),
+                productName: product),
+                "moving a boundary redistributes rows between partitions, and a state diff cannot derive "
+                + "the SPLIT/MERGE intent behind it -- it can only see that two layouts differ");
+
+            Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("p0,p1"), "nothing may have changed");
+        }
+        finally
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    [Test]
+    public void TableQuench_APartitionInsertedBelowTheMaximum_IsRefusedByName()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartMidProduct_{uid}";
+        var table = $"PartMidTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithRangePartitions(table,
+                """[ { "Name": "p0", "Values": "100" }, { "Name": "p2", "Values": "300" } ]"""),
+                productName: product);
+
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+
+            // p1 lands BETWEEN two deployed partitions -- a SPLIT of p2's range, not an append.
+            Assert.Throws<MySqlException>(() => RunTableQuenchProc(cmd, WithRangePartitions(table,
+                """[ { "Name": "p0", "Values": "100" }, { "Name": "p1", "Values": "200" }, { "Name": "p2", "Values": "300" } ]"""),
+                productName: product),
+                "a partition below the deployed maximum splits an existing range and moves its rows -- "
+                + "ADD PARTITION cannot express it, so it is refused rather than silently skipped");
+
+            Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("p0,p2"), "nothing may have changed");
+        }
+        finally
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    // A MAXVALUE tail is the common shape, and nothing can be appended above it -- MySQL rejects
+    // ADD PARTITION after a MAXVALUE partition. That is a REORGANIZE, not an append, so it refuses.
+    [Test]
+    public void TableQuench_AddingAPartitionAboveAMaxValueTail_IsRefusedByName()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartMaxProduct_{uid}";
+        var table = $"PartMaxTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithRangePartitioning(table), productName: product);
+            Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("p0,p1,pmax"), "Setup: MAXVALUE tail.");
+
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+
+            Assert.Throws<MySqlException>(() => RunTableQuenchProc(cmd, WithRangePartitions(table,
+                """[ { "Name": "p0", "Values": "100" }, { "Name": "p1", "Values": "200" }, { "Name": "p2", "Values": "300" }, { "Name": "pmax", "Values": "MAXVALUE" } ]"""),
+                productName: product),
+                "nothing sits above MAXVALUE -- the engine rejects ADD PARTITION after it, so this is a "
+                + "REORGANIZE and must be refused by name rather than attempted and failed");
+
+            Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("p0,p1,pmax"), "nothing may have changed");
+        }
+        finally
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
     // ---- package builders -----------------------------------------------------
 
     private static string WithPlainTable(string table) => $$"""
@@ -411,6 +657,27 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
     ],
     "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`" } ],
     "Partitioning": { "Method": "HASH", "Expression": "Id", "PartitionCount": {{count}} }
+  }
+]
+""";
+
+    // RANGE partitioning with a caller-supplied partition list, so a test can declare a layout differing
+    // from the deployed one by exactly one partition. WithRangePartitioning above hard-codes p0/p1/pmax,
+    // and a MAXVALUE tail cannot be appended to -- several tests below need a list without one.
+    private static string WithRangePartitions(string table, string partitionsJson) => $$"""
+[
+  {
+    "Name": "{{table}}",
+    "Columns": [
+      { "Name": "`Id`",  "DataType": "int", "Nullable": false },
+      { "Name": "`Val`", "DataType": "varchar(50)", "Nullable": true }
+    ],
+    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`" } ],
+    "Partitioning": {
+      "Method": "RANGE",
+      "Expression": "Id",
+      "Partitions": {{partitionsJson}}
+    }
   }
 ]
 """;

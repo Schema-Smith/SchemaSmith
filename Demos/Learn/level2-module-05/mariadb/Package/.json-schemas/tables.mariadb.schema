@@ -452,7 +452,8 @@
       ]
     },
     "IsSystemVersioned": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "MariaDB only. Keeps a full history of every row version (WITH SYSTEM VERSIONING). Applied when the table is created, and turned on for an existing table; turning it OFF is refused, because dropping system versioning discards the history."
     },
     "Periods": {
       "type": "array",

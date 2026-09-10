@@ -184,7 +184,8 @@ public static class SettingsKeys
     public const string DropIndexesRemovedFromProduct = "DropIndexesRemovedFromProduct";
 
     /// <summary>
-    /// MariaDB only, and the one drop-by-absence flag that defaults to FALSE. See the property
+    /// MariaDB only, and one of the two Drop...RemovedFromProduct flags that default to FALSE
+    /// (DropEventsRemovedFromProduct is the other; DropUnknownIndexes also defaults off). See the property
     /// description on Table for why -- a package that predates periods, or was extracted below
     /// 11.4, cannot declare the periods its table actually has.
     /// </summary>

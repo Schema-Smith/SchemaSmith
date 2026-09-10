@@ -418,6 +418,108 @@ VALUES ('TABLE', '{_integrationDb}', 'ProtectedExtractTable', 'TestProduct', '',
         conn.Close();
     }
 
+    /// <summary>
+    /// Extraction from a database whose default collation DIFFERS from the server's.
+    ///
+    /// <para><b>Why this did not exist, and why it is the gap worth closing.</b> Every database these
+    /// fixtures create is made with a bare <c>CREATE DATABASE</c>, so it inherits the server default and
+    /// both sides of every catalog comparison collate identically. The whole suite has therefore never
+    /// exercised the mixed case -- and neither has MySQL in the demo estate, where the sample databases
+    /// happen to carry that server's default. A customer database created with an explicit
+    /// <c>COLLATE</c> is ordinary, not exotic.</para>
+    ///
+    /// <para>The failure mode being guarded against is <c>Illegal mix of collations (…,COERCIBLE) and
+    /// (…,COERCIBLE) for operation '='</c>, which aborts extraction outright rather than degrading: a
+    /// catalog string collated by the database compared against a literal or function result collated by
+    /// the connection. The MySQL-family scripts guard it with <c>BINARY</c> or <c>CONVERT(… USING
+    /// utf8mb4)</c> comparisons; this test is what says every path that needs the guard has it.</para>
+    ///
+    /// <para>Asserted at the outcome rather than on any one query, because the point is that NO
+    /// comparison anywhere in the extraction path is left uncollated -- a test naming a single statement
+    /// would go stale the moment a new one is added.</para>
+    /// </summary>
+    [Test]
+    public void ShouldExtractFromADatabaseWhoseCollationDiffersFromTheServers()
+    {
+        using var admin = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        admin.Open();
+        using var acmd = admin.CreateCommand();
+        acmd.CommandTimeout = 300;
+
+        acmd.CommandText = "SELECT @@collation_server";
+        var serverCollation = acmd.ExecuteScalar()?.ToString() ?? "";
+
+        // utf8mb4_unicode_ci exists on every supported version of both engines and is the default on
+        // none of them -- MySQL 8.0 defaults to utf8mb4_0900_ai_ci, MariaDB 11.4 to utf8mb4_uca1400_ai_ci,
+        // and the 5.7 / 10.2 floors to latin1_swedish_ci.
+        const string differing = "utf8mb4_unicode_ci";
+        if (string.Equals(serverCollation, differing, StringComparison.OrdinalIgnoreCase))
+            Assert.Ignore($"Server default is already {differing}; this test needs the two to differ.");
+
+        var collDb = GenerateUniqueDBName("CollationMismatch");
+        try
+        {
+            acmd.CommandText = $"CREATE DATABASE `{collDb}` CHARACTER SET utf8mb4 COLLATE {differing}";
+            acmd.ExecuteNonQuery();
+
+            admin.ChangeDatabase(collDb);
+            ForgeKindler.KindleTheForge(acmd, Platform);
+
+            acmd.CommandText = $@"
+CREATE TABLE `{collDb}`.`CollWidget` (
+    `Id` INT NOT NULL PRIMARY KEY,
+    `Name` VARCHAR(50) NULL,
+    KEY `ix_coll_name` (`Name`)
+) ENGINE=InnoDB;
+
+CREATE TABLE `{collDb}`.`CollGadget` (
+    `Id` INT NOT NULL PRIMARY KEY,
+    `WidgetId` INT NULL,
+    CONSTRAINT `fk_coll_gadget_widget` FOREIGN KEY (`WidgetId`) REFERENCES `CollWidget` (`Id`)
+) ENGINE=InnoDB;";
+            acmd.ExecuteNonQuery();
+
+            // The database's collation really does differ -- without this the test could pass by
+            // accidentally recreating the matched case it exists to avoid.
+            acmd.CommandText =
+                $"SELECT DEFAULT_COLLATION_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{collDb}'";
+            Assert.That(acmd.ExecuteScalar()?.ToString(), Is.EqualTo(differing).IgnoreCase,
+                "Setup: the database must carry the non-default collation for this test to mean anything.");
+
+            var widgetJson = GenerateTableJson(acmd, collDb, "CollWidget");
+            var gadgetJson = GenerateTableJson(acmd, collDb, "CollGadget");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(widgetJson, Is.Not.Null.And.Not.Empty,
+                    $"extraction returned nothing for a database collated {differing} against a server "
+                    + $"collated {serverCollation} -- an uncollated catalog comparison aborts the whole "
+                    + "extraction, it does not degrade");
+                Assert.That(gadgetJson, Is.Not.Null.And.Not.Empty);
+            });
+
+            var widget = PlatformDeserializer.DeserializeTable(widgetJson, Platform);
+            var gadget = PlatformDeserializer.DeserializeTable(gadgetJson, Platform);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(widget.Columns.Select(c => c.Name.Replace("`", "")),
+                    Is.EquivalentTo(new[] { "Id", "Name" }),
+                    "columns must survive -- the collation guard has to cover the column read too");
+                Assert.That(widget.Indexes.Any(i => i.Name.Replace("`", "") == "ix_coll_name"), Is.True,
+                    "and the index read");
+                Assert.That(gadget.ForeignKeys.Any(f => f.Name.Replace("`", "") == "fk_coll_gadget_widget"),
+                    Is.True, "and the foreign-key read, which compares names across two tables");
+            });
+        }
+        finally
+        {
+            admin.ChangeDatabase(Platform == Platform.PostgreSQL ? "postgres" : "mysql");
+            DropOneDatabase(acmd, collDb);
+        }
+        admin.Close();
+    }
+
     protected string GenerateTableJson(IDbCommand cmd, string schema, string table)
     {
         cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{schema}', '{table}')";

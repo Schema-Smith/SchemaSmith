@@ -881,7 +881,7 @@ public class DatabaseQuench
 
                     // Step: Scheduled events (MySQL/MariaDB only). Runs after tables so an event whose
                     // body references a table the same deploy creates does not fail on first run.
-                    if (_product.Platform.GetBasePlatform() == Platform.MySQL && _template.Events.Count > 0)
+                    if (ShouldQuenchEvents(_product.Platform, _template.Events.Count, DropRemovedEvents))
                     {
                         var eventQuenchSw = Stopwatch.StartNew();
                         _checkpointing.Track(DbScope, "EventQuench", () => QuenchEvents(effectiveTableCmd));
@@ -1670,7 +1670,7 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
             case Platform.PostgreSQL:
                 tableCommand.CommandText = _template.IndexOnlyTableQuenches
                     ? $@"
-CALL ""SchemaSmith"".""IndexOnlyQuench""(p_TableDefinitions := '{EscapeSqlLiteral(IterationTableSchema)}', p_DropUnknownIndexes := {_dropUnknownIndexes}, p_DropIndexesRemovedFromProduct := {_dropRemovedIndexes}, p_WhatIf := {_whatIfOnly}, p_UpdateFillFactor := {_template.UpdateFillFactor.ToString().ToLower()}, p_CaptureWouldDrop := {FormatBooleanFlag(CaptureWouldDrop)});
+CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_TableDefinitions := '{EscapeSqlLiteral(IterationTableSchema)}', p_DropUnknownIndexes := {_dropUnknownIndexes}, p_DropIndexesRemovedFromProduct := {_dropRemovedIndexes}, p_WhatIf := {_whatIfOnly}, p_UpdateFillFactor := {_template.UpdateFillFactor.ToString().ToLower()}, p_CaptureWouldDrop := {FormatBooleanFlag(CaptureWouldDrop)});
 CALL ""SchemaSmith"".""ReplicaIdentityQuench""(p_WhatIf := {_whatIfOnly});
 CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
 "
@@ -1807,6 +1807,21 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
     /// part of that list, so if a CREATE fails execution stops and no ownership row is left claiming an
     /// event that does not exist.</para>
     /// </summary>
+    /// <summary>
+    /// Whether the scheduled-event step runs at all.
+    /// <para><b>An empty declaration still qualifies when by-absence removal is on</b>, and that is the
+    /// whole point of this predicate. A product that used to own events and now declares none needs the
+    /// pass to run against an empty declared set -- <see cref="QuenchEvents"/> falls through with a
+    /// canonical <c>"[]"</c> for exactly that case. Gating the step on <c>Events.Count &gt; 0</c> made
+    /// that fall-through unreachable, so removing the LAST declared event was a silent no-op: exit 0,
+    /// nothing logged, and a live scheduled job still running in production. Removing one of TWO
+    /// declared events always worked, which is what hid it.</para>
+    /// <para>With the flag off and nothing declared this is still false, so the overwhelmingly common
+    /// package -- which declares no events and does not set the flag -- pays no round trip.</para>
+    /// </summary>
+    internal static bool ShouldQuenchEvents(Platform platform, int declaredEventCount, bool dropRemovedEvents)
+        => platform.GetBasePlatform() == Platform.MySQL && (declaredEventCount > 0 || dropRemovedEvents);
+
     internal void QuenchEvents(IDbCommand tableCommand)
     {
         if (_product.Platform.GetBasePlatform() != Platform.MySQL) return;

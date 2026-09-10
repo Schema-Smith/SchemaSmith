@@ -31,6 +31,7 @@ namespace Schema.Domain.MariaDb
         /// users a setting the engine cannot honour.
         /// </para>
         /// </summary>
+        [SchemaProperty(Description = "MariaDB only. Keeps a full history of every row version (WITH SYSTEM VERSIONING). Applied when the table is created, and turned on for an existing table; turning it OFF is refused, because dropping system versioning discards the history.")]
         [JsonProperty(Order = 110)]
         public bool IsSystemVersioned { get; set; }
 
