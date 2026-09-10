@@ -8,9 +8,11 @@
 DROP FUNCTION IF EXISTS "SchemaSmith"."GenerateTableJSON"(varchar, varchar);
 
 -- p_ObjectOrder: 'Name' (default, alphabetical) or 'Physical' (the table's own column order).
--- COLUMNS ONLY at this layer. It carries SchemaTongs' Product:ObjectOrder setting, which also orders
--- indexes, foreign keys and check constraints -- but the caller sequences those after this function
--- returns, not here.
+-- COLUMNS ONLY, and that is the whole story rather than a layering detail. Indexes, foreign keys,
+-- check constraints and extended statistics are ALWAYS emitted in name order below, whatever this
+-- argument says: 'Physical' has no meaning for a set with no physical sequence. This function is the
+-- only thing that orders them -- nothing re-sequences the lists after it returns. A comment here used
+-- to say the caller did, and it was describing a helper that had no callers.
 CREATE OR REPLACE FUNCTION "SchemaSmith"."GenerateTableJSON"(p_Schema varchar(200), p_Table varchar(200), p_ObjectOrder varchar(20) DEFAULT 'Name')
   RETURNS text
   LANGUAGE plpgsql
