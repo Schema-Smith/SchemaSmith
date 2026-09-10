@@ -123,7 +123,7 @@ jobs:
   integration-tests-sqlserver:
     name: Integration Tests (SQL Server)
     runs-on: ubuntu-latest
-    needs: build-and-unit-tests
+    needs: [build-and-unit-tests, sweep-record]
     permissions:
       contents: read
       checks: write
@@ -234,7 +234,7 @@ jobs:
   integration-tests-postgresql:
     name: Integration Tests (PostgreSQL ${{ matrix.pg }})
     runs-on: ubuntu-latest
-    needs: build-and-unit-tests
+    needs: [build-and-unit-tests, sweep-record]
     # latest + the intermediate/floor versions (14, 13, 12): the real old containers are the only way to
     # exercise the version-adaptive branches below 15 (physical-column-existence questions no override can
     # fake) — attcompression + expression statistics (14), DROP EXPRESSION (13), getOwnedSequence (12).
@@ -329,7 +329,7 @@ jobs:
   integration-tests-mysql:
     name: Integration Tests (MySQL ${{ matrix.mysql }})
     runs-on: ubuntu-latest
-    needs: build-and-unit-tests
+    needs: [build-and-unit-tests, sweep-record]
     # Current 8.0 + the supported floor (5.7). MySQL 5.7 lacks JSON_TABLE, CHECK constraints, descending indexes,
     # and RENAME COLUMN — the version-adaptive engine takes an equivalent path or degrades via the policy.
     strategy:
@@ -408,7 +408,7 @@ jobs:
   integration-tests-mariadb:
     name: Integration Tests (MariaDB ${{ matrix.mariadb }})
     runs-on: ubuntu-latest
-    needs: build-and-unit-tests
+    needs: [build-and-unit-tests, sweep-record]
     # Current LTS (11.4, whose new utf8mb4_uca1400_ai_ci default collation exercises the data-delivery
     # collation fix #15), plus 10.6 and the supported floor (10.2). MariaDB 10.2-10.5 lacks JSON_TABLE
     # (recursive-CTE data delivery), RENAME COLUMN/INDEX, JSON_ARRAYAGG, and invisible/descending indexes.
@@ -533,6 +533,19 @@ jobs:
   # a commit whose engine behaviour is still current. Human forgetting is the failure mode: two
   # 2017-vs-2016 defects reached the v2.5.0 cut because the sweep was skipped, not because it lacked
   # coverage. Seconds to run, and it needs full history to walk the record's commits.
+  # Gates the four integration matrices below (see their needs:). This check answers in about ten
+  # seconds; the matrices cost ~68 runner-minutes and ~14 minutes of wall clock between them, and
+  # used to run to completion even after it had already failed.
+  #
+  # Deliberately NOT gating build-and-unit-tests: leaving that ungated lets the ~2m build and this
+  # ~10s check overlap, so the happy path costs no extra wall clock at all while the sad path skips
+  # everything expensive. coverage-gate needs the matrices, so it is gated transitively.
+  #
+  # Safe to gate on because 'Genuine Sweep Record' is NOT one of the twelve required status checks on
+  # main -- verified against the ruleset. That matters: this workflow carries a paths-ignore for
+  # docs/demos, so if it ever becomes required, ci-docs-only-companion.yml must report it too or a
+  # docs-only PR waits forever on a context nothing emits -- the exact deadlock that companion exists
+  # to fix.
   sweep-record:
     name: Genuine Sweep Record
     runs-on: ubuntu-latest
