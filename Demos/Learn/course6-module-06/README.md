@@ -110,6 +110,17 @@ The editor `.json-schemas` that give you red-squiggle validation in your IDE are
    ```
 4. Re-run `--Validate` → `PASS - no issues found`, exit `0`. The staleness finding is gone.
 
+<!-- TRAINING-RELEASE-PIN #416 -- on 2.7.0, fold the second sentence into the board above and delete
+     this note. The message gained it in #416; 2.6.0 prints only the first. Certified on main 2026-09-10. -->
+> **From SchemaSmith 2.7.0 the finding says more, and the extra clause matters.** It reads
+> `… regenerate via --WriteSchemasOnly. Structural validation used the current model merged with this
+> file's authored custom-property governance.` Through 2.6.0 a stale type **short-circuited** structural
+> validation, so any `Extensions` governance you had authored into that file — the kind
+> [Module 3](../course6-module-03) has you write — silently stopped being enforced while the only finding
+> pointed at the schema file rather than at the violation. From 2.7.0 the stale type is validated against
+> the current model *merged with* your recovered fragment, so your rules keep applying while the file is
+> stale. Staleness is still an error worth fixing; it is no longer a hole in your governance.
+
 ## Scenario 6 — make it a gate
 
 `ci/validate.yml` is a copy-ready GitHub Actions workflow. Copy it into your repository's `.github/workflows/` and adjust the package path. It runs `--Validate` on every pull request; the exit-2-on-error behavior fails the PR automatically — no database, no credentials, no matrix of engine containers. Because it needs no live engine, it's the cheapest gate you have: run it first, ahead of anything that connects.

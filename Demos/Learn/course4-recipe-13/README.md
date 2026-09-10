@@ -9,15 +9,14 @@ nothing else.
 The table in this lab is created **outside the package**, by a script standing in for the vendor. The
 package never declares its columns — only the indexes you want on it.
 
-<!-- TRAINING-RELEASE-PIN #415 -- the p_ProductName fix landed on main 2026-09-10 but index-only still
-     fails on PostgreSQL at 42703 (ReplicaIdentity); add the postgres/ folder once THAT lands too. -->
-> **PostgreSQL is not in this lab, and not for a design reason.** `IndexOnlyTableQuenches` does not yet
-> work there. The original fault — the generated `CALL` omitting a required argument, failing with
-> `42883 … procedure SchemaSmith.IndexOnlyQuench(…) does not exist` — was reported from this lab and is
-> fixed on `main`. Re-certifying against that fix surfaced a second fault behind it: the indexes are
-> created and the run then fails with `42703: column "ReplicaIdentity" does not exist`. Also reported.
-> The PostgreSQL folder joins this lab when that lands. SQL Server, MySQL and MariaDB are unaffected on
-> every version.
+<!-- TRAINING-RELEASE-PIN #416 -- on 2.7.0, delete this note and drop the per-engine caveat from the
+     Step 2 command; PostgreSQL then needs no version qualifier. Certified on main 2026-09-10. -->
+> **PostgreSQL needs SchemaSmith 2.7.0 or later; the other three run on 2.6.0.** `IndexOnlyTableQuenches`
+> was broken on PostgreSQL through 2.6.0 — two faults, one behind the other, both reported from this lab.
+> The first failed at `42883 … procedure SchemaSmith.IndexOnlyQuench(…) does not exist`; fixing it revealed
+> a second that created the indexes and then failed at `42703: column "ReplicaIdentity" does not exist`.
+> Both are fixed. On 2.6.0 the `postgres/` folder here will not deploy — run the other three, or build the
+> CLI from `main`.
 
 ## Before you start
 
@@ -30,9 +29,9 @@ package never declares its columns — only the indexes you want on it.
 This is the part you do not control. Run it once per engine:
 
 ```bash
-for e in sqlserver mysql mariadb; do
+for e in sqlserver postgres mysql mariadb; do
   ../lab-sql.sh $e cookbook_r13 "$(cat vendor-schema/create-vendor-table.$e.sql)"
-done
+done   # postgres needs 2.7.0+
 ```
 
 `vendor_order` now exists with four columns — `order_id`, `customer_ref`, `placed_at`, `status` — and a
@@ -64,7 +63,7 @@ Deploy:
 
 ```bash
 cd <engine> && schemaquench --ConfigFile:deploy.settings.json ; cd ..
-# exit 0 on SQL Server, MySQL and MariaDB
+# exit 0 on SQL Server, MySQL and MariaDB -- and on PostgreSQL from 2.7.0
 ```
 
 Watch the log line, because it changes shape to tell you which mode you are in:
@@ -120,6 +119,7 @@ explicitly.
 
 ```bash
 for e in sqlserver mysql mariadb; do ../lab-sql.sh $e cookbook_r13 "DROP TABLE IF EXISTS vendor_order"; done
+../lab-sql.sh postgres cookbook_r13 "DROP TABLE IF EXISTS public.vendor_order"
 ```
 
 ## The principle

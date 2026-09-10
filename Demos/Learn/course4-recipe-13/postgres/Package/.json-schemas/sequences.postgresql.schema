@@ -1,0 +1,53 @@
+{
+  "type": "object",
+  "properties": {
+    "Name": {
+      "type": "string",
+      "maxLength": 63
+    },
+    "Schema": {
+      "type": "string"
+    },
+    "DataType": {
+      "type": "string",
+      "pattern": "smallint|integer|bigint",
+      "description": "The sequence's data type: smallint, integer or bigint. Defaults to bigint, matching PostgreSQL."
+    },
+    "Start": {
+      "type": "integer",
+      "description": "The value the sequence starts from when it is created or restarted. NOT the current value — that is data, and SchemaSmith never resets it."
+    },
+    "Increment": {
+      "type": "integer",
+      "description": "Step between values. Negative for a descending sequence."
+    },
+    "MinValue": {
+      "type": "integer"
+    },
+    "MaxValue": {
+      "type": "integer"
+    },
+    "Cache": {
+      "type": "integer",
+      "minimum": 1.0,
+      "description": "How many values are pre-allocated per session. Higher values are faster but leave larger gaps after a crash."
+    },
+    "Cycle": {
+      "type": "boolean",
+      "description": "When true the sequence wraps to MinValue after reaching MaxValue instead of erroring."
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name"
+  ]
+}

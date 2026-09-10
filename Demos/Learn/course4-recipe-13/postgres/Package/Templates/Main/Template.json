@@ -1,0 +1,5 @@
+{
+  "Name": "Main",
+  "IndexOnlyTableQuenches": true,
+  "DatabaseIdentificationScript": "SELECT datname FROM pg_database WHERE datname = 'cookbook_r13'"
+}

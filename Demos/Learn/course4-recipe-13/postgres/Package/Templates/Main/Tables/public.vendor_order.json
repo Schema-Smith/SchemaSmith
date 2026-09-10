@@ -1,0 +1,18 @@
+{
+  "Schema": "public",
+  "Name": "vendor_order",
+  "Indexes": [
+    {
+      "Name": "ix_vendor_order_customer_placed",
+      "IndexColumns": "customer_ref,placed_at",
+      "PrimaryKey": false,
+      "Unique": false
+    },
+    {
+      "Name": "ix_vendor_order_status",
+      "IndexColumns": "status",
+      "PrimaryKey": false,
+      "Unique": false
+    }
+  ]
+}
