@@ -159,7 +159,12 @@ BEGIN
                          AND i."Name" != ei."IndexName"
                          AND i."IndexColumns" = ei."IndexColumns"
                          AND COALESCE(i."IncludeColumns", '') = COALESCE(ei."IncludeColumns", '')
-                         AND COALESCE(i."Unique", FALSE) = ei."Unique"
+                         -- #285: a PRIMARY KEY is unique in the catalog whether or not the package
+                         -- says so, so a naturally-authored PK (PrimaryKey: true, no Unique) failed
+                         -- this join and a RENAME fell through to drop+recreate. Same disjunction the
+                         -- modified-index detection already uses.
+                         AND (COALESCE(i."Unique", FALSE) OR COALESCE(i."PrimaryKey", FALSE)
+                              OR COALESCE(i."UniqueConstraint", FALSE)) = ei."Unique"
                          AND COALESCE(i."UniqueConstraint", FALSE) = ei."UniqueConstraint"
                          AND COALESCE(i."PrimaryKey", FALSE) = ei."PrimaryKey"
                          AND COALESCE(i."FilterExpression", '') = COALESCE(ei."FilterExpression", '')
