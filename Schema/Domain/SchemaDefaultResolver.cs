@@ -12,9 +12,9 @@ namespace Schema.Domain
     /// Regular templates: unset Schema / RelatedTableSchema resolve to the platform default
     /// ("dbo" on SQL Server, "public" on PostgreSQL — matching pre-refactor behavior bit-for-bit).
     /// Schema templates: unset values resolve to the "{{SchemaName}}" token; literal Schema
-    /// values on tables / indexed views / materialized views are rejected (the object lives in
-    /// {{SchemaName}} by construction). Literal RelatedTableSchema values on FKs are preserved
-    /// as cross-schema references.
+    /// values on tables / indexed views / materialized views / enum types / domain types /
+    /// sequences are rejected (the object lives in {{SchemaName}} by construction). Literal
+    /// RelatedTableSchema values on FKs are preserved as cross-schema references.
     /// </summary>
     public static class SchemaDefaultResolver
     {
@@ -58,6 +58,30 @@ namespace Schema.Domain
         {
             if (view == null) return;
             view.Schema = ResolveTableSchema(view.Schema, view.Name, "materialized view", isSchemaTemplate, platform);
+        }
+
+        // The three declarative PostgreSQL types (2.6.0) resolve exactly like the materialized view above,
+        // and for the same reason: each is a first-class schema-qualified object a tenant owns. They were
+        // missing here while their own doc comments already claimed the behaviour, so under a schema
+        // template an object authored without a Schema was created in public on EVERY tenant -- the quench
+        // procedures each COALESCE a null Schema to 'public', so the omission surfaced as data in the wrong
+        // place rather than as an error.
+        public static void Resolve(PostgreSqlEnumType enumType, bool isSchemaTemplate, Platform platform)
+        {
+            if (enumType == null) return;
+            enumType.Schema = ResolveTableSchema(enumType.Schema, enumType.Name, "enum type", isSchemaTemplate, platform);
+        }
+
+        public static void Resolve(PostgreSqlDomainType domainType, bool isSchemaTemplate, Platform platform)
+        {
+            if (domainType == null) return;
+            domainType.Schema = ResolveTableSchema(domainType.Schema, domainType.Name, "domain type", isSchemaTemplate, platform);
+        }
+
+        public static void Resolve(PostgreSqlSequence sequence, bool isSchemaTemplate, Platform platform)
+        {
+            if (sequence == null) return;
+            sequence.Schema = ResolveTableSchema(sequence.Schema, sequence.Name, "sequence", isSchemaTemplate, platform);
         }
 
         /// <summary>
@@ -106,6 +130,22 @@ namespace Schema.Domain
 
                 foreach (var view in template.MaterializedViews)
                     Resolve(view, isSchemaTemplate, platform);
+
+                // The three declarative PostgreSQL types. Their absence here is what made the overloads
+                // above unreachable: a template's enum types, domain types and sequences were never
+                // visited, so their Schema stayed null all the way to the quench, which COALESCEs it to
+                // 'public'. Under a schema template that put a tenant's own objects in public on every
+                // tenant -- silently, at exit 0. Tables, FKs, indexed views and materialized views all
+                // resolved correctly, which is exactly why it survived: the objects a user checks first
+                // are the ones that were already right.
+                foreach (var enumType in template.EnumTypes)
+                    Resolve(enumType, isSchemaTemplate, platform);
+
+                foreach (var domainType in template.DomainTypes)
+                    Resolve(domainType, isSchemaTemplate, platform);
+
+                foreach (var sequence in template.Sequences)
+                    Resolve(sequence, isSchemaTemplate, platform);
             }
             catch (InvalidOperationException inner)
             {
