@@ -285,6 +285,95 @@ public class RepositoryHelperTests
             "User's custom Extensions property should be preserved");
     }
 
+    // A malformed committed schema used to take the whole command down with a raw JsonReaderException at
+    // exit 3, which made --Validate's SS-STALE-002 advice circular: it tells the user to regenerate via
+    // --WriteSchemasOnly, and regenerating is precisely what the malformed file prevented. Deleting the
+    // file was the only way out and nothing said so.
+    [Test]
+    public void WriteSchemaFilesWithResults_MalformedExistingFile_RegeneratesInsteadOfThrowing()
+    {
+        var writtenFiles = new Dictionary<string, string>();
+        _file.Exists(Arg.Is<string>(s => s.Contains("tables.sqlserver"))).Returns(true);
+        _file.Exists(Arg.Is<string>(s => !s.Contains("tables.sqlserver"))).Returns(false);
+        _file.ReadAllText(Arg.Is<string>(s => s.Contains("tables.sqlserver")))
+            .Returns(@"{ ""title"": ""unterminated");
+        _file.When(f => f.WriteAllText(Arg.Any<string>(), Arg.Any<string>()))
+            .Do(ci => writtenFiles[Path.GetFileName(ci.ArgAt<string>(0))] = ci.ArgAt<string>(1));
+
+        var warnings = new List<string>();
+        var results = RepositoryHelper.WriteSchemaFilesWithResults("/fake/product", Platform.SqlServer, warnings.Add);
+
+        var tablesResult = results.Find(r => r.FileName.Contains("tables"));
+        Assert.Multiple(() =>
+        {
+            // The file is the whole point: a valid schema the user can see is recoverable, a stack trace is not.
+            Assert.That(writtenFiles.ContainsKey("tables.sqlserver.schema"), Is.True,
+                "the unreadable schema must be rewritten, not left in place for the command to die on again");
+            Assert.That(() => JObject.Parse(writtenFiles["tables.sqlserver.schema"]), Throws.Nothing,
+                "the regenerated schema must be valid JSON -- regenerating it badly is no better than crashing");
+            Assert.That(tablesResult.AuthoredExtensionsLost, Is.True);
+            Assert.That(tablesResult.ParseError, Is.Not.Null.And.Not.Empty,
+                "the parser's reason is what lets the warning say WHY the file could not be read");
+        });
+    }
+
+    // Dropping the authored governance QUIETLY would be worse than the crash it replaces: the package would
+    // look healthy while enforcing less than the author wrote. The warning is the feature, not a nicety.
+    [Test]
+    public void WriteSchemaFilesWithResults_MalformedExistingFile_WarnsThatAuthoredGovernanceWasLost()
+    {
+        _file.Exists(Arg.Is<string>(s => s.Contains("tables.sqlserver"))).Returns(true);
+        _file.Exists(Arg.Is<string>(s => !s.Contains("tables.sqlserver"))).Returns(false);
+        _file.ReadAllText(Arg.Is<string>(s => s.Contains("tables.sqlserver"))).Returns("{ not json at all");
+
+        var warnings = new List<string>();
+        RepositoryHelper.WriteSchemaFilesWithResults("/fake/product", Platform.SqlServer, warnings.Add);
+
+        Assert.That(warnings, Has.Count.EqualTo(1), "exactly the one unreadable file should be reported");
+        Assert.Multiple(() =>
+        {
+            Assert.That(warnings[0], Does.Contain("tables.sqlserver.schema"),
+                "the user has to re-author the fragment and cannot do that without knowing which file it was");
+            Assert.That(warnings[0], Does.Contain("Extensions"),
+                "naming what was lost is the difference between a warning and a noise line");
+        });
+    }
+
+    // The fragment-preservation intent is the reason the existing file is read at all, and it is worth
+    // keeping -- the fix must not degrade into "always regenerate", which would silently discard authored
+    // governance from every healthy package.
+    [Test]
+    public void WriteSchemaFilesWithResults_ValidExistingFile_StillPreservesExtensionsAndWarnsNothing()
+    {
+        var existingSchemaContent = @"{
+            ""type"": ""object"",
+            ""properties"": {
+                ""Extensions"": {
+                    ""type"": ""object"",
+                    ""properties"": { ""owningTeam"": { ""type"": ""string"" } }
+                }
+            }
+        }";
+        var writtenFiles = new Dictionary<string, string>();
+        _file.Exists(Arg.Is<string>(s => s.Contains("tables.sqlserver"))).Returns(true);
+        _file.Exists(Arg.Is<string>(s => !s.Contains("tables.sqlserver"))).Returns(false);
+        _file.ReadAllText(Arg.Is<string>(s => s.Contains("tables.sqlserver"))).Returns(existingSchemaContent);
+        _file.When(f => f.WriteAllText(Arg.Any<string>(), Arg.Any<string>()))
+            .Do(ci => writtenFiles[Path.GetFileName(ci.ArgAt<string>(0))] = ci.ArgAt<string>(1));
+
+        var warnings = new List<string>();
+        var results = RepositoryHelper.WriteSchemaFilesWithResults("/fake/product", Platform.SqlServer, warnings.Add);
+
+        var merged = JObject.Parse(writtenFiles["tables.sqlserver.schema"]);
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged["properties"]?["Extensions"]?["properties"]?["owningTeam"]?["type"]?.ToString(),
+                Is.EqualTo("string"), "a readable file's authored Extensions fragment must still be carried forward");
+            Assert.That(results.Find(r => r.FileName.Contains("tables")).AuthoredExtensionsLost, Is.False);
+            Assert.That(warnings, Is.Empty, "a healthy package must not be told it lost anything");
+        });
+    }
+
     [Test]
     public void WriteSchemaFilesWithResults_ExistingFileWithoutExtensions_WritesGeneratedSchema()
     {

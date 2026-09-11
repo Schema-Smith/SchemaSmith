@@ -59,7 +59,8 @@ public static class Program
 
         var product = Product.LoadForDisplay(productFile);
         Console.WriteLine($"Regenerating .json-schemas for {product.Name} ({product.Platform})...");
-        RepositoryHelper.WriteSchemaFiles(productPath, product.Platform);
+        RepositoryHelper.WriteSchemaFiles(productPath, product.Platform,
+            warning => Console.WriteLine($"WARNING: {warning}"));
         Console.WriteLine("Done.");
     }
 

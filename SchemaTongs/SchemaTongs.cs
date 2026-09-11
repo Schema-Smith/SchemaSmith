@@ -340,7 +340,7 @@ public class SchemaTongs
 
         LoadPackageTokens();
 
-        RepositoryHelper.WriteSchemaFiles(_productPath, _platform);
+        RepositoryHelper.WriteSchemaFiles(_productPath, _platform, _progressLog.Warn);
 
         CastDatabaseObjects(targetDb);
         CleanupResolvedSqulerrorFiles();
