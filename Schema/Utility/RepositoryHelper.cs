@@ -27,6 +27,17 @@ public class SchemaFileResult
     /// </summary>
     public bool AuthoredExtensionsLost { get; set; }
 
+    /// <summary>
+    /// True when an EXISTING file's content actually changed. This is the common outcome and the one the
+    /// result could not previously express: the merged schema is written unconditionally, so a rewritten
+    /// file used to return a result identical to nothing-happened, and every consumer's "up to date"
+    /// message was unverifiable. A caller cannot recover this for itself without re-reading, re-generating
+    /// and re-running the merge — reimplementing the method it just called — because this is the only place
+    /// that holds both strings at once.
+    /// <para>Distinct from <see cref="WasCreated"/>: created and updated are different things to report.</para>
+    /// </summary>
+    public bool WasUpdated { get; set; }
+
     /// <summary>Parser message for the unreadable file, so the warning can say WHY it could not be read.</summary>
     public string ParseError { get; set; }
 }
@@ -127,8 +138,10 @@ public static class RepositoryHelper
     /// </summary>
     /// <param name="warn">
     /// Receives a line per committed schema that could not be parsed and was therefore regenerated without
-    /// its authored <c>Extensions</c> fragment. Optional only so existing callers keep compiling -- a caller
-    /// that passes nothing silently discards the one thing the user needs to act on.
+    /// its authored <c>Extensions</c> fragment. Omitting it does NOT discard the warning — it routes to the
+    /// engine's own logger instead. There is deliberately no silent path: the string being dropped is the
+    /// notice that authored governance was destroyed, and a default that makes losing it the quiet option
+    /// is the same fail-open shape this warning exists to close.
     /// </param>
     public static void WriteSchemaFiles(string productPath, Platform platform, Action<string> warn = null)
     {
@@ -144,6 +157,13 @@ public static class RepositoryHelper
         var directory = DirectoryWrapper.GetFromFactory();
         var schemaPath = Path.Combine(productPath, ".json-schemas");
         directory.CreateDirectory(schemaPath);
+
+        // A caller that passes no sink gets the engine's logger, never silence. Making the parameter
+        // REQUIRED was the other candidate and would force each new caller to decide -- but it breaks every
+        // existing call site to buy a decision, when the property that actually matters is that the warning
+        // always lands somewhere. Revisit if a host appears that needs the warning in front of a user rather
+        // than in a log; the flag on the result already carries it for anyone who wants to render it.
+        warn ??= message => LogFactory.GetLogger(nameof(RepositoryHelper)).Warn(message);
 
         var schemaFileNames = GetSchemaFileNames(platform);
         var results = new List<SchemaFileResult>();
@@ -286,12 +306,22 @@ public static class RepositoryHelper
         catch (JsonException ex)
         {
             file.WriteAllText(schemaFile, generated.ToString(Formatting.Indented));
-            return new SchemaFileResult { FileName = fileName, AuthoredExtensionsLost = true, ParseError = ex.Message };
+            return new SchemaFileResult
+            {
+                FileName = fileName, WasUpdated = true, AuthoredExtensionsLost = true, ParseError = ex.Message
+            };
         }
 
         var merged = SchemaGenerator.MergeExtensionsDefinition(generated, existingObj);
-        file.WriteAllText(schemaFile, merged.ToString(Formatting.Indented));
-        return new SchemaFileResult { FileName = fileName };
+        var mergedText = merged.ToString(Formatting.Indented);
+
+        // Compared BEFORE the write, which is the only moment both strings are in hand. The write itself is
+        // deliberately left unconditional: skipping it when the content matches would stop --WriteSchemasOnly
+        // touching mtimes on every run, which is appealing but is a behaviour change consumers may read, and
+        // it is not needed to report the outcome honestly. Worth deciding on its own merits, not as a side
+        // effect of a reporting fix.
+        file.WriteAllText(schemaFile, mergedText);
+        return new SchemaFileResult { FileName = fileName, WasUpdated = mergedText != existing };
     }
 
     /// <summary>

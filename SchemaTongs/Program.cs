@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using Schema.Domain;
 using Schema.Isolators;
 using Schema.Configuration;
@@ -59,9 +60,18 @@ public static class Program
 
         var product = Product.LoadForDisplay(productFile);
         Console.WriteLine($"Regenerating .json-schemas for {product.Name} ({product.Platform})...");
-        RepositoryHelper.WriteSchemaFiles(productPath, product.Platform,
+        var results = RepositoryHelper.WriteSchemaFilesWithResults(productPath, product.Platform,
             warning => Console.WriteLine($"WARNING: {warning}"));
-        Console.WriteLine("Done.");
+
+        // Say which of the three things happened. "Done." was true of every outcome, including the one
+        // where nothing needed doing and the one where every schema in the package was rewritten -- on a
+        // command whose entire output is that report.
+        var created = results.Count(r => r.WasCreated);
+        var updated = results.Count(r => r.WasUpdated);
+        var unchanged = results.Count - created - updated;
+        Console.WriteLine(created == 0 && updated == 0
+            ? $"Done. {unchanged} schema file(s) already current."
+            : $"Done. {created} created, {updated} updated, {unchanged} already current.");
     }
 
     internal static Platform ResolvePlatform()
