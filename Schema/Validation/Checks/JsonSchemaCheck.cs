@@ -29,12 +29,20 @@ namespace Schema.Validation.Checks;
 /// hand-authored <c>Extensions</c> fragments back in via
 /// <see cref="SchemaGenerator.MergeExtensionsDefinition"/>) with
 /// <see cref="JToken.DeepEquals(JToken, JToken)"/>. A mismatch means the domain model moved on
-/// since <c>--WriteSchemasOnly</c> was last run — <c>SS-STALE-001</c> — and structural validation
-/// is skipped for that type: results against a schema that no longer matches the model would be
-/// misleading. A committed schema that fails to parse is reported as <c>SS-STALE-002</c> and
-/// treated the same as absent. When no committed schema is present (missing directory, missing
-/// file, or unparseable file), there is nothing to compare — no staleness finding — and structural
-/// validation runs directly against the freshly generated schema instead.
+/// since <c>--WriteSchemasOnly</c> was last run — <c>SS-STALE-001</c> — but structural validation
+/// still RUNS for that type, against the merged schema. A stale file is out of date, not
+/// meaningless: the governance authored into it is still what the author asked for, so skipping the
+/// type would quietly stop enforcing it while reporting only the staleness.
+/// <para>
+/// A committed schema that cannot be PARSED is different, and is reported as <c>SS-STALE-002</c>:
+/// there is no fragment to recover from an unreadable file, so that type falls back to the freshly
+/// generated schema and whatever governance the file carried is not enforced on that run — which is
+/// why the finding says so outright rather than only naming the file.
+/// </para>
+/// <para>
+/// When no committed schema is present at all (missing directory or missing file), there is nothing
+/// to compare — no staleness finding — and structural validation runs directly against the freshly
+/// generated schema.
 /// </para>
 /// <para>
 /// Structural validation: every package JSON file is validated against its resolved schema (the
