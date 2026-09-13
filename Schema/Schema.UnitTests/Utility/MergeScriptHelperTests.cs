@@ -4,7 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
+using Microsoft.Extensions.Configuration;
 using NSubstitute;
+using Schema.Isolators;
 using Schema.Domain;
 using Schema.Utility;
 
@@ -325,6 +327,88 @@ public class MergeScriptHelperTests
         var result = MergeScriptHelper.GetKeyColumns(Platform.SqlServer, cmd, "dbo", "TestTable");
 
         Assert.That(result, Is.EqualTo(""));
+    }
+
+    #endregion
+
+    #region CompatEncoding override reaches the merge-script cliff
+
+    // The merge-script builders detect the STRING_AGG/OPENJSON cliff by probing the server, and that probe
+    // was the ONLY input -- so DataTongs, whose output IS the product, could not be made to build a legacy
+    // delivery script on modern hardware. It is the same decision the model-ingest encoding makes (compat
+    // < 130 OR server major < 14), which only SchemaQuench and SchemaTongs could force.
+    //
+    // Asserted at the outcome per Rule 32: whether the probe runs at all, and which aggregation the built
+    // query uses -- not "the resolver returned X".
+    private static (IDbCommand cmd, List<string> statements) RecordingSqlServerCommand(string scalar)
+    {
+        var statements = new List<string>();
+        var cmd = Substitute.For<IDbCommand>();
+        cmd.When(c => c.CommandText = Arg.Any<string>()).Do(ci => statements.Add(ci.Arg<string>()));
+        cmd.Parameters.Returns(Substitute.For<IDataParameterCollection>());
+        cmd.CreateParameter().Returns(_ => Substitute.For<IDbDataParameter>());
+        cmd.ExecuteScalar().Returns(scalar);
+        var reader = Substitute.For<IDataReader>();
+        reader.Read().Returns(false);
+        cmd.ExecuteReader().Returns(reader);
+        return (cmd, statements);
+    }
+
+    private static void RegisterCompatEncoding(string sourceValue)
+    {
+        var config = Substitute.For<IConfigurationRoot>();
+        config[Arg.Any<string>()].Returns(_ => null);
+        config["Source:CompatEncoding"].Returns(sourceValue);
+        FactoryContainer.Register<IConfigurationRoot>(config);
+    }
+
+    [TearDown]
+    public void ClearCompatEncodingOverride() => FactoryContainer.Clear();
+
+    [Test]
+    public void MergeScriptCliff_WithNoOverride_ProbesTheServer()
+    {
+        // The control. Without it, the two tests below could pass because the probe never runs for some
+        // unrelated reason, and they would be pinning nothing.
+        var (cmd, statements) = RecordingSqlServerCommand("[Id]");
+
+        MergeScriptHelper.GetKeyColumns(Platform.SqlServer, cmd, "dbo", "TestTable");
+
+        Assert.That(statements.Any(t => t.Contains("compatibility_level")), Is.True,
+            "with no override the cliff must still be detected from the server");
+    }
+
+    [Test]
+    public void MergeScriptCliff_ForcedLegacy_SkipsTheProbeAndAvoidsStringAgg()
+    {
+        RegisterCompatEncoding("legacy");
+        var (cmd, statements) = RecordingSqlServerCommand("[Id]");
+
+        MergeScriptHelper.GetKeyColumns(Platform.SqlServer, cmd, "dbo", "TestTable");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(statements.Any(t => t.Contains("compatibility_level")), Is.False,
+                "a forced encoding is the answer -- asking the server as well would let the server override it");
+            Assert.That(statements.Any(t => t.Contains("STRING_AGG")), Is.False,
+                "legacy must build the ordered row-by-row form, which is the whole point of forcing it");
+        });
+    }
+
+    [Test]
+    public void MergeScriptCliff_ForcedModern_SkipsTheProbeAndUsesStringAgg()
+    {
+        RegisterCompatEncoding("modern");
+        var (cmd, statements) = RecordingSqlServerCommand("[Id]");
+
+        MergeScriptHelper.GetKeyColumns(Platform.SqlServer, cmd, "dbo", "TestTable");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(statements.Any(t => t.Contains("compatibility_level")), Is.False);
+            Assert.That(statements.Any(t => t.Contains("STRING_AGG")), Is.True,
+                "both directions are pinned -- an override that only ever forced legacy would pass a one-sided test");
+        });
     }
 
     #endregion
