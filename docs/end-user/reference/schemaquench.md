@@ -386,6 +386,8 @@ A feature a target version lacks is either taken by an equivalent longer path (s
 | **Per-column compression** (`SET COMPRESSION`) | PostgreSQL 14 | omits the compression + records a downgrade |
 | **Expression statistics** (`CREATE STATISTICS` on an expression) | PostgreSQL 14 | skips the statistic + records a downgrade |
 | **Removing a column's generation** (`DROP EXPRESSION`) | PostgreSQL 13 | drops and re-adds the column as a plain column (the previously-computed values are not preserved, unlike the in-place conversion available on 13+) |
+| **Table access method** (`USING <method>`) | PostgreSQL 15 | creates the table on the server's default access method + records a downgrade |
+| **`VIRTUAL` generated columns** | PostgreSQL 18 | skips the column + records a downgrade (`STORED` is unaffected — it has been available since 12) |
 
 The version-sensitive system-catalog reads SchemaSmith uses to compare and extract state (per-column compression, expression statistics, `NULLS NOT DISTINCT`, INCLUDE columns) are branched automatically so they parse on the older server too — extraction and idempotency work the same on 12 as on current PostgreSQL. Delete-on-absence data delivery uses a single `MERGE … WHEN NOT MATCHED BY SOURCE THEN DELETE` on 17+ and a `MERGE` + follow-on `DELETE … WHERE NOT EXISTS` (keyed identically, same merge filter) on 15/16; below 15 it is the same version-agnostic `DELETE`. In every case the end state is identical — deploy the same package to PostgreSQL 12 through current and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
@@ -427,10 +429,15 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs has no suc
 | **Always Encrypted** (`ENCRYPTED WITH`) | SQL Server 2016 | creates the column *unencrypted* + records a downgrade |
 | **Nonclustered columnstore index** | SQL Server 2012 | skips the index + records a downgrade |
 | **Clustered columnstore index** | SQL Server 2014 | skips the index + records a downgrade |
+| **Graph tables** (`NODE` / `EDGE`) | SQL Server 2017 | creates the table with all its declared columns, *without* graph semantics + records a downgrade |
+| **Ledger tables** | SQL Server 2022 | creates an ordinary table + records a downgrade. The direction is deliberate: a ledger table cannot be converted or dropped afterwards, so not creating one is far easier to recover from than creating one by accident |
+| **XML compression** | SQL Server 2022 | creates the table or index without the compression clause + records a downgrade. Nothing an application can observe changes — only the storage saving is lost |
 
 > **Check the manifest before deploying to a pre-2016 target.** Under the default `warn`, a masked column is created unmasked and an Always Encrypted column is created unencrypted — the deploy succeeds and the downgrade is recorded, but the protection is not there. If a silently-unprotected column is worse for you than a failed deployment, set `Target:UnsupportedFeaturePolicy=fail`.
 
 One further case is compatibility-level gated rather than version gated: a `Json`-encoded [data delivery](schema-packages.md#content-encoding) aimed at a below-130 SQL Server target follows the same policy — `warn` skips just that delivery and delivers the rest, `fail` aborts. Re-encode that delivery as `Xml` to deploy it there.
+
+**Three more route through the same policy but are gated on server *state*, not version** — every supported version can do them, if the feature is turned on. **Change Data Capture** and **Change Tracking** need the feature enabled on the database; **FILESTREAM** columns need FILESTREAM enabled on the server *and* a FILESTREAM filegroup on the database. Where the prerequisite is absent, the object is deployed without that aspect and a downgrade is recorded, exactly as a version degrade would be — so a package that assumes CDC is on does not fail, it quietly deploys without it under the default `warn`. Enable the prerequisite, or set `Target:UnsupportedFeaturePolicy=fail`, if that is not what you want.
 
 #### MySQL / MariaDB
 
@@ -447,6 +454,16 @@ The schema model itself parses on every supported version — a version-agnostic
 | **Invisible column** (`Column.Invisible`) | MySQL 8.0.23 / MariaDB 10.3 | stores the column *visible* — the `INVISIBLE` clause is suppressed — + records a downgrade. The modified-column compare ignores the visibility difference below the floor, so re-deploys stay idempotent instead of churning the column every run |
 | **Descending index key parts** (`… DESC`) | MySQL 8.0 / MariaDB 10.8 | stores the key part ascending (the engine silently does so anyway) + records a downgrade |
 | **Automatic table-data delivery** | MySQL 8.0 | on MariaDB 10.2 uses a recursive-CTE shred (full support); below the MySQL floor, skips delivery with a clear log — use manual data scripts |
+| **Column `DEFAULT` expression** (a function or expression default, not a literal) | MySQL 8.0.13 (MariaDB: at the 10.2 floor) | **skips the whole column**, not just the default + records a downgrade — see the warning below |
+| **Functional / expression index** (a key part that is an expression) | MySQL 8.0.13 (MariaDB: no equivalent at any version) | skips the index + records a downgrade |
+| **Column SRID restriction** (`SRID n` on a spatial column) | MySQL 8.0.3 (MariaDB: no equivalent at any version) | creates the column without the SRID restriction + records a downgrade |
+| **Application-time period** (`PERIOD FOR`) | MariaDB 10.4.3 (MySQL: no equivalent at any version) | creates the table without the period + records a downgrade |
+| **Table-level system versioning** (`WITH SYSTEM VERSIONING`) | MariaDB 10.3 (MySQL: no equivalent) | creates an ordinary, non-versioned table + records a downgrade |
+| **Per-column history exclusion** (`WITHOUT SYSTEM VERSIONING`) | MariaDB 10.3.4 (MySQL: no equivalent) | creates the column without the exclusion + records a downgrade — the column survives, the exclusion does not |
+
+> **A `DEFAULT` expression below MySQL 8.0.13 costs you the column, not the default.** Every other degrade in this table relaxes an aspect and keeps the object; this one skips the whole column, so under the default `warn` the deploy succeeds and a column your package declares is simply not there. If any table targets MySQL below 8.0.13 and uses an expression default, either give it a literal default or set `Target:UnsupportedFeaturePolicy=fail`.
+
+> **"No equivalent at any version" is not the same as "old".** Several rows above are not version gates at all — MySQL has no application-time periods or system versioning at *any* release, and MariaDB has no SRID restriction or functional index at any release. Those degrade on every target of that platform, current versions included, which is why they appear here rather than reading as legacy concerns.
 
 The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7 through current, or MariaDB 10.2 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
