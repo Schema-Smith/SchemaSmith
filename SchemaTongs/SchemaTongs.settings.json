@@ -28,7 +28,6 @@
         // "ObjectOrder": "Name", // Sequence for a table's object lists when there is nothing to preserve: Name (default, alphabetical) or Physical (the table's own column order)
         // "PreserveExistingOrder": true // On re-extract, keep the order the file being replaced already had for entries still present, append new ones, drop what's gone (default true)
     },
-    "TemplatePath": "", // Where the template directory is written. Blank = under Product.Path.
     // Name will default to Database if not provided.
     // This becomes the folder name for the template that is exported as well as the template name.
     "Template": {

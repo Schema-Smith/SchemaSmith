@@ -202,6 +202,77 @@ public class SettingsContractDriftTests
             string.Join(Environment.NewLine, dead.Select(k => "  " + k)));
     }
 
+    // EveryContractKeyIsActuallyReadByProductCode asks whether a key is read by ANY product code, which is
+    // the wrong question for a PER-TOOL contract: Source:CompatEncoding was read by SchemaTongs, so
+    // DataTongs claiming a key it never read passed that guard clean. The key was accepted there and
+    // silently inert -- the exact defect this contract exists to prevent, arriving through the shared base
+    // key list rather than a per-tool one.
+    //
+    // This asks the per-tool question, and only where the answer is knowable. A key referenced anywhere in
+    // the shared Schema project is reachable from every tool, so no conclusion can be drawn and it is
+    // skipped -- that is a legitimate state, not a hole (Source:CompatEncoding is in exactly that state now
+    // that the merge-script cliff honours it). What IS knowable: a key referenced only inside one tool's own
+    // project cannot honestly be claimed by a different tool.
+    [Test]
+    public void AToolMayNotClaimAKeyOnlyAnotherToolsProjectReads()
+    {
+        var root = RepoRoot();
+        Assert.That(root, Is.Not.Null);
+
+        var projectOf = new Dictionary<SettingsTool, string>
+        {
+            [SettingsTool.SchemaQuench] = "SchemaQuench",
+            [SettingsTool.SchemaTongs] = "SchemaTongs",
+            [SettingsTool.DataTongs] = "DataTongs",
+            [SettingsTool.SchemaShears] = "SchemaShears"
+        };
+        const string shared = "Schema";
+
+        // The files that DECLARE the contract necessarily name every key, and they live in the shared
+        // project -- so counting them makes every key look shared and the whole check vacuous. It WAS, twice:
+        // first by counting the declaration sites, then by scanning for string literals when product code
+        // reaches these values through the SettingsKeys CONSTANTS. Both were found by mutating the fix away
+        // and watching this test keep passing, which is the only reason either was noticed.
+        var declarationSites = new[] { "SettingsKeys.cs", "SettingsContract.cs" };
+        var byName = KeyConstantsByPath();
+        var constantReference = new Regex(@"SettingsKeys(?:\.\w+)+", RegexOptions.Compiled);
+
+        // key -> the set of top-level projects whose source references it
+        var projectsByKey = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in ScannableProductFiles(root))
+        {
+            if (declarationSites.Contains(Path.GetFileName(file))) continue;
+            var project = Path.GetRelativePath(root, file)
+                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0];
+
+            foreach (var match in constantReference.Matches(StripComments(File.ReadAllText(file))))
+            {
+                if (!byName.TryGetValue(((Match)match).Value, out var key)) continue;
+                if (!projectsByKey.TryGetValue(key, out var set))
+                    projectsByKey[key] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                set.Add(project);
+            }
+        }
+
+        var offenders = new List<string>();
+        foreach (var (tool, ownProject) in projectOf)
+        {
+            foreach (var key in SettingsContract.AcceptedKeys(tool))
+            {
+                if (!projectsByKey.TryGetValue(key, out var projects)) continue;   // read nowhere: the other guard owns that
+                if (projects.Contains(shared)) continue;                           // reachable from every tool
+                if (projects.Contains(ownProject)) continue;                       // this tool reads it
+
+                offenders.Add($"  {tool} accepts '{key}', but only {string.Join(", ", projects.OrderBy(p => p))} reads it");
+            }
+        }
+
+        Assert.That(offenders, Is.Empty,
+            "A tool that accepts a key it never reads makes that setting silently inert -- the operator sets "
+            + "it in the right file for the wrong tool and nothing says so:" + Environment.NewLine
+            + string.Join(Environment.NewLine, offenders.OrderBy(o => o, StringComparer.Ordinal)));
+    }
+
     // The literal values behind every SettingsKeys constant that product code actually references.
     private static HashSet<string> ReferencedKeyValues(string root)
     {
