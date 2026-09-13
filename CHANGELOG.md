@@ -6,9 +6,14 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ## [Unreleased] — v2.7.0
 
+### Breaking Changes
+
+- **Two table-level settings are no longer accepted on engines that ignore them.** `DropExcludeConstraintsRemovedFromProduct` (PostgreSQL only) and `DropStatisticsRemovedFromProduct` (SQL Server and PostgreSQL only) were filtered out of the generated `products.*` and `templates.*` schemas in v2.6.0 but not out of `tables.*`, so the same setting was an `SS-JSON-001` error at two tiers and silently accepted-and-ignored at the third. The table tier now matches: authoring either in a MySQL or MariaDB table (or `DropExcludeConstraintsRemovedFromProduct` on SQL Server) fails `--Validate` with `SS-JSON-001` instead of doing nothing. **Delete the property from those packages** — nothing is lost, it never had an effect there. Each `tables.<platform>.schema` also now *annotates* which engines a scoped setting applies to, so "no engine note" reliably means "applies everywhere" at every tier.
+
 ### Changed
 
 - **A MariaDB table's `IsSystemVersioned` now carries a description in the generated `.json-schemas`.** The property had no `[SchemaProperty]` description while every sibling MariaDB-only property on the same class had one, so an editor showed a bare property with no tooltip for a feature that deploys and refuses removal. Regenerating the schemas means editors start showing it.
+- **Four settings that never did anything are no longer accepted, and now say so.** SchemaQuench accepted `Target:Platform` (its platform comes from the package — the shipped sample even documented the key), SchemaTongs accepted `TemplatePath` (it derives that path from `Product:Path` and `Template:Name`), and DataTongs accepted `Product:Name` and `Template:Name`. None was read. Setting one now reports it as unrecognized rather than accepting it in silence. `Target:Platform` remains valid for SchemaTongs and DataTongs, which do read it as an alternative to `Source:Platform`.
 
 ### Fixed
 
