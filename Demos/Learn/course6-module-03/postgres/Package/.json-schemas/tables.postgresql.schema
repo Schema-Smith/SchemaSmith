@@ -357,7 +357,7 @@
     },
     "DropStatisticsRemovedFromProduct": {
       "type": "boolean",
-      "description": "When set, overrides the template- and product-level DropStatisticsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+      "description": "When set, overrides the template- and product-level DropStatisticsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting. SQL Server and PostgreSQL only."
     },
     "DropIndexesRemovedFromProduct": {
       "type": "boolean",

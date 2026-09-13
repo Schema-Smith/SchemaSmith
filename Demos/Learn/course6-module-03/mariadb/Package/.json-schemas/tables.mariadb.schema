@@ -322,14 +322,6 @@
       "type": "boolean",
       "description": "When set, overrides the template- and product-level DropCheckConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
     },
-    "DropExcludeConstraintsRemovedFromProduct": {
-      "type": "boolean",
-      "description": "When set, overrides the template- and product-level DropExcludeConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting. PostgreSQL only."
-    },
-    "DropStatisticsRemovedFromProduct": {
-      "type": "boolean",
-      "description": "When set, overrides the template- and product-level DropStatisticsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
-    },
     "DropIndexesRemovedFromProduct": {
       "type": "boolean",
       "description": "When set, overrides the template- and product-level DropIndexesRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
