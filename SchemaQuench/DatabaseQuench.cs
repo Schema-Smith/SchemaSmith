@@ -596,6 +596,14 @@ public class DatabaseQuench
                             _sqlServerMajorVersion = versionInfo.ServerComparable;
                             var compatEncodingOverride = FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.CompatEncoding];
                             _ingestEncoding = CompatEncoding.Select(compatEncodingOverride, versionInfo.CompatibilityLevel, versionInfo.ServerComparable);
+                            // Say which encoding was chosen and whether a setting forced it. SchemaTongs
+                            // names the encoding per object as it extracts; the deploy side resolved it
+                            // silently, so an operator who set Target:CompatEncoding had no confirmation it
+                            // took effect -- and the encoding determines which helper set gets kindled.
+                            SafeProgressLog($"  [{_databaseName}] model ingest encoding: {_ingestEncoding}" +
+                                            (string.IsNullOrWhiteSpace(compatEncodingOverride)
+                                                ? " (auto)"
+                                                : $" (forced by Target:CompatEncoding={compatEncodingOverride})"));
                             break;
                     }
 

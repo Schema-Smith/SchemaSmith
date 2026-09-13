@@ -395,7 +395,26 @@ Two independent adaptations, both automatic. Below **compatibility level** 130 (
 
 **Adaptation 1 — the encoding switch (compatibility-level gated).** This one is not a degrade; nothing is lost. SchemaSmith hands its parsed schema model to the server as JSON (`OPENJSON` / `FOR JSON`) at compatibility level 130 and above, and as XML (`.nodes()` / `.value()` / `FOR XML PATH`) below 130 — because `OPENJSON`'s JSON path is a parse error under compatibility level 130. The switch is chosen from the detected compatibility level and server version, and applies to deployment (SchemaQuench) and extraction (SchemaTongs) alike, reaching down to compatibility level 100 (SQL Server 2008). Constructs SchemaSmith itself uses — `STRING_AGG … WITHIN GROUP` and `STRING_SPLIT` — fall back to `FOR XML PATH` ordered aggregation and a split function on the XML path, so the end state is identical to a modern deployment. **These two are gated differently, and only one gate is the compatibility level.** `STRING_SPLIT` requires compatibility level 130. `STRING_AGG` requires **SQL Server 2017** (server major 14) and is not compatibility-level gated at all — it parses at every level down to 100 on a server that has it. The distinction matters because a SQL Server 2016 server reports compatibility level 130 while having no `STRING_AGG` whatsoever, so the fallback is chosen from the detected server version, not the compatibility level alone. (`STRING_AGG`'s optional `WITHIN GROUP (ORDER BY …)` clause additionally requires compatibility level 110.)
 
-You normally never touch this, but you can force the encoding with `Target:CompatEncoding` (deployment) or `Source:CompatEncoding` (extraction): `auto` (the default — pick by detected version), `legacy` (XML), or `modern` (JSON) — for example `SmithySettings_Target__CompatEncoding=legacy`.
+##### Forcing the encoding
+
+`auto` is the default and picks correctly from the detected compatibility level and server version. The override is a diagnostic escape hatch, not a tuning knob: **there is no schema you can express on one encoding and not the other, and no performance or feature difference to buy.** The resulting database is identical either way.
+
+| Setting | Read by | Values |
+|---|---|---|
+| `Target:CompatEncoding` | SchemaQuench (deployment) | `auto` (default), `legacy` (XML), `modern` (JSON) |
+| `Source:CompatEncoding` | SchemaTongs (extraction) | same three |
+
+For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs has no such setting — it detects the cliff itself and cannot be overridden.
+
+**What it actually changes.** The encoding is how SchemaSmith hands its own parsed model to SQL Server and reads it back — internal plumbing between the tool and the server, not anything about your package, your DDL, or the database that results. Concretely it selects which helper procedures are installed: on `legacy`, five are replaced by XML twins (`BootstrapTableQuench`, `IndexOnlyQuench`, `IndexedViewQuench`, `GenerateTableJson`, `GenerateIndexedViewJson`) and the JSON-only `fn_FormatJson` is not installed at all. The setting is part of the kindle stamp, so changing it re-installs the matching helper set on the next run.
+
+**Where you'd see it.** SchemaQuench logs the encoding it resolved for each database during pre-flight; SchemaTongs names it per object as it extracts — `Cast Json for dbo.Customer` / `Cast Xml for dbo.Customer`.
+
+**When it is genuinely useful.** Reproducing a legacy-path problem on hardware you actually have: set `legacy` against a modern server and SchemaSmith takes exactly the code path a SQL Server 2008–2016 target would, with no old server to maintain. That is the case it exists for.
+
+> **`modern` cannot rescue an old target.** Forcing JSON onto a database below compatibility level 130, or a server below 2017, enables nothing — `OPENJSON`'s JSON path is a parse error there and `STRING_AGG` does not exist, so the run fails during kindling rather than degrading. `auto` already chooses JSON wherever JSON works, so there is no target where `modern` succeeds and `auto` would not have picked it anyway.
+
+**What `legacy` costs you.** One thing, and only on extraction: the open-ended custom-property `Extensions` bag is dropped when SchemaTongs reverse-engineers a table on the XML encoding (the callout below). The typed model — columns, indexes, keys, constraints, statistics — round-trips intact.
 
 > **Legacy fallback (SQL Server only):** On the XML (legacy) encoding, the open-ended custom-property `Extensions` bag is dropped when SchemaTongs reverse-engineers a table below the JSON cliff. The typed schema model — columns, indexes, keys, constraints, statistics — round-trips intact; only the free-form `Extensions` metadata is not carried on the legacy encoding.
 
