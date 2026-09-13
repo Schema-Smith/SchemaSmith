@@ -406,7 +406,9 @@ Two independent adaptations, both automatic. Below **compatibility level** 130 (
 | `Target:CompatEncoding` | SchemaQuench (deployment) | `auto` (default), `legacy` (XML), `modern` (JSON) |
 | `Source:CompatEncoding` | SchemaTongs (extraction) | same three |
 
-For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs has no such setting — it detects the cliff itself and cannot be overridden.
+For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `Source:CompatEncoding` too, for the queries it builds a delivery script from.
+
+> **Don't confuse this with `DeliveryEncoding`.** Two settings, both with "encoding" in the name, and they control unrelated things. **`CompatEncoding`** (this one) is how SchemaSmith talks to SQL Server about *its own schema model* — invisible in your package and in the resulting database. **[`ShouldCast:DeliveryEncoding`](datatongs.md#delivery-encoding-xml-for-legacy-sql-server)** is a DataTongs feature that decides the format of the *data content files it writes* — `Json` or `Xml` — which is what you want when porting data to another platform or handing it to an external vendor. Changing one tells you nothing about the other.
 
 **What it actually changes.** The encoding is how SchemaSmith hands its own parsed model to SQL Server and reads it back — internal plumbing between the tool and the server, not anything about your package, your DDL, or the database that results. Concretely it selects which helper procedures are installed: on `legacy`, five are replaced by XML twins (`BootstrapTableQuench`, `IndexOnlyQuench`, `IndexedViewQuench`, `GenerateTableJson`, `GenerateIndexedViewJson`) and the JSON-only `fn_FormatJson` is not installed at all. The setting is part of the kindle stamp, so changing it re-installs the matching helper set on the next run.
 
