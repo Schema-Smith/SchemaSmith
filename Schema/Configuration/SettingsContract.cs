@@ -84,7 +84,13 @@ public static class SettingsContract
             SettingsKeys.ProductKeys.ObjectOrder, SettingsKeys.ProductKeys.PreserveExistingOrder,
             SettingsKeys.TemplateKeys.Name, SettingsKeys.TemplateKeys.SchemaIdentificationScript,
             SettingsKeys.OrphanHandling.Mode, SettingsKeys.FolderMapping, SettingsKeys.LogHygiene,
-            SettingsKeys.ScriptTokens, SettingsKeys.TemplatePath
+            SettingsKeys.ScriptTokens, SettingsKeys.TemplatePath,
+            // SchemaTongs only, NOT a shared source key. DataTongs was handed this by inheriting the base
+            // source set and never read it -- it detects the STRING_AGG/OPENJSON cliff itself and has no
+            // override path -- so setting it there was silently inert. That is the same over-claim this
+            // class was written to catch (ShouldCast:MergeUpdate, ShouldCast:Collations), arriving through
+            // the shared base list rather than a per-tool one.
+            SettingsKeys.SourceCompatEncoding
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.DataTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.DataTongs)).Concat(
@@ -116,7 +122,7 @@ public static class SettingsContract
         SettingsKeys.Source.Server, SettingsKeys.Source.User, SettingsKeys.Source.Password,
         SettingsKeys.Source.Port, SettingsKeys.Source.Platform, SettingsKeys.Source.Database,
         SettingsKeys.Source.Schema, SettingsKeys.Source.IntegratedSecurity,
-        SettingsKeys.Source.ConnectionProperties, SettingsKeys.SourceCompatEncoding
+        SettingsKeys.Source.ConnectionProperties
     ];
 
     // Only the keys the given tool actually reads. Handing both tools the whole set made the contract

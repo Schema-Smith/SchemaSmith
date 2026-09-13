@@ -116,7 +116,6 @@
       "ShouldCast:OutputScripts",
       "ShouldCast:TokenizeScripts",
       "ShouldCast:UpdateDescendents",
-      "Source:CompatEncoding",
       "Source:ConnectionProperties",
       "Source:Database",
       "Source:IntegratedSecurity",
