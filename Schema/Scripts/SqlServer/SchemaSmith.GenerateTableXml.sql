@@ -132,6 +132,15 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
   EXEC sp_executesql N'SELECT @p_Ledger = CASE ledger_type_desc WHEN ''APPEND_ONLY_LEDGER_TABLE'' THEN ''AppendOnly'' WHEN ''UPDATABLE_LEDGER_TABLE'' THEN ''Updatable'' END FROM sys.tables WITH (NOLOCK) WHERE [object_id] = @p_ObjId',
     N'@p_ObjId INT, @p_Ledger NVARCHAR(12) OUTPUT', @p_ObjId = @v_ObjectId, @p_Ledger = @v_Ledger OUTPUT
 
+-- CDC change-table filegroup (#417). The cdc schema exists only in a CDC-enabled database, so the read is
+-- dynamic and guarded. It takes the NEWEST capture instance first and only then asks whether its filegroup is
+-- a non-default one -- filtering to non-default first would report an older instance's placement. NULL (the
+-- catalog's "default filegroup") and the default itself both extract no key, so existing packages are unchanged.
+DECLARE @v_CdcFilegroup NVARCHAR(260) = NULL
+IF EXISTS (SELECT 1 FROM sys.databases WITH (NOLOCK) WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
+  EXEC sp_executesql N'SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN ''['' + fg.[name] + '']'' END FROM (SELECT TOP 1 ct.filegroup_name FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest JOIN sys.filegroups fg WITH (NOLOCK) ON fg.[name] = newest.filegroup_name',
+    N'@p_ObjId INT, @p_Fg NVARCHAR(260) OUTPUT', @p_ObjId = @v_ObjectId, @p_Fg = @v_CdcFilegroup OUTPUT
+
 -- Memory-optimized (Hekaton) is 2014 (major 12); is_memory_optimized / durability_desc are 2014 columns,
 -- staged behind the >= 12 guard (like @v_GraphType/@v_Ledger) and simply 0/NULL below it, where a
 -- memory-optimized table cannot exist. Without this the XML tier (compat-100 / genuine 2014) extracted a
@@ -224,6 +233,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
          JOIN sys.filegroups lfg WITH (NOLOCK) ON lfg.data_space_id = lds.data_space_id AND lfg.is_default = 0
         WHERE lds.data_space_id = st.lob_data_space_id) AS [TextImageFileGroup],
        CASE WHEN st.is_tracked_by_cdc = 1 THEN 'true' ELSE 'false' END AS [EnableCDC],
+       @v_CdcFilegroup AS [CdcFilegroup],
        @v_GraphType AS [GraphType],
        @v_Ledger AS [Ledger],
        -- Memory-optimized round-trip (#J1/#8): emit only when true, matching the JSON twin. Read into

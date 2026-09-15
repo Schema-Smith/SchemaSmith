@@ -632,6 +632,11 @@
       "pattern": "SCHEMA_AND_DATA|SCHEMA_ONLY",
       "description": "Memory-optimized durability: SCHEMA_AND_DATA (default, data persists) or SCHEMA_ONLY (rows are transient). Only meaningful with MemoryOptimized. Create-time only."
     },
+    "CdcFilegroup": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Filegroup for this table's CDC change table; overrides the template's CdcFilegroup. Only meaningful with EnableCDC. A change creates a new capture instance on the new filegroup and leaves the old one, with its history, for you to drain and drop."
+    },
     "Extensions": {
       "type": "object",
       "required": [

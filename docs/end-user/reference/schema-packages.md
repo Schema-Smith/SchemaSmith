@@ -110,6 +110,7 @@ Each template directory under `Templates/` must contain a `Template.json` file. 
 | `IdentificationDatabase` | string | | No | Re-targets which database the `DatabaseIdentificationScript` runs against. Empty (the default) uses the platform init database. Point it at a control-plane registry database to enumerate a roster from a registry table. Token-resolvable. See [Template settings intent](#template-settings-intent). |
 | `VersionStampScript` | string | | No | SQL executed per database after that database's quench completes successfully. |
 | `UpdateFillFactor` | bool | `true` | No | When `true`, the table quench updates index fill factors to match the JSON definitions. OR'd with table-level and index-level `UpdateFillFactor` settings. |
+| `CdcFilegroup` | string | | No | **SQL Server only.** The filegroup CDC change tables go on, for every `EnableCDC` table in this template that does not set its own `CdcFilegroup`. Unset leaves placement alone. See [Where change tables go](#where-change-tables-go). |
 | `IndexOnlyTableQuenches` | bool | `false` | No | When `true`, the table quench only manages indexes, statistics, XML/full-text indexes. Skips table creation, column changes, and foreign key management. A declared table that is not present on the target **fails the deploy** -- see [Template settings intent](#template-settings-intent) below. |
 | `BaselineValidationScript` | string | | No | SQL validation executed per database before quenching that database. |
 | `RequireAtLeastOneTarget` | bool | `true` | No | When `true`, deployment fails if discovery returns no targets -- zero matching databases for a regular template, or zero matching `(database, schema)` pairs for a schema template. Catches misconfigured identification scripts that silently skip an entire template. Replaces the prior `Required` field (renamed in v2.1). |
@@ -487,6 +488,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | `FullTextIndex` | object or array | `null` | Full-text index on the table -- a single definition, or an array of conditional variants. See [Full-Text Index (SQL Server)](#full-text-index-sql-server). |
 | `UpdateFillFactor` | bool | `false` | When `true`, index fill factors on this table are updated to match JSON definitions during quench. |
 | `EnableCDC` | bool | `false` | When `true`, the table is enabled for change data capture. Changing a tracked table's columns rotates to a new capture instance rather than discarding history -- see [Change Data Capture (SQL Server)](#change-data-capture-sql-server). |
+| `CdcFilegroup` | string | | The filegroup this table's CDC change table goes on; overrides the template's `CdcFilegroup`. Only meaningful with `EnableCDC` (`--Validate` warns `SS-CDC-001` otherwise). See [Where change tables go](#where-change-tables-go). |
 | `EnableChangeTracking` | bool | `false` | When `true`, the table is enabled for SQL Server change tracking. Requires Change Tracking enabled on the database -- see [Change Tracking (SQL Server)](#change-tracking-sql-server). Unrelated to the full-text index option also spelled `ChangeTracking`. |
 | `TrackColumnsUpdated` | bool | `false` | Only meaningful with `EnableChangeTracking`. When `true`, change tracking records **which columns** changed, not merely that the row did, at the cost of extra tracking storage. |
 | `FileGroup` | string | `null` | Filegroup the table is stored on, as a **name only** -- never a file path, so the package stays portable across environments. **Leave it unset and SchemaSmith does not manage placement at all** — the table is created wherever SQL Server would put it, and an existing table is left exactly where it is, including on a filegroup someone placed it on by hand. SchemaSmith does not create filegroups: if the named one does not exist on the target the deploy fails. Moving an existing table to a different filegroup is a rebuild, so a declared name that differs from where the table already lives also fails -- migrate it manually. Removing the property again does not move anything back; it just stops SchemaSmith checking placement. Create filegroups in a migration script, supplying environment-specific paths through [script tokens](script-tokens.md). |
@@ -1225,6 +1227,25 @@ SQL Server's answer is to allow **two capture instances per table** so a new one
 
 Setting `EnableCDC` back to `false` disables capture on the table outright, which drops its capture instances and their history. That is a deliberate opt-out rather than a side effect of a schema change.
 
+### Where change tables go
+
+By default SQL Server puts a change table (`cdc.<schema>_<table>_CT`) on the database's default filegroup. Production databases usually route change tables to a dedicated filegroup instead, so capture I/O stays off the data files. Set `CdcFilegroup` to do that -- on a table, or on the template as the default for every CDC table in it:
+
+```jsonc
+// Template.json -- every EnableCDC table in this template
+{ "Name": "Main", "CdcFilegroup": "cdc_fg" }
+
+// A table -- overrides the template for this table only
+{ "Schema": "dbo", "Name": "Orders", "EnableCDC": true, "CdcFilegroup": "cdc_fg" }
+```
+
+- **The filegroup must already exist.** Like `sp_cdc_enable_db`, creating one is a database-level decision, so SchemaSmith does not do it. A `CdcFilegroup` naming a filegroup the database does not have fails the deploy up front, naming the table and the filegroup, before any table is changed.
+- **Changing it rotates, it never moves.** A table whose newest capture instance is on a different filegroup than the one declared gets a new capture instance on the declared filegroup -- the same rotation a column change performs, with the same rules: the old instance and its history are left for you to drain and drop, and if both slots are already in use the deploy is refused before touching anything. A second deploy of the same declaration changes nothing.
+- **Unset means unmanaged.** With no `CdcFilegroup` on the table or the template, SchemaSmith leaves an existing change table wherever it is, including one a DBA placed by hand. Removing a declaration is therefore a no-op, not a move back to the default.
+- **A rotation keeps its filegroup.** When a column change rotates a table that declares no `CdcFilegroup`, the new instance goes on the same filegroup as the one it replaces.
+
+SchemaTongs extracts `CdcFilegroup` from the newest capture instance, and only when that is not the database's default filegroup -- so a package whose change tables are on the default gains no new key.
+
 ---
 
 ## Change Tracking (SQL Server)
@@ -1785,6 +1806,7 @@ Not every setting means something on every engine, and a generated schema reflec
 | Setting | Offered in `products.*` / `templates.*` |
 |---|---|
 | `DropSchemaBoundDependents` | SQL Server |
+| `CdcFilegroup` (template level) | SQL Server |
 | `DropExcludeConstraintsRemovedFromProduct` | PostgreSQL |
 | `DropStatisticsRemovedFromProduct` | SQL Server and PostgreSQL |
 | `UpdateFillFactor` (template level) | SQL Server and PostgreSQL |

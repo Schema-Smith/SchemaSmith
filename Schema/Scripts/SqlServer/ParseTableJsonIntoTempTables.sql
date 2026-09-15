@@ -51,6 +51,8 @@
          [PartitionScheme] = SchemaSmith.fn_SafeBracketWrap([PartitionScheme]), [PartitionColumn] = SchemaSmith.fn_SafeBracketWrap([PartitionColumn]),
          [FileStreamFileGroup] = SchemaSmith.fn_SafeBracketWrap([FileStreamFileGroup]),
          [TextImageFileGroup] = SchemaSmith.fn_SafeBracketWrap([TextImageFileGroup]),
+         -- CDC change-table placement (#417): NULL means unmanaged; ModifiedTableQuench applies the template default.
+         [CdcFilegroup] = SchemaSmith.fn_SafeBracketWrap([CdcFilegroup]),
          [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints],
          [ShouldApplyExpression], [VariantName], [GraphType] = RTRIM(ISNULL([GraphType], 'None')), [Ledger] = RTRIM(ISNULL([Ledger], 'Off')), [MemoryOptimized] = ISNULL([MemoryOptimized], 0), [Durability] = UPPER(RTRIM(ISNULL(NULLIF([Durability], ''), 'SCHEMA_AND_DATA'))), [EnableCDC] = ISNULL([EnableCDC], 0), [EnableChangeTracking] = ISNULL([EnableChangeTracking], 0), [TrackColumnsUpdated] = ISNULL([TrackColumnsUpdated], 0), [OldName] = SchemaSmith.fn_SafeBracketWrap([OldName]),
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
@@ -91,6 +93,7 @@
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName',
       [EnableCDC] BIT '$.EnableCDC',
+      [CdcFilegroup] NVARCHAR(500) '$.CdcFilegroup',
       [GraphType] NVARCHAR(10) '$.GraphType',
       [Ledger] NVARCHAR(12) '$.Ledger',
       [MemoryOptimized] BIT '$.MemoryOptimized',
@@ -120,7 +123,7 @@
   EXEC(@v_SQL)
 
   DROP TABLE IF EXISTS #Tables
-  SELECT [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName],
+  SELECT [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName],
          CONVERT(BIT, CASE WHEN OBJECT_ID([Schema] + '.' + [Name], 'U') IS NULL AND OBJECT_ID([Schema] + '.' + [OldName], 'U') IS NULL THEN 1 ELSE 0 END) AS NewTable,
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified],

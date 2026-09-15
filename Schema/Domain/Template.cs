@@ -162,6 +162,13 @@ namespace Schema.Domain
         [SchemaProperty(Platforms = [Platform.SqlServer])]
         public bool? DropSchemaBoundDependents { get; set; }
 
+        // #417. The filegroup CDC change tables go on, for every EnableCDC table in this template that does not
+        // declare its own CdcFilegroup. Null means unmanaged: an existing placement is never touched.
+        [JsonProperty(Order = 26, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(Platforms = [Platform.SqlServer], MaxLength = 128,
+            Description = "Default filegroup for CDC change tables of EnableCDC tables that declare no CdcFilegroup of their own. A table on a different filegroup gets a new capture instance there; the old one keeps its history. Unset leaves existing placement alone.")]
+        public string CdcFilegroup { get; set; }
+
         [JsonProperty(Order = 18)]
         public bool? DropColumnsRemovedFromProduct { get; set; }
 

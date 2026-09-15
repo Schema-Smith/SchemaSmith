@@ -136,6 +136,25 @@ public class SchemaGeneratorTests
         Assert.That(errors, Is.Empty, "the engine's own serialized event must satisfy the schema it generates");
     }
 
+    // CDC is SQL Server-only, so the template default is offered only in the SQL Server template schema.
+    [TestCase(Platform.SqlServer, true)]
+    [TestCase(Platform.PostgreSQL, false)]
+    [TestCase(Platform.MySQL, false)]
+    [TestCase(Platform.MariaDb, false)]
+    public void TemplateCdcFilegroup_IsOfferedOnlyOnSqlServer(Platform platform, bool offered)
+    {
+        var schema = SchemaGenerator.GenerateSchema(typeof(Template), t => t, platform);
+        Assert.That(schema["properties"]?["CdcFilegroup"] != null, Is.EqualTo(offered));
+    }
+
+    [Test]
+    public void SqlServerTable_OffersCdcFilegroup_AsAnOptionalString()
+    {
+        var schema = SchemaGenerator.GenerateSchema(typeof(SqlServerTable));
+        Assert.That(schema["properties"]?["CdcFilegroup"]?["type"]?.ToString(), Is.EqualTo("string"));
+        Assert.That(schema["required"]?.ToObject<List<string>>() ?? [], Does.Not.Contain("CdcFilegroup"));
+    }
+
     [Test]
     public void ShouldApplyPatternConstraint()
     {

@@ -796,6 +796,37 @@ CREATE NONCLUSTERED INDEX [IX_MyFileGroupTable_Somedata] ON dbo.MyFileGroupTable
         conn.Close();
     }
 
+    // #417: CdcFilegroup round-trips, and only when it says something -- a change table on the default
+    // filegroup extracts no key, so existing CDC packages re-extract unchanged.
+    [Test]
+    public void ShouldExtractCdcFilegroup_OnlyWhenTheChangeTableIsOffTheDefault()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1) EXEC sys.sp_cdc_enable_db;
+CREATE TABLE dbo.CdcOnFgTest (Id INT NOT NULL PRIMARY KEY, Val INT NULL);
+CREATE TABLE dbo.CdcOnDefaultTest (Id INT NOT NULL PRIMARY KEY, Val INT NULL);
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcOnFgTest', @role_name = NULL, @filegroup_name = N'FG_Test';
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcOnDefaultTest', @role_name = NULL;
+";
+        cmd.ExecuteNonQuery();
+
+        var onFg = GenerateTable(cmd, "dbo", "CdcOnFgTest");
+        var onDefaultJson = GenerateTableJson(cmd, "dbo", "CdcOnDefaultTest");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(onFg.EnableCDC, Is.True);
+            Assert.That(onFg.CdcFilegroup, Is.EqualTo("[FG_Test]"));
+            Assert.That(onDefaultJson, Does.Contain("EnableCDC"));
+            Assert.That(onDefaultJson, Does.Not.Contain("CdcFilegroup"), "a change table on the default filegroup must not gain a key");
+        });
+
+        conn.Close();
+    }
+
     [Test]
     public void ShouldOmitFileGroupWhenDefault()
     {

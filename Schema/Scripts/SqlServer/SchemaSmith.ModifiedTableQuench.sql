@@ -28,7 +28,10 @@ CREATE PROCEDURE SchemaSmith.ModifiedTableQuench
   -- every pre-existing caller, and every package with no RebuildPolicy anywhere -- can never elect a rebuild.
   @RebuildPolicyMode NVARCHAR(20) = 'NEVER',
   @RebuildPolicyThreshold INT = NULL,
-  @RebuildPolicyOnOrderMismatch BIT = 0
+  @RebuildPolicyOnOrderMismatch BIT = 0,
+  -- Template-level CdcFilegroup (#417): where change tables go for a CDC table that declares none of its
+  -- own. NULL at both tiers means unmanaged -- an existing placement is never touched.
+  @CdcFilegroup NVARCHAR(128) = NULL
 AS
 BEGIN TRY
   DECLARE @v_SQL NVARCHAR(MAX) = '',
@@ -199,6 +202,27 @@ BEGIN TRY
       FROM #DeployedTablePlacement
      WHERE DeclaredRaw IS NOT NULL AND DeployedSpaceType IS NOT NULL AND DeployedSpaceType <> 'FG'
     RAISERROR('Table %s declares filegroup %s, but is currently deployed on partition scheme %s. SchemaSmith cannot place a partitioned table on a single filegroup -- remove the declared FileGroup, or migrate the table manually.', 16, 1, @v_PsTable, @v_PsDeclared, @v_PsScheme)
+  END
+
+  -- CDC change-table placement (#417). The template default fills in only where a CDC table declared none;
+  -- NULL at both tiers stays NULL, which means unmanaged. Resolved here, once, so every later pass reads one
+  -- effective value per table.
+  IF @CdcFilegroup IS NOT NULL
+    UPDATE #Tables SET CdcFilegroup = SchemaSmith.fn_SafeBracketWrap(@CdcFilegroup)
+     WHERE EnableCDC = 1 AND CdcFilegroup IS NULL
+
+  -- A filegroup that does not exist would otherwise surface as sp_cdc_enable_table's own error from the middle
+  -- of the run, after the column work -- so refuse it up front, naming the table and the setting.
+  IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK)
+              WHERE t.EnableCDC = 1 AND t.CdcFilegroup IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup)))
+  BEGIN
+    DECLARE @v_CdcFgTable NVARCHAR(1010), @v_CdcFgName NVARCHAR(500)
+    SELECT TOP 1 @v_CdcFgTable = t.[Schema] + '.' + t.[Name], @v_CdcFgName = SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup)
+      FROM #Tables t WITH (NOLOCK)
+     WHERE t.EnableCDC = 1 AND t.CdcFilegroup IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup))
+    RAISERROR('Table %s declares CdcFilegroup %s (on the table or as the template default), but this database has no filegroup by that name. Create it (ALTER DATABASE ... ADD FILEGROUP, then ADD FILE ... TO FILEGROUP), or correct CdcFilegroup.', 16, 1, @v_CdcFgTable, @v_CdcFgName)
   END
 
   -- Partition placement (#partitioning, K1) -- ADOPT AND VERIFY, the other half of the create-side apply.
@@ -1799,31 +1823,54 @@ BEGIN TRY
   -- instance outright, discarding every captured change a downstream reader had not yet consumed.
   -- A second instance is created after the column work instead (rotation), and SQL Server permits
   -- only two per table -- so refuse up front rather than failing partway through the column work.
-  CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256))
+  -- A declared CdcFilegroup the newest capture instance is not on is a rotation reason too (#417): it can only be
+  -- honoured by a new instance, and a new instance is exactly what a column change already creates. The same
+  -- ceiling applies, for the same reason.
+  CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
+                           NewFilegroup NVARCHAR(256), Reason NVARCHAR(20))
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   BEGIN
-    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance)
-      SELECT t.[Schema], t.[Name], MAX(ct.capture_instance)
-        FROM #Tables t WITH (NOLOCK)
-        JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-        JOIN cdc.change_tables ct WITH (NOLOCK) ON ct.source_object_id = st.[object_id]
-        WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
-        AND (EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
-          OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL(c.[ComputedExpression], '')) = ''))
-        GROUP BY t.[Schema], t.[Name]
-        HAVING COUNT(*) = 1
+    DECLARE @v_DefaultFilegroup SYSNAME = (SELECT [name] FROM sys.filegroups WITH (NOLOCK) WHERE is_default = 1)
+
+    IF OBJECT_ID('tempdb..#CdcCandidates') IS NOT NULL DROP TABLE #CdcCandidates
+    SELECT t.[Schema], t.[Name],
+           Instances = (SELECT COUNT(*) FROM cdc.change_tables c WITH (NOLOCK) WHERE c.source_object_id = st.[object_id]),
+           newest.capture_instance AS NewestInstance,
+           -- The catalog reports NULL for "the default filegroup"; resolve it so a comparison never passes on NULL.
+           ISNULL(newest.filegroup_name, @v_DefaultFilegroup) AS NewestFilegroup,
+           newest.filegroup_name AS NewestFilegroupRaw,
+           SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) AS DeclaredFilegroup,
+           ColumnChange = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
+                                              OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL(c.[ComputedExpression], '')) = '')
+                                            THEN 1 ELSE 0 END)
+      INTO #CdcCandidates
+      FROM #Tables t WITH (NOLOCK)
+      JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name
+                     FROM cdc.change_tables ct WITH (NOLOCK)
+                    WHERE ct.source_object_id = st.[object_id]
+                    ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
+      WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
+
+    -- Unset means unmanaged: only a DECLARED filegroup can mismatch.
+    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, Reason)
+      SELECT [Schema], [Name], NewestInstance,
+             -- A rotation keeps the filegroup it is not told to change: the declared one, else where the old
+             -- instance already is. Omitting it (the pre-#417 behaviour) moved a DBA-placed instance to the default.
+             COALESCE(DeclaredFilegroup, NewestFilegroupRaw),
+             CASE WHEN ColumnChange = 1 THEN 'column' ELSE 'filegroup' END
+        FROM #CdcCandidates
+       WHERE Instances = 1
+         AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup))
 
     DECLARE @v_CdcAtCeiling NVARCHAR(MAX) =
-      STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name]
-               FROM #Tables t WITH (NOLOCK)
-               JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-               WHERE st.is_tracked_by_cdc = 1
-                 AND (SELECT COUNT(*) FROM cdc.change_tables ct2 WITH (NOLOCK) WHERE ct2.source_object_id = st.[object_id]) >= 2
-        AND (EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
-          OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL(c.[ComputedExpression], '')) = ''))
+      STUFF((SELECT ', ' + [Schema] + '.' + [Name]
+               FROM #CdcCandidates
+              WHERE Instances >= 2
+                AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup))
                FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_CdcAtCeiling IS NOT NULL
-      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
+      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column or CdcFilegroup change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
   END
 
   RAISERROR('Swap Columns Requiring Data-Preserving Replacement', 10, 100) WITH NOWAIT
@@ -2357,7 +2404,7 @@ BEGIN TRY
     SELECT @v_SQL = @v_SQL +
       CASE WHEN t.EnableCDC = 1 AND st.is_tracked_by_cdc = 0
            THEN 'RAISERROR(''  Enable CDC on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @role_name = NULL;' + CHAR(13) + CHAR(10)
+                'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @role_name = NULL' + ISNULL(', @filegroup_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) + '''', '') + ';' + CHAR(13) + CHAR(10)
            WHEN t.EnableCDC = 0 AND st.is_tracked_by_cdc = 1
            THEN 'RAISERROR(''  Disable CDC on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                 'EXEC sys.sp_cdc_disable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @capture_instance = N''' + ct.capture_instance + ''';' + CHAR(13) + CHAR(10)
@@ -2381,8 +2428,8 @@ BEGIN TRY
   BEGIN
     SET @v_SQL = ''
     SELECT @v_SQL = @v_SQL +
-      'RAISERROR(''  CDC ROTATED on ' + r.[Schema] + '.' + r.[TableName] + ': new capture instance ' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ' now captures the new column set. The previous instance ' + r.OldCaptureInstance + ' STILL HOLDS ITS HISTORY and was NOT dropped -- drain it, then drop it with EXEC sys.sp_cdc_disable_table @capture_instance = N''''' + r.OldCaptureInstance + '''''. Until then the next column change on this table WILL FAIL: SQL Server allows only two capture instances.'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-      'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) + ''', @capture_instance = N''' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ''', @role_name = NULL;' + CHAR(13) + CHAR(10)
+      'RAISERROR(''  CDC ROTATED on ' + r.[Schema] + '.' + r.[TableName] + ': new capture instance ' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ' now captures ' + CASE WHEN r.Reason = 'filegroup' THEN 'this table on filegroup ' + r.NewFilegroup ELSE 'the new column set' END + '. The previous instance ' + r.OldCaptureInstance + ' STILL HOLDS ITS HISTORY and was NOT dropped -- drain it, then drop it with EXEC sys.sp_cdc_disable_table @capture_instance = N''''' + r.OldCaptureInstance + '''''. Until then the next column change on this table WILL FAIL: SQL Server allows only two capture instances.'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+      'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) + ''', @capture_instance = N''' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ''', @role_name = NULL' + ISNULL(', @filegroup_name = N''' + r.NewFilegroup + '''', '') + ';' + CHAR(13) + CHAR(10)
       FROM #CdcRotate r WITH (NOLOCK)
       CROSS APPLY (SELECT SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + '_' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) AS BaseName) b
     IF @v_SQL <> ''

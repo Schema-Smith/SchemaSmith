@@ -190,6 +190,35 @@ CREATE NONCLUSTERED INDEX IX_XmlEquivFileGroup_Somedata ON dbo.XmlEquivFileGroup
         conn.Close();
     }
 
+    [Test]
+    public void GenerateTableXml_CdcFilegroup_ExtractsSameModelAs_GenerateTableJson()
+    {
+        // #417: the legacy XML encoding must carry CdcFilegroup exactly as the JSON proc does, or a pre-2016
+        // target's extraction would silently drop the placement.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1) EXEC sys.sp_cdc_enable_db;
+CREATE TABLE dbo.XmlEquivCdcFg (Id INT NOT NULL PRIMARY KEY, Val INT NULL);
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'XmlEquivCdcFg', @role_name = NULL, @filegroup_name = N'FG_Test';
+";
+        cmd.ExecuteNonQuery();
+
+        var jsonModel = (SqlServerTable)PlatformDeserializer.DeserializeTable(GenerateTableJson(cmd, "dbo", "XmlEquivCdcFg"), Platform.SqlServer);
+        var xmlModel = (SqlServerTable)PlatformDeserializer.DeserializeTable(
+            ModelXmlSerializer.FromIngestXml(GenerateTableXml(cmd, "dbo", "XmlEquivCdcFg")), Platform.SqlServer);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(jsonModel.CdcFilegroup, Is.EqualTo("[FG_Test]"));
+            Assert.That(xmlModel.CdcFilegroup, Is.EqualTo("[FG_Test]"));
+            Assert.That(NormalizeMinusExtensions(xmlModel), Is.EqualTo(NormalizeMinusExtensions(jsonModel)));
+        });
+
+        conn.Close();
+    }
+
     private string GenerateTableJson(IDbCommand cmd, string schema, string table)
     {
         cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJson @p_Schema = '{schema}', @p_Table = '{table}'";

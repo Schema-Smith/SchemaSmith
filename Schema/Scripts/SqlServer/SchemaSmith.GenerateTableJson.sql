@@ -36,6 +36,20 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
      WHERE [object_id] = OBJECT_ID(@p_Schema + ''.'' + @p_Table);',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Ledger NVARCHAR(12) OUTPUT',
     @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Ledger = @v_Ledger OUTPUT
+-- CDC change-table filegroup (#417). The cdc schema exists only in a CDC-enabled database, so the read is
+-- dynamic and guarded. It takes the NEWEST capture instance first and only then asks whether its filegroup is
+-- a non-default one -- filtering to non-default first would report an older instance's placement. NULL (the
+-- catalog's "default filegroup") and the default itself both extract no key, so existing packages are unchanged.
+DECLARE @v_CdcFilegroup NVARCHAR(260) = NULL
+IF EXISTS (SELECT 1 FROM sys.databases WITH (NOLOCK) WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
+  EXEC sp_executesql N'
+    SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN ''['' + fg.[name] + '']'' END
+      FROM (SELECT TOP 1 ct.filegroup_name FROM cdc.change_tables ct WITH (NOLOCK)
+             WHERE ct.source_object_id = OBJECT_ID(@p_Schema + ''.'' + @p_Table)
+             ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
+      JOIN sys.filegroups fg WITH (NOLOCK) ON fg.[name] = newest.filegroup_name;',
+    N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Fg NVARCHAR(260) OUTPUT',
+    @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Fg = @v_CdcFilegroup OUTPUT
 SELECT [Line] FROM SchemaSmith.fn_FormatJson(REPLACE(REPLACE(REPLACE((
 SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        '[' + TABLE_NAME + ']' AS [Name],
@@ -108,6 +122,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
          JOIN sys.filegroups lfg WITH (NOLOCK) ON lfg.data_space_id = lds.data_space_id AND lfg.is_default = 0
         WHERE lds.data_space_id = st.lob_data_space_id) AS [TextImageFileGroup],
        st.is_tracked_by_cdc AS [EnableCDC],
+       @v_CdcFilegroup AS [CdcFilegroup],
        -- Graph tables (#graph). Emitted only when the table IS one, so no existing package gains a
        -- "GraphType": "None" on every table. is_node/is_edge are 2017+, which the JSON tier requires.
        CASE WHEN st.is_node = 1 THEN 'Node' WHEN st.is_edge = 1 THEN 'Edge' END AS [GraphType],

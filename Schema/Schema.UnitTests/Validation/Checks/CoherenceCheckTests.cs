@@ -1158,6 +1158,34 @@ public class CoherenceCheckTests
         Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code.StartsWith("SS-PART-")), Is.Empty);
     }
 
+    // #417: CdcFilegroup only places a change table, so without EnableCDC it does nothing -- and nothing at deploy
+    // says so.
+    [Test]
+    public void CdcFilegroupWithoutEnableCdc_IsAnInertWarning()
+    {
+        var table = new SqlServerTable { Schema = "dbo", Name = "Orders", CdcFilegroup = "cdc_fg" };
+        table.Columns.Add(new SqlServerColumn { Name = "Id", DataType = "INT" });
+
+        var finding = RunFor(table, Platform.SqlServer).Single(f => f.Code == "SS-CDC-001");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Warning));
+            Assert.That(finding.Message, Does.Contain("Orders").And.Contain("cdc_fg").And.Contain("EnableCDC"));
+        });
+    }
+
+    [TestCase(true, "cdc_fg")]
+    [TestCase(false, null)]
+    [TestCase(true, null)]
+    public void CdcFilegroup_IsSilent_WhenItHasSomethingToPlace(bool enableCdc, string filegroup)
+    {
+        var table = new SqlServerTable { Schema = "dbo", Name = "Orders", EnableCDC = enableCdc, CdcFilegroup = filegroup };
+        table.Columns.Add(new SqlServerColumn { Name = "Id", DataType = "INT" });
+
+        Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-CDC-001"), Is.Empty);
+    }
+
     private static System.Collections.Generic.List<Finding> RunFor(Table table, Platform platform)
     {
         var template = new Template { Name = "Main" };

@@ -52,6 +52,7 @@
          [PartitionColumn] = SchemaSmith.fn_SafeBracketWrap(t.value('(PartitionColumn/text())[1]', 'NVARCHAR(500)')),
          [FileStreamFileGroup] = SchemaSmith.fn_SafeBracketWrap(t.value('(FileStreamFileGroup/text())[1]', 'NVARCHAR(500)')),
          [TextImageFileGroup] = SchemaSmith.fn_SafeBracketWrap(t.value('(TextImageFileGroup/text())[1]', 'NVARCHAR(500)')),
+         [CdcFilegroup] = SchemaSmith.fn_SafeBracketWrap(t.value('(CdcFilegroup/text())[1]', 'NVARCHAR(500)')),
          [TableXml] = t.query('.'),
          [ShouldApplyExpression] = t.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'), [VariantName] = t.value('(VariantName/text())[1]', 'NVARCHAR(128)'), [GraphType] = RTRIM(ISNULL(t.value('(GraphType/text())[1]', 'NVARCHAR(10)'), 'None')), [Ledger] = RTRIM(ISNULL(t.value('(Ledger/text())[1]', 'NVARCHAR(12)'), 'Off')), [MemoryOptimized] = ISNULL(CONVERT(BIT, CASE LOWER(t.value('(MemoryOptimized/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END), 0), [Durability] = UPPER(RTRIM(ISNULL(NULLIF(t.value('(Durability/text())[1]', 'NVARCHAR(20)'), ''), 'SCHEMA_AND_DATA'))), [EnableCDC] = ISNULL(CONVERT(BIT, CASE LOWER(t.value('(EnableCDC/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END), 0), [EnableChangeTracking] = ISNULL(CONVERT(BIT, CASE LOWER(t.value('(EnableChangeTracking/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END), 0), [TrackColumnsUpdated] = ISNULL(CONVERT(BIT, CASE LOWER(t.value('(TrackColumnsUpdated/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END), 0), [OldName] = SchemaSmith.fn_SafeBracketWrap(t.value('(OldName/text())[1]', 'NVARCHAR(500)')),
          [DropColumnsRemovedFromProduct] = CONVERT(BIT, CASE LOWER(t.value('(DropColumnsRemovedFromProduct/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
@@ -81,7 +82,7 @@
   EXEC(@v_SQL)
 
   IF OBJECT_ID('tempdb..#Tables') IS NOT NULL DROP TABLE #Tables
-  SELECT [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName],
+  SELECT [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName],
          CONVERT(BIT, CASE WHEN OBJECT_ID([Schema] + '.' + [Name], 'U') IS NULL AND OBJECT_ID([Schema] + '.' + [OldName], 'U') IS NULL THEN 1 ELSE 0 END) AS NewTable,
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified],
