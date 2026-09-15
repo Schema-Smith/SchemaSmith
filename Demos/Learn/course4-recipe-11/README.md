@@ -64,10 +64,10 @@ Put the file back to `'%@%'` before moving on, and clear the hand-made domain so
 `postgres/Package/Templates/Main/` carries three folders the engine reconciles for you — no scripts:
 
 ```
-Domain Types/email_address.json     # character varying(256), NOT NULL, CHECK (VALUE LIKE '%@%')
-Enum Types/order_status.json        # placed, picked, shipped, delivered
-Sequences/order_number.json         # bigint, starts at 1000
-Tables/public.customer_order.json   # a table typed BY the domain and the enum
+Domain Types/public.email_address.json  # character varying(256), NOT NULL, CHECK (VALUE LIKE '%@%')
+Enum Types/public.order_status.json     # placed, picked, shipped, delivered
+Sequences/public.order_number.json      # bigint, starts at 1000
+Tables/public.customer_order.json       # a table typed BY the domain and the enum
 ```
 
 They are ordinary declarations:
@@ -93,7 +93,7 @@ cd ..
 
 ## Step 3: Change the model — this time it takes
 
-Add a value to the enum. Append `"returned"` to `Values` in `order_status.json` and re-quench:
+Add a value to the enum. Append `"returned"` to `Values` in `public.order_status.json` and re-quench:
 
 ```bash
 cd postgres && schemaquench --ConfigFile:deploy.settings.json ; cd ..
@@ -116,7 +116,7 @@ The domain converges the same way. Set `"NotNull": false` and add
 Both moved. Put them back and re-quench, and they move back — the declaration is the truth, and the
 database follows it in either direction.
 
-<!-- TRAINING-RELEASE-PIN #415 -- on 2.7.0, delete this note, declare VARCHAR(256) in email_address.json,
+<!-- TRAINING-RELEASE-PIN #415 -- on 2.7.0, delete this note, declare VARCHAR(256) in public.email_address.json,
      and move the convergence beat in Step 3 onto the domain CHECK. Verified fixed on main 2026-09-10. -->
 > **Two things this lab works around on 2.6.0, both fixed on `main` and shipping in 2.7.0.**
 > **(1)** The domain declares `character varying(256)` rather than `VARCHAR(256)` — on 2.6.0 a type

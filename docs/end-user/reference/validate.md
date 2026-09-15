@@ -60,7 +60,7 @@ Two entries sharing the same name at the same level -- two columns both called `
 
 | Code | Severity | Meaning |
 |------|----------|---------|
-| `SS-DUP-001` | Error | Same-name entries exist and at least one isn't gated by `ShouldApplyExpression` -- an accidental duplicate. |
+| `SS-DUP-001` | Error | Same-name entries exist and at least one isn't gated by `ShouldApplyExpression` -- an accidental duplicate. Checked at every table level, and across each template's declared enum types, domain types, sequences, materialized views, indexed views and events (schema-qualified, so the same name in two schemas is not a duplicate). |
 | `SS-DUP-VAR-002` | Warning | Every entry in the group IS gated (a legitimate variant set), but not every entry declares `VariantName` -- label them for clarity. |
 
 The check runs at every level a name collision could hide: columns, indexes, foreign keys, check constraints, tables (within a template), the product's `TemplateOrder`, and the platform-specific collections (SQL Server XML indexes and statistics; PostgreSQL statistics and exclude constraints; MySQL full-text indexes).
@@ -139,7 +139,7 @@ If a package has no `.json-schemas/` directory at all, Pass 1 has nothing to com
 
 | Code | Severity | Meaning |
 | --- | --- | --- |
-| `SS-FILE-NAME-003` | Warning | A table file's on-disk name differs from the canonical `<schema>.<table>[.<VariantName>].json` derived from its `Schema`, `Name`, and `VariantName`. |
+| `SS-FILE-NAME-003` | Warning | A table or declared-object file's on-disk name differs from the canonical `<schema>.<name>[.<VariantName>].json` derived from its `Schema`, `Name`, and `VariantName` (no schema segment when the file declares none, as for events). Covers `Tables/` and the declared-object folders the package's engine loads: `Enum Types/`, `Domain Types/`, `Sequences/` and `Materialized Views/` (PostgreSQL), `Indexed Views/` (SQL Server), `Events/` (MySQL, MariaDB). |
 
 A table's identity lives in its file *content*, never its filename, so a misnamed file still deploys correctly -- this is a **lean, not a gate** (Warning only, never an Error, never changes the exit code). The canonical name keeps a table's conditional variants sorted together in source control and makes a file's name a reliable pointer to the table it holds. The canonical name is derived from content alone, so the schema segment is omitted whenever the table carries no `Schema`: MySQL and MariaDB (no per-table schema), schema-template packages (the schema is the iteration variable), and any table that omits `Schema` to inherit the platform default -- which is how SchemaTongs writes a PostgreSQL `public` table. A table that *declares* its schema keeps the prefix whether that schema is the default or not (`public.order_lines.json`, `sales.order_lines.json`). Either way the rule is the same: the filename must mirror the content. SchemaTongs writes canonical names on extraction; this check catches hand-authored files that have drifted.
 
