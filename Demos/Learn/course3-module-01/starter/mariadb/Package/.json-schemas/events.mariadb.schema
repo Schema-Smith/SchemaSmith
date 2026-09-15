@@ -56,7 +56,6 @@
   "additionalProperties": false,
   "required": [
     "Name",
-    "Definition",
-    "ScheduleType"
+    "Definition"
   ]
 }
