@@ -217,6 +217,13 @@ namespace Schema.Domain
         [JsonIgnore]
         public List<FileTokenError> FileTokenErrors { get; } = [];
 
+        /// <summary>
+        /// Deprecated aliases this template's load migrated. Recorded on every load path (it costs nothing
+        /// and deploy ignores it); <c>--Validate</c> reports each one through <c>DeprecationCheck</c>.
+        /// </summary>
+        [JsonIgnore]
+        public List<DeprecationNotice> DeprecationNotices { get; } = [];
+
         [JsonIgnore]
         public string TableSchema { get; set; } = "";
 
@@ -523,6 +530,9 @@ namespace Schema.Domain
             if (string.IsNullOrWhiteSpace(SchemaIdentificationScript)) return;
 
             DatabaseIdentificationScript ??= SchemaIdentificationScript;
+            DeprecationNotices.Add(new DeprecationNotice("SS-DEP-001", FilePath,
+                $"Template '{Name}' uses 'SchemaIdentificationScript', a deprecated alias on MySQL and MariaDB. " +
+                "Rename it to 'DatabaseIdentificationScript' -- the value is identical, and the alias only still works because load migrates it."));
             LogFactory.GetLogger("ProgressLog").Warn(
                 $"Template '{Name}' (MySQL) uses the legacy 'SchemaIdentificationScript' alias. " +
                 $"Rename the field to 'DatabaseIdentificationScript' in {FilePath}. " +
@@ -1003,8 +1013,14 @@ namespace Schema.Domain
                     column.CheckExpression = null;
                 }
 
-                if (migrated.Count > 0)
-                    LogFactory.GetLogger("ProgressLog").Warn(
+                if (migrated.Count == 0) continue;
+
+                var tableName = StringHelper.StripIdentifierWrapper(table.Name);
+                DeprecationNotices.Add(new DeprecationNotice("SS-DEP-002", $"Template '{Name}' / Table '{table.Name}'",
+                    $"Column-level 'CheckExpression' on {string.Join(", ", migrated)} is a deprecated alias on MySQL and MariaDB, retired in a later release -- " +
+                    "after that the key is ignored and the deployed constraint is dropped as an orphan. Move each to the table's 'CheckConstraints' as " +
+                    string.Join(", ", migrated.Select(c => $"'CK_{tableName}_{c}'")) + "."));
+                LogFactory.GetLogger("ProgressLog").Warn(
                         $"Table '{table.Name}' uses the deprecated column-level 'CheckExpression' on " +
                         $"{string.Join(", ", migrated)}. MySQL and MariaDB cannot round-trip a column-level " +
                         $"check — extraction always returns it table-level — so move it to the table's " +

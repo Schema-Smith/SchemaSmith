@@ -102,6 +102,32 @@ public class MySqlColumnCheckExpressionAliasTests
             s.Contains("CheckExpression") && s.Contains("CheckConstraints") && s.Contains("Status")));
     }
 
+    // A log line is invisible to --Validate, which reported a package using the alias as a clean PASS.
+    // Recording the migration on the template is what lets the linter report it.
+    [TestCase(Platform.MySQL)]
+    [TestCase(Platform.MariaDb)]
+    public void ColumnCheckExpression_IsRecordedAsADeprecationNotice(Platform platform)
+    {
+        var template = LoadWith(platform, MySqlTableWithColumnCheck);
+
+        var notice = template.DeprecationNotices.Single();
+        Assert.That(notice.Code, Is.EqualTo("SS-DEP-002"));
+        Assert.That(notice.Location, Is.EqualTo("Template 'Main' / Table '`Orders`'"));
+        Assert.That(notice.Message, Does.Contain("Status").And.Contain("CheckConstraints").And.Contain("CK_Orders_Status"));
+    }
+
+    [Test]
+    public void TableLevelCheckConstraints_RecordNoDeprecationNotice()
+    {
+        var template = LoadWith(Platform.MySQL, @"{
+            ""Name"": ""`Orders`"",
+            ""Columns"": [ { ""Name"": ""`Status`"", ""DataType"": ""INT"", ""Nullable"": true } ],
+            ""CheckConstraints"": [ { ""Name"": ""CK_Orders_Status"", ""Expression"": ""`Status` >= 0"" } ]
+        }");
+
+        Assert.That(template.DeprecationNotices, Is.Empty);
+    }
+
     [Test]
     public void ExplicitTableLevelConstraintOfSameName_Wins_AndIsNotDuplicated()
     {

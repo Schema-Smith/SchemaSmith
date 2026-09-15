@@ -135,13 +135,24 @@ If a package has no `.json-schemas/` directory at all, Pass 1 has nothing to com
 
 ### File naming
 
-`--Validate` leans table files toward a canonical, sortable name derived from their content.
+`--Validate` leans table and declared-object files toward a canonical, sortable name derived from their content.
 
 | Code | Severity | Meaning |
 | --- | --- | --- |
 | `SS-FILE-NAME-003` | Warning | A table or declared-object file's on-disk name differs from the canonical `<schema>.<name>[.<VariantName>].json` derived from its `Schema`, `Name`, and `VariantName` (no schema segment when the file declares none, as for events). Covers `Tables/` and the declared-object folders the package's engine loads: `Enum Types/`, `Domain Types/`, `Sequences/` and `Materialized Views/` (PostgreSQL), `Indexed Views/` (SQL Server), `Events/` (MySQL, MariaDB). |
 
 A table's identity lives in its file *content*, never its filename, so a misnamed file still deploys correctly -- this is a **lean, not a gate** (Warning only, never an Error, never changes the exit code). The canonical name keeps a table's conditional variants sorted together in source control and makes a file's name a reliable pointer to the table it holds. The canonical name is derived from content alone, so the schema segment is omitted whenever the table carries no `Schema`: MySQL and MariaDB (no per-table schema), schema-template packages (the schema is the iteration variable), and any table that omits `Schema` to inherit the platform default -- which is how SchemaTongs writes a PostgreSQL `public` table. A table that *declares* its schema keeps the prefix whether that schema is the default or not (`public.order_lines.json`, `sales.order_lines.json`). Either way the rule is the same: the filename must mirror the content. SchemaTongs writes canonical names on extraction; this check catches hand-authored files that have drifted.
+
+### Deprecated aliases
+
+A deprecated alias keeps an older package deploying: load migrates it to the current form and the deploy log says so. `--Validate` reports every one it migrated, so a package does not validate clean while it depends on something scheduled for retirement.
+
+| Code | Severity | Meaning |
+| --- | --- | --- |
+| `SS-DEP-001` | Warning | A MySQL or MariaDB template uses `SchemaIdentificationScript`, the deprecated alias for `DatabaseIdentificationScript`. Rename the key; the value is unchanged. (On SQL Server and PostgreSQL `SchemaIdentificationScript` is a real schema-template setting and is never reported.) |
+| `SS-DEP-002` | Warning | A MySQL or MariaDB column declares `CheckExpression`, the deprecated column-level alias. Move each to the table's `CheckConstraints` as `CK_<table>_<column>` -- the finding names them. Once the alias is retired the key is ignored and the deployed constraint is dropped as an orphan, so move it before then. |
+
+Warnings only: neither changes the exit code.
 
 ### Data types
 

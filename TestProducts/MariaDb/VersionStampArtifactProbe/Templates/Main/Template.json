@@ -1,6 +1,6 @@
 {
     "Name": "Main",
-    "SchemaIdentificationScript": "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{{MainDB}}'",
+    "DatabaseIdentificationScript": "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{{MainDB}}'",
     "VersionStampScript": "-- version_stamp_artifact_probe_marker AdminPassword={{AdminPassword}} Region={{Region}}\nSIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'version_stamp_artifact_probe_error'",
     "ScriptFolders": []
 }

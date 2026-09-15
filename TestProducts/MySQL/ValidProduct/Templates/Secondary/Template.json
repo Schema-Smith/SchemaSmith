@@ -1,6 +1,6 @@
 {
     "Name": "Secondary",
-    "SchemaIdentificationScript": "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{{SecondaryDB}}'",
+    "DatabaseIdentificationScript": "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{{SecondaryDB}}'",
     "VersionStampScript": "SELECT '{{ReleaseVersion}}' AS Version",
     "ScriptTokens": {},
     "ScriptFolders": [

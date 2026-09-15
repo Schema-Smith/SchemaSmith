@@ -1,6 +1,6 @@
 {
     "Name": "Main",
-    "SchemaIdentificationScript": "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{{MainDB}}'",
+    "DatabaseIdentificationScript": "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{{MainDB}}'",
     "BaselineValidationScript": "-- baseline_validation_artifact_probe_marker AdminPassword={{AdminPassword}} Region={{Region}}\nSELECT FALSE",
     "ScriptFolders": []
 }

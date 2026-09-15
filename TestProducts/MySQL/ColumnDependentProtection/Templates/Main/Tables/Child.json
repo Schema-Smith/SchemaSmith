@@ -8,9 +8,11 @@
             "Name": "`Extra`",
             "DataType": "VARCHAR(30)",
             "Nullable": true,
-            "Default": "'x'",
-            "CheckExpression": "LENGTH(`Extra`) >= 0"
+            "Default": "'x'"
         }
+    ],
+    "CheckConstraints": [
+        { "Name": "CK_Child_Extra", "Expression": "LENGTH(`Extra`) >= 0" }
     ],
     "Indexes": [
         { "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "`Id`" },
