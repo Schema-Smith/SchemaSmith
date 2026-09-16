@@ -693,6 +693,41 @@ Set it in `SchemaQuench.settings.json`, or pass `--ForceReKindle` on the command
 
 ---
 
+## Expression change detection
+
+Every engine rewrites an expression when it stores it. SQL Server turns `RetentionDays <= 365` into
+`([RetentionDays]<=(365))`; PostgreSQL turns `starts_with(tag, 'a')` into `starts_with(tag, 'a'::text)`; MySQL
+turns a generated column's `concat(Tag, 'x')` into `concat(Tag,'x')`. Comparing what you wrote against what the catalog
+reports therefore never matches for anything non-trivial -- so a check constraint, computed column or generated
+column could be dropped and re-created on **every** deploy, at exit 0, with nothing in the log to say why.
+
+SchemaSmith answers the question from what it applied instead of from the text. A table it owns,
+`SchemaSmith.ExpressionMap` (`SchemaSmith_ExpressionMap` on MySQL and MariaDB), records for each expression: the
+text your package declared, the text the engine reported back immediately afterwards, and the engine version
+(and on SQL Server the compatibility level) in force at the time. On the next deploy:
+
+| What moved | What SchemaSmith does |
+|---|---|
+| Nothing | Leaves the object alone, however differently the two texts read. |
+| Your declaration | Applies it. |
+| The live object (someone edited it by hand) | Re-applies your declaration. Drift is still corrected -- this is not a one-sided comparison that trusts the package and stops looking at the server. |
+| The engine version or compatibility level | **Re-baselines**: re-reads the live text and updates its record, without touching the object. |
+
+That last row matters on SQL Server, where an expression's stored text is frozen at the compatibility level it
+was created under -- so a database migrated from 100 to 160 holds both forms indefinitely. Re-applying every
+expression-bearing object on the first deploy after a compatibility bump would be a far larger event than the
+churn this removes, so SchemaSmith re-baselines and leaves your objects alone.
+
+**No record means no opinion.** For an object SchemaSmith has not applied yet -- a pre-existing database, or the
+first deploy after upgrading -- the comparison behaves exactly as it did before, and the record is written as
+part of that deploy. Nothing needs migrating, and the table can be emptied at any time: the worst case is one
+more comparison.
+
+**Covered surfaces:** check constraints and computed columns (SQL Server), check constraints and generated
+columns (PostgreSQL, MySQL, MariaDB).
+
+---
+
 ## Modular Quench Procedures
 
 The table quench is broken into modular stored procedures, each handling a specific aspect of the table schema. The procedures are deployed during the KindleTheForge step and called in sequence during the database quench. Every platform ships its own implementation, but the responsibilities are the same.
