@@ -45,6 +45,8 @@ BEGIN
 
     -- Step 5: Create/modify/drop foreign keys
     CALL SchemaSmith_ForeignKeyQuench(p_ProductName, p_DatabaseName, p_WhatIf, p_DropUnknownIndexes, 1);
+    -- #242: last, so anything the passes above created is recorded on this run rather than churning once more.
+    CALL SchemaSmith_ExpressionMapRecord(p_DatabaseName, p_WhatIf);
 
     -- Cleanup temp tables
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Tables;

@@ -425,7 +425,8 @@ public class ForgeKindlerTests
         //   one net script name added to this shared list either way, since the override resolves through
         //   ResourceLoader rather than adding a second list entry).
         // + Kindling_ExpressionMap_Table (#242 -- the authored/canonical expression mapping).
-        Assert.That(mysql.Length, Is.EqualTo(62));
+        // + ExpressionMapUnchanged + ExpressionMapRecord (#242 -- the decision and the recording pass).
+        Assert.That(mysql.Length, Is.EqualTo(64));
     }
 
     [Test]

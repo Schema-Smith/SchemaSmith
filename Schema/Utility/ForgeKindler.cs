@@ -456,6 +456,9 @@ public static class ForgeKindler
                 new("SchemaSmith_NormalizeIndexColumns.sql"),
                 new("SchemaSmith_IndexHasFunctionalKeyPart.sql"),
                 new("SchemaSmith_NormalizeCheckExpression.sql"),
+                // #242: the authored-vs-canonical decision and the pass that records it.
+                new("SchemaSmith_ExpressionMapUnchanged.sql"),
+                new("SchemaSmith_ExpressionMapRecord.sql"),
                 // Canonicalises a partition expression before comparing declared against live
                 // (#partitioning, K3) -- MySQL 5.7 echoes the text the user wrote while every other
                 // supported engine rewrites it, so a literal compare would be engine-specific.
