@@ -322,7 +322,8 @@ public class ForgeKindlerTests
         //   once the domain exists that guard skips, so an edited CHECK never lands. Unlike an enum,
         //   ALTER DOMAIN converges constraints/default/NOT NULL without touching a dependent column.
         // + Kindling_ExpressionMap_Table (#242 -- the authored/canonical expression mapping).
-        Assert.That(postgres.Length, Is.EqualTo(44));
+        // + ExpressionMapUnchanged + ExpressionMapRecord (#242 -- the decision and the recording pass).
+        Assert.That(postgres.Length, Is.EqualTo(46));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor

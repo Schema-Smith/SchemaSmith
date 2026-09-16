@@ -362,6 +362,9 @@ public static class ForgeKindler
                 new("SchemaSmith.QuoteColumnList.sql"),
                 new("SchemaSmith.QuoteIndexColumnList.sql"),
                 new("SchemaSmith.StripParenWrapping.sql"),
+                // #242: the authored-vs-canonical decision and the pass that records it.
+                new("SchemaSmith.ExpressionMapUnchanged.sql"),
+                new("SchemaSmith.ExpressionMapRecord.sql"),
                 new("SchemaSmith.ColumnTypeArguments.sql"),
                 new("SchemaSmith.StripTypeCast.sql"),
                 new("SchemaSmith.ServerVersionNum.sql"),

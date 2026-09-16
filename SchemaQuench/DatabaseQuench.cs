@@ -794,7 +794,7 @@ public class DatabaseQuench
                 // #242: record what each expression-bearing object was applied with, AFTER the create passes
                 // above, so an object created on this run is recorded on this run rather than churning once more.
                 // SQL Server only for now; the other engines join as their surfaces are wired.
-                if (_product.Platform == Platform.SqlServer && !IsWhatIf)
+                if ((_product.Platform == Platform.SqlServer || _product.Platform == Platform.PostgreSQL) && !IsWhatIf)
                     RecordExpressionMap(effectiveTableCmd);
 
                 // MySQL: cleanup temp tables after index quench
@@ -1684,8 +1684,10 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
     {
         try
         {
-            tableCommand.CommandText =
-                $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExpressionMapRecord @WhatIf = {_whatIfOnly}";
+            tableCommand.CommandText = _product.Platform == Platform.PostgreSQL
+                // _whatIfOnly is already rendered per engine (true/false on PostgreSQL, 1/0 elsewhere).
+                ? $"CALL \"SchemaSmith\".\"ExpressionMapRecord\"(p_WhatIf := {_whatIfOnly})"
+                : $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExpressionMapRecord @WhatIf = {_whatIfOnly}";
             tableCommand.ExecuteNonQuery();
         }
         catch (DbException e)

@@ -377,7 +377,12 @@ BEGIN
                             OR COALESCE("SchemaSmith"."StripTypeCast"(c."Default"), '') != COALESCE("SchemaSmith"."StripTypeCast"(ec."Default"), '')
                             OR COALESCE(c."Collation", '') != COALESCE(ec."Collation", '')
                             OR COALESCE(REGEXP_REPLACE(c."Generated", '\s*\(.*$', ''), 'NEVER') != COALESCE(REGEXP_REPLACE(ec."Generated", '\s*\(.*$', ''), 'NEVER')
-                            OR COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')
+                            OR (COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')
+                                -- #242: a generated column's expression is compared raw, so any non-trivial
+                                -- one churns every deploy. Same question as the check constraints.
+                                AND NOT "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName",
+                                      'COLUMN', c."Name", 'generated', c."GenerationExpression",
+                                      COALESCE(ec."GenerationExpression", '')))
                             OR (COALESCE(c."Storage", '') != '' AND COALESCE(c."Storage", '') != COALESCE(ec."Storage", ''))
                             OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", '')))) AS "ModificationPasses",
                      -- ALWAYS fires on ANY detected column change, which includes a column present live
@@ -719,7 +724,12 @@ BEGIN
                            AND col."TableName" = ec."TableName"
                            AND NULLIF(col."CheckExpression", '') IS NOT NULL
                            AND ec."CheckName" = 'CK_' || col."TableName" || '_' || col."Name"
-      WHERE ec."Expression" != col."CheckExpression";
+      WHERE ec."Expression" != col."CheckExpression"
+        -- #242: the texts differ, but they always differ once the engine has rewritten the expression
+        -- (starts_with(tag, 'a') comes back as starts_with(tag, 'a'::text)). Ask what was actually applied
+        -- before calling it a change.
+        AND NOT "SchemaSmith"."ExpressionMapUnchanged"(ec."TableSchema", ec."TableName", 'CHECK', ec."CheckName",
+              'expression', col."CheckExpression", ec."Expression");
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     -- No-drop protection tier (#270): record statistics objects that WOULD be dropped by absence —
