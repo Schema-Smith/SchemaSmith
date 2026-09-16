@@ -26,9 +26,6 @@ namespace Schema.Domain.MySQL
         [JsonProperty(Order = 105)]
         public string Comment { get; set; }
 
-        [JsonProperty(Order = 106)]
-        public string CheckExpression { get; set; }
-
         // Mirrors MySqlIndex.Visible one level down (index -> column): hides the column from
         // SELECT * / INSERT-without-column-list. MySQL 8.0.23 / MariaDB 10.3 — see
         // SchemaSmith_SupportsInvisibleColumn.

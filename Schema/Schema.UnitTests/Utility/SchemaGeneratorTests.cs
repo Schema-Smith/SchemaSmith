@@ -729,7 +729,10 @@ public class SchemaGeneratorTests
         Assert.Multiple(() =>
         {
             Assert.That(colProps?["GenerationExpression"], Is.Not.Null);
-            Assert.That(colProps?["CheckExpression"], Is.Not.Null);
+            // Was CheckExpression until that alias was retired on these engines; OnUpdateCurrentTimestamp is
+            // another MySqlColumn-only property, which is what this test is actually about.
+            Assert.That(colProps?["OnUpdateCurrentTimestamp"], Is.Not.Null);
+            Assert.That(colProps?["CheckExpression"], Is.Null, "the retired alias must not reappear in a generated schema");
         });
     }
 

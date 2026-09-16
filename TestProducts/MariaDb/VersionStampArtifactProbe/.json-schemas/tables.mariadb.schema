@@ -51,9 +51,6 @@
           "Comment": {
             "type": "string"
           },
-          "CheckExpression": {
-            "type": "string"
-          },
           "Invisible": {
             "type": "boolean"
           },

@@ -151,7 +151,6 @@ A deprecated alias keeps an older package deploying: load migrates it to the cur
 | Code | Severity | Meaning |
 | --- | --- | --- |
 | `SS-DEP-001` | Warning | A MySQL or MariaDB template uses `SchemaIdentificationScript`, the deprecated alias for `DatabaseIdentificationScript`. Rename the key; the value is unchanged. (On SQL Server and PostgreSQL `SchemaIdentificationScript` is a real schema-template setting and is never reported.) |
-| `SS-DEP-002` | Warning | A MySQL or MariaDB column declares `CheckExpression`, the deprecated column-level alias. Move each to the table's `CheckConstraints` as `CK_<table>_<column>` -- the finding names them. Once the alias is retired the key is ignored and the deployed constraint is dropped as an orphan, so move it before then. |
 
 Warnings only: neither changes the exit code.
 

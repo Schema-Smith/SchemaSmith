@@ -550,7 +550,6 @@ namespace Schema.Domain
         private void InstanceLoad(Dictionary<string, string> scriptTokens, Platform platform, bool tolerateComponentLoadErrors)
         {
             LoadTables(platform, tolerateComponentLoadErrors);
-            MigrateMySqlColumnCheckExpressionAlias(platform);
             LoadMaterializedViews(platform, tolerateComponentLoadErrors);
             LoadEvents(platform, tolerateComponentLoadErrors);
             LoadDomainTypes(platform, tolerateComponentLoadErrors);
@@ -976,62 +975,6 @@ namespace Schema.Domain
                     // on-disk pass to report precisely as SS-JSON-001.
                     RecordComponentLoadError(f, e);
                 }
-            }
-        }
-
-        /// <summary>
-        /// TRANSITIONAL (MySQL column-level CheckExpression retirement) — see the Community roadmap
-        /// entry "Retire the MySQL Column.CheckExpression deprecated alias" for the deletion trigger.
-        /// <para>MySQL and MariaDB cannot round-trip a column-level check: their
-        /// <c>INFORMATION_SCHEMA.CHECK_CONSTRAINTS</c> exposes only the constraint name and clause,
-        /// with no link back to a column, so extraction always emits table-level
-        /// <c>CheckConstraints</c>. Authoring moved to the table level to match; the column property
-        /// is kept as a deprecated alias so existing packages keep working.</para>
-        /// <para>Silently dropping the property instead would be worse than a breaking change: the
-        /// deployed <c>CK_&lt;table&gt;_&lt;column&gt;</c> constraint would become an orphan and the
-        /// by-absence cleanup would drop it on the next quench, with no error — a plain deploy never
-        /// runs the package validator that would otherwise flag the unknown key.</para>
-        /// </summary>
-        private void MigrateMySqlColumnCheckExpressionAlias(Platform platform)
-        {
-            if (platform.GetBasePlatform() != Platform.MySQL) return;
-
-            foreach (var table in Tables)
-            {
-                var migrated = new List<string>();
-                foreach (var column in table.Columns.OfType<MySqlColumn>()
-                             .Where(c => !string.IsNullOrWhiteSpace(c.CheckExpression)))
-                {
-                    var constraintName = $"CK_{StringHelper.StripIdentifierWrapper(table.Name)}_{StringHelper.StripIdentifierWrapper(column.Name)}";
-
-                    // An explicit table-level constraint of the same name wins — the author has
-                    // already migrated this one and the alias is stale.
-                    if (!table.CheckConstraints.Any(c =>
-                            string.Equals(StringHelper.StripIdentifierWrapper(c.Name), constraintName, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        table.CheckConstraints.Add(new CheckConstraint
-                        {
-                            Name = constraintName,
-                            Expression = column.CheckExpression
-                        });
-                    }
-
-                    migrated.Add(StringHelper.StripIdentifierWrapper(column.Name));
-                    column.CheckExpression = null;
-                }
-
-                if (migrated.Count == 0) continue;
-
-                var tableName = StringHelper.StripIdentifierWrapper(table.Name);
-                DeprecationNotices.Add(new DeprecationNotice("SS-DEP-002", $"Template '{Name}' / Table '{table.Name}'",
-                    $"Column-level 'CheckExpression' on {string.Join(", ", migrated)} is a deprecated alias on MySQL and MariaDB, retired in a later release -- " +
-                    "after that the key is ignored and the deployed constraint is dropped as an orphan. Move each to the table's 'CheckConstraints' as " +
-                    string.Join(", ", migrated.Select(c => $"'CK_{tableName}_{c}'")) + "."));
-                LogFactory.GetLogger("ProgressLog").Warn(
-                        $"Table '{table.Name}' uses the deprecated column-level 'CheckExpression' on " +
-                        $"{string.Join(", ", migrated)}. MySQL and MariaDB cannot round-trip a column-level " +
-                        $"check — extraction always returns it table-level — so move it to the table's " +
-                        $"'CheckConstraints' as 'CK_<table>_<column>'. The value has been migrated for this run.");
             }
         }
 

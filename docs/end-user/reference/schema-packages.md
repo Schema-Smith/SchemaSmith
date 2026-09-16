@@ -1168,7 +1168,7 @@ A column-level check is a **round-trip** concern, not just a formatting preferen
 
 **MySQL / MariaDB -- table-level only.** `INFORMATION_SCHEMA.CHECK_CONSTRAINTS` exposes a constraint's name and clause with no link back to a column, so a column-level check cannot be extracted as one -- it would come back table-level and change the package's shape on every cast. Author MySQL and MariaDB checks in the `CheckConstraints` array.
 
-> A column `CheckExpression` in an existing MySQL or MariaDB package still works: it is migrated to a `CK_<table>_<column>` table-level constraint when the package loads, with a warning naming the columns to move, and `--Validate` reports it as [`SS-DEP-002`](validate.md#deprecated-aliases). The deployed result is identical. The property is deprecated on these engines and will be removed -- move it to `CheckConstraints` before then.
+> **Retired in 2.7.0.** A column `CheckExpression` is no longer accepted on MySQL or MariaDB: a package that still carries one fails to load, naming the property and the file, so move it to the table's `CheckConstraints` (the constraint the old alias created was named `CK_<table>_<column>` — keep that name and nothing changes on the server). Nothing is dropped silently: the deploy stops before it does anything.
 
 ---
 
