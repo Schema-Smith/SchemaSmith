@@ -47,6 +47,8 @@ BEGIN TRY
   -- which for a table created in this same run does not exist until the line above has run.
   EXEC SchemaSmith.ChangeTrackingQuench @WhatIf
   EXEC SchemaSmith.ForeignKeyQuench @ProductName, @WhatIf
+  -- #242: last, so anything the passes above created is recorded on this run rather than churning once more.
+  EXEC SchemaSmith.ExpressionMapRecord @WhatIf
   SET NOCOUNT OFF
 END TRY
 BEGIN CATCH

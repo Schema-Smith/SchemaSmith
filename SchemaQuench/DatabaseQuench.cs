@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -789,6 +790,12 @@ public class DatabaseQuench
                     indexesAndConstraintsSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "IndexesAndConstraints", indexesAndConstraintsSw.ElapsedMilliseconds, 0);
                 }
+
+                // #242: record what each expression-bearing object was applied with, AFTER the create passes
+                // above, so an object created on this run is recorded on this run rather than churning once more.
+                // SQL Server only for now; the other engines join as their surfaces are wired.
+                if (_product.Platform == Platform.SqlServer && !IsWhatIf)
+                    RecordExpressionMap(effectiveTableCmd);
 
                 // MySQL: cleanup temp tables after index quench
                 if (_product.Platform.GetBasePlatform() == Platform.MySQL)
@@ -1668,6 +1675,23 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Modified Tables"), tableCommand.CommandText);
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
+    }
+
+    // #242. The mapping is an optimisation over a working comparison: failing to record must never fail a deploy
+    // whose changes are already applied, so this logs and carries on. A missing row costs one more comparison
+    // next run, which is exactly today's behaviour.
+    private void RecordExpressionMap(IDbCommand tableCommand)
+    {
+        try
+        {
+            tableCommand.CommandText =
+                $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExpressionMapRecord @WhatIf = {_whatIfOnly}";
+            tableCommand.ExecuteNonQuery();
+        }
+        catch (DbException e)
+        {
+            SafeProgressLog($"  Could not record the expression map ({e.Message}). Expression comparison falls back to text on the next run.");
+        }
     }
 
     internal void QuenchIndexesAndConstraints(IDbCommand tableCommand)

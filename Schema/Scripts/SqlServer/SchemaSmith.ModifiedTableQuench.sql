@@ -755,7 +755,12 @@ BEGIN TRY
                                                 CASE WHEN ident.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
                                            ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')
         OR CASE WHEN c.Nullable = 1 THEN 'YES' ELSE 'NO' END <> ic.IS_NULLABLE
-        OR ISNULL(SchemaSmith.fn_StripParenWrapping(cc.[definition]), '') <> ISNULL(c.ComputedExpression, '')
+        OR (ISNULL(SchemaSmith.fn_StripParenWrapping(cc.[definition]), '') <> ISNULL(c.ComputedExpression, '')
+            -- #242: same question as the check constraints. A computed column has no normalisation at all, so
+            -- every non-trivial expression was dropped and re-added on every deploy -- a table rewrite when
+            -- the column is PERSISTED.
+            AND SchemaSmith.fn_ExpressionMapUnchanged(c.[Schema], c.[TableName], 'COLUMN', c.[ColumnName],
+                  'computed', c.ComputedExpression, cc.[definition]) = 0)
         OR ISNULL(cc.is_persisted, 0) <> ISNULL(c.[Persisted], 0))
         OR sc.is_sparse <> [Sparse]
         OR sc.is_column_set <> [IsColumnSet]
@@ -2221,7 +2226,8 @@ BEGIN TRY
   IF OBJECT_ID('tempdb..#ExistingCheckConstraints') IS NOT NULL DROP TABLE #ExistingCheckConstraints
   SELECT t.[Schema], [TableName] = t.[Name], [CheckName] = ck.[name], 
          [CheckColumn] = CASE WHEN ck.parent_column_id <> 0 THEN COL_NAME(ck.parent_object_id, ck.parent_column_id) ELSE NULL END,
-         [CheckDefinition] = SchemaSmith.fn_NormalizeCheckExpression(ck.[definition])
+         [CheckDefinition] = SchemaSmith.fn_NormalizeCheckExpression(ck.[definition]),
+         [LiveDefinition] = ck.[definition]
     INTO #ExistingCheckConstraints
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.check_constraints ck WITH (NOLOCK) ON ck.[parent_object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
@@ -2237,6 +2243,10 @@ BEGIN TRY
     WHERE ec.[CheckColumn] IS NOT NULL
       AND ISNULL(c.[CheckExpression], '') <> ''
       AND ec.[CheckDefinition] <> SchemaSmith.fn_NormalizeCheckExpression(ISNULL(c.[CheckExpression], ''))
+      -- #242: the texts differ, but they always differ once the engine has rewritten the expression. Ask what
+      -- was actually applied before calling it a change.
+      AND SchemaSmith.fn_ExpressionMapUnchanged(ec.[Schema], ec.[TableName], 'CHECK', ec.[CheckName],
+            'expression', c.[CheckExpression], ec.[LiveDefinition]) = 0
       AND NOT EXISTS (SELECT *
                         FROM #CheckConstraints cc WITH (NOLOCK)
                         WHERE ec.[Schema] = cc.[Schema]
@@ -2251,6 +2261,8 @@ BEGIN TRY
                                              AND ec.[TableName] = cc.[TableName]
                                              AND ec.[CheckName] = SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName])
       WHERE ec.[CheckDefinition] <> SchemaSmith.fn_NormalizeCheckExpression(cc.[Expression])
+        AND SchemaSmith.fn_ExpressionMapUnchanged(ec.[Schema], ec.[TableName], 'CHECK', ec.[CheckName],
+              'expression', cc.[Expression], ec.[LiveDefinition]) = 0
   
   RAISERROR('Drop Modified Check Constraints', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping check constraint ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[CheckName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +

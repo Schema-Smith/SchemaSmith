@@ -310,6 +310,9 @@ public static class ForgeKindler
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith.fn_StripParenWrapping.sql"),
                 new("SchemaSmith.fn_NormalizeCheckExpression.sql"),
+                // #242: the authored-vs-canonical decision and the pass that records it.
+                new("SchemaSmith.fn_ExpressionMapUnchanged.sql"),
+                new("SchemaSmith.ExpressionMapRecord.sql"),
                 new("SchemaSmith.fn_ColumnTypeArguments.sql"),
                 new("SchemaSmith.fn_StripLeadingSelect.sql"),
                 new("SchemaSmith.fn_StripBracketWrapping.sql"),

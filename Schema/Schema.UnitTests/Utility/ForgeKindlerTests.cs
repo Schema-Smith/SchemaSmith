@@ -293,7 +293,8 @@ public class ForgeKindlerTests
         //   reports back, so a column authored INTEGER stops being rewritten on every deploy. Replaces the ten
         //   scattered REPLACE(..., 'ROWVERSION', 'TIMESTAMP') calls across the JSON parse and its XML twin).
         // + Kindling_ExpressionMap_Table (#242 -- the authored/canonical expression mapping).
-        Assert.That(sqlServer.Length, Is.EqualTo(37));
+        // + fn_ExpressionMapUnchanged + ExpressionMapRecord (#242 -- the decision and the recording pass).
+        Assert.That(sqlServer.Length, Is.EqualTo(39));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
