@@ -10,7 +10,7 @@
 --   3. COLUMN rename when a column's OldName is set (old column present, new absent) -- BEFORE
 --      ADD COLUMN so a renamed column's data is not left behind under an empty new column
 --   4. ALTER TABLE ADD COLUMN IF NOT EXISTS per missing column
---   5. CREATE INDEX IF NOT EXISTS per missing non-PK index
+--   5. CREATE INDEX IF NOT EXISTS per missing non-PK index (incl. NullsNotDistinct, version-adaptive)
 -- Both a rename's old AND new name already present (table or column) is a hard failure, not a
 -- silent skip -- it means an object exists that the model does not expect.
 -- Out of scope: column type changes (beyond a same-shape rename), drops, FKs, check constraints,
@@ -23,6 +23,7 @@ CREATE OR REPLACE PROCEDURE "SchemaSmith"."BootstrapTableQuench"
 AS $$
 DECLARE
     v_def JSONB := p_TableDefinitions::jsonb;
+    v_pg15 BOOLEAN := (current_setting('server_version_num')::int / 10000) >= 15;
     v_schema TEXT;
     v_name TEXT;
     v_column_list TEXT := '';
@@ -136,11 +137,32 @@ BEGIN
 
     -- Step 5: CREATE INDEX IF NOT EXISTS for non-PK indexes, folded into one batch
     -- (PG supports IF NOT EXISTS natively and runs a multi-statement EXECUTE string). Order preserved.
+    --
+    -- NullsNotDistinct (#270): a unique index that treats NULLs as EQUAL, so a key with a nullable column can
+    -- hold one row per distinct key INCLUDING the NULL one -- which is what makes "one owner per object, ever"
+    -- structural for ProductOwnership, where a table is the NULL IndexName row. Two forms, same meaning:
+    --   PG15+  NULLS NOT DISTINCT, the engine's own clause.
+    --   PG12-14  a functional index over COALESCE(<nullable col>::text, ''), so a table folds to '' and
+    --            collides with itself. Non-nullable key columns are indexed as themselves.
+    -- The clause is built at runtime, never as static text: NULLS NOT DISTINCT is a syntax error at parse time
+    -- on an older server even inside a branch that server never takes.
     SELECT string_agg(
              'CREATE ' ||
              CASE WHEN COALESCE((idx->>'Unique')::boolean, false) THEN 'UNIQUE ' ELSE '' END ||
              'INDEX IF NOT EXISTS "' || (idx->>'Name') || '" ON "' ||
-             v_schema || '"."' || v_name || '" (' || (idx->>'IndexColumns') || ')',
+             v_schema || '"."' || v_name || '" (' ||
+             CASE WHEN COALESCE((idx->>'NullsNotDistinct')::boolean, false) AND NOT v_pg15
+                  THEN (SELECT string_agg(
+                               CASE WHEN EXISTS (SELECT 1
+                                                   FROM jsonb_array_elements(v_def->'Columns') c
+                                                  WHERE '"' || (c.value->>'Name') || '"' = btrim(k.col)
+                                                    AND COALESCE((c.value->>'Nullable')::boolean, true))
+                                    THEN 'COALESCE(' || btrim(k.col) || '::text, '''')'
+                                    ELSE btrim(k.col) END, ', ' ORDER BY k.ord)
+                          FROM unnest(string_to_array(idx->>'IndexColumns', ',')) WITH ORDINALITY AS k(col, ord))
+                  ELSE (idx->>'IndexColumns') END || ')' ||
+             CASE WHEN COALESCE((idx->>'NullsNotDistinct')::boolean, false) AND v_pg15
+                  THEN ' NULLS NOT DISTINCT' ELSE '' END,
              '; ' ORDER BY ord)
       INTO v_sql
       FROM jsonb_array_elements(v_def->'Indexes') WITH ORDINALITY AS t(idx, ord)

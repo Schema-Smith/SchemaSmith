@@ -305,6 +305,9 @@ public static class ForgeKindler
                 new("Kindling_ProductOwnership_Table.sql", ReplaceTableDef: true),
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
+                // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
+                // expression stops reading as a change. Kindled like the other bootstrap tables.
+                new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith.fn_StripParenWrapping.sql"),
                 new("SchemaSmith.fn_NormalizeCheckExpression.sql"),
                 new("SchemaSmith.fn_ColumnTypeArguments.sql"),
@@ -347,11 +350,11 @@ public static class ForgeKindler
                 new("SchemaSmith.BootstrapTableQuench.sql"),
                 new("Kindling_KindleStamp_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ProductOwnership_Table.sql", ReplaceTableDef: true),
-                // TRANSITIONAL: tighten the ProductOwnership unique key to enforce one-owner-per-object
-                // (runs after the table exists; BootstrapTableQuench can't reconcile a changed index).
-                new("Kindling_ProductOwnership_IndexMigration.sql"),
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
+                // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
+                // expression stops reading as a change. Kindled like the other bootstrap tables.
+                new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith.ExecuteOrDebug.sql"),
                 new("SchemaSmith.QuoteColumnList.sql"),
                 new("SchemaSmith.QuoteIndexColumnList.sql"),
@@ -411,6 +414,9 @@ public static class ForgeKindler
                 new("Kindling_ProductOwnership_Table.sql", ReplaceTableDef: true),
                 new("Kindling_StatusMessages_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
+                // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
+                // expression stops reading as a change. Kindled like the other bootstrap tables.
+                new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith_QuoteIdentifier.sql"),
                 new("SchemaSmith_StripBacktickWrapping.sql"),
                 new("SchemaSmith_SafeBacktickWrap.sql"),
