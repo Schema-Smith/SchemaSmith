@@ -893,7 +893,11 @@ BEGIN
                             OR (COALESCE(i."Unique", FALSE) OR COALESCE(i."PrimaryKey", FALSE) OR COALESCE(i."UniqueConstraint", FALSE)) != ei."Unique"
                             OR COALESCE(i."UniqueConstraint", FALSE) != ei."UniqueConstraint"
                             OR COALESCE(i."PrimaryKey", FALSE) != ei."PrimaryKey"
-                            OR COALESCE(i."FilterExpression", '') != COALESCE(ei."FilterExpression", '')
+                            OR (COALESCE(i."FilterExpression", '') != COALESCE(ei."FilterExpression", '')
+                                -- #242: an authored predicate never matches the engine's rendering of it, so a
+                                -- partial index was dropped and re-created on every deploy. Ask what was applied.
+                                AND NOT "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX',
+                                      i."Name", 'filter', i."FilterExpression", COALESCE(ei."FilterExpression", '')))
                             OR COALESCE(i."AccessMethod", 'btree') != COALESCE(ei."AccessMethod", 'btree')
                             OR COALESCE(i."NullsNotDistinct", false) != COALESCE(ei."NullsNotDistinct", false)
                             -- A storage-parameter change rebuilds the index (hnsw m and ivfflat lists cannot

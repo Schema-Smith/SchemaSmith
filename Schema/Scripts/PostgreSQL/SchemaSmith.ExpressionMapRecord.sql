@@ -62,6 +62,18 @@ BEGIN
         ON a.table_schema = col."TableSchema" AND a.table_name = col."TableName" AND a.column_name = col."Name"
      WHERE COALESCE(col."GenerationExpression", '') != '';
 
+  -- Partial-index filter expressions.
+  INSERT INTO temp_expression_map_declared
+    -- Read EXACTLY as BuildExistingIndexesSnapshot reads it -- raw PG_GET_EXPR, no paren stripping. Recording
+    -- a differently-normalised form than the comparison uses would make every partial index look changed
+    -- forever, which is the defect this whole item exists to remove.
+    SELECT i."TableSchema", i."TableName", 'INDEX', i."Name", 'filter', i."FilterExpression",
+           COALESCE(PG_GET_EXPR(idx.indpred, idx.indrelid), '')
+      FROM temp_indexes i
+      JOIN pg_catalog.pg_class ic ON ic.relname = i."Name" AND ic.relkind = 'i'
+      JOIN pg_catalog.pg_index idx ON idx.indexrelid = ic.oid
+     WHERE COALESCE(i."FilterExpression", '') != '';
+
   INSERT INTO "SchemaSmith"."ExpressionMap" AS em
     ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot", "AuthoredText", "CanonicalText",
      "PlatformName", "EngineVersion", "CompatLevel", "UpdatedUtc")

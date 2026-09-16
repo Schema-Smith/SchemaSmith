@@ -81,6 +81,31 @@ BEGIN TRY
        AND comp.[name] = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
      WHERE RTRIM(ISNULL(c.[ComputedExpression], '')) <> ''
 
+  -- Index filter expressions.
+  IF OBJECT_ID('tempdb..#Indexes') IS NOT NULL
+  INSERT #ExpressionMapDeclared (ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot, AuthoredText, CanonicalText)
+    SELECT SchemaSmith.fn_StripBracketWrapping(i.[Schema]), SchemaSmith.fn_StripBracketWrapping(i.[TableName]),
+           'INDEX', SchemaSmith.fn_StripBracketWrapping(i.[IndexName]), 'filter',
+           i.[FilterExpression], ISNULL(SchemaSmith.fn_StripParenWrapping(si.filter_definition), '')
+      FROM #Indexes i WITH (NOLOCK)
+      JOIN sys.indexes si WITH (NOLOCK)
+        ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
+       AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
+     WHERE RTRIM(ISNULL(i.[FilterExpression], '')) <> ''
+
+  -- Column defaults. The catalog reports the stored (reframed) form; that is what the next deploy compares.
+  IF OBJECT_ID('tempdb..#Columns') IS NOT NULL
+  INSERT #ExpressionMapDeclared (ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot, AuthoredText, CanonicalText)
+    SELECT SchemaSmith.fn_StripBracketWrapping(c.[Schema]), SchemaSmith.fn_StripBracketWrapping(c.[TableName]),
+           'COLUMN', SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'default',
+           c.[Default], ISNULL(ic.COLUMN_DEFAULT, '')
+      FROM #Columns c WITH (NOLOCK)
+      JOIN INFORMATION_SCHEMA.COLUMNS ic
+        ON ic.TABLE_SCHEMA = SchemaSmith.fn_StripBracketWrapping(c.[Schema])
+       AND ic.TABLE_NAME = SchemaSmith.fn_StripBracketWrapping(c.[TableName])
+       AND ic.COLUMN_NAME = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
+     WHERE RTRIM(ISNULL(c.[Default], '')) <> ''
+
   MERGE SchemaSmith.ExpressionMap AS target
   USING #ExpressionMapDeclared AS source
      ON target.[ObjectSchema] = source.ObjectSchema

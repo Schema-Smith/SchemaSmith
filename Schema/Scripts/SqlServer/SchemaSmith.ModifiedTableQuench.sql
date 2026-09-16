@@ -1494,7 +1494,24 @@ BEGIN TRY
                             CASE WHEN i.[ColumnStore] = 0 THEN ' (' + i.[IndexColumns] + ')' + CASE WHEN RTRIM(ISNULL(i.[IncludeColumns], '')) <> '' THEN ' INCLUDE (' + i.[IncludeColumns] + ')' ELSE '' END
                                  WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                  ELSE '' END +
-                            CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + i.[FilterExpression] ELSE '' END +
+                            -- #242: use the engine's own rendering of the filter when the mapping says the declared
+                            -- filter is unchanged -- otherwise an authored "Status > 0" never matches the stored
+                            -- "([Status]>(0))" and the index is dropped and re-created on every deploy. Only the
+                            -- filter is substituted; every other part of this string still compares on its own terms.
+                            CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> ''
+                                 THEN ' WHERE ' +
+                                      CASE WHEN SchemaSmith.fn_ExpressionMapUnchanged(i.[Schema], i.[TableName], 'INDEX',
+                                                  i.[IndexName], 'filter', i.[FilterExpression],
+                                                  ISNULL(SchemaSmith.fn_StripParenWrapping(
+                                                    (SELECT si2.filter_definition FROM sys.indexes si2 WITH (NOLOCK)
+                                                      WHERE si2.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
+                                                        AND si2.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))), '')) = 1
+                                           THEN ISNULL(SchemaSmith.fn_StripParenWrapping(
+                                                  (SELECT si2.filter_definition FROM sys.indexes si2 WITH (NOLOCK)
+                                                    WHERE si2.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
+                                                      AND si2.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))), i.[FilterExpression])
+                                           ELSE i.[FilterExpression] END
+                                 ELSE '' END +
                             CASE WHEN o.[WithOptions] <> '' THEN ' WITH (' + STUFF(o.[WithOptions], 1, 2, '') + ')' ELSE '' END
   
   RAISERROR('Detect Index Renames', 10, 100) WITH NOWAIT
@@ -1991,6 +2008,9 @@ BEGIN TRY
       AND ic.COLUMN_NAME = SchemaSmith.fn_StripBracketWrapping(C.[ColumnName])
   WHERE t.NewTable = 0
     AND SchemaSmith.fn_StripParenWrapping(ic.COLUMN_DEFAULT) <> ISNULL(c.[Default], 'NULL')
+    -- #242: the texts differ, but a reframed default always differs. Ask what was actually applied.
+    AND SchemaSmith.fn_ExpressionMapUnchanged(C.[Schema], C.[TableName], 'COLUMN', C.[ColumnName], 'default',
+          c.[Default], ISNULL(ic.COLUMN_DEFAULT, '')) = 0
 
   -- Truly new physical columns were added previously, now we need to determine which columns need to be added back due change from computed to physical columns
   UPDATE #Columns 

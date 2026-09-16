@@ -115,7 +115,12 @@ BEGIN
       -- View definition changed (whitespace-collapsed, case-insensitive comparison)
       EXISTS (SELECT 1 FROM temp_materialized_views t
                WHERE t."Schema" = mv.schemaname AND t."Name" = mv.matviewname
-                 AND UPPER(REGEXP_REPLACE(TRIM(RTRIM(RTRIM(t."Definition"), ';')), '\s+', ' ', 'g')) != UPPER(REGEXP_REPLACE(TRIM(RTRIM(RTRIM(mv.definition), ';')), '\s+', ' ', 'g')))
+                 AND UPPER(REGEXP_REPLACE(TRIM(RTRIM(RTRIM(t."Definition"), ';')), '\s+', ' ', 'g')) != UPPER(REGEXP_REPLACE(TRIM(RTRIM(RTRIM(mv.definition), ';')), '\s+', ' ', 'g'))
+                 -- #242: PostgreSQL rewrites a matview body when it stores it (schema-qualifying, re-aliasing),
+                 -- so a hand-authored body never matches and the view was rebuilt on every deploy -- which
+                 -- re-runs its query. Ask what was actually applied before calling it a change.
+                 AND NOT "SchemaSmith"."ExpressionMapUnchanged"(t."Schema", t."Name", 'MATVIEW', t."Name",
+                       'definition', t."Definition", mv.definition))
     );
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
@@ -146,7 +151,12 @@ BEGIN
       -- View definition changed
       EXISTS (SELECT 1 FROM temp_materialized_views t
                WHERE t."Schema" = mv.schemaname AND t."Name" = mv.matviewname
-                 AND UPPER(REGEXP_REPLACE(TRIM(RTRIM(RTRIM(t."Definition"), ';')), '\s+', ' ', 'g')) != UPPER(REGEXP_REPLACE(TRIM(RTRIM(RTRIM(mv.definition), ';')), '\s+', ' ', 'g')))
+                 AND UPPER(REGEXP_REPLACE(TRIM(RTRIM(RTRIM(t."Definition"), ';')), '\s+', ' ', 'g')) != UPPER(REGEXP_REPLACE(TRIM(RTRIM(RTRIM(mv.definition), ';')), '\s+', ' ', 'g'))
+                 -- #242: PostgreSQL rewrites a matview body when it stores it (schema-qualifying, re-aliasing),
+                 -- so a hand-authored body never matches and the view was rebuilt on every deploy -- which
+                 -- re-runs its query. Ask what was actually applied before calling it a change.
+                 AND NOT "SchemaSmith"."ExpressionMapUnchanged"(t."Schema", t."Name", 'MATVIEW', t."Name",
+                       'definition', t."Definition", mv.definition))
     );
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
@@ -167,6 +177,27 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM pg_matviews mv
                        WHERE mv.schemaname = t."Schema" AND mv.matviewname = t."Name");
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
+  -- #242: record what each body was applied with, after the create pass, so a view created moments ago is
+  -- recorded on this run rather than rebuilding once more on the next.
+  IF NOT p_WhatIf THEN
+    INSERT INTO "SchemaSmith"."ExpressionMap" AS em
+      ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot", "AuthoredText", "CanonicalText",
+       "PlatformName", "EngineVersion", "CompatLevel", "UpdatedUtc")
+    SELECT t."Schema", t."Name", 'MATVIEW', t."Name", 'definition', t."Definition", mv.definition,
+           'PostgreSQL', current_setting('server_version'), NULL, now()
+      FROM temp_materialized_views t
+      JOIN pg_matviews mv ON mv.schemaname = t."Schema" AND mv.matviewname = t."Name"
+     WHERE COALESCE(t."Definition", '') != ''
+    ON CONFLICT ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot")
+    DO UPDATE SET "AuthoredText" = EXCLUDED."AuthoredText",
+                  "CanonicalText" = EXCLUDED."CanonicalText",
+                  "EngineVersion" = EXCLUDED."EngineVersion",
+                  "UpdatedUtc" = now()
+     WHERE em."AuthoredText" != EXCLUDED."AuthoredText"
+        OR em."CanonicalText" != EXCLUDED."CanonicalText"
+        OR em."EngineVersion" != EXCLUDED."EngineVersion";
+  END IF;
 
   -- Handle indexes
   CALL "SchemaSmith"."MissingMaterializedViewIndexesQuench"(p_WhatIf, p_UpdateFillFactor);

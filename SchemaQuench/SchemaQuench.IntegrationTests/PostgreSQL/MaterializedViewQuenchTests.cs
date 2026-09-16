@@ -166,6 +166,44 @@ SELECT c.oid FROM pg_class c
         conn.Close();
     }
 
+    // #242. The test above deliberately feeds the STORED definition back in so the diff matches -- which means
+    // it cannot see the thing a user actually hits: PostgreSQL rewrites a matview body when it stores it
+    // (schema-qualifying, re-aliasing, re-casing), so a body authored by hand never matches the catalog and the
+    // view is dropped and rebuilt on every deploy. Rebuilding a materialized view re-runs its query, so this is
+    // not a cosmetic churn. This authors the body the way a person writes it and asserts the view is left alone.
+    [Test]
+    public void ReQuench_WithANaturallyAuthoredDefinition_DoesNotRebuildView()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+
+        EnsureViewDropped(cmd);
+        var authored = "SELECT id, name, amount FROM public.test_source";
+        RunMaterializedViewQuench(cmd, BuildViewJson("mv_test", "public", authored, true, ViewIndexJson_IdOnly()));
+
+        cmd.CommandText = @"
+SELECT c.oid FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+  WHERE c.relname = 'mv_test' AND c.relkind = 'm'";
+        var oidBefore = cmd.ExecuteScalar();
+        Assert.That(oidBefore, Is.Not.Null, "setup: the view must exist after the first deploy");
+
+        for (var pass = 2; pass <= 3; pass++)
+        {
+            RunMaterializedViewQuench(cmd, BuildViewJson("mv_test", "public", authored, true, ViewIndexJson_IdOnly()));
+            cmd.CommandText = @"
+SELECT c.oid FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+  WHERE c.relname = 'mv_test' AND c.relkind = 'm'";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(oidBefore),
+                $"pass {pass}: the materialized view was rebuilt for an unchanged declaration, which re-runs its query");
+        }
+
+        conn.Close();
+    }
+
     [Test]
     public void DefinitionChange_TriggersRebuild()
     {
