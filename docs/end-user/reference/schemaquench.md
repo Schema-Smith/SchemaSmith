@@ -723,8 +723,13 @@ first deploy after upgrading -- the comparison behaves exactly as it did before,
 part of that deploy. Nothing needs migrating, and the table can be emptied at any time: the worst case is one
 more comparison.
 
-**Covered surfaces:** check constraints and computed columns (SQL Server), check constraints and generated
-columns (PostgreSQL, MySQL, MariaDB).
+**Covered surfaces:** check constraints, computed columns, column defaults and filtered-index predicates
+(SQL Server); check constraints, generated columns, partial-index predicates and materialized view bodies
+(PostgreSQL); check constraints and generated columns (MySQL, MariaDB).
+
+Some surfaces never had this problem and are unchanged: SQL Server indexed view bodies and literal column
+defaults, PostgreSQL column defaults and exclude constraints, and MySQL/MariaDB check constraints all already
+compared equal after the engine's own rewrite.
 
 ---
 

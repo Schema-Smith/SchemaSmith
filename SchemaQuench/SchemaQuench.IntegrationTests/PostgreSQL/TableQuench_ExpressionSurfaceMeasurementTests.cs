@@ -160,4 +160,51 @@ public class TableQuench_ExpressionSurfaceMeasurementTests : BaseTableQuenchTest
         finally { ctx.Drop(); ctx.Dispose(); }
     }
 
+    private static string ExcludeJson(Ctx ctx, string filter) => $$"""
+        {
+            "Schema": "public",
+            "Name": "{{ctx.Table}}",
+            "Columns": [
+                { "Name": "id", "DataType": "integer", "Nullable": false },
+                { "Name": "status", "DataType": "integer", "Nullable": true }
+            ],
+            "ExcludeConstraints": [
+                {
+                    "Name": "EX_{{ctx.Table}}_id",
+                    "AccessMethod": "btree",
+                    "ExcludeColumns": [ { "Column": "id", "Operator": "=" } ],
+                    "FilterExpression": "{{filter}}"
+                }
+            ]
+        }
+        """;
+
+    private static long ConstraintOid(IDbCommand cmd, string name)
+    {
+        cmd.CommandText = $@"SELECT COALESCE((SELECT con.oid::bigint FROM pg_constraint con
+                                               WHERE con.conname = '{name}'), 0)";
+        return Convert.ToInt64(cmd.ExecuteScalar());
+    }
+
+    // Exclude constraints carry a predicate too, and the design lists them as a churn surface.
+    [Test]
+    public void AnExcludeConstraintAuthoredInNaturalForm_IsNotReCreatedOnEveryDeploy()
+    {
+        var ctx = NewTable(@"""id"" integer NOT NULL, ""status"" integer NULL");
+        try
+        {
+            var json = ExcludeJson(ctx, "status > 0");
+            RunTableQuenchProc(ctx.Cmd, json);
+            var firstOid = ConstraintOid(ctx.Cmd, $"EX_{ctx.Table}_id");
+            Assert.That(firstOid, Is.Not.Zero, "setup: the exclude constraint must exist after the first deploy");
+
+            for (var pass = 2; pass <= 3; pass++)
+            {
+                RunTableQuenchProc(ctx.Cmd, json);
+                Assert.That(ConstraintOid(ctx.Cmd, $"EX_{ctx.Table}_id"), Is.EqualTo(firstOid),
+                    $"pass {pass}: the exclude constraint was re-created for an unchanged declaration");
+            }
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
 }
