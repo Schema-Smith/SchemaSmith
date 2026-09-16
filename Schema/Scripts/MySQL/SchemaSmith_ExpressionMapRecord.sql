@@ -31,32 +31,42 @@ proc: BEGIN
 
     -- Table-level check constraints. MySQL and MariaDB cannot attribute a check to a column, so table-level
     -- is the only form -- the column-level alias was retired in 2.7.0.
-    INSERT INTO SchemaSmith_ExpressionMap
-        (ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot, AuthoredText, CanonicalText,
-         PlatformName, EngineVersion, CompatLevel, UpdatedUtc)
-    SELECT p_DatabaseName,
-           SchemaSmith_StripBacktickWrapping(c.TableName),
-           'CHECK',
-           SchemaSmith_StripBacktickWrapping(c.ConstraintName),
-           'expression',
-           c.Expression,
-           SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4)),
-           'MySQL', VERSION(), NULL, UTC_TIMESTAMP(3)
-      FROM _SchemaSmith_CheckConstraints c
-      JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-        ON BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
-       AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-       AND BINARY tc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
-       AND tc.CONSTRAINT_TYPE = 'CHECK'
-      JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
-        ON BINARY cc.CONSTRAINT_SCHEMA = BINARY p_DatabaseName
-       AND BINARY cc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
-     WHERE IFNULL(TRIM(c.Expression), '') != ''
-        ON DUPLICATE KEY UPDATE
-           AuthoredText = VALUES(AuthoredText),
-           CanonicalText = VALUES(CanonicalText),
-           EngineVersion = VALUES(EngineVersion),
-           UpdatedUtc = VALUES(UpdatedUtc);
+    --
+    -- INFORMATION_SCHEMA.CHECK_CONSTRAINTS ARRIVED IN MySQL 8.0.16. On MySQL 5.7 the mention alone is fatal at
+    -- CREATE PROCEDURE time -- the whole kindle dies and every deploy with it -- so a runtime version guard
+    -- around a static reference would not save it. The table is named only inside a string that is PREPAREd,
+    -- which is the same shape SchemaSmith_MissingIndexesAndConstraintsQuench uses for the same reason.
+    IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
+        SET @v_emSql = CONCAT('INSERT INTO SchemaSmith_ExpressionMap
+            (ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot, AuthoredText, CanonicalText,
+             PlatformName, EngineVersion, CompatLevel, UpdatedUtc)
+        SELECT ''', p_DatabaseName, ''',
+               SchemaSmith_StripBacktickWrapping(c.TableName),
+               ''CHECK'',
+               SchemaSmith_StripBacktickWrapping(c.ConstraintName),
+               ''expression'',
+               c.Expression,
+               SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4)),
+               ''MySQL'', VERSION(), NULL, UTC_TIMESTAMP(3)
+          FROM _SchemaSmith_CheckConstraints c
+          JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+            ON BINARY tc.TABLE_SCHEMA = BINARY ''', p_DatabaseName, '''
+           AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
+           AND BINARY tc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
+           AND tc.CONSTRAINT_TYPE = ''CHECK''
+          JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
+            ON BINARY cc.CONSTRAINT_SCHEMA = BINARY ''', p_DatabaseName, '''
+           AND BINARY cc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
+         WHERE IFNULL(TRIM(c.Expression), '''') != ''''
+            ON DUPLICATE KEY UPDATE
+               AuthoredText = VALUES(AuthoredText),
+               CanonicalText = VALUES(CanonicalText),
+               EngineVersion = VALUES(EngineVersion),
+               UpdatedUtc = VALUES(UpdatedUtc)');
+        PREPARE stmt FROM @v_emSql;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
 
     -- Generated columns. Compared with a bare TRIM today, so any expression the engine reformats re-applies
     -- on every deploy -- and this surface had no idempotency coverage at all.

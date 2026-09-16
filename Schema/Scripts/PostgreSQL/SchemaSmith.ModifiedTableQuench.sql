@@ -318,6 +318,23 @@ BEGIN
     --     Note this makes a NEW column in a mid-file position a genuine mismatch, correctly: the ADD
     --     appended it to the end, and only a rebuild can move it.
     ------------------------------------------------------------------------------------------------
+    -- #242. A generated column's expression is compared in a dozen places downstream (rebuild election, alter
+    -- detection, SET EXPRESSION emit, drop/re-add). Patching each one is how a fix looks done and still emits
+    -- DDL -- so this neutralises the difference ONCE, at the source: where the mapping says the declared
+    -- expression is what produced the live one, the live snapshot adopts the authored text and every later
+    -- comparison compares equal. Only the SNAPSHOT is touched; the authored value the ALTER/CREATE paths emit
+    -- is untouched, and the recorder reads the catalog directly, so the mapping still stores the real pair.
+    UPDATE temp_existing_columns ec
+       SET "GenerationExpression" = c."GenerationExpression"
+      FROM temp_columns c
+     WHERE c."TableSchema" = ec."TableSchema"
+       AND c."TableName" = ec."TableName"
+       AND c."Name" = ec."ColumnName"
+       AND COALESCE(c."GenerationExpression", '') != ''
+       AND COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')
+       AND "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'COLUMN', c."Name",
+             'generated', c."GenerationExpression", COALESCE(ec."GenerationExpression", ''));
+
     RAISE NOTICE 'Detect declared-vs-deployed column order drift';
     DROP TABLE IF EXISTS temp_declared_column_order;
     CREATE TEMPORARY TABLE temp_declared_column_order AS
@@ -377,12 +394,7 @@ BEGIN
                             OR COALESCE("SchemaSmith"."StripTypeCast"(c."Default"), '') != COALESCE("SchemaSmith"."StripTypeCast"(ec."Default"), '')
                             OR COALESCE(c."Collation", '') != COALESCE(ec."Collation", '')
                             OR COALESCE(REGEXP_REPLACE(c."Generated", '\s*\(.*$', ''), 'NEVER') != COALESCE(REGEXP_REPLACE(ec."Generated", '\s*\(.*$', ''), 'NEVER')
-                            OR (COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')
-                                -- #242: a generated column's expression is compared raw, so any non-trivial
-                                -- one churns every deploy. Same question as the check constraints.
-                                AND NOT "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName",
-                                      'COLUMN', c."Name", 'generated', c."GenerationExpression",
-                                      COALESCE(ec."GenerationExpression", '')))
+                            OR COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')
                             OR (COALESCE(c."Storage", '') != '' AND COALESCE(c."Storage", '') != COALESCE(ec."Storage", ''))
                             OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", '')))) AS "ModificationPasses",
                      -- ALWAYS fires on ANY detected column change, which includes a column present live

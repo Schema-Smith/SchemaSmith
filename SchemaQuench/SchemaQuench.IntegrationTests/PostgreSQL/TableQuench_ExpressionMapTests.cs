@@ -131,6 +131,9 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         finally { ctx.Drop(); ctx.Dispose(); }
     }
 
+    // Churns at the FLOOR (PostgreSQL 12) but not on 17, which is why an earlier pass of this work wrongly
+    // concluded generated columns were already idempotent here -- the modern container cannot see it. The floor
+    // sweep caught it. Runs on every supported version; only the floor legs exercise the difference.
     [Test]
     public void AGeneratedColumnAuthoredInNaturalForm_IsNotReCreatedOnEveryDeploy()
     {
