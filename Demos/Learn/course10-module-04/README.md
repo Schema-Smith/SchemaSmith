@@ -42,6 +42,11 @@ shred.
 
 ## Part A — deploy the package (the engine's encoding switch is invisible)
 
+<!-- TRAINING-RELEASE-PIN #encoding-log -- on 2.7.0, SchemaQuench logs "[db] model ingest encoding: Json|Xml" after
+the "detected SQL Server version" line. Retitle Part A (the switch is automatic, no longer invisible), replace
+"nothing in the log or the result tells you which" with the new log line on both tiers, and adjust the intro's
+"You never see it". -->
+
 The `sqlserver/package` declares two tables — `dbo.Widget` (a model worth serializing) and
 `dbo.TableCatalog` (an audit table Part B fills). Deploying it to any tier looks identical from
 the outside. The `learn_2008` deploy reads its model payload as XML internally; the `learn_2022`

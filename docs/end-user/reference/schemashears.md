@@ -156,11 +156,13 @@ By default, SchemaShears suppresses all recognized drop categories. The emitted 
 }
 ```
 
+That is the PostgreSQL form. `DropExcludeConstraintsRemovedFromProduct` is written only for PostgreSQL products and `DropStatisticsRemovedFromProduct` only for SQL Server and PostgreSQL products, because those are the only engines that accept them -- stamping either one elsewhere would make the patch fail `--Validate`, and those engines have no such objects to drop anyway.
+
 This is the correct posture for a patch: deploy what's in scope, leave everything else alone.
 
 ### Enforcement
 
-**All seven stamped flags are enforced.** As of v2.2.0, SchemaQuench's drop-control covers every category SchemaShears suppresses: a table absent from the patch is not dropped, and on the tables the patch does include, columns, foreign keys, check constraints, exclude constraints, and statistics that exist in the target but not in the table JSON are preserved -- along with out-of-band indexes (`DropUnknownIndexes` stays `false`). See the per-flag sections in the [SchemaQuench Reference](schemaquench.md#droptablesremovedfromproduct) for exact semantics.
+**Every stamped flag is enforced.** As of v2.2.0, SchemaQuench's drop-control covers every category SchemaShears suppresses: a table absent from the patch is not dropped, and on the tables the patch does include, columns, foreign keys, check constraints, exclude constraints, and statistics that exist in the target but not in the table JSON are preserved -- along with out-of-band indexes (`DropUnknownIndexes` stays `false`). See the per-flag sections in the [SchemaQuench Reference](schemaquench.md#droptablesremovedfromproduct) for exact semantics.
 
 The user promise is: _a patch won't drop objects you didn't include_ -- unless you explicitly re-enable a category with `--AllowDrops`.
 

@@ -130,6 +130,10 @@ category flips to `false`:
 "DropStatisticsRemovedFromProduct": false
 ```
 
+<!-- TRAINING-RELEASE-PIN #fix-shears-stamp -- on 2.7.0, drop DropExcludeConstraintsRemovedFromProduct from this list
+and say why: SchemaShears now stamps a flag only on engines that accept it (exclude constraints are PostgreSQL-only,
+statistics SQL Server + PostgreSQL). On 2.6.0 the stamp above is what is emitted, and --Validate on the patch fails. -->
+
 ## Step 3: Deploy the patch safely
 
 Deploy the SchemaShears patch to the real canary, `shop_patch_canary`:

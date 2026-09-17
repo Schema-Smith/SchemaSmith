@@ -53,7 +53,7 @@ After Script:
 ```
 
 Check what actually landed on each database (`SELECT name FROM sys.tables WHERE name NOT IN
-('ChangeAudit','CompletedMigrationScripts','KindleStamp')` and `SELECT name FROM sys.foreign_keys`):
+('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp')` and `SELECT name FROM sys.foreign_keys`):
 
 ```
 -- Shop_Primary user tables:        Customers, Inventory, Orders

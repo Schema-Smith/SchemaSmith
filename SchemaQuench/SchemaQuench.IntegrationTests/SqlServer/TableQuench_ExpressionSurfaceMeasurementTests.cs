@@ -159,6 +159,25 @@ public class TableQuench_ExpressionSurfaceMeasurementTests : BaseTableQuenchTest
         });
     }
 
+    // The other direction, and the shape the Course 4 Recipe 2 lab teaches: a default driven by a token, whose
+    // resolved value changes after the mapping has recorded the old one. The map must not vouch for the old value.
+    [TestCase("90", "30", "30")]
+    [TestCase("datepart(year, getdate())", "datepart(month, getdate())", "month")]
+    public void ChangingADefaultAfterItWasRecorded_IsApplied(string before, string after, string expectedInLive)
+    {
+        var table = $"ExprSurfChg_{Guid.NewGuid():N}"[..20];
+        WithTable(table, $"CREATE TABLE dbo.[{table}] ([Id] INT NOT NULL, [Qty] INT NULL)", cmd =>
+        {
+            RunTableQuenchProc(cmd, DefaultJson(table, before));
+            cmd.CommandText = $"SELECT COUNT(*) FROM SchemaSmith.ExpressionMap WHERE [ObjectTable] = '{table}' AND [Slot] = 'default'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "setup: the default's mapping must be recorded");
+
+            RunTableQuenchProc(cmd, DefaultJson(table, after));
+            cmd.CommandText = $"SELECT COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{table}' AND COLUMN_NAME = 'Qty'";
+            Assert.That(cmd.ExecuteScalar() as string, Does.Contain(expectedInLive), "the changed default must be applied");
+        });
+    }
+
     private static string FilteredStatisticJson(string table, string filter) => $$"""
         {
             "Schema": "[dbo]",
