@@ -29,6 +29,33 @@ proc: BEGIN
         LEAVE proc;
     END IF;
 
+    -- Say so when a re-baseline happens (Paul, 2026-09-08: "re-baseline, and say so in the log -- log the count so
+    -- it is visible rather than silent"). A re-baseline is a row whose DECLARATION is unchanged but whose engine
+    -- context moved -- an engine upgrade or a compatibility-level change. A row whose declaration also changed was
+    -- APPLIED, not re-baselined, and is not counted.
+    -- BINARY on every comparison: the map is utf8mb4_unicode_ci, VERSION() and the parameter carry the server
+    -- default, and mixing them is an error rather than a wrong answer.
+    SET @v_emRebaselined := (
+        SELECT COUNT(*) FROM SchemaSmith_ExpressionMap em
+         WHERE BINARY em.ObjectSchema = BINARY p_DatabaseName
+           AND BINARY em.EngineVersion != BINARY VERSION()
+           AND ((em.ObjectKind = 'COLUMN' AND em.Slot = 'generated'
+                 AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
+                              WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY em.ObjectTable
+                                AND BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName) = BINARY em.ObjectName
+                                AND BINARY c.GeneratedExpression = BINARY em.AuthoredText))
+             OR (em.ObjectKind = 'CHECK' AND em.Slot = 'expression'
+                 AND EXISTS (SELECT 1 FROM _SchemaSmith_CheckConstraints k
+                              WHERE BINARY SchemaSmith_StripBacktickWrapping(k.TableName) = BINARY em.ObjectTable
+                                AND BINARY SchemaSmith_StripBacktickWrapping(k.ConstraintName) = BINARY em.ObjectName
+                                AND BINARY k.Expression = BINARY em.AuthoredText))));
+    IF IFNULL(@v_emRebaselined, 0) > 0 THEN
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        VALUES (CONNECTION_ID(), CONCAT('  Re-baselined ', @v_emRebaselined,
+                ' recorded expression(s): they were recorded under a different server version, and their stored canonical text is now refreshed for ',
+                VERSION(), '. No object was changed.'));
+    END IF;
+
     -- Table-level check constraints. MySQL and MariaDB cannot attribute a check to a column, so table-level
     -- is the only form -- the column-level alias was retired in 2.7.0.
     --

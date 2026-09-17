@@ -312,6 +312,7 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_NormalizeCheckExpression.sql"),
                 // #242: the authored-vs-canonical decision and the pass that records it.
                 new("SchemaSmith.fn_ExpressionMapUnchanged.sql"),
+                new("SchemaSmith.fn_ExpressionMapEffective.sql"),
                 new("SchemaSmith.ExpressionMapRecord.sql"),
                 new("SchemaSmith.fn_ColumnTypeArguments.sql"),
                 new("SchemaSmith.fn_StripLeadingSelect.sql"),
@@ -361,7 +362,13 @@ public static class ForgeKindler
                 new("SchemaSmith.ExecuteOrDebug.sql"),
                 new("SchemaSmith.QuoteColumnList.sql"),
                 new("SchemaSmith.QuoteIndexColumnList.sql"),
+                // #242: declared index and statistics definitions compared in the form the catalog reads back.
+                // SQL-language functions are validated at creation, so the splitter and StripParenWrapping
+                // must be kindled before the statistics forms that call them.
+                new("SchemaSmith.SplitTopLevelList.sql"),
+                new("SchemaSmith.NormalizeIndexColumnList.sql"),
                 new("SchemaSmith.StripParenWrapping.sql"),
+                new("SchemaSmith.StatisticsDefinitionForms.sql"),
                 // #242: the authored-vs-canonical decision and the pass that records it.
                 new("SchemaSmith.ExpressionMapUnchanged.sql"),
                 new("SchemaSmith.ExpressionMapRecord.sql"),

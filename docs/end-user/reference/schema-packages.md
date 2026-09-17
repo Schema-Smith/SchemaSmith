@@ -1432,11 +1432,18 @@ table has `RowLevelSecurity` set, it needs at least one permissive policy to be 
 flag. A policy left behind after it stops being declared is a live access-control rule that nobody
 declared -- a stronger reason to converge than exists for a performance object.
 
-**A changed expression is not detected.** PostgreSQL stores `USING` and `WITH CHECK` expressions
-normalised, so comparing them against the declared text reports a change on every deploy. SchemaQuench
-converges the *set* of policies -- creating declared policies that are missing and dropping ones that are
-no longer declared -- but editing an expression on an existing policy has no effect. Rename the policy, or
-remove it and add it back under a new name, to change an expression.
+**Every part of a policy converges.** A declared policy that is missing is created and one no longer declared
+is dropped. An edited `UsingExpression` or `WithCheckExpression` is applied in place with `ALTER POLICY`, so
+there is never a moment where the table has row-level security on and the rule missing, and a hand edit to the
+live policy is put back the same way. A change to `Permissive`, `Command` or `Roles`, or adding or removing a
+whole clause (which `ALTER POLICY` cannot express), drops and re-creates the policy.
+
+PostgreSQL stores these expressions in its own form -- `tenant = current_user` comes back as
+`(tenant = (CURRENT_USER)::text)` -- so SchemaQuench compares them through
+[expression change detection](schemaquench.md#expression-change-detection) rather than by text, and a policy
+you have not changed is left alone. On the first deploy after upgrading to a version with this behaviour, a
+policy whose declared text differs from PostgreSQL's rendering has no record yet and is re-applied once with
+`ALTER POLICY`: the same rule, applied again, and then recorded.
 
 ### Example -- tenant isolation
 

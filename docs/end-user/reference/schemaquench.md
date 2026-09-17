@@ -723,9 +723,15 @@ first deploy after upgrading -- the comparison behaves exactly as it did before,
 part of that deploy. Nothing needs migrating, and the table can be emptied at any time: the worst case is one
 more comparison.
 
-**Covered surfaces:** check constraints, computed columns, column defaults and filtered-index predicates
-(SQL Server); check constraints, generated columns, partial-index predicates and materialized view bodies
-(PostgreSQL); check constraints and generated columns (MySQL, MariaDB).
+**A re-baseline is logged, not silent.** The deploy log says how many records were refreshed and for which
+version -- `Re-baselined 3 recorded expression(s) ... No object was changed.` -- so an engine upgrade is visible in
+the first deploy after it.
+
+**Covered surfaces:** check constraints, computed columns, column defaults, and filtered-index and
+filtered-statistic predicates (SQL Server); check constraints, generated columns, partial-index predicates,
+extended-statistics expressions, row-level security `USING` / `WITH CHECK` expressions and materialized view
+bodies (PostgreSQL); check constraints and generated columns (MySQL, MariaDB). Index and statistic predicates
+are covered by `IndexOnlyTableQuenches` too, which compares indexes separately from the full table quench.
 
 Some surfaces never had this problem and are unchanged: SQL Server indexed view bodies and literal column
 defaults, PostgreSQL column defaults and exclude constraints, and MySQL/MariaDB check constraints all already

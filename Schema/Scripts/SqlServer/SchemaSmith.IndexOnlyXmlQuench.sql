@@ -488,7 +488,8 @@ BEGIN TRY
                             CASE WHEN i.[ColumnStore] = 0 THEN ' (' + i.[IndexColumns] + ')' + CASE WHEN RTRIM(ISNULL(i.[IncludeColumns], '')) <> '' THEN ' INCLUDE (' + i.[IncludeColumns] + ')' ELSE '' END
                                  WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                  ELSE '' END +
-                            CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + i.[FilterExpression] ELSE '' END +
+                            -- #242: the engine's own rendering of the filter when the mapping vouches for it (fn_ExpressionMapEffective).
+                            CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', i.[IndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si2.filter_definition FROM sys.indexes si2 WITH (NOLOCK) WHERE si2.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si2.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))) ELSE '' END +
                             CASE WHEN o.[WithOptions] <> '' THEN ' WITH (' + STUFF(o.[WithOptions], 1, 2, '') + ')' ELSE '' END
   
   RAISERROR('Detect Index Renames', 10, 100) WITH NOWAIT
@@ -517,7 +518,8 @@ BEGIN TRY
                                                                   CASE WHEN i.[ColumnStore] = 0 THEN ' (' + i.[IndexColumns] + ')' + CASE WHEN RTRIM(ISNULL(i.[IncludeColumns], '')) <> '' THEN ' INCLUDE (' + i.[IncludeColumns] + ')' ELSE '' END
                                                                        WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                                                        ELSE '' END +
-                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + i.[FilterExpression] ELSE '' END +
+                                                                  -- #242: keyed on the OLD name -- the mapping row was written under the name the index has now.
+                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', ei.[xIndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si3.filter_definition FROM sys.indexes si3 WITH (NOLOCK) WHERE si3.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) AND si3.[name] = ei.[xIndexName]))) ELSE '' END +
                                                                   CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('NONE', 'ROW', 'PAGE'))
                                                                          OR (i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
                                                                        THEN ' WITH (DATA_COMPRESSION=' + RTRIM(ISNULL(i.[CompressionType], '')) + ')'
@@ -590,6 +592,9 @@ BEGIN TRY
     FROM #ExistingIndexes di WITH (NOLOCK)
     WHERE @DropUnknownIndexes = 1
       AND NOT EXISTS (SELECT * FROM #Indexes i WITH (NOLOCK) WHERE i.[Schema] = di.[xSchema] AND i.[TableName] = di.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = di.[xIndexName])
+      -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+      -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+      AND NOT EXISTS (SELECT * FROM #IndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = di.[xSchema] AND rn.[TableName] = di.[xTableName] AND rn.[OldName] = di.[xIndexName])
   UNION 
   -- Indexes where the index definition was modified
   SELECT i.[Schema], i.[TableName], SchemaSmith.fn_StripBracketWrapping(i.[IndexName]), i.[IsConstraint], i.[IsUnique], i.[IsClustered]
@@ -600,6 +605,9 @@ BEGIN TRY
     FROM #ExistingXmlIndexes ei WITH (NOLOCK)
     WHERE @DropUnknownIndexes = 1
       AND NOT EXISTS (SELECT * FROM #XmlIndexes i WITH (NOLOCK) WHERE i.[Schema] = ei.[xSchema] AND i.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = ei.[xIndexName])
+      -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+      -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+      AND NOT EXISTS (SELECT * FROM #XmlIndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = ei.[xSchema] AND rn.[TableName] = ei.[xTableName] AND rn.[OldName] = ei.[xIndexName])
   UNION
   -- Xml Indexes where the index definition was modified
   SELECT [Schema], [TableName], SchemaSmith.fn_StripBracketWrapping([IndexName]), [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
@@ -670,11 +678,17 @@ BEGIN TRY
                CASE WHEN di.[IsConstraint] = 1 THEN 'constraint' ELSE 'index' END
           FROM #ExistingIndexes di WITH (NOLOCK)
           WHERE NOT EXISTS (SELECT * FROM #Indexes i WITH (NOLOCK) WHERE i.[Schema] = di.[xSchema] AND i.[TableName] = di.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = di.[xIndexName])
+            -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+            -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+            AND NOT EXISTS (SELECT * FROM #IndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = di.[xSchema] AND rn.[TableName] = di.[xTableName] AND rn.[OldName] = di.[xIndexName])
         UNION
         -- Unknown xml indexes (minus the @DropUnknownIndexes gate)
         SELECT CAST(ei.[xSchema] AS NVARCHAR(500)), CAST(ei.[xTableName] AS NVARCHAR(500)), CAST(ei.[xIndexName] AS NVARCHAR(500)), 'index'
           FROM #ExistingXmlIndexes ei WITH (NOLOCK)
           WHERE NOT EXISTS (SELECT * FROM #XmlIndexes i WITH (NOLOCK) WHERE i.[Schema] = ei.[xSchema] AND i.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = ei.[xIndexName])
+            -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+            -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+            AND NOT EXISTS (SELECT * FROM #XmlIndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = ei.[xSchema] AND rn.[TableName] = ei.[xTableName] AND rn.[OldName] = ei.[xIndexName])
       ) w
       FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_SQL IS NOT NULL EXEC(@v_SQL)
@@ -731,8 +745,10 @@ BEGIN TRY
     JOIN #ExistingStats es WITH (NOLOCK) ON s.[Schema] = es.[Schema]
                                         AND s.[TableName] = es.[TableName]
                                         AND SchemaSmith.fn_StripBracketWrapping(s.[StatisticName]) = es.[StatsName]
-    WHERE es.StatisticScript <> 'CREATE STATISTICS [' + s.[StatisticName] + '] ON ' + s.[Schema] + '.' + s.[TableName] + ' (' + s.[Columns] + ')' +
-                                CASE WHEN RTRIM(ISNULL(s.[FilterExpression], '')) <> '' THEN ' WHERE ' + s.[FilterExpression] ELSE '' END
+    -- StatisticName is bracket-wrapped at parse; wrapping it again read [[name]] against a live [name], so
+    -- every statistic was re-created on every index-only deploy. Same form as ModifiedTableQuench now.
+    WHERE es.StatisticScript <> 'CREATE STATISTICS ' + s.[StatisticName] + ' ON ' + s.[Schema] + '.' + s.[TableName] + ' (' + s.[Columns] + ')' +
+                                CASE WHEN RTRIM(ISNULL(s.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(s.[Schema], s.[TableName], 'STATISTIC', s.[StatisticName], 'filter', s.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT st2.filter_definition FROM sys.stats st2 WITH (NOLOCK) WHERE st2.[object_id] = OBJECT_ID(s.[Schema] + '.' + s.[TableName]) AND st2.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName])))) ELSE '' END
   
   RAISERROR('Drop Modified Statistics', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping statistics ' + sc.[Schema] + '.' + sc.[TableName] + '.' + sc.[StatisticName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -975,6 +991,9 @@ BEGIN TRY
       SELECT @@SPID, 'fullTextIndex', fi.[Schema] + '.' + fi.[TableName], 'wouldCreate'
         FROM #FullTextIndexes fi WITH (NOLOCK)
         WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WITH (NOLOCK) WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
+
+  -- #242: record here, not in the caller -- this proc's temp tables are gone the moment it returns.
+  EXEC SchemaSmith.ExpressionMapRecord @WhatIf
 
   SET NOCOUNT OFF
 END TRY

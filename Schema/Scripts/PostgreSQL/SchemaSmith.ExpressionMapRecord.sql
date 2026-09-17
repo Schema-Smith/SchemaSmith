@@ -18,10 +18,12 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_version TEXT := current_setting('server_version');
+  v_rebaselined INTEGER := 0;
 BEGIN
   IF p_WhatIf THEN RETURN; END IF;
-  -- An index-only quench never builds the declared-column working set; nothing to record then.
-  IF to_regclass('pg_temp.temp_columns') IS NULL THEN RETURN; END IF;
+  -- Each source is guarded on its own: an index-only quench builds temp_indexes but no temp_columns or
+  -- temp_checks, and a full quench may run with no indexes declared.
+  IF to_regclass('pg_temp.temp_columns') IS NULL AND to_regclass('pg_temp.temp_indexes') IS NULL THEN RETURN; END IF;
 
   CREATE TEMPORARY TABLE IF NOT EXISTS temp_expression_map_declared (
     "ObjectSchema" VARCHAR(256) NOT NULL, "ObjectTable" VARCHAR(256) NOT NULL, "ObjectKind" VARCHAR(32) NOT NULL,
@@ -29,6 +31,7 @@ BEGIN
     "AuthoredText" TEXT NOT NULL, "CanonicalText" TEXT NOT NULL);
   TRUNCATE temp_expression_map_declared;
 
+  IF to_regclass('pg_temp.temp_columns') IS NOT NULL AND to_regclass('pg_temp.temp_checks') IS NOT NULL THEN
   -- Check constraints, table- and column-level. PostgreSQL stores both identically; the column form is
   -- recognised by the CK_<table>_<column> name the create pass gives it.
   INSERT INTO temp_expression_map_declared
@@ -61,7 +64,9 @@ BEGIN
       JOIN information_schema.columns a
         ON a.table_schema = col."TableSchema" AND a.table_name = col."TableName" AND a.column_name = col."Name"
      WHERE COALESCE(col."GenerationExpression", '') != '';
+  END IF;
 
+  IF to_regclass('pg_temp.temp_indexes') IS NOT NULL THEN
   -- Partial-index filter expressions.
   INSERT INTO temp_expression_map_declared
     -- Read EXACTLY as BuildExistingIndexesSnapshot reads it -- raw PG_GET_EXPR, no paren stripping. Recording
@@ -73,6 +78,49 @@ BEGIN
       JOIN pg_catalog.pg_class ic ON ic.relname = i."Name" AND ic.relkind = 'i'
       JOIN pg_catalog.pg_index idx ON idx.indexrelid = ic.oid
      WHERE COALESCE(i."FilterExpression", '') != '';
+  END IF;
+
+  -- Extended statistics carrying an expression: the whole column list, in the normalised live form the
+  -- comparison reads (SchemaSmith.StatisticsLiveColumns).
+  IF to_regclass('pg_temp.temp_statistics') IS NOT NULL THEN
+    INSERT INTO temp_expression_map_declared
+      SELECT ts."TableSchema", ts."TableName", 'STATISTIC', ts."Name", 'columns', ts."StatisticsColumns",
+             "SchemaSmith"."StatisticsLiveColumns"(se.oid)
+        FROM temp_statistics ts
+        JOIN pg_namespace n ON n.nspname = ts."TableSchema"
+        JOIN pg_class rel ON rel.relnamespace = n.oid AND rel.relname = ts."TableName"
+        JOIN pg_statistic_ext se ON se.stxrelid = rel.oid AND se.stxname = ts."Name"
+       WHERE ts."StatisticsColumns" LIKE '%(%';
+  END IF;
+
+  -- Row-level security policy expressions, one slot per clause. Raw pg_policies text, as the comparison reads it.
+  IF to_regclass('pg_temp.temp_policies') IS NOT NULL THEN
+    INSERT INTO temp_expression_map_declared
+      SELECT tp."TableSchema", tp."TableName", 'POLICY', tp."Name", 'using', tp."UsingExpression", pol.qual
+        FROM temp_policies tp
+        JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
+       WHERE NULLIF(TRIM(tp."UsingExpression"), '') IS NOT NULL AND pol.qual IS NOT NULL;
+    INSERT INTO temp_expression_map_declared
+      SELECT tp."TableSchema", tp."TableName", 'POLICY', tp."Name", 'check', tp."WithCheckExpression", pol.with_check
+        FROM temp_policies tp
+        JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
+       WHERE NULLIF(TRIM(tp."WithCheckExpression"), '') IS NOT NULL AND pol.with_check IS NOT NULL;
+  END IF;
+
+  -- Say so when a re-baseline happens (Paul, 2026-09-08: "re-baseline, and say so in the log -- log the count so
+  -- it is visible rather than silent"). A re-baseline is a row whose DECLARATION is unchanged but whose engine
+  -- context moved -- an engine upgrade or a compatibility-level change. A row whose declaration also changed was
+  -- APPLIED, not re-baselined, and is not counted.
+  SELECT COUNT(*) INTO v_rebaselined
+    FROM temp_expression_map_declared d
+    JOIN "SchemaSmith"."ExpressionMap" m
+      ON m."ObjectSchema" = d."ObjectSchema" AND m."ObjectTable" = d."ObjectTable" AND m."ObjectKind" = d."ObjectKind"
+     AND m."ObjectName" = d."ObjectName" AND m."Slot" = d."Slot"
+   WHERE m."AuthoredText" = d."AuthoredText"
+     AND m."EngineVersion" != v_version;
+  IF v_rebaselined > 0 THEN
+    RAISE NOTICE '  Re-baselined % recorded expression(s): they were recorded under a different PostgreSQL version, and their stored canonical text is now refreshed for %. No object was changed.', v_rebaselined, v_version;
+  END IF;
 
   INSERT INTO "SchemaSmith"."ExpressionMap" AS em
     ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot", "AuthoredText", "CanonicalText",

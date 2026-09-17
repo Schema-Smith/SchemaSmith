@@ -232,7 +232,8 @@ BEGIN
   RAISE NOTICE 'Add Missing Statistics';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing statistics ' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || CASE WHEN COALESCE(ts."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ts."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
                     'CREATE STATISTICS "' || ts."TableSchema" || '"."' || ts."Name" || '"' ||
-                    CASE WHEN NULLIF(TRIM(ts."Kind"), '') IS NOT NULL THEN ' (' || ts."Kind" ||')' ELSE '' END ||
+                    -- EXPRESSIONS is not a kind CREATE STATISTICS accepts; an extracted package carries it.
+                    "SchemaSmith"."StatisticsKindClause"(ts."Kind") ||
                     ' ON ' || "SchemaSmith"."QuoteIndexColumnList"(ts."StatisticsColumns") ||
                     ' FROM "' || ts."TableSchema" || '"."' || ts."TableName" || '";' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''statistic'', ''' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || ''', ''created'');', CHR(10))
@@ -301,14 +302,71 @@ BEGIN
                               AND con.conname = tc."Name");
   END IF;
 
+  -- Expression convergence (#242). A change to an existing policy's USING or WITH CHECK text is applied with
+  -- ALTER POLICY: non-destructive, so there is never an instant where the table has RLS on and the rule missing
+  -- -- which is exactly what DROP + CREATE would open. It runs BEFORE the add-missing pass so a policy created on
+  -- this run (which has no mapping row yet) is not ALTERed on the same run. A policy whose Permissive, Command,
+  -- Roles, or clause presence changed is left to the DROP + CREATE pass below: ALTER cannot change those, and
+  -- cannot remove a clause.
+  --
+  -- First deploy after upgrade: an existing policy has no mapping row, so the comparison falls back to text,
+  -- and one authored in a form PostgreSQL rewrites is ALTERed once and then recorded. That is a one-time
+  -- re-application of the SAME rule, not a behaviour change to it.
+  RAISE NOTICE 'Alter Row Level Security Policies Whose Expressions Changed';
+  SELECT STRING_AGG('RAISE NOTICE ''  Altering policy ' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''';' || CHR(10) ||
+                    'ALTER POLICY ' || QUOTE_IDENT(tp."Name") ||
+                    ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") ||
+                    CASE WHEN NULLIF(TRIM(tp."UsingExpression"), '') IS NOT NULL
+                         THEN ' USING (' || tp."UsingExpression" || ')' ELSE '' END ||
+                    CASE WHEN NULLIF(TRIM(tp."WithCheckExpression"), '') IS NOT NULL
+                         THEN ' WITH CHECK (' || tp."WithCheckExpression" || ')' ELSE '' END || ';' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''policy'', ''' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''', ''modified'');', CHR(10))
+    INTO sql_script
+    FROM temp_policies tp
+    JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
+   WHERE UPPER(pol.permissive) = tp."Permissive"
+       AND UPPER(pol.cmd) = tp."Command"
+       AND (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
+           = (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+       AND (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) = (pol.qual IS NULL)
+       AND (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) = (pol.with_check IS NULL)
+     AND ((NULLIF(TRIM(tp."UsingExpression"), '') IS NOT NULL AND pol.qual IS NOT NULL
+             AND "SchemaSmith"."StripParenWrapping"(pol.qual) <> TRIM(tp."UsingExpression")
+             AND NOT "SchemaSmith"."ExpressionMapUnchanged"(tp."TableSchema", tp."TableName", 'POLICY', tp."Name",
+                   'using', tp."UsingExpression", pol.qual))
+         OR (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NOT NULL AND pol.with_check IS NOT NULL
+             AND "SchemaSmith"."StripParenWrapping"(pol.with_check) <> TRIM(tp."WithCheckExpression")
+             AND NOT "SchemaSmith"."ExpressionMapUnchanged"(tp."TableSchema", tp."TableName", 'POLICY', tp."Name",
+                   'check', tp."WithCheckExpression", pol.with_check)));
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
+  IF p_WhatIf THEN
+    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+      SELECT pg_backend_pid(), 'policy', tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name", 'wouldModify'
+        FROM temp_policies tp
+        JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
+       WHERE UPPER(pol.permissive) = tp."Permissive"
+       AND UPPER(pol.cmd) = tp."Command"
+       AND (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
+           = (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+       AND (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) = (pol.qual IS NULL)
+       AND (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) = (pol.with_check IS NULL)
+         AND ((NULLIF(TRIM(tp."UsingExpression"), '') IS NOT NULL AND pol.qual IS NOT NULL
+             AND "SchemaSmith"."StripParenWrapping"(pol.qual) <> TRIM(tp."UsingExpression")
+             AND NOT "SchemaSmith"."ExpressionMapUnchanged"(tp."TableSchema", tp."TableName", 'POLICY', tp."Name",
+                   'using', tp."UsingExpression", pol.qual))
+         OR (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NOT NULL AND pol.with_check IS NOT NULL
+             AND "SchemaSmith"."StripParenWrapping"(pol.with_check) <> TRIM(tp."WithCheckExpression")
+             AND NOT "SchemaSmith"."ExpressionMapUnchanged"(tp."TableSchema", tp."TableName", 'POLICY', tp."Name",
+                   'check', tp."WithCheckExpression", pol.with_check)));
+  END IF;
+
   -- Row-level security policies (#rls, gap item D1). Created when absent.
   --
-  -- SCOPE, stated rather than implied: this converges the SET of policies -- a declared policy that does
-  -- not exist is created, and (in ModifiedTableQuench) one that exists but is no longer declared is
-  -- dropped. It does NOT detect a change to an existing policy's USING / WITH CHECK expression, because
-  -- PostgreSQL stores those normalised and comparing them against the declared text is the same
-  -- false-change problem the roadmap tracks separately. Rename the policy, or drop and re-add it, to
-  -- change an expression today.
+  -- A declared policy that does not exist is created; one no longer declared is dropped; a changed Permissive,
+  -- Command, Roles or clause presence is a DROP + CREATE; and a changed USING / WITH CHECK expression is an
+  -- ALTER POLICY (the pass immediately above), compared through the expression map so PostgreSQL's rewrite of
+  -- the text is not mistaken for a change.
   RAISE NOTICE 'Add Missing Row Level Security Policies';
   SELECT STRING_AGG('CREATE POLICY ' || QUOTE_IDENT(tp."Name") ||
                     ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") ||
@@ -341,9 +399,9 @@ BEGIN
   -- Re-converge an EXISTING policy whose exact-comparable attributes drifted from the declaration:
   -- Permissive (PERMISSIVE/RESTRICTIVE), Command (ALL/SELECT/...) and the Roles set. These are real,
   -- security-relevant changes that previously no-op'd silently. PostgreSQL has no ALTER for them, so it is
-  -- DROP + CREATE -- which also reapplies the declared USING / WITH CHECK expressions. An expression-ONLY
-  -- change is still not detected (comparing normalised expression text is the separate false-change problem
-  -- noted above); Roles is compared as a normalised, order-insensitive, lower-cased set.
+  -- DROP + CREATE -- which also reapplies the declared USING / WITH CHECK expressions -- and so is adding or
+  -- removing a clause. An expression-only change is the ALTER POLICY pass above. Roles is compared as a
+  -- normalised, order-insensitive, lower-cased set.
   RAISE NOTICE 'Re-converge Changed Row Level Security Policies';
   SELECT STRING_AGG('DROP POLICY ' || QUOTE_IDENT(tp."Name") || ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") || ';' || CHR(10) ||
                     'CREATE POLICY ' || QUOTE_IDENT(tp."Name") ||
@@ -362,7 +420,10 @@ BEGIN
     WHERE UPPER(pol.permissive) <> tp."Permissive"
        OR UPPER(pol.cmd) <> tp."Command"
        OR (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
-          <> (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1));
+          <> (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+       -- A clause added or removed: ALTER POLICY can set a clause but never remove one.
+       OR (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) <> (pol.qual IS NULL)
+       OR (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) <> (pol.with_check IS NULL);
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
   IF p_WhatIf THEN
@@ -373,7 +434,9 @@ BEGIN
         WHERE UPPER(pol.permissive) <> tp."Permissive"
            OR UPPER(pol.cmd) <> tp."Command"
            OR (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
-              <> (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1));
+              <> (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+           OR (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) <> (pol.qual IS NULL)
+           OR (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) <> (pol.with_check IS NULL);
   END IF;
 
   -- A policy that is no longer declared is DROPPED, and deliberately without an opt-out flag: a stale

@@ -29,10 +29,14 @@ BEGIN TRY
   -- The parse-produced temp tables are not always in scope: an index-only quench and a template with no tables
   -- never build them. Each read below is guarded, because a statement SQL Server never executes is never bound
   -- to a missing temp table -- and an unguarded read fails the whole deploy with "Invalid object name".
-  IF OBJECT_ID('tempdb..#Columns') IS NULL AND OBJECT_ID('tempdb..#CheckConstraints') IS NULL RETURN
+  IF OBJECT_ID('tempdb..#Columns') IS NULL AND OBJECT_ID('tempdb..#CheckConstraints') IS NULL
+     AND OBJECT_ID('tempdb..#Indexes') IS NULL AND OBJECT_ID('tempdb..#Statistics') IS NULL RETURN
 
   DECLARE @v_Version VARCHAR(50) = CONVERT(VARCHAR(50), SERVERPROPERTY('ProductVersion'))
-  DECLARE @v_Compat INT = CONVERT(INT, DATABASEPROPERTYEX(DB_NAME(), 'CompatibilityLevel'))
+  -- sys.databases, not DATABASEPROPERTYEX(..., 'CompatibilityLevel'): that property returns NULL before SQL Server
+  -- 2017, so on 2008 R2 through 2016 no compatibility level was ever recorded and a compatibility change was
+  -- never seen as a context change -- measured on genuine 2012, 2014 and 2016 instances.
+  DECLARE @v_Compat INT = (SELECT [compatibility_level] FROM sys.databases WHERE [database_id] = DB_ID())
 
   IF OBJECT_ID('tempdb..#ExpressionMapDeclared') IS NOT NULL DROP TABLE #ExpressionMapDeclared
   CREATE TABLE #ExpressionMapDeclared (
@@ -105,6 +109,33 @@ BEGIN TRY
        AND ic.TABLE_NAME = SchemaSmith.fn_StripBracketWrapping(c.[TableName])
        AND ic.COLUMN_NAME = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
      WHERE RTRIM(ISNULL(c.[Default], '')) <> ''
+
+  -- Filtered statistics.
+  IF OBJECT_ID('tempdb..#Statistics') IS NOT NULL
+  INSERT #ExpressionMapDeclared (ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot, AuthoredText, CanonicalText)
+    SELECT SchemaSmith.fn_StripBracketWrapping(s.[Schema]), SchemaSmith.fn_StripBracketWrapping(s.[TableName]),
+           'STATISTIC', SchemaSmith.fn_StripBracketWrapping(s.[StatisticName]), 'filter',
+           s.[FilterExpression], ISNULL(SchemaSmith.fn_StripParenWrapping(st.filter_definition), '')
+      FROM #Statistics s WITH (NOLOCK)
+      JOIN sys.stats st WITH (NOLOCK)
+        ON st.[object_id] = OBJECT_ID(s.[Schema] + '.' + s.[TableName])
+       AND st.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName])
+     WHERE RTRIM(ISNULL(s.[FilterExpression], '')) <> ''
+
+  -- Say so when a re-baseline happens (Paul, 2026-09-08: "re-baseline, and say so in the log -- log the count so
+  -- it is visible rather than silent"). A re-baseline is a row whose DECLARATION is unchanged but whose engine
+  -- context moved -- an engine upgrade or a compatibility-level change. A row whose declaration also changed was
+  -- APPLIED, not re-baselined, and is not counted.
+  DECLARE @v_Rebaselined INT =
+    (SELECT COUNT(*)
+       FROM #ExpressionMapDeclared d
+       JOIN SchemaSmith.ExpressionMap m WITH (NOLOCK)
+         ON m.[ObjectSchema] = d.ObjectSchema AND m.[ObjectTable] = d.ObjectTable AND m.[ObjectKind] = d.ObjectKind
+        AND m.[ObjectName] = d.ObjectName AND m.[Slot] = d.Slot
+      WHERE m.[AuthoredText] = d.AuthoredText
+        AND (m.[EngineVersion] <> @v_Version OR ISNULL(m.[CompatLevel], -1) <> ISNULL(@v_Compat, -1)))
+  IF @v_Rebaselined > 0
+    RAISERROR('  Re-baselined %d recorded expression(s): they were recorded under a different SQL Server version or compatibility level, and their stored canonical text is now refreshed for version %s at compatibility level %d. No object was changed.', 10, 100, @v_Rebaselined, @v_Version, @v_Compat) WITH NOWAIT
 
   MERGE SchemaSmith.ExpressionMap AS target
   USING #ExpressionMapDeclared AS source

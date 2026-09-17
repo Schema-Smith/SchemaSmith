@@ -462,6 +462,22 @@ BEGIN
     RAISE NOTICE 'Collect Existing Index Definitions';
     CALL "SchemaSmith"."BuildExistingIndexesSnapshot"();
 
+    -- #242. A partial index's predicate is compared in more than one place (the drop/modify election and the
+    -- rename join), and PostgreSQL never renders it the way it was authored. Neutralise the difference ONCE, in
+    -- the live snapshot: where the mapping vouches that the declared predicate produced the live one, the
+    -- snapshot adopts the declared text and every later comparison compares equal. The snapshot only -- the
+    -- CREATE path emits the declared text, and the recorder reads the catalog directly.
+    UPDATE temp_existing_indexes ei
+       SET "FilterExpression" = i."FilterExpression"
+      FROM temp_indexes i
+     WHERE i."TableSchema" = ei."TableSchema"
+       AND i."TableName" = ei."TableName"
+       AND i."Name" = ei."IndexName"
+       AND COALESCE(i."FilterExpression", '') != ''
+       AND COALESCE(i."FilterExpression", '') != COALESCE(ei."FilterExpression", '')
+       AND "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX', i."Name", 'filter',
+             i."FilterExpression", COALESCE(ei."FilterExpression", ''));
+
     RAISE NOTICE 'Collect Existing Foreign Key Definitions';
     DROP TABLE IF EXISTS temp_existing_foreignkeys;
     CREATE TEMPORARY TABLE temp_existing_foreignkeys AS
@@ -536,16 +552,27 @@ BEGIN
       SELECT t."Schema" AS "TableSchema",
              t."Name" AS "TableName",
              se.stxname AS "StatisticsName",
-             COALESCE((SELECT STRING_AGG(CASE k WHEN 'd' THEN 'NDISTINCT' WHEN 'f' THEN 'DEPENDENCIES' WHEN 'm' THEN 'MCV' WHEN 'e' THEN 'EXPRESSIONS' ELSE k::text END, ',')
-                       FROM UNNEST(se.stxkind) AS k), '') AS "Kind",
-             COALESCE(ARRAY_TO_STRING(ARRAY_CAT(COALESCE((SELECT ARRAY_AGG(a.attname::text)
-                                                            FROM UNNEST(se.stxkeys) WITH ORDINALITY AS t(attnum, ord)
-                                                            JOIN pg_attribute a ON a.attrelid = se.stxrelid AND a.attnum = t.attnum
-                                                            WHERE a.attnum > 0),
-                                                         ARRAY[]::text[]),
-                                                "SchemaSmith"."StatisticsExpressionColumns"(t."Schema", se.stxname)), ','), '') AS "StatisticsColumns"
+             -- Both definitions in the normalised forms of SchemaSmith.StatisticsDefinitionForms; the declared side
+             -- is put through the same functions wherever it is compared.
+             "SchemaSmith"."NormalizeStatisticsKind"((SELECT STRING_AGG(CASE k WHEN 'd' THEN 'NDISTINCT' WHEN 'f' THEN 'DEPENDENCIES' WHEN 'm' THEN 'MCV' ELSE NULL END, ',')
+                                                       FROM UNNEST(se.stxkind) AS k)) AS "Kind",
+             "SchemaSmith"."StatisticsLiveColumns"(se.oid) AS "StatisticsColumns"
       FROM temp_tables t
       JOIN  pg_statistic_ext se ON se.stxrelid = to_regclass('"' || t."Schema" || '"."' || t."Name" || '"');
+
+    -- #242, the same move as index predicates: where the mapping vouches that the declared column list produced
+    -- the live one (an expression PostgreSQL rewrote), the snapshot adopts the declared list's normalised form,
+    -- so every comparison below compares equal.
+    UPDATE temp_existing_statistics es
+       SET "StatisticsColumns" = "SchemaSmith"."NormalizeStatisticsColumnList"(ts."StatisticsColumns")
+      FROM temp_statistics ts
+     WHERE ts."TableSchema" = es."TableSchema"
+       AND ts."TableName" = es."TableName"
+       AND ts."Name" = es."StatisticsName"
+       AND ts."StatisticsColumns" LIKE '%(%'
+       AND "SchemaSmith"."NormalizeStatisticsColumnList"(ts."StatisticsColumns") != es."StatisticsColumns"
+       AND "SchemaSmith"."ExpressionMapUnchanged"(ts."TableSchema", ts."TableName", 'STATISTIC', ts."Name", 'columns',
+             ts."StatisticsColumns", es."StatisticsColumns");
 
     -- No-drop protection tier (#270): the FK drop pass below still runs in protected mode but its
     -- by-absence branch is gated by p_DropForeignKeysRemovedFromProduct (forced FALSE), so only
@@ -760,8 +787,8 @@ BEGIN
                               WHERE es."TableSchema" = ts."TableSchema"
                                 AND es."TableName" = ts."TableName"
                                 AND es."StatisticsName" = ts."Name"
-                                AND es."Kind" = COALESCE(NULLIF(ts."Kind", ''), 'NDISTINCT,DEPENDENCIES,MCV')
-                                AND es."StatisticsColumns" = ts."StatisticsColumns")
+                                AND es."Kind" = "SchemaSmith"."NormalizeStatisticsKind"(ts."Kind")
+                                AND es."StatisticsColumns" = "SchemaSmith"."NormalizeStatisticsColumnList"(ts."StatisticsColumns"))
             AND NOT EXISTS (SELECT 1
                               FROM temp_statistics ts2
                               WHERE es."TableSchema" = ts2."TableSchema"
@@ -781,8 +808,8 @@ BEGIN
                           WHERE es."TableSchema" = ts."TableSchema"
                             AND es."TableName" = ts."TableName"
                             AND es."StatisticsName" = ts."Name"
-                            AND es."Kind" = COALESCE(NULLIF(ts."Kind", ''), 'NDISTINCT,DEPENDENCIES,MCV')
-                            AND es."StatisticsColumns" = ts."StatisticsColumns")
+                            AND es."Kind" = "SchemaSmith"."NormalizeStatisticsKind"(ts."Kind")
+                            AND es."StatisticsColumns" = "SchemaSmith"."NormalizeStatisticsColumnList"(ts."StatisticsColumns"))
         -- Split modified vs removed: a same-named statistics object whose definition changed is
         -- dropped unconditionally (the create pass re-adds it); one whose name is gone from the
         -- product is a by-absence removal, gated by the cascade flag + per-table tightening.
@@ -853,17 +880,23 @@ BEGIN
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     RAISE NOTICE 'Handle Renamed Indexes And Unique Constraints';
-    SELECT STRING_AGG('RAISE NOTICE ''  Renaming ' || CASE WHEN ei."PrimaryKey" OR ei."UniqueConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || ei."TableSchema" || '.' || ei."TableName" || '.' || ei."IndexName" || ' to ' || i."Name" || ''';' || CHR(10) ||
-                      CASE WHEN NOT (ei."PrimaryKey" OR ei."UniqueConstraint")
-                           THEN 'ALTER INDEX IF EXISTS "' || ei."TableSchema" || '"."' || ei."IndexName" || '" RENAME TO "' || i."Name"  || '";'
-                           ELSE 'ALTER TABLE "' || ei."TableSchema" || '"."' || ei."TableName" || '" RENAME CONSTRAINT "' || ei."IndexName" || '" TO "' || i."Name" || '";' END, CHR(10))
-      INTO sql_script
+    -- The rename pairs are materialised, not just rendered to SQL: the drop election below starts from the
+    -- PRE-rename snapshot, where a renamed index still carries its old name and is absent from the package --
+    -- so without excluding these it was elected as unknown (or removed) and the deploy logged dropping it
+    -- right after renaming it.
+    DROP TABLE IF EXISTS temp_index_renames;
+    CREATE TEMPORARY TABLE temp_index_renames AS
+      SELECT ei."TableSchema", ei."TableName", ei."IndexName" AS "OldName", i."Name" AS "NewName",
+             ei."PrimaryKey", ei."UniqueConstraint"
       FROM temp_existing_indexes ei
       JOIN temp_indexes i ON i."TableSchema" = ei."TableSchema"
                          AND i."TableName" = ei."TableName"
                          AND i."Name" != ei."IndexName"
-                         AND i."IndexColumns" = ei."IndexColumns"
-                         AND COALESCE(i."IncludeColumns", '') = COALESCE(ei."IncludeColumns", '')
+                         -- The declared lists are compared through NormalizeIndexColumnList: the snapshot reads
+                         -- columns back unquoted with only non-default sort options, so "status" or status ASC
+                         -- never matched and the index was rebuilt on every deploy.
+                         AND "SchemaSmith"."NormalizeIndexColumnList"(i."IndexColumns") = ei."IndexColumns"
+                         AND "SchemaSmith"."NormalizeIndexColumnList"(i."IncludeColumns") = COALESCE(ei."IncludeColumns", '')
                          -- #285: a PRIMARY KEY is unique in the catalog whether or not the package
                          -- says so, so a naturally-authored PK (PrimaryKey: true, no Unique) failed
                          -- this join and a RENAME fell through to drop+recreate. Same disjunction the
@@ -872,13 +905,28 @@ BEGIN
                               OR COALESCE(i."UniqueConstraint", FALSE)) = ei."Unique"
                          AND COALESCE(i."UniqueConstraint", FALSE) = ei."UniqueConstraint"
                          AND COALESCE(i."PrimaryKey", FALSE) = ei."PrimaryKey"
-                         AND COALESCE(i."FilterExpression", '') = COALESCE(ei."FilterExpression", '')
+                         -- #242: a rename pairs the declared index with a live one under its OLD name, so the
+                         -- snapshot substitution above (which matches by name) cannot reach it. Ask the mapping,
+                         -- keyed on the old name, whether the declared predicate produced the live one.
+                         AND (COALESCE(i."FilterExpression", '') = COALESCE(ei."FilterExpression", '')
+                              OR "SchemaSmith"."ExpressionMapUnchanged"(ei."TableSchema", ei."TableName", 'INDEX',
+                                   ei."IndexName", 'filter', i."FilterExpression", COALESCE(ei."FilterExpression", '')))
                          AND COALESCE(i."AccessMethod", 'btree') = COALESCE(ei."AccessMethod", 'btree')
+                         AND COALESCE(i."NullsNotDistinct", false) = COALESCE(ei."NullsNotDistinct", false)
+                         AND COALESCE(i."Deferrable", false) = COALESCE(ei."Deferrable", false)
+                         AND COALESCE(i."InitiallyDeferred", false) = COALESCE(ei."InitiallyDeferred", false)
+                         AND COALESCE(i."StorageParameters", '') = COALESCE(ei."StorageParameters", '')
       WHERE NOT EXISTS (SELECT 1
                           FROM temp_indexes i
                           WHERE i."TableSchema" = ei."TableSchema"
                             AND i."TableName" = ei."TableName"
                             AND i."Name" = ei."IndexName");
+    SELECT STRING_AGG('RAISE NOTICE ''  Renaming ' || CASE WHEN rn."PrimaryKey" OR rn."UniqueConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || rn."TableSchema" || '.' || rn."TableName" || '.' || rn."OldName" || ' to ' || rn."NewName" || ''';' || CHR(10) ||
+                      CASE WHEN NOT (rn."PrimaryKey" OR rn."UniqueConstraint")
+                           THEN 'ALTER INDEX IF EXISTS "' || rn."TableSchema" || '"."' || rn."OldName" || '" RENAME TO "' || rn."NewName"  || '";'
+                           ELSE 'ALTER TABLE "' || rn."TableSchema" || '"."' || rn."TableName" || '" RENAME CONSTRAINT "' || rn."OldName" || '" TO "' || rn."NewName" || '";' END, CHR(10))
+      INTO sql_script
+      FROM temp_index_renames rn;
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     RAISE NOTICE 'Identify Unknown, Removed, and Modified Indexes to Drop';
@@ -889,7 +937,10 @@ BEGIN
              ei."IndexName",
              ei."PrimaryKey" OR ei."UniqueConstraint" AS "IsConstraint"
         FROM temp_existing_indexes ei
-        WHERE (p_DropUnknownIndexes 
+        WHERE NOT EXISTS (SELECT 1 FROM temp_index_renames rn
+                          WHERE rn."TableSchema" = ei."TableSchema" AND rn."TableName" = ei."TableName"
+                            AND rn."OldName" = ei."IndexName")
+          AND ((p_DropUnknownIndexes 
            AND NOT EXISTS (SELECT 1 -- Unknown Index
                             FROM temp_indexes i
                             WHERE i."TableSchema" = ei."TableSchema"
@@ -900,18 +951,16 @@ BEGIN
                         WHERE i."TableSchema" = ei."TableSchema"
                           AND i."TableName" = ei."TableName"
                           AND i."Name" = ei."IndexName"
-                          AND (i."IndexColumns" != ei."IndexColumns"
-                            OR COALESCE(i."IncludeColumns", '') != COALESCE(ei."IncludeColumns", '')
+                          AND ("SchemaSmith"."NormalizeIndexColumnList"(i."IndexColumns") != ei."IndexColumns"
+                            OR "SchemaSmith"."NormalizeIndexColumnList"(i."IncludeColumns") != COALESCE(ei."IncludeColumns", '')
                             OR (COALESCE(i."Unique", FALSE) OR COALESCE(i."PrimaryKey", FALSE) OR COALESCE(i."UniqueConstraint", FALSE)) != ei."Unique"
                             OR COALESCE(i."UniqueConstraint", FALSE) != ei."UniqueConstraint"
                             OR COALESCE(i."PrimaryKey", FALSE) != ei."PrimaryKey"
-                            OR (COALESCE(i."FilterExpression", '') != COALESCE(ei."FilterExpression", '')
-                                -- #242: an authored predicate never matches the engine's rendering of it, so a
-                                -- partial index was dropped and re-created on every deploy. Ask what was applied.
-                                AND NOT "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX',
-                                      i."Name", 'filter', i."FilterExpression", COALESCE(ei."FilterExpression", '')))
+                            OR COALESCE(i."FilterExpression", '') != COALESCE(ei."FilterExpression", '')
                             OR COALESCE(i."AccessMethod", 'btree') != COALESCE(ei."AccessMethod", 'btree')
                             OR COALESCE(i."NullsNotDistinct", false) != COALESCE(ei."NullsNotDistinct", false)
+                            OR COALESCE(i."Deferrable", false) != COALESCE(ei."Deferrable", false)
+                            OR COALESCE(i."InitiallyDeferred", false) != COALESCE(ei."InitiallyDeferred", false)
                             -- A storage-parameter change rebuilds the index (hnsw m and ivfflat lists cannot
                             -- be ALTERed in place), so it drops here and the missing-index pass recreates it.
                             OR COALESCE(i."StorageParameters", '') != COALESCE(ei."StorageParameters", '')))
@@ -926,7 +975,7 @@ BEGIN
                                             FROM temp_indexes i
                                             WHERE i."TableSchema" = ei."TableSchema"
                                               AND i."TableName" = ei."TableName"
-                                              AND i."Name" = ei."IndexName")));
+                                              AND i."Name" = ei."IndexName"))));
 
     -- No-drop protection tier (#270): under protected mode the caller forces p_DropUnknownIndexes and
     -- p_DropIndexesRemovedFromProduct to FALSE, so the by-absence branches of temp_indexes_to_drop above
@@ -943,7 +992,10 @@ BEGIN
                ei."TableSchema" || '.' || ei."TableName" || '.' || ei."IndexName",
                'dropSuppressed'
           FROM temp_existing_indexes ei
-          WHERE NOT EXISTS (SELECT 1 -- Unknown Index (minus the p_DropUnknownIndexes gate)
+          WHERE NOT EXISTS (SELECT 1 FROM temp_index_renames rn
+                          WHERE rn."TableSchema" = ei."TableSchema" AND rn."TableName" = ei."TableName"
+                            AND rn."OldName" = ei."IndexName")
+            AND (NOT EXISTS (SELECT 1 -- Unknown Index (minus the p_DropUnknownIndexes gate)
                               FROM temp_indexes i
                               WHERE i."TableSchema" = ei."TableSchema"
                                 AND i."TableName" = ei."TableName"
@@ -958,7 +1010,7 @@ BEGIN
                                    FROM temp_indexes i
                                    WHERE i."TableSchema" = ei."TableSchema"
                                      AND i."TableName" = ei."TableName"
-                                     AND i."Name" = ei."IndexName"));
+                                     AND i."Name" = ei."IndexName")));
     END IF;
 
     RAISE NOTICE 'Drop Unknown, Removed, and Modified Indexes';

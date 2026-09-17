@@ -38,14 +38,14 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
         ]
         """;
 
-    private static string GeneratedJson(string table, string expression) => $$"""
+    private static string GeneratedJson(string table, string expression, bool declareNullable = true) => $$"""
         [
         {
             "Name": "{{table}}",
             "Columns": [
                 { "Name": "Id", "DataType": "INT", "Nullable": false },
                 { "Name": "Tag", "DataType": "VARCHAR(50)", "Nullable": true },
-                { "Name": "Label", "DataType": "VARCHAR(60)", "Nullable": true, "GenerationExpression": "{{expression}}", "Generated": "STORED" }
+                { "Name": "Label", "DataType": "VARCHAR(60)",{{(declareNullable ? " \"Nullable\": true," : "")}} "GenerationExpression": "{{expression}}", "Generated": "STORED" }
             ],
             "Indexes": [
                 { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" }
@@ -139,8 +139,11 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
         });
     }
 
-    [Test]
-    public void AGeneratedColumnAuthoredInNaturalForm_EmitsNoDdlOnARepeatDeploy()
+    // declareNullable: false measures a generated column authored without "Nullable" -- on SQL Server that case
+    // churned on every version because the create path and the comparison read the omission differently.
+    [TestCase(true)]
+    [TestCase(false)]
+    public void AGeneratedColumnAuthoredInNaturalForm_EmitsNoDdlOnARepeatDeploy(bool declareNullable)
     {
         var table = $"ExprMapGen_{Guid.NewGuid():N}"[..20];
         WithConnection(table, cmd =>
@@ -150,7 +153,7 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
             cmd.ExecuteNonQuery();
 
             // Natural form: spaces around the operator, no engine backticking of the function call.
-            var json = GeneratedJson(table, "concat(`Tag`, 'x')");
+            var json = GeneratedJson(table, "concat(`Tag`, 'x')", declareNullable);
             RunTableQuenchProc(cmd, json);
             var live = LiveGenerationExpression(cmd, table);
             Assert.That(live, Is.Not.Empty, "setup: the generated column must exist after the first deploy");
@@ -244,4 +247,78 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
         });
     }
 
+    // SQL Server and PostgreSQL both elected a just-renamed index for dropping when DropUnknownIndexes was on:
+    // it was still in the pre-rename snapshot under its old name. MySQL/MariaDB already clear renamed names
+    // from their detection snapshots -- this proves it rather than trusting the comment that says so.
+    [Test]
+    public void RenamingAnIndex_WithDropUnknownIndexes_DoesNotDropIt()
+    {
+        var table = $"ExprMapRen_{Guid.NewGuid():N}"[..20];
+        WithConnection(table, cmd =>
+        {
+            cmd.CommandText = $@"DROP TABLE IF EXISTS `{_mainDb}`.`{table}`;
+                                 CREATE TABLE `{_mainDb}`.`{table}` (`Id` INT NOT NULL, `Tag` VARCHAR(50) NULL, PRIMARY KEY (`Id`));";
+            cmd.ExecuteNonQuery();
+
+            string Json(string indexName) => $$"""
+                [{ "Name": "{{table}}",
+                   "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "Tag", "DataType": "VARCHAR(50)", "Nullable": true } ],
+                   "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" },
+                                { "Name": "{{indexName}}", "IndexColumns": "Tag" } ] }]
+                """;
+
+            cmd.CommandText = $"CALL SchemaSmith_TableQuench('{_productName}', '{_mainDb}', '{Json("IX_Tag_Old").Replace("'", "''")}', 0, 1, 0)";
+            cmd.ExecuteNonQuery();
+            ClearMessages(cmd);
+
+            cmd.CommandText = $"CALL SchemaSmith_TableQuench('{_productName}', '{_mainDb}', '{Json("IX_Tag_New").Replace("'", "''")}', 0, 1, 0)";
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = $@"SELECT GROUP_CONCAT(DISTINCT INDEX_NAME ORDER BY INDEX_NAME) FROM INFORMATION_SCHEMA.STATISTICS
+                                  WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}'";
+            Assert.Multiple(() =>
+            {
+                Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("IX_Tag_New,PRIMARY"), "the index must exist under its new name only");
+                Assert.That(CountMessages(cmd, "Drop", table), Is.Zero, "no drop may be emitted for a renamed index");
+                Assert.That(CountMessages(cmd, "Rename index", table), Is.EqualTo(1),
+                    "it must have been a RENAME -- a drop-and-recreate also ends with the index under its new name");
+            });
+        });
+    }
+
+    // The SQL Server and PostgreSQL fixtures both pin this; the MySQL family did not. A row written under a
+    // different server version cannot vouch for today's canonical text: stale, not wrong. The column must be left
+    // alone, the row rewritten with the current version, and the re-baseline reported.
+    [Test]
+    public void AStaleContextRow_IsReBaselined_WithoutTouchingTheObject_AndIsReported()
+    {
+        var table = $"ExprMapCtx_{Guid.NewGuid():N}"[..20];
+        WithConnection(table, cmd =>
+        {
+            cmd.CommandText = $@"DROP TABLE IF EXISTS `{_mainDb}`.`{table}`;
+                                 CREATE TABLE `{_mainDb}`.`{table}` (`Id` INT NOT NULL, `Tag` VARCHAR(50) NULL, PRIMARY KEY (`Id`));";
+            cmd.ExecuteNonQuery();
+
+            var json = GeneratedJson(table, "concat(`Tag`, 'x')");
+            RunTableQuenchProc(cmd, json);
+
+            cmd.CommandText = $@"UPDATE SchemaSmith_ExpressionMap
+                                    SET EngineVersion = 'from-another-server', CanonicalText = 'stale text'
+                                  WHERE ObjectTable = '{table}'";
+            Assert.That(cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale");
+
+            ClearMessages(cmd);
+            RunTableQuenchProc(cmd, json);
+
+            cmd.CommandText = $"SELECT COUNT(*) FROM SchemaSmith_ExpressionMap WHERE ObjectTable = '{table}' AND EngineVersion = 'from-another-server'";
+            var staleLeft = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Multiple(() =>
+            {
+                Assert.That(CountMessages(cmd, "olumn", table), Is.Zero, "a stale context must re-baseline, never re-apply");
+                Assert.That(staleLeft, Is.Zero, "the stale row must be rewritten with the current server version");
+                Assert.That(CountMessages(cmd, "Re-baselined 1 recorded expression", ""), Is.EqualTo(1),
+                    "the re-baseline must be reported in the deploy log, not happen silently");
+            });
+        });
+    }
 }

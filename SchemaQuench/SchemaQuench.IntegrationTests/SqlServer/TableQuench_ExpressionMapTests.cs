@@ -4,6 +4,7 @@ using System;
 using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
+using Schema.Utility;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -83,9 +84,19 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         cmd.ExecuteNonQuery();
     }
 
+    private readonly System.Collections.Generic.List<string> _messages = new();
+
+    private void CaptureMessages(IDbConnection conn) =>
+        ((Microsoft.Data.SqlClient.SqlConnection)conn).InfoMessage += (_, e) =>
+        {
+            foreach (Microsoft.Data.SqlClient.SqlError err in e.Errors) _messages.Add(err.Message);
+        };
+
     private void WithTable(string table, string createSql, Action<IDbCommand> body)
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        _messages.Clear();
+        CaptureMessages(conn);
         conn.Open();
         conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
@@ -191,10 +202,14 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
                                   WHERE [ObjectTable] = '{table}'";
             Assert.That(cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale");
 
+            _messages.Clear();
             RunTableQuenchProc(cmd, json);
 
             Assert.That(ConstraintObjectId(cmd, table), Is.EqualTo(firstId),
                 "a stale context must re-baseline, never re-apply");
+            Assert.That(_messages.FindAll(m => m.Contains("Re-baselined 1 recorded expression")), Has.Count.EqualTo(1),
+                "a re-baseline must be reported in the deploy log, not happen silently: "
+                + string.Join(" | ", _messages.FindAll(m => m.Contains("aseline"))));
             cmd.CommandText = $@"SELECT COUNT(*) FROM SchemaSmith.ExpressionMap
                                   WHERE [ObjectTable] = '{table}' AND [EngineVersion] = 'from-another-server'";
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero,
@@ -235,4 +250,131 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         });
     }
 
+    // ------------------------------------------------------------------------------------------------------------
+    // The measured case the re-baseline rule exists for, done for real rather than simulated by editing a row.
+    // SQL Server freezes an expression's stored text at the compatibility level it was CREATED under: at compat 100
+    // CONVERT(varchar(10), Qty) is stored as the 3-argument CONVERT(...,0), and it stays that way after the database
+    // is raised to 160. Re-applying on the context change would drop and re-create every expression-bearing object
+    // in the database on one deploy. Compat 100 is below the OPENJSON cliff, so this deploys through the XML ingest
+    // path, exactly as production does for such a database.
+    // ------------------------------------------------------------------------------------------------------------
+    [Test]
+    public void ARealCompatibilityLevelChange_ReBaselines_AndTouchesNothing()
+    {
+        var db = $"ExprMapCompat_{Guid.NewGuid():N}"[..28];
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        _messages.Clear();
+        CaptureMessages(conn);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            cmd.CommandText = $"CREATE DATABASE [{db}]";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"ALTER DATABASE [{db}] SET COMPATIBILITY_LEVEL = 100";
+            cmd.ExecuteNonQuery();
+            conn.ChangeDatabase(db);
+            ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, forceReKindle: true, encoding: IngestEncoding.Xml);
+
+            cmd.CommandText = "CREATE TABLE dbo.CompatProbe ([Qty] INT NULL)";
+            cmd.ExecuteNonQuery();
+
+            const string tableJson = """
+                [{
+                    "Schema": "[dbo]",
+                    "Name": "[CompatProbe]",
+                    "Columns": [ {"Name": "[Qty]", "DataType": "INT", "Nullable": true} ],
+                    "CheckConstraints": [ {"Name": "[CK_CompatProbe_Qty]", "Expression": "CONVERT(varchar(10), Qty) <> ''"} ]
+                }]
+                """;
+
+            void DeployViaXml()
+            {
+                var xml = ModelXmlSerializer.ToIngestXml(tableJson, "Tables", "Table");
+                cmd.CommandText = "DECLARE @TableDefinitions XML = @payload;\nDECLARE @UpdateFillFactor BIT = 0;\n"
+                                  + ForgeKindler.GetParseTableXmlScript(Platform.SqlServer)
+                                  + "\nEXEC SchemaSmith.MissingTableAndColumnQuench @WhatIf = 0"
+                                  + "\nEXEC SchemaSmith.ModifiedTableQuench @ProductName = 'CompatProbe', @WhatIf = 0, @DropUnknownIndexes = 0, @DropTablesRemovedFromProduct = 0"
+                                  + "\nEXEC SchemaSmith.MissingIndexesAndConstraintsQuench 'CompatProbe', 0"
+                                  + "\nEXEC SchemaSmith.ExpressionMapRecord @WhatIf = 0";
+                cmd.Parameters.Clear();
+                var payload = cmd.CreateParameter();
+                payload.ParameterName = "@payload";
+                payload.Value = xml;
+                cmd.Parameters.Add(payload);
+                cmd.ExecuteNonQuery();
+                cmd.Parameters.Clear();
+            }
+
+            int ObjectId()
+            {
+                cmd.CommandText = "SELECT ISNULL(OBJECT_ID('dbo.CK_CompatProbe_Qty'), 0)";
+                return Convert.ToInt32(cmd.ExecuteScalar());
+            }
+
+            string StoredDefinition()
+            {
+                cmd.CommandText = "SELECT [definition] FROM sys.check_constraints WHERE [name] = 'CK_CompatProbe_Qty'";
+                return cmd.ExecuteScalar() as string;
+            }
+
+            string MapRow()
+            {
+                cmd.CommandText = @"SELECT CAST([CompatLevel] AS VARCHAR(10)) + '|' + [CanonicalText] FROM SchemaSmith.ExpressionMap
+                                     WHERE [ObjectTable] = 'CompatProbe' AND [ObjectName] = 'CK_CompatProbe_Qty'";
+                return cmd.ExecuteScalar() as string;
+            }
+
+            // Pass 1, at compat 100.
+            DeployViaXml();
+            var id = ObjectId();
+            Assert.That(id, Is.Not.Zero, "setup: the constraint must exist");
+            var frozen = StoredDefinition();
+            Assert.That(frozen, Does.Contain(",0)"),
+                "precondition: at compat 100 SQL Server stores the 3-argument CONVERT -- without that this proves nothing: " + frozen);
+            Assert.That(MapRow(), Does.StartWith("100|"), "the mapping must record the compat level it was written under");
+
+            // The upgrade.
+            conn.ChangeDatabase("master");
+            cmd.CommandText = $"ALTER DATABASE [{db}] SET COMPATIBILITY_LEVEL = 160";
+            cmd.ExecuteNonQuery();
+            conn.ChangeDatabase(db);
+
+            // Pass 2, at compat 160: re-baseline, report it, change nothing.
+            _messages.Clear();
+            DeployViaXml();
+            var afterUpgradeId = ObjectId();
+            var afterUpgradeDef = StoredDefinition();
+            var afterUpgradeRow = MapRow();
+            var reported = _messages.FindAll(m => m.Contains("Re-baselined 1 recorded expression"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(afterUpgradeId, Is.EqualTo(id), "a compatibility-level change must NOT re-create the constraint");
+                Assert.That(afterUpgradeDef, Is.EqualTo(frozen), "the stored text must be untouched");
+                Assert.That(afterUpgradeRow, Does.StartWith("160|"), "the mapping must now carry the new compat level");
+                Assert.That(reported, Has.Count.EqualTo(1),
+                    "the re-baseline must be reported: " + string.Join(" | ", _messages.FindAll(m => m.Contains("aseline"))));
+            });
+
+            // Pass 3: context matches again -- nothing to report, nothing re-created.
+            _messages.Clear();
+            DeployViaXml();
+            var pass3Id = ObjectId();
+            var pass3Reported = _messages.FindAll(m => m.Contains("Re-baselined"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(pass3Id, Is.EqualTo(id), "pass 3 must leave the constraint alone");
+                Assert.That(pass3Reported, Is.Empty, "pass 3 has nothing to re-baseline");
+            });
+        }
+        finally
+        {
+            conn.ChangeDatabase("master");
+            cmd.Parameters.Clear();
+            cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
+            cmd.ExecuteNonQuery();
+        }
+    }
 }

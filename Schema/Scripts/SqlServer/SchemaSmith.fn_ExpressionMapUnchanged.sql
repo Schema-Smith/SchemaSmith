@@ -44,7 +44,10 @@ RETURNS BIT
 AS
 BEGIN
   DECLARE @v_Version VARCHAR(50) = CONVERT(VARCHAR(50), SERVERPROPERTY('ProductVersion'))
-  DECLARE @v_Compat INT = CONVERT(INT, DATABASEPROPERTYEX(DB_NAME(), 'CompatibilityLevel'))
+  -- sys.databases, not DATABASEPROPERTYEX(..., 'CompatibilityLevel'): that property returns NULL before SQL Server
+  -- 2017, so on 2008 R2 through 2016 no compatibility level was ever recorded and a compatibility change was
+  -- never seen as a context change -- measured on genuine 2012, 2014 and 2016 instances.
+  DECLARE @v_Compat INT = (SELECT [compatibility_level] FROM sys.databases WHERE [database_id] = DB_ID())
 
   DECLARE @v_Authored NVARCHAR(MAX), @v_Canonical NVARCHAR(MAX), @v_RowVersion VARCHAR(50), @v_RowCompat INT
   SELECT @v_Authored = em.[AuthoredText], @v_Canonical = em.[CanonicalText],

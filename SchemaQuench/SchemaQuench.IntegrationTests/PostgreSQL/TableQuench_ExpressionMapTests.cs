@@ -63,13 +63,13 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         }
         """;
 
-    private static string GeneratedJson(Ctx ctx, string expression) => $$"""
+    private static string GeneratedJson(Ctx ctx, string expression, bool declareNullable = true) => $$"""
         {
             "Schema": "public",
             "Name": "{{ctx.Table}}",
             "Columns": [
                 { "Name": "tag", "DataType": "text", "Nullable": false },
-                { "Name": "label", "DataType": "text", "Nullable": true, "Generated": "ALWAYS", "GenerationExpression": "{{expression}}" }
+                { "Name": "label", "DataType": "text",{{(declareNullable ? " \"Nullable\": true," : "")}} "Generated": "ALWAYS", "GenerationExpression": "{{expression}}" }
             ]
         }
         """;
@@ -134,8 +134,11 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
     // Churns at the FLOOR (PostgreSQL 12) but not on 17, which is why an earlier pass of this work wrongly
     // concluded generated columns were already idempotent here -- the modern container cannot see it. The floor
     // sweep caught it. Runs on every supported version; only the floor legs exercise the difference.
-    [Test]
-    public void AGeneratedColumnAuthoredInNaturalForm_IsNotReCreatedOnEveryDeploy()
+    // declareNullable: false measures a generated column authored without "Nullable" -- on SQL Server that case
+    // churned on every version because the create path and the comparison read the omission differently.
+    [TestCase(true)]
+    [TestCase(false)]
+    public void AGeneratedColumnAuthoredInNaturalForm_IsNotReCreatedOnEveryDeploy(bool declareNullable)
     {
         // The expression carries a literal, so PostgreSQL stores it with a ::text cast that no paren handling
         // reconciles -- the same rewrite the check-constraint case above turns on. An expression PostgreSQL
@@ -143,7 +146,7 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         var ctx = NewTable(@"""tag"" text NOT NULL");
         try
         {
-            var json = GeneratedJson(ctx, @"upper(\""tag\"") || 'x'");
+            var json = GeneratedJson(ctx, @"upper(\""tag\"") || 'x'", declareNullable);
             RunTableQuenchProc(ctx.Cmd, json);
             var firstAttNum = GeneratedColumnAttNum(ctx.Cmd, ctx.Table);
             var firstOid = TableOid(ctx.Cmd, ctx.Table);
@@ -201,10 +204,15 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
                                       WHERE ""ObjectTable"" = '{ctx.Table}'";
             Assert.That(ctx.Cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale");
 
+            var notices = new System.Collections.Generic.List<string>();
+            ctx.Conn.Notice += (_, e) => notices.Add(e.Notice.MessageText);
             RunTableQuenchProc(ctx.Cmd, json);
 
             Assert.That(ConstraintOid(ctx.Cmd, ctx.Table), Is.EqualTo(firstOid),
                 "a stale context must re-baseline, never re-apply");
+            Assert.That(notices.FindAll(n => n.Contains("Re-baselined 1 recorded expression")), Has.Count.EqualTo(1),
+                "a re-baseline must be reported in the deploy log, not happen silently: "
+                + string.Join(" | ", notices.FindAll(n => n.Contains("aseline"))));
             ctx.Cmd.CommandText = $@"SELECT COUNT(*) FROM ""SchemaSmith"".""ExpressionMap""
                                       WHERE ""ObjectTable"" = '{ctx.Table}' AND ""EngineVersion"" = 'from-another-server'";
             Assert.That(Convert.ToInt32(ctx.Cmd.ExecuteScalar()), Is.Zero,

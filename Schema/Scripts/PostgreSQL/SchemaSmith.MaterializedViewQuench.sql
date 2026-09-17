@@ -181,6 +181,22 @@ BEGIN
   -- #242: record what each body was applied with, after the create pass, so a view created moments ago is
   -- recorded on this run rather than rebuilding once more on the next.
   IF NOT p_WhatIf THEN
+    -- Re-baselines are reported, not silent: same rule as SchemaSmith.ExpressionMapRecord.
+    IF EXISTS (SELECT 1
+                 FROM temp_materialized_views t
+                 JOIN "SchemaSmith"."ExpressionMap" m
+                   ON m."ObjectSchema" = t."Schema" AND m."ObjectTable" = t."Name" AND m."ObjectKind" = 'MATVIEW'
+                  AND m."ObjectName" = t."Name" AND m."Slot" = 'definition'
+                WHERE m."AuthoredText" = t."Definition" AND m."EngineVersion" != current_setting('server_version')) THEN
+      RAISE NOTICE '  Re-baselined % recorded materialized view definition(s) for PostgreSQL %. No view was rebuilt.',
+        (SELECT COUNT(*)
+           FROM temp_materialized_views t
+           JOIN "SchemaSmith"."ExpressionMap" m
+             ON m."ObjectSchema" = t."Schema" AND m."ObjectTable" = t."Name" AND m."ObjectKind" = 'MATVIEW'
+            AND m."ObjectName" = t."Name" AND m."Slot" = 'definition'
+          WHERE m."AuthoredText" = t."Definition" AND m."EngineVersion" != current_setting('server_version')),
+        current_setting('server_version');
+    END IF;
     INSERT INTO "SchemaSmith"."ExpressionMap" AS em
       ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot", "AuthoredText", "CanonicalText",
        "PlatformName", "EngineVersion", "CompatLevel", "UpdatedUtc")

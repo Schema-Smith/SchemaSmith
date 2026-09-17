@@ -110,7 +110,10 @@
                            THEN 1 ELSE 0 END) AS NewColumn,
          SchemaSmith.fn_SafeBracketWrap(c.[ColumnName]) + ' ' +
          CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) <> '' THEN 'AS (' + ComputedExpression + ')' + CASE WHEN ISNULL(c.[Persisted], 0) = 1 THEN ' PERSISTED' ELSE '' END
-                                                                                                     + CASE WHEN ISNULL(c.[Persisted], 0) = 1 AND ISNULL(c.[Nullable], 1) = 0 THEN ' NOT NULL' ELSE '' END
+                                                                                                     -- An omitted Nullable is NOT NULL, as for every other column and as the stored [Nullable] above reads it;
+                                                                                                     -- reading it as nullable here built the column one way and compared it the other, so it was dropped
+                                                                                                     -- and re-added on the next deploy.
+                                                                                                     + CASE WHEN ISNULL(c.[Persisted], 0) = 1 AND ISNULL(c.[Nullable], 0) = 0 THEN ' NOT NULL' ELSE '' END
               -- See the JSON twin (ParseTableJsonIntoTempTables.sql) for why a column set gets its own
               -- branch instead of the COLLATE/SPARSE/MASKED/ENCRYPTED/NULL/DEFAULT chain below.
               WHEN ISNULL([IsColumnSet], 0) = 1 THEN UPPER(SchemaSmith.fn_NormalizeDataType(c.[DataType])) + ' COLUMN_SET FOR ALL_SPARSE_COLUMNS'

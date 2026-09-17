@@ -681,7 +681,7 @@ BEGIN TRY
          -- For computed columns, only the expression is needed
          CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) <> ''
               THEN 'AS (' + ComputedExpression + ')' + CASE WHEN c.[Persisted] = 1 THEN ' PERSISTED' ELSE '' END
-                                                    + CASE WHEN c.[Persisted] = 1 AND ISNULL(c.[Nullable], 1) = 0 THEN ' NOT NULL' ELSE '' END
+                                                    + CASE WHEN c.[Persisted] = 1 AND ISNULL(c.[Nullable], 0) = 0 THEN ' NOT NULL' ELSE '' END
               -- Otherwise we need to build the column definition
               ELSE REPLACE(REPLACE(UPPER(LEFT([DataType], COALESCE(NULLIF(CHARINDEX('IDENTITY', [DataType]), 0), LEN([DataType]) + 1) - 1)), 'ROWGUIDCOL', ''), 'NOT FOR REPLICATION', '') +
                    CASE WHEN [Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') <> [Collation] THEN ' COLLATE ' + ISNULL(NULLIF(RTRIM([Collation]), ''), @v_DatabaseCollation) ELSE '' END +
@@ -754,7 +754,11 @@ BEGIN TRY
                                            THEN ' IDENTITY(' + CONVERT(NVARCHAR(20), ident.seed_value) + ', ' + CONVERT(NVARCHAR(20), ident.increment_value) + ')' +
                                                 CASE WHEN ident.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
                                            ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')
-        OR CASE WHEN c.Nullable = 1 THEN 'YES' ELSE 'NO' END <> ic.IS_NULLABLE
+        -- A computed column's nullability is declarable only when it is PERSISTED (PERSISTED NOT NULL); otherwise the
+        -- engine derives it from the expression, and comparing it against the declared flag re-added every such
+        -- column authored without "Nullable": true on every deploy.
+        OR (CASE WHEN c.Nullable = 1 THEN 'YES' ELSE 'NO' END <> ic.IS_NULLABLE
+            AND (RTRIM(ISNULL(c.[ComputedExpression], '')) = '' OR c.[Persisted] = 1))
         OR (ISNULL(SchemaSmith.fn_StripParenWrapping(cc.[definition]), '') <> ISNULL(c.ComputedExpression, '')
             -- #242: same question as the check constraints. A computed column has no normalisation at all, so
             -- every non-trivial expression was dropped and re-added on every deploy -- a table rewrite when
@@ -773,7 +777,7 @@ BEGIN TRY
   INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly])
     SELECT C.[Schema], C.[TableName], c.[ColumnName],
            [ColumnScript] = 'AS (' + ComputedExpression + ')' + CASE WHEN c.[Persisted] = 1 THEN ' PERSISTED' ELSE '' END
-                                                              + CASE WHEN c.[Persisted] = 1 AND ISNULL(c.[Nullable], 1) = 0 THEN ' NOT NULL' ELSE '' END,
+                                                              + CASE WHEN c.[Persisted] = 1 AND ISNULL(c.[Nullable], 0) = 0 THEN ' NOT NULL' ELSE '' END,
            [SpecialColumnScript] = '',
            MustDropAndRecreate = CAST(1 AS BIT), MustSwapColumn = CAST(0 AS BIT), [DropOnly] = CAST(0 AS BIT)
       FROM #ColumnChanges cc WITH (NOLOCK)
@@ -1494,24 +1498,8 @@ BEGIN TRY
                             CASE WHEN i.[ColumnStore] = 0 THEN ' (' + i.[IndexColumns] + ')' + CASE WHEN RTRIM(ISNULL(i.[IncludeColumns], '')) <> '' THEN ' INCLUDE (' + i.[IncludeColumns] + ')' ELSE '' END
                                  WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                  ELSE '' END +
-                            -- #242: use the engine's own rendering of the filter when the mapping says the declared
-                            -- filter is unchanged -- otherwise an authored "Status > 0" never matches the stored
-                            -- "([Status]>(0))" and the index is dropped and re-created on every deploy. Only the
-                            -- filter is substituted; every other part of this string still compares on its own terms.
-                            CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> ''
-                                 THEN ' WHERE ' +
-                                      CASE WHEN SchemaSmith.fn_ExpressionMapUnchanged(i.[Schema], i.[TableName], 'INDEX',
-                                                  i.[IndexName], 'filter', i.[FilterExpression],
-                                                  ISNULL(SchemaSmith.fn_StripParenWrapping(
-                                                    (SELECT si2.filter_definition FROM sys.indexes si2 WITH (NOLOCK)
-                                                      WHERE si2.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
-                                                        AND si2.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))), '')) = 1
-                                           THEN ISNULL(SchemaSmith.fn_StripParenWrapping(
-                                                  (SELECT si2.filter_definition FROM sys.indexes si2 WITH (NOLOCK)
-                                                    WHERE si2.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
-                                                      AND si2.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))), i.[FilterExpression])
-                                           ELSE i.[FilterExpression] END
-                                 ELSE '' END +
+                            -- #242: the engine's own rendering of the filter when the mapping vouches for it (fn_ExpressionMapEffective).
+                            CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', i.[IndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si2.filter_definition FROM sys.indexes si2 WITH (NOLOCK) WHERE si2.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si2.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))) ELSE '' END +
                             CASE WHEN o.[WithOptions] <> '' THEN ' WITH (' + STUFF(o.[WithOptions], 1, 2, '') + ')' ELSE '' END
   
   RAISERROR('Detect Index Renames', 10, 100) WITH NOWAIT
@@ -1540,7 +1528,8 @@ BEGIN TRY
                                                                   CASE WHEN i.[ColumnStore] = 0 THEN ' (' + i.[IndexColumns] + ')' + CASE WHEN RTRIM(ISNULL(i.[IncludeColumns], '')) <> '' THEN ' INCLUDE (' + i.[IncludeColumns] + ')' ELSE '' END
                                                                        WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                                                        ELSE '' END +
-                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + i.[FilterExpression] ELSE '' END +
+                                                                  -- #242: keyed on the OLD name -- the mapping row was written under the name the index has now.
+                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', ei.[xIndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si3.filter_definition FROM sys.indexes si3 WITH (NOLOCK) WHERE si3.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) AND si3.[name] = ei.[xIndexName]))) ELSE '' END +
                                                                   CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('NONE', 'ROW', 'PAGE'))
                                                                          OR (i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
                                                                        THEN ' WITH (DATA_COMPRESSION=' + RTRIM(ISNULL(i.[CompressionType], '')) + ')'
@@ -1663,12 +1652,18 @@ BEGIN TRY
                [ObjName] = ei.[xSchema] + '.' + ei.[xTableName] + '.' + ei.[xIndexName]
           FROM #ExistingIndexes ei WITH (NOLOCK)
           WHERE NOT EXISTS (SELECT * FROM #Indexes i WITH (NOLOCK) WHERE i.[Schema] = ei.[xSchema] AND i.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = ei.[xIndexName])
+            -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+            -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+            AND NOT EXISTS (SELECT * FROM #IndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = ei.[xSchema] AND rn.[TableName] = ei.[xTableName] AND rn.[OldName] = ei.[xIndexName])
         UNION
         -- Arm (c): unknown XML indexes (present in DB, absent from the product) -- @DropUnknownIndexes env gate stripped; XML indexes are never constraints.
         SELECT [ObjType] = 'index',
                [ObjName] = ei.[xSchema] + '.' + ei.[xTableName] + '.' + ei.[xIndexName]
           FROM #ExistingXmlIndexes ei WITH (NOLOCK)
           WHERE NOT EXISTS (SELECT * FROM #XmlIndexes i WITH (NOLOCK) WHERE i.[Schema] = ei.[xSchema] AND i.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = ei.[xIndexName])
+            -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+            -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+            AND NOT EXISTS (SELECT * FROM #XmlIndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = ei.[xSchema] AND rn.[TableName] = ei.[xTableName] AND rn.[OldName] = ei.[xIndexName])
       ) x
       FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_SQL IS NOT NULL EXEC(@v_SQL)
@@ -1694,6 +1689,9 @@ BEGIN TRY
     FROM #ExistingIndexes ei WITH (NOLOCK)
     WHERE @DropUnknownIndexes = 1
       AND NOT EXISTS (SELECT * FROM #Indexes i WITH (NOLOCK) WHERE i.[Schema] = ei.[xSchema] AND i.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = ei.[xIndexName])
+      -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+      -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+      AND NOT EXISTS (SELECT * FROM #IndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = ei.[xSchema] AND rn.[TableName] = ei.[xTableName] AND rn.[OldName] = ei.[xIndexName])
   UNION
   SELECT [Schema], [TableName], SchemaSmith.fn_StripBracketWrapping([IndexName]), [IsConstraint], [IsUnique], [IsClustered]
     FROM #IndexChanges WITH (NOLOCK)
@@ -1702,6 +1700,9 @@ BEGIN TRY
     FROM #ExistingXmlIndexes ei WITH (NOLOCK)
     WHERE @DropUnknownIndexes = 1
       AND NOT EXISTS (SELECT * FROM #XmlIndexes i WITH (NOLOCK) WHERE i.[Schema] = ei.[xSchema] AND i.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = ei.[xIndexName])
+      -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+      -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+      AND NOT EXISTS (SELECT * FROM #XmlIndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = ei.[xSchema] AND rn.[TableName] = ei.[xTableName] AND rn.[OldName] = ei.[xIndexName])
   UNION
   SELECT [Schema], [TableName], SchemaSmith.fn_StripBracketWrapping([IndexName]), [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
     FROM #XmlIndexChanges WITH (NOLOCK)
@@ -2182,7 +2183,7 @@ BEGIN TRY
                                         AND s.[TableName] = es.[TableName]
                                         AND SchemaSmith.fn_StripBracketWrapping(s.[StatisticName]) = es.[StatsName]
     WHERE es.StatisticScript <> 'CREATE STATISTICS ' + s.[StatisticName] + ' ON ' + s.[Schema] + '.' + s.[TableName] + ' (' + s.[Columns] + ')' +
-                                CASE WHEN RTRIM(ISNULL(s.[FilterExpression], '')) <> '' THEN ' WHERE ' + s.[FilterExpression] ELSE '' END
+                                CASE WHEN RTRIM(ISNULL(s.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(s.[Schema], s.[TableName], 'STATISTIC', s.[StatisticName], 'filter', s.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT st2.filter_definition FROM sys.stats st2 WITH (NOLOCK) WHERE st2.[object_id] = OBJECT_ID(s.[Schema] + '.' + s.[TableName]) AND st2.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName])))) ELSE '' END
   
   RAISERROR('Drop Modified Statistics', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping statistics ' + sc.[Schema] + '.' + sc.[TableName] + '.' + sc.[StatisticName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +

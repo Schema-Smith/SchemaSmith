@@ -204,6 +204,47 @@ SELECT c.oid FROM pg_class c
         conn.Close();
     }
 
+    // A mapping row written under another server version is stale, not wrong: the view must be left alone (a
+    // rebuild re-runs the query), the row refreshed, and the re-baseline reported rather than done silently.
+    [Test]
+    public void ReQuench_AfterAnEngineVersionChange_ReBaselines_WithoutRebuilding_AndSaysSo()
+    {
+        using var conn = (Npgsql.NpgsqlConnection)DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        var notices = new System.Collections.Generic.List<string>();
+        conn.Notice += (_, e) => notices.Add(e.Notice.MessageText);
+        using var cmd = conn.CreateCommand();
+
+        EnsureViewDropped(cmd);
+        var json = BuildViewJson("mv_test", "public", "SELECT id, name, amount FROM public.test_source", true, ViewIndexJson_IdOnly());
+        RunMaterializedViewQuench(cmd, json);
+
+        const string oidSql = "SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public' WHERE c.relname = 'mv_test' AND c.relkind = 'm'";
+        cmd.CommandText = oidSql;
+        var oidBefore = cmd.ExecuteScalar();
+
+        cmd.CommandText = @"UPDATE ""SchemaSmith"".""ExpressionMap"" SET ""EngineVersion"" = 'from-another-server'
+                             WHERE ""ObjectKind"" = 'MATVIEW' AND ""ObjectName"" = 'mv_test'";
+        Assert.That(cmd.ExecuteNonQuery(), Is.EqualTo(1), "setup: the view's mapping row must exist to go stale");
+
+        notices.Clear();
+        RunMaterializedViewQuench(cmd, json);
+
+        cmd.CommandText = oidSql;
+        var oidAfter = cmd.ExecuteScalar();
+        cmd.CommandText = @"SELECT COUNT(*) FROM ""SchemaSmith"".""ExpressionMap"" WHERE ""ObjectKind"" = 'MATVIEW' AND ""ObjectName"" = 'mv_test' AND ""EngineVersion"" = 'from-another-server'";
+        var stale = Convert.ToInt64(cmd.ExecuteScalar());
+        Assert.Multiple(() =>
+        {
+            Assert.That(oidAfter, Is.EqualTo(oidBefore), "a stale context must re-baseline, never rebuild");
+            Assert.That(stale, Is.Zero, "the row must carry the current server version");
+            Assert.That(notices.FindAll(n => n.Contains("Re-baselined 1 recorded materialized view")), Has.Count.EqualTo(1),
+                "the re-baseline must be reported: " + string.Join(" | ", notices.FindAll(n => n.Contains("aseline"))));
+        });
+        conn.Close();
+    }
+
     [Test]
     public void DefinitionChange_TriggersRebuild()
     {
@@ -286,6 +327,39 @@ SELECT c.oid FROM pg_class c
         // Verify the original index still exists
         cmd.CommandText = "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'mv_test' AND indexname = 'ix_mv_test_id'";
         Assert.That((long)cmd.ExecuteScalar()!, Is.EqualTo(1), "Original index should still exist");
+
+        conn.Close();
+    }
+
+    // #242: a materialized view index compares its declared columns to the catalog, which reports them unquoted
+    // and without default sort options. Authored quoted, or with an explicit ASC, the index never matched and was
+    // dropped and rebuilt on every quench.
+    [TestCase(@"\""id\""")]
+    [TestCase("id ASC")]
+    [TestCase("id DESC NULLS FIRST")]
+    public void ReQuench_WithAQuotedOrExplicitlyOrderedIndexColumn_DoesNotRebuildTheIndex(string indexColumns)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+
+        EnsureViewExists(cmd);
+        var storedDef = GetStoredDefinition(cmd, "mv_test");
+        var indexes = @"[{""Name"":""ix_mv_test_id"",""Unique"":true,""IndexColumns"":""" + indexColumns + @""",""AccessMethod"":""btree"",""FillFactor"":90}]";
+        var json = BuildViewJson("mv_test", "public", storedDef, true, indexes);
+        RunMaterializedViewQuench(cmd, json);
+
+        long IndexOid()
+        {
+            cmd.CommandText = "SELECT COALESCE((SELECT oid::bigint FROM pg_class WHERE relname = 'ix_mv_test_id' AND relkind = 'i'), 0)";
+            return Convert.ToInt64(cmd.ExecuteScalar());
+        }
+
+        var first = IndexOid();
+        Assert.That(first, Is.Not.Zero, "setup: the index must exist");
+        RunMaterializedViewQuench(cmd, json);
+        Assert.That(IndexOid(), Is.EqualTo(first), $"the index authored as '{indexColumns}' was rebuilt for an unchanged declaration");
 
         conn.Close();
     }
