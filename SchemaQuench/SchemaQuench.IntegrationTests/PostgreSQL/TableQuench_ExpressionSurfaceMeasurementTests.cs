@@ -53,8 +53,11 @@ public class TableQuench_ExpressionSurfaceMeasurementTests : BaseTableQuenchTest
 
     private static long IndexOid(IDbCommand cmd, string table, string index)
     {
+        // Qualified by schema: an index name is unique per schema, not per database, and one of these tests puts
+        // the same name in a second schema on purpose.
         cmd.CommandText = $@"SELECT COALESCE((SELECT c.oid::bigint FROM pg_class c
-                                               WHERE c.relname = '{index}' AND c.relkind = 'i'), 0)";
+                                               WHERE c.relname = '{index}' AND c.relkind = 'i'
+                                                 AND c.relnamespace = 'public'::regnamespace), 0)";
         return Convert.ToInt64(cmd.ExecuteScalar());
     }
 
@@ -564,5 +567,44 @@ public class TableQuench_ExpressionSurfaceMeasurementTests : BaseTableQuenchTest
                 $"the constraint must now be DEFERRABLE INITIALLY DEFERRED (indexOnly={indexOnly})");
         }
         finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
+    // Index names are unique per SCHEMA in PostgreSQL, so two schemas can hold "IX_x_active" legitimately -- which
+    // is ordinary in schema-per-tenant. The recorder matched pg_class on index NAME alone, so it produced two rows
+    // on one key and the deploy died at the final recording INSERT with "ON CONFLICT DO UPDATE command cannot
+    // affect row a second time" -- after every DDL statement had already run.
+    [Test]
+    public void AnIndexNameReusedInAnotherSchema_DoesNotBreakTheDeploy_NorPoisonTheBaseline()
+    {
+        var ctx = NewTable(@"""id"" integer NOT NULL, ""status"" integer NULL");
+        var otherSchema = $"zz_other_{Guid.NewGuid():N}"[..14];
+        try
+        {
+            var indexName = $"IX_{ctx.Table}_status";
+            ctx.Cmd.CommandText = $@"CREATE SCHEMA ""{otherSchema}"";
+                                     CREATE TABLE ""{otherSchema}"".""{ctx.Table}"" (""id"" integer, ""status"" integer);
+                                     CREATE INDEX ""{indexName}"" ON ""{otherSchema}"".""{ctx.Table}"" (""id"") WHERE status > 999;";
+            ctx.Cmd.ExecuteNonQuery();
+
+            var json = FilteredIndexJson(ctx, @"\""status\"" > 0");
+            Assert.DoesNotThrow(() => RunTableQuenchProc(ctx.Cmd, json),
+                "a same-named index in an unrelated schema must not fail the deploy");
+
+            // and the recorded baseline must be THIS index's predicate, not the other schema's
+            ctx.Cmd.CommandText = $@"SELECT COALESCE((SELECT ""CanonicalText"" FROM ""SchemaSmith"".""ExpressionMap""
+                                                       WHERE ""ObjectTable"" = '{ctx.Table}' AND ""ObjectKind"" = 'INDEX'
+                                                         AND ""ObjectName"" = '{indexName}' AND ""ObjectSchema"" = 'public'), '(none)')";
+            var recorded = ctx.Cmd.ExecuteScalar() as string;
+            Assert.That(recorded, Does.Not.Contain("999"), $"the other schema's predicate was recorded as this index's baseline: {recorded}");
+
+            var firstOid = IndexOid(ctx.Cmd, ctx.Table, indexName);
+            RunTableQuenchProc(ctx.Cmd, json);
+            Assert.That(IndexOid(ctx.Cmd, ctx.Table, indexName), Is.EqualTo(firstOid), "and it must still not churn");
+        }
+        finally
+        {
+            try { ctx.Cmd.CommandText = $@"DROP SCHEMA IF EXISTS ""{otherSchema}"" CASCADE"; ctx.Cmd.ExecuteNonQuery(); } catch (Npgsql.NpgsqlException) { }
+            ctx.Drop(); ctx.Dispose();
+        }
     }
 }

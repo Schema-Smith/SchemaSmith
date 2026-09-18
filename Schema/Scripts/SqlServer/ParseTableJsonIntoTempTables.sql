@@ -147,6 +147,9 @@
                             THEN UPPER(LTRIM(RTRIM(SchemaSmith.fn_NormalizeDataType(c.[DataType])))) + '(7)'
                             ELSE SchemaSmith.fn_NormalizeDataType(c.[DataType]) END,
          [Nullable] = ISNULL(c.[Nullable], 0),
+         -- The value AS DECLARED, NULL when the package omitted it. A computed column's nullability is the
+         -- engine's to derive unless the author states one, and only an explicit value may narrow it.
+         [NullableDeclared] = c.[Nullable],
          c.[Default], c.[CheckExpression], c.[ComputedExpression], [Persisted] = ISNULL(c.[Persisted], 0),
          [Sparse] = ISNULL(c.[Sparse], 0), [FileStream] = ISNULL(c.[FileStream], 0), [IsColumnSet] = ISNULL(c.[IsColumnSet], 0), [BackfillExistingRows] = ISNULL(c.[BackfillExistingRows], 0), [Collation] = RTRIM(ISNULL(c.[Collation], '')), [DataMaskFunction] = RTRIM(ISNULL(c.[DataMaskFunction], '')),
          [EncryptionType] = ISNULL(c.[EncryptionType], 'NONE'), [EncryptionKey] = RTRIM(ISNULL(c.[EncryptionKey], '')), [EncryptionAlgorithm] = RTRIM(ISNULL(c.[EncryptionAlgorithm], '')),
@@ -161,10 +164,10 @@
          SchemaSmith.fn_SafeBracketWrap(c.[ColumnName]) + ' ' +
          -- For computed columns only the expression is needed
          CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) <> '' THEN 'AS (' + ComputedExpression + ')' + CASE WHEN ISNULL(c.[Persisted], 0) = 1 THEN ' PERSISTED' ELSE '' END
-                                                                                                     -- An omitted Nullable is NOT NULL, as for every other column and as the stored [Nullable] above reads it;
-                                                                                                     -- reading it as nullable here built the column one way and compared it the other, so it was dropped
-                                                                                                     -- and re-added on the next deploy.
-                                                                                                     + CASE WHEN ISNULL(c.[Persisted], 0) = 1 AND ISNULL(c.[Nullable], 0) = 0 THEN ' NOT NULL' ELSE '' END
+                                                                                                     -- A computed column is created NOT NULL only when the package says so. Defaulting an omitted Nullable to
+                                                                                                     -- NOT NULL here dropped an existing nullable column and failed to put it back when a row's expression
+                                                                                                     -- evaluated to NULL -- the deploy aborted with the column gone.
+                                                                                                     + CASE WHEN ISNULL(c.[Persisted], 0) = 1 AND c.[Nullable] = 0 THEN ' NOT NULL' ELSE '' END
               -- A column set is an aggregating XML column: no COLLATE/SPARSE/MASKED/ENCRYPTED/NULL/DEFAULT
               -- clause is legal on it, and SQL Server only accepts adding one (a) at CREATE TABLE time or
               -- (b) via ALTER TABLE in the SAME statement as the sparse columns it aggregates -- both of

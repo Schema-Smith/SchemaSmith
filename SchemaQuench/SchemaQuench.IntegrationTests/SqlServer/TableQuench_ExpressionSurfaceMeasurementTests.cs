@@ -399,12 +399,11 @@ public class TableQuench_ExpressionSurfaceMeasurementTests : BaseTableQuenchTest
             RunTableQuenchProc(cmd, json);
             var first = ColumnId();
             Assert.That(first, Is.Not.Zero, "setup: the computed column must exist");
-            if (persisted)
-            {
-                cmd.CommandText = $"SELECT COLUMNPROPERTY(OBJECT_ID('dbo.{table}'), 'Total', 'AllowsNull')";
-                Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero,
-                    "an omitted Nullable is NOT NULL -- the same on the create path as on every later comparison");
-            }
+            // An omitted Nullable leaves nullability to the engine, which derives it from the expression
+            // ([Qty] is nullable, so Total is). The package never said NOT NULL, so SchemaSmith must not impose it.
+            cmd.CommandText = $"SELECT COLUMNPROPERTY(OBJECT_ID('dbo.{table}'), 'Total', 'AllowsNull')";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1),
+                "an omitted Nullable must leave the engine's derived nullability alone, not narrow it");
 
             for (var pass = 2; pass <= 3; pass++)
             {
@@ -416,6 +415,67 @@ public class TableQuench_ExpressionSurfaceMeasurementTests : BaseTableQuenchTest
                     Assert.That(DropMessages(table), Is.Zero, $"pass {pass}: " + string.Join(" | ", _messages.FindAll(m => m.StartsWith("  "))));
                 });
             }
+        });
+    }
+
+    // The failure this fix exists for, measured end to end: a table deployed by an earlier version has a NULLABLE
+    // persisted computed column and rows whose expression evaluates to NULL. A package that omits "Nullable" must
+    // not touch it. Narrowing it meant DROP COLUMN, then an ADD ... NOT NULL that the data rejects -- and there is
+    // no transaction, so the deploy aborted with the column gone.
+    [Test]
+    public void APersistedComputedColumnOnATableWithNullProducingRows_IsLeftAlone()
+    {
+        var table = $"ExprCompData_{Guid.NewGuid():N}"[..24];
+        WithTable(table, $@"CREATE TABLE dbo.[{table}] ([Id] INT NOT NULL, [Qty] INT NULL);
+                            INSERT INTO dbo.[{table}] ([Id], [Qty]) VALUES (1, 5), (2, NULL);
+                            ALTER TABLE dbo.[{table}] ADD [Total] AS ([Qty] * 2) PERSISTED;", cmd =>
+        {
+            var json = $$"""
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[{{table}}]",
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "INT"},
+                        {"Name": "[Qty]", "DataType": "INT", "Nullable": true},
+                        {"Name": "[Total]", "DataType": "INT", "ComputedExpression": "Qty * 2", "Persisted": true}
+                    ]
+                }
+                """;
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json),
+                "the deploy must not fail trying to narrow a column the package never declared NOT NULL");
+
+            cmd.CommandText = $"SELECT ISNULL(COLUMNPROPERTY(OBJECT_ID('dbo.{table}'), 'Total', 'ColumnId'), 0)";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Not.Zero, "the computed column must still exist");
+            cmd.CommandText = $"SELECT COUNT(*) FROM dbo.[{table}]";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(2), "and the rows must still be there");
+        });
+    }
+
+    // The other direction still works: an author who declares NOT NULL gets it.
+    [Test]
+    public void APersistedComputedColumnDeclaredNotNull_IsCreatedNotNull()
+    {
+        var table = $"ExprCompNN_{Guid.NewGuid():N}"[..24];
+        WithTable(table, "SELECT 1", cmd =>
+        {
+            var json = $$"""
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[{{table}}]",
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "INT"},
+                        {"Name": "[Qty]", "DataType": "INT"},
+                        {"Name": "[Total]", "DataType": "INT", "ComputedExpression": "Qty * 2", "Persisted": true, "Nullable": false}
+                    ]
+                }
+                """;
+            RunTableQuenchProc(cmd, json);
+            cmd.CommandText = $"SELECT COLUMNPROPERTY(OBJECT_ID('dbo.{table}'), 'Total', 'AllowsNull')";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero, "an explicit \"Nullable\": false must still produce NOT NULL");
+
+            _messages.Clear();
+            RunTableQuenchProc(cmd, json);
+            Assert.That(DropMessages(table), Is.Zero, "and must not churn on the next deploy");
         });
     }
 }

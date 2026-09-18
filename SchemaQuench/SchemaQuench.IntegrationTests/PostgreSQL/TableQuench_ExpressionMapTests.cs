@@ -189,6 +189,32 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         finally { ctx.Drop(); ctx.Dispose(); }
     }
 
+    // Stale context AND drift together: the context must never be an excuse to stop reading the live object.
+    // PostgreSQL's version string carries the packaging build, so a distro rebuild alone can move it.
+    [Test]
+    public void AStaleContextDoesNotExcuseDrift_TheObjectIsStillReApplied()
+    {
+        var ctx = NewTable(@"""tag"" text NULL");
+        try
+        {
+            var json = CheckJson(ctx, @"starts_with(\""tag\"", 'a')");
+            RunTableQuenchProc(ctx.Cmd, json);
+
+            ctx.Cmd.CommandText = $@"ALTER TABLE ""public"".""{ctx.Table}"" DROP CONSTRAINT ""CK_{ctx.Table}_tag"";
+                                     ALTER TABLE ""public"".""{ctx.Table}"" ADD CONSTRAINT ""CK_{ctx.Table}_tag"" CHECK (starts_with(tag, 'zzz'));";
+            ctx.Cmd.ExecuteNonQuery();
+            ctx.Cmd.CommandText = $@"UPDATE ""SchemaSmith"".""ExpressionMap"" SET ""EngineVersion"" = 'from-another-server'
+                                      WHERE ""ObjectTable"" = '{ctx.Table}'";
+            Assert.That(ctx.Cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist");
+
+            RunTableQuenchProc(ctx.Cmd, json);
+
+            Assert.That(LiveCheckDefinition(ctx.Cmd, ctx.Table), Does.Contain("'a'").And.Not.Contain("zzz"),
+                "a version change must not excuse drift -- the declared expression must be re-applied");
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
     [Test]
     public void AStaleContextRow_IsReBaselined_WithoutTouchingTheObject()
     {
@@ -200,9 +226,9 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
             var firstOid = ConstraintOid(ctx.Cmd, ctx.Table);
 
             ctx.Cmd.CommandText = $@"UPDATE ""SchemaSmith"".""ExpressionMap""
-                                        SET ""EngineVersion"" = 'from-another-server', ""CanonicalText"" = 'stale text'
+                                        SET ""EngineVersion"" = 'from-another-server'
                                       WHERE ""ObjectTable"" = '{ctx.Table}'";
-            Assert.That(ctx.Cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale");
+            Assert.That(ctx.Cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale (only the CONTEXT goes stale -- the recorded canonical text still matches the live object, which is what a real engine upgrade looks like)");
 
             var notices = new System.Collections.Generic.List<string>();
             ctx.Conn.Notice += (_, e) => notices.Add(e.Notice.MessageText);

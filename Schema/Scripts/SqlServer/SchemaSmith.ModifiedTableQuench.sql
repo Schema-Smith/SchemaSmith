@@ -681,7 +681,7 @@ BEGIN TRY
          -- For computed columns, only the expression is needed
          CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) <> ''
               THEN 'AS (' + ComputedExpression + ')' + CASE WHEN c.[Persisted] = 1 THEN ' PERSISTED' ELSE '' END
-                                                    + CASE WHEN c.[Persisted] = 1 AND ISNULL(c.[Nullable], 0) = 0 THEN ' NOT NULL' ELSE '' END
+                                                    + CASE WHEN c.[Persisted] = 1 AND c.[NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END
               -- Otherwise we need to build the column definition
               ELSE REPLACE(REPLACE(UPPER(LEFT([DataType], COALESCE(NULLIF(CHARINDEX('IDENTITY', [DataType]), 0), LEN([DataType]) + 1) - 1)), 'ROWGUIDCOL', ''), 'NOT FOR REPLICATION', '') +
                    CASE WHEN [Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') <> [Collation] THEN ' COLLATE ' + ISNULL(NULLIF(RTRIM([Collation]), ''), @v_DatabaseCollation) ELSE '' END +
@@ -754,11 +754,13 @@ BEGIN TRY
                                            THEN ' IDENTITY(' + CONVERT(NVARCHAR(20), ident.seed_value) + ', ' + CONVERT(NVARCHAR(20), ident.increment_value) + ')' +
                                                 CASE WHEN ident.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
                                            ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')
-        -- A computed column's nullability is declarable only when it is PERSISTED (PERSISTED NOT NULL); otherwise the
-        -- engine derives it from the expression, and comparing it against the declared flag re-added every such
-        -- column authored without "Nullable": true on every deploy.
+        -- A computed column's nullability belongs to the engine unless the package states one: it is derivable from
+        -- the expression, and only a PERSISTED column can be declared NOT NULL at all. Comparing an OMITTED value
+        -- here re-added every such column on every deploy, and (once the emit side agreed with it) dropped an
+        -- existing nullable column and failed to put it back on a table whose rows made the expression NULL.
         OR (CASE WHEN c.Nullable = 1 THEN 'YES' ELSE 'NO' END <> ic.IS_NULLABLE
-            AND (RTRIM(ISNULL(c.[ComputedExpression], '')) = '' OR c.[Persisted] = 1))
+            AND (RTRIM(ISNULL(c.[ComputedExpression], '')) = ''
+                 OR (c.[Persisted] = 1 AND c.[NullableDeclared] IS NOT NULL)))
         OR (ISNULL(SchemaSmith.fn_StripParenWrapping(cc.[definition]), '') <> ISNULL(c.ComputedExpression, '')
             -- #242: same question as the check constraints. A computed column has no normalisation at all, so
             -- every non-trivial expression was dropped and re-added on every deploy -- a table rewrite when
@@ -777,7 +779,7 @@ BEGIN TRY
   INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly])
     SELECT C.[Schema], C.[TableName], c.[ColumnName],
            [ColumnScript] = 'AS (' + ComputedExpression + ')' + CASE WHEN c.[Persisted] = 1 THEN ' PERSISTED' ELSE '' END
-                                                              + CASE WHEN c.[Persisted] = 1 AND ISNULL(c.[Nullable], 0) = 0 THEN ' NOT NULL' ELSE '' END,
+                                                              + CASE WHEN c.[Persisted] = 1 AND c.[NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END,
            [SpecialColumnScript] = '',
            MustDropAndRecreate = CAST(1 AS BIT), MustSwapColumn = CAST(0 AS BIT), [DropOnly] = CAST(0 AS BIT)
       FROM #ColumnChanges cc WITH (NOLOCK)

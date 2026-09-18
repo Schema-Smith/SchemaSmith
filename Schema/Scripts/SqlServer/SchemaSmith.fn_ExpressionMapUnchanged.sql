@@ -61,8 +61,16 @@ BEGIN
 
   IF @v_Authored IS NULL RETURN 0                                   -- no row: no opinion
   IF @v_Authored <> ISNULL(@p_Authored, '') RETURN 0                -- the declaration changed
-  IF @v_RowVersion <> @v_Version OR ISNULL(@v_RowCompat, -1) <> ISNULL(@v_Compat, -1) RETURN 1  -- stale: re-baseline
+  -- ORDER MATTERS. The live object is checked BEFORE the context, because a stale context must never be an
+  -- excuse to stop looking at the server. With the two the other way round, an engine version that moved since
+  -- the last deploy -- a cumulative update, or on other engines a packaging rebuild -- made this function answer
+  -- "unchanged" without reading the live text at all: a hand-edited constraint was left in place, and the
+  -- recorder then wrote the DRIFTED text as the new baseline, so the drift became permanent and silent. Checking
+  -- the live text first costs one re-apply in the rare case where an engine genuinely re-renders an existing
+  -- object's stored text (SQL Server freezes it, so in practice this is PostgreSQL major upgrades), and that
+  -- re-apply restores the declared text -- which is the right answer anyway.
   IF @v_Canonical <> ISNULL(@p_LiveCanonical, '') RETURN 0          -- the live object was edited out of band
+  IF @v_RowVersion <> @v_Version OR ISNULL(@v_RowCompat, -1) <> ISNULL(@v_Compat, -1) RETURN 1  -- stale: re-baseline
 
   RETURN 1
 END

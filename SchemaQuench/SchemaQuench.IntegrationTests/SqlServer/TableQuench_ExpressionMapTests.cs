@@ -183,6 +183,39 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         });
     }
 
+    // The two conditions TOGETHER, which is where this went wrong: a cumulative update moves the version string
+    // AND somebody hand-edited the object since the last deploy. Checking the context first made the function
+    // answer "unchanged" without ever reading the live object, so the drift was left in place and the recorder
+    // then wrote the DRIFTED text as the new baseline -- making it permanent and invisible. Drift wins over a
+    // stale context, always.
+    [Test]
+    public void AStaleContextDoesNotExcuseDrift_TheObjectIsStillReApplied()
+    {
+        var table = $"ExprMapCtxDrift_{Guid.NewGuid():N}"[..24];
+        WithTable(table, $"CREATE TABLE dbo.[{table}] ([RetentionDays] INT NULL)", cmd =>
+        {
+            var json = CheckJson(table, "RetentionDays <= 365");
+            RunTableQuenchProc(cmd, json);
+
+            // somebody edits the constraint by hand ...
+            cmd.CommandText = $@"ALTER TABLE dbo.[{table}] DROP CONSTRAINT [CK_{table}_Retention];
+                                 ALTER TABLE dbo.[{table}] ADD CONSTRAINT [CK_{table}_Retention] CHECK ([RetentionDays] <= 999)";
+            cmd.ExecuteNonQuery();
+            // ... and a cumulative update lands before the next deploy
+            cmd.CommandText = $"UPDATE SchemaSmith.ExpressionMap SET [EngineVersion] = 'from-another-server' WHERE [ObjectTable] = '{table}'";
+            Assert.That(cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist");
+
+            RunTableQuenchProc(cmd, json);
+
+            Assert.That(LiveCheckDefinition(cmd, table), Does.Contain("365").And.Not.Contain("999"),
+                "a version change must not excuse drift -- the declared expression must be re-applied");
+            cmd.CommandText = $@"SELECT COUNT(*) FROM SchemaSmith.ExpressionMap
+                                  WHERE [ObjectTable] = '{table}' AND [CanonicalText] LIKE '%999%'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero,
+                "and the drifted text must never become the recorded baseline");
+        });
+    }
+
     // A mapping is only trustworthy for the context it was written in: SQL Server freezes an expression's
     // stored text at creation-time compatibility level. A row whose context no longer matches is stale, not
     // wrong -- re-read and rewrite it, and do NOT touch the object, which would drop and recreate every
@@ -198,9 +231,9 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
             var firstId = ConstraintObjectId(cmd, table);
 
             cmd.CommandText = $@"UPDATE SchemaSmith.ExpressionMap
-                                    SET [EngineVersion] = 'from-another-server', [CanonicalText] = 'stale text'
+                                    SET [EngineVersion] = 'from-another-server'
                                   WHERE [ObjectTable] = '{table}'";
-            Assert.That(cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale");
+            Assert.That(cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale (only the CONTEXT goes stale -- the recorded canonical text still matches the live object, which is what a real engine upgrade looks like)");
 
             _messages.Clear();
             RunTableQuenchProc(cmd, json);

@@ -75,8 +75,15 @@ BEGIN
     SELECT i."TableSchema", i."TableName", 'INDEX', i."Name", 'filter', i."FilterExpression",
            COALESCE(PG_GET_EXPR(idx.indpred, idx.indrelid), '')
       FROM temp_indexes i
-      JOIN pg_catalog.pg_class ic ON ic.relname = i."Name" AND ic.relkind = 'i'
-      JOIN pg_catalog.pg_index idx ON idx.indexrelid = ic.oid
+      -- Bound to the index's OWN table, like every other join here. Matching on relname alone matched a
+      -- same-named index in any other schema -- legal in PostgreSQL, ordinary in schema-per-tenant -- which put
+      -- two rows on one key and killed the deploy at this INSERT with "ON CONFLICT DO UPDATE command cannot
+      -- affect row a second time", after all the DDL had run; and where the declared index did not exist yet it
+      -- recorded the FOREIGN index's predicate as this one's baseline. 'I' is a partitioned index.
+      JOIN pg_catalog.pg_index idx
+        ON idx.indrelid = to_regclass('"' || i."TableSchema" || '"."' || i."TableName" || '"')
+      JOIN pg_catalog.pg_class ic
+        ON ic.oid = idx.indexrelid AND ic.relname = i."Name" AND ic.relkind IN ('i', 'I')
      WHERE COALESCE(i."FilterExpression", '') != '';
   END IF;
 

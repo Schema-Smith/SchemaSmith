@@ -43,7 +43,7 @@
     },
     {
       "Name": "EngineVersion",
-      "DataType": "VARCHAR(50)",
+      "DataType": "VARCHAR(200)",
       "Nullable": false
     },
     {

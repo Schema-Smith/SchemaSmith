@@ -52,8 +52,16 @@ BEGIN
 
     IF v_authored IS NULL THEN RETURN 0; END IF;
     IF BINARY v_authored != BINARY IFNULL(p_Authored, '') THEN RETURN 0; END IF;
-    IF v_rowversion != v_version THEN RETURN 1; END IF;
+    -- ORDER MATTERS. The live object is checked BEFORE the context, because a stale context must never be an
+    -- excuse to stop looking at the server. With the two the other way round, an engine version that moved since
+    -- the last deploy -- a cumulative update, or on other engines a packaging rebuild -- made this function answer
+    -- "unchanged" without reading the live text at all: a hand-edited constraint was left in place, and the
+    -- recorder then wrote the DRIFTED text as the new baseline, so the drift became permanent and silent. Checking
+    -- the live text first costs one re-apply in the rare case where an engine genuinely re-renders an existing
+    -- object's stored text (SQL Server freezes it, so in practice this is PostgreSQL major upgrades), and that
+    -- re-apply restores the declared text -- which is the right answer anyway.
     IF BINARY v_canonical != BINARY IFNULL(p_LiveCanonical, '') THEN RETURN 0; END IF;
+    IF v_rowversion != v_version THEN RETURN 1; END IF;
 
     RETURN 1;
 END//

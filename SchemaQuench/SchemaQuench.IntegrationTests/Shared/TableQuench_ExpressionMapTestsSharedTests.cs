@@ -303,9 +303,9 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
             RunTableQuenchProc(cmd, json);
 
             cmd.CommandText = $@"UPDATE SchemaSmith_ExpressionMap
-                                    SET EngineVersion = 'from-another-server', CanonicalText = 'stale text'
+                                    SET EngineVersion = 'from-another-server'
                                   WHERE ObjectTable = '{table}'";
-            Assert.That(cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale");
+            Assert.That(cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale (only the CONTEXT goes stale -- the recorded canonical text still matches the live object, which is what a real engine upgrade looks like)");
 
             ClearMessages(cmd);
             RunTableQuenchProc(cmd, json);
@@ -319,6 +319,39 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
                 Assert.That(CountMessages(cmd, "Re-baselined 1 recorded expression", ""), Is.EqualTo(1),
                     "the re-baseline must be reported in the deploy log, not happen silently");
             });
+        });
+    }
+
+    // Stale context AND drift together: VERSION() moves on any server upgrade, and that must never stop the
+    // comparison reading the live object.
+    [Test]
+    public void AStaleContextDoesNotExcuseDrift_TheObjectIsStillReApplied()
+    {
+        if (!TargetSupportsCheckConstraints())
+            Assert.Ignore("CHECK constraints require MySQL 8.0.16; skipped below the floor.");
+
+        var table = $"ExprMapCtxDrift_{Guid.NewGuid():N}"[..24];
+        var ck = $"CK_{table}_Id";
+        WithConnection(table, cmd =>
+        {
+            cmd.CommandText = $@"DROP TABLE IF EXISTS `{_mainDb}`.`{table}`;
+                                 CREATE TABLE `{_mainDb}`.`{table}` (`Id` INT NOT NULL, PRIMARY KEY (`Id`));";
+            cmd.ExecuteNonQuery();
+
+            var json = CheckJson(table, ck, "`Id` > 100");
+            RunTableQuenchProc(cmd, json);
+
+            var dropCheck = Platform == Platform.MariaDb ? "DROP CONSTRAINT" : "DROP CHECK";
+            cmd.CommandText = $@"ALTER TABLE `{_mainDb}`.`{table}` {dropCheck} `{ck}`;
+                                 ALTER TABLE `{_mainDb}`.`{table}` ADD CONSTRAINT `{ck}` CHECK (`Id` > 999);";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"UPDATE SchemaSmith_ExpressionMap SET EngineVersion = 'from-another-server' WHERE ObjectTable = '{table}'";
+            Assert.That(cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist");
+
+            RunTableQuenchProc(cmd, json);
+
+            Assert.That(LiveCheckClause(cmd, ck), Does.Contain("100").And.Not.Contain("999"),
+                "a version change must not excuse drift -- the declared expression must be re-applied");
         });
     }
 }
