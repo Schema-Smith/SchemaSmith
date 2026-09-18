@@ -34,6 +34,10 @@
 -- but called out so nobody discovers it.
 CREATE OR REPLACE PROCEDURE "SchemaSmith"."RebuildTable"(p_Schema TEXT, p_Table TEXT, p_WhatIf BOOLEAN = FALSE)
     LANGUAGE plpgsql
+  -- JIT off: see the measurement in SchemaSmith.TableQuench.sql. Every procedure carries this, not just
+  -- the ones that look like entry points -- the product CALLs ModifiedTableQuench and its siblings
+  -- directly (SchemaQuench/DatabaseQuench.cs), so "nested" is not a safe assumption to plan around.
+  SET jit = 'off'
 AS $$
 DECLARE
   v_SchemaRaw TEXT;
