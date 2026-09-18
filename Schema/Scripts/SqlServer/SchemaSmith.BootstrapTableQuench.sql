@@ -214,6 +214,107 @@ BEGIN TRY
         END
     END;
 
+    -- Step 4.4: a declared PRIMARY KEY whose deployed shape differs is swapped IN PLACE. A PK cannot be dropped
+    -- with DROP INDEX and cannot be rebuilt by the create pass below, so it is handled here: DROP CONSTRAINT then
+    -- ADD CONSTRAINT, inside one transaction so the table is never left without its key. The rows are untouched.
+    DECLARE @v_DeclPkName NVARCHAR(500), @v_DeclPkBare NVARCHAR(500), @v_DeclPkCols NVARCHAR(MAX), @v_DeclPkClustered BIT;
+    DECLARE @v_PkName SYSNAME, @v_PkCols NVARCHAR(MAX), @v_PkClustered BIT, @v_Dupes INT;
+
+    SELECT TOP 1 @v_DeclPkName = IndexName, @v_DeclPkBare = IndexNameBare,
+                 @v_DeclPkCols = IndexColumns, @v_DeclPkClustered = [Clustered]
+      FROM @v_Indexes WHERE PrimaryKey = 1 ORDER BY OrdinalPos;
+
+    IF @v_DeclPkName IS NOT NULL
+    BEGIN
+        SELECT @v_PkName = kc.[name],
+               @v_PkClustered = CASE WHEN si.type_desc = 'CLUSTERED' THEN 1 ELSE 0 END,
+               @v_PkCols = (SELECT STRING_AGG(CAST(c.[name] AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY ic.key_ordinal)
+                        FROM sys.index_columns ic
+                        JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                       WHERE ic.object_id = si.object_id AND ic.index_id = si.index_id AND ic.is_included_column = 0)
+          FROM sys.key_constraints kc
+          JOIN sys.indexes si ON si.object_id = kc.parent_object_id AND si.index_id = kc.unique_index_id
+         WHERE kc.parent_object_id = OBJECT_ID(@v_QualifiedName) AND kc.[type] = 'PK';
+
+        IF @v_PkName IS NOT NULL
+           AND (@v_PkName <> @v_DeclPkBare
+                OR @v_PkClustered <> @v_DeclPkClustered
+                OR REPLACE(REPLACE(REPLACE(@v_DeclPkCols, '[', ''), ']', ''), ' ', '') <> ISNULL(@v_PkCols, ''))
+        BEGIN
+            -- Refuse before touching anything when the data cannot satisfy the declared key. The ALTER would
+            -- fail on its own, but this says which table, which key, and what to do about it.
+            SET @v_SQL = N'SELECT @cnt = COUNT(*) FROM (SELECT 1 AS dup FROM ' + @v_QualifiedName +
+                         N' GROUP BY ' + @v_DeclPkCols + N' HAVING COUNT(*) > 1) d';
+            EXEC sp_executesql @v_SQL, N'@cnt INT OUTPUT', @cnt = @v_Dupes OUTPUT;
+            IF @v_Dupes > 0
+            BEGIN
+                DECLARE @v_PkMsg NVARCHAR(600) =
+                    N'SchemaSmith bootstrap: cannot rebuild PRIMARY KEY on ' + @v_QualifiedName + N' as (' +
+                    @v_DeclPkCols + N') -- the table holds duplicate rows for that key. The existing key is ' +
+                    N'unchanged; resolve the duplicates and re-run.';
+                RAISERROR(@v_PkMsg, 16, 1);
+                RETURN;
+            END
+
+            RAISERROR('  Rebuilding PRIMARY KEY on %s: the deployed key does not match its declaration', 10, 100, @v_QualifiedName) WITH NOWAIT;
+            BEGIN TRANSACTION;
+            SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' DROP CONSTRAINT [' + @v_PkName + N']';
+            EXEC(@v_SQL);
+            SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' ADD CONSTRAINT ' + @v_DeclPkName +
+                         N' PRIMARY KEY ' + CASE WHEN @v_DeclPkClustered = 1 THEN N'CLUSTERED' ELSE N'NONCLUSTERED' END +
+                         N' (' + @v_DeclPkCols + N')';
+            EXEC(@v_SQL);
+            COMMIT TRANSACTION;
+        END
+    END
+
+    -- Step 4.5: a declared index that EXISTS UNDER THE RIGHT NAME BUT THE WRONG SHAPE is dropped here, so the
+    -- create below rebuilds it. Existence-by-name alone was the hole: an index created by an older SchemaSmith
+    -- (or by hand) kept whatever shape it had while the declaration in the JSON quietly did not hold. Shape is
+    -- read from the catalog and compared only against what this JSON declares: uniqueness, clustering, and the
+    -- key column list. A key backed by a UNIQUE CONSTRAINT cannot be dropped with DROP INDEX, so it is dropped
+    -- as the constraint it is. PRIMARY KEY shape is out of scope: the loop below only considers indexes the
+    -- declaration marks PrimaryKey = 0, because a PK index cannot be rebuilt without rebuilding the table.
+    DECLARE @v_ReshapeSQL NVARCHAR(MAX);
+    SET @v_ReshapeSQL =
+        (SELECT STRING_AGG(CAST(
+            -- A key backed by a CONSTRAINT (unique or primary key) cannot be dropped with DROP INDEX;
+            -- SQL Server raises 3723 for a PK. Drop it as the constraint it is.
+            CASE WHEN si.is_unique_constraint = 1 OR si.is_primary_key = 1
+                 THEN 'ALTER TABLE ' + @v_QualifiedName + ' DROP CONSTRAINT ' + i.IndexName
+                 ELSE 'DROP INDEX ' + i.IndexName + ' ON ' + @v_QualifiedName END
+          AS NVARCHAR(MAX)), ';' + CHAR(13) + CHAR(10)) WITHIN GROUP (ORDER BY i.OrdinalPos)
+           FROM @v_Indexes i
+           JOIN sys.indexes si
+             ON si.object_id = OBJECT_ID(@v_QualifiedName)
+            AND si.name = i.IndexNameBare
+          WHERE i.PrimaryKey = 0
+            AND (si.is_unique <> i.[Unique]
+                 OR CASE WHEN si.type_desc = 'CLUSTERED' THEN 1 ELSE 0 END <> i.[Clustered]
+                 OR REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(REPLACE(REPLACE(REPLACE(i.IndexColumns, '[', ''), ']', ''), ' ', '')),
+                                       'ASC', ''), 'DESC', '~'), '~', ' DESC'), ',', ','), '  ', ' ') <>
+                    ISNULL((SELECT STRING_AGG(CAST(c.[name] + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',')
+                                     WITHIN GROUP (ORDER BY ic.key_ordinal)
+                              FROM sys.index_columns ic
+                              JOIN sys.columns c
+                                ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                             WHERE ic.object_id = si.object_id
+                               AND ic.index_id = si.index_id
+                               AND ic.is_included_column = 0), '')
+                 -- A filtered index, or one carrying INCLUDE columns, is a shape bootstrap cannot declare, so it
+                 -- is by definition not what the declaration asks for.
+                 OR si.has_filter = 1
+                 OR EXISTS (SELECT 1 FROM sys.index_columns ic2
+                             WHERE ic2.object_id = si.object_id AND ic2.index_id = si.index_id
+                               AND ic2.is_included_column = 1)));
+
+    IF @v_ReshapeSQL IS NOT NULL
+    BEGIN
+        RAISERROR('  Rebuilding index(es) on %s whose deployed shape does not match the declaration', 10, 100, @v_QualifiedName) WITH NOWAIT;
+        EXEC(@v_ReshapeSQL);
+    END;
+
+
     -- Step 5: CREATE INDEX for any non-PK indexes missing on the table.
     -- (PK indexes were attached at CREATE TABLE time; if the table already existed before
     -- this refactor, the legacy CREATE TABLE attached its own PK constraint.)
