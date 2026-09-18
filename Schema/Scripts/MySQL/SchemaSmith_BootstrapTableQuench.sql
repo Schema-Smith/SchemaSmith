@@ -72,6 +72,7 @@ BEGIN
     DECLARE v_GroupCols LONGTEXT;
     DECLARE v_GroupPart VARCHAR(256);
     DECLARE v_GroupIdx INT;
+    DECLARE v_SupportsDescIndex TINYINT;
     -- MESSAGE_TEXT is a VARCHAR(128) condition item in the server's own charset; a utf8mb4
     -- variable is refused by MariaDB with "Data too long for condition item" whatever its length.
     DECLARE v_SignalMsg VARCHAR(128) CHARACTER SET utf8mb3;
@@ -210,6 +211,12 @@ BEGIN
     -- function itself provides.
     SET v_SupportsRenameColumn = IF((VERSION() LIKE '%MariaDB%' AND v_ServerVersionNum >= 1006)
                                      OR (VERSION() NOT LIKE '%MariaDB%' AND v_ServerVersionNum >= 800), 1, 0);
+
+    -- A DESC key part is PARSED AND IGNORED below MySQL 8.0 / MariaDB 10.8: the engine builds an ascending
+    -- index and reports collation 'A'. Comparing a declared DESC against that would rebuild the index on every
+    -- kindle, so below the floor the direction is not part of the shape -- the engine has no opinion to compare.
+    SET v_SupportsDescIndex = IF((VERSION() LIKE '%MariaDB%' AND v_ServerVersionNum >= 1008)
+                                  OR (VERSION() NOT LIKE '%MariaDB%' AND v_ServerVersionNum >= 800), 1, 0);
 
     SET v_RenIdx = 0;
     WHILE v_RenIdx < v_ColumnCount DO
@@ -406,7 +413,7 @@ BEGIN
             SELECT MIN(non_unique),
                    GROUP_CONCAT(CONCAT(COALESCE(column_name, '?expr'),
                                        IF(sub_part IS NULL, '', CONCAT('(', sub_part, ')')),
-                                       IF(collation = 'D', ' DESC', ''))
+                                       IF(collation = 'D' AND v_SupportsDescIndex = 1, ' DESC', ''))
                                 ORDER BY seq_in_index SEPARATOR ','),
                    COUNT(*),
                    SUM(column_name IS NULL)
@@ -421,8 +428,8 @@ BEGIN
             IF v_ShapeParts > 0 THEN
                 -- Declared side: drop backticks and whitespace, upper-case a trailing direction, and let ASC
                 -- render as nothing, which is what the catalog reports for it.
-                SET v_DeclKeys = REPLACE(REPLACE(REPLACE(UPPER(REPLACE(REPLACE(v_AiIndexColumns, '`', ''), ' ', '')),
-                                                 'ASC', ''), 'DESC', ' DESC'), ',', ',');
+                SET v_DeclKeys = REPLACE(REPLACE(UPPER(REPLACE(REPLACE(v_AiIndexColumns, '`', ''), ' ', '')),
+                                          'ASC', ''), 'DESC', IF(v_SupportsDescIndex = 1, ' DESC', ''));
                 -- Column names are case-insensitive in MySQL, so the comparison is too: comparing the declared
                 -- casing against the catalog's with BINARY rebuilt a correct index forever.
                 IF v_ShapeExprParts > 0
