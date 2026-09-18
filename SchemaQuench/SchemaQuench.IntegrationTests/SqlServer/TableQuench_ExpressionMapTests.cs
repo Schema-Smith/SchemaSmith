@@ -254,7 +254,9 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
     // The measured case the re-baseline rule exists for, done for real rather than simulated by editing a row.
     // SQL Server freezes an expression's stored text at the compatibility level it was CREATED under: at compat 100
     // CONVERT(varchar(10), Qty) is stored as the 3-argument CONVERT(...,0), and it stays that way after the database
-    // is raised to 160. Re-applying on the context change would drop and re-create every expression-bearing object
+    // is raised to the server's own level (which one that is differs per version -- 150 on 2019, 160 on 2022 -- so
+    // it is read from the server rather than hardcoded; hardcoding 160 failed CI's 2019 leg with "Valid values of
+    // the database compatibility level are 100, 110, 120, 130, 140 or 150"). Re-applying on the context change would drop and re-create every expression-bearing object
     // in the database on one deploy. Compat 100 is below the OPENJSON cliff, so this deploys through the XML ingest
     // path, exactly as production does for such a database.
     // ------------------------------------------------------------------------------------------------------------
@@ -273,6 +275,10 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         {
             cmd.CommandText = $"CREATE DATABASE [{db}]";
             cmd.ExecuteNonQuery();
+            cmd.CommandText = "SELECT [compatibility_level] FROM sys.databases WHERE [name] = 'model'";
+            var serverCompat = Convert.ToInt32(cmd.ExecuteScalar());
+            if (serverCompat <= 100)
+                Assert.Ignore($"The server's own compatibility level is {serverCompat}; there is no upgrade from 100 to measure.");
             cmd.CommandText = $"ALTER DATABASE [{db}] SET COMPATIBILITY_LEVEL = 100";
             cmd.ExecuteNonQuery();
             conn.ChangeDatabase(db);
@@ -338,11 +344,11 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
 
             // The upgrade.
             conn.ChangeDatabase("master");
-            cmd.CommandText = $"ALTER DATABASE [{db}] SET COMPATIBILITY_LEVEL = 160";
+            cmd.CommandText = $"ALTER DATABASE [{db}] SET COMPATIBILITY_LEVEL = {serverCompat}";
             cmd.ExecuteNonQuery();
             conn.ChangeDatabase(db);
 
-            // Pass 2, at compat 160: re-baseline, report it, change nothing.
+            // Pass 2, at the server's compatibility level: re-baseline, report it, change nothing.
             _messages.Clear();
             DeployViaXml();
             var afterUpgradeId = ObjectId();
@@ -353,7 +359,7 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
             {
                 Assert.That(afterUpgradeId, Is.EqualTo(id), "a compatibility-level change must NOT re-create the constraint");
                 Assert.That(afterUpgradeDef, Is.EqualTo(frozen), "the stored text must be untouched");
-                Assert.That(afterUpgradeRow, Does.StartWith("160|"), "the mapping must now carry the new compat level");
+                Assert.That(afterUpgradeRow, Does.StartWith($"{serverCompat}|"), "the mapping must now carry the new compat level");
                 Assert.That(reported, Has.Count.EqualTo(1),
                     "the re-baseline must be reported: " + string.Join(" | ", _messages.FindAll(m => m.Contains("aseline"))));
             });
