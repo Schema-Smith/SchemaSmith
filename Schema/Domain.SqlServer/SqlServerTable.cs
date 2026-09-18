@@ -117,6 +117,13 @@ namespace Schema.Domain.SqlServer
         [JsonProperty(Order = 107)]
         public bool EnableCDC { get; set; }
 
+        // #417. Where this table's CDC change table goes; overrides the template's CdcFilegroup. Null means
+        // unmanaged. A change is honoured by rotating to a new capture instance, never by moving the old one.
+        [JsonProperty(Order = 123, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(MaxLength = 128,
+            Description = "Filegroup for this table's CDC change table; overrides the template's CdcFilegroup. Only meaningful with EnableCDC. A change creates a new capture instance on the new filegroup and leaves the old one, with its history, for you to drain and drop.")]
+        public string CdcFilegroup { get; set; }
+
         // Table-level Change Tracking (#change-tracking). Distinct from the FullTextIndex option spelled
         // WITH CHANGE_TRACKING = AUTO|MANUAL|OFF, which is unrelated and already implemented.
         // Requires Change Tracking enabled on the DATABASE (sys.change_tracking_databases). SchemaSmith

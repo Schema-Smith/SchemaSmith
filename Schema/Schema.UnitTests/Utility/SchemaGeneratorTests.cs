@@ -103,6 +103,58 @@ public class SchemaGeneratorTests
         Assert.That(required, Does.Not.Contain("Optional"));
     }
 
+    // JsonHelper.Serialize drops a value equal to its [DefaultValue], so a property carrying both that and
+    // Required is absent from exactly the files the model writes for the common case -- a schema requiring
+    // it rejects the engine's own output. Absence already means the default when loaded, so it cannot be
+    // required.
+    [Test]
+    public void ShouldNotRequireAPropertyThatHasADefaultValue()
+    {
+        var schema = SchemaGenerator.GenerateSchema(typeof(RequiredWithDefaultClass));
+        var required = schema["required"]?.ToObject<List<string>>();
+        Assert.That(required, Is.EqualTo(new List<string> { "Name" }));
+    }
+
+    [Test]
+    public void ShouldNotConditionallyRequireAPropertyThatHasADefaultValue()
+    {
+        var schema = SchemaGenerator.GenerateSchema(typeof(RequiredUnlessWithDefaultClass));
+        Assert.That(schema["allOf"], Is.Null);
+    }
+
+    [Test]
+    public void ADefaultScheduleEvent_ValidatesAgainstItsOwnGeneratedSchema()
+    {
+        var json = JsonHelper.Serialize(new Schema.Domain.MySQL.MySqlEvent { Name = "nightly", Definition = "DO 1", Interval = "1 DAY" });
+        Assert.That(JObject.Parse(json)["ScheduleType"], Is.Null,
+            "precondition: the serializer omits the default EVERY, which is the shape under test");
+
+        var schema = NJsonSchema.JsonSchema.FromJsonAsync(
+            SchemaGenerator.GenerateSchema(typeof(Schema.Domain.MySQL.MySqlEvent), Platform.MySQL).ToString()).GetAwaiter().GetResult();
+        var errors = schema.Validate(json).Select(e => e.ToString()).ToList();
+
+        Assert.That(errors, Is.Empty, "the engine's own serialized event must satisfy the schema it generates");
+    }
+
+    // CDC is SQL Server-only, so the template default is offered only in the SQL Server template schema.
+    [TestCase(Platform.SqlServer, true)]
+    [TestCase(Platform.PostgreSQL, false)]
+    [TestCase(Platform.MySQL, false)]
+    [TestCase(Platform.MariaDb, false)]
+    public void TemplateCdcFilegroup_IsOfferedOnlyOnSqlServer(Platform platform, bool offered)
+    {
+        var schema = SchemaGenerator.GenerateSchema(typeof(Template), t => t, platform);
+        Assert.That(schema["properties"]?["CdcFilegroup"] != null, Is.EqualTo(offered));
+    }
+
+    [Test]
+    public void SqlServerTable_OffersCdcFilegroup_AsAnOptionalString()
+    {
+        var schema = SchemaGenerator.GenerateSchema(typeof(SqlServerTable));
+        Assert.That(schema["properties"]?["CdcFilegroup"]?["type"]?.ToString(), Is.EqualTo("string"));
+        Assert.That(schema["required"]?.ToObject<List<string>>() ?? [], Does.Not.Contain("CdcFilegroup"));
+    }
+
     [Test]
     public void ShouldApplyPatternConstraint()
     {
@@ -541,6 +593,16 @@ public class SchemaGeneratorTests
         [SchemaProperty(Required = true)] public string Name { get; set; }
         public string Optional { get; set; }
     }
+    private class RequiredWithDefaultClass
+    {
+        [SchemaProperty(Required = true)] public string Name { get; set; }
+        [SchemaProperty(Required = true)] [System.ComponentModel.DefaultValue("EVERY")] public string Kind { get; set; } = "EVERY";
+    }
+    private class RequiredUnlessWithDefaultClass
+    {
+        public bool Flag { get; set; }
+        [SchemaProperty(Required = true, RequiredUnless = "Flag")] [System.ComponentModel.DefaultValue("X")] public string Value { get; set; } = "X";
+    }
     private class PatternClass
     {
         [SchemaProperty(Pattern = "NO ACTION|CASCADE")] public string Action { get; set; }
@@ -667,7 +729,10 @@ public class SchemaGeneratorTests
         Assert.Multiple(() =>
         {
             Assert.That(colProps?["GenerationExpression"], Is.Not.Null);
-            Assert.That(colProps?["CheckExpression"], Is.Not.Null);
+            // Was CheckExpression until that alias was retired on these engines; OnUpdateCurrentTimestamp is
+            // another MySqlColumn-only property, which is what this test is actually about.
+            Assert.That(colProps?["OnUpdateCurrentTimestamp"], Is.Not.Null);
+            Assert.That(colProps?["CheckExpression"], Is.Null, "the retired alias must not reappear in a generated schema");
         });
     }
 

@@ -61,18 +61,18 @@ BEGIN
       -- FillFactor changed (when UpdateFillFactor is true)
       OR (t."UpdateFillFactor" AND
           COALESCE(NULLIF((REGEXP_MATCH(ARRAY_TO_STRING(i.reloptions, ','), 'fillfactor=(\d+)'))[1]::int, 0), 90) != t."FillFactor")
-      -- IndexColumns changed
+      -- IndexColumns changed (declared side normalised to the unquoted, default-free form read back here)
       OR (SELECT STRING_AGG(TRIM(BOTH '"' FROM PG_GET_INDEXDEF(idx.indexrelid, u.idx::int4, true)) ||
                             CASE WHEN (idx.indoption[u.idx-1] & 1) = 1 THEN ' DESC' || CASE WHEN (idx.indoption[u.idx-1] & 2) = 2 THEN '' ELSE ' NULLS LAST' END
                                  ELSE CASE WHEN (idx.indoption[u.idx-1] & 2) = 2 THEN ' NULLS FIRST' ELSE '' END
                                 END, ',' ORDER BY u.idx)
             FROM UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
-            WHERE u.idx <= idx.indnkeyatts) != t."IndexColumns"
+            WHERE u.idx <= idx.indnkeyatts) != "SchemaSmith"."NormalizeIndexColumnList"(t."IndexColumns")
       -- IncludeColumns changed
       OR COALESCE((SELECT STRING_AGG(a.attname, ',' ORDER BY u.idx)
                      FROM pg_attribute a
                      CROSS JOIN LATERAL UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
-                     WHERE a.attrelid = idx.indrelid AND u.idx > idx.indnkeyatts AND a.attnum = u.element), '') != COALESCE(t."IncludeColumns", '')
+                     WHERE a.attrelid = idx.indrelid AND u.idx > idx.indnkeyatts AND a.attnum = u.element), '') != "SchemaSmith"."NormalizeIndexColumnList"(t."IncludeColumns")
     )
   $mv$, CASE WHEN (current_setting('server_version_num')::int / 10000) >= 15
              THEN 'idx.indnullsnotdistinct != t."NullsNotDistinct"'

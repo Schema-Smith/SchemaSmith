@@ -835,7 +835,12 @@ BEGIN
           OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
           OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
           OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-              AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression)))
+              AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+              -- #242: the texts differ, but they always differ once the engine has reformatted the expression.
+              -- Ask what was actually applied before calling it a change.
+              AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                    'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'generated',
+                    c.GeneratedExpression, IFNULL(isc.GENERATION_EXPRESSION, '')) = 0)
           OR ((isc.EXTRA LIKE '%auto_increment%') <> (c.IsAutoIncrement = 1))
           OR (SchemaSmith_SupportsInvisibleColumn() = 1 AND (isc.EXTRA LIKE '%INVISIBLE%') <> (c.IsInvisible = 1))
           OR (SchemaSmith_SupportsSystemVersioning() = 1
@@ -1173,7 +1178,12 @@ BEGIN
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
               -- Generated expression changes (both sides are generated, but expression differs)
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression)))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  -- #242: the texts always differ once the engine has reformatted the expression; ask what was
+                  -- actually applied before calling it a change.
+                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'generated',
+                        c.GeneratedExpression, IFNULL(isc.GENERATION_EXPRESSION, '')) = 0)
               -- AUTO_INCREMENT removal/addition (live EXTRA vs declared IsAutoIncrement) — parity with identity removal
               OR ((isc.EXTRA LIKE '%auto_increment%') <> (c.IsAutoIncrement = 1))
               -- Invisible-column visibility differs. Gated behind SchemaSmith_SupportsInvisibleColumn(): below
@@ -1246,7 +1256,12 @@ BEGIN
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression)))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  -- #242: the texts always differ once the engine has reformatted the expression; ask what was
+                  -- actually applied before calling it a change.
+                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'generated',
+                        c.GeneratedExpression, IFNULL(isc.GENERATION_EXPRESSION, '')) = 0)
               OR ((isc.EXTRA LIKE '%auto_increment%') <> (c.IsAutoIncrement = 1))
               -- Invisible-column visibility differs. Gated behind SchemaSmith_SupportsInvisibleColumn(): below
               -- the floor (MySQL 8.0.23 / MariaDB 10.3) the column can never actually become invisible (the
@@ -1336,7 +1351,12 @@ BEGIN
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
               -- Generated expression changes (both sides are generated, but expression differs)
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression)))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  -- #242: the texts always differ once the engine has reformatted the expression; ask what was
+                  -- actually applied before calling it a change.
+                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'generated',
+                        c.GeneratedExpression, IFNULL(isc.GENERATION_EXPRESSION, '')) = 0)
               -- AUTO_INCREMENT removal/addition (live EXTRA vs declared IsAutoIncrement) — parity with identity removal
               OR ((isc.EXTRA LIKE '%auto_increment%') <> (c.IsAutoIncrement = 1))
               -- Invisible-column visibility differs. Gated behind SchemaSmith_SupportsInvisibleColumn(): below
@@ -1412,7 +1432,12 @@ BEGIN
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression)))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  -- #242: the texts always differ once the engine has reformatted the expression; ask what was
+                  -- actually applied before calling it a change.
+                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'generated',
+                        c.GeneratedExpression, IFNULL(isc.GENERATION_EXPRESSION, '')) = 0)
               OR ((isc.EXTRA LIKE '%auto_increment%') <> (c.IsAutoIncrement = 1))
               -- Invisible-column visibility differs. Gated behind SchemaSmith_SupportsInvisibleColumn(): below
               -- the floor (MySQL 8.0.23 / MariaDB 10.3) the column can never actually become invisible (the
@@ -1488,7 +1513,12 @@ BEGIN
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression)))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  -- #242: the texts always differ once the engine has reformatted the expression; ask what was
+                  -- actually applied before calling it a change.
+                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'generated',
+                        c.GeneratedExpression, IFNULL(isc.GENERATION_EXPRESSION, '')) = 0)
               OR ((isc.EXTRA LIKE '%auto_increment%') <> (c.IsAutoIncrement = 1))
               -- Invisible-column visibility differs. Gated behind SchemaSmith_SupportsInvisibleColumn(): below
               -- the floor (MySQL 8.0.23 / MariaDB 10.3) the column can never actually become invisible (the

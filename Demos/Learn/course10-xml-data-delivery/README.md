@@ -43,6 +43,8 @@ The table itself deploys fine — only the *data delivery* hits the cliff. Under
 `warn` policy, SchemaQuench skips just that delivery with a clear message and leaves the table
 empty, rather than failing the whole run:
 
+<!-- TRAINING-RELEASE-PIN #encoding-log -- on 2.7.0 a "model ingest encoding: Xml" line follows the detected-version line
+below; add it to the excerpt. -->
 ```
 [localhost,11433].[learn_2008]   detected SQL Server version 16.0.4260.1 (compatibility level 100)
 [localhost,11433].[learn_2008]   Delivering table data

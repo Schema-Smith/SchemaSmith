@@ -24,7 +24,14 @@ set -u
 
 TEST_USER='TestUser'
 TEST_PASSWORD='aCa2d805-41E5@40c4!98e7#92F93zzxo176'
-PROJ='Schema/Schema.IntegrationTests/Schema.IntegrationTests.csproj'
+# All four, as CI's floor legs run them. Schema.IntegrationTests alone catches a kindle that dies, but the
+# PR #392 family (MySQL 5.7 parenthesized DEFAULT, SRS_ID, comment escaping) only fails in the tool suites.
+PROJS=(
+  'Schema/Schema.IntegrationTests/Schema.IntegrationTests.csproj'
+  'SchemaQuench/SchemaQuench.IntegrationTests/SchemaQuench.IntegrationTests.csproj'
+  'SchemaTongs/SchemaTongs.IntegrationTests/SchemaTongs.IntegrationTests.csproj'
+  'DataTongs/DataTongs.IntegrationTests/DataTongs.IntegrationTests.csproj'
+)
 KEEP=${KEEP_CONTAINERS:-0}
 FAILED=0
 
@@ -102,17 +109,20 @@ for f in "${FLOORS[@]}"; do
     PostgreSQL) PORT_ENV="SmithySettings_PostgreSQL__Port=$port" ;;
   esac
 
-  out=$(env $PORT_ENV $SSL_ENV dotnet test "$PROJ" -c Release --no-build \
-          --filter "TestCategory=$category" 2>&1)
-  summary=$(echo "$out" | grep -aE '^(Passed!|Failed!)' | tail -1)
+  for proj in "${PROJS[@]}"; do
+    out=$(env $PORT_ENV $SSL_ENV dotnet test "$proj" -c Release --no-build \
+            --filter "TestCategory=$category" 2>&1)
+    summary=$(echo "$out" | grep -aE '^(Passed!|Failed!)' | tail -1)
 
-  if echo "$summary" | grep -q '^Passed!'; then
-    echo "  $summary"
-  else
-    FAILED=1
-    echo "  $summary"
-    echo "$out" | grep -aE '  Failed [A-Za-z]|Error occurred while kindling|Unknown column|Unknown system variable|error in your SQL syntax' | head -8 | sed 's/^/    /'
-  fi
+    # A missing summary is a failure, not a pass: a filter that selects nothing prints no "Passed!" line.
+    if echo "$summary" | grep -q '^Passed!'; then
+      echo "  $(basename "$proj" .csproj): $summary"
+    else
+      FAILED=1
+      echo "  $(basename "$proj" .csproj): ${summary:-NO RESULT}"
+      echo "$out" | grep -aE '  Failed [A-Za-z]|Error occurred while kindling|Unknown column|Unknown system variable|error in your SQL syntax' | head -8 | sed 's/^/    /'
+    fi
+  done
 done
 
 echo ""

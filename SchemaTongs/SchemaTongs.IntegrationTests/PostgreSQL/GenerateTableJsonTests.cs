@@ -139,6 +139,10 @@ CREATE STATISTICS ""ST_TestStatistics_MyBigInt_ForNullStrings"" ON (""MyBigInt""
 
         AssertStatisticProperties(result.Statistics[0], "ST_TestStatistics_MyBigInt_ForNullStrings", @"(""MyBigInt"" / 1)");
         AssertStatisticProperties(result.Statistics[1], "ST_TestStatistics_MyInt", "MyInt,MyBigInt");
+        // The catalog marks any statistic with an expression with an 'e' kind. EXPRESSIONS is not a kind CREATE
+        // STATISTICS accepts, so extracting it produced a package that could not be deployed.
+        Assert.That(result.Statistics[0].Kind ?? "", Does.Not.Contain("EXPRESSIONS"), "a single-expression statistic has no declarable kind");
+        Assert.That(result.Statistics[1].Kind ?? "", Does.Not.Contain("EXPRESSIONS"));
 
         conn.Close();
     }

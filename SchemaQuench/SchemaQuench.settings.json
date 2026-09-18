@@ -7,7 +7,6 @@
         "User": "", // SQL Server: leave User and Password blank for Windows authentication
         "Password": "",
         "Port": "", // Optional for all platforms — overrides default port
-        "Platform": "", // SqlServer, PostgreSQL, MySQL, or MariaDb. Blank = inferred from the package.
         // "IntegratedSecurity": true, // SQL Server: use Windows Authentication and IGNORE any User/Password
                                        // left in this file — the opt-in for when a credential is present but
                                        // should not be used. Absent = credential-based when one is supplied.

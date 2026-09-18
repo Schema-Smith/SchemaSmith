@@ -100,7 +100,7 @@ public class CheckConstraintGatingTests
             Columns =
             [
                 new MySqlColumn { Name = "`id`", DataType = "INT", Nullable = false, AutoIncrement = true },
-                new MySqlColumn { Name = "`qty`", DataType = "INT", Nullable = true, CheckExpression = "`qty` >= 0" }
+                new MySqlColumn { Name = "`qty`", DataType = "INT", Nullable = true }
             ],
             Indexes =
             [
@@ -108,7 +108,10 @@ public class CheckConstraintGatingTests
             ],
             CheckConstraints =
             [
-                new CheckConstraint { Name = $"`CK_{TableName}_pos`", Expression = "`qty` < 1000" }
+                new CheckConstraint { Name = $"`CK_{TableName}_pos`", Expression = "`qty` < 1000" },
+                // Two constraints, both table-level: the column-level CheckExpression alias is retired, and the
+                // pair is what makes the count below prove the whole set is gated together rather than one of it.
+                new CheckConstraint { Name = $"`CK_{TableName}_nonneg`", Expression = "`qty` >= 0" }
             ]
         };
         return "[" + JsonConvert.SerializeObject(table) + "]";
@@ -199,7 +202,7 @@ public class CheckConstraintGatingTests
         Assert.Multiple(() =>
         {
             Assert.That(TableExistsCount(), Is.EqualTo(1), "Table must deploy on the modern binary.");
-            Assert.That(LiveCheckCount(), Is.EqualTo(2), "Both the table-level and column-level checks must be created.");
+            Assert.That(LiveCheckCount(), Is.EqualTo(2), "Both declared checks must be created.");
             Assert.That(CheckAuditCount("downgraded"), Is.EqualTo(0), "No downgrade may be recorded on a supported server.");
         });
     }

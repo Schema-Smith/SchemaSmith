@@ -65,11 +65,11 @@ namespace Schema.Domain
         [JsonProperty(Order = 87)]
         public bool? DropCheckConstraintsRemovedFromProduct { get; set; }
 
-        [SchemaProperty(AuthoredOnly = true, Description = "When set, overrides the template- and product-level DropExcludeConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting. PostgreSQL only.")]
+        [SchemaProperty(AuthoredOnly = true, Platforms = [Platform.PostgreSQL], Description = "When set, overrides the template- and product-level DropExcludeConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting.")]
         [JsonProperty(Order = 88)]
         public bool? DropExcludeConstraintsRemovedFromProduct { get; set; }
 
-        [SchemaProperty(AuthoredOnly = true, Description = "When set, overrides the template- and product-level DropStatisticsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting.")]
+        [SchemaProperty(AuthoredOnly = true, Platforms = [Platform.SqlServer, Platform.PostgreSQL], Description = "When set, overrides the template- and product-level DropStatisticsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting.")]
         [JsonProperty(Order = 89)]
         public bool? DropStatisticsRemovedFromProduct { get; set; }
 

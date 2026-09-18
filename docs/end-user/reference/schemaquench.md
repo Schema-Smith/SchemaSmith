@@ -372,7 +372,9 @@ What you *declare* is a separate, friendlier grammar: `MinimumVersion` takes `16
 
 When the supported range across your targets diverges, SchemaSmith adapts the DDL it generates automatically. There is nothing to configure -- you deploy the same package to older and newer engine versions and SchemaSmith picks the right form for each target.
 
-> **PostgreSQL:** The following cases apply only to PostgreSQL, whose supported range (12 through current) spans versions that differ in available DDL.
+#### PostgreSQL
+
+The following cases apply only to PostgreSQL, whose supported range (12 through current) spans versions that differ in available DDL.
 
 A feature a target version lacks is either taken by an equivalent longer path (same end state), or -- where there is no equivalent -- degraded through the **unsupported-feature policy** (`Target:UnsupportedFeaturePolicy`, default `warn`): the object is emitted without the unsupported aspect and each affected object is listed under **Unsupported Feature Downgrades** in the deployment summary, so you know exactly what was relaxed. Set `Target:UnsupportedFeaturePolicy=fail` (for example `SmithySettings_Target__UnsupportedFeaturePolicy=fail`) to abort instead with a "requires PostgreSQL N" message rather than deploy a silently-degraded schema.
 
@@ -384,14 +386,39 @@ A feature a target version lacks is either taken by an equivalent longer path (s
 | **Per-column compression** (`SET COMPRESSION`) | PostgreSQL 14 | omits the compression + records a downgrade |
 | **Expression statistics** (`CREATE STATISTICS` on an expression) | PostgreSQL 14 | skips the statistic + records a downgrade |
 | **Removing a column's generation** (`DROP EXPRESSION`) | PostgreSQL 13 | drops and re-adds the column as a plain column (the previously-computed values are not preserved, unlike the in-place conversion available on 13+) |
+| **Table access method** (`USING <method>`) | PostgreSQL 15 | creates the table on the server's default access method + records a downgrade |
+| **`VIRTUAL` generated columns** | PostgreSQL 18 | skips the column + records a downgrade (`STORED` is unaffected — it has been available since 12) |
 
 The version-sensitive system-catalog reads SchemaSmith uses to compare and extract state (per-column compression, expression statistics, `NULLS NOT DISTINCT`, INCLUDE columns) are branched automatically so they parse on the older server too — extraction and idempotency work the same on 12 as on current PostgreSQL. Delete-on-absence data delivery uses a single `MERGE … WHEN NOT MATCHED BY SOURCE THEN DELETE` on 17+ and a `MERGE` + follow-on `DELETE … WHERE NOT EXISTS` (keyed identically, same merge filter) on 15/16; below 15 it is the same version-agnostic `DELETE`. In every case the end state is identical — deploy the same package to PostgreSQL 12 through current and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
-> **SQL Server:** Two independent adaptations, both automatic. Below **compatibility level** 130 (SQL Server 2016) SchemaSmith switches its entire model-ingest and compare encoding from JSON to XML. Separately, features introduced after the target's **server version** are degraded through the unsupported-feature policy, exactly as on the other engines.
+#### SQL Server
+
+Two independent adaptations, both automatic. Below **compatibility level** 130 (SQL Server 2016) SchemaSmith switches its entire model-ingest and compare encoding from JSON to XML. Separately, features introduced after the target's **server version** are degraded through the unsupported-feature policy, exactly as on the other engines.
 
 **Adaptation 1 — the encoding switch (compatibility-level gated).** This one is not a degrade; nothing is lost. SchemaSmith hands its parsed schema model to the server as JSON (`OPENJSON` / `FOR JSON`) at compatibility level 130 and above, and as XML (`.nodes()` / `.value()` / `FOR XML PATH`) below 130 — because `OPENJSON`'s JSON path is a parse error under compatibility level 130. The switch is chosen from the detected compatibility level and server version, and applies to deployment (SchemaQuench) and extraction (SchemaTongs) alike, reaching down to compatibility level 100 (SQL Server 2008). Constructs SchemaSmith itself uses — `STRING_AGG … WITHIN GROUP` and `STRING_SPLIT` — fall back to `FOR XML PATH` ordered aggregation and a split function on the XML path, so the end state is identical to a modern deployment. **These two are gated differently, and only one gate is the compatibility level.** `STRING_SPLIT` requires compatibility level 130. `STRING_AGG` requires **SQL Server 2017** (server major 14) and is not compatibility-level gated at all — it parses at every level down to 100 on a server that has it. The distinction matters because a SQL Server 2016 server reports compatibility level 130 while having no `STRING_AGG` whatsoever, so the fallback is chosen from the detected server version, not the compatibility level alone. (`STRING_AGG`'s optional `WITHIN GROUP (ORDER BY …)` clause additionally requires compatibility level 110.)
 
-You normally never touch this, but you can force the encoding with `Target:CompatEncoding` (deployment) or `Source:CompatEncoding` (extraction): `auto` (the default — pick by detected version), `legacy` (XML), or `modern` (JSON) — for example `SmithySettings_Target__CompatEncoding=legacy`.
+##### Forcing the encoding
+
+`auto` is the default and picks correctly from the detected compatibility level and server version. The override is a diagnostic escape hatch, not a tuning knob: **there is no schema you can express on one encoding and not the other, and no performance or feature difference to buy.** The resulting database is identical either way.
+
+| Setting | Read by | Values |
+|---|---|---|
+| `Target:CompatEncoding` | SchemaQuench (deployment) | `auto` (default), `legacy` (XML), `modern` (JSON) |
+| `Source:CompatEncoding` | SchemaTongs (extraction) | same three |
+
+For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `Source:CompatEncoding` too, for the queries it builds a delivery script from.
+
+> **Don't confuse this with `DeliveryEncoding`.** Two settings, both with "encoding" in the name, and they control unrelated things. **`CompatEncoding`** (this one) is how SchemaSmith talks to SQL Server about *its own schema model* — invisible in your package and in the resulting database. **[`ShouldCast:DeliveryEncoding`](datatongs.md#delivery-encoding-xml-for-legacy-sql-server)** is a DataTongs feature that decides the format of the *data content files it writes* — `Json` or `Xml` — which is what you want when porting data to another platform or handing it to an external vendor. Changing one tells you nothing about the other.
+
+**What it actually changes.** The encoding is how SchemaSmith hands its own parsed model to SQL Server and reads it back — internal plumbing between the tool and the server, not anything about your package, your DDL, or the database that results. Concretely it selects which helper procedures are installed: on `legacy`, five are replaced by XML twins (`BootstrapTableQuench`, `IndexOnlyQuench`, `IndexedViewQuench`, `GenerateTableJson`, `GenerateIndexedViewJson`) and the JSON-only `fn_FormatJson` is not installed at all. The setting is part of the kindle stamp, so changing it re-installs the matching helper set on the next run.
+
+**Where you'd see it.** SchemaQuench logs the encoding it resolved for each database during pre-flight; SchemaTongs names it per object as it extracts — `Cast Json for dbo.Customer` / `Cast Xml for dbo.Customer`.
+
+**When it is genuinely useful.** Reproducing a legacy-path problem on hardware you actually have: set `legacy` against a modern server and SchemaSmith takes exactly the code path a SQL Server 2008–2016 target would, with no old server to maintain. That is the case it exists for.
+
+> **`modern` cannot rescue an old target.** Forcing JSON onto a database below compatibility level 130, or a server below 2017, enables nothing — `OPENJSON`'s JSON path is a parse error there and `STRING_AGG` does not exist, so the run fails during kindling rather than degrading. `auto` already chooses JSON wherever JSON works, so there is no target where `modern` succeeds and `auto` would not have picked it anyway.
+
+**What `legacy` costs you.** One thing, and only on extraction: the open-ended custom-property `Extensions` bag is dropped when SchemaTongs reverse-engineers a table on the XML encoding (the callout below). The typed model — columns, indexes, keys, constraints, statistics — round-trips intact.
 
 > **Legacy fallback (SQL Server only):** On the XML (legacy) encoding, the open-ended custom-property `Extensions` bag is dropped when SchemaTongs reverse-engineers a table below the JSON cliff. The typed schema model — columns, indexes, keys, constraints, statistics — round-trips intact; only the free-form `Extensions` metadata is not carried on the legacy encoding.
 
@@ -404,12 +431,19 @@ You normally never touch this, but you can force the encoding with `Target:Compa
 | **Always Encrypted** (`ENCRYPTED WITH`) | SQL Server 2016 | creates the column *unencrypted* + records a downgrade |
 | **Nonclustered columnstore index** | SQL Server 2012 | skips the index + records a downgrade |
 | **Clustered columnstore index** | SQL Server 2014 | skips the index + records a downgrade |
+| **Graph tables** (`NODE` / `EDGE`) | SQL Server 2017 | creates the table with all its declared columns, *without* graph semantics + records a downgrade |
+| **Ledger tables** | SQL Server 2022 | creates an ordinary table + records a downgrade. The direction is deliberate: a ledger table cannot be converted or dropped afterwards, so not creating one is far easier to recover from than creating one by accident |
+| **XML compression** | SQL Server 2022 | creates the table or index without the compression clause + records a downgrade. Nothing an application can observe changes — only the storage saving is lost |
 
 > **Check the manifest before deploying to a pre-2016 target.** Under the default `warn`, a masked column is created unmasked and an Always Encrypted column is created unencrypted — the deploy succeeds and the downgrade is recorded, but the protection is not there. If a silently-unprotected column is worse for you than a failed deployment, set `Target:UnsupportedFeaturePolicy=fail`.
 
 One further case is compatibility-level gated rather than version gated: a `Json`-encoded [data delivery](schema-packages.md#content-encoding) aimed at a below-130 SQL Server target follows the same policy — `warn` skips just that delivery and delivers the rest, `fail` aborts. Re-encode that delivery as `Xml` to deploy it there.
 
-> **MySQL / MariaDB:** The supported range (MySQL 5.7 through current, MariaDB 10.2 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
+**Three more route through the same policy but are gated on server *state*, not version** — every supported version can do them, if the feature is turned on. **Change Data Capture** and **Change Tracking** need the feature enabled on the database; **FILESTREAM** columns need FILESTREAM enabled on the server *and* a FILESTREAM filegroup on the database. Where the prerequisite is absent, the object is deployed without that aspect and a downgrade is recorded, exactly as a version degrade would be — so a package that assumes CDC is on does not fail, it quietly deploys without it under the default `warn`. Enable the prerequisite, or set `Target:UnsupportedFeaturePolicy=fail`, if that is not what you want.
+
+#### MySQL / MariaDB
+
+The supported range (MySQL 5.7 through current, MariaDB 10.2 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
 
 The schema model itself parses on every supported version — a version-agnostic `JSON_EXTRACT` shred stands in for `JSON_TABLE` (MySQL 8.0 / MariaDB 10.6), so nothing about kindling or ingest depends on the target version. Beyond that, a feature a target lacks is either taken by an equivalent path (same end state) or degraded through the **unsupported-feature policy** (`Target:UnsupportedFeaturePolicy`, default `warn` → emit without the feature + an **Unsupported Feature Downgrades** line; `fail` → abort with a "requires MySQL N" message):
 
@@ -422,6 +456,16 @@ The schema model itself parses on every supported version — a version-agnostic
 | **Invisible column** (`Column.Invisible`) | MySQL 8.0.23 / MariaDB 10.3 | stores the column *visible* — the `INVISIBLE` clause is suppressed — + records a downgrade. The modified-column compare ignores the visibility difference below the floor, so re-deploys stay idempotent instead of churning the column every run |
 | **Descending index key parts** (`… DESC`) | MySQL 8.0 / MariaDB 10.8 | stores the key part ascending (the engine silently does so anyway) + records a downgrade |
 | **Automatic table-data delivery** | MySQL 8.0 | on MariaDB 10.2 uses a recursive-CTE shred (full support); below the MySQL floor, skips delivery with a clear log — use manual data scripts |
+| **Column `DEFAULT` expression** (a function or expression default, not a literal) | MySQL 8.0.13 (MariaDB: at the 10.2 floor) | **skips the whole column**, not just the default + records a downgrade — see the warning below |
+| **Functional / expression index** (a key part that is an expression) | MySQL 8.0.13 (MariaDB: no equivalent at any version) | skips the index + records a downgrade |
+| **Column SRID restriction** (`SRID n` on a spatial column) | MySQL 8.0.3 (MariaDB: no equivalent at any version) | creates the column without the SRID restriction + records a downgrade |
+| **Application-time period** (`PERIOD FOR`) | MariaDB 10.4.3 (MySQL: no equivalent at any version) | creates the table without the period + records a downgrade |
+| **Table-level system versioning** (`WITH SYSTEM VERSIONING`) | MariaDB 10.3 (MySQL: no equivalent) | creates an ordinary, non-versioned table + records a downgrade |
+| **Per-column history exclusion** (`WITHOUT SYSTEM VERSIONING`) | MariaDB 10.3.4 (MySQL: no equivalent) | creates the column without the exclusion + records a downgrade — the column survives, the exclusion does not |
+
+> **A `DEFAULT` expression below MySQL 8.0.13 costs you the column, not the default.** Every other degrade in this table relaxes an aspect and keeps the object; this one skips the whole column, so under the default `warn` the deploy succeeds and a column your package declares is simply not there. If any table targets MySQL below 8.0.13 and uses an expression default, either give it a literal default or set `Target:UnsupportedFeaturePolicy=fail`.
+
+> **"No equivalent at any version" is not the same as "old".** Several rows above are not version gates at all — MySQL has no application-time periods or system versioning at *any* release, and MariaDB has no SRID restriction or functional index at any release. Those degrade on every target of that platform, current versions included, which is why they appear here rather than reading as legacy concerns.
 
 The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7 through current, or MariaDB 10.2 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
@@ -646,6 +690,52 @@ Set it in `SchemaQuench.settings.json`, or pass `--ForceReKindle` on the command
 > **Tip:** Forcing a re-kindle is safe to run concurrently. SchemaSmith serializes the helper re-install per database with a session lock, so parallel deployments don't collide even when every one of them is forcing.
 
 > **Tip:** If you can't change the configuration or CLI invocation but still need a re-kindle, dropping the `SchemaSmith.KindleStamp` marker table (or `SchemaSmith_KindleStamp` on MySQL and MariaDB) has the same effect — the gate sees the missing stamp on the next run and re-installs.
+
+---
+
+## Expression change detection
+
+Every engine rewrites an expression when it stores it. SQL Server turns `RetentionDays <= 365` into
+`([RetentionDays]<=(365))`; PostgreSQL turns `starts_with(tag, 'a')` into `starts_with(tag, 'a'::text)`; MySQL
+turns a generated column's `concat(Tag, 'x')` into `concat(Tag,'x')`. Comparing what you wrote against what the catalog
+reports therefore never matches for anything non-trivial -- so a check constraint, computed column or generated
+column could be dropped and re-created on **every** deploy, at exit 0, with nothing in the log to say why.
+
+SchemaSmith answers the question from what it applied instead of from the text. A table it owns,
+`SchemaSmith.ExpressionMap` (`SchemaSmith_ExpressionMap` on MySQL and MariaDB), records for each expression: the
+text your package declared, the text the engine reported back immediately afterwards, and the engine version
+(and on SQL Server the compatibility level) in force at the time. On the next deploy:
+
+| What moved | What SchemaSmith does |
+|---|---|
+| Nothing | Leaves the object alone, however differently the two texts read. |
+| Your declaration | Applies it. |
+| The live object (someone edited it by hand) | Re-applies your declaration. Drift is still corrected -- this is not a one-sided comparison that trusts the package and stops looking at the server. |
+| The engine version or compatibility level | **Re-baselines**: re-reads the live text and updates its record, without touching the object. |
+
+That last row matters on SQL Server, where an expression's stored text is frozen at the compatibility level it
+was created under -- so a database migrated from 100 to 160 holds both forms indefinitely. Re-applying every
+expression-bearing object on the first deploy after a compatibility bump would be a far larger event than the
+churn this removes, so SchemaSmith re-baselines and leaves your objects alone.
+
+**No record means no opinion.** For an object SchemaSmith has not applied yet -- a pre-existing database, or the
+first deploy after upgrading -- the comparison behaves exactly as it did before, and the record is written as
+part of that deploy. Nothing needs migrating, and the table can be emptied at any time: the worst case is one
+more comparison.
+
+**A re-baseline is logged, not silent.** The deploy log says how many records were refreshed and for which
+version -- `Re-baselined 3 recorded expression(s) ... No object was changed.` -- so an engine upgrade is visible in
+the first deploy after it.
+
+**Covered surfaces:** check constraints, computed columns, column defaults, and filtered-index and
+filtered-statistic predicates (SQL Server); check constraints, generated columns, partial-index predicates,
+extended-statistics expressions, row-level security `USING` / `WITH CHECK` expressions and materialized view
+bodies (PostgreSQL); check constraints and generated columns (MySQL, MariaDB). Index and statistic predicates
+are covered by `IndexOnlyTableQuenches` too, which compares indexes separately from the full table quench.
+
+Some surfaces never had this problem and are unchanged: SQL Server indexed view bodies and literal column
+defaults, PostgreSQL column defaults and exclude constraints, and MySQL/MariaDB check constraints all already
+compared equal after the engine's own rewrite.
 
 ---
 

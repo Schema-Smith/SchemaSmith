@@ -8,14 +8,17 @@ AS $$
 DECLARE
   v_result TEXT[];
 BEGIN
-  -- pg_stats_ext_exprs is a PostgreSQL 14 system view (expression-based extended statistics). Below 14 the
-  -- view does not exist — a static reference is a plan-time "relation does not exist" even in an untaken
-  -- branch — and no expression statistics can exist there, so the result is an empty array. It is read via
-  -- EXECUTE so the view is referenced only at runtime on a server that actually has it, including from the
-  -- compare-side serialization and the existing-statistics snapshot. Keyed on the REAL server version (a
-  -- physical relation-existence question), not the override-aware ServerVersionNum().
+  -- Expression-based extended statistics are PostgreSQL 14+. Below 14 none can exist, so the result is an empty
+  -- array. The expressions are read from the statistics OBJECT (pg_get_statisticsobjdef_expressions, in
+  -- declared order) rather than pg_stats_ext_exprs: that view is over statistics DATA, filtered by the caller's
+  -- column privileges, carries a row per inheritance flavour once analyzed, and has no defined order. Read
+  -- through EXECUTE so the 14+ function is referenced only at runtime on a server that has it. Keyed on the
+  -- REAL server version (a physical existence question), not the override-aware ServerVersionNum().
   IF (current_setting('server_version_num')::int / 10000) >= 14 THEN
-    EXECUTE 'SELECT ARRAY_AGG(exp.expr) FROM pg_stats_ext_exprs exp WHERE exp.schemaname = $1 AND exp.statistics_name = $2'
+    EXECUTE 'SELECT pg_get_statisticsobjdef_expressions(se.oid)
+               FROM pg_statistic_ext se
+               JOIN pg_namespace n ON n.oid = se.stxnamespace
+              WHERE n.nspname = $1 AND se.stxname = $2'
       INTO v_result USING p_schema, p_stxname;
   END IF;
   RETURN COALESCE(v_result, ARRAY[]::text[]);

@@ -1,0 +1,70 @@
+{
+  "Schema": "SchemaSmith",
+  "Name": "ExpressionMap",
+  "Columns": [
+    {
+      "Name": "ObjectSchema",
+      "DataType": "VARCHAR(256)",
+      "Nullable": false
+    },
+    {
+      "Name": "ObjectTable",
+      "DataType": "VARCHAR(256)",
+      "Nullable": false
+    },
+    {
+      "Name": "ObjectKind",
+      "DataType": "VARCHAR(32)",
+      "Nullable": false
+    },
+    {
+      "Name": "ObjectName",
+      "DataType": "VARCHAR(256)",
+      "Nullable": false
+    },
+    {
+      "Name": "Slot",
+      "DataType": "VARCHAR(32)",
+      "Nullable": false
+    },
+    {
+      "Name": "AuthoredText",
+      "DataType": "TEXT",
+      "Nullable": false
+    },
+    {
+      "Name": "CanonicalText",
+      "DataType": "TEXT",
+      "Nullable": false
+    },
+    {
+      "Name": "PlatformName",
+      "DataType": "VARCHAR(20)",
+      "Nullable": false
+    },
+    {
+      "Name": "EngineVersion",
+      "DataType": "VARCHAR(200)",
+      "Nullable": false
+    },
+    {
+      "Name": "CompatLevel",
+      "DataType": "INTEGER",
+      "Nullable": true
+    },
+    {
+      "Name": "UpdatedUtc",
+      "DataType": "TIMESTAMPTZ",
+      "Nullable": false,
+      "Default": "now()"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_expressionmap",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "\"ObjectSchema\",\"ObjectTable\",\"ObjectKind\",\"ObjectName\",\"Slot\""
+    }
+  ]
+}

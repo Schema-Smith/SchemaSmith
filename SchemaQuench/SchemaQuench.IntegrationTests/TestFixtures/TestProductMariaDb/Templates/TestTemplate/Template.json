@@ -1,6 +1,6 @@
 {
     "Name": "TestTemplate",
-    "SchemaIdentificationScript": "SELECT 'sakila' AS DatabaseName",
+    "DatabaseIdentificationScript": "SELECT 'sakila' AS DatabaseName",
     "VersionStampScript": null,
     "IndexOnlyTableQuenches": false,
     "ScriptFolders": [],

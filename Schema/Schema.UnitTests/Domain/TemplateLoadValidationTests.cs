@@ -84,6 +84,37 @@ namespace Schema.UnitTests.Domain
             Assert.That(template.SchemaIdentificationScript, Is.Null.Or.Empty);
         }
 
+        [TestCase(Platform.MySQL)]
+        [TestCase(Platform.MariaDb)]
+        public void SchemaIdentificationScriptAlias_OnMySqlFamily_IsRecordedAsADeprecationNotice(Platform platform)
+        {
+            var (templateFile, tablesPath) = Paths();
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(@"{ ""Name"": ""Main"", ""SchemaIdentificationScript"": ""SELECT 'db'"" }");
+            _mockDirectory.Exists(tablesPath).Returns(false);
+
+            var template = Template.Load("Main", MakeProduct(platform));
+
+            Assert.That(template.DeprecationNotices, Has.Count.EqualTo(1));
+            Assert.That(template.DeprecationNotices[0].Code, Is.EqualTo("SS-DEP-001"));
+            Assert.That(template.DeprecationNotices[0].Location, Is.EqualTo(templateFile));
+            Assert.That(template.DeprecationNotices[0].Message, Does.Contain("DatabaseIdentificationScript"));
+        }
+
+        [TestCase(Platform.SqlServer)]
+        [TestCase(Platform.PostgreSQL)]
+        public void SchemaIdentificationScript_OnSchemaTemplateEngines_IsNotADeprecation(Platform platform)
+        {
+            var (templateFile, tablesPath) = Paths();
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(@"{ ""Name"": ""Main"", ""DatabaseIdentificationScript"": ""SELECT 'db'"", ""SchemaIdentificationScript"": ""SELECT 'tenant'"" }");
+            _mockDirectory.Exists(tablesPath).Returns(false);
+
+            var template = Template.Load("Main", MakeProduct(platform));
+
+            Assert.That(template.DeprecationNotices, Is.Empty);
+        }
+
         // -------------------------------------------------------------------
         // Rule 2: Database-scoped ObjectType rejection for schema templates.
         // -------------------------------------------------------------------

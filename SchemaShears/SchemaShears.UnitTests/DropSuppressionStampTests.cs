@@ -93,4 +93,28 @@ public class DropSuppressionStampTests
         Assert.Throws<PatchBuildException>(() =>
             DropSuppressionStamp.Apply(Path.Join(_dir, "nope.json"), Array.Empty<string>()));
     }
+
+    // The stamp used to write every flag on every engine. DropExcludeConstraintsRemovedFromProduct is PostgreSQL
+    // only and DropStatisticsRemovedFromProduct is SQL Server and PostgreSQL only, so a patch of any other
+    // product failed --Validate with SS-JSON-001 before it ever reached a server.
+    [TestCase("SqlServer", false, true)]
+    [TestCase("PostgreSQL", true, true)]
+    [TestCase("MySQL", false, false)]
+    [TestCase("MariaDb", false, false)]
+    [TestCase("mysql", false, false)]
+    public void Apply_StampsOnlyTheFlagsTheProductsPlatformAccepts(string platform, bool expectExclude, bool expectStatistics)
+    {
+        File.WriteAllText(_productJson, "{ \"Name\": \"Acme\", \"Platform\": \"" + platform + "\" }");
+
+        DropSuppressionStamp.Apply(_productJson, Array.Empty<string>());
+
+        var json = JObject.Parse(File.ReadAllText(_productJson));
+        Assert.Multiple(() =>
+        {
+            Assert.That(json["DropExcludeConstraintsRemovedFromProduct"] != null, Is.EqualTo(expectExclude), "exclude-constraint flag");
+            Assert.That(json["DropStatisticsRemovedFromProduct"] != null, Is.EqualTo(expectStatistics), "statistics flag");
+            Assert.That(json["DropTablesRemovedFromProduct"]!.Value<bool>(), Is.False, "an every-engine flag is still stamped");
+            Assert.That(json["DropCheckConstraintsRemovedFromProduct"]!.Value<bool>(), Is.False);
+        });
+    }
 }

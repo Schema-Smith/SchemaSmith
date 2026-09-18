@@ -1,0 +1,71 @@
+{
+  "Schema": "[SchemaSmith]",
+  "Name": "[ExpressionMap]",
+  "Columns": [
+    {
+      "Name": "[ObjectSchema]",
+      "DataType": "NVARCHAR(256)",
+      "Nullable": false
+    },
+    {
+      "Name": "[ObjectTable]",
+      "DataType": "NVARCHAR(256)",
+      "Nullable": false
+    },
+    {
+      "Name": "[ObjectKind]",
+      "DataType": "VARCHAR(32)",
+      "Nullable": false
+    },
+    {
+      "Name": "[ObjectName]",
+      "DataType": "NVARCHAR(256)",
+      "Nullable": false
+    },
+    {
+      "Name": "[Slot]",
+      "DataType": "VARCHAR(32)",
+      "Nullable": false
+    },
+    {
+      "Name": "[AuthoredText]",
+      "DataType": "NVARCHAR(MAX)",
+      "Nullable": false
+    },
+    {
+      "Name": "[CanonicalText]",
+      "DataType": "NVARCHAR(MAX)",
+      "Nullable": false
+    },
+    {
+      "Name": "[PlatformName]",
+      "DataType": "VARCHAR(20)",
+      "Nullable": false
+    },
+    {
+      "Name": "[EngineVersion]",
+      "DataType": "VARCHAR(200)",
+      "Nullable": false
+    },
+    {
+      "Name": "[CompatLevel]",
+      "DataType": "INT",
+      "Nullable": true
+    },
+    {
+      "Name": "[UpdatedUtc]",
+      "DataType": "DATETIME2(3)",
+      "Nullable": false,
+      "Default": "SYSUTCDATETIME()"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_ExpressionMap]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "Clustered": true,
+      "IndexColumns": "[ObjectSchema],[ObjectTable],[ObjectKind],[ObjectName],[Slot]"
+    }
+  ]
+}

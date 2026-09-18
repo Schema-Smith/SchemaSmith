@@ -1,0 +1,69 @@
+{
+  "Name": "SchemaSmith_ExpressionMap",
+  "Columns": [
+    {
+      "Name": "ObjectSchema",
+      "DataType": "VARCHAR(64)",
+      "Nullable": false
+    },
+    {
+      "Name": "ObjectTable",
+      "DataType": "VARCHAR(64)",
+      "Nullable": false
+    },
+    {
+      "Name": "ObjectKind",
+      "DataType": "VARCHAR(32)",
+      "Nullable": false
+    },
+    {
+      "Name": "ObjectName",
+      "DataType": "VARCHAR(64)",
+      "Nullable": false
+    },
+    {
+      "Name": "Slot",
+      "DataType": "VARCHAR(32)",
+      "Nullable": false
+    },
+    {
+      "Name": "AuthoredText",
+      "DataType": "TEXT",
+      "Nullable": false
+    },
+    {
+      "Name": "CanonicalText",
+      "DataType": "TEXT",
+      "Nullable": false
+    },
+    {
+      "Name": "PlatformName",
+      "DataType": "VARCHAR(20)",
+      "Nullable": false
+    },
+    {
+      "Name": "EngineVersion",
+      "DataType": "VARCHAR(200)",
+      "Nullable": false
+    },
+    {
+      "Name": "CompatLevel",
+      "DataType": "INT",
+      "Nullable": true
+    },
+    {
+      "Name": "UpdatedUtc",
+      "DataType": "DATETIME(3)",
+      "Nullable": false,
+      "Default": "CURRENT_TIMESTAMP(3)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "uk_expressionmap",
+      "PrimaryKey": false,
+      "Unique": true,
+      "IndexColumns": "ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot"
+    }
+  ]
+}

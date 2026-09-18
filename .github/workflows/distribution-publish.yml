@@ -76,7 +76,8 @@ jobs:
 
   winget:
     # Submit/update the SchemaSmith.SchemaSmith manifest in microsoft/winget-pkgs from the
-    # published Windows release zips. Skipped when WINGET_PAT is absent.
+    # published Windows release zips. Skipped when WINGET_PAT is absent, and skipped while the
+    # channel is PARKED (see the gate step).
     runs-on: windows-latest
     needs: version
     environment: release
@@ -84,12 +85,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Gate on WINGET_PAT
+      # winget is PARKED behind an unresolved upstream blocker, but the PAT is still configured --
+      # so the job used to attempt the channel on every release and fail, turning the whole publish
+      # run red. A run that is always red is a run nobody reads, and this one fires on
+      # `release: published`, AFTER the irreversible step, where a real Docker or AUR failure is
+      # exactly what would get lost in the noise.
+      #
+      # Gated rather than `continue-on-error: true` on purpose: a SKIPPED job says "deliberately
+      # off", while a green-with-errors job says nothing at all and hides a genuine regression the
+      # day the channel is unparked. Unpark by setting the WINGET_UNPARKED repository variable to
+      # 'true'; nothing else has to change.
+      - name: Gate on WINGET_PAT and the unparked flag
         id: gate
         shell: bash
         env:
-          HAS: ${{ secrets.WINGET_PAT != '' }}
-        run: echo "has=$HAS" >> "$GITHUB_OUTPUT"
+          HAS_PAT: ${{ secrets.WINGET_PAT != '' }}
+          UNPARKED: ${{ vars.WINGET_UNPARKED }}
+        run: |
+          unparked=$(printf '%s' "$UNPARKED" | tr '[:upper:]' '[:lower:]')
+          if [ "$HAS_PAT" != "true" ]; then
+            echo "::notice::winget skipped - WINGET_PAT is not configured."
+            echo "has=false" >> "$GITHUB_OUTPUT"
+          elif [ "$unparked" != "true" ]; then
+            echo "::notice::winget skipped - the channel is PARKED. Set the WINGET_UNPARKED repository variable to 'true' to re-enable it."
+            echo "has=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install wingetcreate
         if: steps.gate.outputs.has == 'true'

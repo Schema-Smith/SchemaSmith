@@ -305,8 +305,15 @@ public static class ForgeKindler
                 new("Kindling_ProductOwnership_Table.sql", ReplaceTableDef: true),
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
+                // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
+                // expression stops reading as a change. Kindled like the other bootstrap tables.
+                new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith.fn_StripParenWrapping.sql"),
                 new("SchemaSmith.fn_NormalizeCheckExpression.sql"),
+                // #242: the authored-vs-canonical decision and the pass that records it.
+                new("SchemaSmith.fn_ExpressionMapUnchanged.sql"),
+                new("SchemaSmith.fn_ExpressionMapEffective.sql"),
+                new("SchemaSmith.ExpressionMapRecord.sql"),
                 new("SchemaSmith.fn_ColumnTypeArguments.sql"),
                 new("SchemaSmith.fn_StripLeadingSelect.sql"),
                 new("SchemaSmith.fn_StripBracketWrapping.sql"),
@@ -347,15 +354,24 @@ public static class ForgeKindler
                 new("SchemaSmith.BootstrapTableQuench.sql"),
                 new("Kindling_KindleStamp_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ProductOwnership_Table.sql", ReplaceTableDef: true),
-                // TRANSITIONAL: tighten the ProductOwnership unique key to enforce one-owner-per-object
-                // (runs after the table exists; BootstrapTableQuench can't reconcile a changed index).
-                new("Kindling_ProductOwnership_IndexMigration.sql"),
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
+                // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
+                // expression stops reading as a change. Kindled like the other bootstrap tables.
+                new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith.ExecuteOrDebug.sql"),
                 new("SchemaSmith.QuoteColumnList.sql"),
                 new("SchemaSmith.QuoteIndexColumnList.sql"),
+                // #242: declared index and statistics definitions compared in the form the catalog reads back.
+                // SQL-language functions are validated at creation, so the splitter and StripParenWrapping
+                // must be kindled before the statistics forms that call them.
+                new("SchemaSmith.SplitTopLevelList.sql"),
+                new("SchemaSmith.NormalizeIndexColumnList.sql"),
                 new("SchemaSmith.StripParenWrapping.sql"),
+                new("SchemaSmith.StatisticsDefinitionForms.sql"),
+                // #242: the authored-vs-canonical decision and the pass that records it.
+                new("SchemaSmith.ExpressionMapUnchanged.sql"),
+                new("SchemaSmith.ExpressionMapRecord.sql"),
                 new("SchemaSmith.ColumnTypeArguments.sql"),
                 new("SchemaSmith.StripTypeCast.sql"),
                 new("SchemaSmith.ServerVersionNum.sql"),
@@ -411,6 +427,9 @@ public static class ForgeKindler
                 new("Kindling_ProductOwnership_Table.sql", ReplaceTableDef: true),
                 new("Kindling_StatusMessages_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
+                // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
+                // expression stops reading as a change. Kindled like the other bootstrap tables.
+                new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith_QuoteIdentifier.sql"),
                 new("SchemaSmith_StripBacktickWrapping.sql"),
                 new("SchemaSmith_SafeBacktickWrap.sql"),
@@ -444,6 +463,9 @@ public static class ForgeKindler
                 new("SchemaSmith_NormalizeIndexColumns.sql"),
                 new("SchemaSmith_IndexHasFunctionalKeyPart.sql"),
                 new("SchemaSmith_NormalizeCheckExpression.sql"),
+                // #242: the authored-vs-canonical decision and the pass that records it.
+                new("SchemaSmith_ExpressionMapUnchanged.sql"),
+                new("SchemaSmith_ExpressionMapRecord.sql"),
                 // Canonicalises a partition expression before comparing declared against live
                 // (#partitioning, K3) -- MySQL 5.7 echoes the text the user wrote while every other
                 // supported engine rewrites it, so a literal compare would be engine-specific.

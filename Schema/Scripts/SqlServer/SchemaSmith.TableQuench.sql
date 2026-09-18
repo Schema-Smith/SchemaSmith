@@ -22,7 +22,9 @@ CREATE PROCEDURE SchemaSmith.TableQuench
     -- something SchemaSmith cannot put back. ON means the package accepts responsibility for
     -- recreating them -- which the after-tables object pass does, provided they live in a folder on
     -- the AfterTablesObjects slot. SchemaTongs places them there automatically on extraction.
-    @DropSchemaBoundDependents BIT = 0
+    @DropSchemaBoundDependents BIT = 0,
+    -- Template-level CdcFilegroup (#417): the default for tables that declare none. NULL = unmanaged.
+    @CdcFilegroup NVARCHAR(128) = NULL
 AS
 BEGIN TRY
     SET NOCOUNT ON
@@ -35,7 +37,8 @@ BEGIN TRY
 
   EXEC SchemaSmith.MissingTableAndColumnQuench @WhatIf
   EXEC SchemaSmith.ModifiedTableQuench @ProductName = @ProductName, @WhatIf = @WhatIf, @DropUnknownIndexes = @DropUnknownIndexes, @DropTablesRemovedFromProduct = @DropTablesRemovedFromProduct, @DropSchemaBoundDependents = @DropSchemaBoundDependents,
-                                       @RebuildPolicyMode = @RebuildPolicyMode, @RebuildPolicyThreshold = @RebuildPolicyThreshold, @RebuildPolicyOnOrderMismatch = @RebuildPolicyOnOrderMismatch
+                                       @RebuildPolicyMode = @RebuildPolicyMode, @RebuildPolicyThreshold = @RebuildPolicyThreshold, @RebuildPolicyOnOrderMismatch = @RebuildPolicyOnOrderMismatch,
+                                       @CdcFilegroup = @CdcFilegroup
   EXEC SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName, @WhatIf
   -- Also after the indexes/constraints pass, and for a closely related reason: SQL Server refuses a
   -- FILESTREAM column unless the table already has a ROWGUIDCOL column covered by a unique CONSTRAINT.
@@ -44,6 +47,8 @@ BEGIN TRY
   -- which for a table created in this same run does not exist until the line above has run.
   EXEC SchemaSmith.ChangeTrackingQuench @WhatIf
   EXEC SchemaSmith.ForeignKeyQuench @ProductName, @WhatIf
+  -- #242: last, so anything the passes above created is recorded on this run rather than churning once more.
+  EXEC SchemaSmith.ExpressionMapRecord @WhatIf
   SET NOCOUNT OFF
 END TRY
 BEGIN CATCH

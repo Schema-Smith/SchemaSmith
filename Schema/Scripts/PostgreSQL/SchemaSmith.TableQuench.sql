@@ -32,4 +32,6 @@ BEGIN
   CALL "SchemaSmith"."ForeignKeyQuench"(p_WhatIf);
   CALL "SchemaSmith"."FixupTableOwnership"(p_ProductName, p_WhatIf);
   CALL "SchemaSmith"."FixupIndexOwnership"(p_ProductName, p_WhatIf);
+  -- #242: last, so anything the passes above created is recorded on this run rather than churning once more.
+  CALL "SchemaSmith"."ExpressionMapRecord"(p_WhatIf);
 END $$;

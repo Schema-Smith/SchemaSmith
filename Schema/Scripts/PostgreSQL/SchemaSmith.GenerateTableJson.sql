@@ -166,8 +166,10 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                           ORDER BY con.conname) sub) AS "CheckConstraints",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))
                   FROM (SELECT se.stxname AS "Name",
-                               COALESCE((SELECT STRING_AGG(CASE k WHEN 'd' THEN 'NDISTINCT' WHEN 'f' THEN 'DEPENDENCIES' WHEN 'm' THEN 'MCV' WHEN 'e' THEN 'EXPRESSIONS' ELSE k::text END, ',')
-                                           FROM UNNEST(se.stxkind) AS k), '') AS "Kind",
+                               -- 'e' is left out: EXPRESSIONS is implied by an expression and CREATE STATISTICS rejects it as a
+                               -- kind, so extracting it produced a package that could not be deployed.
+                               COALESCE((SELECT STRING_AGG(CASE k WHEN 'd' THEN 'NDISTINCT' WHEN 'f' THEN 'DEPENDENCIES' WHEN 'm' THEN 'MCV' ELSE k::text END, ',')
+                                           FROM UNNEST(se.stxkind) AS k WHERE k <> 'e'), '') AS "Kind",
                                COALESCE(ARRAY_TO_STRING(ARRAY_CAT(COALESCE((SELECT ARRAY_AGG(a.attname::text)
                                                                               FROM UNNEST(se.stxkeys) WITH ORDINALITY AS t(attnum, ord)
                                                                               JOIN pg_attribute a ON a.attrelid = se.stxrelid AND a.attnum = t.attnum

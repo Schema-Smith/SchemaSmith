@@ -301,38 +301,15 @@ JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
     ON BINARY cc.CONSTRAINT_SCHEMA = BINARY @v_mcDbName
     AND BINARY cc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
 WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))
-    != BINARY SchemaSmith_NormalizeCheckExpression(c.Expression)';
+    != BINARY SchemaSmith_NormalizeCheckExpression(c.Expression)
+  AND SchemaSmith_ExpressionMapUnchanged(@v_mcDbName, SchemaSmith_StripBacktickWrapping(c.TableName),
+        ''CHECK'', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ''expression'',
+        c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0';
         PREPARE stmt FROM @v_mcSql1;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
     END IF;
 
-    -- Column-level checks: keyed on the deterministic name CK_<table>_<column>; live CHECK_CLAUSE
-    -- differs from the desired column CheckExpression. (INFORMATION_SCHEMA.CHECK_CONSTRAINTS has
-    -- no column linkage, which is exactly why column checks carry a deterministic name.) Same
-    -- CREATE-time binding constraint as above, so this read is also dynamic SQL under the same guard.
-    IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
-        SET @v_mcSql2 = 'INSERT IGNORE INTO _SchemaSmith_ModifiedChecks (TableName, ConstraintName)
-SELECT
-    SchemaSmith_StripBacktickWrapping(col.TableName) AS TableName,
-    CONCAT(''CK_'', SchemaSmith_StripBacktickWrapping(col.TableName), ''_'', SchemaSmith_StripBacktickWrapping(col.ColumnName)) AS ConstraintName
-FROM _SchemaSmith_Columns col
-JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-    ON BINARY tc.TABLE_SCHEMA = BINARY @v_mcDbName
-    AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(col.TableName)
-    AND BINARY tc.CONSTRAINT_NAME = BINARY CONCAT(''CK_'', SchemaSmith_StripBacktickWrapping(col.TableName), ''_'', SchemaSmith_StripBacktickWrapping(col.ColumnName))
-    AND tc.CONSTRAINT_TYPE = ''CHECK''
-JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
-    ON BINARY cc.CONSTRAINT_SCHEMA = BINARY @v_mcDbName
-    AND BINARY cc.CONSTRAINT_NAME = BINARY CONCAT(''CK_'', SchemaSmith_StripBacktickWrapping(col.TableName), ''_'', SchemaSmith_StripBacktickWrapping(col.ColumnName))
-WHERE col.CheckExpression IS NOT NULL
-  AND TRIM(col.CheckExpression) != ''''
-  AND BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))
-    != BINARY SchemaSmith_NormalizeCheckExpression(col.CheckExpression)';
-        PREPARE stmt FROM @v_mcSql2;
-        EXECUTE stmt;
-        DEALLOCATE PREPARE stmt;
-    END IF;
 
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop modified check constraints');
@@ -396,11 +373,7 @@ WHERE col.CheckExpression IS NOT NULL
               SELECT 1 FROM _SchemaSmith_CheckConstraints c
               WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY tc.TABLE_NAME
                 AND BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName) = BINARY tc.CONSTRAINT_NAME)
-          AND NOT EXISTS (
-              SELECT 1 FROM _SchemaSmith_Columns col
-              WHERE BINARY SchemaSmith_StripBacktickWrapping(col.TableName) = BINARY tc.TABLE_NAME
-                AND col.CheckExpression IS NOT NULL AND TRIM(col.CheckExpression) != ''
-                AND BINARY tc.CONSTRAINT_NAME = BINARY CONCAT('CK_', SchemaSmith_StripBacktickWrapping(col.TableName), '_', SchemaSmith_StripBacktickWrapping(col.ColumnName)));
+;
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT CONNECTION_ID(), 'constraint', CONCAT(TableName, '.', ConstraintName), 'dropSuppressed'
@@ -412,9 +385,9 @@ WHERE col.CheckExpression IS NOT NULL
     -- =========================================================================
     -- Drop check constraints removed from the product (by-absence), gated by the cascade flag
     -- and per-table tightening. Scoped to the current quench's product tables. Table-level checks
-    -- absent from _SchemaSmith_CheckConstraints are dropped; a column-level CK_<table>_<column>
-    -- check is excluded only while its column still carries a CheckExpression (then it is owned by
-    -- the modify/create passes); once the CheckExpression is removed, the orphan is cleaned up here.
+    -- absent from _SchemaSmith_CheckConstraints are dropped. A CK_<table>_<column> left over from the
+    -- retired column-level CheckExpression alias is an ordinary undeclared check now: declare it as a
+    -- table-level CheckConstraint to keep it, or let drop-by-absence clean it up.
     -- =========================================================================
     IF p_DropCheckConstraintsRemovedFromProduct = 1 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChecksToDropByAbsence;
@@ -438,11 +411,7 @@ WHERE col.CheckExpression IS NOT NULL
               SELECT 1 FROM _SchemaSmith_CheckConstraints c
               WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY tc.TABLE_NAME
                 AND BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName) = BINARY tc.CONSTRAINT_NAME)
-          AND NOT EXISTS (
-              SELECT 1 FROM _SchemaSmith_Columns col
-              WHERE BINARY SchemaSmith_StripBacktickWrapping(col.TableName) = BINARY tc.TABLE_NAME
-                AND col.CheckExpression IS NOT NULL AND TRIM(col.CheckExpression) != ''
-                AND BINARY tc.CONSTRAINT_NAME = BINARY CONCAT('CK_', SchemaSmith_StripBacktickWrapping(col.TableName), '_', SchemaSmith_StripBacktickWrapping(col.ColumnName)))
+
           -- MariaDB backs an application-time period with a CHECK constraint named after the period
           -- (`start < end`), indistinguishable from a user check constraint in the catalog -- same
           -- CONSTRAINT_TYPE, same LEVEL. Without this it looks like an undeclared check and
@@ -612,103 +581,13 @@ WHERE col.CheckExpression IS NOT NULL
     END IF;
 
     -- =========================================================================
-    -- STEP 4.5: Create missing column-level check constraints (MySQL 8.0.16+)
-    -- =========================================================================
-    -- A column's CheckExpression becomes a deterministically named CK_<table>_<column> check.
-    -- The deterministic name lets the create/modify passes key on it (INFORMATION_SCHEMA has no
-    -- column linkage for checks). Mirrors the table-level STEP 4 idiom exactly -- including the
-    -- SchemaSmith_SupportsCheckConstraints() degrade for MySQL below 8.0.16 (see STEP 4).
-    IF SchemaSmith_SupportsCheckConstraints() = 0 THEN
-        IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail'
-           AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns WHERE CheckExpression IS NOT NULL AND TRIM(CheckExpression) != '') THEN
-            -- Log the full offending list first; keep the SIGNAL message concise (128-char cap). See STEP 4.
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Column CHECK constraint unsupported (requires MySQL 8.0.16): ',
-                   SchemaSmith_StripBacktickWrapping(c.TableName), '.CK_',
-                   SchemaSmith_StripBacktickWrapping(c.TableName), '_', SchemaSmith_StripBacktickWrapping(c.ColumnName))
-            FROM _SchemaSmith_Columns c
-            WHERE c.CheckExpression IS NOT NULL AND TRIM(c.CheckExpression) != '';
-            -- Keep < 128 chars (see STEP 4).
-            SET @ss_msg = CONCAT('CHECK constraints require MySQL 8.0.16 (detected ',
-                                 SchemaSmith_ServerVersionNum(), '); see the deploy log for the unsupported column check(s).');
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
-        ELSE
-            -- Surface the downgrade in the run log (see STEP 4).
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Skipping column check constraint (requires MySQL 8.0.16 - downgraded): ',
-                   SchemaSmith_StripBacktickWrapping(c.TableName), '.CK_',
-                   SchemaSmith_StripBacktickWrapping(c.TableName), '_', SchemaSmith_StripBacktickWrapping(c.ColumnName))
-            FROM _SchemaSmith_Columns c
-            WHERE c.CheckExpression IS NOT NULL AND TRIM(c.CheckExpression) != '';
-            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-            SELECT CONNECTION_ID(), 'CHECK constraint (MySQL 8.0.16)',
-                   CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.CK_',
-                          SchemaSmith_StripBacktickWrapping(c.TableName), '_', SchemaSmith_StripBacktickWrapping(c.ColumnName)), 'downgraded'
-            FROM _SchemaSmith_Columns c
-            WHERE c.CheckExpression IS NOT NULL AND TRIM(c.CheckExpression) != '';
-        END IF;
-    ELSEIF p_WhatIf = 1 THEN
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing column check constraints');
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
-                      ' ADD CONSTRAINT `CK_', SchemaSmith_StripBacktickWrapping(c.TableName), '_', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`',
-                      ' CHECK (', c.CheckExpression, ')')
-        FROM _SchemaSmith_Columns c
-        WHERE c.CheckExpression IS NOT NULL
-          AND TRIM(c.CheckExpression) != ''
-          AND NOT EXISTS (
-            SELECT 1 FROM _SchemaSmith_ChkExist tc
-            WHERE BINARY tc.TableName = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-              AND BINARY tc.ConstraintName = BINARY CONCAT('CK_', SchemaSmith_StripBacktickWrapping(c.TableName), '_', SchemaSmith_StripBacktickWrapping(c.ColumnName))
-        );
-    ELSE
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing column check constraints');
-
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateColChkStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_CreateColChkStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT)
-            ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        -- Detection reads the pre-create snapshot _SchemaSmith_ChkExist (taken after STEP 3.5's drops)
-        -- so a just-dropped modified column check (STEP 3.5) is correctly seen as missing here and recreated.
-        INSERT INTO _SchemaSmith_CreateColChkStmts (LogMsg, Stmt)
-        SELECT
-            CONCAT('  Create column check constraint: ',
-                   SchemaSmith_StripBacktickWrapping(c.TableName), '.',
-                   CONCAT('CK_', SchemaSmith_StripBacktickWrapping(c.TableName), '_', SchemaSmith_StripBacktickWrapping(c.ColumnName)),
-                CASE WHEN COALESCE(c.VariantName, '') <> '' THEN CONCAT(' (variant: ', c.VariantName, ')') ELSE '' END),
-            CONCAT(
-                'ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
-                ' ADD CONSTRAINT `CK_', SchemaSmith_StripBacktickWrapping(c.TableName), '_', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`',
-                ' CHECK (', c.CheckExpression, ')'
-            )
-        FROM _SchemaSmith_Columns c
-        WHERE c.CheckExpression IS NOT NULL
-          AND TRIM(c.CheckExpression) != ''
-          AND NOT EXISTS (
-            SELECT 1 FROM _SchemaSmith_ChkExist tc
-            WHERE BINARY tc.TableName = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-              AND BINARY tc.ConstraintName = BINARY CONCAT('CK_', SchemaSmith_StripBacktickWrapping(c.TableName), '_', SchemaSmith_StripBacktickWrapping(c.ColumnName))
-        );
-
-        SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateColChkStmts);
-        WHILE @ss_id IS NOT NULL DO
-            SELECT LogMsg, Stmt INTO @ss_log, @exec_sql FROM _SchemaSmith_CreateColChkStmts WHERE RowId = @ss_id;
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
-            PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            DEALLOCATE PREPARE stmt;
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateColChkStmts WHERE RowId > @ss_id);
-        END WHILE;
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateColChkStmts;
-    END IF;
-
-    -- =========================================================================
     -- STEP 7: Update ProductOwnership for managed objects
-    -- Confirms objects created THIS run (STEP 3/4/4.5) via post-create existence snapshots taken here,
+    -- Confirms objects created THIS run (STEP 3/4) via post-create existence snapshots taken here,
     -- so ownership is written only for what actually landed -- the same confirmation the original live
     -- INFORMATION_SCHEMA reads gave, now one scan each instead of one per declared object.
     -- =========================================================================
     IF p_WhatIf = 0 THEN
-        -- Post-create existence snapshots (indexes + CHECK constraints), reflecting STEP 3/4/4.5 creates.
+        -- Post-create existence snapshots (indexes + CHECK constraints), reflecting STEP 3/4 creates.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxExistFinal;
         CREATE TEMPORARY TABLE _SchemaSmith_IdxExistFinal (
             TableName VARCHAR(128) NOT NULL,
@@ -759,19 +638,6 @@ WHERE col.CheckExpression IS NOT NULL
               AND BINARY tc.ConstraintName = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
         );
 
-        -- Track column-level check constraints (deterministic CK_<table>_<column> name)
-        INSERT IGNORE INTO SchemaSmith_ProductOwnership (ProductName, TemplateName, ObjectSchema, ObjectType, ObjectName)
-        SELECT p_ProductName, '', p_DatabaseName, 'CHECK CONSTRAINT',
-               CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.CK_',
-                      SchemaSmith_StripBacktickWrapping(c.TableName), '_', SchemaSmith_StripBacktickWrapping(c.ColumnName))
-        FROM _SchemaSmith_Columns c
-        WHERE c.CheckExpression IS NOT NULL
-          AND TRIM(c.CheckExpression) != ''
-          AND EXISTS (
-            SELECT 1 FROM _SchemaSmith_ChkExist tc
-            WHERE BINARY tc.TableName = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-              AND BINARY tc.ConstraintName = BINARY CONCAT('CK_', SchemaSmith_StripBacktickWrapping(c.TableName), '_', SchemaSmith_StripBacktickWrapping(c.ColumnName))
-        );
     END IF;
 
     -- Cleanup temporary tables

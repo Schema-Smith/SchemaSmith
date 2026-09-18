@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -159,6 +160,11 @@ public class DatabaseQuench
     private string SystemVersioningAlterHistory =>
         EscapeSqlLiteral((FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.SystemVersioningAlterHistory]
                           ?? "").Trim().ToUpperInvariant());
+
+    // #417. NULL is the unmanaged contract, so an unset default is the SQL literal, never '' -- an empty string
+    // names a filegroup that does not exist and would fail every CDC table in the template.
+    private string TemplateCdcFilegroup =>
+        string.IsNullOrWhiteSpace(_template?.CdcFilegroup) ? "NULL" : $"N'{EscapeSqlLiteral(_template.CdcFilegroup.Trim())}'";
 
     private string RebuildPolicyMode =>
         EscapeSqlLiteral((CascadedRebuildPolicy?.Mode ?? "NEVER").Trim().ToUpperInvariant());
@@ -596,6 +602,14 @@ public class DatabaseQuench
                             _sqlServerMajorVersion = versionInfo.ServerComparable;
                             var compatEncodingOverride = FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.CompatEncoding];
                             _ingestEncoding = CompatEncoding.Select(compatEncodingOverride, versionInfo.CompatibilityLevel, versionInfo.ServerComparable);
+                            // Say which encoding was chosen and whether a setting forced it. SchemaTongs
+                            // names the encoding per object as it extracts; the deploy side resolved it
+                            // silently, so an operator who set Target:CompatEncoding had no confirmation it
+                            // took effect -- and the encoding determines which helper set gets kindled.
+                            SafeProgressLog($"  [{_databaseName}] model ingest encoding: {_ingestEncoding}" +
+                                            (string.IsNullOrWhiteSpace(compatEncodingOverride)
+                                                ? " (auto)"
+                                                : $" (forced by Target:CompatEncoding={compatEncodingOverride})"));
                             break;
                     }
 
@@ -776,6 +790,12 @@ public class DatabaseQuench
                     indexesAndConstraintsSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "IndexesAndConstraints", indexesAndConstraintsSw.ElapsedMilliseconds, 0);
                 }
+
+                // #242: record what each expression-bearing object was applied with, AFTER the create passes
+                // above, so an object created on this run is recorded on this run rather than churning once more.
+                // SQL Server only for now; the other engines join as their surfaces are wired.
+                if (!IsWhatIf)
+                    RecordExpressionMap(effectiveTableCmd);
 
                 // MySQL: cleanup temp tables after index quench
                 if (_product.Platform.GetBasePlatform() == Platform.MySQL)
@@ -1618,7 +1638,7 @@ CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {_whatIfOnly})"
         switch (_product.Platform.GetBasePlatform())
         {
             case Platform.SqlServer:
-                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @WhatIf = {_whatIfOnly}, @DropTablesRemovedFromProduct = {_dropRemovedTables}, @DropColumnsRemovedFromProduct = {_dropRemovedColumns}, @DropForeignKeysRemovedFromProduct = {_dropRemovedForeignKeys}, @DropCheckConstraintsRemovedFromProduct = {_dropRemovedCheckConstraints}, @DropExcludeConstraintsRemovedFromProduct = {_dropRemovedExcludeConstraints}, @DropStatisticsRemovedFromProduct = {_dropRemovedStatistics}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}";
+                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @WhatIf = {_whatIfOnly}, @DropTablesRemovedFromProduct = {_dropRemovedTables}, @DropColumnsRemovedFromProduct = {_dropRemovedColumns}, @DropForeignKeysRemovedFromProduct = {_dropRemovedForeignKeys}, @DropCheckConstraintsRemovedFromProduct = {_dropRemovedCheckConstraints}, @DropExcludeConstraintsRemovedFromProduct = {_dropRemovedExcludeConstraints}, @DropStatisticsRemovedFromProduct = {_dropRemovedStatistics}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}, @CdcFilegroup = {TemplateCdcFilegroup}";
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"
@@ -1655,6 +1675,27 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Modified Tables"), tableCommand.CommandText);
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
+    }
+
+    // #242. The mapping is an optimisation over a working comparison: failing to record must never fail a deploy
+    // whose changes are already applied, so this logs and carries on. A missing row costs one more comparison
+    // next run, which is exactly today's behaviour.
+    private void RecordExpressionMap(IDbCommand tableCommand)
+    {
+        try
+        {
+            tableCommand.CommandText = _product.Platform.GetBasePlatform() == Platform.MySQL
+                ? $"CALL SchemaSmith_ExpressionMapRecord('{EscapeSqlLiteral(_databaseName)}', {_whatIfOnly})"
+                : _product.Platform == Platform.PostgreSQL
+                // _whatIfOnly is already rendered per engine (true/false on PostgreSQL, 1/0 elsewhere).
+                ? $"CALL \"SchemaSmith\".\"ExpressionMapRecord\"(p_WhatIf := {_whatIfOnly})"
+                : $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExpressionMapRecord @WhatIf = {_whatIfOnly}";
+            tableCommand.ExecuteNonQuery();
+        }
+        catch (DbException e)
+        {
+            SafeProgressLog($"  Could not record the expression map ({e.Message}). Expression comparison falls back to text on the next run.");
+        }
     }
 
     internal void QuenchIndexesAndConstraints(IDbCommand tableCommand)

@@ -212,7 +212,8 @@ public class TableQuench_StickyPreventDropTests
 
     // A tracked object must never have two owners. On PostgreSQL this is now enforced structurally by
     // the ProductOwnership unique key (Schema, TableName, IndexName) with NULLS NOT DISTINCT (applied by
-    // the transitional Kindling_ProductOwnership_IndexMigration) — parity with SQL Server (one ProductName
+    // kindling, version-adaptively: NULLS NOT DISTINCT on PG15+, an equivalent functional index below it)
+    // — parity with SQL Server (one ProductName
     // extended property per object) and MySQL (uk_object on ObjectType/ObjectSchema/ObjectName).
     [Test]
     public void SecondOwnerForSameObject_IsStructurallyRejected()

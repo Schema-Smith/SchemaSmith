@@ -70,6 +70,10 @@ public abstract class ProtectedMode_ColumnDependentsTestsSharedTests
                 var childJson = Path.Join(tempDir, "Templates", "Main", "Tables", "Child.json");
                 RemoveColumnFromTable(childJson, "`Extra`");
                 RemoveIndexFromTable(childJson, "IX_Child_Extra");
+                // The CHECK is declared table-level (the column-level CheckExpression alias is deprecated), so
+                // dropping the column from the package means dropping its constraint too -- otherwise the CHECK
+                // would survive only because it is still declared, and this would stop proving #358.
+                RemoveCheckConstraintFromTable(childJson, "CK_Child_Extra");
 
                 FactoryContainer.Resolve<Microsoft.Extensions.Configuration.IConfigurationRoot>()["PreventDrop"] = "true";
                 _environment.ClearReceivedCalls();
@@ -106,6 +110,13 @@ public abstract class ProtectedMode_ColumnDependentsTestsSharedTests
     {
         var root = JObject.Parse(File.ReadAllText(tableJsonPath));
         ((JArray)root["Columns"]!).First(c => (string)c["Name"]! == columnName).Remove();
+        File.WriteAllText(tableJsonPath, root.ToString());
+    }
+
+    private static void RemoveCheckConstraintFromTable(string tableJsonPath, string constraintName)
+    {
+        var root = JObject.Parse(File.ReadAllText(tableJsonPath));
+        ((JArray)root["CheckConstraints"]!).First(c => (string)c["Name"]! == constraintName).Remove();
         File.WriteAllText(tableJsonPath, root.ToString());
     }
 

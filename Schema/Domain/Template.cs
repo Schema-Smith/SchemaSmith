@@ -162,6 +162,13 @@ namespace Schema.Domain
         [SchemaProperty(Platforms = [Platform.SqlServer])]
         public bool? DropSchemaBoundDependents { get; set; }
 
+        // #417. The filegroup CDC change tables go on, for every EnableCDC table in this template that does not
+        // declare its own CdcFilegroup. Null means unmanaged: an existing placement is never touched.
+        [JsonProperty(Order = 26, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(Platforms = [Platform.SqlServer], MaxLength = 128,
+            Description = "Default filegroup for CDC change tables of EnableCDC tables that declare no CdcFilegroup of their own. A table on a different filegroup gets a new capture instance there; the old one keeps its history. Unset leaves existing placement alone.")]
+        public string CdcFilegroup { get; set; }
+
         [JsonProperty(Order = 18)]
         public bool? DropColumnsRemovedFromProduct { get; set; }
 
@@ -216,6 +223,13 @@ namespace Schema.Domain
         /// </summary>
         [JsonIgnore]
         public List<FileTokenError> FileTokenErrors { get; } = [];
+
+        /// <summary>
+        /// Deprecated aliases this template's load migrated. Recorded on every load path (it costs nothing
+        /// and deploy ignores it); <c>--Validate</c> reports each one through <c>DeprecationCheck</c>.
+        /// </summary>
+        [JsonIgnore]
+        public List<DeprecationNotice> DeprecationNotices { get; } = [];
 
         [JsonIgnore]
         public string TableSchema { get; set; } = "";
@@ -523,6 +537,9 @@ namespace Schema.Domain
             if (string.IsNullOrWhiteSpace(SchemaIdentificationScript)) return;
 
             DatabaseIdentificationScript ??= SchemaIdentificationScript;
+            DeprecationNotices.Add(new DeprecationNotice("SS-DEP-001", FilePath,
+                $"Template '{Name}' uses 'SchemaIdentificationScript', a deprecated alias on MySQL and MariaDB. " +
+                "Rename it to 'DatabaseIdentificationScript' -- the value is identical, and the alias only still works because load migrates it."));
             LogFactory.GetLogger("ProgressLog").Warn(
                 $"Template '{Name}' (MySQL) uses the legacy 'SchemaIdentificationScript' alias. " +
                 $"Rename the field to 'DatabaseIdentificationScript' in {FilePath}. " +
@@ -533,7 +550,6 @@ namespace Schema.Domain
         private void InstanceLoad(Dictionary<string, string> scriptTokens, Platform platform, bool tolerateComponentLoadErrors)
         {
             LoadTables(platform, tolerateComponentLoadErrors);
-            MigrateMySqlColumnCheckExpressionAlias(platform);
             LoadMaterializedViews(platform, tolerateComponentLoadErrors);
             LoadEvents(platform, tolerateComponentLoadErrors);
             LoadDomainTypes(platform, tolerateComponentLoadErrors);
@@ -959,56 +975,6 @@ namespace Schema.Domain
                     // on-disk pass to report precisely as SS-JSON-001.
                     RecordComponentLoadError(f, e);
                 }
-            }
-        }
-
-        /// <summary>
-        /// TRANSITIONAL (MySQL column-level CheckExpression retirement) — see the Community roadmap
-        /// entry "Retire the MySQL Column.CheckExpression deprecated alias" for the deletion trigger.
-        /// <para>MySQL and MariaDB cannot round-trip a column-level check: their
-        /// <c>INFORMATION_SCHEMA.CHECK_CONSTRAINTS</c> exposes only the constraint name and clause,
-        /// with no link back to a column, so extraction always emits table-level
-        /// <c>CheckConstraints</c>. Authoring moved to the table level to match; the column property
-        /// is kept as a deprecated alias so existing packages keep working.</para>
-        /// <para>Silently dropping the property instead would be worse than a breaking change: the
-        /// deployed <c>CK_&lt;table&gt;_&lt;column&gt;</c> constraint would become an orphan and the
-        /// by-absence cleanup would drop it on the next quench, with no error — a plain deploy never
-        /// runs the package validator that would otherwise flag the unknown key.</para>
-        /// </summary>
-        private void MigrateMySqlColumnCheckExpressionAlias(Platform platform)
-        {
-            if (platform.GetBasePlatform() != Platform.MySQL) return;
-
-            foreach (var table in Tables)
-            {
-                var migrated = new List<string>();
-                foreach (var column in table.Columns.OfType<MySqlColumn>()
-                             .Where(c => !string.IsNullOrWhiteSpace(c.CheckExpression)))
-                {
-                    var constraintName = $"CK_{StringHelper.StripIdentifierWrapper(table.Name)}_{StringHelper.StripIdentifierWrapper(column.Name)}";
-
-                    // An explicit table-level constraint of the same name wins — the author has
-                    // already migrated this one and the alias is stale.
-                    if (!table.CheckConstraints.Any(c =>
-                            string.Equals(StringHelper.StripIdentifierWrapper(c.Name), constraintName, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        table.CheckConstraints.Add(new CheckConstraint
-                        {
-                            Name = constraintName,
-                            Expression = column.CheckExpression
-                        });
-                    }
-
-                    migrated.Add(StringHelper.StripIdentifierWrapper(column.Name));
-                    column.CheckExpression = null;
-                }
-
-                if (migrated.Count > 0)
-                    LogFactory.GetLogger("ProgressLog").Warn(
-                        $"Table '{table.Name}' uses the deprecated column-level 'CheckExpression' on " +
-                        $"{string.Join(", ", migrated)}. MySQL and MariaDB cannot round-trip a column-level " +
-                        $"check — extraction always returns it table-level — so move it to the table's " +
-                        $"'CheckConstraints' as 'CK_<table>_<column>'. The value has been migrated for this run.");
             }
         }
 

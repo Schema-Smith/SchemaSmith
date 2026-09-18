@@ -2778,6 +2778,29 @@ public class DatabaseQuenchTests
 
     #endregion
 
+    #region CdcFilegroup threading (#417)
+
+    // NULL is the unmanaged contract, so an absent template default must reach the procedure as the SQL literal,
+    // never as an empty string -- '' is a filegroup name that does not exist, and would fail every CDC table.
+    [TestCase(null, "@CdcFilegroup = NULL")]
+    [TestCase("cdc_fg", "@CdcFilegroup = N'cdc_fg'")]
+    [TestCase("o'fg", "@CdcFilegroup = N'o''fg'")]
+    public void QuenchModifiedTables_SqlServer_SendsTheTemplateCdcFilegroup(string templateValue, string expected)
+    {
+        RegisterMockFileWrapper();
+        var product = new Product { Name = "Prod", Platform = Platform.SqlServer };
+        var template = new Template { Name = "T", CdcFilegroup = templateValue };
+        var quench = new DatabaseQuench("srv", product, template, "db",
+            false, "0", false, "0", "1", "1", "1", "1", "1", "1", "0", false, false, null);
+
+        var mockCmd = CreateMockCommand();
+        quench.QuenchModifiedTables(mockCmd);
+
+        Assert.That(mockCmd.CommandText, Does.Contain(expected));
+    }
+
+    #endregion
+
     #region RebuildPolicy threading
 
     // The resolved upper-tier policy is the only thing that lets a table WITHOUT its own RebuildPolicy be

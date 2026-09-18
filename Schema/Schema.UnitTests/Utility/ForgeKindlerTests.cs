@@ -292,9 +292,11 @@ public class ForgeKindlerTests
         // + SchemaSmith.fn_NormalizeDataType (#12 -- folds declared type synonyms onto the spelling sys.types
         //   reports back, so a column authored INTEGER stops being rewritten on every deploy. Replaces the ten
         //   scattered REPLACE(..., 'ROWVERSION', 'TIMESTAMP') calls across the JSON parse and its XML twin).
-        Assert.That(sqlServer.Length, Is.EqualTo(36));
-        // PostgreSQL: 35 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + Kindling_ProductOwnership_IndexMigration
-        // (one-owner enforcement, #270 TRANSITIONAL) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
+        // + Kindling_ExpressionMap_Table (#242 -- the authored/canonical expression mapping).
+        // + fn_ExpressionMapUnchanged + ExpressionMapRecord (#242 -- the decision and the recording pass).
+        // + fn_ExpressionMapEffective (#242 -- whole-script comparisons take the text, not a yes/no).
+        Assert.That(sqlServer.Length, Is.EqualTo(40));
+        // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
         // (PG14-adaptive pg_stats_ext_exprs read) — the last two are the floor 14->12 cascade
@@ -320,7 +322,11 @@ public class ForgeKindlerTests
         //   promoted for the same reason as enums: a scripted domain is a guarded CREATE DOMAIN, and
         //   once the domain exists that guard skips, so an edited CHECK never lands. Unlike an enum,
         //   ALTER DOMAIN converges constraints/default/NOT NULL without touching a dependent column.
-        Assert.That(postgres.Length, Is.EqualTo(44));
+        // + Kindling_ExpressionMap_Table (#242 -- the authored/canonical expression mapping).
+        // + ExpressionMapUnchanged + ExpressionMapRecord (#242 -- the decision and the recording pass).
+        // + SplitTopLevelList + NormalizeIndexColumnList + StatisticsDefinitionForms (#242 -- declared index and
+        //   statistics definitions compared in the form the catalog reads back).
+        Assert.That(postgres.Length, Is.EqualTo(49));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
@@ -421,7 +427,9 @@ public class ForgeKindlerTests
         //   (INNODB_DATAFILES is 8.0+-only); the MariaDb per-file override reads CREATE_OPTIONS instead --
         //   one net script name added to this shared list either way, since the override resolves through
         //   ResourceLoader rather than adding a second list entry).
-        Assert.That(mysql.Length, Is.EqualTo(61));
+        // + Kindling_ExpressionMap_Table (#242 -- the authored/canonical expression mapping).
+        // + ExpressionMapUnchanged + ExpressionMapRecord (#242 -- the decision and the recording pass).
+        Assert.That(mysql.Length, Is.EqualTo(64));
     }
 
     [Test]

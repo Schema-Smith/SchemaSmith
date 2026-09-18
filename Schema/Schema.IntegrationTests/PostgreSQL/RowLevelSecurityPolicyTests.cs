@@ -21,9 +21,11 @@ namespace Schema.IntegrationTests.PostgreSQL;
 /// <para>Policies are dropped when they leave the package, and deliberately without an opt-out: a stale
 /// policy is a live access-control rule, so leaving one behind is a security posture nobody declared.
 /// That is a stronger reason to drop than exists for an index.</para>
-/// <para><b>Known limit, asserted rather than glossed:</b> a change to an existing policy's expression is
-/// not detected. PostgreSQL stores those normalised, so comparing against the declared text is the same
-/// false-change problem tracked separately on the roadmap.</para>
+/// <para><b>Expressions converge too.</b> A change to an existing policy's USING or WITH CHECK text is applied
+/// with <c>ALTER POLICY</c> -- non-destructive, so the table is never left without the rule for an instant -- and
+/// adding or removing a clause (which ALTER cannot do) is a DROP + CREATE. PostgreSQL stores the text
+/// normalised, which is why this was once left undetected: a raw comparison would re-apply every policy on every
+/// deploy. The expression map (#242) is what makes it safe to compare.</para>
 /// </summary>
 [Category("PostgreSQL")]
 [Category("Integration")]
@@ -98,8 +100,37 @@ public class RowLevelSecurityPolicyTests
         + " \"Indexes\": [ { \"Name\": \"pk_" + table + "\", \"IndexColumns\": \"id\", \"PrimaryKey\": true, \"Unique\": true } ],"
         + " \"Policies\": [" + policies + "] }]";
 
-    private static string Policy(string name, string cmd = "ALL", string usingExpr = "true") =>
-        "{ \"Name\": \"" + name + "\", \"Command\": \"" + cmd + "\", \"UsingExpression\": \"" + usingExpr + "\" }";
+    private static string Policy(string name, string cmd = "ALL", string usingExpr = "true", string withCheck = null) =>
+        "{ \"Name\": \"" + name + "\", \"Command\": \"" + cmd + "\", \"UsingExpression\": \"" + usingExpr + "\""
+        + (withCheck == null ? "" : ", \"WithCheckExpression\": \"" + withCheck + "\"") + " }";
+
+    private static string PolicyAttr(IDbCommand cmd, string table, string policy, string column)
+    {
+        cmd.CommandText = "SELECT COALESCE(" + column + ", '(null)') FROM pg_policies WHERE schemaname = 'public'"
+                          + " AND tablename = '" + table + "' AND policyname = '" + policy + "'";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    private static long PolicyOid(IDbCommand cmd, string table, string policy)
+    {
+        cmd.CommandText = "SELECT COALESCE((SELECT p.oid::bigint FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid"
+                          + " WHERE c.relname = '" + table + "' AND p.polname = '" + policy + "'), 0)";
+        return Convert.ToInt64(cmd.ExecuteScalar());
+    }
+
+    private static int PolicyAuditRows(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = "SELECT COUNT(*) FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"ObjectType\" = 'policy'"
+                          + " AND \"ObjectName\" LIKE 'public." + table + ".%'";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private static void ClearPolicyAudit(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = "DELETE FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"ObjectType\" = 'policy'"
+                          + " AND \"ObjectName\" LIKE 'public." + table + ".%'";
+        cmd.ExecuteNonQuery();
+    }
 
     private void Deploy(IDbCommand cmd, string json)
     {
@@ -230,4 +261,103 @@ public class RowLevelSecurityPolicyTests
             Assert.That(PolicyCount(cmd, "rls_none"), Is.Zero);
         });
     }
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Expression convergence. These are the cases that used to be a documented "known limit".
+    // ---------------------------------------------------------------------------------------------------------
+
+    [Test]
+    public void AChangedUsingExpression_IsApplied_InPlace()
+    {
+        OnDb(cmd =>
+        {
+            Deploy(cmd, Package("rls_using", Policy("p_tenant", usingExpr: "tenant = 'a'")));
+            var oid = PolicyOid(cmd, "rls_using", "p_tenant");
+
+            Deploy(cmd, Package("rls_using", Policy("p_tenant", usingExpr: "tenant = 'b'")));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(PolicyAttr(cmd, "rls_using", "p_tenant", "qual"), Does.Contain("'b'").And.Not.Contain("'a'"),
+                    "an edited USING expression must reach the server -- leaving the old one is a live access rule nobody declared");
+                Assert.That(PolicyOid(cmd, "rls_using", "p_tenant"), Is.EqualTo(oid),
+                    "an expression-only change is an ALTER POLICY, not a drop and re-create: there must be no instant "
+                    + "at which the table has RLS on and this policy missing");
+            });
+        });
+    }
+
+    [Test]
+    public void AChangedWithCheckExpression_IsApplied()
+    {
+        OnDb(cmd =>
+        {
+            Deploy(cmd, Package("rls_check", Policy("p_write", usingExpr: "true", withCheck: "tenant = 'a'")));
+            Deploy(cmd, Package("rls_check", Policy("p_write", usingExpr: "true", withCheck: "tenant = 'b'")));
+
+            Assert.That(PolicyAttr(cmd, "rls_check", "p_write", "with_check"), Does.Contain("'b'").And.Not.Contain("'a'"));
+        });
+    }
+
+    // ALTER POLICY can set a clause but never remove one, so removal must fall back to DROP + CREATE.
+    [Test]
+    public void RemovingAWithCheckExpression_IsApplied()
+    {
+        OnDb(cmd =>
+        {
+            Deploy(cmd, Package("rls_rmcheck", Policy("p_write", usingExpr: "true", withCheck: "tenant = 'a'")));
+            Assert.That(PolicyAttr(cmd, "rls_rmcheck", "p_write", "with_check"), Is.Not.EqualTo("(null)"), "precondition");
+
+            Deploy(cmd, Package("rls_rmcheck", Policy("p_write", usingExpr: "true")));
+
+            Assert.That(PolicyAttr(cmd, "rls_rmcheck", "p_write", "with_check"), Is.EqualTo("(null)"),
+                "a WITH CHECK removed from the package must be removed from the server");
+        });
+    }
+
+    // Someone edits the policy by hand. The package did not change; the live rule did. It must be put back.
+    [Test]
+    public void AnOutOfBandPolicyEdit_IsReApplied()
+    {
+        OnDb(cmd =>
+        {
+            Deploy(cmd, Package("rls_drift", Policy("p_tenant", usingExpr: "tenant = 'a'")));
+
+            cmd.CommandText = "ALTER POLICY p_tenant ON public.rls_drift USING (true)";
+            cmd.ExecuteNonQuery();
+
+            Deploy(cmd, Package("rls_drift", Policy("p_tenant", usingExpr: "tenant = 'a'")));
+
+            Assert.That(PolicyAttr(cmd, "rls_drift", "p_tenant", "qual"), Does.Contain("'a'"),
+                "a hand-widened policy must be narrowed back to what was declared");
+        });
+    }
+
+    // The reason this was never compared: PostgreSQL renders "tenant = current_user" as
+    // (tenant = (CURRENT_USER)::text). A raw comparison would ALTER every policy on every deploy.
+    [Test]
+    public void APolicyAuthoredInNaturalForm_IsNotReAppliedOnEveryDeploy()
+    {
+        OnDb(cmd =>
+        {
+            var json = Package("rls_quiet", Policy("p_tenant", usingExpr: "tenant = current_user", withCheck: "tenant = current_user"));
+            Deploy(cmd, json);
+            Assert.That(PolicyAttr(cmd, "rls_quiet", "p_tenant", "qual"), Is.Not.EqualTo("tenant = current_user"),
+                "precondition: PostgreSQL must have rewritten the expression, or this proves nothing");
+            var oid = PolicyOid(cmd, "rls_quiet", "p_tenant");
+
+            for (var pass = 2; pass <= 3; pass++)
+            {
+                ClearPolicyAudit(cmd, "rls_quiet");
+                Deploy(cmd, json);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(PolicyAuditRows(cmd, "rls_quiet"), Is.Zero,
+                        $"pass {pass}: the policy was re-applied for an unchanged declaration");
+                    Assert.That(PolicyOid(cmd, "rls_quiet", "p_tenant"), Is.EqualTo(oid), $"pass {pass}: policy identity");
+                });
+            }
+        });
+    }
+
 }

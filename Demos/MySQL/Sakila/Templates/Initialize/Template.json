@@ -1,6 +1,6 @@
 {
   "Name": "Initialize",
-  "SchemaIdentificationScript": "SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME = 'TestMain' AND NOT EXISTS (SELECT * FROM information_schema.schemata WHERE SCHEMA_NAME = '{{SakilaDb}}')",
+  "DatabaseIdentificationScript": "SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME = 'TestMain' AND NOT EXISTS (SELECT * FROM information_schema.schemata WHERE SCHEMA_NAME = '{{SakilaDb}}')",
   "ScriptFolders": [
     {
       "FolderPath": "Before Scripts",

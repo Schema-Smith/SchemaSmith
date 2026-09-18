@@ -363,13 +363,9 @@
       "type": "boolean",
       "description": "When set, overrides the template- and product-level DropCheckConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
     },
-    "DropExcludeConstraintsRemovedFromProduct": {
-      "type": "boolean",
-      "description": "When set, overrides the template- and product-level DropExcludeConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting. PostgreSQL only."
-    },
     "DropStatisticsRemovedFromProduct": {
       "type": "boolean",
-      "description": "When set, overrides the template- and product-level DropStatisticsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+      "description": "When set, overrides the template- and product-level DropStatisticsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting. SQL Server and PostgreSQL only."
     },
     "DropIndexesRemovedFromProduct": {
       "type": "boolean",
@@ -618,6 +614,11 @@
       "type": "string",
       "pattern": "SCHEMA_AND_DATA|SCHEMA_ONLY",
       "description": "Memory-optimized durability: SCHEMA_AND_DATA (default, data persists) or SCHEMA_ONLY (rows are transient). Only meaningful with MemoryOptimized. Create-time only."
+    },
+    "CdcFilegroup": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Filegroup for this table's CDC change table; overrides the template's CdcFilegroup. Only meaningful with EnableCDC. A change creates a new capture instance on the new filegroup and leaves the old one, with its history, for you to drain and drop."
     },
     "Extensions": {}
   },

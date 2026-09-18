@@ -7,8 +7,11 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
+using Microsoft.Extensions.Configuration;
+using Schema.Configuration;
 using Schema.Domain;
 using Schema.Delivery;
+using Schema.Isolators;
 
 namespace Schema.Utility;
 
@@ -145,8 +148,32 @@ public static class MergeScriptHelper
     // Same 2016/2017 band CompatEncoding.JsonServerMajorFloor documents for the ingest encoding; the two
     // must agree. PARSENAME(...,4) takes the major from ProductVersion ('13.0.6404.1' -> '13') and works
     // on every supported binary, unlike ProductMajorVersion which is itself 2016+ and NULLs below it.
+    /// <summary>
+    /// The <c>CompatEncoding</c> override in force for this process, or null for <c>auto</c>. Exactly one of
+    /// the two keys is meaningful in any run — the settings contract lets SchemaQuench declare only
+    /// <c>Target:</c> and the source-side tools only <c>Source:</c> — so consulting both is unambiguous
+    /// rather than a precedence question.
+    /// </summary>
+    private static string CompatEncodingOverride()
+    {
+        // Resolve, not ResolveOrCreate: this is library code reached from paths that never register a
+        // configuration (unit tests, and any caller building a script without a settings file), and
+        // ResolveOrCreate tries to instantiate the interface and throws. No config means no override.
+        var config = FactoryContainer.Resolve<IConfigurationRoot>();
+        return config?[SettingsKeys.SourceCompatEncoding] ?? config?[SettingsKeys.CompatEncoding];
+    }
+
     private static bool IsBelowStringAggCliffSqlServer(IDbCommand cmd)
     {
+        // Honour the same override the model-ingest encoding honours. These two decisions are the SAME
+        // decision -- compat < 130 OR server major < 14, as the comment above says they must be -- but only
+        // one of them could be forced, so DataTongs could not be made to build a legacy merge script at all.
+        // That matters most for the one tool whose OUTPUT is the product: a delivery file handed to an
+        // external vendor could not be generated in the legacy shape on modern hardware.
+        var forced = CompatEncodingOverride();
+        if (!string.IsNullOrWhiteSpace(forced))
+            return CompatEncoding.Select(forced, null, int.MaxValue) == IngestEncoding.Xml;
+
         cmd.Parameters.Clear();
         cmd.CommandText =
             "SELECT CASE WHEN (SELECT compatibility_level FROM sys.databases WHERE database_id = DB_ID()) < 130 " +

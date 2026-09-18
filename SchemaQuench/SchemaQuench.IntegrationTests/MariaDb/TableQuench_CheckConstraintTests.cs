@@ -10,7 +10,7 @@ namespace SchemaQuench.IntegrationTests.MariaDb;
 [Category("MariaDb")]
 [TestFixture]
 [Parallelizable(scope: ParallelScope.All)]
-public class TableQuench_ColumnCheckExpressionTests : TableQuench_ColumnCheckExpressionTestsSharedTests
+public class TableQuench_CheckConstraintTests : TableQuench_CheckConstraintTestsSharedTests
 {
     protected override Platform Platform => Platform.MariaDb;
     protected override string MainConnectionString => FixtureSetup.GetMainDbConnectionString();

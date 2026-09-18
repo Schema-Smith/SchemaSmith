@@ -37,6 +37,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string ReplicaIdentityIndexNotUniqueCode = "SS-RI-003";
     private const string ReplicaIdentityIndexIgnoredCode = "SS-RI-004";
     private const string VersioningExclusionInertCode = "SS-SV-001";
+    private const string CdcFilegroupInertCode = "SS-CDC-001";
     private const string CompressionConflictCode = "SS-CO-001";
     private const string CompressionLevelInertCode = "SS-CO-002";
     private const string DuplicateEventCode = "SS-EVT-001";
@@ -76,6 +77,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckRowLevelSecurity(table, location));
             findings.AddRange(CheckReplicaIdentity(table, location));
             findings.AddRange(CheckSystemVersioningExclusions(table, location));
+            findings.AddRange(CheckCdcFilegroup(table, location));
             findings.AddRange(CheckCompressionOptions(table, location));
             findings.AddRange(CheckPartitionPlacement(table, location));
             findings.AddRange(CheckMyPartitioning(table, location));
@@ -384,6 +386,20 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// and nothing at deploy time can tell the author, because nothing failed.</para>
     /// <para>Warning rather than Error: it is legal and deployable, and a table may gain versioning later.</para>
     /// </summary>
+    /// <summary>
+    /// #417: <c>CdcFilegroup</c> only places a CDC change table, so on a table without <c>EnableCDC</c> it does
+    /// nothing, and the deploy has no reason to mention it. Table-level only: a template default legitimately
+    /// covers a mix of CDC and non-CDC tables.
+    /// </summary>
+    private static IEnumerable<Finding> CheckCdcFilegroup(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable ssTable || ssTable.EnableCDC || string.IsNullOrWhiteSpace(ssTable.CdcFilegroup)) yield break;
+
+        yield return new Finding(Severity.Warning, CdcFilegroupInertCode, Category, tableLocation,
+            $"Table '{table.Name}' sets CdcFilegroup '{ssTable.CdcFilegroup}' but not EnableCDC, so there is no change " +
+            "table to place and the setting does nothing — set EnableCDC, or drop CdcFilegroup.");
+    }
+
     private static IEnumerable<Finding> CheckSystemVersioningExclusions(Table table, string tableLocation)
     {
         if (table is not MariaDbTable mariaTable || mariaTable.IsSystemVersioned) yield break;

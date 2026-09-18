@@ -36,7 +36,6 @@
       "Target:Databases",
       "Target:IntegratedSecurity",
       "Target:Password",
-      "Target:Platform",
       "Target:Port",
       "Target:Schemas",
       "Target:SecondaryServers",
@@ -97,13 +96,12 @@
       "Source:Schema",
       "Source:Server",
       "Source:User",
+      "Target:Platform",
       "Template:Name",
-      "Template:SchemaIdentificationScript",
-      "TemplatePath"
+      "Template:SchemaIdentificationScript"
     ],
     "DataTongs": [
       "ContentPath",
-      "Product:Name",
       "ScriptPath",
       "ScriptTokens",
       "ShouldCast:ConfigureDataDelivery",
@@ -127,7 +125,7 @@
       "Source:Server",
       "Source:User",
       "Tables",
-      "Template:Name",
+      "Target:Platform",
       "TemplatePath"
     ],
     "SchemaShears": [

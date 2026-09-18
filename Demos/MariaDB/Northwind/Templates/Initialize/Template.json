@@ -1,6 +1,6 @@
 {
   "Name": "Initialize",
-  "SchemaIdentificationScript": "SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME = 'TestMain' AND NOT EXISTS (SELECT * FROM information_schema.schemata WHERE SCHEMA_NAME = '{{NorthwindDb}}')",
+  "DatabaseIdentificationScript": "SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME = 'TestMain' AND NOT EXISTS (SELECT * FROM information_schema.schemata WHERE SCHEMA_NAME = '{{NorthwindDb}}')",
   "ScriptFolders": [
     {
       "FolderPath": "Before Scripts",

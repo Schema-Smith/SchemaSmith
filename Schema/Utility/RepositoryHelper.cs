@@ -19,6 +19,27 @@ public class SchemaFileResult
 {
     public string FileName { get; set; }
     public bool WasCreated { get; set; }
+
+    /// <summary>
+    /// True when the committed schema could not be parsed, so it was regenerated from the model WITHOUT
+    /// the hand-authored <c>Extensions</c> fragment it may have carried. The file is valid again; whatever
+    /// custom-property governance was written into it is gone and has to be re-applied by hand.
+    /// </summary>
+    public bool AuthoredExtensionsLost { get; set; }
+
+    /// <summary>
+    /// True when an EXISTING file's content actually changed. This is the common outcome and the one the
+    /// result could not previously express: the merged schema is written unconditionally, so a rewritten
+    /// file used to return a result identical to nothing-happened, and every consumer's "up to date"
+    /// message was unverifiable. A caller cannot recover this for itself without re-reading, re-generating
+    /// and re-running the merge — reimplementing the method it just called — because this is the only place
+    /// that holds both strings at once.
+    /// <para>Distinct from <see cref="WasCreated"/>: created and updated are different things to report.</para>
+    /// </summary>
+    public bool WasUpdated { get; set; }
+
+    /// <summary>Parser message for the unreadable file, so the warning can say WHY it could not be read.</summary>
+    public string ParseError { get; set; }
 }
 
 /// <summary>
@@ -115,24 +136,46 @@ public static class RepositoryHelper
     /// <summary>
     /// Writes or merges schema files for the given platform into the .json-schemas folder.
     /// </summary>
-    public static void WriteSchemaFiles(string productPath, Platform platform)
+    /// <param name="warn">
+    /// Receives a line per committed schema that could not be parsed and was therefore regenerated without
+    /// its authored <c>Extensions</c> fragment. Omitting it does NOT discard the warning — it routes to the
+    /// engine's own logger instead. There is deliberately no silent path: the string being dropped is the
+    /// notice that authored governance was destroyed, and a default that makes losing it the quiet option
+    /// is the same fail-open shape this warning exists to close.
+    /// </param>
+    public static void WriteSchemaFiles(string productPath, Platform platform, Action<string> warn = null)
     {
-        WriteSchemaFilesWithResults(productPath, platform);
+        WriteSchemaFilesWithResults(productPath, platform, warn);
     }
 
     /// <summary>
     /// Writes or merges schema files and returns detailed results for each file.
     /// </summary>
-    public static List<SchemaFileResult> WriteSchemaFilesWithResults(string productPath, Platform platform)
+    public static List<SchemaFileResult> WriteSchemaFilesWithResults(string productPath, Platform platform,
+        Action<string> warn = null)
     {
         var directory = DirectoryWrapper.GetFromFactory();
         var schemaPath = Path.Combine(productPath, ".json-schemas");
         directory.CreateDirectory(schemaPath);
 
+        // A caller that passes no sink gets the engine's logger, never silence. Making the parameter
+        // REQUIRED was the other candidate and would force each new caller to decide -- but it breaks every
+        // existing call site to buy a decision, when the property that actually matters is that the warning
+        // always lands somewhere. Revisit if a host appears that needs the warning in front of a user rather
+        // than in a log; the flag on the result already carries it for anyone who wants to render it.
+        warn ??= message => LogFactory.GetLogger(nameof(RepositoryHelper)).Warn(message);
+
         var schemaFileNames = GetSchemaFileNames(platform);
         var results = new List<SchemaFileResult>();
         foreach (var fileName in schemaFileNames)
             results.Add(WriteSchemaFileWithResult(schemaPath, fileName, platform));
+
+        // Losing an authored fragment is a real loss, so it is reported per file rather than summarised.
+        // The user has to re-author it, and cannot do that without knowing which file it was.
+        foreach (var lost in results.Where(r => r.AuthoredExtensionsLost))
+            warn?.Invoke($"'{lost.FileName}' could not be parsed ({lost.ParseError}) and was regenerated from the "
+                         + "current model. Any hand-authored \"Extensions\" governance it carried (required "
+                         + "properties, enum rules) was NOT preserved and must be re-applied.");
         return results;
     }
 
@@ -245,10 +288,40 @@ public static class RepositoryHelper
         }
 
         var existing = file.ReadAllText(schemaFile);
-        var existingObj = JObject.Parse(existing);
+
+        // The existing file is read to carry its hand-authored "Extensions" fragment forward, which is worth
+        // doing -- but an unreadable file used to take the whole command down with a raw JsonReaderException
+        // at exit 3. That made the advice circular: --Validate's SS-STALE-002 finding tells the user to
+        // regenerate via --WriteSchemasOnly, and regenerating is exactly what a malformed file prevented.
+        // The only way out was deleting the file, which nothing told them to do.
+        //
+        // Regenerate instead, and say what was lost. A valid schema with no authored fragment is a state the
+        // user can see and fix; a stack trace is not. NOT silent: dropping governance quietly would be worse
+        // than the crash, because the package would look healthy while enforcing less than it used to.
+        JObject existingObj;
+        try
+        {
+            existingObj = JObject.Parse(existing);
+        }
+        catch (JsonException ex)
+        {
+            file.WriteAllText(schemaFile, generated.ToString(Formatting.Indented));
+            return new SchemaFileResult
+            {
+                FileName = fileName, WasUpdated = true, AuthoredExtensionsLost = true, ParseError = ex.Message
+            };
+        }
+
         var merged = SchemaGenerator.MergeExtensionsDefinition(generated, existingObj);
-        file.WriteAllText(schemaFile, merged.ToString(Formatting.Indented));
-        return new SchemaFileResult { FileName = fileName };
+        var mergedText = merged.ToString(Formatting.Indented);
+
+        // Compared BEFORE the write, which is the only moment both strings are in hand. The write itself is
+        // deliberately left unconditional: skipping it when the content matches would stop --WriteSchemasOnly
+        // touching mtimes on every run, which is appealing but is a behaviour change consumers may read, and
+        // it is not needed to report the outcome honestly. Worth deciding on its own merits, not as a side
+        // effect of a reporting fix.
+        file.WriteAllText(schemaFile, mergedText);
+        return new SchemaFileResult { FileName = fileName, WasUpdated = mergedText != existing };
     }
 
     /// <summary>

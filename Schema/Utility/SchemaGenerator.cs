@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Reflection;
 using Newtonsoft.Json;
@@ -93,7 +94,9 @@ public static class SchemaGenerator
 
             properties[GetPropertyName(prop)] = propSchema;
 
-            if (schemaAttr is { Required: true })
+            // JsonHelper.Serialize omits a value equal to its [DefaultValue], so requiring such a property
+            // would reject the commonest file the model itself writes. Absent already loads as the default.
+            if (schemaAttr is { Required: true } && prop.GetCustomAttribute<DefaultValueAttribute>() == null)
             {
                 // A property may be required only when a sibling flag is off -- IndexColumns is
                 // required unless the index is a columnstore, which has no key columns at all.

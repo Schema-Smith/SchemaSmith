@@ -84,14 +84,13 @@ public static class SettingsContract
             SettingsKeys.ProductKeys.ObjectOrder, SettingsKeys.ProductKeys.PreserveExistingOrder,
             SettingsKeys.TemplateKeys.Name, SettingsKeys.TemplateKeys.SchemaIdentificationScript,
             SettingsKeys.OrphanHandling.Mode, SettingsKeys.FolderMapping, SettingsKeys.LogHygiene,
-            SettingsKeys.ScriptTokens, SettingsKeys.TemplatePath
+            SettingsKeys.ScriptTokens
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.DataTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.DataTongs)).Concat(
         [
             SettingsKeys.ContentPath, SettingsKeys.ScriptPath, SettingsKeys.TemplatePath,
-            SettingsKeys.TablesToExtract, SettingsKeys.ProductKeys.Name, SettingsKeys.TemplateKeys.Name,
-            SettingsKeys.ScriptTokens
+            SettingsKeys.TablesToExtract, SettingsKeys.ScriptTokens
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaShears] = new(
@@ -104,7 +103,7 @@ public static class SettingsContract
     private static IEnumerable<string> BaseTargetKeys() =>
     [
         SettingsKeys.Target.Server, SettingsKeys.Target.User, SettingsKeys.Target.Password,
-        SettingsKeys.Target.Port, SettingsKeys.Target.Platform, SettingsKeys.Target.IntegratedSecurity,
+        SettingsKeys.Target.Port, SettingsKeys.Target.IntegratedSecurity,
         SettingsKeys.Target.SecondaryServers, SettingsKeys.Target.ConnectionProperties,
         SettingsKeys.Target.Templates, SettingsKeys.Target.Databases, SettingsKeys.Target.Schemas,
         SettingsKeys.Target.TemplateTargets, SettingsKeys.UnsupportedFeaturePolicy,
@@ -116,7 +115,8 @@ public static class SettingsContract
         SettingsKeys.Source.Server, SettingsKeys.Source.User, SettingsKeys.Source.Password,
         SettingsKeys.Source.Port, SettingsKeys.Source.Platform, SettingsKeys.Source.Database,
         SettingsKeys.Source.Schema, SettingsKeys.Source.IntegratedSecurity,
-        SettingsKeys.Source.ConnectionProperties, SettingsKeys.SourceCompatEncoding
+        SettingsKeys.Source.ConnectionProperties, SettingsKeys.SourceCompatEncoding,
+        SettingsKeys.Target.Platform
     ];
 
     // Only the keys the given tool actually reads. Handing both tools the whole set made the contract

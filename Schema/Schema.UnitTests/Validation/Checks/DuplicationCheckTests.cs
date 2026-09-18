@@ -3,6 +3,8 @@
 using System.Linq;
 using NUnit.Framework;
 using Schema.Domain;
+using Schema.Domain.MySQL;
+using Schema.Domain.PostgreSQL;
 using Schema.Domain.SqlServer;
 using Schema.Validation;
 using Schema.Validation.Checks;
@@ -217,5 +219,63 @@ public class DuplicationCheckTests
         var findings = new DuplicationCheck().Run(ctx).ToList();
 
         Assert.That(findings, Is.Empty);
+    }
+
+    // Declared (modeled) objects were never grouped at all, so two files declaring one object reported
+    // nothing -- and the quench would try to create it twice. Each list gets the same ShouldApply-aware rule
+    // as tables, keyed by schema-qualified identity.
+    private static readonly (string Level, System.Action<Template, string, string, string> Add)[] ModeledLists =
+    [
+        ("enum type", (t, s, n, g) => t.EnumTypes.Add(new PostgreSqlEnumType { Schema = s, Name = n, ShouldApplyExpression = g })),
+        ("domain type", (t, s, n, g) => t.DomainTypes.Add(new PostgreSqlDomainType { Schema = s, Name = n, ShouldApplyExpression = g })),
+        ("sequence", (t, s, n, g) => t.Sequences.Add(new PostgreSqlSequence { Schema = s, Name = n, ShouldApplyExpression = g })),
+        ("materialized view", (t, s, n, g) => t.MaterializedViews.Add(new PostgreSqlMaterializedView { Schema = s, Name = n, ShouldApplyExpression = g })),
+        ("indexed view", (t, s, n, g) => t.IndexedViews.Add(new SqlServerIndexedView { Schema = s, Name = n, ShouldApplyExpression = g })),
+        ("event", (t, _, n, g) => t.Events.Add(new MySqlEvent { Name = n, ShouldApplyExpression = g })),
+    ];
+
+    private static System.Collections.Generic.IEnumerable<TestCaseData> ModeledListCases() =>
+        ModeledLists.Select(l => new TestCaseData(l.Level).SetName($"{{m}}({l.Level})"));
+
+    private static (string Level, System.Action<Template, string, string, string> Add) Modeled(string level) =>
+        ModeledLists.Single(l => l.Level == level);
+
+    [TestCaseSource(nameof(ModeledListCases))]
+    public void DuplicateUngatedModeledObjects_AreError(string level)
+    {
+        var template = new Template { Name = "Main" };
+        Modeled(level).Add(template, "public", "order_status", null);
+        Modeled(level).Add(template, "public", "ORDER_STATUS", null);
+
+        var findings = new DuplicationCheck().Run(Context(Product(), template)).ToList();
+
+        Assert.That(findings, Has.Exactly(1).Items);
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+        Assert.That(findings[0].Code, Is.EqualTo("SS-DUP-001"));
+        Assert.That(findings[0].Message, Does.Contain($"Duplicate {level} name"));
+        Assert.That(findings[0].Location, Is.EqualTo("Template 'Main'"));
+    }
+
+    [TestCaseSource(nameof(ModeledListCases))]
+    public void SameNameModeledObjects_AllGated_AreValidVariantSet_WithoutLabelsWarned(string level)
+    {
+        var template = new Template { Name = "Main" };
+        Modeled(level).Add(template, "public", "order_status", "{{IsEU}}");
+        Modeled(level).Add(template, "public", "order_status", "{{IsUS}}");
+
+        var findings = new DuplicationCheck().Run(Context(Product(), template)).ToList();
+
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-DUP-VAR-002" }));
+    }
+
+    [TestCase("enum type")]
+    [TestCase("indexed view")]
+    public void SameNameModeledObjects_InDifferentSchemas_AreNotDuplicates(string level)
+    {
+        var template = new Template { Name = "Main" };
+        Modeled(level).Add(template, "sales", "order_status", null);
+        Modeled(level).Add(template, "billing", "order_status", null);
+
+        Assert.That(new DuplicationCheck().Run(Context(Product(), template)).ToList(), Is.Empty);
     }
 }

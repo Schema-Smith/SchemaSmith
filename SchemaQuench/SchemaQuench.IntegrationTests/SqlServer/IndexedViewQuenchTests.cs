@@ -613,6 +613,37 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
         RunIndexedViewQuench(cmd, "[]");
     }
 
+    // #242. ReQuench_WithNoChanges_ViewStillExists asserts the view is still THERE, which a drop-and-recreate
+    // satisfies just as well as leaving it alone. This asserts the view's object_id is stable across three
+    // deploys: re-creating an indexed view rebuilds its clustered index, so churn here is expensive.
+    [Test]
+    public void ReQuench_WithNoChanges_DoesNotRecreateTheView()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_ivTestDb);
+        using var cmd = conn.CreateCommand();
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
+        cmd.CommandText = @"SELECT v.object_id FROM sys.views v
+                            INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
+                            WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+        var firstId = cmd.ExecuteScalar();
+        Assert.That(firstId, Is.Not.Null, "setup: the indexed view must exist after the first deploy");
+
+        for (var pass = 2; pass <= 3; pass++)
+        {
+            RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
+            cmd.CommandText = @"SELECT v.object_id FROM sys.views v
+                                INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
+                                WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(firstId),
+                $"pass {pass}: the indexed view was dropped and re-created for an unchanged declaration");
+        }
+
+        conn.Close();
+    }
+
     private void RunIndexedViewQuench(IDbCommand cmd, string indexedViewJson)
     {
         cmd.CommandTimeout = 300;

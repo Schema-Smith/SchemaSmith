@@ -15,7 +15,10 @@ cd "$(dirname "$0")/.." || exit 1
 #         2017-catalog-column gates cross. It runs ONLY on major 13, so it skips on 14330/14331/14332
 #         and runs on 14333. 14333 used to skip everything, which is exactly how two 2017-vs-2016
 #         defects lived there unseen; an all-skip result on 14333 now means something is wrong.
-#     Expected shape per instance: 4 passed / 4 skipped.
+#       * ExpressionChurnAcrossVersionsTests (#242) runs on EVERY instance: three tests measuring that the
+#         expression surfaces stay put and that a real compatibility-level upgrade re-baselines. Its upgrade
+#         test skips on 14330 only, because 2008 R2's default compatibility level is already 100.
+#     Expected shape: 6 passed / 5 skipped on 14330, 7 passed / 4 skipped on 14331-14333.
 #  2. SchemaQuench's GenuineSql2008EmitGuardCert HARDCODES 127.0.0.1,14330 for its own work, but it
 #     lives in the SqlServer namespace whose [SetUpFixture] provisions Always Encrypted keys. Point
 #     the env vars at an old instance and that setup dies with "SQL Server instance in use does not
@@ -41,7 +44,8 @@ for port in 14330 14331 14332 14333; do
     --filter "FullyQualifiedName~GenuineOldBinary" 2>&1 | tee "/tmp/ss-sweep-$port.log" \
     | grep -E "^(Passed!|Failed!|No test)|^  (Failed|Skipped) "
   summary="$(grep -E "^(Passed!|Failed!)" "/tmp/ss-sweep-$port.log" | head -1 | sed "s/ - Duration.*//")"
-  SWEEP_ROWS="${SWEEP_ROWS}| SQL Server @ $port | ${summary:-NO RESULT} | 4 passed / 4 skipped |
+  expected="7 passed / 4 skipped"; [ "$port" = "14330" ] && expected="6 passed / 5 skipped"
+  SWEEP_ROWS="${SWEEP_ROWS}| SQL Server @ $port | ${summary:-NO RESULT} | $expected |
 "
 done
 echo "===== 2. 2008 emit-guard cert (default settings; fixture reaches 14330 itself) ====="

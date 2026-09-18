@@ -94,30 +94,6 @@ namespace Schema.UnitTests.Domain.MySQL
         }
 
         [Test]
-        public void MySqlColumn_PreservesCheckExpression_ThroughDeserializeAndSerializeAll()
-        {
-            const string json = """
-            {"Name":"T","Columns":[
-                {"Name":"Quantity","DataType":"int","CheckExpression":"Quantity > 0"}
-            ]}
-            """;
-            var table = PlatformDeserializer.DeserializeTable(json, Platform.MySQL);
-            var roundTripped = JsonHelper.SerializeAll(table);
-            Assert.That(roundTripped, Does.Contain("CheckExpression"));
-            Assert.That(roundTripped, Does.Contain("Quantity > 0"));
-        }
-
-        [Test]
-        public void MySqlColumn_OmitsNullCheckExpression_FromSerializeAll()
-        {
-            const string json = """
-            {"Name":"T","Columns":[{"Name":"Id","DataType":"int"}]}
-            """;
-            var table = PlatformDeserializer.DeserializeTable(json, Platform.MySQL);
-            Assert.That(JsonHelper.SerializeAll(table), Does.Not.Contain("CheckExpression"));
-        }
-
-        [Test]
         public void MySqlColumn_PreservesOnUpdateCurrentTimestamp_ThroughDeserializeAndSerializeAll()
         {
             const string json = """

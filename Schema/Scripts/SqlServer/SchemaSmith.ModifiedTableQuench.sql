@@ -28,7 +28,10 @@ CREATE PROCEDURE SchemaSmith.ModifiedTableQuench
   -- every pre-existing caller, and every package with no RebuildPolicy anywhere -- can never elect a rebuild.
   @RebuildPolicyMode NVARCHAR(20) = 'NEVER',
   @RebuildPolicyThreshold INT = NULL,
-  @RebuildPolicyOnOrderMismatch BIT = 0
+  @RebuildPolicyOnOrderMismatch BIT = 0,
+  -- Template-level CdcFilegroup (#417): where change tables go for a CDC table that declares none of its
+  -- own. NULL at both tiers means unmanaged -- an existing placement is never touched.
+  @CdcFilegroup NVARCHAR(128) = NULL
 AS
 BEGIN TRY
   DECLARE @v_SQL NVARCHAR(MAX) = '',
@@ -199,6 +202,27 @@ BEGIN TRY
       FROM #DeployedTablePlacement
      WHERE DeclaredRaw IS NOT NULL AND DeployedSpaceType IS NOT NULL AND DeployedSpaceType <> 'FG'
     RAISERROR('Table %s declares filegroup %s, but is currently deployed on partition scheme %s. SchemaSmith cannot place a partitioned table on a single filegroup -- remove the declared FileGroup, or migrate the table manually.', 16, 1, @v_PsTable, @v_PsDeclared, @v_PsScheme)
+  END
+
+  -- CDC change-table placement (#417). The template default fills in only where a CDC table declared none;
+  -- NULL at both tiers stays NULL, which means unmanaged. Resolved here, once, so every later pass reads one
+  -- effective value per table.
+  IF @CdcFilegroup IS NOT NULL
+    UPDATE #Tables SET CdcFilegroup = SchemaSmith.fn_SafeBracketWrap(@CdcFilegroup)
+     WHERE EnableCDC = 1 AND CdcFilegroup IS NULL
+
+  -- A filegroup that does not exist would otherwise surface as sp_cdc_enable_table's own error from the middle
+  -- of the run, after the column work -- so refuse it up front, naming the table and the setting.
+  IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK)
+              WHERE t.EnableCDC = 1 AND t.CdcFilegroup IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup)))
+  BEGIN
+    DECLARE @v_CdcFgTable NVARCHAR(1010), @v_CdcFgName NVARCHAR(500)
+    SELECT TOP 1 @v_CdcFgTable = t.[Schema] + '.' + t.[Name], @v_CdcFgName = SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup)
+      FROM #Tables t WITH (NOLOCK)
+     WHERE t.EnableCDC = 1 AND t.CdcFilegroup IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup))
+    RAISERROR('Table %s declares CdcFilegroup %s (on the table or as the template default), but this database has no filegroup by that name. Create it (ALTER DATABASE ... ADD FILEGROUP, then ADD FILE ... TO FILEGROUP), or correct CdcFilegroup.', 16, 1, @v_CdcFgTable, @v_CdcFgName)
   END
 
   -- Partition placement (#partitioning, K1) -- ADOPT AND VERIFY, the other half of the create-side apply.
@@ -657,7 +681,7 @@ BEGIN TRY
          -- For computed columns, only the expression is needed
          CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) <> ''
               THEN 'AS (' + ComputedExpression + ')' + CASE WHEN c.[Persisted] = 1 THEN ' PERSISTED' ELSE '' END
-                                                    + CASE WHEN c.[Persisted] = 1 AND ISNULL(c.[Nullable], 1) = 0 THEN ' NOT NULL' ELSE '' END
+                                                    + CASE WHEN c.[Persisted] = 1 AND c.[NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END
               -- Otherwise we need to build the column definition
               ELSE REPLACE(REPLACE(UPPER(LEFT([DataType], COALESCE(NULLIF(CHARINDEX('IDENTITY', [DataType]), 0), LEN([DataType]) + 1) - 1)), 'ROWGUIDCOL', ''), 'NOT FOR REPLICATION', '') +
                    CASE WHEN [Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') <> [Collation] THEN ' COLLATE ' + ISNULL(NULLIF(RTRIM([Collation]), ''), @v_DatabaseCollation) ELSE '' END +
@@ -730,8 +754,19 @@ BEGIN TRY
                                            THEN ' IDENTITY(' + CONVERT(NVARCHAR(20), ident.seed_value) + ', ' + CONVERT(NVARCHAR(20), ident.increment_value) + ')' +
                                                 CASE WHEN ident.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
                                            ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')
-        OR CASE WHEN c.Nullable = 1 THEN 'YES' ELSE 'NO' END <> ic.IS_NULLABLE
-        OR ISNULL(SchemaSmith.fn_StripParenWrapping(cc.[definition]), '') <> ISNULL(c.ComputedExpression, '')
+        -- A computed column's nullability belongs to the engine unless the package states one: it is derivable from
+        -- the expression, and only a PERSISTED column can be declared NOT NULL at all. Comparing an OMITTED value
+        -- here re-added every such column on every deploy, and (once the emit side agreed with it) dropped an
+        -- existing nullable column and failed to put it back on a table whose rows made the expression NULL.
+        OR (CASE WHEN c.Nullable = 1 THEN 'YES' ELSE 'NO' END <> ic.IS_NULLABLE
+            AND (RTRIM(ISNULL(c.[ComputedExpression], '')) = ''
+                 OR (c.[Persisted] = 1 AND c.[NullableDeclared] IS NOT NULL)))
+        OR (ISNULL(SchemaSmith.fn_StripParenWrapping(cc.[definition]), '') <> ISNULL(c.ComputedExpression, '')
+            -- #242: same question as the check constraints. A computed column has no normalisation at all, so
+            -- every non-trivial expression was dropped and re-added on every deploy -- a table rewrite when
+            -- the column is PERSISTED.
+            AND SchemaSmith.fn_ExpressionMapUnchanged(c.[Schema], c.[TableName], 'COLUMN', c.[ColumnName],
+                  'computed', c.ComputedExpression, cc.[definition]) = 0)
         OR ISNULL(cc.is_persisted, 0) <> ISNULL(c.[Persisted], 0))
         OR sc.is_sparse <> [Sparse]
         OR sc.is_column_set <> [IsColumnSet]
@@ -744,7 +779,7 @@ BEGIN TRY
   INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly])
     SELECT C.[Schema], C.[TableName], c.[ColumnName],
            [ColumnScript] = 'AS (' + ComputedExpression + ')' + CASE WHEN c.[Persisted] = 1 THEN ' PERSISTED' ELSE '' END
-                                                              + CASE WHEN c.[Persisted] = 1 AND ISNULL(c.[Nullable], 1) = 0 THEN ' NOT NULL' ELSE '' END,
+                                                              + CASE WHEN c.[Persisted] = 1 AND c.[NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END,
            [SpecialColumnScript] = '',
            MustDropAndRecreate = CAST(1 AS BIT), MustSwapColumn = CAST(0 AS BIT), [DropOnly] = CAST(0 AS BIT)
       FROM #ColumnChanges cc WITH (NOLOCK)
@@ -1465,7 +1500,8 @@ BEGIN TRY
                             CASE WHEN i.[ColumnStore] = 0 THEN ' (' + i.[IndexColumns] + ')' + CASE WHEN RTRIM(ISNULL(i.[IncludeColumns], '')) <> '' THEN ' INCLUDE (' + i.[IncludeColumns] + ')' ELSE '' END
                                  WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                  ELSE '' END +
-                            CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + i.[FilterExpression] ELSE '' END +
+                            -- #242: the engine's own rendering of the filter when the mapping vouches for it (fn_ExpressionMapEffective).
+                            CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', i.[IndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si2.filter_definition FROM sys.indexes si2 WITH (NOLOCK) WHERE si2.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si2.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))) ELSE '' END +
                             CASE WHEN o.[WithOptions] <> '' THEN ' WITH (' + STUFF(o.[WithOptions], 1, 2, '') + ')' ELSE '' END
   
   RAISERROR('Detect Index Renames', 10, 100) WITH NOWAIT
@@ -1494,7 +1530,8 @@ BEGIN TRY
                                                                   CASE WHEN i.[ColumnStore] = 0 THEN ' (' + i.[IndexColumns] + ')' + CASE WHEN RTRIM(ISNULL(i.[IncludeColumns], '')) <> '' THEN ' INCLUDE (' + i.[IncludeColumns] + ')' ELSE '' END
                                                                        WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                                                        ELSE '' END +
-                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + i.[FilterExpression] ELSE '' END +
+                                                                  -- #242: keyed on the OLD name -- the mapping row was written under the name the index has now.
+                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', ei.[xIndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si3.filter_definition FROM sys.indexes si3 WITH (NOLOCK) WHERE si3.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) AND si3.[name] = ei.[xIndexName]))) ELSE '' END +
                                                                   CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('NONE', 'ROW', 'PAGE'))
                                                                          OR (i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
                                                                        THEN ' WITH (DATA_COMPRESSION=' + RTRIM(ISNULL(i.[CompressionType], '')) + ')'
@@ -1617,12 +1654,18 @@ BEGIN TRY
                [ObjName] = ei.[xSchema] + '.' + ei.[xTableName] + '.' + ei.[xIndexName]
           FROM #ExistingIndexes ei WITH (NOLOCK)
           WHERE NOT EXISTS (SELECT * FROM #Indexes i WITH (NOLOCK) WHERE i.[Schema] = ei.[xSchema] AND i.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = ei.[xIndexName])
+            -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+            -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+            AND NOT EXISTS (SELECT * FROM #IndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = ei.[xSchema] AND rn.[TableName] = ei.[xTableName] AND rn.[OldName] = ei.[xIndexName])
         UNION
         -- Arm (c): unknown XML indexes (present in DB, absent from the product) -- @DropUnknownIndexes env gate stripped; XML indexes are never constraints.
         SELECT [ObjType] = 'index',
                [ObjName] = ei.[xSchema] + '.' + ei.[xTableName] + '.' + ei.[xIndexName]
           FROM #ExistingXmlIndexes ei WITH (NOLOCK)
           WHERE NOT EXISTS (SELECT * FROM #XmlIndexes i WITH (NOLOCK) WHERE i.[Schema] = ei.[xSchema] AND i.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = ei.[xIndexName])
+            -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+            -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+            AND NOT EXISTS (SELECT * FROM #XmlIndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = ei.[xSchema] AND rn.[TableName] = ei.[xTableName] AND rn.[OldName] = ei.[xIndexName])
       ) x
       FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_SQL IS NOT NULL EXEC(@v_SQL)
@@ -1648,6 +1691,9 @@ BEGIN TRY
     FROM #ExistingIndexes ei WITH (NOLOCK)
     WHERE @DropUnknownIndexes = 1
       AND NOT EXISTS (SELECT * FROM #Indexes i WITH (NOLOCK) WHERE i.[Schema] = ei.[xSchema] AND i.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = ei.[xIndexName])
+      -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+      -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+      AND NOT EXISTS (SELECT * FROM #IndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = ei.[xSchema] AND rn.[TableName] = ei.[xTableName] AND rn.[OldName] = ei.[xIndexName])
   UNION
   SELECT [Schema], [TableName], SchemaSmith.fn_StripBracketWrapping([IndexName]), [IsConstraint], [IsUnique], [IsClustered]
     FROM #IndexChanges WITH (NOLOCK)
@@ -1656,6 +1702,9 @@ BEGIN TRY
     FROM #ExistingXmlIndexes ei WITH (NOLOCK)
     WHERE @DropUnknownIndexes = 1
       AND NOT EXISTS (SELECT * FROM #XmlIndexes i WITH (NOLOCK) WHERE i.[Schema] = ei.[xSchema] AND i.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = ei.[xIndexName])
+      -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
+      -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
+      AND NOT EXISTS (SELECT * FROM #XmlIndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = ei.[xSchema] AND rn.[TableName] = ei.[xTableName] AND rn.[OldName] = ei.[xIndexName])
   UNION
   SELECT [Schema], [TableName], SchemaSmith.fn_StripBracketWrapping([IndexName]), [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
     FROM #XmlIndexChanges WITH (NOLOCK)
@@ -1799,31 +1848,54 @@ BEGIN TRY
   -- instance outright, discarding every captured change a downstream reader had not yet consumed.
   -- A second instance is created after the column work instead (rotation), and SQL Server permits
   -- only two per table -- so refuse up front rather than failing partway through the column work.
-  CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256))
+  -- A declared CdcFilegroup the newest capture instance is not on is a rotation reason too (#417): it can only be
+  -- honoured by a new instance, and a new instance is exactly what a column change already creates. The same
+  -- ceiling applies, for the same reason.
+  CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
+                           NewFilegroup NVARCHAR(256), Reason NVARCHAR(20))
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   BEGIN
-    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance)
-      SELECT t.[Schema], t.[Name], MAX(ct.capture_instance)
-        FROM #Tables t WITH (NOLOCK)
-        JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-        JOIN cdc.change_tables ct WITH (NOLOCK) ON ct.source_object_id = st.[object_id]
-        WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
-        AND (EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
-          OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL(c.[ComputedExpression], '')) = ''))
-        GROUP BY t.[Schema], t.[Name]
-        HAVING COUNT(*) = 1
+    DECLARE @v_DefaultFilegroup SYSNAME = (SELECT [name] FROM sys.filegroups WITH (NOLOCK) WHERE is_default = 1)
+
+    IF OBJECT_ID('tempdb..#CdcCandidates') IS NOT NULL DROP TABLE #CdcCandidates
+    SELECT t.[Schema], t.[Name],
+           Instances = (SELECT COUNT(*) FROM cdc.change_tables c WITH (NOLOCK) WHERE c.source_object_id = st.[object_id]),
+           newest.capture_instance AS NewestInstance,
+           -- The catalog reports NULL for "the default filegroup"; resolve it so a comparison never passes on NULL.
+           ISNULL(newest.filegroup_name, @v_DefaultFilegroup) AS NewestFilegroup,
+           newest.filegroup_name AS NewestFilegroupRaw,
+           SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) AS DeclaredFilegroup,
+           ColumnChange = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
+                                              OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL(c.[ComputedExpression], '')) = '')
+                                            THEN 1 ELSE 0 END)
+      INTO #CdcCandidates
+      FROM #Tables t WITH (NOLOCK)
+      JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name
+                     FROM cdc.change_tables ct WITH (NOLOCK)
+                    WHERE ct.source_object_id = st.[object_id]
+                    ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
+      WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
+
+    -- Unset means unmanaged: only a DECLARED filegroup can mismatch.
+    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, Reason)
+      SELECT [Schema], [Name], NewestInstance,
+             -- A rotation keeps the filegroup it is not told to change: the declared one, else where the old
+             -- instance already is. Omitting it (the pre-#417 behaviour) moved a DBA-placed instance to the default.
+             COALESCE(DeclaredFilegroup, NewestFilegroupRaw),
+             CASE WHEN ColumnChange = 1 THEN 'column' ELSE 'filegroup' END
+        FROM #CdcCandidates
+       WHERE Instances = 1
+         AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup))
 
     DECLARE @v_CdcAtCeiling NVARCHAR(MAX) =
-      STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name]
-               FROM #Tables t WITH (NOLOCK)
-               JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-               WHERE st.is_tracked_by_cdc = 1
-                 AND (SELECT COUNT(*) FROM cdc.change_tables ct2 WITH (NOLOCK) WHERE ct2.source_object_id = st.[object_id]) >= 2
-        AND (EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
-          OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL(c.[ComputedExpression], '')) = ''))
+      STUFF((SELECT ', ' + [Schema] + '.' + [Name]
+               FROM #CdcCandidates
+              WHERE Instances >= 2
+                AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup))
                FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_CdcAtCeiling IS NOT NULL
-      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
+      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column or CdcFilegroup change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
   END
 
   RAISERROR('Swap Columns Requiring Data-Preserving Replacement', 10, 100) WITH NOWAIT
@@ -1939,6 +2011,9 @@ BEGIN TRY
       AND ic.COLUMN_NAME = SchemaSmith.fn_StripBracketWrapping(C.[ColumnName])
   WHERE t.NewTable = 0
     AND SchemaSmith.fn_StripParenWrapping(ic.COLUMN_DEFAULT) <> ISNULL(c.[Default], 'NULL')
+    -- #242: the texts differ, but a reframed default always differs. Ask what was actually applied.
+    AND SchemaSmith.fn_ExpressionMapUnchanged(C.[Schema], C.[TableName], 'COLUMN', C.[ColumnName], 'default',
+          c.[Default], ISNULL(ic.COLUMN_DEFAULT, '')) = 0
 
   -- Truly new physical columns were added previously, now we need to determine which columns need to be added back due change from computed to physical columns
   UPDATE #Columns 
@@ -2110,7 +2185,7 @@ BEGIN TRY
                                         AND s.[TableName] = es.[TableName]
                                         AND SchemaSmith.fn_StripBracketWrapping(s.[StatisticName]) = es.[StatsName]
     WHERE es.StatisticScript <> 'CREATE STATISTICS ' + s.[StatisticName] + ' ON ' + s.[Schema] + '.' + s.[TableName] + ' (' + s.[Columns] + ')' +
-                                CASE WHEN RTRIM(ISNULL(s.[FilterExpression], '')) <> '' THEN ' WHERE ' + s.[FilterExpression] ELSE '' END
+                                CASE WHEN RTRIM(ISNULL(s.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(s.[Schema], s.[TableName], 'STATISTIC', s.[StatisticName], 'filter', s.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT st2.filter_definition FROM sys.stats st2 WITH (NOLOCK) WHERE st2.[object_id] = OBJECT_ID(s.[Schema] + '.' + s.[TableName]) AND st2.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName])))) ELSE '' END
   
   RAISERROR('Drop Modified Statistics', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping statistics ' + sc.[Schema] + '.' + sc.[TableName] + '.' + sc.[StatisticName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -2174,7 +2249,8 @@ BEGIN TRY
   IF OBJECT_ID('tempdb..#ExistingCheckConstraints') IS NOT NULL DROP TABLE #ExistingCheckConstraints
   SELECT t.[Schema], [TableName] = t.[Name], [CheckName] = ck.[name], 
          [CheckColumn] = CASE WHEN ck.parent_column_id <> 0 THEN COL_NAME(ck.parent_object_id, ck.parent_column_id) ELSE NULL END,
-         [CheckDefinition] = SchemaSmith.fn_NormalizeCheckExpression(ck.[definition])
+         [CheckDefinition] = SchemaSmith.fn_NormalizeCheckExpression(ck.[definition]),
+         [LiveDefinition] = ck.[definition]
     INTO #ExistingCheckConstraints
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.check_constraints ck WITH (NOLOCK) ON ck.[parent_object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
@@ -2190,6 +2266,10 @@ BEGIN TRY
     WHERE ec.[CheckColumn] IS NOT NULL
       AND ISNULL(c.[CheckExpression], '') <> ''
       AND ec.[CheckDefinition] <> SchemaSmith.fn_NormalizeCheckExpression(ISNULL(c.[CheckExpression], ''))
+      -- #242: the texts differ, but they always differ once the engine has rewritten the expression. Ask what
+      -- was actually applied before calling it a change.
+      AND SchemaSmith.fn_ExpressionMapUnchanged(ec.[Schema], ec.[TableName], 'CHECK', ec.[CheckName],
+            'expression', c.[CheckExpression], ec.[LiveDefinition]) = 0
       AND NOT EXISTS (SELECT *
                         FROM #CheckConstraints cc WITH (NOLOCK)
                         WHERE ec.[Schema] = cc.[Schema]
@@ -2204,6 +2284,8 @@ BEGIN TRY
                                              AND ec.[TableName] = cc.[TableName]
                                              AND ec.[CheckName] = SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName])
       WHERE ec.[CheckDefinition] <> SchemaSmith.fn_NormalizeCheckExpression(cc.[Expression])
+        AND SchemaSmith.fn_ExpressionMapUnchanged(ec.[Schema], ec.[TableName], 'CHECK', ec.[CheckName],
+              'expression', cc.[Expression], ec.[LiveDefinition]) = 0
   
   RAISERROR('Drop Modified Check Constraints', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping check constraint ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[CheckName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -2357,7 +2439,7 @@ BEGIN TRY
     SELECT @v_SQL = @v_SQL +
       CASE WHEN t.EnableCDC = 1 AND st.is_tracked_by_cdc = 0
            THEN 'RAISERROR(''  Enable CDC on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @role_name = NULL;' + CHAR(13) + CHAR(10)
+                'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @role_name = NULL' + ISNULL(', @filegroup_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) + '''', '') + ';' + CHAR(13) + CHAR(10)
            WHEN t.EnableCDC = 0 AND st.is_tracked_by_cdc = 1
            THEN 'RAISERROR(''  Disable CDC on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                 'EXEC sys.sp_cdc_disable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @capture_instance = N''' + ct.capture_instance + ''';' + CHAR(13) + CHAR(10)
@@ -2381,8 +2463,8 @@ BEGIN TRY
   BEGIN
     SET @v_SQL = ''
     SELECT @v_SQL = @v_SQL +
-      'RAISERROR(''  CDC ROTATED on ' + r.[Schema] + '.' + r.[TableName] + ': new capture instance ' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ' now captures the new column set. The previous instance ' + r.OldCaptureInstance + ' STILL HOLDS ITS HISTORY and was NOT dropped -- drain it, then drop it with EXEC sys.sp_cdc_disable_table @capture_instance = N''''' + r.OldCaptureInstance + '''''. Until then the next column change on this table WILL FAIL: SQL Server allows only two capture instances.'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-      'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) + ''', @capture_instance = N''' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ''', @role_name = NULL;' + CHAR(13) + CHAR(10)
+      'RAISERROR(''  CDC ROTATED on ' + r.[Schema] + '.' + r.[TableName] + ': new capture instance ' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ' now captures ' + CASE WHEN r.Reason = 'filegroup' THEN 'this table on filegroup ' + r.NewFilegroup ELSE 'the new column set' END + '. The previous instance ' + r.OldCaptureInstance + ' STILL HOLDS ITS HISTORY and was NOT dropped -- drain it, then drop it with EXEC sys.sp_cdc_disable_table @capture_instance = N''''' + r.OldCaptureInstance + '''''. Until then the next column change on this table WILL FAIL: SQL Server allows only two capture instances.'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+      'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) + ''', @capture_instance = N''' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ''', @role_name = NULL' + ISNULL(', @filegroup_name = N''' + r.NewFilegroup + '''', '') + ';' + CHAR(13) + CHAR(10)
       FROM #CdcRotate r WITH (NOLOCK)
       CROSS APPLY (SELECT SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + '_' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) AS BaseName) b
     IF @v_SQL <> ''

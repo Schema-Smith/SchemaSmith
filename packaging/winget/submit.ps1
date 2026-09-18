@@ -58,6 +58,18 @@ if (Get-Command winget -ErrorAction SilentlyContinue) {
 if ($ValidateOnly) { Write-Host 'ValidateOnly: rendered + validated, no submission.'; return }
 if (-not $Token)   { Write-Host 'No WINGET_PAT set — skipping winget-pkgs submission.'; return }
 
-wingetcreate submit --token $Token $out
-if ($LASTEXITCODE -ne 0) { throw 'wingetcreate submit failed.' }
+# Hand the PAT over in the environment, not on the command line. wingetcreate warns about
+# --token on every run ("Using the --token argument may result in the token being logged",
+# https://aka.ms/winget-create-token) and WINGET_CREATE_GITHUB_TOKEN is the form it documents.
+# Nothing leaked -- the argument is not echoed and the job log carried only the warning -- so this
+# is hardening: an argument is visible in process listings and is one verbose-logging change away
+# from the log. Scoped to this process, so it does not outlive the submit.
+$env:WINGET_CREATE_GITHUB_TOKEN = $Token
+try {
+    wingetcreate submit $out
+    if ($LASTEXITCODE -ne 0) { throw 'wingetcreate submit failed.' }
+}
+finally {
+    Remove-Item Env:\WINGET_CREATE_GITHUB_TOKEN -ErrorAction SilentlyContinue
+}
 Write-Host 'Submitted to winget-pkgs.'

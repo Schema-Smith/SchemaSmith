@@ -501,5 +501,213 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCCeilin
               ]
           }
           """;
-}
 
+    // ---------------------------------------------------------------------------------------------------
+    // CdcFilegroup (#417). Change tables go where the package says; a table whose capture instance sits
+    // somewhere else is ROTATED onto the declared filegroup, never moved -- the old instance keeps its
+    // history. Unset means unmanaged, at both tiers.
+    // ---------------------------------------------------------------------------------------------------
+
+    private const string CdcFilegroup = "SchemaSmithCdcFg";
+
+    [OneTimeSetUp]
+    public void CreateCdcFilegroup()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $@"
+IF NOT EXISTS (SELECT 1 FROM sys.filegroups WHERE [name] = '{CdcFilegroup}')
+BEGIN
+    DECLARE @db SYSNAME = DB_NAME()
+    DECLARE @path NVARCHAR(4000) = CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS NVARCHAR(4000)) + @db + '_{CdcFilegroup}.ndf'
+    DECLARE @sql NVARCHAR(MAX) = N'ALTER DATABASE ' + QUOTENAME(@db) + N' ADD FILEGROUP [{CdcFilegroup}]'
+    EXEC(@sql)
+    SET @sql = N'ALTER DATABASE ' + QUOTENAME(@db) + N' ADD FILE (NAME = N''' + @db + N'_{CdcFilegroup}'', FILENAME = N''' + @path + N''', SIZE = 8MB) TO FILEGROUP [{CdcFilegroup}]'
+    EXEC(@sql)
+END";
+        cmd.ExecuteNonQuery();
+    }
+
+    private void RunCdcQuench(IDbCommand cmd, string json, string templateCdcFilegroup = null)
+    {
+        cmd.CommandTimeout = 300;
+        var fg = templateCdcFilegroup == null ? "NULL" : $"N'{templateCdcFilegroup}'";
+        cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{_productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0, @CdcFilegroup = {fg}";
+        ExecuteWithDeadlockRetry(cmd);
+    }
+
+    private static string CdcTableJson(string table, string cdcFilegroup = null, bool extraColumn = false)
+    {
+        var fg = cdcFilegroup == null ? "" : $"\"CdcFilegroup\": \"{cdcFilegroup}\",";
+        var extra = extraColumn ? ", {\"Name\": \"[Extra]\", \"DataType\": \"INT\", \"Nullable\": true}" : "";
+        return "{\"Schema\": \"[dbo]\", \"Name\": \"[" + table + "]\", \"EnableCDC\": true, " + fg
+             + "\"Columns\": [{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false}, {\"Name\": \"[Val]\", \"DataType\": \"NVARCHAR(100)\", \"Nullable\": true}" + extra + "]}";
+    }
+
+    // The filegroup the NEWEST capture instance's change table lives on, resolving the catalog's NULL
+    // ("the database default") to the default's actual name so a comparison can never pass on NULL.
+    private static string NewestInstanceFilegroup(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"SELECT TOP 1 ISNULL(ct.filegroup_name, (SELECT [name] FROM sys.filegroups WHERE is_default = 1))
+                               FROM cdc.change_tables ct
+                              WHERE ct.source_object_id = OBJECT_ID('dbo.{table}')
+                              ORDER BY ct.create_date DESC, ct.object_id DESC";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    private static int InstanceCount(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $"SELECT COUNT(*) FROM cdc.change_tables WHERE source_object_id = OBJECT_ID('dbo.{table}')";
+        return (int)cmd.ExecuteScalar();
+    }
+
+    private static string DefaultFilegroup(IDbCommand cmd)
+    {
+        cmd.CommandText = "SELECT [name] FROM sys.filegroups WHERE is_default = 1";
+        return (string)cmd.ExecuteScalar();
+    }
+
+    private static void DropCdcTable(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"
+IF OBJECT_ID('dbo.{table}') IS NOT NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE source_object_id = OBJECT_ID('dbo.{table}'))
+        EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'{table}', @capture_instance = N'all'
+    DROP TABLE dbo.{table}
+END";
+        cmd.ExecuteNonQuery();
+    }
+
+    private void CreateTable(IDbCommand cmd, string table, string enableOnFilegroup = null, bool enable = false)
+    {
+        DropCdcTable(cmd, table);
+        var enableSql = !enable && enableOnFilegroup == null
+            ? ""
+            : $"\nEXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'{table}', @role_name = NULL"
+              + (enableOnFilegroup == null ? "" : $", @filegroup_name = N'{enableOnFilegroup}'");
+        cmd.CommandText = $"CREATE TABLE dbo.{table} (Id INT NOT NULL, Val NVARCHAR(100) NULL){enableSql}";
+        ExecuteWithDeadlockRetry(cmd);
+    }
+
+    private void WithMainDb(string table, Action<IDbCommand> body)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        try { body(cmd); }
+        finally { DropCdcTable(cmd, table); }
+    }
+
+    [Test]
+    public void CdcFilegroup_OnTheTable_PlacesTheChangeTableThere() =>
+        WithMainDb("CdcFgTableLevel", cmd =>
+        {
+            CreateTable(cmd, "CdcFgTableLevel");
+
+            RunCdcQuench(cmd, CdcTableJson("CdcFgTableLevel", CdcFilegroup));
+
+            Assert.That(NewestInstanceFilegroup(cmd, "CdcFgTableLevel"), Is.EqualTo(CdcFilegroup));
+        });
+
+    [Test]
+    public void CdcFilegroup_FromTheTemplate_AppliesToATableThatDeclaresNone() =>
+        WithMainDb("CdcFgTemplateDefault", cmd =>
+        {
+            CreateTable(cmd, "CdcFgTemplateDefault");
+
+            RunCdcQuench(cmd, CdcTableJson("CdcFgTemplateDefault"), templateCdcFilegroup: CdcFilegroup);
+
+            Assert.That(NewestInstanceFilegroup(cmd, "CdcFgTemplateDefault"), Is.EqualTo(CdcFilegroup));
+        });
+
+    [Test]
+    public void CdcFilegroup_OnTheTable_OverridesTheTemplateDefault() =>
+        WithMainDb("CdcFgTableOverrides", cmd =>
+        {
+            CreateTable(cmd, "CdcFgTableOverrides");
+            var primary = DefaultFilegroup(cmd);
+
+            RunCdcQuench(cmd, CdcTableJson("CdcFgTableOverrides", primary), templateCdcFilegroup: CdcFilegroup);
+
+            Assert.That(NewestInstanceFilegroup(cmd, "CdcFgTableOverrides"), Is.EqualTo(primary));
+        });
+
+    [Test]
+    public void CdcFilegroup_Changed_RotatesOntoIt_KeepsTheOldInstance_AndThenConverges() =>
+        WithMainDb("CdcFgRotate", cmd =>
+        {
+            CreateTable(cmd, "CdcFgRotate", enable: true);
+            cmd.CommandText = "SELECT object_id FROM cdc.change_tables WHERE source_object_id = OBJECT_ID('dbo.CdcFgRotate')";
+            var originalChangeTable = cmd.ExecuteScalar();
+
+            RunCdcQuench(cmd, CdcTableJson("CdcFgRotate", CdcFilegroup));
+
+            Assert.That(NewestInstanceFilegroup(cmd, "CdcFgRotate"), Is.EqualTo(CdcFilegroup), "the new instance lands on the declared filegroup");
+            Assert.That(InstanceCount(cmd, "CdcFgRotate"), Is.EqualTo(2), "rotation adds an instance rather than replacing one");
+            cmd.CommandText = $"SELECT COUNT(*) FROM cdc.change_tables WHERE object_id = {originalChangeTable}";
+            Assert.That((int)cmd.ExecuteScalar(), Is.EqualTo(1), "the original instance and its history must survive");
+
+            RunCdcQuench(cmd, CdcTableJson("CdcFgRotate", CdcFilegroup));
+
+            Assert.That(InstanceCount(cmd, "CdcFgRotate"), Is.EqualTo(2), "a second deploy of the same declaration must change nothing");
+        });
+
+    [Test]
+    public void CdcFilegroup_ChangedWhileBothInstancesAreInUse_IsRefused() =>
+        WithMainDb("CdcFgCeiling", cmd =>
+        {
+            CreateTable(cmd, "CdcFgCeiling", enable: true);
+            cmd.CommandText = "EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcFgCeiling', @capture_instance = N'dbo_CdcFgCeiling_2', @role_name = NULL";
+            ExecuteWithDeadlockRetry(cmd);
+
+            var ex = Assert.Catch<Exception>(() => RunCdcQuench(cmd, CdcTableJson("CdcFgCeiling", CdcFilegroup)));
+
+            Assert.That(ex!.Message, Does.Contain("CDC capture-instance limit reached").And.Contain("CdcFgCeiling"));
+            Assert.That(InstanceCount(cmd, "CdcFgCeiling"), Is.EqualTo(2), "the refusal must not disturb either instance");
+        });
+
+    // Unset means unmanaged: a DBA's placement survives a package that never mentions CdcFilegroup.
+    [Test]
+    public void CdcFilegroup_Unset_LeavesAnExistingNonDefaultPlacementAlone() =>
+        WithMainDb("CdcFgUnmanaged", cmd =>
+        {
+            CreateTable(cmd, "CdcFgUnmanaged", enableOnFilegroup: CdcFilegroup);
+
+            RunCdcQuench(cmd, CdcTableJson("CdcFgUnmanaged"));
+
+            Assert.That(InstanceCount(cmd, "CdcFgUnmanaged"), Is.EqualTo(1), "nothing declared, nothing to rotate");
+            Assert.That(NewestInstanceFilegroup(cmd, "CdcFgUnmanaged"), Is.EqualTo(CdcFilegroup));
+        });
+
+    // The latent defect #417 exposed: a column-change rotation omitted @filegroup_name, so a table whose
+    // change capture a DBA routed to a dedicated filegroup had it silently moved to the default.
+    [Test]
+    public void ColumnChangeRotation_WithNothingDeclared_StaysOnTheExistingFilegroup() =>
+        WithMainDb("CdcFgColumnRotation", cmd =>
+        {
+            CreateTable(cmd, "CdcFgColumnRotation", enableOnFilegroup: CdcFilegroup);
+
+            RunCdcQuench(cmd, CdcTableJson("CdcFgColumnRotation", extraColumn: true));
+
+            Assert.That(InstanceCount(cmd, "CdcFgColumnRotation"), Is.EqualTo(2), "precondition: the column change rotated");
+            Assert.That(NewestInstanceFilegroup(cmd, "CdcFgColumnRotation"), Is.EqualTo(CdcFilegroup),
+                "the rotated instance must stay on the filegroup the original was on");
+        });
+
+    [Test]
+    public void CdcFilegroup_ThatDoesNotExist_FailsByName_BeforeEnabling() =>
+        WithMainDb("CdcFgMissing", cmd =>
+        {
+            CreateTable(cmd, "CdcFgMissing");
+
+            var ex = Assert.Catch<Exception>(() => RunCdcQuench(cmd, CdcTableJson("CdcFgMissing", "NoSuchCdcFg")));
+
+            Assert.That(ex!.Message, Does.Contain("NoSuchCdcFg").And.Contain("CdcFgMissing").And.Contain("CdcFilegroup"));
+            cmd.CommandText = "SELECT is_tracked_by_cdc FROM sys.tables WHERE object_id = OBJECT_ID('dbo.CdcFgMissing')";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(false));
+        });
+}

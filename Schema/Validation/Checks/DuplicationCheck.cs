@@ -48,6 +48,8 @@ public sealed class DuplicationCheck : ISchemaCheck
                 t => t.VariantName,
                 "table",
                 $"Template '{template.Name}'"));
+
+            findings.AddRange(CheckModeledObjects(template));
         }
 
         // Per-product: TemplateOrder has no gate concept — any repeated name is unconditionally
@@ -94,6 +96,23 @@ public sealed class DuplicationCheck : ISchemaCheck
 
         return findings;
     }
+
+    // Declared objects outside Tables/ get the same rule. Their Schema is already resolved by load
+    // (SchemaDefaultResolver), so an explicit "public" and an omitted schema are correctly one identity.
+    private static IEnumerable<Finding> CheckModeledObjects(Template template)
+    {
+        var location = $"Template '{template.Name}'";
+        return CheckNamedGroup(template.EnumTypes, e => Qualified(e.Schema, e.Name), e => e.ShouldApplyExpression, e => e.VariantName, "enum type", location)
+            .Concat(CheckNamedGroup(template.DomainTypes, d => Qualified(d.Schema, d.Name), d => d.ShouldApplyExpression, d => d.VariantName, "domain type", location))
+            .Concat(CheckNamedGroup(template.Sequences, s => Qualified(s.Schema, s.Name), s => s.ShouldApplyExpression, s => s.VariantName, "sequence", location))
+            .Concat(CheckNamedGroup(template.MaterializedViews, v => Qualified(v.Schema, v.Name), v => v.ShouldApplyExpression, v => v.VariantName, "materialized view", location))
+            .Concat(CheckNamedGroup(template.IndexedViews, v => Qualified(v.Schema, v.Name), v => v.ShouldApplyExpression, v => v.VariantName, "indexed view", location))
+            .Concat(CheckNamedGroup(template.Events, e => e.Name, e => e.ShouldApplyExpression, e => e.VariantName, "event", location));
+    }
+
+    // A blank name stays blank so CheckNamedGroup's blank-name filter still drops it.
+    private static string Qualified(string schema, string name) =>
+        string.IsNullOrWhiteSpace(name) || string.IsNullOrEmpty(schema) ? name : $"{schema}.{name}";
 
     // IDeliverableTable.Schema is resolved uniformly across platforms (SchemaDefaultResolver fills
     // "dbo"/"public"/the "{{SchemaName}}" token; MySqlTable's explicit interface implementation
