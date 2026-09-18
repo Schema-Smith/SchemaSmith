@@ -209,8 +209,10 @@ BEGIN TRY
         BEGIN
             -- Refuse before touching anything when the data cannot satisfy the declared key. The ALTER would
             -- fail on its own, but this says which table, which key, and what to do about it.
+            -- GROUP BY takes plain column names; a declared sort direction is a syntax error here.
+            DECLARE @v_GroupCols NVARCHAR(MAX) = REPLACE(REPLACE(@v_DeclPkCols, ' DESC', ''), ' ASC', '');
             SET @v_SQL = N'SELECT @cnt = COUNT(*) FROM (SELECT 1 AS dup FROM ' + @v_QualifiedName +
-                         N' GROUP BY ' + @v_DeclPkCols + N' HAVING COUNT(*) > 1) d';
+                         N' GROUP BY ' + @v_GroupCols + N' HAVING COUNT(*) > 1) d';
             EXEC sp_executesql @v_SQL, N'@cnt INT OUTPUT', @cnt = @v_Dupes OUTPUT;
             IF @v_Dupes > 0
             BEGIN

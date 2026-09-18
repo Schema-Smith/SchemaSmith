@@ -284,4 +284,31 @@ public abstract class BootstrapIndexShapeSharedTests
         + "\"Indexes\": ["
         + $"{{\"Name\": \"PRIMARY\", \"PrimaryKey\": true, \"Unique\": true, \"IndexColumns\": \"{keyColumns}\"}}]"
         + "}";
+
+    // The pre-check has to GROUP BY plain column names: a prefix length is legal in the index declaration and a
+    // syntax error in GROUP BY, which took down kindling for the shipped CompletedMigrationScripts definition.
+    [Test]
+    public void AUniqueUpgradeOnPrefixLengthColumns_RunsThePreCheckWithoutASyntaxError()
+    {
+        Exec($@"CREATE TABLE `{TableName}` (`Id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                                            `Alpha` VARCHAR(200) NOT NULL, `Beta` VARCHAR(200) NOT NULL)");
+        Exec($"CREATE INDEX `{IndexName}` ON `{TableName}` (`Alpha`(100))");
+        Exec($"INSERT INTO `{TableName}` (`Alpha`, `Beta`) VALUES ('a', 'b'), ('c', 'd')");
+
+        var json = "{"
+            + $"\"Name\": \"{TableName}\","
+            + "\"Columns\": ["
+            + "{\"Name\": \"Id\", \"DataType\": \"INT\", \"Nullable\": false, \"AutoIncrement\": true, \"PrimaryKey\": true},"
+            + "{\"Name\": \"Alpha\", \"DataType\": \"VARCHAR(200)\", \"Nullable\": false},"
+            + "{\"Name\": \"Beta\", \"DataType\": \"VARCHAR(200)\", \"Nullable\": false}],"
+            + "\"Indexes\": ["
+            + "{\"Name\": \"PK_" + TableName + "\", \"PrimaryKey\": true, \"Unique\": true, \"IndexColumns\": \"Id\"},"
+            + $"{{\"Name\": \"{IndexName}\", \"Unique\": true, \"IndexColumns\": \"Alpha(100),Beta(50)\"}}]"
+            + "}";
+
+        Assert.DoesNotThrow(() => CallBootstrap(json),
+            "the duplicate pre-check must reduce prefix-length key parts to plain column names");
+
+        Assert.That(Shape(), Is.EqualTo("0|Alpha,Beta"), "and the declared unique index must be deployed");
+    }
 }

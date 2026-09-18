@@ -69,6 +69,9 @@ BEGIN
     DECLARE v_DeclKeys LONGTEXT;
     DECLARE v_ShapeParts INT;
     DECLARE v_ShapeExprParts INT;
+    DECLARE v_GroupCols LONGTEXT;
+    DECLARE v_GroupPart VARCHAR(256);
+    DECLARE v_GroupIdx INT;
     -- MESSAGE_TEXT is a VARCHAR(128) condition item in the server's own charset; a utf8mb4
     -- variable is refused by MariaDB with "Data too long for condition item" whatever its length.
     DECLARE v_SignalMsg VARCHAR(128) CHARACTER SET utf8mb3;
@@ -354,8 +357,26 @@ BEGIN
 
             IF v_ShapeKeys IS NOT NULL
                AND UPPER(v_ShapeKeys) <> UPPER(REPLACE(REPLACE(v_AiIndexColumns, '`', ''), ' ', '')) THEN
+            -- GROUP BY takes plain column names. A prefix length (ScriptPath(200)) and a sort direction are
+            -- both legal in the index declaration and both a syntax error here, so each key part is reduced to
+            -- its column name. No REGEXP_REPLACE: it does not exist on the MySQL 5.7 floor.
+            SET v_GroupCols = '';
+            SET v_GroupIdx = 1;
+            WHILE v_GroupIdx <= (LENGTH(v_AiIndexColumns) - LENGTH(REPLACE(v_AiIndexColumns, ',', '')) + 1) DO
+                SET v_GroupPart = TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(v_AiIndexColumns, ',', v_GroupIdx), ',', -1));
+                IF LOCATE('(', v_GroupPart) > 0 THEN
+                    SET v_GroupPart = TRIM(SUBSTRING_INDEX(v_GroupPart, '(', 1));
+                END IF;
+                IF UPPER(RIGHT(v_GroupPart, 5)) = ' DESC' THEN
+                    SET v_GroupPart = TRIM(LEFT(v_GroupPart, LENGTH(v_GroupPart) - 5));
+                ELSEIF UPPER(RIGHT(v_GroupPart, 4)) = ' ASC' THEN
+                    SET v_GroupPart = TRIM(LEFT(v_GroupPart, LENGTH(v_GroupPart) - 4));
+                END IF;
+                SET v_GroupCols = CONCAT(v_GroupCols, IF(v_GroupCols = '', '', ','), v_GroupPart);
+                SET v_GroupIdx = v_GroupIdx + 1;
+            END WHILE;
                 SET @exec_sql = CONCAT('SELECT COUNT(*) INTO @v_dupes FROM (SELECT 1 FROM `', v_Db, '`.`', v_TableName,
-                                       '` GROUP BY ', REPLACE(v_AiIndexColumns, ' ', ''), ' HAVING COUNT(*) > 1) d');
+                                       '` GROUP BY ', v_GroupCols, ' HAVING COUNT(*) > 1) d');
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
@@ -411,9 +432,26 @@ BEGIN
                     -- recreate it, leaving the table with neither -- and MySQL DDL commits, so there is no
                     -- rollback. Refuse while the old index is still in place instead.
                     IF COALESCE(v_AiUnique, 0) = 1 THEN
+                    -- GROUP BY takes plain column names. A prefix length (ScriptPath(200)) and a sort direction are
+                    -- both legal in the index declaration and both a syntax error here, so each key part is reduced to
+                    -- its column name. No REGEXP_REPLACE: it does not exist on the MySQL 5.7 floor.
+                    SET v_GroupCols = '';
+                    SET v_GroupIdx = 1;
+                    WHILE v_GroupIdx <= (LENGTH(v_AiIndexColumns) - LENGTH(REPLACE(v_AiIndexColumns, ',', '')) + 1) DO
+                        SET v_GroupPart = TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(v_AiIndexColumns, ',', v_GroupIdx), ',', -1));
+                        IF LOCATE('(', v_GroupPart) > 0 THEN
+                            SET v_GroupPart = TRIM(SUBSTRING_INDEX(v_GroupPart, '(', 1));
+                        END IF;
+                        IF UPPER(RIGHT(v_GroupPart, 5)) = ' DESC' THEN
+                            SET v_GroupPart = TRIM(LEFT(v_GroupPart, LENGTH(v_GroupPart) - 5));
+                        ELSEIF UPPER(RIGHT(v_GroupPart, 4)) = ' ASC' THEN
+                            SET v_GroupPart = TRIM(LEFT(v_GroupPart, LENGTH(v_GroupPart) - 4));
+                        END IF;
+                        SET v_GroupCols = CONCAT(v_GroupCols, IF(v_GroupCols = '', '', ','), v_GroupPart);
+                        SET v_GroupIdx = v_GroupIdx + 1;
+                    END WHILE;
                         SET @exec_sql = CONCAT('SELECT COUNT(*) INTO @v_dupes FROM (SELECT 1 FROM `', v_Db, '`.`', v_TableName,
-                                               '` GROUP BY ', REPLACE(REPLACE(v_AiIndexColumns, '(', '('), ' ', ''),
-                                               ' HAVING COUNT(*) > 1) d');
+                                               '` GROUP BY ', v_GroupCols, ' HAVING COUNT(*) > 1) d');
                         PREPARE stmt FROM @exec_sql;
                         EXECUTE stmt;
                         DEALLOCATE PREPARE stmt;

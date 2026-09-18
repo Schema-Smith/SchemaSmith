@@ -49,6 +49,7 @@ DECLARE
     v_actual_extra BOOLEAN;
     v_pk_name TEXT;
     v_has_dupes BOOLEAN;
+    v_group_cols TEXT;
 BEGIN
     v_schema := TRIM(BOTH FROM (v_def->>'Schema'));
     v_name := TRIM(BOTH FROM (v_def->>'Name'));
@@ -173,8 +174,18 @@ BEGIN
             -- its own, but its message names a system-generated index, not the declaration that asked for it.
             -- The DECLARED column list, which carries its own quoting: an unquoted name would be folded to
             -- lower case here and the pre-check would fail with "column does not exist" on a correct table.
+            -- The DECLARED column list, which carries its own quoting -- an unquoted name would be folded
+            -- to lower case and the pre-check would fail with "column does not exist" on a correct table -- but
+            -- with any sort direction removed, which GROUP BY does not accept.
+            SELECT string_agg(CASE WHEN lower(right(btrim(x), 5)) = ' desc'
+                                        THEN btrim(left(btrim(x), length(btrim(x)) - 5))
+                                   WHEN lower(right(btrim(x), 4)) = ' asc'
+                                        THEN btrim(left(btrim(x), length(btrim(x)) - 4))
+                                   ELSE btrim(x) END, ',')
+              INTO v_group_cols
+              FROM unnest(string_to_array(v_idx->>'IndexColumns', ',')) AS x;
             EXECUTE 'SELECT EXISTS (SELECT 1 FROM "' || v_schema || '"."' || v_name || '" GROUP BY ' ||
-                    (v_idx->>'IndexColumns') || ' HAVING COUNT(*) > 1)' INTO v_has_dupes;
+                    v_group_cols || ' HAVING COUNT(*) > 1)' INTO v_has_dupes;
             IF v_has_dupes THEN
                 RAISE EXCEPTION 'SchemaSmith bootstrap: cannot rebuild PRIMARY KEY %.% as (%) -- the table holds duplicate rows for that key. The existing key is unchanged; resolve the duplicates and re-run.',
                     v_schema, v_name, v_expected_sig;
