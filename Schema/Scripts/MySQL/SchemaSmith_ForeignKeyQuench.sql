@@ -21,6 +21,12 @@ BEGIN
     -- avoiding the add-drop-readd cycle for circular FK dependencies.
 
     DECLARE v_Done INT DEFAULT FALSE;
+    -- The catalog is utf8mb3. Comparing a bare catalog column against a value in the SAME charset lets
+    -- MariaDB push the schema filter down (EXPLAIN: "Scanned 1 database" rather than "Scanned all
+    -- databases"); wrapping the column in CONVERT(... USING utf8mb4) defeated it and cost ~1.8ms per
+    -- database ON THE SERVER, on every deploy. A bare parameter does NOT work -- it carries the
+    -- connection charset -- so the declared local is load-bearing, not decoration.
+    DECLARE v_IsDbName VARCHAR(128) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT p_DatabaseName;
 
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_Done = TRUE;
 
@@ -323,7 +329,7 @@ BEGIN
           -- Verify FK actually exists
           AND EXISTS (
               SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-              WHERE CONVERT(tc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+              WHERE tc.TABLE_SCHEMA = v_IsDbName
                 AND CONVERT(tc.TABLE_NAME USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
                 AND CONVERT(tc.CONSTRAINT_NAME USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
                 AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
@@ -372,7 +378,7 @@ BEGIN
           -- Verify FK actually exists
           AND EXISTS (
               SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-              WHERE CONVERT(tc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+              WHERE tc.TABLE_SCHEMA = v_IsDbName
                 AND CONVERT(tc.TABLE_NAME USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
                 AND CONVERT(tc.CONSTRAINT_NAME USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
                 AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'

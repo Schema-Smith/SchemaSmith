@@ -45,6 +45,12 @@ BEGIN
 
     DECLARE v_ConflictingTable VARCHAR(128);
     DECLARE v_ConflictingOwner VARCHAR(100);
+    -- The catalog is utf8mb3. Comparing a bare catalog column against a value in the SAME charset lets
+    -- MariaDB push the schema filter down (EXPLAIN: "Scanned 1 database" rather than "Scanned all
+    -- databases"); wrapping the column in CONVERT(... USING utf8mb4) defeated it and cost ~1.8ms per
+    -- database ON THE SERVER, on every deploy. A bare parameter does NOT work -- it carries the
+    -- connection charset -- so the declared local is load-bearing, not decoration.
+    DECLARE v_IsDbName VARCHAR(128) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT p_DatabaseName;
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'BEGIN ModifiedTableQuench');
 
@@ -227,7 +233,7 @@ BEGIN
           FROM _SchemaSmith_Tables t
           LEFT JOIN (SELECT p.TABLE_NAME, p.PARTITION_METHOD, p.PARTITION_EXPRESSION
                        FROM INFORMATION_SCHEMA.PARTITIONS p
-                      WHERE CONVERT(p.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                      WHERE p.TABLE_SCHEMA = v_IsDbName
                         AND p.PARTITION_NAME IS NOT NULL
                         AND p.PARTITION_ORDINAL_POSITION = 1) lp
             ON CONVERT(lp.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
@@ -241,7 +247,7 @@ BEGIN
                 -- Gated on a declared count so RANGE/LIST (named partitions, no declared count) is untouched.
                 OR (t.PartitionCount IS NOT NULL AND t.PartitionCount > 0
                     AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS pc
-                          WHERE CONVERT(pc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                          WHERE pc.TABLE_SCHEMA = v_IsDbName
                             AND CONVERT(pc.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
                             AND pc.PARTITION_NAME IS NOT NULL) <> t.PartitionCount));
 
@@ -298,12 +304,12 @@ BEGIN
                (SELECT COUNT(*) FROM _SchemaSmith_Partitions dp
                  WHERE CONVERT(dp.TableName USING utf8mb4) = CONVERT(t.TableName USING utf8mb4)),
                (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS pc
-                 WHERE CONVERT(pc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                 WHERE pc.TABLE_SCHEMA = v_IsDbName
                    AND CONVERT(pc.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
                    AND pc.PARTITION_NAME IS NOT NULL),
                COALESCE((SELECT MAX(UPPER(TRIM(COALESCE(pm.PARTITION_DESCRIPTION, ''))) = 'MAXVALUE')
                            FROM INFORMATION_SCHEMA.PARTITIONS pm
-                          WHERE CONVERT(pm.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                          WHERE pm.TABLE_SCHEMA = v_IsDbName
                             AND CONVERT(pm.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
                             AND pm.PARTITION_NAME IS NOT NULL), 0)
           FROM _SchemaSmith_Tables t
@@ -319,7 +325,7 @@ BEGIN
                SELECT dp.PartitionName
                  FROM _SchemaSmith_Partitions dp
                  JOIN INFORMATION_SCHEMA.PARTITIONS lp
-                   ON CONVERT(lp.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                   ON lp.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(lp.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(dp.TableName) USING utf8mb4)
                   AND lp.PARTITION_NAME IS NOT NULL
                   AND lp.PARTITION_ORDINAL_POSITION = dp.Ordinal + 1
@@ -338,7 +344,7 @@ BEGIN
            SET v.RemovedName = (
                SELECT lp.PARTITION_NAME
                  FROM INFORMATION_SCHEMA.PARTITIONS lp
-                WHERE CONVERT(lp.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                WHERE lp.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(lp.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(v.TableName) USING utf8mb4)
                   AND lp.PARTITION_NAME IS NOT NULL
                   AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Partitions dp
@@ -1081,7 +1087,7 @@ BEGIN
                   AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
                   AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
               INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON CONVERT(kcu.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                  ON kcu.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(kcu.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4)
                   AND CONVERT(kcu.COLUMN_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4)
                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
@@ -1097,7 +1103,7 @@ BEGIN
                   AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
                   AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
               INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON CONVERT(kcu.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                  ON kcu.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4)
                   AND CONVERT(kcu.REFERENCED_COLUMN_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4)
              WHERE c.NewColumn = 0 AND c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation;
@@ -1806,7 +1812,7 @@ BEGIN
             CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-            ON CONVERT(kcu.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON kcu.TABLE_SCHEMA = v_IsDbName
             AND CONVERT(kcu.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND CONVERT(kcu.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
         INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
@@ -1822,7 +1828,7 @@ BEGIN
             CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-            ON CONVERT(kcu.REFERENCED_TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON kcu.REFERENCED_TABLE_SCHEMA = v_IsDbName
             AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND CONVERT(kcu.REFERENCED_COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
         INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
@@ -1933,7 +1939,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             CONVERT(s.INDEX_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.STATISTICS s
-            ON CONVERT(s.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON s.TABLE_SCHEMA = v_IsDbName
             AND CONVERT(s.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND CONVERT(s.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
         WHERE UPPER(s.INDEX_NAME) != 'PRIMARY';
@@ -1983,7 +1989,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             CONVERT(isc_gen.COLUMN_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.COLUMNS isc_gen
-            ON CONVERT(isc_gen.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON isc_gen.TABLE_SCHEMA = v_IsDbName
             AND CONVERT(isc_gen.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND isc_gen.GENERATION_EXPRESSION IS NOT NULL
             AND isc_gen.GENERATION_EXPRESSION != ''
@@ -2030,7 +2036,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                       '` DROP COLUMN `', CONVERT(ctd.ColumnName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`')
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON CONVERT(isc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON isc.TABLE_SCHEMA = v_IsDbName
             AND CONVERT(isc.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND CONVERT(isc.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
         -- Not a generated column (those were handled above)
@@ -2046,7 +2052,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                       GROUP_CONCAT(CONCAT('DROP COLUMN `', CONVERT(ctd.ColumnName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`') ORDER BY ctd.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON CONVERT(isc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON isc.TABLE_SCHEMA = v_IsDbName
             AND CONVERT(isc.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND CONVERT(isc.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
         WHERE (isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
@@ -2174,7 +2180,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                   ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
                   AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
               INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON CONVERT(kcu.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                  ON kcu.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(kcu.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
              WHERE t.NewTable = 0 AND t.Collation IS NOT NULL AND ist.TABLE_COLLATION != t.Collation;
@@ -2189,7 +2195,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                   ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
                   AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
               INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON CONVERT(kcu.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                  ON kcu.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
              WHERE t.NewTable = 0 AND t.Collation IS NOT NULL AND ist.TABLE_COLLATION != t.Collation;
 
@@ -2822,7 +2828,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         SELECT DISTINCT CONNECTION_ID(), CONCAT('  Partitioned table removed from product, not dropped (data-loss guard): ', po.ObjectName)
         FROM SchemaSmith_ProductOwnership po
         INNER JOIN INFORMATION_SCHEMA.PARTITIONS ip
-            ON CONVERT(ip.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON ip.TABLE_SCHEMA = v_IsDbName
            AND CONVERT(ip.TABLE_NAME USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
            AND ip.PARTITION_NAME IS NOT NULL
         WHERE CONVERT(po.ProductName USING utf8mb4) = CONVERT(p_ProductName USING utf8mb4)
@@ -2853,7 +2859,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                                    '` DROP FOREIGN KEY `', CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`')
             FROM SchemaSmith_ProductOwnership po
             INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                ON CONVERT(kcu.REFERENCED_TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                ON kcu.REFERENCED_TABLE_SCHEMA = v_IsDbName
                AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
             INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 ON CONVERT(tc.TABLE_SCHEMA USING utf8mb4) = CONVERT(kcu.TABLE_SCHEMA USING utf8mb4)
@@ -2889,7 +2895,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
             FROM SchemaSmith_ProductOwnership po
             INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                ON CONVERT(kcu.REFERENCED_TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                ON kcu.REFERENCED_TABLE_SCHEMA = v_IsDbName
                AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
             INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 ON CONVERT(tc.TABLE_SCHEMA USING utf8mb4) = CONVERT(kcu.TABLE_SCHEMA USING utf8mb4)
