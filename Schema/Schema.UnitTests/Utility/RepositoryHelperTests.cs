@@ -287,7 +287,7 @@ public class RepositoryHelperTests
     }
 
     // WasCreated-only reporting meant a rewritten file returned a result identical to nothing-happened, so
-    // every consumer's "up to date" sentence was unverifiable -- SchemaHammer's dialog said it after
+    // every consumer's "up to date" sentence was unverifiable -- a caller's dialog said it after
     // rewriting every schema in the package. Not recoverable in a consumer: answering "did this change?"
     // would mean re-reading, re-generating and re-running the merge, i.e. reimplementing this method.
     [Test]

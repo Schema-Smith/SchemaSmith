@@ -20,7 +20,7 @@ namespace Schema.Validation.Checks;
 /// content, so a non-canonical name never breaks a deploy — it only earns a warning
 /// (<c>SS-FILE-NAME-003</c>) so the filename stays an honest, sortable pointer to the object it holds.
 /// <para>Covers <c>Tables/</c> and every modeled-object folder the loader reads on the package's engine.
-/// The modeled folders matter beyond tidiness: the add-ons find an object by its derived file name, so a
+/// The modeled folders matter beyond tidiness: tooling resolves an object by its derived file name, so a
 /// file that drifted from its content let a second same-named object be written beside it.</para>
 /// </summary>
 public sealed class TableFileNameCheck : ISchemaCheck

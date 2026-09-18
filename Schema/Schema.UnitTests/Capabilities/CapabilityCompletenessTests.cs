@@ -93,7 +93,7 @@ namespace Schema.UnitTests.Capabilities
         // The Supports*.sql sweep above only sees gates written as a gate FUNCTION. A degrade written as an
         // inline version comparison has no such file and is invisible to it -- which is how PostgreSQL's
         // VIRTUAL generated-column degrade shipped in v2.5.0 with no registry row, fully policy-routed and
-        // completely absent from the list the paid add-ons drive their UI and AI behaviour from.
+        // completely absent from the list downstream tooling drives its behaviour from.
         //
         // This closes that hole by keying on BEHAVIOUR instead of file naming: every degrade, however it is
         // gated, records a 'downgraded' ChangeAudit row, and the ObjectType it writes is the string the
@@ -140,7 +140,7 @@ namespace Schema.UnitTests.Capabilities
 
                     problems.Add(
                         $"{BareFileName(resource)} records a downgrade as '{objectType}', which no CapabilityRegistry "
-                        + "row claims — add a row (ManifestObjectType must match this string exactly) so the add-ons "
+                        + "row claims — add a row (ManifestObjectType must match this string exactly) so a consumer "
                         + "can see the degrade");
                 }
             }

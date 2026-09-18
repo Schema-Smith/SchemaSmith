@@ -115,7 +115,7 @@ public class ChangeTrackingDatabaseToggleTests
                                + "WHERE ActionType = 'downgraded' AND ObjectName LIKE '%CtWantedNoDb%'"),
                 Is.EqualTo(1),
                 "a declared feature that could not be applied must leave a 'downgraded' manifest row -- the "
-                + "add-ons drive behaviour off that manifest and cannot see a degrade that writes nothing");
+                + "downstream tooling drives behaviour off that manifest and cannot see a degrade that writes nothing");
 
             Assert.That(Scalar("SELECT COUNT(*) FROM sys.change_tracking_tables "
                                + "WHERE [object_id] = OBJECT_ID('dbo.CtWantedNoDb')"),

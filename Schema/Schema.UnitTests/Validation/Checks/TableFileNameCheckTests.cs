@@ -114,7 +114,7 @@ public class TableFileNameCheckTests
 
     // Declared (modeled) objects follow the same <schema>.<name>[.<VariantName>].json convention as tables.
     // They were outside this check entirely, so a renamed object file drifted from its content unreported --
-    // and the add-ons look an object up by its derived file name, so that drift let a second same-named
+    // and tooling resolves an object by its derived file name, so that drift let a second same-named
     // object be written beside the first.
     [TestCase("Enum Types")]
     [TestCase("Domain Types")]

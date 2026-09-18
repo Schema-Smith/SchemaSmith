@@ -13,7 +13,7 @@ namespace SchemaQuench.UnitTests;
 /// <summary>
 /// E2: proves the DeploymentSummary record graph serializes to the frozen v1 JSON contract
 /// (field names, camelCase keys, enum-as-string, null preservation). The paid Intelligence
-/// add-ons deserialize this JSON, so assertions parse the output with JObject/SelectToken rather
+/// Downstream consumers deserialize this JSON, so assertions parse the output with JObject/SelectToken rather
 /// than substring-matching, and pin down the exact shapes a consumer would rely on.
 /// </summary>
 [TestFixture]

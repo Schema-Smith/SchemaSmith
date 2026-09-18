@@ -7,7 +7,7 @@ namespace SchemaQuench.Reporting;
 
 /// <summary>
 /// Root of the Deployment Summary Report record graph (#243). This is the frozen v1 JSON
-/// contract the paid Intelligence add-ons deserialize — field names, casing, nesting, and enum
+/// contract downstream consumers deserialize — field names, casing, nesting, and enum
 /// string values must not change without a schema-version bump. Purely a data model: nothing in
 /// this file (or <see cref="DeploymentSummaryJson"/>) wires into the run, populates itself, or
 /// scrubs content. A later slice (E4) builds and emits instances; E5 fills in
