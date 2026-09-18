@@ -82,3 +82,7 @@ __pycache__/
 # during quench runs (e.g. "SchemaQuench - Quench Indexes localhost.db.sql").
 # Run artifacts, regenerated on demand; never tracked.
 SchemaQuench - *.sql
+
+## Node (the schema-validation script installs ajv locally; CI installs it fresh)
+node_modules/
+package-lock.json
