@@ -332,6 +332,11 @@ public static class ForgeKindler
                 // WhatIf output), and precede the quench procedures that will elect a rebuild.
                 new("SchemaSmith.RebuildTable.sql"),
                 new("SchemaSmith.MissingTableAndColumnQuench.sql"),
+                // Must precede ModifiedTableQuench, which CALLs it. Split out of that procedure because
+                // SQL Server compiles a procedure's statements whether or not they run and caches the plan
+                // per object PER DATABASE -- 328 lines of rare-attribute validation were being compiled on
+                // every first deploy to every database for a feature set most packages never touch.
+                new("SchemaSmith.ValidateDeclaredTableAttributes.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 new("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"),
                 // Must follow MissingIndexesAndConstraintsQuench: enabling change tracking requires a

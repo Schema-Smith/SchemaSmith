@@ -40,7 +40,7 @@ namespace Schema.IntegrationTests.SqlServer;
 public class UniqueConstraintIdempotenceTests
 {
     private IDbConnection _connection;
-    private string _db;
+    // (no private database -- see OneTimeSetUp)
 
     private const string TableJson = """
         [{
@@ -57,20 +57,24 @@ public class UniqueConstraintIdempotenceTests
         }]
         """;
 
+    // Uses the suite's already-kindled database rather than creating and kindling its own.
+    //
+    // A private database is not free: CREATE DATABASE, then kindling ~40 helper scripts, then SQL Server
+    // compiling ModifiedTableQuench's plan from scratch -- plans are cached per object PER DATABASE, so a
+    // fresh database never reuses one, and that compile alone measured ~2.6s for ~117ms of real work. This
+    // fixture ran ONE test and paid all of it: 9 seconds, almost entirely setup.
+    //
+    // Nothing here needs a private database -- no compatibility level, filegroup, CDC or change-tracking
+    // configuration, which is what genuinely forces a fixture to own one. Isolation comes from the UqIdem_
+    // name prefix instead, and the objects are dropped in teardown so a shared database does not
+    // accumulate them.
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        _db = $"SchemaUqIdem_{Guid.NewGuid():N}"[..40];
         _connection = DbConnectionFactory.ForPlatform(Platform.SqlServer)
             .GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         _connection.Open();
-
-        _connection.ChangeDatabase("master");
-        Exec($"CREATE DATABASE [{_db}]");
-        _connection.ChangeDatabase(_db);
-
-        using var cmd = _connection.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
+        DropOwnObjects();
     }
 
     [OneTimeTearDown]
@@ -79,15 +83,21 @@ public class UniqueConstraintIdempotenceTests
         if (_connection == null) return;
         try
         {
-            _connection.ChangeDatabase("master");
-            Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec($"DROP DATABASE IF EXISTS [{_db}]");
+            DropOwnObjects();
         }
         finally
         {
             _connection.Close();
             _connection.Dispose();
         }
+    }
+
+    // Everything this fixture creates, by its own name prefix -- so sharing the suite database cannot
+    // leak state into a sibling fixture or inherit it from one.
+    private void DropOwnObjects()
+    {
+        Exec(@"IF OBJECT_ID('dbo.UqIdem', 'U') IS NOT NULL DROP TABLE dbo.UqIdem;
+               DELETE FROM SchemaSmith.ProductOwnership WHERE ProductName = 'UqIdemTest';");
     }
 
     private void Exec(string sql)

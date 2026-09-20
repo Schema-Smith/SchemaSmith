@@ -295,7 +295,12 @@ public class ForgeKindlerTests
         // + Kindling_ExpressionMap_Table (#242 -- the authored/canonical expression mapping).
         // + fn_ExpressionMapUnchanged + ExpressionMapRecord (#242 -- the decision and the recording pass).
         // + fn_ExpressionMapEffective (#242 -- whole-script comparisons take the text, not a yes/no).
-        Assert.That(sqlServer.Length, Is.EqualTo(40));
+        // + SchemaSmith.ValidateDeclaredTableAttributes (split OUT of ModifiedTableQuench, not new behaviour:
+        //   the declared-vs-deployed refusals for filegroup/partition/graph/memory-optimized/ledger. SQL Server
+        //   compiles a procedure's statements whether or not they run and caches the plan per object PER
+        //   DATABASE, so those 328 lines were compiled on every first deploy to every database for a feature
+        //   set most packages never touch. Behind a guarded CALL they are not compiled on the common path.)
+        Assert.That(sqlServer.Length, Is.EqualTo(41));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
