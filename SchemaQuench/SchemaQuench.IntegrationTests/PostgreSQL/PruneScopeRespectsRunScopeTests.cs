@@ -42,15 +42,6 @@ public class PruneScopeRespectsRunScopeTests
         _mainDb = config["ScriptTokens:MainDB"];
     }
 
-    [SetUp]
-    public void SetUpClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [TearDown]
-    public void TearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [OneTimeTearDown]
-    public void OneTimeTearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
     [Test]
     public void Selective_Run_With_Prune_Enabled_Only_Prunes_Within_Scope()
     {

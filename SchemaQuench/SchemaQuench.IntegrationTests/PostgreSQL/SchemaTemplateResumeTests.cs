@@ -51,10 +51,6 @@ public class SchemaTemplateResumeTests
     {
         _checkpointDir = Path.Combine(Path.GetTempPath(), $"SchemaQuench_SchemaTemplateResume_PG_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_checkpointDir);
-        // Bound the Npgsql connection pool across the suite — same pattern as the PG happy-path
-        // fixture (test container runs max_connections=500; accumulating across a 3-tenant
-        // fan-out plus the assertion connections without pool flushing exhausts headroom).
-        Npgsql.NpgsqlConnection.ClearAllPools();
     }
 
     [TearDown]
@@ -69,13 +65,6 @@ public class SchemaTemplateResumeTests
         {
             // Best-effort cleanup.
         }
-        Npgsql.NpgsqlConnection.ClearAllPools();
-    }
-
-    [OneTimeTearDown]
-    public void OneTimeTearDownClearPgPools()
-    {
-        Npgsql.NpgsqlConnection.ClearAllPools();
     }
 
     [Test]

@@ -45,15 +45,6 @@ public class TemplateTargetsHappyPathTests
         _server = config["Target:Server"];
     }
 
-    [SetUp]
-    public void SetUpClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [TearDown]
-    public void TearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [OneTimeTearDown]
-    public void OneTimeTearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
     [Test]
     public void OverrideSchemasListReplacesDiscoveryScript_ExistingTenants()
     {
@@ -524,8 +515,8 @@ $$;";
     {
         try
         {
-            // Terminate other connections first; PG refuses DROP DATABASE if there are active sessions.
-            Npgsql.NpgsqlConnection.ClearAllPools();
+            // pg_terminate_backend below is what frees the database; PG refuses DROP DATABASE
+            // while any session still holds it.
             using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
             conn.Open();
             using var cmd = conn.CreateCommand();

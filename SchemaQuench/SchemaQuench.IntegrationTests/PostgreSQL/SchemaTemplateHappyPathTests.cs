@@ -53,39 +53,6 @@ public class SchemaTemplateHappyPathTests
         _server = config["Target:Server"];
     }
 
-    /// <summary>
-    /// The test PG container runs with max_connections=2000 (matches the CI workflow override and
-    /// the Demos PG compose). Even at that ceiling, the 3-tenant fan-out * multiple per-iteration
-    /// command pools + per-test assertion connections accumulates across the suite, so we still
-    /// flush the Npgsql pool around each test to bound the count. Every schema-template-era PG
-    /// fixture follows this pattern — when a new fixture is added without the flush hooks the
-    /// suite breaches the ceiling and emits 53300 (sorry, too many clients already). SetUp +
-    /// TearDown both fire because (a) accumulation from earlier fixtures shouldn't strand the
-    /// first test in this fixture, and (b) the [TearDown] keeps subsequent test fixtures from
-    /// inheriting our accumulated pool.
-    /// </summary>
-    [SetUp]
-    public void SetUpClearPgPools()
-    {
-        Npgsql.NpgsqlConnection.ClearAllPools();
-    }
-
-    [TearDown]
-    public void TearDownClearPgPools()
-    {
-        Npgsql.NpgsqlConnection.ClearAllPools();
-    }
-
-    [OneTimeTearDown]
-    public void OneTimeTearDownClearPgPools()
-    {
-        // Final pool flush before the next fixture in the test run inherits our state.
-        // Without this, ~25 connections per test * N tests accumulate before TIME_WAIT
-        // releases them; max_connections=2000 (CI + Demos compose) leaves headroom only as
-        // long as every PG fixture flushes pools on the same cadence.
-        Npgsql.NpgsqlConnection.ClearAllPools();
-    }
-
     [Test]
     public void Happy_Path_Multi_Tenant_Deploy_Creates_Identical_Per_Tenant_Structure_And_Shared_Content_Once()
     {
@@ -442,10 +409,8 @@ SELECT COUNT(*) FROM information_schema.table_constraints tc
 
     // [ALWAYS] / WhatIf / Tenant offboarding+re-onboarding / MaterializedView scenarios were
     // previously [Ignore]'d on this PG mirror to keep connection-pool pressure below the default
-    // max_connections=100. With the test container bumped to max_connections=500 (matches the CI
-    // override and the Demos PG compose), all four scenarios run alongside the existing 7 PG
-    // tests in this fixture. SetUp / TearDown / OneTimeTearDown still flush Npgsql pools to keep
-    // accumulation bounded.
+    // max_connections=100. The test container raises it (matching the CI override and the Demos PG
+    // compose), so all four scenarios run alongside the existing 7 PG tests in this fixture.
 
     [Test]
     public void Always_Tagged_Script_Runs_Every_Quench_Per_Iteration_And_Is_Not_Tracked()

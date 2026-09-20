@@ -53,15 +53,6 @@ public class FailureIsolationTests
         _server = config["Target:Server"];
     }
 
-    [SetUp]
-    public void SetUpClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [TearDown]
-    public void TearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [OneTimeTearDown]
-    public void OneTimeTearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
     /// <summary>
     /// ContinueOnSchemaFailure: true (default). 5 tenants, tenant_boom fails via RAISE EXCEPTION.
     /// The remaining 4 tenants complete. Exit code is non-zero. Failure summary names tenant_boom.
