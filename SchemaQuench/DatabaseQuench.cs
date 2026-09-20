@@ -797,10 +797,6 @@ public class DatabaseQuench
                 if (!IsWhatIf)
                     RecordExpressionMap(effectiveTableCmd);
 
-                // MySQL: cleanup temp tables after index quench
-                if (_product.Platform.GetBasePlatform() == Platform.MySQL)
-                    CleanupMySqlTempTables(command);
-
                 if (!IsWhatIf)
                 {
                     SafeProgressLog("  Quenching after table scripts");
@@ -880,12 +876,7 @@ public class DatabaseQuench
                     if (!_template.IndexOnlyTableQuenches && _updateTables)
                     {
                         var foreignKeysSw = Stopwatch.StartNew();
-                        _checkpointing.Track(DbScope, "ForeignKeys", () =>
-                        {
-                            QuenchForeignKeys(effectiveTableCmd);
-                            if (_product.Platform.GetBasePlatform() == Platform.MySQL)
-                                CleanupMySqlTempTables(command);
-                        });
+                        _checkpointing.Track(DbScope, "ForeignKeys", () => QuenchForeignKeys(effectiveTableCmd));
                         foreignKeysSw.Stop();
                         RunTiming?.Record(LogPrefix, _databaseName, "ForeignKeys", foreignKeysSw.ElapsedMilliseconds, 0);
                     }
@@ -1004,6 +995,16 @@ public class DatabaseQuench
                 _statusMonitor?.Dispose();
                 _statusMonitor = null;
                 DrainChangeAudit(tableCommand ?? command);
+                // MySQL parses the table JSON into session-scoped temp tables that every table step
+                // consumes, so the drop belongs AFTER the last consumer -- foreign keys -- not between
+                // two of them. It used to run right after the index quench, which meant ForeignKeys
+                // found the tables gone and re-parsed the whole payload: measured as a second
+                // `CALL SchemaSmith_ParseTableJson` costing ~2.4s on an 11-table demo package, to feed a
+                // ForeignKeyQuench that then took 3ms. Cleaning up here instead is also the stronger
+                // guarantee -- it runs exactly once per work unit, on the exception path too, so a
+                // pooled connection can never carry one unit's model into the next.
+                if (_product.Platform.GetBasePlatform() == Platform.MySQL)
+                    CleanupMySqlTempTables(command);
                 connection.Close();
                 tableConnection?.Close();
                 objectsConnection?.Close();
