@@ -6,7 +6,6 @@ using System.Text;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
-using Schema.Utility;
 
 namespace Schema.IntegrationTests.SqlServer;
 
@@ -28,22 +27,21 @@ namespace Schema.IntegrationTests.SqlServer;
 public class GraphTableDeployTests
 {
     private IDbConnection _connection;
-    private string _db;
 
+    // Uses the suite's already-kindled database rather than creating and kindling its own. A private
+    // database costs CREATE DATABASE, ~40 kindling scripts, and a from-scratch plan compile for
+    // ModifiedTableQuench (plans cache per object PER DATABASE, so a fresh one never reuses them) --
+    // ~2.6s of compile for ~117ms of real work. Nothing here needs a private database: no compatibility
+    // level, filegroup, CDC or change-tracking configuration, which is what genuinely forces a fixture to
+    // own one. Isolation comes from this fixture's own object names, dropped at both ends so a shared
+    // database neither inherits state nor leaks it.
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        _db = $"SchemaGraphDeploy_{Guid.NewGuid():N}"[..40];
         _connection = DbConnectionFactory.ForPlatform(Platform.SqlServer)
             .GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         _connection.Open();
-
-        _connection.ChangeDatabase("master");
-        Exec($"CREATE DATABASE [{_db}]");
-        _connection.ChangeDatabase(_db);
-
-        using var cmd = _connection.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
+        DropOwnObjects();
     }
 
     [OneTimeTearDown]
@@ -52,15 +50,26 @@ public class GraphTableDeployTests
         if (_connection == null) return;
         try
         {
-            _connection.ChangeDatabase("master");
-            Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec($"DROP DATABASE IF EXISTS [{_db}]");
+            DropOwnObjects();
         }
         finally
         {
             _connection.Close();
             _connection.Dispose();
         }
+    }
+
+    // Everything this fixture creates, by its own names -- so sharing the suite database cannot
+    // leak state into a sibling fixture or inherit it from one.
+    private void DropOwnObjects()
+    {
+        Exec(@"IF OBJECT_ID('dbo.GNode', 'U') IS NOT NULL DROP TABLE dbo.GNode;
+               IF OBJECT_ID('dbo.GEdge', 'U') IS NOT NULL DROP TABLE dbo.GEdge;
+               IF OBJECT_ID('dbo.GPlain', 'U') IS NOT NULL DROP TABLE dbo.GPlain;
+               IF OBJECT_ID('dbo.GTwice', 'U') IS NOT NULL DROP TABLE dbo.GTwice;
+               IF OBJECT_ID('dbo.GRoundTrip', 'U') IS NOT NULL DROP TABLE dbo.GRoundTrip;
+               IF OBJECT_ID('dbo.GChange', 'U') IS NOT NULL DROP TABLE dbo.GChange;
+               DELETE FROM SchemaSmith.ProductOwnership WHERE ProductName = 'GraphTest';");
     }
 
     private void Exec(string sql)

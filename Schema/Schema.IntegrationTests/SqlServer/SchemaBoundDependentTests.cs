@@ -5,7 +5,6 @@ using System.Data;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
-using Schema.Utility;
 
 namespace Schema.IntegrationTests.SqlServer;
 
@@ -27,22 +26,21 @@ namespace Schema.IntegrationTests.SqlServer;
 public class SchemaBoundDependentTests
 {
     private IDbConnection _connection;
-    private string _db;
 
+    // Uses the suite's already-kindled database rather than creating and kindling its own. A private
+    // database costs CREATE DATABASE, ~40 kindling scripts, and a from-scratch plan compile for
+    // ModifiedTableQuench (plans cache per object PER DATABASE, so a fresh one never reuses them) --
+    // and this fixture deploys six tables, so it pays that compile six times over. Nothing here needs a
+    // private database: no compatibility level, filegroup, CDC or change-tracking configuration, which
+    // is what genuinely forces a fixture to own one. Isolation comes from the `Sb` prefix on every
+    // object, dropped at both ends so a shared database neither inherits state nor leaks it.
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        _db = $"SchemaBound_{Guid.NewGuid():N}"[..40];
         _connection = DbConnectionFactory.ForPlatform(Platform.SqlServer)
             .GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         _connection.Open();
-
-        _connection.ChangeDatabase("master");
-        Exec($"CREATE DATABASE [{_db}]");
-        _connection.ChangeDatabase(_db);
-
-        using var cmd = _connection.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
+        DropOwnObjects();
     }
 
     [OneTimeTearDown]
@@ -51,15 +49,36 @@ public class SchemaBoundDependentTests
         if (_connection == null) return;
         try
         {
-            _connection.ChangeDatabase("master");
-            Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec($"DROP DATABASE IF EXISTS [{_db}]");
+            DropOwnObjects();
         }
         finally
         {
             _connection.Close();
             _connection.Dispose();
         }
+    }
+
+    // Everything this fixture creates, by its own names. Views go before tables because a SCHEMABINDING
+    // view blocks DROP TABLE -- and that is exactly the hazard worth being careful about here: a view
+    // left behind would permanently block column changes on its base table for every later run. SbNestB
+    // schemabinds SbNestA, so it has to go first. Unconditional rather than best-effort: the tests that
+    // assert a *failed* ALTER deliberately leave their views in place.
+    private void DropOwnObjects()
+    {
+        Exec(@"IF OBJECT_ID('dbo.SbNestB', 'V') IS NOT NULL DROP VIEW dbo.SbNestB;
+               IF OBJECT_ID('dbo.SbNestA', 'V') IS NOT NULL DROP VIEW dbo.SbNestA;
+               IF OBJECT_ID('dbo.SbView', 'V') IS NOT NULL DROP VIEW dbo.SbView;
+               IF OBJECT_ID('dbo.SbEnumView', 'V') IS NOT NULL DROP VIEW dbo.SbEnumView;
+               IF OBJECT_ID('dbo.SbDropView', 'V') IS NOT NULL DROP VIEW dbo.SbDropView;
+               IF OBJECT_ID('dbo.SbKeepView', 'V') IS NOT NULL DROP VIEW dbo.SbKeepView;
+               IF OBJECT_ID('dbo.SbEncView', 'V') IS NOT NULL DROP VIEW dbo.SbEncView;
+               IF OBJECT_ID('dbo.SbTable', 'U') IS NOT NULL DROP TABLE dbo.SbTable;
+               IF OBJECT_ID('dbo.SbEnum', 'U') IS NOT NULL DROP TABLE dbo.SbEnum;
+               IF OBJECT_ID('dbo.SbDrop', 'U') IS NOT NULL DROP TABLE dbo.SbDrop;
+               IF OBJECT_ID('dbo.SbKeep', 'U') IS NOT NULL DROP TABLE dbo.SbKeep;
+               IF OBJECT_ID('dbo.SbEnc', 'U') IS NOT NULL DROP TABLE dbo.SbEnc;
+               IF OBJECT_ID('dbo.SbNest', 'U') IS NOT NULL DROP TABLE dbo.SbNest;
+               DELETE FROM SchemaSmith.ProductOwnership WHERE ProductName = 'SchemaBoundTest';");
     }
 
     private void Exec(string sql)
