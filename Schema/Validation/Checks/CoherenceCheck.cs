@@ -41,6 +41,9 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string CompressionConflictCode = "SS-CO-001";
     private const string CompressionLevelInertCode = "SS-CO-002";
     private const string DuplicateEventCode = "SS-EVT-001";
+    private const string DuplicateEnumTypeCode = "SS-ENUM-001";
+    private const string DuplicateSequenceCode = "SS-SEQ-001";
+    private const string DuplicateDomainTypeCode = "SS-DOM-001";
     private const string PartitionHalfDeclaredCode = "SS-PART-001";
     private const string PartitionAndFileGroupCode = "SS-PART-002";
     private const string MyPartitionRangeListNoPartitionsCode = "SS-PART-003";
@@ -61,6 +64,9 @@ public sealed class CoherenceCheck : ISchemaCheck
         var findings = new List<Finding>();
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckScheduledEvents(template));
+
+        foreach (var template in ctx.Templates)
+            findings.AddRange(CheckModeledFolderObjectCoexistence(template));
 
         foreach (var template in ctx.Templates)
         foreach (var table in template.Tables)
@@ -578,6 +584,84 @@ public sealed class CoherenceCheck : ISchemaCheck
                 "Events folder. The scripted form drops and recreates the event on every deploy, undoing " +
                 "what the declared form converged — keep one.");
     }
+
+
+    /// <summary>
+    /// A PostgreSQL enum type, sequence or domain type declared BOTH as JSON and scripted as a .sql file
+    /// in the same folder.
+    /// <para>These three folders are additive by design -- <c>Enum Types/</c>, <c>Sequences/</c> and
+    /// <c>Domain Types/</c> each hold declared <c>.json</c> and scripted <c>.sql</c> side by side, and a
+    /// package using only one of the two is correct and common. Declaring the SAME object both ways is the
+    /// problem, and until now it validated clean: the coexistence rule existed only for scheduled events
+    /// (<c>SS-EVT-001</c>), even though all three of these are already shape-validated.</para>
+    /// <para>Why it matters differs per type, so the messages say what the engine actually does rather than
+    /// warning in the abstract:</para>
+    /// <list type="bullet">
+    /// <item>An enum type's scripted form is a GUARDED <c>CREATE TYPE</c> (<c>EnumTypeQuench.sql</c>), so
+    /// once the type exists the guard skips and the script silently does nothing -- the declared form is
+    /// what converges, and the script is dead weight that reads as if it were in charge.</item>
+    /// <item>A domain type is the same trap and <c>DomainTypeQuench.sql</c> says so outright: there is no
+    /// <c>CREATE OR REPLACE DOMAIN</c>, so a scripted domain is a guarded <c>CREATE DOMAIN</c>.</item>
+    /// <item>For sequences the engine scripts say nothing about a scripted form (checked, not assumed), so
+    /// that message claims no mechanism -- only that two authoring paths for one object is ambiguous.</item>
+    /// </list>
+    /// <para>Deliberately NOT claimed anywhere here: which authoring path wins when both are present. That
+    /// needs SchemaQuench slot-ordering evidence which this check does not have, and guessing it in a
+    /// finding message would be worse than leaving it out.</para>
+    /// </summary>
+    private static IEnumerable<Finding> CheckModeledFolderObjectCoexistence(Template template)
+    {
+        foreach (var finding in CoexistenceFindings(
+                     template, "Enum Types", DuplicateEnumTypeCode, "Enum type",
+                     template.EnumTypes.Select(e => e.Name),
+                     "The scripted form is a guarded CREATE TYPE, so once the type exists the script " +
+                     "silently does nothing while the declared form is what converges"))
+            yield return finding;
+
+        foreach (var finding in CoexistenceFindings(
+                     template, "Domain Types", DuplicateDomainTypeCode, "Domain type",
+                     template.DomainTypes.Select(d => d.Name),
+                     "There is no CREATE OR REPLACE DOMAIN, so the scripted form is a guarded CREATE " +
+                     "DOMAIN and silently does nothing once the domain exists"))
+            yield return finding;
+
+        foreach (var finding in CoexistenceFindings(
+                     template, "Sequences", DuplicateSequenceCode, "Sequence",
+                     template.Sequences.Select(s => s.Name),
+                     "Two authoring paths for one object leave it ambiguous which one is in charge"))
+            yield return finding;
+    }
+
+    private static IEnumerable<Finding> CoexistenceFindings(
+        Template template,
+        string folder,
+        string code,
+        string noun,
+        IEnumerable<string> declaredNames,
+        string consequence)
+    {
+        var declared = declaredNames.Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+        if (declared.Count == 0) yield break;
+
+        var scripted = ScriptedNamesIn(template, folder);
+        if (scripted.Count == 0) yield break;
+
+        foreach (var name in declared.Where(scripted.Contains))
+            yield return new Finding(Severity.Error, code, Category,
+                $"Template '{template.Name}'",
+                $"{noun} '{name}' is declared as JSON and also scripted as a .sql file in the same " +
+                $"{folder} folder. {consequence} — keep one.");
+    }
+
+    // Same folder discriminator and filename-as-object-name convention the events check uses: a
+    // scripted object is named by its file, and the folder is what says which kind it is.
+    private static HashSet<string> ScriptedNamesIn(Template template, string folder) =>
+        template.ObjectScripts?
+            .Where(s => (s.FilePath ?? "").Replace(Path.DirectorySeparatorChar, '/')
+                .Contains($"/{folder}/", StringComparison.OrdinalIgnoreCase))
+            .Select(s => Path.GetFileNameWithoutExtension(s.FilePath ?? ""))
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
 
     // Mirrors SchemaSmith_NormalizeIndexColumns.sql's DESC/ASC suffix handling (source of truth —
     // keep in sync): a trailing " DESC" or " ASC" (case-insensitive) is ordering, not part of the
