@@ -434,7 +434,11 @@ public class ForgeKindlerTests
         //   ResourceLoader rather than adding a second list entry).
         // + Kindling_ExpressionMap_Table (#242 -- the authored/canonical expression mapping).
         // + ExpressionMapUnchanged + ExpressionMapRecord (#242 -- the decision and the recording pass).
-        Assert.That(mysql.Length, Is.EqualTo(64));
+        // +1 = SchemaSmith_IdentifierKey (the identifier-case policy. Whether two object names name the
+        //   same object is the server's call via lower_case_table_names, and the ownership comparisons
+        //   were each answering it differently from the catalog reads -- which refused a legitimate
+        //   deploy naming a table the package had not declared. One function so every site agrees.).
+        Assert.That(mysql.Length, Is.EqualTo(65));
     }
 
     [Test]

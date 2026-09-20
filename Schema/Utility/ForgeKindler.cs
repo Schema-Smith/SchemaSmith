@@ -437,6 +437,10 @@ public static class ForgeKindler
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith_QuoteIdentifier.sql"),
                 new("SchemaSmith_StripBacktickWrapping.sql"),
+                // Identifier-case policy in one place: whether two object names name the same object
+                // depends on the server's lower_case_table_names, and every ownership comparison has to
+                // ask the same question the same way.
+                new("SchemaSmith_IdentifierKey.sql"),
                 new("SchemaSmith_SafeBacktickWrap.sql"),
                 new("SchemaSmith_StripLeadingSelect.sql"),
                 new("SchemaSmith_ServerVersionNum.sql"),

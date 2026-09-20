@@ -53,6 +53,10 @@ BEGIN
     DECLARE v_AcNullable TINYINT;
     DECLARE v_AcDefault LONGTEXT;
     DECLARE v_AcAutoIncrement TINYINT;
+    DECLARE v_Collation VARCHAR(64);
+    DECLARE v_AcCollation VARCHAR(64);
+    DECLARE v_LiveCollation VARCHAR(64);
+    DECLARE v_CollateClauses LONGTEXT;
     DECLARE v_ColExists INT;
     DECLARE v_HasStatusTable INT DEFAULT 0;
     DECLARE v_ClashDetail LONGTEXT;
@@ -164,11 +168,18 @@ BEGIN
         SET v_Default = JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_Idx, '].Default')));
         SET v_AutoIncrement = COALESCE((JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_Idx, '].AutoIncrement'))) IN ('true','1')), 0);
         SET v_ColumnPrimaryKey = COALESCE((JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_Idx, '].PrimaryKey'))) IN ('true','1')), 0);
+        -- Optional per-column collation. The kindling tables otherwise inherit the table default
+        -- (utf8mb4_unicode_ci), which is case-INSENSITIVE -- and for a column that stores an object
+        -- NAME that is wrong on a server where object names are case-sensitive: two names differing
+        -- only by case collapse to one key in a UNIQUE index, so the second object silently gets no
+        -- row. Declaring the collation is how ProductOwnership's uk_object keeps them apart.
+        SET v_Collation = JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_Idx, '].Collation')));
 
         IF v_ColumnList <> '' THEN
             SET v_ColumnList = CONCAT(v_ColumnList, ', ');
         END IF;
         SET v_ColumnList = CONCAT(v_ColumnList, '`', v_ColumnName, '` ', v_DataType,
+            CASE WHEN v_Collation IS NOT NULL AND TRIM(v_Collation) <> '' THEN CONCAT(' COLLATE ', v_Collation) ELSE '' END,
             CASE WHEN v_Nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END,
             CASE WHEN v_AutoIncrement = 1 THEN ' AUTO_INCREMENT' ELSE '' END,
             CASE WHEN v_Default IS NOT NULL AND TRIM(v_Default) <> '' THEN CONCAT(' DEFAULT ', v_Default) ELSE '' END,
@@ -336,6 +347,53 @@ BEGIN
         SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddColStmts WHERE RowId > @v_addcol_id);
     END WHILE;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapAddColStmts;
+
+    -- Step 4.4: a declared column that EXISTS BUT WITH THE WRONG COLLATION is converged here. Step 4
+    -- only ADDs columns that are missing, so without this an existing deployment keeps whatever
+    -- collation its table was first created with -- and for a column holding an object NAME that is
+    -- not cosmetic: the collation decides whether a UNIQUE index treats two names differing only by
+    -- case as one key. A ci->bin change can only ever SPLIT keys that were previously equal, never
+    -- merge two into one, so this ALTER cannot fail on duplicate values no matter what is stored.
+    -- Only columns that actually declare a Collation are considered; everything else keeps the table
+    -- default and is never rewritten.
+    SET v_AcCnt = COALESCE(JSON_LENGTH(JSON_EXTRACT(p_TableDefinitions, '$.Columns')), 0);
+    SET v_AcIdx = 0;
+    SET v_CollateClauses = '';
+    WHILE v_AcIdx < v_AcCnt DO
+        SET v_AcColName = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].Name')));
+        SET v_AcDataType = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].DataType')));
+        SET v_AcNullable = SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].Nullable')));
+        SET v_AcDefault = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].Default')));
+        SET v_AcCollation = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].Collation')));
+
+        IF v_AcCollation IS NOT NULL AND TRIM(v_AcCollation) <> '' THEN
+            SET v_LiveCollation = NULL;
+            -- BINARY on the INFORMATION_SCHEMA comparisons for the same reason Step 4 uses it: on
+            -- MySQL 8.0 those columns collate utf8mb4_0900_ai_ci while proc variables do not, and a
+            -- bare '=' between them throws 1267.
+            SELECT collation_name INTO v_LiveCollation
+            FROM information_schema.columns
+            WHERE BINARY table_schema = BINARY v_Db
+              AND BINARY table_name = BINARY v_TableName
+              AND BINARY column_name = BINARY v_AcColName
+            LIMIT 1;
+
+            IF v_LiveCollation IS NOT NULL AND BINARY v_LiveCollation <> BINARY v_AcCollation THEN
+                SET v_CollateClauses = CONCAT(v_CollateClauses, IF(v_CollateClauses = '', '', ', '),
+                    'MODIFY COLUMN `', v_AcColName, '` ', v_AcDataType, ' COLLATE ', v_AcCollation,
+                    CASE WHEN v_AcNullable = 1 THEN ' NULL' ELSE ' NOT NULL' END,
+                    CASE WHEN v_AcDefault IS NOT NULL AND TRIM(v_AcDefault) <> '' THEN CONCAT(' DEFAULT ', v_AcDefault) ELSE '' END);
+            END IF;
+        END IF;
+        SET v_AcIdx = v_AcIdx + 1;
+    END WHILE;
+
+    IF v_CollateClauses <> '' THEN
+        SET @exec_sql = CONCAT('ALTER TABLE `', v_TableName, '` ', v_CollateClauses);
+        PREPARE stmt FROM @exec_sql;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
 
     -- Step 4.5: a declared index that EXISTS UNDER THE RIGHT NAME BUT THE WRONG SHAPE is dropped here, so
     -- Step 5 rebuilds it. Existence-by-name alone was the hole: an index created by an older SchemaSmith (or by

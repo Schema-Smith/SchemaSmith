@@ -627,12 +627,19 @@ BEGIN
     -- STEP 0: OWNERSHIP VALIDATION
     -- =======================
     -- Check if any tables in the definition are owned by a different product
+    -- SchemaSmith_IdentifierKey rather than CONVERT(... USING utf8mb4) on the identifier halves:
+    -- CONVERT() yields the charset's DEFAULT collation, which is case-INSENSITIVE, so this check used
+    -- to treat `CaseProbe` and `caseprobe` as one table. On a server with lower_case_table_names = 0
+    -- those are two different tables, and a second product declaring the lowercase twin was refused
+    -- with "Table CaseProbe is already owned by another product" -- naming a table it had not
+    -- declared. IdentifierKey asks the server which it is and folds both sides only when the server
+    -- folds identifiers itself, so behaviour on lower_case_table_names >= 1 is unchanged.
     SELECT po.ObjectName, po.ProductName
     INTO v_ConflictingTable, v_ConflictingOwner
     FROM _SchemaSmith_Tables t
     INNER JOIN SchemaSmith_ProductOwnership po
-        ON CONVERT(po.ObjectName USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
-        AND CONVERT(po.ObjectSchema USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+        ON SchemaSmith_IdentifierKey(po.ObjectName) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName))
+        AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
         AND po.ObjectType = 'TABLE'
     WHERE CONVERT(po.ProductName USING utf8mb4) != CONVERT(p_ProductName USING utf8mb4)
     LIMIT 1;
@@ -2763,12 +2770,17 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
         -- INSERT IGNORE skips existing ownership rows, so a toggled PreventDrop would not take
         -- effect without this refresh UPDATE carrying the current per-table flag onto the row.
+        -- Same identifier-key treatment as STEP 0, and for a sharper reason: the INSERT above matches
+        -- its rows with BINARY, so a case-insensitive join here refreshed PreventDrop from whichever
+        -- of two case-differing tables the collation happened to pick. ProductName stays on a plain
+        -- comparison -- a product name is not a server identifier and lower_case_table_names has
+        -- nothing to say about it.
         UPDATE SchemaSmith_ProductOwnership po
           JOIN _SchemaSmith_Tables t
-            ON CONVERT(po.ObjectName USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
+            ON SchemaSmith_IdentifierKey(po.ObjectName) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName))
          SET po.PreventDrop = COALESCE(t.PreventDrop, 0)
          WHERE CONVERT(po.ProductName USING utf8mb4) = CONVERT(p_ProductName USING utf8mb4)
-           AND CONVERT(po.ObjectSchema USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+           AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
            AND po.ObjectType = 'TABLE';
     END IF;
 
