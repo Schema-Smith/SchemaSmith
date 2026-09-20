@@ -530,6 +530,48 @@ END";
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// Disable every capture instance this fixture could have left behind, whichever test failed.
+    /// <para>A CDC-enabled table keeps SQL Server's capture agent (<c>sp_cdc_scan</c>) alive in the
+    /// database, polling on a WAITFOR. Only 3 of this fixture's 16 tests wrapped their cleanup in a
+    /// finally, so any failure part-way left the agent running — and a database with a live capture agent
+    /// resists teardown, so the test database leaks and whatever waits on it stalls. That is not
+    /// hypothetical: a surviving agent held a full four-engine gate for 72 minutes at ~3% CPU before it
+    /// was killed by hand, and the databases it stranded had to be dropped manually.</para>
+    /// <para>Fixture-level rather than per-test on purpose: 16 finally blocks is 16 chances to forget one,
+    /// and a test added later would not know to write it. This runs regardless of how a test exited.</para>
+    /// </summary>
+    [OneTimeTearDown]
+    public void DisableAnyCaptureInstancesLeftRunning()
+    {
+        try
+        {
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+            conn.Open();
+            conn.ChangeDatabase(_mainDb);
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 300;
+            cmd.CommandText = @"
+IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
+BEGIN
+    DECLARE @sql NVARCHAR(MAX) = N''
+    SELECT @sql = @sql + N'EXEC sys.sp_cdc_disable_table @source_schema = N''''' + s.[name]
+                       + N''''', @source_name = N''''' + o.[name] + N''''', @capture_instance = N''''all'''';' + CHAR(10)
+      FROM cdc.change_tables ct
+      JOIN sys.objects o ON o.[object_id] = ct.source_object_id
+      JOIN sys.schemas s ON s.[schema_id] = o.[schema_id]
+     GROUP BY s.[name], o.[name]
+    IF @sql <> N'' EXEC sp_executesql @sql
+END";
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception)
+        {
+            // Teardown must never mask a test failure. If the agent cannot be stopped here, FixtureSetup's
+            // database-level drop still runs; this is the cheap first attempt, not the only safeguard.
+        }
+    }
+
     private void RunCdcQuench(IDbCommand cmd, string json, string templateCdcFilegroup = null)
     {
         cmd.CommandTimeout = 300;

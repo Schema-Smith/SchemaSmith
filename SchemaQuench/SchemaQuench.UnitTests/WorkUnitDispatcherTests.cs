@@ -472,4 +472,73 @@ public class WorkUnitDispatcherTests
         Assert.DoesNotThrow(() => dispatcher.Run());
         Assert.That(processed.Count, Is.EqualTo(3));
     }
+
+    /// <summary>
+    /// Contention stress: many units across several serial templates plus a parallel pool, run on more
+    /// threads than templates so workers are forced to block on serial claims and be woken by siblings.
+    /// <para>This exists because the dispatcher's wait is only correct while EVERY state change that can
+    /// make work dequeuable pulses under the lock — an invariant nothing enforces. Reading the code cannot
+    /// prove the absence of a deadlock; running it under contention can at least catch one. The wait is
+    /// bounded, so a genuine missed pulse shows up here as a test that takes far longer than it should
+    /// rather than one that hangs the suite forever, which is the whole point of bounding it.</para>
+    /// </summary>
+    [Test]
+    [Repeat(5)]
+    public void Run_UnderSerialAndParallelContention_CompletesEveryUnitWithoutDeadlock()
+    {
+        var units = new List<WorkUnit>();
+        for (var i = 0; i < 40; i++)
+        {
+            units.Add(new WorkUnit("s", $"db{i}", "SerialA", ""));
+            units.Add(new WorkUnit("s", $"db{i}", "SerialB", ""));
+            units.Add(new WorkUnit("s", $"db{i}", "Parallel", ""));
+        }
+
+        // SerialA and SerialB may each run only one unit at a time; Parallel is unconstrained.
+        var allowParallel = new Dictionary<string, bool>
+        {
+            ["SerialA"] = false,
+            ["SerialB"] = false,
+            ["Parallel"] = true
+        };
+
+        var processed = new ConcurrentBag<WorkUnit>();
+        var inFlight = new Dictionary<string, int>();
+        var concurrencyViolations = new ConcurrentBag<string>();
+        var gate = new object();
+
+        var dispatcher = new WorkUnitDispatcher(units, maxThreads: 8, allowParallel, unit =>
+        {
+            lock (gate)
+            {
+                inFlight.TryGetValue(unit.TemplateName, out var n);
+                inFlight[unit.TemplateName] = n + 1;
+                // A serial template must never have two units in flight at once.
+                if (n + 1 > 1 && !allowParallel[unit.TemplateName])
+                    concurrencyViolations.Add(unit.TemplateName);
+            }
+
+            Thread.Sleep(1);
+            processed.Add(unit);
+
+            lock (gate) { inFlight[unit.TemplateName] -= 1; }
+        });
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        dispatcher.Run();
+        watch.Stop();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(processed.Count, Is.EqualTo(units.Count),
+                "every queued unit must run exactly once, however the workers interleaved");
+            Assert.That(concurrencyViolations, Is.Empty,
+                "a template declared serial must never have two units in flight at once");
+            // 120 units of ~1ms on 8 threads is well under a second. The bounded wait is 1s, so a run that
+            // needed the safety net to make progress lands far above this -- which is what we want to catch.
+            Assert.That(watch.Elapsed.TotalSeconds, Is.LessThan(20),
+                "the run took long enough to suggest workers were waiting out the missed-pulse timeout "
+                + "rather than being pulsed -- the pulse/wait pairing has regressed");
+        });
+    }
 }

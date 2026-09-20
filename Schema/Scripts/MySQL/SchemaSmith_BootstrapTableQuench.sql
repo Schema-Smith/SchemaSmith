@@ -278,7 +278,7 @@ BEGIN
     -- INFORMATION_SCHEMA inside a JSON_TABLE-sourced query can cache/materialize incorrectly in
     -- MySQL (same optimizer issue documented in SchemaSmith_ParseTableJson.sql).
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapExistingCols;
-    CREATE TEMPORARY TABLE _SchemaSmith_BootstrapExistingCols (ColumnName VARCHAR(128) NOT NULL PRIMARY KEY)
+    CREATE TEMPORARY TABLE _SchemaSmith_BootstrapExistingCols (ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY)
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     -- BINARY on the INFORMATION_SCHEMA-vs-proc-variable comparisons: on MySQL 8.0 the
     -- INFORMATION_SCHEMA columns collate utf8mb4_0900_ai_ci while proc/temp/JSON strings are
@@ -487,7 +487,7 @@ BEGIN
     -- indexes ordering matches the original two-step structure exactly.
     -- Same snapshot-first workaround as Step 4, for the index-existence lookup.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapExistingIdxs;
-    CREATE TEMPORARY TABLE _SchemaSmith_BootstrapExistingIdxs (IndexName VARCHAR(128) NOT NULL PRIMARY KEY)
+    CREATE TEMPORARY TABLE _SchemaSmith_BootstrapExistingIdxs (IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY)
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT IGNORE INTO _SchemaSmith_BootstrapExistingIdxs (IndexName)
     SELECT index_name FROM information_schema.statistics

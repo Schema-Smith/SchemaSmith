@@ -115,8 +115,8 @@ BEGIN
     -- GROUP_CONCAT the correlated subqueries used, so composite index column lists compare byte-for-byte.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectSnap;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxDetectSnap (
-        TableName VARCHAR(128) NOT NULL,
-        IndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         NonUnique TINYINT DEFAULT 0,
         IndexType VARCHAR(32),
         NormColumns TEXT,
@@ -186,8 +186,8 @@ BEGIN
     -- (ER_CANT_REOPEN_TABLE 1137). The second reference reads this copy.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectNames;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxDetectNames (
-        TableName VARCHAR(128) NOT NULL,
-        IndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, IndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT INTO _SchemaSmith_IdxDetectNames (TableName, IndexName)
@@ -202,8 +202,8 @@ BEGIN
     -- =========================================================================
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexRenames;
     CREATE TEMPORARY TABLE _SchemaSmith_IndexRenames (
-        TableName VARCHAR(128) NOT NULL,
-        OldIndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        OldIndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         NewIndexName VARCHAR(128) NOT NULL,
         PRIMARY KEY (TableName, OldIndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -302,8 +302,8 @@ BEGIN
     -- =========================================================================
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifiedIndexes;
     CREATE TEMPORARY TABLE _SchemaSmith_ModifiedIndexes (
-        TableName VARCHAR(128) NOT NULL,
-        IndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, IndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -404,8 +404,8 @@ BEGIN
         -- Catalog snapshot (one row per index; SEQ_IN_INDEX = 1). Mirrors STEP 3's _SchemaSmith_IdxOnlyIdx.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropIdxCat;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropIdxCat (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_WouldDropIdxCat (TableName, IndexName)
@@ -417,8 +417,8 @@ BEGIN
         -- Defined-index snapshot (table.index pairs from the current definition). Mirrors STEP 3's _SchemaSmith_DefinedIndexes.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropDefIdx;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropDefIdx (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_WouldDropDefIdx (TableName, IndexName)
@@ -428,8 +428,8 @@ BEGIN
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropIndexes;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropIndexes (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -509,8 +509,8 @@ BEGIN
         -- rather than live INFORMATION_SCHEMA in set-based DML (the frequent-run segfault trigger, #337).
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyIdx;
         CREATE TEMPORARY TABLE _SchemaSmith_IdxOnlyIdx (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             NonUnique TINYINT DEFAULT 0,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -522,9 +522,9 @@ BEGIN
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyKCU;
         CREATE TEMPORARY TABLE _SchemaSmith_IdxOnlyKCU (
-            TableName VARCHAR(128) NOT NULL,
-            ConstraintName VARCHAR(128) NOT NULL,
-            ReferencedTableName VARCHAR(128) DEFAULT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ReferencedTableName VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
             KEY ix_iokcu (ReferencedTableName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_IdxOnlyKCU (TableName, ConstraintName, ReferencedTableName)
@@ -536,8 +536,8 @@ BEGIN
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyTC;
         CREATE TEMPORARY TABLE _SchemaSmith_IdxOnlyTC (
-            TableName VARCHAR(128) NOT NULL,
-            ConstraintName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             KEY ix_iotc (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_IdxOnlyTC (TableName, ConstraintName)
@@ -548,8 +548,8 @@ BEGIN
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexesToDrop;
         CREATE TEMPORARY TABLE _SchemaSmith_IndexesToDrop (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             IsUnique TINYINT DEFAULT 0,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -558,8 +558,8 @@ BEGIN
         -- MySQL cannot reference the same temporary table multiple times in a query
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DefinedIndexes;
         CREATE TEMPORARY TABLE _SchemaSmith_DefinedIndexes (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -653,8 +653,8 @@ BEGIN
             -- and drop-index phases each fold into one ALTER per table instead of per-row PREPAREs.
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKsForIndexDrop;
             CREATE TEMPORARY TABLE _SchemaSmith_FKsForIndexDrop (
-                TableName VARCHAR(128) NOT NULL,
-                ConstraintName VARCHAR(128) NOT NULL,
+                TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+                ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
                 PRIMARY KEY (TableName, ConstraintName)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -875,8 +875,8 @@ BEGIN
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FTIndexesToDrop;
         CREATE TEMPORARY TABLE _SchemaSmith_FTIndexesToDrop (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

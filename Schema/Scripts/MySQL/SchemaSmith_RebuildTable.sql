@@ -605,7 +605,7 @@ BEGIN
         ChildSchema VARCHAR(64) NOT NULL,
         ChildTable VARCHAR(64) NOT NULL,
         AlterTable VARCHAR(64) NOT NULL,
-        ConstraintName VARCHAR(64) NOT NULL,
+        ConstraintName VARCHAR(64) COLLATE utf8mb4_bin NOT NULL,
         Stmt TEXT
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

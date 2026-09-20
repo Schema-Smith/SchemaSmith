@@ -21,8 +21,8 @@ BEGIN
     -- override is needed.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxExist;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxExist (
-        TableName VARCHAR(128) NOT NULL,
-        IndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         IndexType VARCHAR(32),
         PRIMARY KEY (TableName, IndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

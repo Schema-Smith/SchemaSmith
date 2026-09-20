@@ -29,8 +29,8 @@ BEGIN
     -- is uniform across an index's STATISTICS rows, so MAX collapses the per-column rows to one value.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingIndexVisibility;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingIndexVisibility (
-        TableName VARCHAR(128) NOT NULL,
-        IndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         IsVisible TINYINT NOT NULL DEFAULT 1,
         PRIMARY KEY (TableName, IndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

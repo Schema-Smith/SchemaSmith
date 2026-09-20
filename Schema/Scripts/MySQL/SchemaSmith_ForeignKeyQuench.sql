@@ -39,8 +39,8 @@ BEGIN
     -- =========================================================================
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifiedFKs;
     CREATE TEMPORARY TABLE _SchemaSmith_ModifiedFKs (
-        TableName VARCHAR(128) NOT NULL,
-        ConstraintName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, ConstraintName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -55,7 +55,7 @@ BEGIN
     -- Hoisting the metadata into temp tables turns ~360 scans into 3.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingFKCols;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingFKCols (
-        ConstraintName VARCHAR(128) NOT NULL,
+        ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         FkColumns TEXT,
         RefColumns TEXT,
         PRIMARY KEY (ConstraintName)
@@ -75,8 +75,8 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingFKs;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingFKs (
-        TableName VARCHAR(128) NOT NULL,
-        ConstraintName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ReferencedTable VARCHAR(128),
         DeleteRule VARCHAR(64),
         UpdateRule VARCHAR(64),
@@ -307,8 +307,8 @@ BEGIN
     IF COALESCE(@ss_capture_would_drop, 0) = 1 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropFKs;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropFKs (
-            TableName VARCHAR(128) NOT NULL,
-            ConstraintName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -355,8 +355,8 @@ BEGIN
     IF p_DropForeignKeysRemovedFromProduct = 1 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKsToDrop;
         CREATE TEMPORARY TABLE _SchemaSmith_FKsToDrop (
-            TableName VARCHAR(128) NOT NULL,
-            ConstraintName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

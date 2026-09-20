@@ -50,6 +50,13 @@ namespace SchemaQuench;
 /// </summary>
 public sealed class WorkUnitDispatcher
 {
+    /// <summary>
+    /// Ceiling on how long a worker blocks waiting to be pulsed. Not the wake-up mechanism — a pulse wakes
+    /// a worker immediately — but the safety net that keeps a missed pulse from hanging a deploy forever.
+    /// See the wait site in <c>WorkerLoop</c> for the invariant it is insuring against.
+    /// </summary>
+    private const int MissedPulseSafetyNetMs = 1000;
+
     private readonly int _maxThreads;
     private readonly Action<WorkUnit> _callback;
     private readonly IReadOnlyDictionary<string, bool> _allowParallel;
@@ -169,7 +176,17 @@ public sealed class WorkUnitDispatcher
                     // No work currently available — but a serial queue may unlock when a sibling
                     // unit finishes. Exit only when nothing remains anywhere.
                     if (TotalRemaining() == 0) return;
-                    Monitor.Wait(_lock);
+
+                    // THE INVARIANT THIS WAIT DEPENDS ON: every state change that could make work
+                    // dequeuable must PulseAll under _lock. Today the unit-completion `finally` and the
+                    // failure `catch` both do, which is what makes the wait correct.
+                    //
+                    // The timeout is not how a worker is normally woken — a pulse does that immediately.
+                    // It exists because the invariant is not enforced by anything: a later edit that adds
+                    // a path releasing a claim (or clearing a queue) without pulsing would, with an
+                    // unbounded wait, hang the DEPLOY permanently. Bounded, the same mistake degrades to a
+                    // one-second poll. A hang is the worst failure this product has; a slow poll is not.
+                    Monitor.Wait(_lock, MissedPulseSafetyNetMs);
                     continue;
                 }
             }

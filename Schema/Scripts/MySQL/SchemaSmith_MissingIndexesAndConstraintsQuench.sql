@@ -143,8 +143,8 @@ BEGIN
     -- taken after the drops, not reused from the pre-STEP-1 detection snapshot. One row per index.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxExistPostDrop;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxExistPostDrop (
-        TableName VARCHAR(128) NOT NULL,
-        IndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, IndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT INTO _SchemaSmith_IdxExistPostDrop (TableName, IndexName)
@@ -274,8 +274,8 @@ BEGIN
     -- paren pair and normalizes spacing), which the normalizer collapses to a canonical form.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifiedChecks;
     CREATE TEMPORARY TABLE _SchemaSmith_ModifiedChecks (
-        TableName VARCHAR(128) NOT NULL,
-        ConstraintName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, ConstraintName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -354,8 +354,8 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
     IF COALESCE(@ss_capture_would_drop, 0) = 1 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropChecks;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropChecks (
-            TableName VARCHAR(128) NOT NULL,
-            ConstraintName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -392,8 +392,8 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
     IF p_DropCheckConstraintsRemovedFromProduct = 1 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChecksToDropByAbsence;
         CREATE TEMPORARY TABLE _SchemaSmith_ChecksToDropByAbsence (
-            TableName VARCHAR(128) NOT NULL,
-            ConstraintName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -473,8 +473,8 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
     -- so the create passes here see the pre-create state and the ownership pass sees the post-create state.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkExist;
     CREATE TEMPORARY TABLE _SchemaSmith_ChkExist (
-        TableName VARCHAR(128) NOT NULL,
-        ConstraintName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, ConstraintName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
@@ -590,8 +590,8 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
         -- Post-create existence snapshots (indexes + CHECK constraints), reflecting STEP 3/4 creates.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxExistFinal;
         CREATE TEMPORARY TABLE _SchemaSmith_IdxExistFinal (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_IdxExistFinal (TableName, IndexName)
@@ -604,8 +604,8 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
         -- pre-create build; ownership must see what now exists).
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkExist;
         CREATE TEMPORARY TABLE _SchemaSmith_ChkExist (
-            TableName VARCHAR(128) NOT NULL,
-            ConstraintName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
