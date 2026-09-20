@@ -1,5 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System.Data.Common;
 using System;
 using System.Data;
 using NUnit.Framework;
@@ -109,7 +110,7 @@ public abstract class TableQuench_CaseDifferingTableNamesSharedTests : BaseTable
             cmd.ExecuteNonQuery();
             return true;
         }
-        catch (Exception)
+        catch (DbException)
         {
             return false;
         }

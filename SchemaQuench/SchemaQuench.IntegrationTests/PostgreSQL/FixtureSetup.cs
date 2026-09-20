@@ -1,5 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System.Data.Common;
 using System.Globalization;
 using System;
 using System.Collections.Generic;
@@ -101,10 +102,10 @@ public class FixtureSetup
                     cmd.CommandText = $@"DROP DATABASE IF EXISTS ""{db}""";
                     cmd.ExecuteNonQuery();
                 }
-                catch (Exception) { /* in use by a live run; leave it */ }
+                catch (DbException) { /* in use by a live run; leave it */ }
             }
         }
-        catch (Exception)
+        catch (DbException)
         {
             // Housekeeping must never stop the suite from starting.
         }

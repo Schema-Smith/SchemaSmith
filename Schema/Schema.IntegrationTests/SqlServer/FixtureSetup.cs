@@ -1,5 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System.Data.Common;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -113,10 +114,10 @@ BEGIN
     ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
     DROP DATABASE [{db}];
 END";
-                try { cmd.ExecuteNonQuery(); } catch (Exception) { /* in use by a live run; leave it */ }
+                try { cmd.ExecuteNonQuery(); } catch (DbException) { /* in use by a live run; leave it */ }
             }
         }
-        catch (Exception)
+        catch (DbException)
         {
             // Housekeeping must never stop the suite from starting.
         }

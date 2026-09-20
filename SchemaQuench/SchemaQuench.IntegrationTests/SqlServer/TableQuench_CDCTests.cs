@@ -565,7 +565,7 @@ BEGIN
 END";
             cmd.ExecuteNonQuery();
         }
-        catch (Exception)
+        catch (DbException)
         {
             // Teardown must never mask a test failure. If the agent cannot be stopped here, FixtureSetup's
             // database-level drop still runs; this is the cheap first attempt, not the only safeguard.
