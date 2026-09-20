@@ -17,7 +17,9 @@ public sealed record TargetResult(
     string Schema,
     string Template,
     TargetOutcome Outcome,
-    long DurationMs)
+    long DurationMs,
+    string DatabaseSource = "",
+    string SchemaSource = "")
 {
     /// <summary>
     /// Derives a work unit's <see cref="TargetOutcome"/> from <c>DatabaseQuench.QuenchSuccessful</c>

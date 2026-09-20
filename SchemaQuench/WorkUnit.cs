@@ -32,10 +32,10 @@ public sealed record WorkUnit(
     /// <summary>
     /// Discloses how <see cref="DatabaseName"/> was obtained — either the user-facing
     /// <c>DatabaseIdentificationScript</c> result or a config-driven
-    /// <c>TemplateTargets:&lt;TemplateName&gt;:Databases</c> override. Surfaces in the
-    /// per-unit dispatch log so a reader can see at a glance whether discovery or a config
-    /// override produced this unit. Default empty so existing call sites and tests that don't
-    /// care about the disclosure stay unaffected.
+    /// <c>TemplateTargets:&lt;TemplateName&gt;:Databases</c> override. Carried into the deployment
+    /// summary report (<c>TargetSummary.DatabaseSource</c>), which keeps one row per work unit; the
+    /// progress log shows only a per-template rollup of these. Default empty so existing call sites
+    /// and tests that don't care about the disclosure stay unaffected.
     /// </summary>
     public string DatabaseSource { get; init; } = "";
 
