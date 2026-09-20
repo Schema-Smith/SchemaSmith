@@ -238,10 +238,18 @@ jobs:
     # latest + the intermediate/floor versions (14, 13, 12): the real old containers are the only way to
     # exercise the version-adaptive branches below 15 (physical-column-existence questions no override can
     # fake) — attcompression + expression statistics (14), DROP EXPRESSION (13), getOwnedSequence (12).
+    # MATRIX SHAPE (Paul, 2026-09-20). A pull request runs FLOOR + LATEST per engine; the full matrix
+    # runs on merge to main. No nightly -- a scheduled run would re-test code nobody is waiting on.
+    # The intermediate versions are what a PR gives up, and they are the ones that mostly duplicate
+    # the latest leg; the floors are where the version-adaptive branches actually differ, which is why
+    # they are never the ones dropped. The accepted risk is that a break confined to an intermediate
+    # version is caught at merge rather than on the PR, and the mitigation is process, not CI: the full
+    # gate and floor sweep are run locally before a PR is opened -- including, for an external
+    # contribution, by a maintainer on the contributor's behalf.
     strategy:
       fail-fast: false
       matrix:
-        pg: [latest, '14', '13', '12']
+        pg: ${{ github.event_name == 'pull_request' && fromJSON('["latest","12"]') || fromJSON('["latest","14","13","12"]') }}
     permissions:
       contents: read
       checks: write
@@ -332,6 +340,7 @@ jobs:
     needs: [build-and-unit-tests, sweep-record]
     # Current 8.0 + the supported floor (5.7). MySQL 5.7 lacks JSON_TABLE, CHECK constraints, descending indexes,
     # and RENAME COLUMN — the version-adaptive engine takes an equivalent path or degrades via the policy.
+    # Already floor + latest, so a pull request runs the same two legs as a merge.
     strategy:
       fail-fast: false
       matrix:
@@ -412,10 +421,18 @@ jobs:
     # Current LTS (11.4, whose new utf8mb4_uca1400_ai_ci default collation exercises the data-delivery
     # collation fix #15), plus 10.6 and the supported floor (10.2). MariaDB 10.2-10.5 lacks JSON_TABLE
     # (recursive-CTE data delivery), RENAME COLUMN/INDEX, JSON_ARRAYAGG, and invisible/descending indexes.
+    # MATRIX SHAPE (Paul, 2026-09-20). A pull request runs FLOOR + LATEST per engine; the full matrix
+    # runs on merge to main. No nightly -- a scheduled run would re-test code nobody is waiting on.
+    # The intermediate versions are what a PR gives up, and they are the ones that mostly duplicate
+    # the latest leg; the floors are where the version-adaptive branches actually differ, which is why
+    # they are never the ones dropped. The accepted risk is that a break confined to an intermediate
+    # version is caught at merge rather than on the PR, and the mitigation is process, not CI: the full
+    # gate and floor sweep are run locally before a PR is opened -- including, for an external
+    # contribution, by a maintainer on the contributor's behalf.
     strategy:
       fail-fast: false
       matrix:
-        mariadb: ['11.4', '10.6', '10.2']
+        mariadb: ${{ github.event_name == 'pull_request' && fromJSON('["11.4","10.2"]') || fromJSON('["11.4","10.6","10.2"]') }}
     permissions:
       contents: read
       checks: write
