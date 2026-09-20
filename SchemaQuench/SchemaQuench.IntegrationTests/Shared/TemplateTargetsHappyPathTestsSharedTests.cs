@@ -72,10 +72,11 @@ public abstract class TemplateTargetsHappyPathTestsSharedTests
                 RunSchemaQuench();
                 _progressLog.DidNotReceive().Error(Arg.Any<string>());
 
-                // Source-disclosure log line names the override origin.
+                // Source disclosure still names the override origin, now as the per-template rollup
+                // rather than a line per work unit (the per-unit detail moved to the report).
                 _progressLog.Received().Info(Arg.Is<string>(s =>
-                    s.Contains("source: ") &&
-                    s.Contains("db=TemplateTargets:Body:Databases")));
+                    s.Contains("Template 'Body'") &&
+                    s.Contains("db: TemplateTargets:Body:Databases")));
 
                 // The DB still exists (no provisioning needed, none done) and the marker table
                 // was deployed inside it.

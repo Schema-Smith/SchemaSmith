@@ -78,9 +78,11 @@ public class TemplateTargetsHappyPathTests
                 _progressLog.DidNotReceive().Info(
                     $"[{_server}].[{_mainDb}] [Schema: {extraTenantIgnoredByOverride}] Successfully Quenched");
 
+                // Source disclosure still names the override origin, now as the per-template rollup
+                // rather than a line per work unit (the per-unit detail moved to the report).
                 _progressLog.Received().Info(Arg.Is<string>(s =>
-                    s.Contains("source: ") &&
-                    s.Contains("schema=TemplateTargets:TenantBody:Schemas")));
+                    s.Contains("Template 'TenantBody'") &&
+                    s.Contains("schema: TemplateTargets:TenantBody:Schemas")));
 
                 foreach (var tenant in overrideTenants)
                     AssertMigrationTracked(TenantBodyTemplate, tenant,

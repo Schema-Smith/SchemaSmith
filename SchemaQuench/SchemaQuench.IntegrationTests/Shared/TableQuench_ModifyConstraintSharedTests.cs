@@ -346,6 +346,12 @@ VALUES ('{_productName}', '', '{TestSchema}', 'FOREIGN KEY', 'ModFKCascUpd.FK_Mo
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
 
+        // Its own database: this test runs DDL, and a sibling test's concurrent ALTER in a shared
+        // database makes the engine refuse this one's catalog reads outright. Its own product name too --
+        // FK reconciliation is ownership-scoped, so sharing the fixture product would let this package's
+        // two tables look like the whole product and strip sibling tests' foreign keys.
+        var schema = CreatePrivateDdlDatabase(cmd, "coll");
+        var product = $"CollFkProduct_{Guid.NewGuid():N}"[..24];
         var parent = "coll_fk_parent";
         var child = "coll_fk_child";
         var json = $$"""
@@ -373,38 +379,32 @@ VALUES ('{_productName}', '', '{TestSchema}', 'FOREIGN KEY', 'ModFKCascUpd.FK_Mo
         try
         {
             // Live tables start on a DIFFERENT collation, so the deploy must convert them.
-            cmd.CommandText = $"DROP TABLE IF EXISTS `{TestSchema}`.`{child}`"; cmd.ExecuteNonQuery();
-            cmd.CommandText = $"DROP TABLE IF EXISTS `{TestSchema}`.`{parent}`"; cmd.ExecuteNonQuery();
-            cmd.CommandText = $@"CREATE TABLE `{TestSchema}`.`{parent}` (Code VARCHAR(20) NOT NULL,
+            cmd.CommandText = $@"CREATE TABLE `{schema}`.`{parent}` (Code VARCHAR(20) NOT NULL,
                                   CONSTRAINT PK_{parent} PRIMARY KEY (Code)) COLLATE=utf8mb4_general_ci";
             cmd.ExecuteNonQuery();
-            cmd.CommandText = $@"CREATE TABLE `{TestSchema}`.`{child}` (Id INT NOT NULL, Code VARCHAR(20) NOT NULL,
+            cmd.CommandText = $@"CREATE TABLE `{schema}`.`{child}` (Id INT NOT NULL, Code VARCHAR(20) NOT NULL,
                                   CONSTRAINT PK_{child} PRIMARY KEY (Id),
                                   CONSTRAINT FK_{child}_{parent} FOREIGN KEY (Code)
-                                    REFERENCES `{TestSchema}`.`{parent}`(Code)) COLLATE=utf8mb4_general_ci";
+                                    REFERENCES `{schema}`.`{parent}`(Code)) COLLATE=utf8mb4_general_ci";
             cmd.ExecuteNonQuery();
 
-            // Its own product name: FK reconciliation is ownership-scoped, so sharing the fixture product
-            // would let this package's two tables look like the whole product and strip sibling tests' FKs.
-            var product = $"CollFkProduct_{Guid.NewGuid():N}"[..24];
-            Assert.DoesNotThrow(() => RunFullQuench(cmd, json, product),
+            Assert.DoesNotThrow(() => RunFullQuench(cmd, json, product, schema),
                 "a collation change must drop the dependent foreign key rather than let the engine refuse");
 
             cmd.CommandText = $@"SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES
-                                  WHERE TABLE_SCHEMA = '{TestSchema}' AND TABLE_NAME = '{parent}'";
+                                  WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{parent}'";
             Assert.That(Convert.ToString(cmd.ExecuteScalar()), Is.EqualTo("utf8mb4_unicode_ci"),
                 "the declared collation must actually be applied");
 
             cmd.CommandText = $@"SELECT COUNT(*) FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-                                  WHERE TABLE_SCHEMA = '{TestSchema}' AND TABLE_NAME = '{child}'
+                                  WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{child}'
                                     AND REFERENCED_TABLE_NAME = '{parent}'";
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1),
                 "the foreign key must be put back by the foreign-key phase, not left dropped");
         }
         finally
         {
-            cmd.CommandText = $"DROP TABLE IF EXISTS `{TestSchema}`.`{child}`"; cmd.ExecuteNonQuery();
-            cmd.CommandText = $"DROP TABLE IF EXISTS `{TestSchema}`.`{parent}`"; cmd.ExecuteNonQuery();
+            DropPrivateDdlDatabase(cmd, schema, product);
         }
         conn.Close();
     }
@@ -425,6 +425,12 @@ VALUES ('{_productName}', '', '{TestSchema}', 'FOREIGN KEY', 'ModFKCascUpd.FK_Mo
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
 
+        // Its own database: this test runs DDL, and a sibling test's concurrent ALTER in a shared
+        // database makes the engine refuse this one's catalog reads outright. Its own product name too --
+        // FK reconciliation is ownership-scoped, so sharing the fixture product would let this package's
+        // two tables look like the whole product and strip sibling tests' foreign keys.
+        var schema = CreatePrivateDdlDatabase(cmd, "colcoll");
+        var product = $"ColCollFkProduct_{Guid.NewGuid():N}"[..24];
         var parent = "colcoll_fk_parent";
         var child = "colcoll_fk_child";
         var json = $$"""
@@ -451,53 +457,89 @@ VALUES ('{_productName}', '', '{TestSchema}', 'FOREIGN KEY', 'ModFKCascUpd.FK_Mo
         {
             // Live COLUMNS start on a different collation; the tables themselves are left alone, so only the
             // per-column MODIFY COLUMN path can be responsible for what happens next.
-            cmd.CommandText = $"DROP TABLE IF EXISTS `{TestSchema}`.`{child}`"; cmd.ExecuteNonQuery();
-            cmd.CommandText = $"DROP TABLE IF EXISTS `{TestSchema}`.`{parent}`"; cmd.ExecuteNonQuery();
-            cmd.CommandText = $@"CREATE TABLE `{TestSchema}`.`{parent}` (Code VARCHAR(20) COLLATE utf8mb4_general_ci NOT NULL,
+            cmd.CommandText = $@"CREATE TABLE `{schema}`.`{parent}` (Code VARCHAR(20) COLLATE utf8mb4_general_ci NOT NULL,
                                   CONSTRAINT PK_{parent} PRIMARY KEY (Code))";
             cmd.ExecuteNonQuery();
-            cmd.CommandText = $@"CREATE TABLE `{TestSchema}`.`{child}` (Id INT NOT NULL, Code VARCHAR(20) COLLATE utf8mb4_general_ci NOT NULL,
+            cmd.CommandText = $@"CREATE TABLE `{schema}`.`{child}` (Id INT NOT NULL, Code VARCHAR(20) COLLATE utf8mb4_general_ci NOT NULL,
                                   CONSTRAINT PK_{child} PRIMARY KEY (Id),
                                   CONSTRAINT FK_{child}_{parent} FOREIGN KEY (Code)
-                                    REFERENCES `{TestSchema}`.`{parent}`(Code))";
+                                    REFERENCES `{schema}`.`{parent}`(Code))";
             cmd.ExecuteNonQuery();
 
-            var product = $"ColCollFkProduct_{Guid.NewGuid():N}"[..24];
-            Assert.DoesNotThrow(() => RunFullQuench(cmd, json, product),
+            Assert.DoesNotThrow(() => RunFullQuench(cmd, json, product, schema),
                 "a column-level collation change must drop the dependent foreign key rather than let the engine refuse");
 
             cmd.CommandText = $@"SELECT COLLATION_NAME FROM INFORMATION_SCHEMA.COLUMNS
-                                  WHERE TABLE_SCHEMA = '{TestSchema}' AND TABLE_NAME = '{parent}' AND COLUMN_NAME = 'Code'";
+                                  WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{parent}' AND COLUMN_NAME = 'Code'";
             Assert.That(Convert.ToString(cmd.ExecuteScalar()), Is.EqualTo("utf8mb4_unicode_ci"),
                 "the declared column collation must actually be applied");
 
             cmd.CommandText = $@"SELECT COUNT(*) FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-                                  WHERE TABLE_SCHEMA = '{TestSchema}' AND TABLE_NAME = '{child}'
+                                  WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{child}'
                                     AND REFERENCED_TABLE_NAME = '{parent}'";
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1),
                 "the foreign key must be put back by the foreign-key phase, not left dropped");
         }
         finally
         {
-            cmd.CommandText = $"DROP TABLE IF EXISTS `{TestSchema}`.`{child}`"; cmd.ExecuteNonQuery();
-            cmd.CommandText = $"DROP TABLE IF EXISTS `{TestSchema}`.`{parent}`"; cmd.ExecuteNonQuery();
+            DropPrivateDdlDatabase(cmd, schema, product);
         }
         conn.Close();
     }
 
-    private void RunFullQuench(System.Data.IDbCommand cmd, string json, string product)
+
+    /// <summary>
+    /// A private target database for a test that runs DDL.
+    /// <para>The fixture's six read-only tests happily share <c>TestSchema</c>, but the two collation
+    /// tests each issue ALTER TABLE, and the engine's catalog reads are database-wide rather than
+    /// scoped to the declared tables. Run concurrently, one test's quench reads INFORMATION_SCHEMA
+    /// while the other's ALTER is in flight and the server refuses the read outright:</para>
+    /// <code>Table 'ModifyConstraintTests'.'colcoll_fk_child' was skipped since its definition
+    /// is being modified by concurrent DDL statement</code>
+    /// <para>Reproduced at <c>NUnit.NumberOfTestWorkers=2</c>; it is one of the two races that forced
+    /// the assembly to <c>LevelOfParallelism(1)</c>. Serialising the tests would hide it rather than
+    /// fix it (Rule 28) -- the real defect is two concurrent DDL streams in one database, so each gets
+    /// its own. This is cheap: the target database is never kindled (the SchemaSmith procedures live in
+    /// the suite database and take the target as a parameter), so this is one CREATE DATABASE, not a
+    /// kindle and a plan compile.</para>
+    /// </summary>
+    private string CreatePrivateDdlDatabase(System.Data.IDbCommand cmd, string tag)
     {
-        cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{json.Replace("'", "''")}')";
+        var schema = $"{TestSchema}_{tag}_{Guid.NewGuid():N}"[..40];
+        cmd.CommandText = $"DROP DATABASE IF EXISTS `{schema}`";
         cmd.ExecuteNonQuery();
-        cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingTableAndColumnQuench('{TestSchema}', 0)";
+        cmd.CommandText = $"CREATE DATABASE `{schema}`";
+        cmd.ExecuteNonQuery();
+        return schema;
+    }
+
+    /// <summary>
+    /// Drops the private database AND the ownership rows that pointed into it. Those rows live in the
+    /// suite database, so dropping the target alone would leave them behind forever: the product name is
+    /// a fresh GUID each run, so no later quench ever names it again and the catalog-reconcile prune --
+    /// which is product-scoped -- can never reclaim them.
+    /// </summary>
+    private void DropPrivateDdlDatabase(System.Data.IDbCommand cmd, string schema, string product)
+    {
+        cmd.CommandText = $"DROP DATABASE IF EXISTS `{schema}`";
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = $"DELETE FROM `{_mainDb}`.SchemaSmith_ProductOwnership WHERE ProductName = '{product}'";
+        cmd.ExecuteNonQuery();
+    }
+
+    private void RunFullQuench(System.Data.IDbCommand cmd, string json, string product, string schema)
+    {
+        cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{schema}', '{json.Replace("'", "''")}')";
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingTableAndColumnQuench('{schema}', 0)";
         cmd.ExecuteNonQuery();
         // Trailing 0, 1 are DropUnknownIndexes and DropIndexesRemovedFromProduct: index removal now
         // happens here, and the 1 carries over from the MissingIndexesAndConstraintsQuench call below.
-        cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{product}', '{TestSchema}', 0, 0, 1, 1, 1, 1, 0, 0, 1)";
+        cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{product}', '{schema}', 0, 0, 1, 1, 1, 1, 0, 0, 1)";
         cmd.ExecuteNonQuery();
-        cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingIndexesAndConstraintsQuench('{product}', '{TestSchema}', 0, 1)";
+        cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingIndexesAndConstraintsQuench('{product}', '{schema}', 0, 1)";
         cmd.ExecuteNonQuery();
-        cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ForeignKeyQuench('{product}', '{TestSchema}', 0, 0, 1)";
+        cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ForeignKeyQuench('{product}', '{schema}', 0, 0, 1)";
         cmd.ExecuteNonQuery();
     }
 

@@ -85,10 +85,11 @@ public class TemplateTargetsHappyPathTests
                 _progressLog.DidNotReceive().Info(
                     $"[{_server}].[{_mainDb}] [Schema: {extraTenantIgnoredByOverride}] Successfully Quenched");
 
-                // Source-disclosure log line names the override origin for the schema axis.
+                // Source disclosure still names the override origin for the schema axis, now as the
+                // per-template rollup rather than a line per work unit (per-unit detail moved to the report).
                 _progressLog.Received().Info(Arg.Is<string>(s =>
-                    s.Contains("source: ") &&
-                    s.Contains("schema=TemplateTargets:TenantBody:Schemas")));
+                    s.Contains("Template 'TenantBody'") &&
+                    s.Contains("schema: TemplateTargets:TenantBody:Schemas")));
 
                 // Both overridden tenants got their per-iteration migration tracking.
                 foreach (var tenant in overrideTenants)
