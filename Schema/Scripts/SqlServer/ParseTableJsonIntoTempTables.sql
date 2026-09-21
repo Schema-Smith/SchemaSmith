@@ -513,19 +513,27 @@
     [RelatedTable] NVARCHAR(MAX) NULL,
     [Columns] NVARCHAR(MAX) NULL,
     [RelatedColumns] NVARCHAR(MAX) NULL,
-    [DeleteAction] NVARCHAR(20) NOT NULL,
-    [UpdateAction] NVARCHAR(20) NOT NULL,
+    -- NULLable on ingest, non-null after NORMALIZE. The measured shape had these NOT NULL because the
+    -- old SELECT applied ISNULL(..., 'NO ACTION') inline -- the constraint was recording the transform,
+    -- not a requirement. Ingest now carries raw values, so the column has to admit them; the value
+    -- every consumer sees is unchanged, which is what the equality harness checks.
+    [DeleteAction] NVARCHAR(20) NULL,
+    [UpdateAction] NVARCHAR(20) NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) NULL,
     [VariantName] NVARCHAR(128) NULL
   )
   INSERT INTO #ForeignKeys ([_RowId], [Schema], [TableName], [KeyName], [RelatedTableSchema], [RelatedTable], [Columns], [RelatedColumns], [DeleteAction], [UpdateAction], [ShouldApplyExpression], [VariantName])
+  -- INGEST ONLY -- raw values straight off the shred. Every transform that used to live in this SELECT
+  -- moved to the NORMALIZE pass below, so that a second ingestion path (C# bulk-loading these rows
+  -- instead of shredding JSON) gets the identical treatment from one definition rather than a
+  -- reimplementation. Two producers of one working set is the drift risk the whole design turns on.
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         t.[Schema], t.[Name] AS [TableName], [KeyName] = SchemaSmith.fn_SafeBracketWrap(f.[KeyName]),
-         [RelatedTableSchema] = SchemaSmith.fn_SafeBracketWrap(f.[RelatedTableSchema]), [RelatedTable] = SchemaSmith.fn_SafeBracketWrap(f.[RelatedTable]),
-         [Columns] = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',') FROM STRING_SPLIT(f.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
-         [RelatedColumns] = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',') FROM STRING_SPLIT(f.[RelatedColumns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
-         [DeleteAction] = ISNULL(NULLIF(RTRIM([DeleteAction]), ''), 'NO ACTION'),
-         [UpdateAction] = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION'),
+         t.[Schema], t.[Name] AS [TableName], f.[KeyName],
+         f.[RelatedTableSchema], f.[RelatedTable],
+         f.[Columns],
+         f.[RelatedColumns],
+         f.[DeleteAction],
+         f.[UpdateAction],
          f.[ShouldApplyExpression], f.[VariantName]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(ForeignKeys) WITH (
@@ -544,6 +552,23 @@
   -- (string concat with NULL yields NULL), and fn_SafeBracketWrap('') returns '[]'.
   -- Both sentinels indicate a blank input — fail loud rather than letting downstream
   -- code emit DDL against an unintended schema.
+  -- NORMALIZE -- one definition, applied however the rows arrived (JSON shred today, bulk-loaded
+  -- rows tomorrow). Identifier bracket-wrapping, the comma-list rebuild that drops empty entries, and
+  -- the NO ACTION defaulting were all inline in the SELECT above; reproducing them in C# instead would
+  -- have been a second implementation of the same rules, which is precisely how the two paths diverge.
+  UPDATE #ForeignKeys
+     SET [KeyName]           = SchemaSmith.fn_SafeBracketWrap([KeyName]),
+         [RelatedTableSchema] = SchemaSmith.fn_SafeBracketWrap([RelatedTableSchema]),
+         [RelatedTable]      = SchemaSmith.fn_SafeBracketWrap([RelatedTable]),
+         [Columns]           = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
+                                  FROM STRING_SPLIT([Columns], ',')
+                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+         [RelatedColumns]    = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
+                                  FROM STRING_SPLIT([RelatedColumns], ',')
+                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+         [DeleteAction]      = ISNULL(NULLIF(RTRIM([DeleteAction]), ''), 'NO ACTION'),
+         [UpdateAction]      = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION');
+
   IF EXISTS (SELECT 1 FROM #ForeignKeys WITH (NOLOCK)
                WHERE [RelatedTableSchema] IS NULL OR [RelatedTableSchema] IN ('[]', '[ ]', ''))
   BEGIN
