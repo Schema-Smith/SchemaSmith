@@ -11,19 +11,28 @@ name: CI (docs-only companion)
 #
 # THE SET CHANGED 2026-09-20 with the matrix-shape decision, and the branch ruleset MUST be updated to
 # match or the deadlock this file prevents comes back from the other direction -- a required context that
-# no longer runs waits forever. A pull request now produces exactly these ten:
+# no longer runs waits forever. A pull request now produces exactly these eleven:
 #   Build & Unit Tests
 #   Integration Tests (SQL Server 2017)        <- new name; "(SQL Server)" no longer exists
 #   Integration Tests (SQL Server 2025)        <- new
 #   Integration Tests (PostgreSQL latest)
 #   Integration Tests (PostgreSQL 12)
-#   Integration Tests (MySQL 8.0)
+#   Integration Tests (MySQL latest)         <- floating; replaced the pinned "(MySQL 8.0)" context
 #   Integration Tests (MySQL 5.7)
-#   Integration Tests (MariaDB 11.4)
+#   Integration Tests (MariaDB latest)       <- floating; replaced the pinned "(MariaDB 11.4)" context
 #   Integration Tests (MariaDB 10.2)
+#   Engine Ceiling Ratchet
 #   Coverage Gate
 # Removed from PR runs (still run on merge to main, so do NOT require them on a PR):
-#   Integration Tests (PostgreSQL 14), (PostgreSQL 13), (MariaDB 10.6) Do NOT delete the `paths-ignore` in the CI workflow — it exists so a prose
+#   Integration Tests (PostgreSQL 17), (PostgreSQL 16), (PostgreSQL 15), (PostgreSQL 14), (PostgreSQL 13)
+#   Integration Tests (MySQL 8.4), (MySQL 8.0)
+#   Integration Tests (MariaDB 11.8), (MariaDB 11.4), (MariaDB 10.6)
+#   Integration Tests (SQL Server 2019), (SQL Server 2022)
+#
+# The floating `latest` legs are REQUIRED, deliberately: an engine release that breaks us should stop a
+# merge, not be scrolled past. They are also why this list can drift without anyone editing it -- when
+# `latest` advances, the CONTEXT NAME does not change, but what it tested does. See the ratchet note in
+# continuous-integration.yml. Do NOT delete the `paths-ignore` in the CI workflow — it exists so a prose
 # fix doesn't spin the three-engine matrix; this pairs with it rather than replacing it.
 #
 # The `paths:` list below is the exact inverse of continuous-integration.yml's `pull_request` `paths-ignore`,
@@ -82,8 +91,8 @@ jobs:
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-mysql-80:
-    name: Integration Tests (MySQL 8.0)
+  integration-tests-mysql-latest:
+    name: Integration Tests (MySQL latest)
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
@@ -94,8 +103,8 @@ jobs:
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-mariadb-114:
-    name: Integration Tests (MariaDB 11.4)
+  integration-tests-mariadb-latest:
+    name: Integration Tests (MariaDB latest)
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
@@ -106,6 +115,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
+
+  engine-ceiling-ratchet:
+    name: Engine Ceiling Ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "docs-only change — no engine ceiling check required."
 
   coverage-gate:
     name: Coverage Gate
