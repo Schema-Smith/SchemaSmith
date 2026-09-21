@@ -19,6 +19,17 @@
 -- and is expensive to certify (it needs the genuine old-binary sweep). The asymmetry is a decision, not
 -- an oversight.
 
+-- IDENTIFIER COLUMNS ARE NVARCHAR(200), NOT NVARCHAR(MAX), AND THE WORKING SET IS INDEXED.
+-- Every one of these tables is joined to the others on schema/table/column name. As NVARCHAR(MAX) those
+-- names cannot be indexed and cannot be compared cheaply, so each correlated join degraded into a scan
+-- with LOB comparisons once per outer row -- the single cause behind the largest costs measured across
+-- this pipeline. A sysname is 128 characters and bracket-wrapping adds two, so 200 truncates nothing
+-- that SQL Server could have created in the first place, and it leaves the two-column index key at 800
+-- bytes, inside the 900-byte limit.
+--
+-- Expressions, column lists, nested JSON and generated script fragments stay NVARCHAR(MAX): those are
+-- genuinely unbounded, and narrowing one would silently corrupt a package rather than slow it down.
+
   DECLARE @v_SQL NVARCHAR(MAX) = ''
   SET NOCOUNT ON
   -- ===== WORKING-SET SHAPES =====
@@ -49,21 +60,21 @@
   CREATE TABLE #TableDefinitions
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [Name] NVARCHAR(MAX) NULL,
+    [Schema] NVARCHAR(200) NULL,
+    [Name] NVARCHAR(200) NULL,
     [CompressionType] NVARCHAR(100) NULL,
     [XmlCompression] BIT NULL,
     [IsTemporal] BIT NULL,
     [UpdateFillFactor] BIT NULL,
-    [HistoryTableSchema] NVARCHAR(MAX) NULL,
-    [HistoryTableName] NVARCHAR(MAX) NULL,
+    [HistoryTableSchema] NVARCHAR(200) NULL,
+    [HistoryTableName] NVARCHAR(200) NULL,
     [HistoryRetentionPeriod] NVARCHAR(50) NULL,
-    [FileGroup] NVARCHAR(MAX) NULL,
-    [PartitionScheme] NVARCHAR(MAX) NULL,
-    [PartitionColumn] NVARCHAR(MAX) NULL,
-    [FileStreamFileGroup] NVARCHAR(MAX) NULL,
-    [TextImageFileGroup] NVARCHAR(MAX) NULL,
-    [CdcFilegroup] NVARCHAR(MAX) NULL,
+    [FileGroup] NVARCHAR(200) NULL,
+    [PartitionScheme] NVARCHAR(200) NULL,
+    [PartitionColumn] NVARCHAR(200) NULL,
+    [FileStreamFileGroup] NVARCHAR(200) NULL,
+    [TextImageFileGroup] NVARCHAR(200) NULL,
+    [CdcFilegroup] NVARCHAR(200) NULL,
     [Indexes] NVARCHAR(MAX) NULL,
     [XmlIndexes] NVARCHAR(MAX) NULL,
     [Columns] NVARCHAR(MAX) NULL,
@@ -80,7 +91,7 @@
     [EnableCDC] BIT NULL,
     [EnableChangeTracking] BIT NULL,
     [TrackColumnsUpdated] BIT NULL,
-    [OldName] NVARCHAR(MAX) NULL,
+    [OldName] NVARCHAR(200) NULL,
     [DropColumnsRemovedFromProduct] BIT NULL,
     [DropForeignKeysRemovedFromProduct] BIT NULL,
     [DropCheckConstraintsRemovedFromProduct] BIT NULL,
@@ -99,29 +110,29 @@
   -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
   CREATE TABLE #Tables
   (
-    [Schema] NVARCHAR(MAX) NULL,
-    [Name] NVARCHAR(MAX) NULL,
+    [Schema] NVARCHAR(200) NULL,
+    [Name] NVARCHAR(200) NULL,
     [CompressionType] NVARCHAR(100) NOT NULL,
     [XmlCompression] BIT NOT NULL,
     [IsTemporal] BIT NOT NULL,
-    [HistoryTableSchema] NVARCHAR(MAX) NULL,
-    [HistoryTableName] NVARCHAR(MAX) NULL,
+    [HistoryTableSchema] NVARCHAR(200) NULL,
+    [HistoryTableName] NVARCHAR(200) NULL,
     [HistoryRetentionPeriod] NVARCHAR(50) NULL,
-    [FileGroup] NVARCHAR(MAX) NULL,
-    [PartitionScheme] NVARCHAR(MAX) NULL,
-    [PartitionColumn] NVARCHAR(MAX) NULL,
-    [FileStreamFileGroup] NVARCHAR(MAX) NULL,
-    [TextImageFileGroup] NVARCHAR(MAX) NULL,
+    [FileGroup] NVARCHAR(200) NULL,
+    [PartitionScheme] NVARCHAR(200) NULL,
+    [PartitionColumn] NVARCHAR(200) NULL,
+    [FileStreamFileGroup] NVARCHAR(200) NULL,
+    [TextImageFileGroup] NVARCHAR(200) NULL,
     [UpdateFillFactor] BIT NOT NULL,
     [EnableCDC] BIT NOT NULL,
-    [CdcFilegroup] NVARCHAR(MAX) NULL,
+    [CdcFilegroup] NVARCHAR(200) NULL,
     [EnableChangeTracking] BIT NOT NULL,
     [TrackColumnsUpdated] BIT NOT NULL,
     [GraphType] NVARCHAR(10) NULL,
     [Ledger] NVARCHAR(12) NULL,
     [MemoryOptimized] BIT NOT NULL,
     [Durability] NVARCHAR(20) NULL,
-    [OldName] NVARCHAR(MAX) NULL,
+    [OldName] NVARCHAR(200) NULL,
     [VariantName] NVARCHAR(128) NULL,
     [NewTable] BIT NULL,
     [DropColumnsRemovedFromProduct] BIT NULL,
@@ -143,9 +154,9 @@
   CREATE TABLE #Columns
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [ColumnName] NVARCHAR(MAX) NULL,
+    [Schema] NVARCHAR(200) NULL,
+    [TableName] NVARCHAR(200) NULL,
+    [ColumnName] NVARCHAR(200) NULL,
     [DataType] NVARCHAR(MAX) NULL,
     [Nullable] BIT NOT NULL,
     [NullableDeclared] BIT NULL,
@@ -162,7 +173,7 @@
     [EncryptionType] NVARCHAR(100) NOT NULL,
     [EncryptionKey] NVARCHAR(500) NULL,
     [EncryptionAlgorithm] NVARCHAR(500) NULL,
-    [OldName] NVARCHAR(MAX) NULL,
+    [OldName] NVARCHAR(200) NULL,
     [NewColumn] BIT NULL,
     [ColumnScript] NVARCHAR(MAX) NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) NULL,
@@ -177,9 +188,9 @@
   CREATE TABLE #Indexes
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [IndexName] NVARCHAR(MAX) NULL,
+    [Schema] NVARCHAR(200) NULL,
+    [TableName] NVARCHAR(200) NULL,
+    [IndexName] NVARCHAR(200) NULL,
     [CompressionType] NVARCHAR(100) NULL,
     [XmlCompression] BIT NULL,
     [PrimaryKey] BIT NULL,
@@ -189,9 +200,9 @@
     [ColumnStore] BIT NULL,
     [FillFactor] TINYINT NULL,
     [FilterExpression] NVARCHAR(MAX) NULL,
-    [FileGroup] NVARCHAR(MAX) NULL,
-    [PartitionScheme] NVARCHAR(MAX) NULL,
-    [PartitionColumn] NVARCHAR(MAX) NULL,
+    [FileGroup] NVARCHAR(200) NULL,
+    [PartitionScheme] NVARCHAR(200) NULL,
+    [PartitionColumn] NVARCHAR(200) NULL,
     [BucketCount] INT NULL,
     [UpdateFillFactor] BIT NULL,
     [IndexColumns] NVARCHAR(MAX) NULL,
@@ -208,12 +219,12 @@
   CREATE TABLE #XmlIndexes
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [IndexName] NVARCHAR(MAX) NULL,
+    [Schema] NVARCHAR(200) NULL,
+    [TableName] NVARCHAR(200) NULL,
+    [IndexName] NVARCHAR(200) NULL,
     [IsPrimary] BIT NULL,
-    [Column] NVARCHAR(MAX) NULL,
-    [PrimaryIndex] NVARCHAR(MAX) NULL,
+    [Column] NVARCHAR(200) NULL,
+    [PrimaryIndex] NVARCHAR(200) NULL,
     [SecondaryIndexType] NVARCHAR(500) NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) NULL,
     [VariantName] NVARCHAR(128) NULL
@@ -230,11 +241,11 @@
   CREATE TABLE #ForeignKeys
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [KeyName] NVARCHAR(MAX) NULL,
-    [RelatedTableSchema] NVARCHAR(MAX) NULL,
-    [RelatedTable] NVARCHAR(MAX) NULL,
+    [Schema] NVARCHAR(200) NULL,
+    [TableName] NVARCHAR(200) NULL,
+    [KeyName] NVARCHAR(200) NULL,
+    [RelatedTableSchema] NVARCHAR(200) NULL,
+    [RelatedTable] NVARCHAR(200) NULL,
     [Columns] NVARCHAR(MAX) NULL,
     [RelatedColumns] NVARCHAR(MAX) NULL,
     -- NULLable on ingest, non-null after NORMALIZE. The measured shape had these NOT NULL because the
@@ -253,8 +264,8 @@
   CREATE TABLE #CheckConstraints
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
+    [Schema] NVARCHAR(200) NULL,
+    [TableName] NVARCHAR(200) NULL,
     [ConstraintName] NVARCHAR(500) NULL,
     [Expression] NVARCHAR(MAX) NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) NULL,
@@ -267,9 +278,9 @@
   CREATE TABLE #Statistics
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [StatisticName] NVARCHAR(MAX) NULL,
+    [Schema] NVARCHAR(200) NULL,
+    [TableName] NVARCHAR(200) NULL,
+    [StatisticName] NVARCHAR(200) NULL,
     -- NULLable on ingest, defaulted by NORMALIZE -- NOT NULL recorded the old inline ISNULL.
     [SampleSize] TINYINT NULL,
     [FilterExpression] NVARCHAR(MAX) NULL,
@@ -284,10 +295,10 @@
   CREATE TABLE #FullTextIndexes
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [FullTextCatalog] NVARCHAR(MAX) NULL,
-    [KeyIndex] NVARCHAR(MAX) NULL,
+    [Schema] NVARCHAR(200) NULL,
+    [TableName] NVARCHAR(200) NULL,
+    [FullTextCatalog] NVARCHAR(200) NULL,
+    [KeyIndex] NVARCHAR(200) NULL,
     [ChangeTracking] NVARCHAR(500) NULL,
     [StopList] NVARCHAR(MAX) NULL,
     [Columns] NVARCHAR(MAX) NULL,
