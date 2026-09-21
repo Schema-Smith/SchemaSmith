@@ -563,31 +563,102 @@
   -- against 27s for the entire parse before this pass existed. Narrowing the keys to NVARCHAR(400) and
   -- indexing them restores a normal join. The inline version this replaced never paid it: the parent
   -- row was already in scope from the CROSS APPLY, so there was no join at all.
-  DROP TABLE IF EXISTS #ParentOldName;
-  -- NVARCHAR(200), not (400): the two key columns together have to fit SQL Server's 900-byte index key.
-  -- At 400 each that is 1600 bytes, which the engine accepts with a warning on every deploy and then
-  -- fails on any value actually long enough to overflow. 200 is still far above what can arrive here --
-  -- an identifier is at most 128 characters, plus bracket-wrapping -- so nothing is truncated, and the
-  -- key fits at 800 bytes.
-  SELECT [Schema] = CONVERT(NVARCHAR(200), [Schema]),
-         [Name]   = CONVERT(NVARCHAR(200), [Name]),
-         [OldName]
-    INTO #ParentOldName
-    FROM #TableDefinitions WITH (NOLOCK);
-  CREATE CLUSTERED INDEX [ix_ParentOldName] ON #ParentOldName ([Schema], [Name]);
+  -- EVERYTHING THIS DECISION NEEDS, KEYED AND READ ONCE.
+  --
+  -- The working set stores every identifier as NVARCHAR(MAX), which cannot be indexed and cannot be
+  -- compared cheaply. Deciding "is this a new column?" per row therefore meant, for each of 33,877
+  -- declared columns: a correlated scan of all 1,783 parent rows comparing two LOB columns, plus three
+  -- COLUMNPROPERTY(OBJECT_ID(...), fn_StripBracketWrapping(...)) calls -- catalog lookups behind a
+  -- scalar UDF, which also pins the statement to a serial plan. Measured at 19,512 ms on that model,
+  -- two thirds of the whole parse and more than the JSON shred feeding it.
+  --
+  -- Both halves are hoisted into keyed lookups built once. Parent facts (its OldName, and whether it is
+  -- a new table) collapse to one row per table; the live columns come from a single scan of sys.columns.
+  -- Names are matched in the bracket-wrapped form the working set already stores, so nothing is stripped
+  -- per row.
+  DROP TABLE IF EXISTS #ParentLookup;
+  CREATE TABLE #ParentLookup
+  (
+    [Schema] NVARCHAR(200) NULL,
+    [Name] NVARCHAR(200) NULL,
+    [OldName] NVARCHAR(200) NULL,
+    -- Whether the PARENT is being created by this run. Replaces a correlated NOT EXISTS over #Tables
+    -- that ran once per column and compared LOB columns to do it.
+    [ParentIsNew] BIT NOT NULL
+  )
+  INSERT INTO #ParentLookup ([Schema], [Name], [OldName], [ParentIsNew])
+  SELECT CONVERT(NVARCHAR(200), td.[Schema]), CONVERT(NVARCHAR(200), td.[Name]),
+         CONVERT(NVARCHAR(200), td.[OldName]),
+         CONVERT(BIT, CASE WHEN MAX(CASE WHEN x.[NewTable] = 1 THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END)
+    FROM #TableDefinitions td WITH (NOLOCK)
+    LEFT JOIN #Tables x WITH (NOLOCK)
+      ON CONVERT(NVARCHAR(200), x.[Schema]) = CONVERT(NVARCHAR(200), td.[Schema])
+     AND CONVERT(NVARCHAR(200), x.[Name]) = CONVERT(NVARCHAR(200), td.[Name])
+   GROUP BY CONVERT(NVARCHAR(200), td.[Schema]), CONVERT(NVARCHAR(200), td.[Name]), CONVERT(NVARCHAR(200), td.[OldName]);
+  CREATE CLUSTERED INDEX [ix_ParentLookup] ON #ParentLookup ([Schema], [Name]);
+
+  -- The live columns. COLLATE DATABASE_DEFAULT is not incidental: a temp table's columns take TEMPDB's
+  -- collation while OBJECT_ID resolves a name in the DATABASE's, so comparing under the database default
+  -- both avoids a collation conflict and keeps the answer the one the catalog would have given.
+  DROP TABLE IF EXISTS #ExistingColumns;
+  CREATE TABLE #ExistingColumns
+  (
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [ColumnName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL
+  )
+  INSERT INTO #ExistingColumns ([Schema], [TableName], [ColumnName])
+  SELECT '[' + s.[name] + ']', '[' + o.[name] + ']', '[' + col.[name] + ']'
+    FROM sys.columns col WITH (NOLOCK)
+    JOIN sys.objects o WITH (NOLOCK) ON o.[object_id] = col.[object_id] AND o.[type] = 'U'
+    JOIN sys.schemas s WITH (NOLOCK) ON s.[schema_id] = o.[schema_id];
+  -- Keyed on schema+table only: three NVARCHAR(200) columns exceed the 900-byte index key limit, and a
+  -- seek to the table with the column name as a residual is the same work -- a table has few columns.
+  CREATE CLUSTERED INDEX [ix_ExistingColumns] ON #ExistingColumns ([Schema], [TableName]);
+
+  -- The declared columns, narrowed ONCE. Every identifier in the working set is NVARCHAR(MAX), so each
+  -- comparison below would otherwise be a LOB comparison repeated per row and per lookup. One pass
+  -- converts them to a width that can be indexed and compared cheaply; [_RowId] carries the result back.
+  DROP TABLE IF EXISTS #ColumnKeys;
+  CREATE TABLE #ColumnKeys
+  (
+    [_RowId] BIGINT NULL,
+    [KeySchema] NVARCHAR(200) NULL,
+    [KeyTableName] NVARCHAR(200) NULL,
+    [KeyColumnName] NVARCHAR(200) NULL,
+    [KeyOldName] NVARCHAR(200) NULL,
+    [IsComputed] BIT NOT NULL
+  )
+  INSERT INTO #ColumnKeys ([_RowId], [KeySchema], [KeyTableName], [KeyColumnName], [KeyOldName], [IsComputed])
+  SELECT [_RowId], CONVERT(NVARCHAR(200), [Schema]), CONVERT(NVARCHAR(200), [TableName]),
+         CONVERT(NVARCHAR(200), [ColumnName]), CONVERT(NVARCHAR(200), [OldName]),
+         CONVERT(BIT, CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) <> '' THEN 1 ELSE 0 END)
+    FROM #Columns WITH (NOLOCK);
+  CREATE CLUSTERED INDEX [ix_ColumnKeys] ON #ColumnKeys ([_RowId]);
 
   UPDATE c
-     SET [NewColumn] = CONVERT(BIT, CASE WHEN (RTRIM(ISNULL(c.[ComputedExpression], '')) <> '' OR NOT EXISTS (SELECT * FROM #Tables x WHERE x.[Name] = c.[TableName] AND x.[Schema] = c.[Schema] AND x.NewTable = 1))
-                            AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName], 'U'), SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'ColumnId') IS NULL
+     SET [NewColumn] = CONVERT(BIT, CASE WHEN (k.[IsComputed] = 1 OR ISNULL(td.[ParentIsNew], 0) = 0)
+                            AND NOT EXISTS (SELECT * FROM #ExistingColumns e
+                                             WHERE e.[Schema] = k.[KeySchema] COLLATE DATABASE_DEFAULT
+                                               AND e.[TableName] = k.[KeyTableName] COLLATE DATABASE_DEFAULT
+                                               AND e.[ColumnName] = k.[KeyColumnName] COLLATE DATABASE_DEFAULT)
                             -- Not a new column if it exists by current name in the table being renamed from (table rename scenario)
-                            AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + td.[OldName], 'U'), SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'ColumnId') IS NULL
+                            AND NOT EXISTS (SELECT * FROM #ExistingColumns e
+                                             WHERE e.[Schema] = k.[KeySchema] COLLATE DATABASE_DEFAULT
+                                               AND e.[TableName] = td.[OldName] COLLATE DATABASE_DEFAULT
+                                               AND e.[ColumnName] = k.[KeyColumnName] COLLATE DATABASE_DEFAULT)
                             -- Not a new column if the column's own OldName exists (column rename scenario)
-                            AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName], 'U'), SchemaSmith.fn_StripBracketWrapping(c.[OldName]), 'ColumnId') IS NULL
+                            AND NOT EXISTS (SELECT * FROM #ExistingColumns e
+                                             WHERE e.[Schema] = k.[KeySchema] COLLATE DATABASE_DEFAULT
+                                               AND e.[TableName] = k.[KeyTableName] COLLATE DATABASE_DEFAULT
+                                               AND e.[ColumnName] = k.[KeyOldName] COLLATE DATABASE_DEFAULT)
                            THEN 1 ELSE 0 END)
     FROM #Columns c
-    LEFT JOIN #ParentOldName td
-      ON td.[Schema] = CONVERT(NVARCHAR(200), c.[Schema]) AND td.[Name] = CONVERT(NVARCHAR(200), c.[TableName]);
-  DROP TABLE IF EXISTS #ParentOldName;
+    JOIN #ColumnKeys k ON k.[_RowId] = c.[_RowId]
+    LEFT JOIN #ParentLookup td ON td.[Schema] = k.[KeySchema] AND td.[Name] = k.[KeyTableName];
+  DROP TABLE IF EXISTS #ColumnKeys;
+  DROP TABLE IF EXISTS #ParentLookup;
+  DROP TABLE IF EXISTS #ExistingColumns;
 
   -- Identify Columns to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #Columns WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
