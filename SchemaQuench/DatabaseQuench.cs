@@ -1587,32 +1587,33 @@ public class DatabaseQuench
             case Platform.SqlServer:
             {
                 var updateFillFactor = _template.UpdateFillFactor ? "1" : "0";
-                tableCommand.CommandText = _ingestEncoding == IngestEncoding.Xml
-                    ? $@"
+                if (_ingestEncoding == IngestEncoding.Xml)
+                {
+                    // The XML twin still builds its working set with SELECT ... INTO, so it has no point
+                    // at which the temp tables exist but are empty and cannot be split. It keeps the
+                    // inlined payload. See the header of ParseTableXmlIntoTempTables.sql.
+                    tableCommand.CommandText = $@"
 DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
         @UpdateFillFactor BIT = {updateFillFactor}
 {ForgeKindler.GetParseTableXmlScript(Platform.SqlServer)}
-EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {_whatIfOnly}"
-                    : $@"
-DECLARE @TableDefinitions VARCHAR(MAX)= '{EscapeSqlLiteral(IterationTableSchema)}',
-        @UpdateFillFactor BIT = {updateFillFactor}
-{ForgeKindler.GetParseTableJsonScript(Platform.SqlServer)}
 EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {_whatIfOnly}";
+                    break;
+                }
+
+                PrepareSqlServerTableIngest(tableCommand, updateFillFactor);
                 break;
             }
             case Platform.PostgreSQL:
             {
-                tableCommand.CommandText = $@"
-DO $$
-DECLARE
-  p_UpdateFillFactor BOOL = {_template.UpdateFillFactor.ToString().ToLower()};
-  table_json JSON = '{EscapeSqlLiteral(IterationTableSchema)}';
-  sql_script TEXT = '';
-BEGIN
-{ForgeKindler.GetParseTableJsonScript(Platform.PostgreSQL)}
-END $$ LANGUAGE plpgsql;
+                // The shred lives in a procedure so the model can be an argument. As an anonymous DO
+                // block it had to be escaped into the statement text, which made a large product send
+                // tens of megabytes of JSON for PostgreSQL to parse as SQL on every work unit. The temp
+                // tables it builds are session-scoped either way, so every later step still reads them.
+                PrepareParameterizedTableJson(tableCommand,
+                    $@"CALL ""SchemaSmith"".""ParseTableJson""(@tableJson, {_template.UpdateFillFactor.ToString().ToLower()});",
+                    IterationTableSchema, "Parse Table Json");
 
-CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {_whatIfOnly})";
+                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {_whatIfOnly})";
                 break;
             }
             case Platform.MySQL:
@@ -1625,7 +1626,17 @@ CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {_whatIfOnly})"
         }
 
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Missing Tables And Columns"), tableCommand.CommandText);
-        ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
+        try
+        {
+            ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
+        }
+        finally
+        {
+            // The SQL Server JSON path leaves the payload bound here; the command is pooled and reused by
+            // every step after this one, so a leftover parameter would follow it around -- including down
+            // the error path, where the next thing to touch the command is the failure handling.
+            ClearParameters(tableCommand);
+        }
         _debugFileLocation = "";
     }
 
@@ -2003,6 +2014,66 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
         _debugFileLocation = "";
     }
 
+    /// <summary>
+    /// Build the SQL Server table working set in two phases so the model travels as a parameter rather
+    /// than as a string literal inside the batch.
+    /// <para>
+    /// A large product ships tens of megabytes of table JSON. Inlined, SQL Server had to lex and parse
+    /// all of it as part of the batch on every work unit, and cache a plan keyed by the entire text.
+    /// Sent as a parameter it is data: the batch is the script alone, and the same script text is reused
+    /// across databases instead of producing one cache entry per payload.
+    /// </para>
+    /// <para>
+    /// The split is what makes that legal. Any parameterized command goes through sp_executesql, and a
+    /// temp table created inside that nested scope dies when it returns — the working set would vanish
+    /// before MissingTableAndColumnQuench ever saw it. So phase A creates the tables in an
+    /// unparameterized batch, putting them in the session scope, and phase B, parameterized, only ever
+    /// INSERTs into tables that already exist.
+    /// </para>
+    /// </summary>
+    private void PrepareSqlServerTableIngest(IDbCommand command, string updateFillFactor)
+    {
+        var (createTables, fillTables) = ForgeKindler.GetParseTableJsonPhases(Platform.SqlServer);
+        var tableJson = IterationTableSchema;
+        var quench = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {_whatIfOnly}";
+
+        // The debug artifact stays replayable, which means it stays whole: the undivided script with the
+        // payload inlined, exactly the text this path used to execute. Splitting the execution should not
+        // cost anyone the ability to paste the failing run into a query window. Written before either
+        // phase runs, so a failure in the first one still leaves the artifact that explains it.
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Parse Table Json"), $@"
+DECLARE @TableDefinitions VARCHAR(MAX)= '{EscapeSqlLiteral(tableJson)}',
+        @UpdateFillFactor BIT = {updateFillFactor}
+{ForgeKindler.GetParseTableJsonScript(Platform.SqlServer)}
+{quench}");
+
+        ClearParameters(command);
+        command.CommandText = createTables;
+        ExecuteNonQueryHandlingMessages(command);
+
+        // @v_SQL is re-declared because variables, unlike temp tables, do not cross a batch boundary.
+        command.CommandText = $@"
+DECLARE @v_SQL NVARCHAR(MAX) = ''
+SET NOCOUNT ON
+{fillTables}
+{quench}";
+
+        // AnsiString with Size -1 is VARCHAR(MAX) -- the type the inlined literal had. Left to infer,
+        // the provider would size it at 8000 and silently truncate every model bigger than that.
+        var payload = command.CreateParameter();
+        payload.ParameterName = "@TableDefinitions";
+        payload.Value = tableJson;
+        payload.DbType = DbType.AnsiString;
+        payload.Size = -1;
+        command.Parameters.Add(payload);
+
+        var fillFactor = command.CreateParameter();
+        fillFactor.ParameterName = "@UpdateFillFactor";
+        fillFactor.Value = _template.UpdateFillFactor;
+        fillFactor.DbType = DbType.Boolean;
+        command.Parameters.Add(fillFactor);
+    }
+
     #endregion
 
     #region MySQL Temp Tables
@@ -2012,11 +2083,37 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
         var tableJson = !string.IsNullOrEmpty(_template.TableSchema)
             ? _template.TableSchema
             : JsonHelper.SerializeAll(_template.Tables);
-        command.CommandText = $"CALL SchemaSmith_ParseTableJson('{EscapeSqlLiteral(_databaseName)}', @tableJson)";
-        _debugFileLocation = LogSqlScript(GetDebugFileName("Parse Table Json"), command.CommandText.Replace("@tableJson", $"'{EscapeSqlLiteral(tableJson)}'"));
-        AddJsonParameter(command, "@tableJson", tableJson);
-        ExecuteNonQueryHandlingMessages(command);
+        PrepareParameterizedTableJson(command,
+            $"CALL SchemaSmith_ParseTableJson('{EscapeSqlLiteral(_databaseName)}', @tableJson)",
+            tableJson, "Parse Table Json");
+    }
+
+    /// <summary>
+    /// Run a shred whose payload is bound as a parameter rather than escaped into the statement text.
+    /// <para>
+    /// The debug artifact is written with the payload inlined, so it stays replayable: a parameterized
+    /// statement pasted into a query window without its arguments is not much use to whoever is chasing
+    /// the failure the artifact exists to explain.
+    /// </para>
+    /// </summary>
+    private void PrepareParameterizedTableJson(IDbCommand command, string commandText, string tableJson, string debugName)
+    {
+        command.CommandText = commandText;
+        _debugFileLocation = LogSqlScript(GetDebugFileName(debugName),
+            commandText.Replace("@tableJson", $"'{EscapeSqlLiteral(tableJson)}'"));
+
         ClearParameters(command);
+        AddJsonParameter(command, "@tableJson", tableJson);
+        try
+        {
+            ExecuteNonQueryHandlingMessages(command);
+        }
+        finally
+        {
+            // The command is pooled and every later step reuses it, so the payload must not outlive this
+            // call -- including down the error path, where the next thing to touch it is failure handling.
+            ClearParameters(command);
+        }
     }
 
     private static bool MySqlTempTablesExist(IDbCommand command)

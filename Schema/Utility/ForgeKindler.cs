@@ -255,6 +255,46 @@ public static class ForgeKindler
     }
 
     /// <summary>
+    /// The line ParseTableJsonIntoTempTables.sql carries between the block that creates the working-set
+    /// temp tables and the block that fills them. Kept in one place because both halves are identified
+    /// by it and a rename that missed one side would silently produce an empty phase.
+    /// </summary>
+    private const string IngestSplitMarker = "-- ===== INGEST SPLIT =====";
+
+    /// <summary>
+    /// Split the ParseTableJson script at the INGEST SPLIT marker.
+    /// <para>
+    /// The point of the split is that the payload can then be a real parameter. ADO.NET sends any
+    /// parameterized command through sp_executesql, which runs in a NESTED scope — a temp table created
+    /// there dies when the call returns, so the whole script could never be parameterized as one batch.
+    /// Creating the tables first, in an unparameterized batch, puts them in the session scope, and the
+    /// nested scope can freely INSERT into tables that already exist.
+    /// </para>
+    /// <para>
+    /// What that buys: the model stops being escaped into the command text. A large product shipped ~20MB
+    /// of JSON as a string literal that SQL Server had to parse as part of the batch on every work unit,
+    /// which is both the parse and a plan-cache entry keyed by the whole 20MB. As a parameter it is sent
+    /// as data and the batch text is the script alone.
+    /// </para>
+    /// <para>
+    /// Callers that do not care (tests, and any path happy to inline) can keep using
+    /// <see cref="GetParseTableJsonScript"/>, which still returns the script whole — the marker is a
+    /// comment, so the undivided script behaves exactly as it always did.
+    /// </para>
+    /// </summary>
+    public static (string CreateTables, string FillTables) GetParseTableJsonPhases(Platform platform)
+    {
+        var script = GetParseTableJsonScript(platform);
+        var at = script.IndexOf(IngestSplitMarker, StringComparison.Ordinal);
+        if (at < 0)
+            throw new Exception(
+                $"ParseTableJsonIntoTempTables.sql for platform '{platform}' has no '{IngestSplitMarker}' marker, " +
+                "so the working-set creation cannot be separated from the fill. The two-phase ingest requires it.");
+
+        return (script.Substring(0, at), script.Substring(at + IngestSplitMarker.Length));
+    }
+
+    /// <summary>
     /// Get the XML-ingest twin of the ParseTableJson script (selected below the OPENJSON compat cliff).
     /// </summary>
     public static string GetParseTableXmlScript(Platform platform)
@@ -401,6 +441,9 @@ public static class ForgeKindler
                 new("SchemaSmith.ReplicaIdentityQuench.sql"),
                 new("SchemaSmith.ForeignKeyQuench.sql"),
                 new("SchemaSmith.TableQuench.sql", ReplaceParseJson: true),
+                // Same {{ParseJson}} body as TableQuench, exposed on its own so SchemaQuench can hand the
+                // model over as an argument instead of escaping it into an anonymous DO block.
+                new("SchemaSmith.ParseTableJson.sql", ReplaceParseJson: true),
                 new("SchemaSmith.IndexOnlyQuench.sql"),
                 new("SchemaSmith.FormatJson.sql"),
                 new("SchemaSmith.GenerateTableJson.sql"),
