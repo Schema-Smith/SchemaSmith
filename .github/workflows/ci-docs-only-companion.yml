@@ -14,7 +14,7 @@ name: CI (docs-only companion)
 # no longer runs waits forever. A pull request now produces exactly these twelve:
 #   Build & Unit Tests
 #   Integration Tests (SQL Server 2017)        <- new name; "(SQL Server)" no longer exists
-#   Integration Tests (SQL Server 2025)        <- new
+#   Integration Tests (SQL Server latest)      <- new; floating, like the other engines
 #   Integration Tests (PostgreSQL latest)
 #   Integration Tests (PostgreSQL 12)
 #   Integration Tests (MySQL latest)         <- floating; replaced the pinned "(MySQL 8.0)" context
@@ -28,7 +28,7 @@ name: CI (docs-only companion)
 #   Integration Tests (PostgreSQL 17), (PostgreSQL 16), (PostgreSQL 15), (PostgreSQL 14), (PostgreSQL 13)
 #   Integration Tests (MySQL 8.4), (MySQL 8.0)
 #   Integration Tests (MariaDB 11.8), (MariaDB 11.4), (MariaDB 10.6)
-#   Integration Tests (SQL Server 2019), (SQL Server 2022)
+#   Integration Tests (SQL Server 2019), (SQL Server 2022), (SQL Server 2025)
 #
 # The floating `latest` legs are REQUIRED, deliberately: an engine release that breaks us should stop a
 # merge, not be scrolled past. They are also why this list can drift without anyone editing it -- when
@@ -72,8 +72,8 @@ jobs:
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-sqlserver-2025:
-    name: Integration Tests (SQL Server 2025)
+  integration-tests-sqlserver-latest:
+    name: Integration Tests (SQL Server latest)
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."

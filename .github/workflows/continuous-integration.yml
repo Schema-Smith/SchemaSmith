@@ -129,8 +129,16 @@ jobs:
     # 2025 -- and until now it had the FEWEST legs: one, 2019, which is neither the floor nor the latest.
     # The reclaimed minutes from the matrix-shape change are spent here, which is what they were for.
     #
-    # A pull request runs floor + latest (2017 + 2025), the same rule the other engines follow and the
-    # pair that carries the most version-specific signal. Merge to main runs all four.
+    # A pull request runs floor + latest (2017 + latest), the same rule the other engines follow.
+    #
+    # WHY SQL SERVER FLOATS TOO, and why `latest` duplicating the 2025 pin is the point rather than waste.
+    # An earlier draft pinned every SQL Server leg and excluded it from the ratchet, justified by "its legs
+    # are all pinned so there is no floating leg to ratchet" -- which is circular, and leaves the ONE engine
+    # that started this whole investigation (a single pinned 2019 leg that silently decayed) free to decay
+    # again the day the next version ships. `latest` and `2025-latest` are the same digest today, so the
+    # floating leg costs one duplicate run now; the moment a new major ships it picks it up and TESTS it,
+    # rather than merely telling us it exists. Finding out whether the new version breaks us is the whole
+    # purpose -- "catch breaking changes when they happen" (Paul, 2026-09-20). Merge to main runs all four.
     #
     # scripts/run-modern-band-sweep.sh remains the evidence these bands are provisionable and green --
     # it is where 2017/2022/2025 were first proven, and its per-band notes are the source for the
@@ -142,7 +150,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-ubuntu-18.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"}]') || fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-ubuntu-18.04"},{"ss":"2019","image":"mcr.microsoft.com/mssql/server:2019-CU32-GDR10-ubuntu-20.04"},{"ss":"2022","image":"mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"}]') }}
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-ubuntu-18.04"},{"ss":"latest","image":"mcr.microsoft.com/mssql/server:latest"}]') || fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-ubuntu-18.04"},{"ss":"2019","image":"mcr.microsoft.com/mssql/server:2019-CU32-GDR10-ubuntu-20.04"},{"ss":"2022","image":"mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"},{"ss":"latest","image":"mcr.microsoft.com/mssql/server:latest"}]') }}
     permissions:
       contents: read
       checks: write
@@ -565,6 +573,27 @@ jobs:
           actual_postgresql=$(docker run --rm postgres:latest postgres --version | grep -oE '[0-9]+' | head -1)
           actual_mysql=$(docker run --rm mysql:latest mysqld --version | grep -oE '[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
           actual_mariadb=$(docker run --rm mariadb:latest mariadbd --version | grep -oE '[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
+
+          # SQL Server resolves by MANIFEST DIGEST rather than by booting the server: the image is ~1.5 GB
+          # and needs an SA password and a startup wait just to answer a version query, while MCR publishes
+          # a `<year>-latest` tag per major. If `latest` still points at the same digest as
+          # `<expected>-latest`, the ceiling has not moved. If it points at none of them, a new major has
+          # shipped -- which is exactly the signal.
+          want_ss=$(expect sqlserver)
+          SS_ACCEPT='application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json'
+          dg() { curl -sS --max-time 30 -I -H "Accept: $SS_ACCEPT" "https://mcr.microsoft.com/v2/mssql/server/manifests/$1" | tr -d '\r' | grep -i '^docker-content-digest:' | awk '{print $2}'; }
+          ss_latest=$(dg latest)
+          ss_want=$(dg "${want_ss}-latest")
+          if [ -z "$ss_latest" ] || [ -z "$ss_want" ]; then
+            echo "::error::Could not resolve the SQL Server manifest digests from MCR. Treating as a failure rather than a pass -- an undetected ceiling is the exact condition this job exists to catch."
+            FAILED=1
+          elif [ "$ss_latest" != "$ss_want" ]; then
+            echo "::error::SQL Server latest no longer matches ${want_ss}-latest, so a new major has shipped."
+            echo "::error::Do BOTH: (1) pin ${want_ss} as a permanent leg in continuous-integration.yml, scripts/run-modern-band-sweep.sh and release.yml's REQUIRED_CHECKS -- or decide out loud to accept the hole; (2) set sqlserver to the new year in .github/engine-ceilings.json."
+            FAILED=1
+          else
+            echo "sqlserver latest = ${want_ss}-latest -- ceiling unchanged."
+          fi
 
           for engine in postgresql mysql mariadb; do
             want=$(expect "$engine")

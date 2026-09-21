@@ -59,6 +59,7 @@ jobs:
             "Integration Tests (SQL Server 2019)"
             "Integration Tests (SQL Server 2022)"
             "Integration Tests (SQL Server 2025)"
+            "Integration Tests (SQL Server latest)"
             "Integration Tests (PostgreSQL latest)"
             "Integration Tests (PostgreSQL 17)"
             "Integration Tests (PostgreSQL 16)"

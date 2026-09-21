@@ -17,9 +17,15 @@
     "Doing only (2) is how the gap comes back. The failure message says so.",
     "",
     "Match is on the MAJOR version only -- a patch release should not redden CI.",
-    "SQL Server is absent on purpose: its legs are all pinned (2017/2019/2022/2025), so there is no",
-    "floating leg to ratchet. Its ceiling is checked at release open, per the pre-release checklist."
+    "",
+    "SQL Server is resolved by MANIFEST DIGEST rather than by version string: booting it just to ask its",
+    "version means a ~1.5 GB image, an SA password and a startup wait, while MCR publishes a <year>-latest",
+    "tag per major. `latest` matching `<value>-latest` means the ceiling has not moved. An earlier draft",
+    "excluded SQL Server from this file entirely, reasoning that all its legs were pinned so there was",
+    "nothing to ratchet -- which is circular, and left the one engine that started this investigation free",
+    "to decay again the day the next version ships."
   ],
+  "sqlserver": "2025",
   "postgresql": "18",
   "mysql": "26",
   "mariadb": "13"
