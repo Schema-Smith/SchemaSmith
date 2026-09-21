@@ -11,7 +11,7 @@ name: CI (docs-only companion)
 #
 # THE SET CHANGED 2026-09-20 with the matrix-shape decision, and the branch ruleset MUST be updated to
 # match or the deadlock this file prevents comes back from the other direction -- a required context that
-# no longer runs waits forever. A pull request now produces exactly these eleven:
+# no longer runs waits forever. A pull request now produces exactly these twelve:
 #   Build & Unit Tests
 #   Integration Tests (SQL Server 2017)        <- new name; "(SQL Server)" no longer exists
 #   Integration Tests (SQL Server 2025)        <- new
@@ -21,6 +21,7 @@ name: CI (docs-only companion)
 #   Integration Tests (MySQL 5.7)
 #   Integration Tests (MariaDB latest)       <- floating; replaced the pinned "(MariaDB 11.4)" context
 #   Integration Tests (MariaDB 10.2)
+#   Genuine Sweep Record
 #   Engine Ceiling Ratchet
 #   Coverage Gate
 # Removed from PR runs (still run on merge to main, so do NOT require them on a PR):
@@ -115,6 +116,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
+
+  # Never stubbed before 2026-09-20, and latent rather than harmless: sweep-record lives in
+  # continuous-integration.yml, which carries paths-ignore for docs -- so if this context is required, an
+  # external contributor's docs-only PR waits on it forever. Maintainers would never hit it, because the
+  # Rule 6 carve-out pushes docs straight to main. Stubbed here so it is safe whether the ruleset requires
+  # it or not; a stub for a non-required context costs nothing.
+  sweep-record:
+    name: Genuine Sweep Record
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "docs-only change — the recorded genuine-binary sweep still covers this tree."
 
   engine-ceiling-ratchet:
     name: Engine Ceiling Ratchet
