@@ -71,6 +71,14 @@ public class DataDeliveryProcessor : IDataDelivery
 
         log("  Delivering table data");
 
+        // Answer each table's catalog questions once for the length of this pass. Building one table's
+        // merge script reads INFORMATION_SCHEMA several times over, and on MySQL/MariaDB every such read
+        // materialises to a disk temp table -- measured at 65% of a no-op quench's catalog traffic.
+        // Bounded to this call on purpose: delivery performs DML only (the user's own table-data scripts
+        // run after it returns), so the catalog cannot move underneath it. Anything wider would break the
+        // point-in-time reads the rest of the quench depends on.
+        using var catalogScope = MergeScriptHelper.BeginCatalogScope();
+
         var mergeTypeErrors = ValidateMergeTypes(tablesToDeliver);
         if (mergeTypeErrors.Count > 0)
         {
