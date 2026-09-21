@@ -355,6 +355,20 @@
   -- predicate is unchanged from the SELECT it moved out of, with t.* replaced by the row's own carried
   -- [Schema]/[TableName] and the parent's [OldName] joined back from #TableDefinitions (the only field
   -- it needed that #Columns does not carry itself).
+  -- The parent's [OldName] is fetched through a SMALL KEYED lookup rather than joined straight off
+  -- #TableDefinitions. Both tables key on NVARCHAR(MAX) columns, and LOB types cannot be hash-join
+  -- keys -- SQL Server degrades to nested loops, which measured 65 SECONDS over 33,877 column rows
+  -- against 27s for the entire parse before this pass existed. Narrowing the keys to NVARCHAR(400) and
+  -- indexing them restores a normal join. The inline version this replaced never paid it: the parent
+  -- row was already in scope from the CROSS APPLY, so there was no join at all.
+  DROP TABLE IF EXISTS #ParentOldName;
+  SELECT [Schema] = CONVERT(NVARCHAR(400), [Schema]),
+         [Name]   = CONVERT(NVARCHAR(400), [Name]),
+         [OldName]
+    INTO #ParentOldName
+    FROM #TableDefinitions WITH (NOLOCK);
+  CREATE CLUSTERED INDEX [ix_ParentOldName] ON #ParentOldName ([Schema], [Name]);
+
   UPDATE c
      SET [NewColumn] = CONVERT(BIT, CASE WHEN (RTRIM(ISNULL(c.[ComputedExpression], '')) <> '' OR NOT EXISTS (SELECT * FROM #Tables x WHERE x.[Name] = c.[TableName] AND x.[Schema] = c.[Schema] AND x.NewTable = 1))
                             AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName], 'U'), SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'ColumnId') IS NULL
@@ -364,8 +378,9 @@
                             AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName], 'U'), SchemaSmith.fn_StripBracketWrapping(c.[OldName]), 'ColumnId') IS NULL
                            THEN 1 ELSE 0 END)
     FROM #Columns c
-    LEFT JOIN #TableDefinitions td WITH (NOLOCK)
-      ON td.[Schema] = c.[Schema] AND td.[Name] = c.[TableName];
+    LEFT JOIN #ParentOldName td
+      ON td.[Schema] = CONVERT(NVARCHAR(400), c.[Schema]) AND td.[Name] = CONVERT(NVARCHAR(400), c.[TableName]);
+  DROP TABLE IF EXISTS #ParentOldName;
 
   -- Identify Columns to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #Columns WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
