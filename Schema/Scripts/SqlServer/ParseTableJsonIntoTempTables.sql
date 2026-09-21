@@ -21,25 +21,12 @@
 
   DECLARE @v_SQL NVARCHAR(MAX) = ''
   SET NOCOUNT ON
-  RAISERROR('Parse Tables from Json', 10, 100) WITH NOWAIT
-
-  -- I5: missing/blank [Schema] is a programmer error after slice-1's SchemaDefaultResolver.
-  -- The canonical Load path fills Schema with the platform default ('dbo' / 'public') or the
-  -- {{SchemaName}} token; a blank value here means a caller built the JSON without going
-  -- through Template.Load (or a downstream substitution swallowed the token). Silently
-  -- defaulting to dbo here is data-loss-equivalent for schema templates — fail loud.
-  IF EXISTS (SELECT 1 FROM OPENJSON(@TableDefinitions) WITH ([Schema] NVARCHAR(500) '$.Schema', [Name] NVARCHAR(500) '$.Name')
-                 WHERE NULLIF(RTRIM(ISNULL([Schema], '')), '') IS NULL)
-  BEGIN
-    DECLARE @v_BadTable NVARCHAR(500) =
-      (SELECT TOP 1 ISNULL([Name], '<unnamed>') FROM OPENJSON(@TableDefinitions) WITH ([Schema] NVARCHAR(500) '$.Schema', [Name] NVARCHAR(500) '$.Name')
-         WHERE NULLIF(RTRIM(ISNULL([Schema], '')), '') IS NULL);
-    DECLARE @v_Msg NVARCHAR(2000) = 'Table JSON is missing Schema for table ''' + @v_BadTable + '''. ' +
-      'Schema must be populated before reaching ParseTableJsonIntoTempTables — this is a programmer error. ' +
-      'In production the SchemaDefaultResolver fills Schema with the platform default or the {{SchemaName}} token; ' +
-      'a blank value here means a caller bypassed Template.Load or substituted the token away.';
-    THROW 51000, @v_Msg, 1;
-  END
+  -- ===== WORKING-SET SHAPES =====
+  -- Every temp table is created up front, before any of them is filled, so that an ingestion
+  -- path OTHER than the JSON shred below can put rows in them: the caller runs everything above
+  -- the INGEST SPLIT marker, loads its own rows, then runs everything below it with
+  -- @BulkIngested = 1 so the shred statements are skipped while NORMALIZE, DERIVE and the
+  -- ShouldApply gating still run. Interleaved CREATEs made that impossible.
 
   DROP TABLE IF EXISTS #TableDefinitions
   -- [_RowId] gives each parsed row a unique identifier so the per-row ShouldApply DELETE
@@ -53,15 +40,21 @@
   -- non-blank by the time we reach this SELECT.
   -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
   -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  -- NULLABILITY NOTE: the measured shape had CompressionType/XmlCompression/IsTemporal/
+  -- UpdateFillFactor/MemoryOptimized/EnableCDC/EnableChangeTracking/TrackColumnsUpdated/PreventDrop
+  -- as NOT NULL, because it was measured against a SELECT ... INTO whose projection had already
+  -- applied the ISNULL defaults. Those defaults now live in the NORMALIZE pass, so the INGEST insert
+  -- carries raw NULLs through and the columns have to accept them (Msg 515 otherwise). Post-NORMALIZE
+  -- they are still never NULL.
   CREATE TABLE #TableDefinitions
   (
     [_RowId] BIGINT NULL,
     [Schema] NVARCHAR(MAX) NULL,
     [Name] NVARCHAR(MAX) NULL,
-    [CompressionType] NVARCHAR(100) NOT NULL,
-    [XmlCompression] BIT NOT NULL,
-    [IsTemporal] BIT NOT NULL,
-    [UpdateFillFactor] BIT NOT NULL,
+    [CompressionType] NVARCHAR(100) NULL,
+    [XmlCompression] BIT NULL,
+    [IsTemporal] BIT NULL,
+    [UpdateFillFactor] BIT NULL,
     [HistoryTableSchema] NVARCHAR(MAX) NULL,
     [HistoryTableName] NVARCHAR(MAX) NULL,
     [HistoryRetentionPeriod] NVARCHAR(50) NULL,
@@ -82,12 +75,55 @@
     [VariantName] NVARCHAR(128) NULL,
     [GraphType] NVARCHAR(10) NULL,
     [Ledger] NVARCHAR(12) NULL,
-    [MemoryOptimized] BIT NOT NULL,
+    [MemoryOptimized] BIT NULL,
     [Durability] NVARCHAR(20) NULL,
+    [EnableCDC] BIT NULL,
+    [EnableChangeTracking] BIT NULL,
+    [TrackColumnsUpdated] BIT NULL,
+    [OldName] NVARCHAR(MAX) NULL,
+    [DropColumnsRemovedFromProduct] BIT NULL,
+    [DropForeignKeysRemovedFromProduct] BIT NULL,
+    [DropCheckConstraintsRemovedFromProduct] BIT NULL,
+    [DropExcludeConstraintsRemovedFromProduct] BIT NULL,
+    [DropStatisticsRemovedFromProduct] BIT NULL,
+    [DropIndexesRemovedFromProduct] BIT NULL,
+    [RebuildPolicyMode] NVARCHAR(20) NULL,
+    [RebuildPolicyThreshold] INT NULL,
+    [RebuildPolicyOnOrderMismatch] BIT NULL,
+    [RebuildPolicySpecified] BIT NULL,
+    [PreventDrop] BIT NULL
+  )
+
+  DROP TABLE IF EXISTS #Tables
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #Tables
+  (
+    [Schema] NVARCHAR(MAX) NULL,
+    [Name] NVARCHAR(MAX) NULL,
+    [CompressionType] NVARCHAR(100) NOT NULL,
+    [XmlCompression] BIT NOT NULL,
+    [IsTemporal] BIT NOT NULL,
+    [HistoryTableSchema] NVARCHAR(MAX) NULL,
+    [HistoryTableName] NVARCHAR(MAX) NULL,
+    [HistoryRetentionPeriod] NVARCHAR(50) NULL,
+    [FileGroup] NVARCHAR(MAX) NULL,
+    [PartitionScheme] NVARCHAR(MAX) NULL,
+    [PartitionColumn] NVARCHAR(MAX) NULL,
+    [FileStreamFileGroup] NVARCHAR(MAX) NULL,
+    [TextImageFileGroup] NVARCHAR(MAX) NULL,
+    [UpdateFillFactor] BIT NOT NULL,
     [EnableCDC] BIT NOT NULL,
+    [CdcFilegroup] NVARCHAR(MAX) NULL,
     [EnableChangeTracking] BIT NOT NULL,
     [TrackColumnsUpdated] BIT NOT NULL,
+    [GraphType] NVARCHAR(10) NULL,
+    [Ledger] NVARCHAR(12) NULL,
+    [MemoryOptimized] BIT NOT NULL,
+    [Durability] NVARCHAR(20) NULL,
     [OldName] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL,
+    [NewTable] BIT NULL,
     [DropColumnsRemovedFromProduct] BIT NULL,
     [DropForeignKeysRemovedFromProduct] BIT NULL,
     [DropCheckConstraintsRemovedFromProduct] BIT NULL,
@@ -100,39 +136,209 @@
     [RebuildPolicySpecified] BIT NULL,
     [PreventDrop] BIT NOT NULL
   )
+
+  DROP TABLE IF EXISTS #Columns
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #Columns
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [ColumnName] NVARCHAR(MAX) NULL,
+    [DataType] NVARCHAR(MAX) NULL,
+    [Nullable] BIT NOT NULL,
+    [NullableDeclared] BIT NULL,
+    [Default] NVARCHAR(MAX) NULL,
+    [CheckExpression] NVARCHAR(MAX) NULL,
+    [ComputedExpression] NVARCHAR(MAX) NULL,
+    [Persisted] BIT NOT NULL,
+    [Sparse] BIT NOT NULL,
+    [FileStream] BIT NOT NULL,
+    [IsColumnSet] BIT NOT NULL,
+    [BackfillExistingRows] BIT NOT NULL,
+    [Collation] NVARCHAR(500) NULL,
+    [DataMaskFunction] NVARCHAR(500) NULL,
+    [EncryptionType] NVARCHAR(100) NOT NULL,
+    [EncryptionKey] NVARCHAR(500) NULL,
+    [EncryptionAlgorithm] NVARCHAR(500) NULL,
+    [OldName] NVARCHAR(MAX) NULL,
+    [NewColumn] BIT NULL,
+    [ColumnScript] NVARCHAR(MAX) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+
+  DROP TABLE IF EXISTS #Indexes
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  -- Columns NORMALIZE fills are NULLable on ingest: each was NOT NULL only because the old SELECT
+  -- applied ISNULL/COALESCE inline, so the constraint recorded the transform rather than a requirement.
+  CREATE TABLE #Indexes
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [IndexName] NVARCHAR(MAX) NULL,
+    [CompressionType] NVARCHAR(100) NULL,
+    [XmlCompression] BIT NULL,
+    [PrimaryKey] BIT NULL,
+    [Unique] INT NULL,
+    [UniqueConstraint] BIT NULL,
+    [Clustered] BIT NULL,
+    [ColumnStore] BIT NULL,
+    [FillFactor] TINYINT NULL,
+    [FilterExpression] NVARCHAR(MAX) NULL,
+    [FileGroup] NVARCHAR(MAX) NULL,
+    [PartitionScheme] NVARCHAR(MAX) NULL,
+    [PartitionColumn] NVARCHAR(MAX) NULL,
+    [BucketCount] INT NULL,
+    [UpdateFillFactor] BIT NULL,
+    [IndexColumns] NVARCHAR(MAX) NULL,
+    [IncludeColumns] NVARCHAR(MAX) NULL,
+    [IgnoreDuplicateKey] BIT NULL,
+    [PadIndex] BIT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+
+  DROP TABLE IF EXISTS #XmlIndexes
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #XmlIndexes
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [IndexName] NVARCHAR(MAX) NULL,
+    [IsPrimary] BIT NULL,
+    [Column] NVARCHAR(MAX) NULL,
+    [PrimaryIndex] NVARCHAR(MAX) NULL,
+    [SecondaryIndexType] NVARCHAR(500) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+
+  DROP TABLE IF EXISTS #ForeignKeys
+  -- Merge note (2026-06-02): main added [_RowId] (kept) AND swapped RelatedTableSchema to
+  -- ISNULL(f.[RelatedTableSchema], 'dbo'). Schema-templates added the explicit THROW
+  -- check (I5, below the SELECT INTO) instead of a silent fallback, so ISNULL is
+  -- intentionally NOT applied here — the post-parse check catches blank RelatedTableSchema
+  -- loudly rather than silently rewriting it to 'dbo'.
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #ForeignKeys
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [KeyName] NVARCHAR(MAX) NULL,
+    [RelatedTableSchema] NVARCHAR(MAX) NULL,
+    [RelatedTable] NVARCHAR(MAX) NULL,
+    [Columns] NVARCHAR(MAX) NULL,
+    [RelatedColumns] NVARCHAR(MAX) NULL,
+    -- NULLable on ingest, non-null after NORMALIZE. The measured shape had these NOT NULL because the
+    -- old SELECT applied ISNULL(..., 'NO ACTION') inline -- the constraint was recording the transform,
+    -- not a requirement. Ingest now carries raw values, so the column has to admit them; the value
+    -- every consumer sees is unchanged, which is what the equality harness checks.
+    [DeleteAction] NVARCHAR(20) NULL,
+    [UpdateAction] NVARCHAR(20) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+
+  DROP TABLE IF EXISTS #CheckConstraints
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #CheckConstraints
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [ConstraintName] NVARCHAR(500) NULL,
+    [Expression] NVARCHAR(MAX) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+
+  DROP TABLE IF EXISTS #Statistics
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #Statistics
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [StatisticName] NVARCHAR(MAX) NULL,
+    -- NULLable on ingest, defaulted by NORMALIZE -- NOT NULL recorded the old inline ISNULL.
+    [SampleSize] TINYINT NULL,
+    [FilterExpression] NVARCHAR(MAX) NULL,
+    [Columns] NVARCHAR(MAX) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+
+  DROP TABLE IF EXISTS #FullTextIndexes
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #FullTextIndexes
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [FullTextCatalog] NVARCHAR(MAX) NULL,
+    [KeyIndex] NVARCHAR(MAX) NULL,
+    [ChangeTracking] NVARCHAR(500) NULL,
+    [StopList] NVARCHAR(MAX) NULL,
+    [Columns] NVARCHAR(MAX) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+
+  -- ===== INGEST SPLIT =====
+
+  RAISERROR('Parse Tables from Json', 10, 100) WITH NOWAIT
+
+  -- I5: missing/blank [Schema] is a programmer error after slice-1's SchemaDefaultResolver.
+  -- The canonical Load path fills Schema with the platform default ('dbo' / 'public') or the
+  -- {{SchemaName}} token; a blank value here means a caller built the JSON without going
+  -- through Template.Load (or a downstream substitution swallowed the token). Silently
+  -- defaulting to dbo here is data-loss-equivalent for schema templates — fail loud.
+  IF EXISTS (SELECT 1 FROM OPENJSON(@TableDefinitions) WITH ([Schema] NVARCHAR(500) '$.Schema', [Name] NVARCHAR(500) '$.Name')
+                 WHERE NULLIF(RTRIM(ISNULL([Schema], '')), '') IS NULL)
+  BEGIN
+    DECLARE @v_BadTable NVARCHAR(500) =
+      (SELECT TOP 1 ISNULL([Name], '<unnamed>') FROM OPENJSON(@TableDefinitions) WITH ([Schema] NVARCHAR(500) '$.Schema', [Name] NVARCHAR(500) '$.Name')
+         WHERE NULLIF(RTRIM(ISNULL([Schema], '')), '') IS NULL);
+    DECLARE @v_Msg NVARCHAR(2000) = 'Table JSON is missing Schema for table ''' + @v_BadTable + '''. ' +
+      'Schema must be populated before reaching ParseTableJsonIntoTempTables — this is a programmer error. ' +
+      'In production the SchemaDefaultResolver fills Schema with the platform default or the {{SchemaName}} token; ' +
+      'a blank value here means a caller bypassed Template.Load or substituted the token away.';
+    THROW 51000, @v_Msg, 1;
+  END
+
   INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop])
+  -- INGEST ONLY -- raw values straight off the shred. Every transform that used to live in this
+  -- SELECT moved to the NORMALIZE pass below, so a second ingestion path (C# bulk-loading these rows
+  -- instead of shredding JSON) gets the identical treatment from one definition rather than a
+  -- reimplementation. [RebuildPolicySpecified] is the one exception that stays here: it is read from
+  -- the PRESENCE of the '$.RebuildPolicy' object, which is a shred-only fact -- the object itself is
+  -- never stored, so NORMALIZE could not recompute it. The bulk path supplies the bit directly.
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         [Schema] = SchemaSmith.fn_SafeBracketWrap([Schema]), [Name] = SchemaSmith.fn_SafeBracketWrap([Name]), [CompressionType] = ISNULL(NULLIF(RTRIM([CompressionType]), ''), 'NONE'), [XmlCompression] = ISNULL([XmlCompression], 0),
-         [IsTemporal] = ISNULL([IsTemporal], 0), [UpdateFillFactor] = ISNULL([UpdateFillFactor], 0),
-         -- History table identity/retention (#depth-gap): schema/name left NULL (not defaulted here) so
-         -- the apply-side quench can tell "unset -> use SchemaSmith's own <Table>_Hist default" apart from
-         -- an explicit value. Retention is normalized here (singular unit -> plural, e.g. "5 YEAR" ->
-         -- "5 YEARS") so a hand-authored singular form compares equal to the canonical plural form the
-         -- live-state read and extraction both produce -- see fn_NormalizeTemporalRetentionPeriod.
-         [HistoryTableSchema] = SchemaSmith.fn_SafeBracketWrap([HistoryTableSchema]), [HistoryTableName] = SchemaSmith.fn_SafeBracketWrap([HistoryTableName]), [HistoryRetentionPeriod] = SchemaSmith.fn_NormalizeTemporalRetentionPeriod([HistoryRetentionPeriod]),
-         -- Filegroup placement (#filegroups): left NULL (not defaulted) when absent, same as
-         -- HistoryTableSchema/Name above, so the apply side can tell "unset -> SQL Server's own default
-         -- filegroup" apart from an explicit declaration.
-         [FileGroup] = SchemaSmith.fn_SafeBracketWrap([FileGroup]),
-         -- Partition placement (#partitioning): same null-means-unmanaged contract as [FileGroup] above.
-         [PartitionScheme] = SchemaSmith.fn_SafeBracketWrap([PartitionScheme]), [PartitionColumn] = SchemaSmith.fn_SafeBracketWrap([PartitionColumn]),
-         [FileStreamFileGroup] = SchemaSmith.fn_SafeBracketWrap([FileStreamFileGroup]),
-         [TextImageFileGroup] = SchemaSmith.fn_SafeBracketWrap([TextImageFileGroup]),
-         -- CDC change-table placement (#417): NULL means unmanaged; ModifiedTableQuench applies the template default.
-         [CdcFilegroup] = SchemaSmith.fn_SafeBracketWrap([CdcFilegroup]),
+         [Schema], [Name], [CompressionType], [XmlCompression],
+         [IsTemporal], [UpdateFillFactor],
+         [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod],
+         [FileGroup],
+         [PartitionScheme], [PartitionColumn],
+         [FileStreamFileGroup],
+         [TextImageFileGroup],
+         [CdcFilegroup],
          [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints],
-         [ShouldApplyExpression], [VariantName], [GraphType] = RTRIM(ISNULL([GraphType], 'None')), [Ledger] = RTRIM(ISNULL([Ledger], 'Off')), [MemoryOptimized] = ISNULL([MemoryOptimized], 0), [Durability] = UPPER(RTRIM(ISNULL(NULLIF([Durability], ''), 'SCHEMA_AND_DATA'))), [EnableCDC] = ISNULL([EnableCDC], 0), [EnableChangeTracking] = ISNULL([EnableChangeTracking], 0), [TrackColumnsUpdated] = ISNULL([TrackColumnsUpdated], 0), [OldName] = SchemaSmith.fn_SafeBracketWrap([OldName]),
+         [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName],
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
-         -- RebuildPolicy resolves MOST-SPECIFIC-WINS on the WHOLE object (ProductQuench.ResolveCascadedPolicy),
-         -- so the apply side needs to know whether this table declared one AT ALL -- not just what its fields
-         -- say. [RebuildPolicySpecified] is that sentinel, read from the presence of the OBJECT rather than
-         -- from any field: a table declaring only { "Mode": "ALWAYS" } must NOT inherit a product-level
-         -- Threshold, and a per-field COALESCE against the passed-in tier would graft one on. A JSON null
-         -- ('"RebuildPolicy": null', which is what an undeclared policy serializes to) yields NULL for
-         -- '$.RebuildPolicy' AS JSON in lax mode, so absent and null both read as not-specified.
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch],
          [RebuildPolicySpecified] = CONVERT(BIT, CASE WHEN [RebuildPolicyJson] IS NOT NULL THEN 1 ELSE 0 END),
-         [PreventDrop] = ISNULL([PreventDrop], 0)
+         [PreventDrop]
     FROM OPENJSON(@TableDefinitions) WITH (
       [Schema] NVARCHAR(500) '$.Schema',
       [Name] NVARCHAR(500) '$.Name',
@@ -180,6 +386,47 @@
       [PreventDrop] BIT '$.PreventDrop'
       ) t;
   
+  -- NORMALIZE -- defaults, identifier bracket-wrapping and canonicalization, applied to whatever is in
+  -- the table regardless of how it got there. Every transform here is idempotent: fn_SafeBracketWrap
+  -- strips before it wraps, and each ISNULL/RTRIM/UPPER is a no-op on an already-normalized value. That
+  -- is what lets the child shreds below keep reading wrapped [Schema]/[Name] off this table while the
+  -- bulk path supplies raw ones and has them wrapped right here.
+  UPDATE #TableDefinitions
+    SET [Schema] = SchemaSmith.fn_SafeBracketWrap([Schema]),
+        [Name] = SchemaSmith.fn_SafeBracketWrap([Name]),
+        [CompressionType] = ISNULL(NULLIF(RTRIM([CompressionType]), ''), 'NONE'),
+        [XmlCompression] = ISNULL([XmlCompression], 0),
+        [IsTemporal] = ISNULL([IsTemporal], 0),
+        [UpdateFillFactor] = ISNULL([UpdateFillFactor], 0),
+        -- History table identity/retention (#depth-gap): schema/name left NULL (not defaulted) so the
+        -- apply-side quench can tell "unset -> use SchemaSmith's own <Table>_Hist default" apart from an
+        -- explicit value. Retention is canonicalized (singular unit -> plural, e.g. "5 YEAR" -> "5 YEARS")
+        -- so a hand-authored singular form compares equal to the plural form the live-state read and
+        -- extraction both produce -- see fn_NormalizeTemporalRetentionPeriod.
+        [HistoryTableSchema] = SchemaSmith.fn_SafeBracketWrap([HistoryTableSchema]),
+        [HistoryTableName] = SchemaSmith.fn_SafeBracketWrap([HistoryTableName]),
+        [HistoryRetentionPeriod] = SchemaSmith.fn_NormalizeTemporalRetentionPeriod([HistoryRetentionPeriod]),
+        -- Filegroup placement (#filegroups): left NULL (not defaulted) when absent, same as
+        -- HistoryTableSchema/Name above, so the apply side can tell "unset -> SQL Server's own default
+        -- filegroup" apart from an explicit declaration.
+        [FileGroup] = SchemaSmith.fn_SafeBracketWrap([FileGroup]),
+        -- Partition placement (#partitioning): same null-means-unmanaged contract as [FileGroup] above.
+        [PartitionScheme] = SchemaSmith.fn_SafeBracketWrap([PartitionScheme]),
+        [PartitionColumn] = SchemaSmith.fn_SafeBracketWrap([PartitionColumn]),
+        [FileStreamFileGroup] = SchemaSmith.fn_SafeBracketWrap([FileStreamFileGroup]),
+        [TextImageFileGroup] = SchemaSmith.fn_SafeBracketWrap([TextImageFileGroup]),
+        -- CDC change-table placement (#417): NULL means unmanaged; ModifiedTableQuench applies the template default.
+        [CdcFilegroup] = SchemaSmith.fn_SafeBracketWrap([CdcFilegroup]),
+        [GraphType] = RTRIM(ISNULL([GraphType], 'None')),
+        [Ledger] = RTRIM(ISNULL([Ledger], 'Off')),
+        [MemoryOptimized] = ISNULL([MemoryOptimized], 0),
+        [Durability] = UPPER(RTRIM(ISNULL(NULLIF([Durability], ''), 'SCHEMA_AND_DATA'))),
+        [EnableCDC] = ISNULL([EnableCDC], 0),
+        [EnableChangeTracking] = ISNULL([EnableChangeTracking], 0),
+        [TrackColumnsUpdated] = ISNULL([TrackColumnsUpdated], 0),
+        [OldName] = SchemaSmith.fn_SafeBracketWrap([OldName]),
+        [PreventDrop] = ISNULL([PreventDrop], 0)
+
   -- Identify Tables to skip based on ShouldApply expression
   -- Scoped by [_RowId] so each generated DELETE targets exactly the source row whose
   -- expression evaluated false (no collateral damage to siblings with the same Name).
@@ -188,48 +435,6 @@
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
 
-  DROP TABLE IF EXISTS #Tables
-  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
-  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
-  CREATE TABLE #Tables
-  (
-    [Schema] NVARCHAR(MAX) NULL,
-    [Name] NVARCHAR(MAX) NULL,
-    [CompressionType] NVARCHAR(100) NOT NULL,
-    [XmlCompression] BIT NOT NULL,
-    [IsTemporal] BIT NOT NULL,
-    [HistoryTableSchema] NVARCHAR(MAX) NULL,
-    [HistoryTableName] NVARCHAR(MAX) NULL,
-    [HistoryRetentionPeriod] NVARCHAR(50) NULL,
-    [FileGroup] NVARCHAR(MAX) NULL,
-    [PartitionScheme] NVARCHAR(MAX) NULL,
-    [PartitionColumn] NVARCHAR(MAX) NULL,
-    [FileStreamFileGroup] NVARCHAR(MAX) NULL,
-    [TextImageFileGroup] NVARCHAR(MAX) NULL,
-    [UpdateFillFactor] BIT NOT NULL,
-    [EnableCDC] BIT NOT NULL,
-    [CdcFilegroup] NVARCHAR(MAX) NULL,
-    [EnableChangeTracking] BIT NOT NULL,
-    [TrackColumnsUpdated] BIT NOT NULL,
-    [GraphType] NVARCHAR(10) NULL,
-    [Ledger] NVARCHAR(12) NULL,
-    [MemoryOptimized] BIT NOT NULL,
-    [Durability] NVARCHAR(20) NULL,
-    [OldName] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL,
-    [NewTable] BIT NULL,
-    [DropColumnsRemovedFromProduct] BIT NULL,
-    [DropForeignKeysRemovedFromProduct] BIT NULL,
-    [DropCheckConstraintsRemovedFromProduct] BIT NULL,
-    [DropExcludeConstraintsRemovedFromProduct] BIT NULL,
-    [DropStatisticsRemovedFromProduct] BIT NULL,
-    [DropIndexesRemovedFromProduct] BIT NULL,
-    [RebuildPolicyMode] NVARCHAR(20) NULL,
-    [RebuildPolicyThreshold] INT NULL,
-    [RebuildPolicyOnOrderMismatch] BIT NULL,
-    [RebuildPolicySpecified] BIT NULL,
-    [PreventDrop] BIT NOT NULL
-  )
   INSERT INTO #Tables ([Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName], [NewTable], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop])
   SELECT [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName],
          CONVERT(BIT, CASE WHEN OBJECT_ID([Schema] + '.' + [Name], 'U') IS NULL AND OBJECT_ID([Schema] + '.' + [OldName], 'U') IS NULL THEN 1 ELSE 0 END) AS NewTable,
@@ -239,37 +444,6 @@
     FROM #TableDefinitions WITH (NOLOCK);
   
   RAISERROR('Parse Columns from Json', 10, 100) WITH NOWAIT
-  DROP TABLE IF EXISTS #Columns
-  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
-  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
-  CREATE TABLE #Columns
-  (
-    [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [ColumnName] NVARCHAR(MAX) NULL,
-    [DataType] NVARCHAR(MAX) NULL,
-    [Nullable] BIT NOT NULL,
-    [NullableDeclared] BIT NULL,
-    [Default] NVARCHAR(MAX) NULL,
-    [CheckExpression] NVARCHAR(MAX) NULL,
-    [ComputedExpression] NVARCHAR(MAX) NULL,
-    [Persisted] BIT NOT NULL,
-    [Sparse] BIT NOT NULL,
-    [FileStream] BIT NOT NULL,
-    [IsColumnSet] BIT NOT NULL,
-    [BackfillExistingRows] BIT NOT NULL,
-    [Collation] NVARCHAR(500) NULL,
-    [DataMaskFunction] NVARCHAR(500) NULL,
-    [EncryptionType] NVARCHAR(100) NOT NULL,
-    [EncryptionKey] NVARCHAR(500) NULL,
-    [EncryptionAlgorithm] NVARCHAR(500) NULL,
-    [OldName] NVARCHAR(MAX) NULL,
-    [NewColumn] BIT NULL,
-    [ColumnScript] NVARCHAR(MAX) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
-  )
   INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [NullableDeclared], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [OldName], [NewColumn], [ColumnScript], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [ColumnName] = SchemaSmith.fn_SafeBracketWrap(c.[ColumnName]),
@@ -395,38 +569,6 @@
     WHERE NOT EXISTS (SELECT * FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = #TableDefinitions.[Schema] AND C.[TableName] = #TableDefinitions.[Name])
 
   RAISERROR('Parse Indexes from Json', 10, 100) WITH NOWAIT
-  DROP TABLE IF EXISTS #Indexes
-  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
-  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
-  -- Columns NORMALIZE fills are NULLable on ingest: each was NOT NULL only because the old SELECT
-  -- applied ISNULL/COALESCE inline, so the constraint recorded the transform rather than a requirement.
-  CREATE TABLE #Indexes
-  (
-    [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [IndexName] NVARCHAR(MAX) NULL,
-    [CompressionType] NVARCHAR(100) NULL,
-    [XmlCompression] BIT NULL,
-    [PrimaryKey] BIT NULL,
-    [Unique] INT NULL,
-    [UniqueConstraint] BIT NULL,
-    [Clustered] BIT NULL,
-    [ColumnStore] BIT NULL,
-    [FillFactor] TINYINT NULL,
-    [FilterExpression] NVARCHAR(MAX) NULL,
-    [FileGroup] NVARCHAR(MAX) NULL,
-    [PartitionScheme] NVARCHAR(MAX) NULL,
-    [PartitionColumn] NVARCHAR(MAX) NULL,
-    [BucketCount] INT NULL,
-    [UpdateFillFactor] BIT NULL,
-    [IndexColumns] NVARCHAR(MAX) NULL,
-    [IncludeColumns] NVARCHAR(MAX) NULL,
-    [IgnoreDuplicateKey] BIT NULL,
-    [PadIndex] BIT NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
-  )
   INSERT INTO #Indexes ([_RowId], [Schema], [TableName], [IndexName], [CompressionType], [XmlCompression], [PrimaryKey], [Unique], [UniqueConstraint], [Clustered], [ColumnStore], [FillFactor], [FilterExpression], [FileGroup], [PartitionScheme], [PartitionColumn], [BucketCount], [UpdateFillFactor], [IndexColumns], [IncludeColumns], [IgnoreDuplicateKey], [PadIndex], [ShouldApplyExpression], [VariantName])
   -- INGEST ONLY -- raw values; NORMALIZE below owns every transform, so a second ingestion path gets
   -- the same treatment from the same code rather than a reimplementation of these rules.
@@ -504,22 +646,6 @@
   EXEC(@v_SQL)
   
   RAISERROR('Parse XML Indexes from Json', 10, 100) WITH NOWAIT
-  DROP TABLE IF EXISTS #XmlIndexes
-  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
-  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
-  CREATE TABLE #XmlIndexes
-  (
-    [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [IndexName] NVARCHAR(MAX) NULL,
-    [IsPrimary] BIT NULL,
-    [Column] NVARCHAR(MAX) NULL,
-    [PrimaryIndex] NVARCHAR(MAX) NULL,
-    [SecondaryIndexType] NVARCHAR(500) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
-  )
   INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          -- INGEST ONLY -- NORMALIZE below owns the transforms.
@@ -559,33 +685,6 @@
   -- (the kindling JSON for SchemaSmith's own bootstrap tables passes a single object).
   -- Post-parse the check is uniform across object / array inputs.
 
-  DROP TABLE IF EXISTS #ForeignKeys
-  -- Merge note (2026-06-02): main added [_RowId] (kept) AND swapped RelatedTableSchema to
-  -- ISNULL(f.[RelatedTableSchema], 'dbo'). Schema-templates added the explicit THROW
-  -- check (I5, below the SELECT INTO) instead of a silent fallback, so ISNULL is
-  -- intentionally NOT applied here — the post-parse check catches blank RelatedTableSchema
-  -- loudly rather than silently rewriting it to 'dbo'.
-  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
-  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
-  CREATE TABLE #ForeignKeys
-  (
-    [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [KeyName] NVARCHAR(MAX) NULL,
-    [RelatedTableSchema] NVARCHAR(MAX) NULL,
-    [RelatedTable] NVARCHAR(MAX) NULL,
-    [Columns] NVARCHAR(MAX) NULL,
-    [RelatedColumns] NVARCHAR(MAX) NULL,
-    -- NULLable on ingest, non-null after NORMALIZE. The measured shape had these NOT NULL because the
-    -- old SELECT applied ISNULL(..., 'NO ACTION') inline -- the constraint was recording the transform,
-    -- not a requirement. Ingest now carries raw values, so the column has to admit them; the value
-    -- every consumer sees is unchanged, which is what the equality harness checks.
-    [DeleteAction] NVARCHAR(20) NULL,
-    [UpdateAction] NVARCHAR(20) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
-  )
   INSERT INTO #ForeignKeys ([_RowId], [Schema], [TableName], [KeyName], [RelatedTableSchema], [RelatedTable], [Columns], [RelatedColumns], [DeleteAction], [UpdateAction], [ShouldApplyExpression], [VariantName])
   -- INGEST ONLY -- raw values straight off the shred. Every transform that used to live in this SELECT
   -- moved to the NORMALIZE pass below, so that a second ingestion path (C# bulk-loading these rows
@@ -653,19 +752,6 @@
   EXEC(@v_SQL)
 
   RAISERROR('Parse Table Level Check Constraints from Json', 10, 100) WITH NOWAIT
-  DROP TABLE IF EXISTS #CheckConstraints
-  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
-  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
-  CREATE TABLE #CheckConstraints
-  (
-    [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [ConstraintName] NVARCHAR(500) NULL,
-    [Expression] NVARCHAR(MAX) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
-  )
   INSERT INTO #CheckConstraints ([_RowId], [Schema], [TableName], [ConstraintName], [Expression], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], c.[ConstraintName], c.[Expression], c.[ShouldApplyExpression], c.[VariantName]
@@ -684,22 +770,6 @@
   EXEC(@v_SQL)
   
   RAISERROR('Parse Statistics from Json', 10, 100) WITH NOWAIT
-  DROP TABLE IF EXISTS #Statistics
-  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
-  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
-  CREATE TABLE #Statistics
-  (
-    [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [StatisticName] NVARCHAR(MAX) NULL,
-    -- NULLable on ingest, defaulted by NORMALIZE -- NOT NULL recorded the old inline ISNULL.
-    [SampleSize] TINYINT NULL,
-    [FilterExpression] NVARCHAR(MAX) NULL,
-    [Columns] NVARCHAR(MAX) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
-  )
   INSERT INTO #Statistics ([_RowId], [Schema], [TableName], [StatisticName], [SampleSize], [FilterExpression], [Columns], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          -- INGEST ONLY -- NORMALIZE below owns the transforms.
@@ -731,22 +801,6 @@
   EXEC(@v_SQL)
   
   RAISERROR('Parse Full Text Indexes from Json', 10, 100) WITH NOWAIT
-  DROP TABLE IF EXISTS #FullTextIndexes
-  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
-  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
-  CREATE TABLE #FullTextIndexes
-  (
-    [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(MAX) NULL,
-    [TableName] NVARCHAR(MAX) NULL,
-    [FullTextCatalog] NVARCHAR(MAX) NULL,
-    [KeyIndex] NVARCHAR(MAX) NULL,
-    [ChangeTracking] NVARCHAR(500) NULL,
-    [StopList] NVARCHAR(MAX) NULL,
-    [Columns] NVARCHAR(MAX) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
-  )
   INSERT INTO #FullTextIndexes ([_RowId], [Schema], [TableName], [FullTextCatalog], [KeyIndex], [ChangeTracking], [StopList], [Columns], [ShouldApplyExpression], [VariantName])
   -- INGEST ONLY -- raw values; NORMALIZE below owns every transform, including the LANGUAGE and
   -- STATISTICAL_SEMANTICS handling, so a second ingestion path cannot reimplement them differently.
