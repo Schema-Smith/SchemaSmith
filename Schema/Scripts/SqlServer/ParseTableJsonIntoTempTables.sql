@@ -303,7 +303,6 @@
   -- that had already committed in place and the retry would add a second copy of them. (Before the
   -- script was split, the retry re-ran the DROP/CREATE too, so it started clean by accident.)
   -- TRUNCATE rather than DELETE: no foreign keys point at these, and on the first run they are empty.
-  TRUNCATE TABLE #TableDefinitions
   TRUNCATE TABLE #Tables
   TRUNCATE TABLE #Columns
   TRUNCATE TABLE #Indexes
@@ -313,6 +312,17 @@
   TRUNCATE TABLE #Statistics
   TRUNCATE TABLE #FullTextIndexes
 
+  -- ===== SHRED #TableDefinitions BEGIN =====
+  -- The reset lives inside the region, not with the shared ones above: a client that built these rows
+  -- loaded them BEFORE this half ran, and a reset outside the region would wipe them and leave the table
+  -- empty for every consumer below.
+  TRUNCATE TABLE #TableDefinitions
+  -- Everything to the END marker exists only to turn the JSON payload into rows. An ingest path that
+  -- produces those rows itself removes this region outright rather than guarding it at runtime: a
+  -- skipped-but-present shred still has to be compiled, and the compile of a statement over a payload
+  -- this size is part of what the other path exists to avoid. The missing-Schema guard sits inside the
+  -- region because it, too, only reads the payload -- a client that built the rows has already seen the
+  -- model and checks it there.
   RAISERROR('Parse Tables from Json', 10, 100) WITH NOWAIT
 
   -- I5: missing/blank [Schema] is a programmer error after slice-1's SchemaDefaultResolver.
@@ -402,6 +412,8 @@
       [PreventDrop] BIT '$.PreventDrop'
       ) t;
   
+  -- ===== SHRED #TableDefinitions END =====
+
   -- NORMALIZE -- defaults, identifier bracket-wrapping and canonicalization, applied to whatever is in
   -- the table regardless of how it got there. Every transform here is idempotent: fn_SafeBracketWrap
   -- strips before it wraps, and each ISNULL/RTRIM/UPPER is a no-op on an already-normalized value. That

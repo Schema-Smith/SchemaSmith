@@ -218,6 +218,14 @@ public static class SettingsKeys
     public const string SourceCompatEncoding = "Source:CompatEncoding";
     public const string ArtifactPath = "ArtifactPath";
     public const string ScrubArtifacts = "ScrubArtifacts";
+    /// <summary>
+    /// How the declared table model reaches the engine's working set. <c>shred</c> (the default) sends
+    /// the model to the engine and has it shred the JSON; <c>bulk</c> parses it once in the client and
+    /// bulk-loads the rows, leaving the engine only the normalization and gating passes that must stay
+    /// server-side. Both paths fill the same tables, created by the same SQL, and the normalize/derive
+    /// half is shared -- the setting selects who produces the raw rows, nothing else.
+    /// </summary>
+    public const string IngestMode = "Target:IngestMode";
 
     // ---- DataTongs -------------------------------------------------------------------------------
     public const string ContentPath = "ContentPath";
