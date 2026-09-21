@@ -370,20 +370,22 @@
   DROP TABLE IF EXISTS #Indexes
   -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
   -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  -- Columns NORMALIZE fills are NULLable on ingest: each was NOT NULL only because the old SELECT
+  -- applied ISNULL/COALESCE inline, so the constraint recorded the transform rather than a requirement.
   CREATE TABLE #Indexes
   (
     [_RowId] BIGINT NULL,
     [Schema] NVARCHAR(MAX) NULL,
     [TableName] NVARCHAR(MAX) NULL,
     [IndexName] NVARCHAR(MAX) NULL,
-    [CompressionType] NVARCHAR(100) NOT NULL,
-    [XmlCompression] BIT NOT NULL,
-    [PrimaryKey] BIT NOT NULL,
+    [CompressionType] NVARCHAR(100) NULL,
+    [XmlCompression] BIT NULL,
+    [PrimaryKey] BIT NULL,
     [Unique] INT NULL,
-    [UniqueConstraint] BIT NOT NULL,
-    [Clustered] BIT NOT NULL,
-    [ColumnStore] BIT NOT NULL,
-    [FillFactor] TINYINT NOT NULL,
+    [UniqueConstraint] BIT NULL,
+    [Clustered] BIT NULL,
+    [ColumnStore] BIT NULL,
+    [FillFactor] TINYINT NULL,
     [FilterExpression] NVARCHAR(MAX) NULL,
     [FileGroup] NVARCHAR(MAX) NULL,
     [PartitionScheme] NVARCHAR(MAX) NULL,
@@ -392,28 +394,26 @@
     [UpdateFillFactor] BIT NULL,
     [IndexColumns] NVARCHAR(MAX) NULL,
     [IncludeColumns] NVARCHAR(MAX) NULL,
-    [IgnoreDuplicateKey] BIT NOT NULL,
-    [PadIndex] BIT NOT NULL,
+    [IgnoreDuplicateKey] BIT NULL,
+    [PadIndex] BIT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) NULL,
     [VariantName] NVARCHAR(128) NULL
   )
   INSERT INTO #Indexes ([_RowId], [Schema], [TableName], [IndexName], [CompressionType], [XmlCompression], [PrimaryKey], [Unique], [UniqueConstraint], [Clustered], [ColumnStore], [FillFactor], [FilterExpression], [FileGroup], [PartitionScheme], [PartitionColumn], [BucketCount], [UpdateFillFactor], [IndexColumns], [IncludeColumns], [IgnoreDuplicateKey], [PadIndex], [ShouldApplyExpression], [VariantName])
+  -- INGEST ONLY -- raw values; NORMALIZE below owns every transform, so a second ingestion path gets
+  -- the same treatment from the same code rather than a reimplementation of these rules.
+  -- [UpdateFillFactor] is computed here, not in NORMALIZE: it combines the @UpdateFillFactor parameter
+  -- with the PARENT table's flag, and the parent row is in scope here.
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), [CompressionType] = ISNULL(NULLIF(RTRIM(i.[CompressionType]), ''), 'NONE'), [XmlCompression] = ISNULL(i.[XmlCompression], 0), [PrimaryKey] = ISNULL(i.[PrimaryKey], 0),
-         [Unique] = COALESCE(NULLIF(i.[Unique], 0), NULLIF(i.[PrimaryKey], 0), i.[UniqueConstraint], 0),
-         [UniqueConstraint] = ISNULL(i.[UniqueConstraint], 0), [Clustered] = ISNULL(i.[Clustered], 0), [ColumnStore] = ISNULL(i.[ColumnStore], 0), [FillFactor] = ISNULL(NULLIF(i.[FillFactor], 0), 100),
-         i.[FilterExpression], [FileGroup] = SchemaSmith.fn_SafeBracketWrap(i.[FileGroup]),
-         [PartitionScheme] = SchemaSmith.fn_SafeBracketWrap(i.[PartitionScheme]), [PartitionColumn] = SchemaSmith.fn_SafeBracketWrap(i.[PartitionColumn]), [BucketCount] = i.[BucketCount], [UpdateFillFactor] = CONVERT(BIT, CASE WHEN @UpdateFillFactor = 1 OR t.[UpdateFillFactor] = 1 OR i.[UpdateFillFactor] = 1 THEN 1 ELSE 0 END),
-         [IndexColumns] = (SELECT STRING_AGG(CAST(CASE WHEN RTRIM([value]) LIKE '% DESC' 
-                                                       THEN SchemaSmith.fn_SafeBracketWrap(SUBSTRING(RTRIM([value]), 1, LEN(RTRIM([value])) - 5)) + ' DESC'
-                                                       ELSE SchemaSmith.fn_SafeBracketWrap([value])
-                                                       END AS NVARCHAR(MAX)), ',') 
-                             FROM STRING_SPLIT(i.[IndexColumns], ',') 
-                             WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
-         [IncludeColumns] = (SELECT STRING_AGG(SchemaSmith.fn_SafeBracketWrap([value]), ',') WITHIN GROUP (ORDER BY SchemaSmith.fn_SafeBracketWrap([value]))
-                               FROM STRING_SPLIT(i.[IncludeColumns], ',') 
-                               WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
-         [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0),
+         t.[Schema], t.[Name] AS [TableName], i.[IndexName], i.[CompressionType], i.[XmlCompression], i.[PrimaryKey],
+         i.[Unique],
+         i.[UniqueConstraint], i.[Clustered], i.[ColumnStore], i.[FillFactor],
+         i.[FilterExpression], i.[FileGroup],
+         i.[PartitionScheme], i.[PartitionColumn], [BucketCount] = i.[BucketCount],
+         [UpdateFillFactor] = CONVERT(BIT, CASE WHEN @UpdateFillFactor = 1 OR t.[UpdateFillFactor] = 1 OR i.[UpdateFillFactor] = 1 THEN 1 ELSE 0 END),
+         i.[IndexColumns],
+         i.[IncludeColumns],
+         i.[IgnoreDuplicateKey], i.[PadIndex],
          i.[ShouldApplyExpression], i.[VariantName]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(Indexes) WITH (
@@ -440,6 +440,35 @@
       [VariantName] NVARCHAR(128) '$.VariantName'
       ) i;
   
+  -- NORMALIZE -- one definition, applied however the rows arrived. Every assignment reads the row's
+  -- PRE-UPDATE values (SQL Server evaluates the whole SET list against the old row), so [Unique] still
+  -- sees the raw [PrimaryKey]/[UniqueConstraint] even though those are being defaulted in the same
+  -- statement -- which is what keeps this a faithful move rather than a re-ordering.
+  UPDATE #Indexes
+     SET [IndexName]        = SchemaSmith.fn_SafeBracketWrap([IndexName]),
+         [CompressionType]  = ISNULL(NULLIF(RTRIM([CompressionType]), ''), 'NONE'),
+         [XmlCompression]   = ISNULL([XmlCompression], 0),
+         [PrimaryKey]       = ISNULL([PrimaryKey], 0),
+         [Unique]           = COALESCE(NULLIF([Unique], 0), NULLIF([PrimaryKey], 0), [UniqueConstraint], 0),
+         [UniqueConstraint] = ISNULL([UniqueConstraint], 0),
+         [Clustered]        = ISNULL([Clustered], 0),
+         [ColumnStore]      = ISNULL([ColumnStore], 0),
+         [FillFactor]       = ISNULL(NULLIF([FillFactor], 0), 100),
+         [FileGroup]        = SchemaSmith.fn_SafeBracketWrap([FileGroup]),
+         [PartitionScheme]  = SchemaSmith.fn_SafeBracketWrap([PartitionScheme]),
+         [PartitionColumn]  = SchemaSmith.fn_SafeBracketWrap([PartitionColumn]),
+         [IndexColumns]     = (SELECT STRING_AGG(CAST(CASE WHEN RTRIM([value]) LIKE '% DESC'
+                                                           THEN SchemaSmith.fn_SafeBracketWrap(SUBSTRING(RTRIM([value]), 1, LEN(RTRIM([value])) - 5)) + ' DESC'
+                                                           ELSE SchemaSmith.fn_SafeBracketWrap([value])
+                                                           END AS NVARCHAR(MAX)), ',')
+                                 FROM STRING_SPLIT([IndexColumns], ',')
+                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+         [IncludeColumns]   = (SELECT STRING_AGG(SchemaSmith.fn_SafeBracketWrap([value]), ',') WITHIN GROUP (ORDER BY SchemaSmith.fn_SafeBracketWrap([value]))
+                                 FROM STRING_SPLIT([IncludeColumns], ',')
+                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+         [IgnoreDuplicateKey] = ISNULL([IgnoreDuplicateKey], 0),
+         [PadIndex]         = ISNULL([PadIndex], 0);
+
   -- Identify Indexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #Indexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
     FROM #Indexes WITH (NOLOCK)
