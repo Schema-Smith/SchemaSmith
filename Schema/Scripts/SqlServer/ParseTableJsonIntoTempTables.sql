@@ -292,13 +292,10 @@
          [Sparse] = ISNULL(c.[Sparse], 0), [FileStream] = ISNULL(c.[FileStream], 0), [IsColumnSet] = ISNULL(c.[IsColumnSet], 0), [BackfillExistingRows] = ISNULL(c.[BackfillExistingRows], 0), [Collation] = RTRIM(ISNULL(c.[Collation], '')), [DataMaskFunction] = RTRIM(ISNULL(c.[DataMaskFunction], '')),
          [EncryptionType] = ISNULL(c.[EncryptionType], 'NONE'), [EncryptionKey] = RTRIM(ISNULL(c.[EncryptionKey], '')), [EncryptionAlgorithm] = RTRIM(ISNULL(c.[EncryptionAlgorithm], '')),
          [OldName] = SchemaSmith.fn_SafeBracketWrap(c.[OldName]),
-         CONVERT(BIT, CASE WHEN (RTRIM(ISNULL([ComputedExpression], '')) <> '' OR NOT EXISTS (SELECT * FROM #Tables x WHERE x.[Name] = t.[Name] AND x.[Schema] = t.[Schema] AND x.NewTable = 1))
-                            AND COLUMNPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name], 'U'), SchemaSmith.fn_StripBracketWrapping([ColumnName]), 'ColumnId') IS NULL
-                            -- Not a new column if it exists by current name in the table being renamed from (table rename scenario)
-                            AND COLUMNPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[OldName], 'U'), SchemaSmith.fn_StripBracketWrapping([ColumnName]), 'ColumnId') IS NULL
-                            -- Not a new column if the column's own OldName exists (column rename scenario)
-                            AND COLUMNPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name], 'U'), SchemaSmith.fn_StripBracketWrapping(c.[OldName]), 'ColumnId') IS NULL
-                           THEN 1 ELSE 0 END) AS NewColumn,
+         -- NewColumn is NOT computed here -- see the DERIVE pass after this INSERT. It is the one value on
+         -- this row that cannot come from the model at all: it asks the LIVE catalog whether the column
+         -- already exists. A C# ingest path can supply every other column and must not attempt this one.
+         CONVERT(BIT, NULL) AS NewColumn,
          SchemaSmith.fn_SafeBracketWrap(c.[ColumnName]) + ' ' +
          -- For computed columns only the expression is needed
          CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) <> '' THEN 'AS (' + ComputedExpression + ')' + CASE WHEN ISNULL(c.[Persisted], 0) = 1 THEN ' PERSISTED' ELSE '' END
@@ -353,6 +350,22 @@
       [VariantName] NVARCHAR(128) '$.VariantName',
       [OldName] NVARCHAR(500) '$.OldName'
       ) c;
+
+  -- DERIVE -- catalog-dependent, so it runs after the rows exist and however they got there. The
+  -- predicate is unchanged from the SELECT it moved out of, with t.* replaced by the row's own carried
+  -- [Schema]/[TableName] and the parent's [OldName] joined back from #TableDefinitions (the only field
+  -- it needed that #Columns does not carry itself).
+  UPDATE c
+     SET [NewColumn] = CONVERT(BIT, CASE WHEN (RTRIM(ISNULL(c.[ComputedExpression], '')) <> '' OR NOT EXISTS (SELECT * FROM #Tables x WHERE x.[Name] = c.[TableName] AND x.[Schema] = c.[Schema] AND x.NewTable = 1))
+                            AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName], 'U'), SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'ColumnId') IS NULL
+                            -- Not a new column if it exists by current name in the table being renamed from (table rename scenario)
+                            AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + td.[OldName], 'U'), SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'ColumnId') IS NULL
+                            -- Not a new column if the column's own OldName exists (column rename scenario)
+                            AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName], 'U'), SchemaSmith.fn_StripBracketWrapping(c.[OldName]), 'ColumnId') IS NULL
+                           THEN 1 ELSE 0 END)
+    FROM #Columns c
+    LEFT JOIN #TableDefinitions td WITH (NOLOCK)
+      ON td.[Schema] = c.[Schema] AND td.[Name] = c.[TableName];
 
   -- Identify Columns to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #Columns WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
