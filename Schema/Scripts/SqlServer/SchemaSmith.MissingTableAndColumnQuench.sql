@@ -202,6 +202,37 @@ BEGIN TRY
                                OR UPPER(c.[DataType]) LIKE 'XML(%'))
     RAISERROR('Table %s declares TextImageFileGroup but has no large-object column to place. SQL Server rejects TEXTIMAGE_ON on such a table (error 1709). Large-object columns are text, ntext, image, xml, and the (MAX) types -- a FILESTREAM column does not count. Remove TextImageFileGroup, or declare a large-object column.', 16, 1, @v_NoLobTable)
   END
+  -- THE COLUMNS OF THE TABLES BEING CREATED, KEYED ONCE.
+  --
+  -- The CREATE TABLE text below is assembled with correlated subqueries over #Columns, one per table.
+  -- #Columns stores every identifier as NVARCHAR(MAX), which cannot be indexed, so each of those
+  -- subqueries scanned the whole column set and compared two LOB values to find its table's rows. On a
+  -- 1,783-table model (33,877 columns) that is ~60 million LOB comparisons, and building this one
+  -- statement's string measured 62,254 ms -- six times the entire JSON parse that precedes it, and paid
+  -- on a real deploy exactly as it is under WhatIf.
+  --
+  -- Narrowing the join keys once, into something that can carry a clustered index, turns each of those
+  -- scans into a seek. The per-column decisions the subqueries used to re-evaluate are resolved here
+  -- too, so the correlated part is reduced to a lookup.
+  DROP TABLE IF EXISTS #AddTableColumns;
+  CREATE TABLE #AddTableColumns
+  (
+    [KeySchema] NVARCHAR(200) NULL,
+    [KeyTableName] NVARCHAR(200) NULL,
+    [_RowId] BIGINT NULL,
+    [ColumnScript] NVARCHAR(MAX) NULL,
+    -- Whether the column belongs in the CREATE at all: computed columns and the FILESTREAM column are
+    -- added afterwards, the latter because it needs a unique constraint first.
+    [InCreate] BIT NOT NULL,
+    [SparseOrColumnSet] BIT NOT NULL
+  )
+  INSERT INTO #AddTableColumns ([KeySchema], [KeyTableName], [_RowId], [ColumnScript], [InCreate], [SparseOrColumnSet])
+  SELECT CONVERT(NVARCHAR(200), C.[Schema]), CONVERT(NVARCHAR(200), C.[TableName]), C.[_RowId], C.[ColumnScript],
+         CONVERT(BIT, CASE WHEN RTRIM(ISNULL(C.[ComputedExpression], '')) = '' AND ISNULL(C.[FileStream], 0) = 0 THEN 1 ELSE 0 END),
+         CONVERT(BIT, CASE WHEN ISNULL(C.[Sparse], 0) = 1 OR ISNULL(C.[IsColumnSet], 0) = 1 THEN 1 ELSE 0 END)
+    FROM #Columns C WITH (NOLOCK);
+  CREATE CLUSTERED INDEX [ix_AddTableColumns] ON #AddTableColumns ([KeySchema], [KeyTableName], [_RowId]);
+
   RAISERROR('Add New Tables', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding new table ' + T.[Schema] + '.' + T.[Name] +
                                   CASE WHEN RTRIM(ISNULL(T.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(T.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -284,14 +315,15 @@ BEGIN TRY
                                             -- kindle-time composition, because that names a column.
                                             CASE WHEN ISNULL(T.[XmlCompression], 0) = 1 AND T.[MemoryOptimized] = 0 AND SchemaSmith.fn_ServerMajorVersion() >= 16
                                                  THEN ', XML_COMPRESSION = ON' ELSE '' END,
-                                        HasSparseOrColumnSet = CASE WHEN EXISTS (SELECT 1 FROM #Columns C2 WITH (NOLOCK)
-                                                                                  WHERE C2.[Schema] = T.[Schema] AND C2.[TableName] = T.[Name]
-                                                                                    AND (ISNULL(C2.[Sparse], 0) = 1 OR ISNULL(C2.[IsColumnSet], 0) = 1)) THEN 1 ELSE 0 END,
-                                        ScriptColumns = STUFF((SELECT ', ' + [ColumnScript] FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND RTRIM(ISNULL([ComputedExpression], '')) = '' AND ISNULL(C.[FileStream], 0) = 0 ORDER BY c.[_RowId] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+                                        HasSparseOrColumnSet = CASE WHEN EXISTS (SELECT 1 FROM #AddTableColumns C2 WITH (NOLOCK)
+                                                                                  WHERE C2.[KeySchema] = CONVERT(NVARCHAR(200), T.[Schema]) AND C2.[KeyTableName] = CONVERT(NVARCHAR(200), T.[Name])
+                                                                                    AND C2.[SparseOrColumnSet] = 1) THEN 1 ELSE 0 END,
+                                        ScriptColumns = STUFF((SELECT ', ' + [ColumnScript] FROM #AddTableColumns C WITH (NOLOCK) WHERE C.[KeySchema] = CONVERT(NVARCHAR(200), T.[Schema]) AND C.[KeyTableName] = CONVERT(NVARCHAR(200), T.[Name]) AND C.[InCreate] = 1 ORDER BY C.[_RowId] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
                                    FROM #Tables T WITH (NOLOCK)
                                    WHERE NewTable = 1) T
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  DROP TABLE IF EXISTS #AddTableColumns;
 
   -- Object-change audit (#363): WhatIf twin of the embedded 'table'/'created' row above. That row
   -- rides the CREATE TABLE DDL (executed only on a real run); under WhatIf the DDL is printed, so
