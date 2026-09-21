@@ -2,6 +2,23 @@
 -- Licensed for use and modification with SchemaSmith products only.
 -- Redistribution outside of SchemaSmith product usage is prohibited.
 
+-- WORKING-SET SHAPES ARE DECLARED, NOT INFERRED (2026-09-20). Each temp table below is an explicit
+-- CREATE TABLE + INSERT rather than a SELECT ... INTO. Two reasons, and the second is the one that
+-- matters: SQL owns the shapes so a second ingestion path cannot silently desync from this one, and a
+-- PARAMETERIZED insert cannot reach a session-scoped temp table that does not already exist --
+-- sp_executesql runs in a nested scope, where SELECT ... INTO #X creates a table that dies with the
+-- scope (Msg 208 on the next phase call). That is the prerequisite for bulk-loading the working set
+-- from C# instead of shipping the whole model as inlined command text.
+--
+-- The shapes were MEASURED from tempdb against the SELECT ... INTO forms these replace, verified
+-- payload-independent, and the converted script re-measured byte-for-byte identical. Do not hand-edit a
+-- type here to "fix" something; re-measure.
+--
+-- ParseTableXmlIntoTempTables.sql is DELIBERATELY left on SELECT ... INTO. That path serves targets
+-- below the OPENJSON cliff and the bulk design bypasses both encodings, so it gains nothing from this
+-- and is expensive to certify (it needs the genuine old-binary sweep). The asymmetry is a decision, not
+-- an oversight.
+
   DECLARE @v_SQL NVARCHAR(MAX) = ''
   SET NOCOUNT ON
   RAISERROR('Parse Tables from Json', 10, 100) WITH NOWAIT
@@ -34,6 +51,56 @@
   -- with explicit THROW upstream (lines 22-25 above), so the ISNULL is intentionally NOT
   -- applied here — strict-fail wins on schema-templates because [Schema] is guaranteed
   -- non-blank by the time we reach this SELECT.
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #TableDefinitions
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [Name] NVARCHAR(MAX) NULL,
+    [CompressionType] NVARCHAR(100) NOT NULL,
+    [XmlCompression] BIT NOT NULL,
+    [IsTemporal] BIT NOT NULL,
+    [UpdateFillFactor] BIT NOT NULL,
+    [HistoryTableSchema] NVARCHAR(MAX) NULL,
+    [HistoryTableName] NVARCHAR(MAX) NULL,
+    [HistoryRetentionPeriod] NVARCHAR(50) NULL,
+    [FileGroup] NVARCHAR(MAX) NULL,
+    [PartitionScheme] NVARCHAR(MAX) NULL,
+    [PartitionColumn] NVARCHAR(MAX) NULL,
+    [FileStreamFileGroup] NVARCHAR(MAX) NULL,
+    [TextImageFileGroup] NVARCHAR(MAX) NULL,
+    [CdcFilegroup] NVARCHAR(MAX) NULL,
+    [Indexes] NVARCHAR(MAX) NULL,
+    [XmlIndexes] NVARCHAR(MAX) NULL,
+    [Columns] NVARCHAR(MAX) NULL,
+    [Statistics] NVARCHAR(MAX) NULL,
+    [FullTextIndex] NVARCHAR(MAX) NULL,
+    [ForeignKeys] NVARCHAR(MAX) NULL,
+    [CheckConstraints] NVARCHAR(MAX) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL,
+    [GraphType] NVARCHAR(10) NULL,
+    [Ledger] NVARCHAR(12) NULL,
+    [MemoryOptimized] BIT NOT NULL,
+    [Durability] NVARCHAR(20) NULL,
+    [EnableCDC] BIT NOT NULL,
+    [EnableChangeTracking] BIT NOT NULL,
+    [TrackColumnsUpdated] BIT NOT NULL,
+    [OldName] NVARCHAR(MAX) NULL,
+    [DropColumnsRemovedFromProduct] BIT NULL,
+    [DropForeignKeysRemovedFromProduct] BIT NULL,
+    [DropCheckConstraintsRemovedFromProduct] BIT NULL,
+    [DropExcludeConstraintsRemovedFromProduct] BIT NULL,
+    [DropStatisticsRemovedFromProduct] BIT NULL,
+    [DropIndexesRemovedFromProduct] BIT NULL,
+    [RebuildPolicyMode] NVARCHAR(20) NULL,
+    [RebuildPolicyThreshold] INT NULL,
+    [RebuildPolicyOnOrderMismatch] BIT NULL,
+    [RebuildPolicySpecified] BIT NULL,
+    [PreventDrop] BIT NOT NULL
+  )
+  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          [Schema] = SchemaSmith.fn_SafeBracketWrap([Schema]), [Name] = SchemaSmith.fn_SafeBracketWrap([Name]), [CompressionType] = ISNULL(NULLIF(RTRIM([CompressionType]), ''), 'NONE'), [XmlCompression] = ISNULL([XmlCompression], 0),
          [IsTemporal] = ISNULL([IsTemporal], 0), [UpdateFillFactor] = ISNULL([UpdateFillFactor], 0),
@@ -66,7 +133,6 @@
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch],
          [RebuildPolicySpecified] = CONVERT(BIT, CASE WHEN [RebuildPolicyJson] IS NOT NULL THEN 1 ELSE 0 END),
          [PreventDrop] = ISNULL([PreventDrop], 0)
-    INTO #TableDefinitions
     FROM OPENJSON(@TableDefinitions) WITH (
       [Schema] NVARCHAR(500) '$.Schema',
       [Name] NVARCHAR(500) '$.Name',
@@ -123,16 +189,88 @@
   EXEC(@v_SQL)
 
   DROP TABLE IF EXISTS #Tables
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #Tables
+  (
+    [Schema] NVARCHAR(MAX) NULL,
+    [Name] NVARCHAR(MAX) NULL,
+    [CompressionType] NVARCHAR(100) NOT NULL,
+    [XmlCompression] BIT NOT NULL,
+    [IsTemporal] BIT NOT NULL,
+    [HistoryTableSchema] NVARCHAR(MAX) NULL,
+    [HistoryTableName] NVARCHAR(MAX) NULL,
+    [HistoryRetentionPeriod] NVARCHAR(50) NULL,
+    [FileGroup] NVARCHAR(MAX) NULL,
+    [PartitionScheme] NVARCHAR(MAX) NULL,
+    [PartitionColumn] NVARCHAR(MAX) NULL,
+    [FileStreamFileGroup] NVARCHAR(MAX) NULL,
+    [TextImageFileGroup] NVARCHAR(MAX) NULL,
+    [UpdateFillFactor] BIT NOT NULL,
+    [EnableCDC] BIT NOT NULL,
+    [CdcFilegroup] NVARCHAR(MAX) NULL,
+    [EnableChangeTracking] BIT NOT NULL,
+    [TrackColumnsUpdated] BIT NOT NULL,
+    [GraphType] NVARCHAR(10) NULL,
+    [Ledger] NVARCHAR(12) NULL,
+    [MemoryOptimized] BIT NOT NULL,
+    [Durability] NVARCHAR(20) NULL,
+    [OldName] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL,
+    [NewTable] BIT NULL,
+    [DropColumnsRemovedFromProduct] BIT NULL,
+    [DropForeignKeysRemovedFromProduct] BIT NULL,
+    [DropCheckConstraintsRemovedFromProduct] BIT NULL,
+    [DropExcludeConstraintsRemovedFromProduct] BIT NULL,
+    [DropStatisticsRemovedFromProduct] BIT NULL,
+    [DropIndexesRemovedFromProduct] BIT NULL,
+    [RebuildPolicyMode] NVARCHAR(20) NULL,
+    [RebuildPolicyThreshold] INT NULL,
+    [RebuildPolicyOnOrderMismatch] BIT NULL,
+    [RebuildPolicySpecified] BIT NULL,
+    [PreventDrop] BIT NOT NULL
+  )
+  INSERT INTO #Tables ([Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName], [NewTable], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop])
   SELECT [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName],
          CONVERT(BIT, CASE WHEN OBJECT_ID([Schema] + '.' + [Name], 'U') IS NULL AND OBJECT_ID([Schema] + '.' + [OldName], 'U') IS NULL THEN 1 ELSE 0 END) AS NewTable,
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified],
          ISNULL([PreventDrop], 0) AS [PreventDrop]
-    INTO #Tables
     FROM #TableDefinitions WITH (NOLOCK);
   
   RAISERROR('Parse Columns from Json', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #Columns
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #Columns
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [ColumnName] NVARCHAR(MAX) NULL,
+    [DataType] NVARCHAR(MAX) NULL,
+    [Nullable] BIT NOT NULL,
+    [NullableDeclared] BIT NULL,
+    [Default] NVARCHAR(MAX) NULL,
+    [CheckExpression] NVARCHAR(MAX) NULL,
+    [ComputedExpression] NVARCHAR(MAX) NULL,
+    [Persisted] BIT NOT NULL,
+    [Sparse] BIT NOT NULL,
+    [FileStream] BIT NOT NULL,
+    [IsColumnSet] BIT NOT NULL,
+    [BackfillExistingRows] BIT NOT NULL,
+    [Collation] NVARCHAR(500) NULL,
+    [DataMaskFunction] NVARCHAR(500) NULL,
+    [EncryptionType] NVARCHAR(100) NOT NULL,
+    [EncryptionKey] NVARCHAR(500) NULL,
+    [EncryptionAlgorithm] NVARCHAR(500) NULL,
+    [OldName] NVARCHAR(MAX) NULL,
+    [NewColumn] BIT NULL,
+    [ColumnScript] NVARCHAR(MAX) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+  INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [NullableDeclared], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [OldName], [NewColumn], [ColumnScript], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [ColumnName] = SchemaSmith.fn_SafeBracketWrap(c.[ColumnName]),
          -- Canonicalize the JSON DataType so the live-vs-declared comparison
@@ -193,7 +331,6 @@
                    CASE WHEN RTRIM(ISNULL([Default], '')) <> '' THEN ' DEFAULT ' + [Default] ELSE '' END
               END AS [ColumnScript],
          c.[ShouldApplyExpression], c.[VariantName]
-    INTO #Columns
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(Columns) WITH (
       [ColumnName] NVARCHAR(500) '$.Name',
@@ -231,6 +368,36 @@
 
   RAISERROR('Parse Indexes from Json', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #Indexes
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #Indexes
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [IndexName] NVARCHAR(MAX) NULL,
+    [CompressionType] NVARCHAR(100) NOT NULL,
+    [XmlCompression] BIT NOT NULL,
+    [PrimaryKey] BIT NOT NULL,
+    [Unique] INT NULL,
+    [UniqueConstraint] BIT NOT NULL,
+    [Clustered] BIT NOT NULL,
+    [ColumnStore] BIT NOT NULL,
+    [FillFactor] TINYINT NOT NULL,
+    [FilterExpression] NVARCHAR(MAX) NULL,
+    [FileGroup] NVARCHAR(MAX) NULL,
+    [PartitionScheme] NVARCHAR(MAX) NULL,
+    [PartitionColumn] NVARCHAR(MAX) NULL,
+    [BucketCount] INT NULL,
+    [UpdateFillFactor] BIT NULL,
+    [IndexColumns] NVARCHAR(MAX) NULL,
+    [IncludeColumns] NVARCHAR(MAX) NULL,
+    [IgnoreDuplicateKey] BIT NOT NULL,
+    [PadIndex] BIT NOT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+  INSERT INTO #Indexes ([_RowId], [Schema], [TableName], [IndexName], [CompressionType], [XmlCompression], [PrimaryKey], [Unique], [UniqueConstraint], [Clustered], [ColumnStore], [FillFactor], [FilterExpression], [FileGroup], [PartitionScheme], [PartitionColumn], [BucketCount], [UpdateFillFactor], [IndexColumns], [IncludeColumns], [IgnoreDuplicateKey], [PadIndex], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), [CompressionType] = ISNULL(NULLIF(RTRIM(i.[CompressionType]), ''), 'NONE'), [XmlCompression] = ISNULL(i.[XmlCompression], 0), [PrimaryKey] = ISNULL(i.[PrimaryKey], 0),
          [Unique] = COALESCE(NULLIF(i.[Unique], 0), NULLIF(i.[PrimaryKey], 0), i.[UniqueConstraint], 0),
@@ -248,7 +415,6 @@
                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
          [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0),
          i.[ShouldApplyExpression], i.[VariantName]
-    INTO #Indexes
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(Indexes) WITH (
       [IndexName] NVARCHAR(500) '$.Name',
@@ -282,11 +448,26 @@
   
   RAISERROR('Parse XML Indexes from Json', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #XmlIndexes
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #XmlIndexes
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [IndexName] NVARCHAR(MAX) NULL,
+    [IsPrimary] BIT NULL,
+    [Column] NVARCHAR(MAX) NULL,
+    [PrimaryIndex] NVARCHAR(MAX) NULL,
+    [SecondaryIndexType] NVARCHAR(500) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+  INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), i.[IsPrimary],
          [Column] = SchemaSmith.fn_SafeBracketWrap(i.[Column]), [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap(i.[PrimaryIndex]),
          i.[SecondaryIndexType], i.[ShouldApplyExpression], i.[VariantName]
-    INTO #XmlIndexes
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(XmlIndexes) WITH (
       [IndexName] NVARCHAR(500) '$.Name',
@@ -320,6 +501,24 @@
   -- check (I5, below the SELECT INTO) instead of a silent fallback, so ISNULL is
   -- intentionally NOT applied here — the post-parse check catches blank RelatedTableSchema
   -- loudly rather than silently rewriting it to 'dbo'.
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #ForeignKeys
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [KeyName] NVARCHAR(MAX) NULL,
+    [RelatedTableSchema] NVARCHAR(MAX) NULL,
+    [RelatedTable] NVARCHAR(MAX) NULL,
+    [Columns] NVARCHAR(MAX) NULL,
+    [RelatedColumns] NVARCHAR(MAX) NULL,
+    [DeleteAction] NVARCHAR(20) NOT NULL,
+    [UpdateAction] NVARCHAR(20) NOT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+  INSERT INTO #ForeignKeys ([_RowId], [Schema], [TableName], [KeyName], [RelatedTableSchema], [RelatedTable], [Columns], [RelatedColumns], [DeleteAction], [UpdateAction], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [KeyName] = SchemaSmith.fn_SafeBracketWrap(f.[KeyName]),
          [RelatedTableSchema] = SchemaSmith.fn_SafeBracketWrap(f.[RelatedTableSchema]), [RelatedTable] = SchemaSmith.fn_SafeBracketWrap(f.[RelatedTable]),
@@ -328,7 +527,6 @@
          [DeleteAction] = ISNULL(NULLIF(RTRIM([DeleteAction]), ''), 'NO ACTION'),
          [UpdateAction] = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION'),
          f.[ShouldApplyExpression], f.[VariantName]
-    INTO #ForeignKeys
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(ForeignKeys) WITH (
       [KeyName] NVARCHAR(500) '$.Name',
@@ -367,9 +565,21 @@
 
   RAISERROR('Parse Table Level Check Constraints from Json', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #CheckConstraints
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #CheckConstraints
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [ConstraintName] NVARCHAR(500) NULL,
+    [Expression] NVARCHAR(MAX) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+  INSERT INTO #CheckConstraints ([_RowId], [Schema], [TableName], [ConstraintName], [Expression], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], c.[ConstraintName], c.[Expression], c.[ShouldApplyExpression], c.[VariantName]
-    INTO #CheckConstraints
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(CheckConstraints) WITH (
       [ConstraintName] NVARCHAR(500) '$.Name',
@@ -386,11 +596,25 @@
   
   RAISERROR('Parse Statistics from Json', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #Statistics
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #Statistics
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [StatisticName] NVARCHAR(MAX) NULL,
+    [SampleSize] TINYINT NOT NULL,
+    [FilterExpression] NVARCHAR(MAX) NULL,
+    [Columns] NVARCHAR(MAX) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+  INSERT INTO #Statistics ([_RowId], [Schema], [TableName], [StatisticName], [SampleSize], [FilterExpression], [Columns], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [StatisticName] = SchemaSmith.fn_SafeBracketWrap(s.[StatisticName]), [SampleSize] = ISNULL(s.[SampleSize], 0), s.[FilterExpression],
          [Columns] = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',') FROM STRING_SPLIT(s.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
          s.[ShouldApplyExpression], s.[VariantName]
-    INTO #Statistics
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON([Statistics]) WITH (
       [StatisticName] NVARCHAR(500) '$.Name',
@@ -409,6 +633,22 @@
   
   RAISERROR('Parse Full Text Indexes from Json', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #FullTextIndexes
+  -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
+  -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  CREATE TABLE #FullTextIndexes
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(MAX) NULL,
+    [TableName] NVARCHAR(MAX) NULL,
+    [FullTextCatalog] NVARCHAR(MAX) NULL,
+    [KeyIndex] NVARCHAR(MAX) NULL,
+    [ChangeTracking] NVARCHAR(500) NULL,
+    [StopList] NVARCHAR(MAX) NULL,
+    [Columns] NVARCHAR(MAX) NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
+    [VariantName] NVARCHAR(128) NULL
+  )
+  INSERT INTO #FullTextIndexes ([_RowId], [Schema], [TableName], [FullTextCatalog], [KeyIndex], [ChangeTracking], [StopList], [Columns], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [FullTextCatalog] = SchemaSmith.fn_SafeBracketWrap(f.[FullTextCatalog]), [KeyIndex] = SchemaSmith.fn_SafeBracketWrap(f.[KeyIndex]),
          -- Guarded like StopList beside it. Unguarded, this concatenates into the CREATE FULLTEXT INDEX
@@ -436,7 +676,6 @@
                                                    ELSE SchemaSmith.fn_SafeBracketWrap([value])
                                                    END AS NVARCHAR(MAX)), ',') FROM STRING_SPLIT(f.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
          f.[ShouldApplyExpression], f.[VariantName]
-    INTO #FullTextIndexes
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON([FullTextIndex]) WITH (
       [Columns] NVARCHAR(MAX) '$.Columns',
