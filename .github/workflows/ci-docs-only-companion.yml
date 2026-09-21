@@ -6,8 +6,24 @@ name: CI (docs-only companion)
 # only bites contributors WITHOUT admin bypass (an external drive-by fixing a typo); maintainers never see
 # it because the Rule 6 doc/demo carve-out pushes such content straight to `main`.
 #
-# This companion fires on EXACTLY those excluded paths and reports the SAME eight check contexts as success,
-# with no build and no containers. Do NOT delete the `paths-ignore` in the CI workflow — it exists so a prose
+# This companion fires on EXACTLY those excluded paths and reports the SAME check contexts as success,
+# with no build and no containers.
+#
+# THE SET CHANGED 2026-09-20 with the matrix-shape decision, and the branch ruleset MUST be updated to
+# match or the deadlock this file prevents comes back from the other direction -- a required context that
+# no longer runs waits forever. A pull request now produces exactly these ten:
+#   Build & Unit Tests
+#   Integration Tests (SQL Server 2017)        <- new name; "(SQL Server)" no longer exists
+#   Integration Tests (SQL Server 2025)        <- new
+#   Integration Tests (PostgreSQL latest)
+#   Integration Tests (PostgreSQL 12)
+#   Integration Tests (MySQL 8.0)
+#   Integration Tests (MySQL 5.7)
+#   Integration Tests (MariaDB 11.4)
+#   Integration Tests (MariaDB 10.2)
+#   Coverage Gate
+# Removed from PR runs (still run on merge to main, so do NOT require them on a PR):
+#   Integration Tests (PostgreSQL 14), (PostgreSQL 13), (MariaDB 10.6) Do NOT delete the `paths-ignore` in the CI workflow — it exists so a prose
 # fix doesn't spin the three-engine matrix; this pairs with it rather than replacing it.
 #
 # The `paths:` list below is the exact inverse of continuous-integration.yml's `pull_request` `paths-ignore`,
@@ -40,8 +56,14 @@ jobs:
     steps:
       - run: echo "docs-only change — no build required; satisfying the required check."
 
-  integration-tests-sqlserver:
-    name: Integration Tests (SQL Server)
+  integration-tests-sqlserver-2017:
+    name: Integration Tests (SQL Server 2017)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "docs-only change — no integration run required."
+
+  integration-tests-sqlserver-2025:
+    name: Integration Tests (SQL Server 2025)
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
@@ -52,17 +74,7 @@ jobs:
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-postgresql-14:
-    name: Integration Tests (PostgreSQL 14)
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "docs-only change — no integration run required."
 
-  integration-tests-postgresql-13:
-    name: Integration Tests (PostgreSQL 13)
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "docs-only change — no integration run required."
 
   integration-tests-postgresql-12:
     name: Integration Tests (PostgreSQL 12)
@@ -88,11 +100,6 @@ jobs:
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-mariadb-106:
-    name: Integration Tests (MariaDB 10.6)
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "docs-only change — no integration run required."
 
   integration-tests-mariadb-102:
     name: Integration Tests (MariaDB 10.2)
