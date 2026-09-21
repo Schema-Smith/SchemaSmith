@@ -43,6 +43,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
         // indexes each, and enough of them that per-row costs separate from fixed ones.
         private const int TableCount = 1783;
         private const int ColumnsPerTable = 19;
+        private const int NoOpRuns = 3;
 
         private string _benchDb;
 
@@ -80,8 +81,15 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                 TestContext.Out.WriteLine("\n--- FIRST DEPLOY (everything is new) ---");
                 Report(RunPipeline(conn, cmd, model));
 
-                TestContext.Out.WriteLine("\n--- NO-OP RE-DEPLOY (nothing has changed) ---");
-                Report(RunPipeline(conn, cmd, model));
+                // The no-op pass is repeated and reported as a median. A single run of it was read as
+                // noise once when it was really a 2x regression, and believing a one-shot number is how
+                // that happened: the first pass leaves the buffer pool and plan cache in a state the
+                // next run inherits, so run-to-run spread is real and has to be measured, not assumed.
+                var runs = new List<List<(string Step, long Ms)>>();
+                for (var i = 0; i < NoOpRuns; i++) runs.Add(RunPipeline(conn, cmd, model));
+
+                TestContext.Out.WriteLine($"\n--- NO-OP RE-DEPLOY (nothing has changed), median of {NoOpRuns} ---");
+                ReportMedian(runs);
             }
             finally
             {
@@ -204,6 +212,25 @@ SELECT [Label], [ms] FROM (
             foreach (var (step, ms) in steps.OrderByDescending(s => s.Ms))
                 TestContext.Out.WriteLine($"  {ms,8:N0} ms  {100.0 * ms / Math.Max(total, 1),5:F1}%  {step}");
             TestContext.Out.WriteLine($"  {total,8:N0} ms          TOTAL");
+        }
+
+        /// <summary>
+        /// Median per step, with the observed spread alongside it. The spread is printed because it is
+        /// the thing that says whether a difference between two runs means anything: a step whose own
+        /// min and max straddle the change being judged has not measured that change.
+        /// </summary>
+        private static void ReportMedian(List<List<(string Step, long Ms)>> runs)
+        {
+            var perStep = runs[0].Select(s => s.Step)
+                .Select(step => (Step: step, Times: runs.Select(r => r.First(x => x.Step == step).Ms).OrderBy(m => m).ToList()))
+                .Select(x => (x.Step, Median: x.Times[x.Times.Count / 2], Min: x.Times.First(), Max: x.Times.Last()))
+                .OrderByDescending(x => x.Median)
+                .ToList();
+
+            var total = perStep.Sum(x => x.Median);
+            foreach (var (step, median, min, max) in perStep)
+                TestContext.Out.WriteLine($"  {median,8:N0} ms  {100.0 * median / Math.Max(total, 1),5:F1}%  {step}  (min {min:N0}, max {max:N0})");
+            TestContext.Out.WriteLine($"  {total,8:N0} ms          TOTAL (median)");
         }
 
         private static long Time(Action action)
