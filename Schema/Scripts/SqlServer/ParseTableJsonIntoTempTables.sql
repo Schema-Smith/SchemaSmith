@@ -494,8 +494,9 @@
   )
   INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), i.[IsPrimary],
-         [Column] = SchemaSmith.fn_SafeBracketWrap(i.[Column]), [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap(i.[PrimaryIndex]),
+         -- INGEST ONLY -- NORMALIZE below owns the transforms.
+         t.[Schema], t.[Name] AS [TableName], i.[IndexName], i.[IsPrimary],
+         i.[Column], i.[PrimaryIndex],
          i.[SecondaryIndexType], i.[ShouldApplyExpression], i.[VariantName]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(XmlIndexes) WITH (
@@ -507,6 +508,12 @@
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName'
       ) i;
+
+  -- NORMALIZE -- one definition, applied however the rows arrived.
+  UPDATE #XmlIndexes
+     SET [IndexName]    = SchemaSmith.fn_SafeBracketWrap([IndexName]),
+         [Column]       = SchemaSmith.fn_SafeBracketWrap([Column]),
+         [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap([PrimaryIndex]);
 
   -- Identify XmlIndexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #XmlIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
@@ -658,7 +665,8 @@
     [Schema] NVARCHAR(MAX) NULL,
     [TableName] NVARCHAR(MAX) NULL,
     [StatisticName] NVARCHAR(MAX) NULL,
-    [SampleSize] TINYINT NOT NULL,
+    -- NULLable on ingest, defaulted by NORMALIZE -- NOT NULL recorded the old inline ISNULL.
+    [SampleSize] TINYINT NULL,
     [FilterExpression] NVARCHAR(MAX) NULL,
     [Columns] NVARCHAR(MAX) NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) NULL,
@@ -666,8 +674,9 @@
   )
   INSERT INTO #Statistics ([_RowId], [Schema], [TableName], [StatisticName], [SampleSize], [FilterExpression], [Columns], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         t.[Schema], t.[Name] AS [TableName], [StatisticName] = SchemaSmith.fn_SafeBracketWrap(s.[StatisticName]), [SampleSize] = ISNULL(s.[SampleSize], 0), s.[FilterExpression],
-         [Columns] = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',') FROM STRING_SPLIT(s.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+         -- INGEST ONLY -- NORMALIZE below owns the transforms.
+         t.[Schema], t.[Name] AS [TableName], s.[StatisticName], s.[SampleSize], s.[FilterExpression],
+         s.[Columns],
          s.[ShouldApplyExpression], s.[VariantName]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON([Statistics]) WITH (
@@ -678,6 +687,14 @@
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName'
       ) s;
+
+  -- NORMALIZE -- one definition, applied however the rows arrived.
+  UPDATE #Statistics
+     SET [StatisticName] = SchemaSmith.fn_SafeBracketWrap([StatisticName]),
+         [SampleSize]    = ISNULL([SampleSize], 0),
+         [Columns]       = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
+                              FROM STRING_SPLIT([Columns], ',')
+                             WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> '');
 
   -- Identify Statistics to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #Statistics WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
@@ -703,32 +720,13 @@
     [VariantName] NVARCHAR(128) NULL
   )
   INSERT INTO #FullTextIndexes ([_RowId], [Schema], [TableName], [FullTextCatalog], [KeyIndex], [ChangeTracking], [StopList], [Columns], [ShouldApplyExpression], [VariantName])
+  -- INGEST ONLY -- raw values; NORMALIZE below owns every transform, including the LANGUAGE and
+  -- STATISTICAL_SEMANTICS handling, so a second ingestion path cannot reimplement them differently.
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         t.[Schema], t.[Name] AS [TableName], [FullTextCatalog] = SchemaSmith.fn_SafeBracketWrap(f.[FullTextCatalog]), [KeyIndex] = SchemaSmith.fn_SafeBracketWrap(f.[KeyIndex]),
-         -- Guarded like StopList beside it. Unguarded, this concatenates into the CREATE FULLTEXT INDEX
-         -- statement, and T-SQL concatenation with NULL yields NULL -- the whole statement becomes NULL and
-         -- NO index is created, with no error and no log line. Reachable from an ordinary package: the C#
-         -- default is AUTO, but an explicit "ChangeTracking": null in a table file overwrites it. 'AUTO'
-         -- here matches that C# default, so an omitted and an explicitly-null value behave the same.
-         [ChangeTracking] = COALESCE(NULLIF(RTRIM(f.[ChangeTracking]), ''), 'AUTO'),
-         [StopList] = SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM(f.[StopList]), ''), 'SYSTEM')),
-         -- Full-text LANGUAGE churn: a per-column "LANGUAGE nnnn" suffix must round-trip byte-identical
-         -- against the live-side build in ModifiedTableQuench.sql (drift compares these as strings). Peel
-         -- it off before bracket-wrapping the column (+ optional TYPE COLUMN) part -- same shape as the
-         -- " DESC" handling for IndexColumns -- then reattach it; the LCID is variable-length so it's
-         -- located and sliced rather than trimmed by a fixed count. Mirrors IndexOnlyQuench.sql's
-         -- declared-side parse exactly.
-         [Columns] = (SELECT STRING_AGG(CAST(CASE WHEN RTRIM([value]) LIKE '% LANGUAGE [0-9]%'
-                                                   THEN SchemaSmith.fn_SafeBracketWrap(LEFT(RTRIM([value]), CHARINDEX(' LANGUAGE ', RTRIM([value])) - 1)) +
-                                                        ' LANGUAGE ' + SUBSTRING(RTRIM([value]), CHARINDEX(' LANGUAGE ', RTRIM([value])) + 10, 4000)
-                                                   -- A column may carry STATISTICAL_SEMANTICS with no LANGUAGE. Without this branch the whole
-                                                   -- token would be bracket-wrapped as part of the column name ([Body STATISTICAL_SEMANTICS]),
-                                                   -- which never matches the live-side render and churns the index on every deploy.
-                                                   WHEN RTRIM([value]) LIKE '% STATISTICAL[_]SEMANTICS'
-                                                        THEN SchemaSmith.fn_SafeBracketWrap(LEFT(RTRIM([value]), CHARINDEX(' STATISTICAL_SEMANTICS', RTRIM([value])) - 1)) +
-                                                             ' STATISTICAL_SEMANTICS'
-                                                   ELSE SchemaSmith.fn_SafeBracketWrap([value])
-                                                   END AS NVARCHAR(MAX)), ',') FROM STRING_SPLIT(f.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+         t.[Schema], t.[Name] AS [TableName], f.[FullTextCatalog], f.[KeyIndex],
+         f.[ChangeTracking],
+         f.[StopList],
+         f.[Columns],
          f.[ShouldApplyExpression], f.[VariantName]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON([FullTextIndex]) WITH (
@@ -740,6 +738,37 @@
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName'
       ) f;
+
+  -- NORMALIZE -- one definition, applied however the rows arrived.
+  UPDATE #FullTextIndexes
+     SET [FullTextCatalog] = SchemaSmith.fn_SafeBracketWrap([FullTextCatalog]),
+         [KeyIndex]        = SchemaSmith.fn_SafeBracketWrap([KeyIndex]),
+         -- Guarded like StopList beside it. Unguarded, this concatenates into the CREATE FULLTEXT INDEX
+         -- statement, and T-SQL concatenation with NULL yields NULL -- the whole statement becomes NULL
+         -- and NO index is created, with no error and no log line. Reachable from an ordinary package:
+         -- the C# default is AUTO, but an explicit "ChangeTracking": null in a table file overwrites it.
+         -- 'AUTO' here matches that C# default, so omitted and explicitly-null behave the same.
+         [ChangeTracking]  = COALESCE(NULLIF(RTRIM([ChangeTracking]), ''), 'AUTO'),
+         [StopList]        = SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM([StopList]), ''), 'SYSTEM')),
+         -- Full-text LANGUAGE churn: a per-column "LANGUAGE nnnn" suffix must round-trip byte-identical
+         -- against the live-side build in ModifiedTableQuench.sql (drift compares these as strings). Peel
+         -- it off before bracket-wrapping the column (+ optional TYPE COLUMN) part -- same shape as the
+         -- " DESC" handling for IndexColumns -- then reattach it; the LCID is variable-length so it is
+         -- located and sliced rather than trimmed by a fixed count. Mirrors IndexOnlyQuench.sql's
+         -- declared-side parse exactly.
+         [Columns]         = (SELECT STRING_AGG(CAST(CASE WHEN RTRIM([value]) LIKE '% LANGUAGE [0-9]%'
+                                                   THEN SchemaSmith.fn_SafeBracketWrap(LEFT(RTRIM([value]), CHARINDEX(' LANGUAGE ', RTRIM([value])) - 1)) +
+                                                        ' LANGUAGE ' + SUBSTRING(RTRIM([value]), CHARINDEX(' LANGUAGE ', RTRIM([value])) + 10, 4000)
+                                                   -- A column may carry STATISTICAL_SEMANTICS with no LANGUAGE. Without this branch the whole
+                                                   -- token would be bracket-wrapped as part of the column name ([Body STATISTICAL_SEMANTICS]),
+                                                   -- which never matches the live-side render and churns the index on every deploy.
+                                                   WHEN RTRIM([value]) LIKE '% STATISTICAL[_]SEMANTICS'
+                                                        THEN SchemaSmith.fn_SafeBracketWrap(LEFT(RTRIM([value]), CHARINDEX(' STATISTICAL_SEMANTICS', RTRIM([value])) - 1)) +
+                                                             ' STATISTICAL_SEMANTICS'
+                                                   ELSE SchemaSmith.fn_SafeBracketWrap([value])
+                                                   END AS NVARCHAR(MAX)), ',')
+                                FROM STRING_SPLIT([Columns], ',')
+                               WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> '');
 
   -- Identify FullTextIndexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #FullTextIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
