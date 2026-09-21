@@ -60,7 +60,15 @@ public sealed class WorkUnitDispatcher
     private readonly int _maxThreads;
     private readonly Action<WorkUnit> _callback;
     private readonly IReadOnlyDictionary<string, bool> _allowParallel;
-    private readonly Queue<WorkUnit> _parallelQueue;
+    // Parallel work is queued PER SERVER rather than in one FIFO. ProductQuench enumerates servers
+    // sequentially, so a single FIFO arrives grouped -- [serverA.*, serverA.*, serverB.*, ...] -- and
+    // workers drain server A before touching server B, defeating the "keep every server active" intent
+    // this dispatcher exists to provide. Insertion order within each server's queue is preserved;
+    // balancing happens at DISPATCH, never at enumeration, because interleaving there would destroy the
+    // #247 abort-before-secondary guarantee.
+    private readonly Dictionary<string, Queue<WorkUnit>> _parallelQueues;
+    private readonly List<string> _parallelServers = new();
+    private int _serverCursor;
     private readonly Dictionary<string, Queue<WorkUnit>> _serialQueues;
     private readonly HashSet<string> _serialBusy = new();
     private readonly object _lock = new();
@@ -101,7 +109,7 @@ public sealed class WorkUnitDispatcher
         _maxThreads = maxThreads < 1 ? 1 : maxThreads;
         _continueOnFailure = continueOnFailure;
 
-        _parallelQueue = new Queue<WorkUnit>();
+        _parallelQueues = new Dictionary<string, Queue<WorkUnit>>();
         _serialQueues = new Dictionary<string, Queue<WorkUnit>>();
 
         foreach (var unit in units)
@@ -117,7 +125,14 @@ public sealed class WorkUnitDispatcher
             }
             else
             {
-                _parallelQueue.Enqueue(unit);
+                var server = unit.Server ?? "";
+                if (!_parallelQueues.TryGetValue(server, out var pq))
+                {
+                    pq = new Queue<WorkUnit>();
+                    _parallelQueues[server] = pq;
+                    _parallelServers.Add(server);
+                }
+                pq.Enqueue(unit);
             }
         }
     }
@@ -207,7 +222,10 @@ public sealed class WorkUnitDispatcher
                         // failure" is then a property of the empty queues, not an emergent consequence
                         // of the WorkerLoop short-circuit alone — a future restructure of the loop that
                         // drops the _abort check cannot silently regress it.
-                        _parallelQueue.Clear();
+                        // EVERY server's queue, not just the one that failed. The pre-existing abort
+                        // guard queued a single server, so a drain that missed a second queue would
+                        // have shipped green -- Run_AbortMode_DrainsEveryServersQueue covers that.
+                        foreach (var q in _parallelQueues.Values) q.Clear();
                         foreach (var q in _serialQueues.Values) q.Clear();
                     }
                     Monitor.PulseAll(_lock);
@@ -226,12 +244,22 @@ public sealed class WorkUnitDispatcher
 
     private bool TryDequeue(out WorkUnit unit, out string serialClaim)
     {
-        // Prefer parallel work to keep the pool saturated while serial queues unblock naturally.
-        if (_parallelQueue.Count > 0)
+        // Prefer parallel work to keep the pool saturated while serial queues unblock naturally, and
+        // rotate across servers so every server stays busy rather than being drained in turn. The cursor
+        // advances on each successful pull; empty queues are skipped without consuming a turn, so a
+        // server that finishes early stops costing anything.
+        if (_parallelServers.Count > 0)
         {
-            unit = _parallelQueue.Dequeue();
-            serialClaim = null;
-            return true;
+            for (var probed = 0; probed < _parallelServers.Count; probed++)
+            {
+                var server = _parallelServers[(_serverCursor + probed) % _parallelServers.Count];
+                var q = _parallelQueues[server];
+                if (q.Count == 0) continue;
+                unit = q.Dequeue();
+                _serverCursor = (_serverCursor + probed + 1) % _parallelServers.Count;
+                serialClaim = null;
+                return true;
+            }
         }
 
         foreach (var kvp in _serialQueues)
@@ -249,9 +277,21 @@ public sealed class WorkUnitDispatcher
         return false;
     }
 
+    /// <summary>
+    /// Units still queued. <c>internal</c> rather than private so a test can assert the ABORT DRAIN
+    /// itself, which is otherwise unobservable: the worker loop short-circuits on the abort flag before
+    /// dequeuing, so "no queued unit ran" stays true even with no drain at all. Verified by mutation --
+    /// deleting both Clear() calls left all 612 unit tests green, including the pre-existing abort test
+    /// whose comment claimed to guard the drain "independently of the worker-loop abort short-circuit".
+    /// It did not. The drain is the #370 guarantee that queued units don't run because the queues are
+    /// EMPTY rather than because a flag was checked, so it deserves a real assertion.
+    /// </summary>
+    internal int RemainingQueuedForTest() => TotalRemaining();
+
     private int TotalRemaining()
     {
-        var n = _parallelQueue.Count;
+        var n = 0;
+        foreach (var q in _parallelQueues.Values) n += q.Count;
         foreach (var q in _serialQueues.Values) n += q.Count;
         return n;
     }

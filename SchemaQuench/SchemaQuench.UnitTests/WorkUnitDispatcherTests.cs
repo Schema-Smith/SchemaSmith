@@ -541,4 +541,84 @@ public class WorkUnitDispatcherTests
                 + "rather than being pulsed -- the pulse/wait pairing has regressed");
         });
     }
+    
+    [Test]
+    public void Run_MultipleServers_InterleavesRatherThanDrainingOneServerFirst()
+    {
+        // ProductQuench.EnumerateWorkUnitsForTemplate walks servers sequentially, so the flat list
+        // arrives grouped: [serverA.*, serverA.*, serverA.*, serverB.*, ...]. A single-FIFO parallel
+        // queue therefore hands workers all of server A's units before touching server B, which defeats
+        // the "keep every server active concurrently" intent the dispatcher exists to provide.
+        //
+        // maxThreads=1 makes this deterministic and turns a concurrency property into an ORDER
+        // assertion: with round-robin dequeuing the sequence alternates between servers; with a single
+        // FIFO it does not. No sleeps, no timing, no flake.
+        var units = new List<WorkUnit>
+        {
+            new("serverA", "db1", "Core", ""),
+            new("serverA", "db2", "Core", ""),
+            new("serverA", "db3", "Core", ""),
+            new("serverB", "db1", "Core", ""),
+            new("serverB", "db2", "Core", ""),
+            new("serverB", "db3", "Core", "")
+        };
+        var order = new List<string>();
+
+        var dispatcher = new WorkUnitDispatcher(units, maxThreads: 1, new Dictionary<string, bool>(),
+            unit => { lock (order) order.Add(unit.Server); });
+        dispatcher.Run();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(order, Has.Count.EqualTo(6), "every unit must still run exactly once");
+            Assert.That(order.Count(s => s == "serverA"), Is.EqualTo(3));
+            Assert.That(order.Count(s => s == "serverB"), Is.EqualTo(3));
+            // The assertion that actually captures the defect: the first three dequeues must not all
+            // be the same server. Without balancing they are serverA, serverA, serverA.
+            Assert.That(order.Take(3).Distinct().Count(), Is.EqualTo(2),
+                "the dispatcher must pull across servers rather than draining one first -- got: "
+                + string.Join(", ", order));
+        });
+    }
+
+    [Test]
+    public void Run_AbortMode_DrainsEveryServersQueue()
+    {
+        // The highest-risk line in the balancing change: the abort drain has to clear EVERY per-server
+        // queue, and the pre-existing abort guard queues only one server, so a drain that missed a
+        // second queue would ship green. This is that guard.
+        var units = new List<WorkUnit>
+        {
+            new("serverA", "db1", "Core", ""),      // throws first
+            new("serverA", "db2", "Core", ""),      // queued -- must not run
+            new("serverB", "db1", "Core", ""),      // queued on ANOTHER server -- must not run
+            new("serverB", "db2", "Core", ""),      // queued on another server -- must not run
+            new("serverB", "db", "Serial", "t1")    // queued serial -- must not run
+        };
+        var allowParallel = new Dictionary<string, bool> { ["Serial"] = false };
+        var ranAfterFailure = new ConcurrentBag<string>();
+
+        var dispatcher = new WorkUnitDispatcher(units, maxThreads: 1, allowParallel,
+            unit =>
+            {
+                if (unit is { Server: "serverA", DatabaseName: "db1" })
+                    throw new InvalidOperationException("boom");
+                ranAfterFailure.Add($"{unit.Server}/{unit.TemplateName}/{unit.DatabaseName}");
+            });
+
+        Assert.Throws<AggregateException>(() => dispatcher.Run());
+        Assert.Multiple(() =>
+        {
+            Assert.That(ranAfterFailure, Is.Empty,
+                "Abort must clear every server's queue, not just the one that failed -- ran: "
+                + string.Join(", ", ranAfterFailure));
+            // The assertion that actually guards the DRAIN. "Nothing ran" is true even with no drain at
+            // all, because the worker loop short-circuits on the abort flag before dequeuing -- proven by
+            // mutation: deleting both Clear() calls left every test green. #370's guarantee is that
+            // queued units cannot run because the queues are EMPTY, so the emptiness is what to assert.
+            Assert.That(dispatcher.RemainingQueuedForTest(), Is.Zero,
+                "the abort drain must leave EVERY queue empty -- parallel queues across all servers and "
+                + "every per-template serial queue");
+        });
+    }
 }
