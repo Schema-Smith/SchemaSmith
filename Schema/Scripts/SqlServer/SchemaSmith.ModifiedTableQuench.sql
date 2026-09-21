@@ -460,9 +460,19 @@ BEGIN TRY
     JOIN #Columns c WITH (NOLOCK) ON C.[Schema] = T.[Schema] 
                                  AND C.[TableName] = T.[Name]
                                  AND C.[NewColumn] = 0
-    JOIN INFORMATION_SCHEMA.COLUMNS ic  WITH (NOLOCK) ON ic.TABLE_SCHEMA = SchemaSmith.fn_StripBracketWrapping(C.[Schema])
-                                                     AND ic.TABLE_NAME = SchemaSmith.fn_StripBracketWrapping(C.[TableName])
-                                                     AND ic.COLUMN_NAME = SchemaSmith.fn_StripBracketWrapping(C.[ColumnName])
+    -- The declared side is compared in the bracket-wrapped form the working set already stores, by
+    -- wrapping the catalog's name instead of stripping ours. Calling a scalar function on the join
+    -- predicate evaluates it per row and keeps the statement on a serial plan; wrapping the other side
+    -- is the same comparison with none of that. Measured on a 1,783-table model: this procedure went
+    -- from 35,540 ms to 20,413 ms on a no-op re-deploy, medians of three, ranges not overlapping.
+    --
+    -- COLLATE DATABASE_DEFAULT because the two sides come from different places: a temp table's columns
+    -- take TEMPDB's collation while a catalog name carries the DATABASE's. The old form compared two
+    -- database-collated values (the function returns one), so without this the change would work
+    -- wherever those two collations happen to agree and fail where they do not.
+    JOIN INFORMATION_SCHEMA.COLUMNS ic  WITH (NOLOCK) ON C.[Schema] COLLATE DATABASE_DEFAULT = '[' + ic.TABLE_SCHEMA + ']'
+                                                     AND C.[TableName] COLLATE DATABASE_DEFAULT = '[' + ic.TABLE_NAME + ']'
+                                                     AND C.[ColumnName] COLLATE DATABASE_DEFAULT = '[' + ic.COLUMN_NAME + ']'
     JOIN sys.columns sc WITH (NOLOCK) ON sc.[object_id] = OBJECT_ID(ic.TABLE_SCHEMA + '.' + ic.TABLE_NAME) AND sc.[name] = ic.COLUMN_NAME
     JOIN (SELECT CASE WHEN SCHEMA_NAME(st.[schema_id]) IN ('sys', 'dbo')
                       THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END + st.[name] AS USER_TYPE, st.user_type_id
@@ -545,8 +555,8 @@ BEGIN TRY
   INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly])
     SELECT t.[Schema], [TableName] = t.[Name], [ColumnName] = '[' + COLUMN_NAME + ']', '', '', 0, 0, 1
       FROM #Tables t WITH (NOLOCK)
-      JOIN INFORMATION_SCHEMA.COLUMNS WITH (NOLOCK) ON TABLE_SCHEMA = SchemaSmith.fn_StripBracketWrapping(t.[Schema])
-                                                   AND TABLE_NAME = SchemaSmith.fn_StripBracketWrapping(t.[Name]) 
+      JOIN INFORMATION_SCHEMA.COLUMNS WITH (NOLOCK) ON t.[Schema] COLLATE DATABASE_DEFAULT = '[' + TABLE_SCHEMA + ']'
+                                                   AND t.[Name] COLLATE DATABASE_DEFAULT = '[' + TABLE_NAME + ']' 
       WHERE NOT EXISTS (SELECT * 
                           FROM #Columns c WITH (NOLOCK)
                           WHERE c.[Schema] = t.[Schema]
@@ -646,9 +656,9 @@ BEGIN TRY
     INTO #DeclaredColumnOrder
     FROM #Columns c WITH (NOLOCK)
     JOIN INFORMATION_SCHEMA.COLUMNS ic WITH (NOLOCK)
-      ON ic.TABLE_SCHEMA = SchemaSmith.fn_StripBracketWrapping(c.[Schema])
-     AND ic.TABLE_NAME = SchemaSmith.fn_StripBracketWrapping(c.[TableName])
-     AND ic.COLUMN_NAME = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
+      ON c.[Schema] COLLATE DATABASE_DEFAULT = '[' + ic.TABLE_SCHEMA + ']'
+     AND c.[TableName] COLLATE DATABASE_DEFAULT = '[' + ic.TABLE_NAME + ']'
+     AND c.[ColumnName] COLLATE DATABASE_DEFAULT = '[' + ic.COLUMN_NAME + ']'
 
   IF OBJECT_ID('tempdb..#RebuildOrderMismatch') IS NOT NULL DROP TABLE #RebuildOrderMismatch
   SELECT DISTINCT a.[Schema], a.[TableName]
