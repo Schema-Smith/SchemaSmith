@@ -564,8 +564,13 @@
   -- indexing them restores a normal join. The inline version this replaced never paid it: the parent
   -- row was already in scope from the CROSS APPLY, so there was no join at all.
   DROP TABLE IF EXISTS #ParentOldName;
-  SELECT [Schema] = CONVERT(NVARCHAR(400), [Schema]),
-         [Name]   = CONVERT(NVARCHAR(400), [Name]),
+  -- NVARCHAR(200), not (400): the two key columns together have to fit SQL Server's 900-byte index key.
+  -- At 400 each that is 1600 bytes, which the engine accepts with a warning on every deploy and then
+  -- fails on any value actually long enough to overflow. 200 is still far above what can arrive here --
+  -- an identifier is at most 128 characters, plus bracket-wrapping -- so nothing is truncated, and the
+  -- key fits at 800 bytes.
+  SELECT [Schema] = CONVERT(NVARCHAR(200), [Schema]),
+         [Name]   = CONVERT(NVARCHAR(200), [Name]),
          [OldName]
     INTO #ParentOldName
     FROM #TableDefinitions WITH (NOLOCK);
@@ -581,7 +586,7 @@
                            THEN 1 ELSE 0 END)
     FROM #Columns c
     LEFT JOIN #ParentOldName td
-      ON td.[Schema] = CONVERT(NVARCHAR(400), c.[Schema]) AND td.[Name] = CONVERT(NVARCHAR(400), c.[TableName]);
+      ON td.[Schema] = CONVERT(NVARCHAR(200), c.[Schema]) AND td.[Name] = CONVERT(NVARCHAR(200), c.[TableName]);
   DROP TABLE IF EXISTS #ParentOldName;
 
   -- Identify Columns to skip based on ShouldApply expression (scoped by [_RowId])
