@@ -398,10 +398,17 @@ BEGIN TRY
   IF SchemaSmith.fn_ServerMajorVersion() >= 13
     EXEC sp_executesql N'
       INSERT INTO #ColMeta ([object_id], column_id, ExistingMaskFn, ExistingEncType, ExistingEncAlgo, ExistingEncKeyDb)
+      -- NO NOLOCK ON THESE CATALOG READS. A NOLOCK scan can return the same row twice when pages move
+      -- underneath it, and a deploy is exactly when the catalog is being rewritten: with several schemas
+      -- of one database quenched at once, another session is creating and altering tables while this
+      -- reads. The duplicates land in a table keyed on (object_id, column_id) and the deploy dies with a
+      -- primary key violation naming a temp table, which says nothing about the real cause. Observed
+      -- intermittently on the multi-schema lifecycle test. These are small catalog reads; the dirty read
+      -- bought nothing and cost correctness.
       SELECT sc.[object_id], sc.column_id, mc.masking_function, sc.encryption_type_desc, sc.encryption_algorithm_name, sc.column_encryption_key_database_name
-        FROM sys.columns sc WITH (NOLOCK)
-        JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = sc.[object_id] AND st.is_ms_shipped = 0
-        LEFT JOIN sys.masked_columns mc WITH (NOLOCK) ON mc.[object_id] = sc.[object_id] AND mc.column_id = sc.column_id'
+        FROM sys.columns sc
+        JOIN sys.tables st ON st.[object_id] = sc.[object_id] AND st.is_ms_shipped = 0
+        LEFT JOIN sys.masked_columns mc ON mc.[object_id] = sc.[object_id] AND mc.column_id = sc.column_id'
 
   RAISERROR('Detect Column Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ColumnChanges') IS NOT NULL DROP TABLE #ColumnChanges
@@ -1777,6 +1784,20 @@ BEGIN TRY
   -- Stamp/refresh the sticky PreventDrop protection marker so it tracks the package value each run
   -- (an existing table newly marked PreventDrop:true gets its property; one toggled back to false is
   -- updated). Covers the same present-table set as the ProductName stamp above (physical tables in #Tables).
+  -- WHAT THE MARKER ALREADY SAYS, READ ONCE. The statement below generates one
+  -- fn_listextendedproperty probe plus an sp_updateextendedproperty (or sp_addextendedproperty) PER
+  -- TABLE, and then executes all of them -- unconditionally, so a re-deploy where nothing had changed
+  -- still re-stamped every table in the package. On a 1,783-table model that is ~1,783 system-procedure
+  -- calls to write values that already said what they were going to say, and it measured 5,541 ms.
+  -- Reading the current values in one pass lets the generator skip tables that already agree, which on
+  -- an unchanged package is all of them. The end state is identical either way.
+  IF OBJECT_ID('tempdb..#ExistingPreventDrop') IS NOT NULL DROP TABLE #ExistingPreventDrop
+  SELECT [MajorId] = ep.major_id, [Value] = CONVERT(NVARCHAR(100), ep.[value])
+    INTO #ExistingPreventDrop
+    FROM sys.extended_properties ep WITH (NOLOCK)
+   WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.[name] = 'PreventDrop'
+  CREATE CLUSTERED INDEX [ixExistingPreventDrop] ON #ExistingPreventDrop ([MajorId])
+
   RAISERROR('Stamp/refresh PreventDrop protection marker', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
     'IF EXISTS (SELECT 1 FROM fn_listextendedproperty(N''PreventDrop'', N''Schema'', ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', N''Table'', ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', default, default)) ' +
@@ -1785,8 +1806,13 @@ BEGIN TRY
     FROM #Tables t WITH (NOLOCK)
     WHERE OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NOT NULL  -- table physically exists
       AND t.[MemoryOptimized] = 0  -- memory-optimized tables reject extended properties; PreventDrop is tracked in SchemaSmith.ProductOwnership below
+      -- Only where the marker is missing or disagrees. The generated SQL still probes and branches
+      -- add-vs-update itself, so this narrows WHICH tables are visited, not what happens when one is.
+      AND ISNULL((SELECT x.[Value] FROM #ExistingPreventDrop x WHERE x.[MajorId] = OBJECT_ID(t.[Schema] + '.' + t.[Name])), '')
+          <> CASE WHEN t.[PreventDrop] = 1 THEN 'true' ELSE 'false' END
     FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  IF OBJECT_ID('tempdb..#ExistingPreventDrop') IS NOT NULL DROP TABLE #ExistingPreventDrop
 
   -- Memory-optimized tables reject extended properties, so their ProductName / PreventDrop ownership is
   -- recorded in SchemaSmith.ProductOwnership instead of stamped on the table (the read-side fold into
