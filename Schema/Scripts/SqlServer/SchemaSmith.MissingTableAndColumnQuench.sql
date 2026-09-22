@@ -214,7 +214,11 @@ BEGIN TRY
   -- Narrowing the join keys once, into something that can carry a clustered index, turns each of those
   -- scans into a seek. The per-column decisions the subqueries used to re-evaluate are resolved here
   -- too, so the correlated part is reduced to a lookup.
-  DROP TABLE IF EXISTS #AddTableColumns;
+  -- OBJECT_ID form, not DROP TABLE IF EXISTS: that syntax is SQL Server 2016+ and this procedure is
+  -- kindled on every supported version down to 2008. Using it here failed the kindle outright on
+  -- 2008 R2, 2012 and 2014 with 'Incorrect syntax near the keyword IF' -- so no test ran at all on
+  -- those instances, which is how it reached the genuine-binary sweep rather than a unit test.
+  IF OBJECT_ID('tempdb..#AddTableColumns') IS NOT NULL DROP TABLE #AddTableColumns
   CREATE TABLE #AddTableColumns
   (
     [KeySchema] NVARCHAR(200) NULL,
@@ -323,7 +327,7 @@ BEGIN TRY
                                    WHERE NewTable = 1) T
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-  DROP TABLE IF EXISTS #AddTableColumns;
+  IF OBJECT_ID('tempdb..#AddTableColumns') IS NOT NULL DROP TABLE #AddTableColumns
 
   -- Object-change audit (#363): WhatIf twin of the embedded 'table'/'created' row above. That row
   -- rides the CREATE TABLE DDL (executed only on a real run); under WhatIf the DDL is printed, so
