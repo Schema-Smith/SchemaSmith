@@ -425,11 +425,15 @@ the normalization and gating passes that have to run server-side.
 
 For example `SmithySettings_Target__IngestMode=bulk`.
 
-**Leave it unset unless your package is very large.** The engine's own shred is *faster* at small scale,
-so the default is the right answer for most packages; the client path only wins once a package is big
-enough that parsing it on the server dominates. Both paths fill the same tables, created by the same SQL,
-and share the same normalization — the setting chooses who produces the raw rows and nothing else, which
-an equivalence test enforces by running both over one model and comparing the results row for row.
+**Leave it unset. It is a diagnostic, not a tuning knob, and on current code it makes no measurable
+difference.** Measured on a 1,783-table package: 8,489 ms against 8,655 ms for the default — inside the
+run-to-run spread. The reason is that parsing the model was never the expensive part of ingest; the
+per-row normalization that follows is, and both paths run that identically. It is documented because the
+setting exists and you may see it, not because it is worth setting.
+
+Both paths fill the same tables, created by the same SQL, and share the same normalization — the setting
+chooses who produces the raw rows and nothing else, which an equivalence test enforces by running both
+over one model and comparing the results row for row.
 
 > **Don't confuse this with `DeliveryEncoding`.** Two settings, both with "encoding" in the name, and they control unrelated things. **`CompatEncoding`** (this one) is how SchemaSmith talks to SQL Server about *its own schema model* — invisible in your package and in the resulting database. **[`ShouldCast:DeliveryEncoding`](datatongs.md#delivery-encoding-xml-for-legacy-sql-server)** is a DataTongs feature that decides the format of the *data content files it writes* — `Json` or `Xml` — which is what you want when porting data to another platform or handing it to an external vendor. Changing one tells you nothing about the other.
 
