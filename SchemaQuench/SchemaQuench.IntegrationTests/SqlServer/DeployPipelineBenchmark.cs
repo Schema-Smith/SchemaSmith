@@ -78,6 +78,24 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                         $"SchemaSmith.{required} is not installed; any timing taken here would measure the wrong code.");
                 }
 
+                // COLD COMPILE. Plans cache per object PER DATABASE, so a fresh database never reuses
+                // one -- and a CI run creates ~30 of them, each compiling this procedure once and using
+                // the plan once. That makes compile time, not execution time, the lever on the slowest
+                // leg, so it is measured against a database that has never run the procedure.
+                // The working set has to exist for the procedure to compile against it, but it does not
+                // have to have rows: compiling is what is being measured, and the plan is built from the
+                // declared shapes, not the data.
+                cmd.Parameters.Clear();
+                cmd.CommandText = ForgeKindler.GetParseTableJsonPhases(Platform.SqlServer).CreateTables;
+                cmd.ExecuteNonQuery();
+                var coldMs = Time(() =>
+                {
+                    cmd.CommandText = "EXEC SchemaSmith.ModifiedTableQuench @ProductName = 'Cold', @WhatIf = 1, @DropUnknownIndexes = 0, @DropTablesRemovedFromProduct = 0";
+                    cmd.ExecuteNonQuery();
+                });
+                cmd.CommandText = "SELECT ISNULL(SUM(cp.size_in_bytes)/1024, 0) FROM sys.dm_exec_cached_plans cp CROSS APPLY sys.dm_exec_sql_text(cp.plan_handle) st WHERE OBJECT_NAME(st.objectid, st.dbid) = 'ModifiedTableQuench' AND st.dbid = DB_ID()";
+                TestContext.Out.WriteLine($"Cold compile (empty database): {coldMs:N0} ms, cached plan {Convert.ToInt32(cmd.ExecuteScalar()):N0} KB");
+
                 TestContext.Out.WriteLine("\n--- FIRST DEPLOY (everything is new) ---");
                 Report(RunPipeline(conn, cmd, model));
 
