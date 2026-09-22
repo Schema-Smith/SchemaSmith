@@ -372,8 +372,10 @@ What you *declare* is a separate, friendlier grammar: `MinimumVersion` takes `16
 
 When the supported range across your targets diverges, SchemaSmith adapts the DDL it generates automatically. There is nothing to configure -- you deploy the same package to older and newer engine versions and SchemaSmith picks the right form for each target.
 
-#### PostgreSQL
-
+#### PostgreSQL
+
+
+
 The following cases apply only to PostgreSQL, whose supported range (12 through current) spans versions that differ in available DDL.
 
 A feature a target version lacks is either taken by an equivalent longer path (same end state), or -- where there is no equivalent -- degraded through the **unsupported-feature policy** (`Target:UnsupportedFeaturePolicy`, default `warn`): the object is emitted without the unsupported aspect and each affected object is listed under **Unsupported Feature Downgrades** in the deployment summary, so you know exactly what was relaxed. Set `Target:UnsupportedFeaturePolicy=fail` (for example `SmithySettings_Target__UnsupportedFeaturePolicy=fail`) to abort instead with a "requires PostgreSQL N" message rather than deploy a silently-degraded schema.
@@ -391,8 +393,10 @@ A feature a target version lacks is either taken by an equivalent longer path (s
 
 The version-sensitive system-catalog reads SchemaSmith uses to compare and extract state (per-column compression, expression statistics, `NULLS NOT DISTINCT`, INCLUDE columns) are branched automatically so they parse on the older server too — extraction and idempotency work the same on 12 as on current PostgreSQL. Delete-on-absence data delivery uses a single `MERGE … WHEN NOT MATCHED BY SOURCE THEN DELETE` on 17+ and a `MERGE` + follow-on `DELETE … WHERE NOT EXISTS` (keyed identically, same merge filter) on 15/16; below 15 it is the same version-agnostic `DELETE`. In every case the end state is identical — deploy the same package to PostgreSQL 12 through current and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
-#### SQL Server
-
+#### SQL Server
+
+
+
 Two independent adaptations, both automatic. Below **compatibility level** 130 (SQL Server 2016) SchemaSmith switches its entire model-ingest and compare encoding from JSON to XML. Separately, features introduced after the target's **server version** are degraded through the unsupported-feature policy, exactly as on the other engines.
 
 **Adaptation 1 — the encoding switch (compatibility-level gated).** This one is not a degrade; nothing is lost. SchemaSmith hands its parsed schema model to the server as JSON (`OPENJSON` / `FOR JSON`) at compatibility level 130 and above, and as XML (`.nodes()` / `.value()` / `FOR XML PATH`) below 130 — because `OPENJSON`'s JSON path is a parse error under compatibility level 130. The switch is chosen from the detected compatibility level and server version, and applies to deployment (SchemaQuench) and extraction (SchemaTongs) alike, reaching down to compatibility level 100 (SQL Server 2008). Constructs SchemaSmith itself uses — `STRING_AGG … WITHIN GROUP` and `STRING_SPLIT` — fall back to `FOR XML PATH` ordered aggregation and a split function on the XML path, so the end state is identical to a modern deployment. **These two are gated differently, and only one gate is the compatibility level.** `STRING_SPLIT` requires compatibility level 130. `STRING_AGG` requires **SQL Server 2017** (server major 14) and is not compatibility-level gated at all — it parses at every level down to 100 on a server that has it. The distinction matters because a SQL Server 2016 server reports compatibility level 130 while having no `STRING_AGG` whatsoever, so the fallback is chosen from the detected server version, not the compatibility level alone. (`STRING_AGG`'s optional `WITHIN GROUP (ORDER BY …)` clause additionally requires compatibility level 110.)
@@ -407,6 +411,25 @@ Two independent adaptations, both automatic. Below **compatibility level** 130 (
 | `Source:CompatEncoding` | SchemaTongs (extraction) | same three |
 
 For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `Source:CompatEncoding` too, for the queries it builds a delivery script from.
+
+##### Where the model is parsed (`Target:IngestMode`)
+
+Separate from the encoding above, and a performance knob rather than a compatibility one. SchemaSmith
+hands the engine its declared table model and the engine parses it (`shred`, the default). Setting
+`bulk` parses the model once in SchemaSmith instead and loads the rows directly, leaving the engine only
+the normalization and gating passes that have to run server-side.
+
+| Setting | Read by | Values |
+|---|---|---|
+| `Target:IngestMode` | SchemaQuench (deployment), SQL Server only | `shred` (default), `bulk` |
+
+For example `SmithySettings_Target__IngestMode=bulk`.
+
+**Leave it unset unless your package is very large.** The engine's own shred is *faster* at small scale,
+so the default is the right answer for most packages; the client path only wins once a package is big
+enough that parsing it on the server dominates. Both paths fill the same tables, created by the same SQL,
+and share the same normalization — the setting chooses who produces the raw rows and nothing else, which
+an equivalence test enforces by running both over one model and comparing the results row for row.
 
 > **Don't confuse this with `DeliveryEncoding`.** Two settings, both with "encoding" in the name, and they control unrelated things. **`CompatEncoding`** (this one) is how SchemaSmith talks to SQL Server about *its own schema model* — invisible in your package and in the resulting database. **[`ShouldCast:DeliveryEncoding`](datatongs.md#delivery-encoding-xml-for-legacy-sql-server)** is a DataTongs feature that decides the format of the *data content files it writes* — `Json` or `Xml` — which is what you want when porting data to another platform or handing it to an external vendor. Changing one tells you nothing about the other.
 
@@ -441,8 +464,10 @@ One further case is compatibility-level gated rather than version gated: a `Json
 
 **Three more route through the same policy but are gated on server *state*, not version** — every supported version can do them, if the feature is turned on. **Change Data Capture** and **Change Tracking** need the feature enabled on the database; **FILESTREAM** columns need FILESTREAM enabled on the server *and* a FILESTREAM filegroup on the database. Where the prerequisite is absent, the object is deployed without that aspect and a downgrade is recorded, exactly as a version degrade would be — so a package that assumes CDC is on does not fail, it quietly deploys without it under the default `warn`. Enable the prerequisite, or set `Target:UnsupportedFeaturePolicy=fail`, if that is not what you want.
 
-#### MySQL / MariaDB
-
+#### MySQL / MariaDB
+
+
+
 The supported range (MySQL 5.7 through current, MariaDB 10.2 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
 
 The schema model itself parses on every supported version — a version-agnostic `JSON_EXTRACT` shred stands in for `JSON_TABLE` (MySQL 8.0 / MariaDB 10.6), so nothing about kindling or ingest depends on the target version. Beyond that, a feature a target lacks is either taken by an equivalent path (same end state) or degraded through the **unsupported-feature policy** (`Target:UnsupportedFeaturePolicy`, default `warn` → emit without the feature + an **Unsupported Feature Downgrades** line; `fail` → abort with a "requires MySQL N" message):

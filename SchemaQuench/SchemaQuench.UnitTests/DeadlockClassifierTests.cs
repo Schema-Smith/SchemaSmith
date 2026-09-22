@@ -10,6 +10,35 @@ namespace SchemaQuench.UnitTests;
 public class DeadlockClassifierTests
 {
     [Test]
+    public void SqlServerWrappedError_1222_IsRetryableContention()
+    {
+        // Reachable only since the catalog reads stopped using WITH (NOLOCK): a dirty read waits for
+        // nothing, a clean one can wait behind concurrent DDL. Locale-independent on the number, because
+        // the message arrives in the server's language.
+        var ex = new SqlServerErrorException(1222, "Zeitüberschreitung bei Sperranforderung.");
+        Assert.That(DeadlockClassifier.IsLockTimeout(ex), Is.True);
+        Assert.That(DeadlockClassifier.IsRetryableContention(ex), Is.True);
+    }
+
+    [Test]
+    public void SqlServerWrappedError_1222_IsNotReportedAsADeadlock()
+    {
+        // Retryable for the same reason, but it is not a deadlock and must not be described as one --
+        // the retry message an operator reads says which contention it hit.
+        var ex = new SqlServerErrorException(1222, "Lock request time out period exceeded.");
+        Assert.That(DeadlockClassifier.IsDeadlock(ex), Is.False);
+    }
+
+    [Test]
+    public void AnUnrelatedSqlError_IsNotRetryableContention()
+    {
+        // Guards the widening: only 1205 and 1222 are transient. Re-running anything else just repeats
+        // a real failure and hides it behind attempts.
+        var ex = new SqlServerErrorException(2627, "Violation of PRIMARY KEY constraint.");
+        Assert.That(DeadlockClassifier.IsRetryableContention(ex), Is.False);
+    }
+
+    [Test]
     public void Null_IsNotDeadlock()
     {
         Assert.That(DeadlockClassifier.IsDeadlock(null), Is.False);

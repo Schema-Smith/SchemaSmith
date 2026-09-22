@@ -60,8 +60,34 @@ internal static class DeadlockClassifier
     }
 
     /// <summary>
-    /// True for any transient contention an idempotent convergence proc can recover from by re-running:
-    /// a deadlock (all engines) or the PostgreSQL relation-cache race under parallel fan-out.
+    /// True for the SQL Server lock-timeout error (1222, "Lock request time out period exceeded").
+    /// <para>
+    /// This became reachable when the catalog reads stopped using WITH (NOLOCK): a dirty read waits for
+    /// nothing, while a clean one takes schema stability locks that conflict with the schema-modification
+    /// locks concurrent DDL holds — and a deploy is surrounded by concurrent DDL. SQL Server's default
+    /// LOCK_TIMEOUT is infinite, so this only surfaces where a caller or a server default sets one, but
+    /// where it does it is transient contention by definition and re-running is exactly the right answer:
+    /// the convergence procs are idempotent, which is the same property that makes the deadlock retry
+    /// safe.
+    /// </para>
     /// </summary>
-    public static bool IsRetryableContention(Exception ex) => IsDeadlock(ex) || IsTransientRelationRace(ex);
+    public static bool IsLockTimeout(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+            switch (e)
+            {
+                case SqlServerErrorException { Number: 1222 }:
+                case SqlException { Number: 1222 }:
+                    return true;
+            }
+        return false;
+    }
+
+    /// <summary>
+    /// True for any transient contention an idempotent convergence proc can recover from by re-running:
+    /// a deadlock (all engines), a SQL Server lock timeout, or the PostgreSQL relation-cache race under
+    /// parallel fan-out.
+    /// </summary>
+    public static bool IsRetryableContention(Exception ex) =>
+        IsDeadlock(ex) || IsLockTimeout(ex) || IsTransientRelationRace(ex);
 }

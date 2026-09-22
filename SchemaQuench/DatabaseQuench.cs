@@ -2058,7 +2058,9 @@ DECLARE @TableDefinitions VARCHAR(MAX)= '{EscapeSqlLiteral(tableJson)}',
 
         ClearParameters(command);
         command.CommandText = createTables;
-        ExecuteNonQueryHandlingMessages(command);
+        // Retried like every other step: these reads and creates now contend with concurrent DDL for
+        // real locks, where the dirty read they replaced waited for nothing.
+        ExecuteNonQueryHandlingMessages(command, retryOnDeadlock: true);
 
         if (BulkIngestEnabled)
         {
@@ -2214,7 +2216,7 @@ SET NOCOUNT ON
         AddJsonParameter(command, "@tableJson", tableJson);
         try
         {
-            ExecuteNonQueryHandlingMessages(command);
+            ExecuteNonQueryHandlingMessages(command, retryOnDeadlock: true);
         }
         finally
         {
