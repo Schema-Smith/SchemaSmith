@@ -2119,32 +2119,50 @@ SET NOCOUNT ON
         var model = ParseIterationModel(tableJson);
         AssertEverySchemaIsPopulated(model);
 
-        using var shape = new DataTable("#TableDefinitions");
-        using (var probe = sqlConnection.CreateCommand())
-        {
-            probe.Transaction = sqlCommand.Transaction;
-            // Read the shape rather than declare it. TOP 0 costs nothing and means a column added to the
-            // CREATE is seen here immediately, where WorkingSetRowBuilder refuses anything it was not
-            // taught to fill -- instead of being quietly bulk-loaded as NULL.
-            probe.CommandText = "SELECT TOP 0 * FROM #TableDefinitions";
-            using var reader = probe.ExecuteReader(CommandBehavior.SchemaOnly);
-            shape.Load(reader);
-        }
+        using var shape = ReadWorkingSetShape(sqlConnection, sqlCommand, "#TableDefinitions");
 
         WorkingSetRowBuilder.Build(model, WorkingSetShredMap.For(Platform.SqlServer, "#TableDefinitions"), shape);
+        BulkCopy(sqlConnection, sqlCommand, command.CommandTimeout, shape);
 
-        using (var bulk = new SqlBulkCopy(sqlConnection, SqlBulkCopyOptions.Default, sqlCommand.Transaction))
-        {
-            bulk.DestinationTableName = "#TableDefinitions";
-            bulk.BulkCopyTimeout = command.CommandTimeout;
-            // By name, never by ordinal: the shape was discovered, and a column reordered in the CREATE
-            // would otherwise silently transpose values between columns of compatible type.
-            foreach (DataColumn column in shape.Columns)
-                bulk.ColumnMappings.Add(column.ColumnName, column.ColumnName);
-            bulk.WriteToServer(shape);
-        }
+        // #Columns is the child table worth taking: on a 1,783-table model its shred is 6,938 ms while
+        // the other six children total ~125 ms between them. They keep shredding, because a second
+        // producer is only worth its drift risk where the time actually is.
+        using var columns = ReadWorkingSetShape(sqlConnection, sqlCommand, "#Columns");
+        WorkingSetRowBuilder.BuildChild(model, "Columns", WorkingSetShredMap.For(Platform.SqlServer, "#Columns"), columns);
+        BulkCopy(sqlConnection, sqlCommand, command.CommandTimeout, columns);
 
-        return ForgeKindler.RemoveShredRegion(fillTables, "#TableDefinitions");
+        return ForgeKindler.RemoveShredRegion(
+               ForgeKindler.RemoveShredRegion(fillTables, "#TableDefinitions"), "#Columns");
+    }
+
+
+    /// <summary>
+    /// Read a working-set table's shape off the temp table SQL just created, rather than declaring it
+    /// here. TOP 0 costs nothing, and it means a column added to the CREATE is seen immediately -- where
+    /// <see cref="WorkingSetRowBuilder"/> refuses anything it was not taught to fill, instead of being
+    /// quietly bulk-loaded as NULL.
+    /// </summary>
+    private static DataTable ReadWorkingSetShape(SqlConnection connection, SqlCommand command, string table)
+    {
+        var shape = new DataTable(table);
+        using var probe = connection.CreateCommand();
+        probe.Transaction = command.Transaction;
+        probe.CommandText = $"SELECT TOP 0 * FROM {table}";
+        using var reader = probe.ExecuteReader(CommandBehavior.SchemaOnly);
+        shape.Load(reader);
+        return shape;
+    }
+
+    private static void BulkCopy(SqlConnection connection, SqlCommand command, int timeout, DataTable rows)
+    {
+        using var bulk = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, command.Transaction);
+        bulk.DestinationTableName = rows.TableName;
+        bulk.BulkCopyTimeout = timeout;
+        // By name, never by ordinal: the shape was discovered, and a column reordered in the CREATE would
+        // otherwise silently transpose values between columns of compatible type.
+        foreach (DataColumn column in rows.Columns)
+            bulk.ColumnMappings.Add(column.ColumnName, column.ColumnName);
+        bulk.WriteToServer(rows);
     }
 
     /// <summary>

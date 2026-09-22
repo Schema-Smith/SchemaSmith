@@ -32,6 +32,7 @@ public static class WorkingSetRowBuilder
         {
             ["_RowId"] = "assigned here, from the model's order",
             ["RebuildPolicySpecified"] = "derived from whether the RebuildPolicy object is present at all",
+            ["NullableDeclared"] = "derived in NORMALIZE from the raw Nullable, before it is defaulted",
         };
 
     /// <summary>
@@ -82,17 +83,85 @@ public static class WorkingSetRowBuilder
     }
 
     /// <summary>
+    /// Fill a CHILD working-set table — one whose rows come from an array nested inside each table of the
+    /// model, the shape the shred expresses as <c>CROSS APPLY OPENJSON(&lt;array&gt;)</c>.
+    /// <para>
+    /// Two things have to match the shred exactly or the paths diverge. <c>[Schema]</c> and
+    /// <c>[TableName]</c> are the PARENT's, not the child's, and are written raw here because the child's
+    /// normalize pass wraps them — the same division as every other column. And <c>_RowId</c> numbers the
+    /// rows CONTINUOUSLY across all parents, because the shred's <c>ROW_NUMBER()</c> runs over the whole
+    /// cross-applied set, and the per-row ShouldApply gating generates
+    /// <c>DELETE … WHERE [_RowId] = N</c> against exactly that numbering.
+    /// </para>
+    /// </summary>
+    /// <param name="childProperty">The property on each table holding the child array, e.g. "Columns".</param>
+    public static void BuildChild(JArray model, string childProperty,
+        IReadOnlyList<WorkingSetShredMap.ShredColumn> map, DataTable target)
+    {
+        var byColumn = map.ToDictionary(c => c.Column, StringComparer.OrdinalIgnoreCase);
+        AssertEveryColumnIsAccountedFor(map, target, ParentSuppliedColumns);
+
+        var rowId = 0L;
+        foreach (var parent in model.OfType<JObject>())
+        {
+            if (parent[childProperty] is not JArray children) continue;
+
+            foreach (var child in children.OfType<JObject>())
+            {
+                var row = target.NewRow();
+                rowId++;
+
+                foreach (DataColumn column in target.Columns)
+                {
+                    switch (column.ColumnName.ToLowerInvariant())
+                    {
+                        case "_rowid":
+                            row[column] = rowId;
+                            continue;
+                        case "schema":
+                            row[column] = (object)parent["Schema"]?.ToString() ?? DBNull.Value;
+                            continue;
+                        case "tablename":
+                            row[column] = (object)parent["Name"]?.ToString() ?? DBNull.Value;
+                            continue;
+                    }
+
+                    if (!byColumn.TryGetValue(column.ColumnName, out var shred)) continue;
+                    row[column] = Convert(Select(child, shred.JsonPath), shred, column);
+                }
+
+                target.Rows.Add(row);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Columns a CHILD table takes from its parent rather than from its own JSON, so the shred's own
+    /// mapping does not describe them and their absence from it is expected rather than a gap.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> ParentSuppliedColumns =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Schema"] = "the parent table's schema",
+            ["TableName"] = "the parent table's name",
+            ["NewColumn"] = "catalog-derived — asks the live server whether the column already exists",
+            ["ColumnScript"] = "built by NORMALIZE from fn_ServerMajorVersion(); a server fact, not a model one",
+        };
+
+    /// <summary>
     /// A column the SQL declares but nothing fills is the failure this whole design has to avoid: the
     /// bulk path would load a null where the shred loaded a value, and only a deploy would show it. So a
     /// column added to the working set without a mapping stops the run here, by name.
     /// </summary>
     private static void AssertEveryColumnIsAccountedFor(
-        IReadOnlyList<WorkingSetShredMap.ShredColumn> map, DataTable target)
+        IReadOnlyList<WorkingSetShredMap.ShredColumn> map, DataTable target,
+        IReadOnlyDictionary<string, string> alsoAccountedFor = null)
     {
         var mapped = new HashSet<string>(map.Select(c => c.Column), StringComparer.OrdinalIgnoreCase);
         var unexplained = target.Columns.Cast<DataColumn>()
             .Select(c => c.ColumnName)
-            .Where(name => !mapped.Contains(name) && !NotWrittenByClient.ContainsKey(name))
+            .Where(name => !mapped.Contains(name) && !NotWrittenByClient.ContainsKey(name)
+                           && !(alsoAccountedFor?.ContainsKey(name) ?? false))
             .ToList();
 
         if (unexplained.Count > 0)

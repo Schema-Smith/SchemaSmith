@@ -166,23 +166,39 @@ namespace SchemaQuench.IntegrationTests.SqlServer
 
             WorkingSetRowBuilder.Build(JArray.Parse(RichModelJson),
                 WorkingSetShredMap.For(Platform.SqlServer, "#TableDefinitions"), shape);
+            Load(conn, shape);
 
-            using (var bulk = new SqlBulkCopy(conn))
+            // #Columns is built from the nested array, so it also proves the parent-supplied Schema and
+            // TableName and the continuous _RowId numbering the gating DELETEs key on.
+            using var columns = new DataTable("#Columns");
+            using (var probe = conn.CreateCommand())
             {
-                bulk.DestinationTableName = "#TableDefinitions";
-                foreach (DataColumn column in shape.Columns)
-                    bulk.ColumnMappings.Add(column.ColumnName, column.ColumnName);
-                bulk.WriteToServer(shape);
+                probe.CommandText = "SELECT TOP 0 * FROM #Columns";
+                using var reader = probe.ExecuteReader(CommandBehavior.SchemaOnly);
+                columns.Load(reader);
             }
+            WorkingSetRowBuilder.BuildChild(JArray.Parse(RichModelJson), "Columns",
+                WorkingSetShredMap.For(Platform.SqlServer, "#Columns"), columns);
+            Load(conn, columns);
 
             // The shred for the table just loaded is REMOVED, not skipped, and the rest of the fill --
             // normalize, gating, and every child shred reading this table's nested JSON -- runs as usual.
             cmd.CommandText = "DECLARE @v_SQL NVARCHAR(MAX) = ''\nSET NOCOUNT ON\n"
-                              + ForgeKindler.RemoveShredRegion(fillTables, "#TableDefinitions");
+                              + ForgeKindler.RemoveShredRegion(
+                                    ForgeKindler.RemoveShredRegion(fillTables, "#TableDefinitions"), "#Columns");
             AddPayload(cmd, RichModelJson);
             cmd.ExecuteNonQuery();
 
             return Capture(conn);
+        }
+
+
+        private static void Load(SqlConnection conn, DataTable rows)
+        {
+            using var bulk = new SqlBulkCopy(conn) { DestinationTableName = rows.TableName };
+            foreach (DataColumn column in rows.Columns)
+                bulk.ColumnMappings.Add(column.ColumnName, column.ColumnName);
+            bulk.WriteToServer(rows);
         }
 
         private static void AddPayload(SqlCommand cmd, string json)

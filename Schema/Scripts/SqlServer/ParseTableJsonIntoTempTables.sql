@@ -318,7 +318,6 @@
   -- script was split, the retry re-ran the DROP/CREATE too, so it started clean by accident.)
   -- TRUNCATE rather than DELETE: no foreign keys point at these, and on the first run they are empty.
   TRUNCATE TABLE #Tables
-  TRUNCATE TABLE #Columns
   TRUNCATE TABLE #Indexes
   TRUNCATE TABLE #XmlIndexes
   TRUNCATE TABLE #ForeignKeys
@@ -485,8 +484,13 @@
          ISNULL([PreventDrop], 0) AS [PreventDrop]
     FROM #TableDefinitions WITH (NOLOCK);
   
+  -- ===== SHRED #Columns BEGIN =====
+  -- Removed outright by an ingest path that supplies these rows itself, for the same reason as
+  -- #TableDefinitions: a skipped-but-present shred is still compiled, and this is the expensive one --
+  -- 6,938 ms of a 1,783-table parse against ~125 ms for the other six child tables combined.
+  TRUNCATE TABLE #Columns
   RAISERROR('Parse Columns from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [NullableDeclared], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [OldName], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [OldName], [ShouldApplyExpression], [VariantName])
   -- INGEST ONLY -- raw values straight off the shred, exactly as the other tables do it. Every default,
   -- bracket-wrap, type canonicalization and the whole ColumnScript build moved to the NORMALIZE pass
   -- below, so a second ingestion path supplying these rows gets the identical treatment from one
@@ -494,7 +498,7 @@
   -- from fn_ServerMajorVersion(), so it is a fact about the target server, not about the model.
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], c.[ColumnName],
-         c.[DataType], c.[Nullable], c.[Nullable] AS [NullableDeclared], c.[Default], c.[CheckExpression],
+         c.[DataType], c.[Nullable], c.[Default], c.[CheckExpression],
          c.[ComputedExpression], c.[Persisted], c.[Sparse], c.[FileStream], c.[IsColumnSet],
          c.[BackfillExistingRows], c.[Collation], c.[DataMaskFunction], c.[EncryptionType],
          c.[EncryptionKey], c.[EncryptionAlgorithm], c.[OldName],
@@ -521,6 +525,17 @@
       [VariantName] NVARCHAR(128) '$.VariantName',
       [OldName] NVARCHAR(500) '$.OldName'
       ) c;
+  -- ===== SHRED #Columns END =====
+
+  -- NullableDeclared FIRST, and in its own statement, because it must capture whether the package
+  -- declared Nullable AT ALL -- NULL meaning "omitted, let the engine decide". The very next UPDATE
+  -- defaults Nullable to 0, which would destroy that distinction. Separating them is deliberate: the
+  -- same value read one statement later means something different, and that is how a previously fixed
+  -- bug came back (a computed column narrowed to NOT NULL that the package never declared).
+  --
+  -- It is derived here rather than supplied by an ingest path, so neither producer has to know the rule.
+  UPDATE #Columns SET [NullableDeclared] = [Nullable]
+
   -- NORMALIZE -- every default, canonicalization and derived value for #Columns, applied to whatever is
   -- in the table however it got there. Idempotent throughout: fn_SafeBracketWrap strips before it wraps,
   -- fn_NormalizeDataType is a no-op on an already-normal type, and each ISNULL/RTRIM is a no-op on a

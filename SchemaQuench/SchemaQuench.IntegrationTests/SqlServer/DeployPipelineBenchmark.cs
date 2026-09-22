@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using Microsoft.Data.SqlClient;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -222,6 +223,93 @@ SELECT [Label], [ms] FROM (
             cmd.CommandText = body;
             cmd.ExecuteNonQuery();
             TestContext.Out.WriteLine($"Profiled copy installed with {n} step boundaries");
+        }
+
+        /// <summary>
+        /// Parse only, both ingest paths, against one database — the comparison the client-ingest work
+        /// exists to make. Everything downstream is identical by construction, so measuring the whole
+        /// pipeline would bury a parse-only change under noise from steps neither path touches.
+        /// </summary>
+        [Test]
+        public void CompareIngestPaths()
+        {
+            _benchDb = $"SchemaSmithIngest_{DateTime.UtcNow:yyyyMMdd_HHmmss}";
+            var model = BuildModel();
+
+            using var conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 0;
+
+            try
+            {
+                cmd.CommandText = $"CREATE DATABASE [{_benchDb}]";
+                cmd.ExecuteNonQuery();
+                conn.ChangeDatabase(_benchDb);
+                ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, forceReKindle: true);
+
+                var (createTables, fillTables) = ForgeKindler.GetParseTableJsonPhases(Platform.SqlServer);
+                var parsed = JArray.Parse(model);
+
+                var shred = new List<long>();
+                var bulk = new List<long>();
+                for (var i = 0; i < NoOpRuns; i++)
+                {
+                    shred.Add(Time(() =>
+                    {
+                        cmd.Parameters.Clear();
+                        cmd.CommandText = createTables; cmd.ExecuteNonQuery();
+                        cmd.CommandText = "DECLARE @v_SQL NVARCHAR(MAX) = ''" + Environment.NewLine + "SET NOCOUNT ON" + Environment.NewLine + fillTables;
+                        cmd.Parameters.Add("@TableDefinitions", SqlDbType.VarChar, -1).Value = model;
+                        cmd.Parameters.Add("@UpdateFillFactor", SqlDbType.Bit).Value = false;
+                        cmd.ExecuteNonQuery();
+                        cmd.Parameters.Clear();
+                    }));
+
+                    bulk.Add(Time(() =>
+                    {
+                        cmd.Parameters.Clear();
+                        cmd.CommandText = createTables; cmd.ExecuteNonQuery();
+
+                        foreach (var (table, childProperty) in new[] { ("#TableDefinitions", (string)null), ("#Columns", "Columns") })
+                        {
+                            using var shape = new DataTable(table);
+                            using (var probe = conn.CreateCommand())
+                            {
+                                probe.CommandText = $"SELECT TOP 0 * FROM {table}";
+                                using var reader = probe.ExecuteReader(CommandBehavior.SchemaOnly);
+                                shape.Load(reader);
+                            }
+                            var map = WorkingSetShredMap.For(Platform.SqlServer, table);
+                            if (childProperty == null) WorkingSetRowBuilder.Build(parsed, map, shape);
+                            else WorkingSetRowBuilder.BuildChild(parsed, childProperty, map, shape);
+
+                            using var copy = new SqlBulkCopy(conn) { DestinationTableName = table, BulkCopyTimeout = 0 };
+                            foreach (DataColumn c in shape.Columns) copy.ColumnMappings.Add(c.ColumnName, c.ColumnName);
+                            copy.WriteToServer(shape);
+                        }
+
+                        cmd.CommandText = "DECLARE @v_SQL NVARCHAR(MAX) = ''" + Environment.NewLine + "SET NOCOUNT ON" + Environment.NewLine
+                                        + ForgeKindler.RemoveShredRegion(
+                                              ForgeKindler.RemoveShredRegion(fillTables, "#TableDefinitions"), "#Columns");
+                        cmd.Parameters.Add("@TableDefinitions", SqlDbType.VarChar, -1).Value = model;
+                        cmd.Parameters.Add("@UpdateFillFactor", SqlDbType.Bit).Value = false;
+                        cmd.ExecuteNonQuery();
+                        cmd.Parameters.Clear();
+                    }));
+                }
+
+                shred.Sort(); bulk.Sort();
+                TestContext.Out.WriteLine(Environment.NewLine + $"--- PARSE, median of {NoOpRuns} ---");
+                TestContext.Out.WriteLine($"  shred (engine parses the model): {shred[shred.Count / 2],8:N0} ms  (min {shred.First():N0}, max {shred.Last():N0})");
+                TestContext.Out.WriteLine($"  bulk  (client builds the rows) : {bulk[bulk.Count / 2],8:N0} ms  (min {bulk.First():N0}, max {bulk.Last():N0})");
+            }
+            finally
+            {
+                conn.ChangeDatabase("master");
+                cmd.CommandText = $"IF DB_ID('{_benchDb}') IS NOT NULL BEGIN ALTER DATABASE [{_benchDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_benchDb}]; END";
+                cmd.ExecuteNonQuery();
+            }
         }
 
         private static void Report(List<(string Step, long Ms)> steps)
