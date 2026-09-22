@@ -11,6 +11,13 @@ cd "$(dirname "$0")/.." || exit 1
 # while the local gate reported 5,337 passing. It took six CI runs to land one PR. Every one of those
 # defects reproduces here in under two minutes.
 #
+# READINESS PROBES MUST NOT ASSUME THE mysql* CLIENT NAMES. MariaDB 11.4 and later ship mariadb and
+# mariadb-admin and no longer provide the mysql/mysqladmin aliases, so a probe hard-coded to mysqladmin
+# reports "never became ready" against a server that is up and serving. Three MariaDB bands -- 11.4, 11.8
+# and latest -- ran ZERO tests that way while the sweep looked like it had covered them and failed them.
+# That is the same shape as the defect this whole script exists to catch: the harness agreeing with itself
+# rather than with the engine.
+#
 # NOT the learn-* sandbox containers: those are training-lab servers with no TestUser, and pointing the
 # suite at them fails with "Access denied" that looks like a product problem.
 #
@@ -109,7 +116,7 @@ for f in "${FLOORS[@]}"; do
     if [ "$image" = "postgres" ]; then
       docker exec "$name" pg_isready -U "$TEST_USER" -d TestMain >/dev/null 2>&1 && ready=1 && break
     else
-      docker exec "$name" sh -c "mysqladmin ping -h 127.0.0.1 -u root -p'$TEST_PASSWORD'" >/dev/null 2>&1 && ready=1 && break
+      docker exec "$name" sh -c "{ command -v mariadb-admin >/dev/null && P=mariadb-admin || P=mysqladmin; } ; \$P ping -h 127.0.0.1 -u root -p'$TEST_PASSWORD'" >/dev/null 2>&1 && ready=1 && break
     fi
     echo -n "."; sleep 2
   done
@@ -121,7 +128,9 @@ for f in "${FLOORS[@]}"; do
 
   # MySQL/MariaDB images create TestUser without global rights; CI grants them in its own step.
   if [ "$image" != "postgres" ]; then
-    docker exec "$name" sh -c "mysql -u root -p'$TEST_PASSWORD' -e \"
+    # MariaDB 11.4+ images ship mariadb/mariadb-admin and NO LONGER ship the mysql* names. Try the
+    # MariaDB spelling first and fall back, so one loop covers 10.2 through latest and MySQL too.
+    docker exec "$name" sh -c "{ command -v mariadb >/dev/null && CLI=mariadb || CLI=mysql; } ; \$CLI -u root -p'$TEST_PASSWORD' -e \"
       GRANT ALL PRIVILEGES ON *.* TO '$TEST_USER'@'%' WITH GRANT OPTION;
       FLUSH PRIVILEGES;
       SET GLOBAL max_connections = 2000;\"" >/dev/null 2>&1
