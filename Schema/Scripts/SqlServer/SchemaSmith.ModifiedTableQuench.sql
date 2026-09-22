@@ -91,7 +91,7 @@ BEGIN TRY
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Table ' + tp.[Schema] + '.' + tp.[TableName] + ' owned by different product. [' + tp.[Value] + ']'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
                            FROM #Tables t WITH (NOLOCK)
                            JOIN #TableProperties tp WITH (NOLOCK) ON t.[Schema] = tp.[Schema]
-                                                                 AND SchemaSmith.fn_StripBracketWrapping(t.[Name]) = tp.TableName
+                                                                 AND t.[Name] = '[' + tp.TableName + ']'
                            WHERE tp.PropertyName = 'ProductName'
                              AND tp.[value] <> @ProductName
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -100,7 +100,7 @@ BEGIN TRY
   IF EXISTS (SELECT *
                FROM #Tables t WITH (NOLOCK)
                JOIN #TableProperties tp WITH (NOLOCK) ON t.[Schema] = tp.[Schema]
-                                                     AND SchemaSmith.fn_StripBracketWrapping(t.[Name]) = tp.TableName
+                                                     AND t.[Name] = '[' + tp.TableName + ']'
                WHERE tp.PropertyName = 'ProductName'
                  AND tp.[value] <> @ProductName)
   BEGIN
@@ -201,7 +201,7 @@ BEGIN TRY
         AND NOT EXISTS (SELECT *
                           FROM #Tables t WITH (NOLOCK)
                           WHERE t.[Schema] = tp.[Schema]
-                            AND SchemaSmith.fn_StripBracketWrapping(t.[Name]) = tp.TableName)
+                            AND t.[Name] = '[' + tp.TableName + ']')
       FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_SQL IS NOT NULL EXEC(@v_SQL)
   END
@@ -224,7 +224,7 @@ BEGIN TRY
         AND NOT EXISTS (SELECT *
                           FROM #Tables t WITH (NOLOCK)
                           WHERE t.[Schema] = tp.[Schema]
-                            AND SchemaSmith.fn_StripBracketWrapping(t.[Name]) = tp.TableName)
+                            AND t.[Name] = '[' + tp.TableName + ']')
         -- A dropped ledger table is RETAINED as MSSQL_DroppedLedgerTable_<name>_<guid>, inheriting the
         -- extended properties of the table it came from -- including the ProductName stamp this pass
         -- selects on. Without this it reads as "a table removed from the product" on every later
@@ -346,7 +346,7 @@ BEGIN TRY
                              AND NOT EXISTS (SELECT *
                                                FROM #Tables t WITH (NOLOCK)
                                                WHERE t.[Schema] = tp.[Schema]
-                                                 AND SchemaSmith.fn_StripBracketWrapping(t.[Name]) = tp.TableName)
+                                                 AND t.[Name] = '[' + tp.TableName + ']')
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
@@ -368,12 +368,12 @@ BEGIN TRY
                         FROM #Indexes i WITH (NOLOCK) 
                         WHERE i.[Schema] = xp.[Schema] 
                           AND i.TableName = xp.TableName
-                          AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = xp.IndexName)
+                          AND i.IndexName = '[' + xp.IndexName + ']')
       AND NOT EXISTS (SELECT * 
                         FROM #XmlIndexes i WITH (NOLOCK) 
                         WHERE i.[Schema] = xp.[Schema] 
                           AND i.TableName = xp.TableName
-                          AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = xp.IndexName)
+                          AND i.IndexName = '[' + xp.IndexName + ']')
 
   -- 2016-era per-column catalog metadata (dynamic data masking + Always Encrypted) is version-gated so this
   -- shared apply proc CREATEs on a genuine pre-2016 binary: a STATIC sys.masked_columns / encryption_* column
@@ -486,7 +486,7 @@ BEGIN TRY
             FROM sys.types st) st ON st.user_type_id = sc.user_type_id
     LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
                                                       AND ident.[object_id] = OBJECT_ID(TABLE_SCHEMA + '.' + TABLE_NAME)
-    LEFT JOIN sys.computed_columns cc ON cc.[name] = SchemaSmith.fn_StripBracketWrapping(c.ColumnName)
+    LEFT JOIN sys.computed_columns cc ON c.ColumnName COLLATE DATABASE_DEFAULT = '[' + cc.[name] + ']'
                                                    AND cc.[object_id] = OBJECT_ID(C.[Schema] + '.' + C.[TableName])
     LEFT JOIN #ColMeta cm ON cm.[object_id] = sc.[object_id] AND cm.column_id = sc.column_id
     WHERE t.NewTable = 0
@@ -568,7 +568,7 @@ BEGIN TRY
                           FROM #Columns c WITH (NOLOCK)
                           WHERE c.[Schema] = t.[Schema]
                             AND c.[TableName] = t.[Name]
-                            AND SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]) = COLUMN_NAME)
+                            AND c.[ColumnName] COLLATE DATABASE_DEFAULT = '[' + COLUMN_NAME + ']')
         AND NOT (t.IsTemporal = 1 AND COLUMN_NAME IN ('ValidFrom', 'ValidTo'))
         AND NOT EXISTS (SELECT 1 FROM #EngineOwnedColumns g WITH (NOLOCK)
                          WHERE g.TableSchema = TABLE_SCHEMA AND g.TableName = TABLE_NAME
@@ -1775,7 +1775,7 @@ BEGIN TRY
                                                               '@level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ' +
                                                               '@level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''';' AS NVARCHAR(MAX))
                            FROM #Tables t WITH (NOLOCK)
-                           WHERE NOT EXISTS (SELECT * FROM #TableProperties tp WITH (NOLOCK) WHERE t.[Schema] = tp.[Schema] AND SchemaSmith.fn_StripBracketWrapping(t.[Name]) = tp.TableName AND tp.PropertyName = 'ProductName')
+                           WHERE NOT EXISTS (SELECT * FROM #TableProperties tp WITH (NOLOCK) WHERE t.[Schema] = tp.[Schema] AND t.[Name] = '[' + tp.TableName + ']' AND tp.PropertyName = 'ProductName')
                              AND OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NOT NULL  -- and the table physically exists
                              AND t.[MemoryOptimized] = 0  -- memory-optimized tables reject extended properties; their ownership is tracked in SchemaSmith.ProductOwnership below
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')

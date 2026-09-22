@@ -21,6 +21,17 @@ CREATE OR REPLACE PROCEDURE "SchemaSmith"."ParseTableJson"
   (p_TableDefinitions TEXT,
    p_UpdateFillFactor BOOLEAN = FALSE)
   LANGUAGE plpgsql
+  -- Every SchemaSmith procedure turns JIT off, and a test asserts it: the temp tables this builds are
+  -- never ANALYZEd, so queries over them are planned from default row estimates that can clear the JIT
+  -- cost thresholds and spend hundreds of milliseconds compiling a plan that then does almost no work.
+  -- Measured across the PostgreSQL suite when this was first established: 596s -> 208s. The setting is
+  -- function-level, so PostgreSQL saves and restores it around the call and the caller's own jit
+  -- preference is left exactly as it was found.
+  --
+  -- This procedure was written as a pure lift of the shred out of an anonymous DO block, which cannot
+  -- carry the setting -- so omitting it looked like faithfulness to the original. It was not: it made
+  -- this the one procedure in the schema running with JIT on.
+  SET jit = 'off'
 AS $$
 DECLARE
   table_json JSON = p_TableDefinitions::JSON;
