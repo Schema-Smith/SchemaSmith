@@ -151,6 +151,9 @@
   DROP TABLE IF EXISTS #Columns
   -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
   -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
+  -- Columns NORMALIZE fills are NULLable on ingest: each was NOT NULL only because the old SELECT
+  -- applied its ISNULL/COALESCE inline, so the shape recorded the transform rather than a requirement.
+  -- Post-NORMALIZE they are still never NULL.
   CREATE TABLE #Columns
   (
     [_RowId] BIGINT NULL,
@@ -158,19 +161,19 @@
     [TableName] NVARCHAR(200) NULL,
     [ColumnName] NVARCHAR(200) NULL,
     [DataType] NVARCHAR(MAX) NULL,
-    [Nullable] BIT NOT NULL,
+    [Nullable] BIT NULL,
     [NullableDeclared] BIT NULL,
     [Default] NVARCHAR(MAX) NULL,
     [CheckExpression] NVARCHAR(MAX) NULL,
     [ComputedExpression] NVARCHAR(MAX) NULL,
-    [Persisted] BIT NOT NULL,
-    [Sparse] BIT NOT NULL,
-    [FileStream] BIT NOT NULL,
-    [IsColumnSet] BIT NOT NULL,
-    [BackfillExistingRows] BIT NOT NULL,
+    [Persisted] BIT NULL,
+    [Sparse] BIT NULL,
+    [FileStream] BIT NULL,
+    [IsColumnSet] BIT NULL,
+    [BackfillExistingRows] BIT NULL,
     [Collation] NVARCHAR(500) NULL,
     [DataMaskFunction] NVARCHAR(500) NULL,
-    [EncryptionType] NVARCHAR(100) NOT NULL,
+    [EncryptionType] NVARCHAR(100) NULL,
     [EncryptionKey] NVARCHAR(500) NULL,
     [EncryptionAlgorithm] NVARCHAR(500) NULL,
     [OldName] NVARCHAR(200) NULL,
@@ -483,63 +486,18 @@
     FROM #TableDefinitions WITH (NOLOCK);
   
   RAISERROR('Parse Columns from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [NullableDeclared], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [OldName], [NewColumn], [ColumnScript], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [NullableDeclared], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [OldName], [ShouldApplyExpression], [VariantName])
+  -- INGEST ONLY -- raw values straight off the shred, exactly as the other tables do it. Every default,
+  -- bracket-wrap, type canonicalization and the whole ColumnScript build moved to the NORMALIZE pass
+  -- below, so a second ingestion path supplying these rows gets the identical treatment from one
+  -- definition rather than a reimplementation. ColumnScript in particular MUST stay here: it is built
+  -- from fn_ServerMajorVersion(), so it is a fact about the target server, not about the model.
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         t.[Schema], t.[Name] AS [TableName], [ColumnName] = SchemaSmith.fn_SafeBracketWrap(c.[ColumnName]),
-         -- Canonicalize the JSON DataType so the live-vs-declared comparison
-         -- in ModifiedTableQuench (which builds USER_TYPE + DATETIME_PRECISION
-         -- as e.g. "DATETIME2(7)") matches a JSON-declared "DATETIME2" without
-         -- explicit precision. SQL Server defaults DATETIME2 / TIME /
-         -- DATETIMEOFFSET to precision 7 — without canonicalization, every
-         -- re-quench against a column declared with the default precision sees
-         -- false drift and emits a destructive ALTER COLUMN that cascades to
-         -- any dependent computed columns and indexes.
-         [DataType] = CASE WHEN UPPER(LTRIM(RTRIM(SchemaSmith.fn_NormalizeDataType(c.[DataType])))) IN ('DATETIME2', 'TIME', 'DATETIMEOFFSET')
-                            THEN UPPER(LTRIM(RTRIM(SchemaSmith.fn_NormalizeDataType(c.[DataType])))) + '(7)'
-                            ELSE SchemaSmith.fn_NormalizeDataType(c.[DataType]) END,
-         [Nullable] = ISNULL(c.[Nullable], 0),
-         -- The value AS DECLARED, NULL when the package omitted it. A computed column's nullability is the
-         -- engine's to derive unless the author states one, and only an explicit value may narrow it.
-         [NullableDeclared] = c.[Nullable],
-         c.[Default], c.[CheckExpression], c.[ComputedExpression], [Persisted] = ISNULL(c.[Persisted], 0),
-         [Sparse] = ISNULL(c.[Sparse], 0), [FileStream] = ISNULL(c.[FileStream], 0), [IsColumnSet] = ISNULL(c.[IsColumnSet], 0), [BackfillExistingRows] = ISNULL(c.[BackfillExistingRows], 0), [Collation] = RTRIM(ISNULL(c.[Collation], '')), [DataMaskFunction] = RTRIM(ISNULL(c.[DataMaskFunction], '')),
-         [EncryptionType] = ISNULL(c.[EncryptionType], 'NONE'), [EncryptionKey] = RTRIM(ISNULL(c.[EncryptionKey], '')), [EncryptionAlgorithm] = RTRIM(ISNULL(c.[EncryptionAlgorithm], '')),
-         [OldName] = SchemaSmith.fn_SafeBracketWrap(c.[OldName]),
-         -- NewColumn is NOT computed here -- see the DERIVE pass after this INSERT. It is the one value on
-         -- this row that cannot come from the model at all: it asks the LIVE catalog whether the column
-         -- already exists. A C# ingest path can supply every other column and must not attempt this one.
-         CONVERT(BIT, NULL) AS NewColumn,
-         SchemaSmith.fn_SafeBracketWrap(c.[ColumnName]) + ' ' +
-         -- For computed columns only the expression is needed
-         CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) <> '' THEN 'AS (' + ComputedExpression + ')' + CASE WHEN ISNULL(c.[Persisted], 0) = 1 THEN ' PERSISTED' ELSE '' END
-                                                                                                     -- A computed column is created NOT NULL only when the package says so. Defaulting an omitted Nullable to
-                                                                                                     -- NOT NULL here dropped an existing nullable column and failed to put it back when a row's expression
-                                                                                                     -- evaluated to NULL -- the deploy aborted with the column gone.
-                                                                                                     + CASE WHEN ISNULL(c.[Persisted], 0) = 1 AND c.[Nullable] = 0 THEN ' NOT NULL' ELSE '' END
-              -- A column set is an aggregating XML column: no COLLATE/SPARSE/MASKED/ENCRYPTED/NULL/DEFAULT
-              -- clause is legal on it, and SQL Server only accepts adding one (a) at CREATE TABLE time or
-              -- (b) via ALTER TABLE in the SAME statement as the sparse columns it aggregates -- both of
-              -- which this proc already satisfies by batching a table's new columns into one CREATE/ADD
-              -- (see MissingTableAndColumnQuench.sql). A column set added to a table that already has
-              -- standalone sparse columns from a prior deploy is left to the engine's own (clear) rejection
-              -- rather than pre-validated here.
-              WHEN ISNULL([IsColumnSet], 0) = 1 THEN UPPER(SchemaSmith.fn_NormalizeDataType(c.[DataType])) + ' COLUMN_SET FOR ALL_SPARSE_COLUMNS'
-              -- Otherwise build the column definition
-              ELSE UPPER(SchemaSmith.fn_NormalizeDataType(c.[DataType])) +
-                   CASE WHEN ISNULL([FileStream], 0) = 1 THEN ' FILESTREAM' ELSE '' END +
-                   CASE WHEN RTRIM(ISNULL([Collation], '')) NOT IN ('IGNORE', '') THEN ' COLLATE ' + [Collation] ELSE '' END +
-                   CASE WHEN ISNULL([Sparse], 0) = 1 THEN ' SPARSE' ELSE '' END +
-                   -- MASKED WITH / ENCRYPTED WITH are 2016 (major 13). The column DDL is assembled here at parse
-                   -- time, so this is the one place the create-path emit is suppressed below the floor;
-                   -- DegradeUnsupportedFeatures reports the downgrade and neutralizes the source columns for the
-                   -- ALTER/detection passes. Kept gate-consistent with that proc's < 13 check.
-                   CASE WHEN RTRIM(ISNULL([DataMaskFunction], '')) <> '' AND SchemaSmith.fn_ServerMajorVersion() >= 13 THEN ' MASKED WITH (FUNCTION = ''' + [DataMaskFunction] + ''')' ELSE '' END +
-                   CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE' AND SchemaSmith.fn_ServerMajorVersion() >= 13
-                        THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = ''' + [EncryptionAlgorithm] + ''')'
-                        ELSE '' END +
-                   CASE WHEN ISNULL(Nullable, 0) = 1 THEN ' NULL' ELSE ' NOT NULL' END +
-                   CASE WHEN RTRIM(ISNULL([Default], '')) <> '' THEN ' DEFAULT ' + [Default] ELSE '' END
-              END AS [ColumnScript],
+         t.[Schema], t.[Name] AS [TableName], c.[ColumnName],
+         c.[DataType], c.[Nullable], c.[Nullable] AS [NullableDeclared], c.[Default], c.[CheckExpression],
+         c.[ComputedExpression], c.[Persisted], c.[Sparse], c.[FileStream], c.[IsColumnSet],
+         c.[BackfillExistingRows], c.[Collation], c.[DataMaskFunction], c.[EncryptionType],
+         c.[EncryptionKey], c.[EncryptionAlgorithm], c.[OldName],
          c.[ShouldApplyExpression], c.[VariantName]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(Columns) WITH (
@@ -563,6 +521,80 @@
       [VariantName] NVARCHAR(128) '$.VariantName',
       [OldName] NVARCHAR(500) '$.OldName'
       ) c;
+  -- NORMALIZE -- every default, canonicalization and derived value for #Columns, applied to whatever is
+  -- in the table however it got there. Idempotent throughout: fn_SafeBracketWrap strips before it wraps,
+  -- fn_NormalizeDataType is a no-op on an already-normal type, and each ISNULL/RTRIM is a no-op on a
+  -- normalized value. That is what lets the shred hand over raw rows and a client hand over the same raw
+  -- rows and both end up identical.
+  UPDATE #Columns
+    SET [Schema] = SchemaSmith.fn_SafeBracketWrap([Schema]),
+        [TableName] = SchemaSmith.fn_SafeBracketWrap([TableName]),
+        [ColumnName] = SchemaSmith.fn_SafeBracketWrap([ColumnName]),
+        [OldName] = SchemaSmith.fn_SafeBracketWrap([OldName]),
+        [Nullable] = ISNULL([Nullable], 0),
+        [Persisted] = ISNULL([Persisted], 0),
+        [Sparse] = ISNULL([Sparse], 0),
+        [FileStream] = ISNULL([FileStream], 0),
+        [IsColumnSet] = ISNULL([IsColumnSet], 0),
+        [BackfillExistingRows] = ISNULL([BackfillExistingRows], 0),
+        [EncryptionType] = ISNULL([EncryptionType], 'NONE'),
+        [EncryptionKey] = RTRIM(ISNULL([EncryptionKey], '')),
+        [EncryptionAlgorithm] = RTRIM(ISNULL([EncryptionAlgorithm], '')),
+        -- Empty string, not NULL: the XML twin produces '' for these and the two paths are asserted
+        -- equal row for row, so a NULL here is a real difference rather than a cosmetic one.
+        [Collation] = RTRIM(ISNULL([Collation], '')),
+        [DataMaskFunction] = RTRIM(ISNULL([DataMaskFunction], ''))
+
+  -- ColumnScript SECOND, because it is built FROM the values normalized above -- the wrapped name, the
+  -- canonicalized type, the defaulted flags. It also reads fn_ServerMajorVersion(), which makes it a fact
+  -- about the target server rather than about the model, and therefore something no client ingest path
+  -- can supply. This is the line between what the model knows and what only the server knows.
+  UPDATE #Columns
+    SET [ColumnScript] =
+         [ColumnName] + ' ' +
+         -- For computed columns only the expression is needed
+         CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) <> '' THEN 'AS (' + ComputedExpression + ')' + CASE WHEN ISNULL([Persisted], 0) = 1 THEN ' PERSISTED' ELSE '' END
+                                                                                                     -- A computed column is created NOT NULL only when the package says so. Defaulting an omitted Nullable to
+                                                                                                     -- NOT NULL here dropped an existing nullable column and failed to put it back when a row's expression
+                                                                                                     -- evaluated to NULL -- the deploy aborted with the column gone.
+                                                                                                     + CASE WHEN ISNULL([Persisted], 0) = 1 AND [NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END
+              -- A column set is an aggregating XML column: no COLLATE/SPARSE/MASKED/ENCRYPTED/NULL/DEFAULT
+              -- clause is legal on it, and SQL Server only accepts adding one (a) at CREATE TABLE time or
+              -- (b) via ALTER TABLE in the SAME statement as the sparse columns it aggregates -- both of
+              -- which this proc already satisfies by batching a table's new columns into one CREATE/ADD
+              -- (see MissingTableAndColumnQuench.sql). A column set added to a table that already has
+              -- standalone sparse columns from a prior deploy is left to the engine's own (clear) rejection
+              -- rather than pre-validated here.
+              WHEN ISNULL([IsColumnSet], 0) = 1 THEN UPPER(SchemaSmith.fn_NormalizeDataType([DataType])) + ' COLUMN_SET FOR ALL_SPARSE_COLUMNS'
+              -- Otherwise build the column definition
+              ELSE UPPER(SchemaSmith.fn_NormalizeDataType([DataType])) +
+                   CASE WHEN ISNULL([FileStream], 0) = 1 THEN ' FILESTREAM' ELSE '' END +
+                   CASE WHEN RTRIM(ISNULL([Collation], '')) NOT IN ('IGNORE', '') THEN ' COLLATE ' + [Collation] ELSE '' END +
+                   CASE WHEN ISNULL([Sparse], 0) = 1 THEN ' SPARSE' ELSE '' END +
+                   -- MASKED WITH / ENCRYPTED WITH are 2016 (major 13). The column DDL is assembled here at parse
+                   -- time, so this is the one place the create-path emit is suppressed below the floor;
+                   -- DegradeUnsupportedFeatures reports the downgrade and neutralizes the source columns for the
+                   -- ALTER/detection passes. Kept gate-consistent with that proc's < 13 check.
+                   CASE WHEN RTRIM(ISNULL([DataMaskFunction], '')) <> '' AND SchemaSmith.fn_ServerMajorVersion() >= 13 THEN ' MASKED WITH (FUNCTION = ''' + [DataMaskFunction] + ''')' ELSE '' END +
+                   CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE' AND SchemaSmith.fn_ServerMajorVersion() >= 13
+                        THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = ''' + [EncryptionAlgorithm] + ''')'
+                        ELSE '' END +
+                   CASE WHEN ISNULL(Nullable, 0) = 1 THEN ' NULL' ELSE ' NOT NULL' END +
+                   CASE WHEN RTRIM(ISNULL([Default], '')) <> '' THEN ' DEFAULT ' + [Default] ELSE '' END
+              END
+
+  -- DataType canonicalization runs LAST, after ColumnScript has been built from the un-suffixed type.
+  -- ModifiedTableQuench compares against USER_TYPE + DATETIME_PRECISION, which reads back as e.g.
+  -- "DATETIME2(7)", so a JSON-declared "DATETIME2" must canonicalize to match or every re-quench sees
+  -- false drift and emits a destructive ALTER COLUMN. The EMITTED DDL must NOT carry the suffix, which
+  -- is why the order matters rather than being incidental.
+  UPDATE #Columns
+    SET [DataType] = CASE WHEN UPPER(LTRIM(RTRIM(SchemaSmith.fn_NormalizeDataType([DataType])))) IN ('DATETIME2', 'TIME', 'DATETIMEOFFSET')
+                           THEN UPPER(LTRIM(RTRIM(SchemaSmith.fn_NormalizeDataType([DataType])))) + '(7)'
+                           ELSE SchemaSmith.fn_NormalizeDataType([DataType]) END
+
+
+
 
   -- DERIVE -- catalog-dependent, so it runs after the rows exist and however they got there. The
   -- predicate is unchanged from the SELECT it moved out of, with t.* replaced by the row's own carried

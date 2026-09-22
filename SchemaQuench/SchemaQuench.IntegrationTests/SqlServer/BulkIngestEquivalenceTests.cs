@@ -32,6 +32,12 @@ namespace SchemaQuench.IntegrationTests.SqlServer
         // Deliberately exercises what a client row-writer is most likely to get wrong: an absent property
         // versus an explicit null, a nested object read through dotted paths, booleans spelled as JSON
         // literals, a table declaring no children at all, and two tables so row identity has to be right.
+        // DATETIME2 / TIME / DATETIMEOFFSET are here deliberately: those three canonicalize to an
+        // explicit (7) for COMPARISON while the emitted DDL must stay un-suffixed, so they are the case
+        // where getting the normalize ORDER wrong changes the generated SQL. A rewrite did exactly that
+        // and neither equivalence guard caught it, because the fixture had no such column.
+        // The two computed columns cover the other half: an OMITTED Nullable must leave the engine's
+        // derived nullability alone, while an explicit false on a PERSISTED column asks for NOT NULL.
         private const string RichModelJson = @"[{
   ""Schema"":""dbo"",""Name"":""BulkEquivTable"",""CompressionType"":""PAGE"",""IsTemporal"":true,
   ""HistoryTableSchema"":""history"",""HistoryTableName"":""BulkEquivTable_Archive"",""HistoryRetentionPeriod"":""5 YEARS"",
@@ -45,7 +51,12 @@ namespace SchemaQuench.IntegrationTests.SqlServer
   ""Columns"":[
     {""Name"":""Id"",""DataType"":""INT"",""Nullable"":false},
     {""Name"":""Amount"",""DataType"":""DECIMAL(10,2)"",""Nullable"":true,""Default"":""0""},
-    {""Name"":""Note"",""DataType"":""NVARCHAR(200)"",""Nullable"":true,""Collation"":""SQL_Latin1_General_CP1_CI_AS""}
+    {""Name"":""Note"",""DataType"":""NVARCHAR(200)"",""Nullable"":true,""Collation"":""SQL_Latin1_General_CP1_CI_AS""},
+    {""Name"":""Stamp"",""DataType"":""DATETIME2"",""Nullable"":true},
+    {""Name"":""Clock"",""DataType"":""TIME"",""Nullable"":true},
+    {""Name"":""Zoned"",""DataType"":""DATETIMEOFFSET"",""Nullable"":true},
+    {""Name"":""Derived"",""DataType"":""INT"",""ComputedExpression"":""Id + 1"",""Persisted"":true},
+    {""Name"":""DerivedNotNull"",""DataType"":""INT"",""ComputedExpression"":""Id + 2"",""Persisted"":true,""Nullable"":false}
   ],
   ""Indexes"":[
     {""Name"":""PK_BulkEquivTable"",""PrimaryKey"":true,""Unique"":true,""Clustered"":true,""IndexColumns"":""Id""},
