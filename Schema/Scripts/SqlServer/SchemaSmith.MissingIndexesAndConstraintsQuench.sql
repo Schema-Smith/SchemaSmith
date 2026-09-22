@@ -24,7 +24,7 @@ BEGIN TRY
     SET NewColumn = 0
     WHERE NewColumn = 1
       AND EXISTS (SELECT * 
-                    FROM INFORMATION_SCHEMA.COLUMNS c WITH (NOLOCK)
+                    FROM INFORMATION_SCHEMA.COLUMNS c
                     WHERE c.TABLE_SCHEMA = SchemaSmith.fn_StripBracketWrapping(#Columns.[Schema]) 
                       AND c.TABLE_NAME = SchemaSmith.fn_StripBracketWrapping(#Columns.[TableName]) 
                       AND c.COLUMN_NAME = SchemaSmith.fn_StripBracketWrapping(#Columns.[ColumnName]))
@@ -62,15 +62,15 @@ BEGIN TRY
   IF EXISTS (SELECT 1
                FROM #Indexes i WITH (NOLOCK)
                WHERE i.[FileGroup] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
-                 AND NOT EXISTS (SELECT * FROM sys.indexes si WITH (NOLOCK) WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
+                 AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
+                 AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
   BEGIN
     DECLARE @v_IdxFGIndex NVARCHAR(1510), @v_IdxFGName NVARCHAR(500)
     SELECT TOP 1 @v_IdxFGIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxFGName = i.[FileGroup]
       FROM #Indexes i WITH (NOLOCK)
       WHERE i.[FileGroup] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
-        AND NOT EXISTS (SELECT * FROM sys.indexes si WITH (NOLOCK) WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
+        AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
+        AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
     RAISERROR('Index %s declares filegroup %s, which does not exist on this database. SchemaSmith does not create filegroups -- create it on the target first, or correct the declared name.', 16, 1, @v_IdxFGIndex, @v_IdxFGName)
   END
 
@@ -80,13 +80,13 @@ BEGIN TRY
   IF EXISTS (SELECT 1
                FROM #Indexes i WITH (NOLOCK)
                WHERE i.[PartitionScheme] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WITH (NOLOCK) WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme])))
+                 AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme])))
   BEGIN
     DECLARE @v_IdxPsIndex NVARCHAR(1510), @v_IdxPsName NVARCHAR(500)
     SELECT TOP 1 @v_IdxPsIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxPsName = i.[PartitionScheme]
       FROM #Indexes i WITH (NOLOCK)
       WHERE i.[PartitionScheme] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WITH (NOLOCK) WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]))
+        AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]))
     RAISERROR('Index %s declares partition scheme %s, which does not exist on this database. SchemaSmith does not create partition functions or schemes -- create them on the target first, or correct the declared name.', 16, 1, @v_IdxPsIndex, @v_IdxPsName)
   END
 
@@ -175,7 +175,7 @@ BEGIN TRY
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ''', ''created'');'
     FROM #Indexes i WITH (NOLOCK)
     WHERE NOT EXISTS (SELECT *
-                        FROM sys.indexes si WITH (NOLOCK)
+                        FROM sys.indexes si
                         WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                           AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
     ORDER BY i.[Schema], i.[TableName], CASE WHEN i.[Clustered] =  1 THEN 0 ELSE 1 END, i.[IndexName]
@@ -187,7 +187,7 @@ BEGIN TRY
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
       SELECT @@SPID, CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END, i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], 'wouldCreate'
         FROM #Indexes i WITH (NOLOCK)
-        WHERE NOT EXISTS (SELECT * FROM sys.indexes si WITH (NOLOCK)
+        WHERE NOT EXISTS (SELECT * FROM sys.indexes si
                             WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                               AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
 
@@ -200,7 +200,7 @@ BEGIN TRY
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''xmlIndex'', ''' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ''', ''created'');'
     FROM #XmlIndexes i WITH (NOLOCK)
     WHERE NOT EXISTS (SELECT *
-                        FROM sys.xml_indexes si WITH (NOLOCK)
+                        FROM sys.xml_indexes si
                         WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                           AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
     ORDER BY i.[Schema], i.[TableName], CASE WHEN i.IsPrimary =  1 THEN 0 ELSE 1 END, i.[IndexName]
@@ -212,7 +212,7 @@ BEGIN TRY
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
       SELECT @@SPID, 'xmlIndex', i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], 'wouldCreate'
         FROM #XmlIndexes i WITH (NOLOCK)
-        WHERE NOT EXISTS (SELECT * FROM sys.xml_indexes si WITH (NOLOCK)
+        WHERE NOT EXISTS (SELECT * FROM sys.xml_indexes si
                             WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                               AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
 
@@ -295,7 +295,7 @@ BEGIN TRY
                ELSE CONVERT(NVARCHAR(50), CONVERT(INT, ''Unrecognized SYSTEM_VERSIONING retention unit: '' + ISNULL(mt.history_retention_period_unit_desc, CONVERT(NVARCHAR(20), mt.history_retention_period_unit))))
              END
         FROM #Tables T WITH (NOLOCK)
-        JOIN sys.tables mt WITH (NOLOCK) ON mt.[object_id] = OBJECT_ID(T.[Schema] + ''.'' + T.[Name]) AND mt.temporal_type = 2'
+        JOIN sys.tables mt ON mt.[object_id] = OBJECT_ID(T.[Schema] + ''.'' + T.[Name]) AND mt.temporal_type = 2'
 
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Updating history retention period for ' + T.[Schema] + '.' + T.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_RETENTION_PERIOD = ' +
@@ -351,7 +351,7 @@ BEGIN TRY
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''statistic'', ''' + s.[Schema] + '.' + s.[TableName] + '.' + s.[StatisticName] + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #Statistics s WITH (NOLOCK)
                            WHERE NOT EXISTS (SELECT *
-                                               FROM sys.stats ss WITH (NOLOCK)
+                                               FROM sys.stats ss
                                                WHERE ss.[object_id] = OBJECT_ID(s.[Schema] + '.' + s.[TableName])
                                                  AND ss.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName]))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -362,7 +362,7 @@ BEGIN TRY
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
       SELECT @@SPID, 'statistic', s.[Schema] + '.' + s.[TableName] + '.' + s.[StatisticName], 'wouldCreate'
         FROM #Statistics s WITH (NOLOCK)
-        WHERE NOT EXISTS (SELECT * FROM sys.stats ss WITH (NOLOCK)
+        WHERE NOT EXISTS (SELECT * FROM sys.stats ss
                             WHERE ss.[object_id] = OBJECT_ID(s.[Schema] + '.' + s.[TableName])
                               AND ss.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName]))
 
@@ -373,7 +373,7 @@ BEGIN TRY
                            FROM #Columns c WITH (NOLOCK)
                            WHERE RTRIM(ISNULL(c.[Default], '')) <> ''
                              AND NOT EXISTS (SELECT *
-                                               FROM sys.default_constraints dc WITH (NOLOCK)
+                                               FROM sys.default_constraints dc
                                                WHERE dc.[parent_object_id] = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
                                                  AND COL_NAME(dc.parent_object_id, dc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.ColumnName))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -385,7 +385,7 @@ BEGIN TRY
       SELECT @@SPID, 'constraint', c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ' (default)', 'wouldCreate'
         FROM #Columns c WITH (NOLOCK)
         WHERE RTRIM(ISNULL(c.[Default], '')) <> ''
-          AND NOT EXISTS (SELECT * FROM sys.default_constraints dc WITH (NOLOCK)
+          AND NOT EXISTS (SELECT * FROM sys.default_constraints dc
                             WHERE dc.[parent_object_id] = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
                               AND COL_NAME(dc.parent_object_id, dc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.ColumnName))
 
@@ -395,7 +395,7 @@ BEGIN TRY
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', ''' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName] + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #CheckConstraints cc WITH (NOLOCK)
                            WHERE NOT EXISTS (SELECT *
-                                               FROM sys.check_constraints sc WITH (NOLOCK)
+                                               FROM sys.check_constraints sc
                                                WHERE sc.[parent_object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
                                                  AND sc.[name] = SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName]))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -406,7 +406,7 @@ BEGIN TRY
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
       SELECT @@SPID, 'constraint', cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName], 'wouldCreate'
         FROM #CheckConstraints cc WITH (NOLOCK)
-        WHERE NOT EXISTS (SELECT * FROM sys.check_constraints sc WITH (NOLOCK)
+        WHERE NOT EXISTS (SELECT * FROM sys.check_constraints sc
                             WHERE sc.[parent_object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
                               AND sc.[name] = SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName]))
 
@@ -415,7 +415,7 @@ BEGIN TRY
                            FROM #Columns c WITH (NOLOCK)
                            WHERE RTRIM(ISNULL(c.[CheckExpression], '')) <> ''
                              AND NOT EXISTS (SELECT *
-                                               FROM sys.check_constraints sc WITH (NOLOCK)
+                                               FROM sys.check_constraints sc
                                                WHERE sc.[parent_object_id] = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
                                                  AND COL_NAME(sc.parent_object_id, sc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -428,7 +428,7 @@ BEGIN TRY
                                   CASE WHEN RTRIM(ISNULL(fi.[StopList], '')) <> '' THEN ', STOPLIST = ' + [StopList] ELSE '' END + ';' + CHAR(13) + CHAR(10) +
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''fullTextIndex'', ''' + fi.[Schema] + '.' + fi.[TableName] + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #FullTextIndexes fi WITH (NOLOCK)
-                           WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WITH (NOLOCK) WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
+                           WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
@@ -437,7 +437,7 @@ BEGIN TRY
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
       SELECT @@SPID, 'fullTextIndex', fi.[Schema] + '.' + fi.[TableName], 'wouldCreate'
         FROM #FullTextIndexes fi WITH (NOLOCK)
-        WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WITH (NOLOCK) WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
+        WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
 
   SET NOCOUNT OFF
 END TRY

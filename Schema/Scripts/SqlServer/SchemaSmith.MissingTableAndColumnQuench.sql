@@ -20,14 +20,14 @@ BEGIN TRY
                FROM #Tables t WITH (NOLOCK)
                WHERE t.NewTable = 1
                  AND t.[FileGroup] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.[FileGroup])))
+                 AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.[FileGroup])))
   BEGIN
     DECLARE @v_FGTable NVARCHAR(1010), @v_FGName NVARCHAR(500)
     SELECT TOP 1 @v_FGTable = t.[Schema] + '.' + t.[Name], @v_FGName = t.[FileGroup]
       FROM #Tables t WITH (NOLOCK)
       WHERE t.NewTable = 1
         AND t.[FileGroup] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.[FileGroup]))
+        AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.[FileGroup]))
     RAISERROR('Table %s declares filegroup %s, which does not exist on this database. SchemaSmith does not create filegroups -- create it on the target first, or correct the declared name.', 16, 1, @v_FGTable, @v_FGName)
   END
 
@@ -40,7 +40,7 @@ BEGIN TRY
   RAISERROR('Validate memory-optimized prerequisites', 10, 100) WITH NOWAIT
   IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) WHERE t.NewTable = 1 AND t.[MemoryOptimized] = 1)
      AND (CONVERT(INT, ISNULL(SERVERPROPERTY('IsXTPSupported'), 0)) <> 1
-          OR NOT EXISTS (SELECT 1 FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[type] = 'FX'))
+          OR NOT EXISTS (SELECT 1 FROM sys.filegroups fg WHERE fg.[type] = 'FX'))
   BEGIN
     DECLARE @v_MoTable NVARCHAR(1010)
     SELECT TOP 1 @v_MoTable = t.[Schema] + '.' + t.[Name]
@@ -60,7 +60,7 @@ BEGIN TRY
                FROM #Tables t WITH (NOLOCK)
                WHERE t.NewTable = 1
                  AND t.[PartitionScheme] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WITH (NOLOCK)
+                 AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps
                                   WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(t.[PartitionScheme])))
   BEGIN
     DECLARE @v_PsMissingTable NVARCHAR(1010), @v_PsMissingName NVARCHAR(500)
@@ -68,7 +68,7 @@ BEGIN TRY
       FROM #Tables t WITH (NOLOCK)
       WHERE t.NewTable = 1
         AND t.[PartitionScheme] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WITH (NOLOCK)
+        AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps
                          WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(t.[PartitionScheme]))
     RAISERROR('Table %s declares partition scheme %s, which does not exist on this database. SchemaSmith does not create partition functions or schemes -- create them on the target first, or correct the declared name.', 16, 1, @v_PsMissingTable, @v_PsMissingName)
   END
@@ -108,21 +108,21 @@ BEGIN TRY
   -- say which table asked for it.
   IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK)
               WHERE t.[TextImageFileGroup] IS NOT NULL
-                AND NOT EXISTS (SELECT * FROM sys.filegroups fg WITH (NOLOCK)
+                AND NOT EXISTS (SELECT * FROM sys.filegroups fg
                                  WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.[TextImageFileGroup])))
   BEGIN
     DECLARE @v_TiTable NVARCHAR(1010), @v_TiName NVARCHAR(500)
     SELECT TOP 1 @v_TiTable = t.[Schema] + '.' + t.[Name], @v_TiName = t.[TextImageFileGroup]
       FROM #Tables t WITH (NOLOCK)
      WHERE t.[TextImageFileGroup] IS NOT NULL
-       AND NOT EXISTS (SELECT * FROM sys.filegroups fg WITH (NOLOCK)
+       AND NOT EXISTS (SELECT * FROM sys.filegroups fg
                         WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.[TextImageFileGroup]))
     RAISERROR('Table %s declares TextImageFileGroup %s, which does not exist on this database. SchemaSmith does not create filegroups -- create it on the target first, or correct the declared name.', 16, 1, @v_TiTable, @v_TiName)
   END
 
   IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK)
               WHERE t.[FileStreamFileGroup] IS NOT NULL
-                AND NOT EXISTS (SELECT * FROM sys.filegroups fg WITH (NOLOCK)
+                AND NOT EXISTS (SELECT * FROM sys.filegroups fg
                                  WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.[FileStreamFileGroup])
                                    AND fg.[type] = 'FD'))
   BEGIN
@@ -130,7 +130,7 @@ BEGIN TRY
     SELECT TOP 1 @v_FsTable = t.[Schema] + '.' + t.[Name], @v_FsName = t.[FileStreamFileGroup]
       FROM #Tables t WITH (NOLOCK)
      WHERE t.[FileStreamFileGroup] IS NOT NULL
-       AND NOT EXISTS (SELECT * FROM sys.filegroups fg WITH (NOLOCK)
+       AND NOT EXISTS (SELECT * FROM sys.filegroups fg
                         WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.[FileStreamFileGroup])
                           AND fg.[type] = 'FD')
     RAISERROR('Table %s declares FileStreamFileGroup %s, which is not a FILESTREAM filegroup on this database. SchemaSmith does not create filegroups -- create it with CONTAINS FILESTREAM on the target first, or correct the declared name.', 16, 1, @v_FsTable, @v_FsName)

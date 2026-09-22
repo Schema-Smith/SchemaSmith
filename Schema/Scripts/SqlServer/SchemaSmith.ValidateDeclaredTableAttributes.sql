@@ -59,15 +59,15 @@ BEGIN
          SchemaSmith.fn_StripBracketWrapping(t.[PartitionScheme]) AS DeclaredScheme,
          SchemaSmith.fn_StripBracketWrapping(t.[PartitionColumn]) AS DeclaredPartitionColumn,
          (SELECT pc.[name]
-            FROM sys.index_columns pic WITH (NOLOCK)
-            JOIN sys.columns pc WITH (NOLOCK) ON pc.[object_id] = pic.[object_id] AND pc.column_id = pic.column_id
+            FROM sys.index_columns pic
+            JOIN sys.columns pc ON pc.[object_id] = pic.[object_id] AND pc.column_id = pic.column_id
            WHERE pic.[object_id] = si.[object_id] AND pic.index_id = si.index_id
              AND pic.partition_ordinal = 1) AS DeployedPartitionColumn
     INTO #DeployedTablePlacement
     FROM #Tables t WITH (NOLOCK)
-    LEFT JOIN sys.indexes si WITH (NOLOCK)
+    LEFT JOIN sys.indexes si
       ON si.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name]) AND si.index_id IN (0, 1)
-    LEFT JOIN sys.data_spaces ds WITH (NOLOCK) ON ds.data_space_id = si.data_space_id
+    LEFT JOIN sys.data_spaces ds ON ds.data_space_id = si.data_space_id
    WHERE t.NewTable = 0
 
   IF EXISTS (SELECT 1 FROM #DeployedTablePlacement WHERE DeclaredRaw IS NOT NULL AND DeployedSpaceType = 'FG' AND Declared <> DeployedSpace)
@@ -90,8 +90,8 @@ BEGIN
          lds.[name] AS DeployedSpace
     INTO #DeployedLobPlacement
     FROM #Tables t WITH (NOLOCK)
-    JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-    LEFT JOIN sys.data_spaces lds WITH (NOLOCK) ON lds.data_space_id = st.lob_data_space_id
+    JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+    LEFT JOIN sys.data_spaces lds ON lds.data_space_id = st.lob_data_space_id
    WHERE t.NewTable = 0 AND t.[TextImageFileGroup] IS NOT NULL
   UNION ALL
   SELECT t.[Schema] + '.' + t.[Name],
@@ -99,8 +99,8 @@ BEGIN
          SchemaSmith.fn_StripBracketWrapping(t.[FileStreamFileGroup]),
          fds.[name]
     FROM #Tables t WITH (NOLOCK)
-    JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-    LEFT JOIN sys.data_spaces fds WITH (NOLOCK) ON fds.data_space_id = st.filestream_data_space_id
+    JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+    LEFT JOIN sys.data_spaces fds ON fds.data_space_id = st.filestream_data_space_id
    WHERE t.NewTable = 0 AND t.[FileStreamFileGroup] IS NOT NULL
 
   IF EXISTS (SELECT 1 FROM #DeployedLobPlacement WHERE DeployedSpace IS NOT NULL AND Declared <> DeployedSpace)
@@ -129,13 +129,13 @@ BEGIN
   -- of the run, after the column work -- so refuse it up front, naming the table and the setting.
   IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK)
               WHERE t.EnableCDC = 1 AND t.CdcFilegroup IS NOT NULL
-                AND NOT EXISTS (SELECT 1 FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup)))
+                AND NOT EXISTS (SELECT 1 FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup)))
   BEGIN
     DECLARE @v_CdcFgTable NVARCHAR(1010), @v_CdcFgName NVARCHAR(500)
     SELECT TOP 1 @v_CdcFgTable = t.[Schema] + '.' + t.[Name], @v_CdcFgName = SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup)
       FROM #Tables t WITH (NOLOCK)
      WHERE t.EnableCDC = 1 AND t.CdcFilegroup IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup))
+       AND NOT EXISTS (SELECT 1 FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup))
     RAISERROR('Table %s declares CdcFilegroup %s (on the table or as the template default), but this database has no filegroup by that name. Create it (ALTER DATABASE ... ADD FILEGROUP, then ADD FILE ... TO FILEGROUP), or correct CdcFilegroup.', 16, 1, @v_CdcFgTable, @v_CdcFgName)
   END
 
@@ -207,7 +207,7 @@ BEGIN
                ISNULL(NULLIF(t.[GraphType], ''''), ''None''),
                CASE WHEN st.is_node = 1 THEN ''Node'' WHEN st.is_edge = 1 THEN ''Edge'' ELSE ''None'' END
           FROM #Tables t WITH (NOLOCK)
-          JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + ''.'' + t.[Name])
+          JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + ''.'' + t.[Name])
          WHERE t.NewTable = 0'
 
     IF EXISTS (SELECT 1 FROM #DeployedGraphType WHERE Declared <> Deployed)
@@ -240,7 +240,7 @@ BEGIN
                ISNULL(NULLIF(t.[Durability], ''''), ''SCHEMA_AND_DATA''),
                st.durability_desc
           FROM #Tables t WITH (NOLOCK)
-          JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + ''.'' + t.[Name])
+          JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + ''.'' + t.[Name])
          WHERE t.NewTable = 0'
 
     IF EXISTS (SELECT 1 FROM #DeployedMemOpt WHERE DeclaredMO <> DeployedMO)
@@ -287,8 +287,8 @@ BEGIN
     -- version, so this is a static all-version aggregation (FOR XML PATH, not STRING_AGG).
     UPDATE p
       SET colset = STUFF((SELECT ',' + LOWER(c.[name])
-                            FROM sys.index_columns ic WITH (NOLOCK)
-                            JOIN sys.columns c WITH (NOLOCK) ON c.[object_id] = ic.[object_id] AND c.column_id = ic.column_id
+                            FROM sys.index_columns ic
+                            JOIN sys.columns c ON c.[object_id] = ic.[object_id] AND c.column_id = ic.column_id
                             WHERE ic.[object_id] = p.obj_id AND ic.index_id = p.idx_id AND ic.is_included_column = 0
                             ORDER BY LOWER(c.[name])
                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '')
@@ -350,7 +350,7 @@ BEGIN
                                         WHEN ''UPDATABLE_LEDGER_TABLE'' THEN ''Updatable''
                                         ELSE ''Off'' END
           FROM #Tables t WITH (NOLOCK)
-          JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + ''.'' + t.[Name])
+          JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + ''.'' + t.[Name])
          WHERE t.NewTable = 0'
 
     IF EXISTS (SELECT 1 FROM #DeployedLedger WHERE Declared <> Deployed)

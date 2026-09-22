@@ -51,7 +51,7 @@ BEGIN TRY
            'CHECK', SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName]), 'expression',
            cc.[Expression], ck.[definition]
       FROM #CheckConstraints cc WITH (NOLOCK)
-      JOIN sys.check_constraints ck WITH (NOLOCK)
+      JOIN sys.check_constraints ck
         ON ck.parent_object_id = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
        AND ck.[name] = SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName])
      WHERE RTRIM(ISNULL(cc.[Expression], '')) <> ''
@@ -64,7 +64,7 @@ BEGIN TRY
            'CHECK', ck.[name], 'expression',
            c.[CheckExpression], ck.[definition]
       FROM #Columns c WITH (NOLOCK)
-      JOIN sys.check_constraints ck WITH (NOLOCK)
+      JOIN sys.check_constraints ck
         ON ck.parent_object_id = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
        AND ck.parent_column_id <> 0
        AND COL_NAME(ck.parent_object_id, ck.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
@@ -80,7 +80,7 @@ BEGIN TRY
            'COLUMN', SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'computed',
            c.[ComputedExpression], comp.[definition]
       FROM #Columns c WITH (NOLOCK)
-      JOIN sys.computed_columns comp WITH (NOLOCK)
+      JOIN sys.computed_columns comp
         ON comp.[object_id] = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
        AND comp.[name] = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
      WHERE RTRIM(ISNULL(c.[ComputedExpression], '')) <> ''
@@ -92,7 +92,7 @@ BEGIN TRY
            'INDEX', SchemaSmith.fn_StripBracketWrapping(i.[IndexName]), 'filter',
            i.[FilterExpression], ISNULL(SchemaSmith.fn_StripParenWrapping(si.filter_definition), '')
       FROM #Indexes i WITH (NOLOCK)
-      JOIN sys.indexes si WITH (NOLOCK)
+      JOIN sys.indexes si
         ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
        AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
      WHERE RTRIM(ISNULL(i.[FilterExpression], '')) <> ''
@@ -117,7 +117,7 @@ BEGIN TRY
            'STATISTIC', SchemaSmith.fn_StripBracketWrapping(s.[StatisticName]), 'filter',
            s.[FilterExpression], ISNULL(SchemaSmith.fn_StripParenWrapping(st.filter_definition), '')
       FROM #Statistics s WITH (NOLOCK)
-      JOIN sys.stats st WITH (NOLOCK)
+      JOIN sys.stats st
         ON st.[object_id] = OBJECT_ID(s.[Schema] + '.' + s.[TableName])
        AND st.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName])
      WHERE RTRIM(ISNULL(s.[FilterExpression], '')) <> ''

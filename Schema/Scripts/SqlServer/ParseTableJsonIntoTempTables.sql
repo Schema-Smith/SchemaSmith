@@ -620,9 +620,9 @@
   )
   INSERT INTO #ExistingColumns ([Schema], [TableName], [ColumnName])
   SELECT '[' + s.[name] + ']', '[' + o.[name] + ']', '[' + col.[name] + ']'
-    FROM sys.columns col WITH (NOLOCK)
-    JOIN sys.objects o WITH (NOLOCK) ON o.[object_id] = col.[object_id] AND o.[type] = 'U'
-    JOIN sys.schemas s WITH (NOLOCK) ON s.[schema_id] = o.[schema_id];
+    FROM sys.columns col
+    JOIN sys.objects o ON o.[object_id] = col.[object_id] AND o.[type] = 'U'
+    JOIN sys.schemas s ON s.[schema_id] = o.[schema_id];
   -- Keyed on schema+table only: three NVARCHAR(200) columns exceed the 900-byte index key limit, and a
   -- seek to the table with the column name as a residual is the same work -- a table has few columns.
   CREATE CLUSTERED INDEX [ix_ExistingColumns] ON #ExistingColumns ([Schema], [TableName]);

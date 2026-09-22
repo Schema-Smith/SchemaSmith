@@ -32,7 +32,7 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
   EXEC sp_executesql N'
     SELECT @p_Ledger = CASE ledger_type_desc WHEN ''APPEND_ONLY_LEDGER_TABLE'' THEN ''AppendOnly''
                                              WHEN ''UPDATABLE_LEDGER_TABLE'' THEN ''Updatable'' END
-      FROM sys.tables WITH (NOLOCK)
+      FROM sys.tables
      WHERE [object_id] = OBJECT_ID(@p_Schema + ''.'' + @p_Table);',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Ledger NVARCHAR(12) OUTPUT',
     @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Ledger = @v_Ledger OUTPUT
@@ -41,13 +41,13 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
 -- a non-default one -- filtering to non-default first would report an older instance's placement. NULL (the
 -- catalog's "default filegroup") and the default itself both extract no key, so existing packages are unchanged.
 DECLARE @v_CdcFilegroup NVARCHAR(260) = NULL
-IF EXISTS (SELECT 1 FROM sys.databases WITH (NOLOCK) WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
+IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   EXEC sp_executesql N'
     SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN ''['' + fg.[name] + '']'' END
       FROM (SELECT TOP 1 ct.filegroup_name FROM cdc.change_tables ct WITH (NOLOCK)
              WHERE ct.source_object_id = OBJECT_ID(@p_Schema + ''.'' + @p_Table)
              ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
-      JOIN sys.filegroups fg WITH (NOLOCK) ON fg.[name] = newest.filegroup_name;',
+      JOIN sys.filegroups fg ON fg.[name] = newest.filegroup_name;',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Fg NVARCHAR(260) OUTPUT',
     @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Fg = @v_CdcFilegroup OUTPUT
 SELECT [Line] FROM SchemaSmith.fn_FormatJson(REPLACE(REPLACE(REPLACE((
@@ -80,8 +80,8 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        -- the target's default filegroup is) stays exactly as minimal as before this change. Filegroups
        -- predate every supported SQL Server version -- no version gate needed.
        (SELECT '[' + fg.[name] + ']'
-          FROM sys.indexes tfg WITH (NOLOCK)
-          JOIN sys.filegroups fg WITH (NOLOCK) ON fg.data_space_id = tfg.data_space_id
+          FROM sys.indexes tfg
+          JOIN sys.filegroups fg ON fg.data_space_id = tfg.data_space_id
          WHERE tfg.[object_id] = st.[object_id]
            AND tfg.index_id IN (0, 1)
            AND fg.is_default = 0) AS [FileGroup],
@@ -95,31 +95,31 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        -- sys.data_spaces.type = 'PS' and sys.index_columns.partition_ordinal both predate the supported
        -- floor, so no version gate. partition_ordinal = 1 because SQL Server partitions on ONE column.
        (SELECT '[' + ds.[name] + ']'
-          FROM sys.indexes tps WITH (NOLOCK)
-          JOIN sys.data_spaces ds WITH (NOLOCK) ON ds.data_space_id = tps.data_space_id
+          FROM sys.indexes tps
+          JOIN sys.data_spaces ds ON ds.data_space_id = tps.data_space_id
          WHERE tps.[object_id] = st.[object_id]
            AND tps.index_id IN (0, 1)
            AND ds.[type] = 'PS') AS [PartitionScheme],
        (SELECT '[' + pc.[name] + ']'
-          FROM sys.indexes tps WITH (NOLOCK)
-          JOIN sys.data_spaces ds WITH (NOLOCK) ON ds.data_space_id = tps.data_space_id
-          JOIN sys.index_columns pic WITH (NOLOCK) ON pic.[object_id] = tps.[object_id]
+          FROM sys.indexes tps
+          JOIN sys.data_spaces ds ON ds.data_space_id = tps.data_space_id
+          JOIN sys.index_columns pic ON pic.[object_id] = tps.[object_id]
                                                   AND pic.index_id = tps.index_id
                                                   AND pic.partition_ordinal = 1
-          JOIN sys.columns pc WITH (NOLOCK) ON pc.[object_id] = pic.[object_id]
+          JOIN sys.columns pc ON pc.[object_id] = pic.[object_id]
                                            AND pc.column_id = pic.column_id
          WHERE tps.[object_id] = st.[object_id]
            AND tps.index_id IN (0, 1)
            AND ds.[type] = 'PS') AS [PartitionColumn],
        -- FILESTREAM_ON. Read from the table's filestream data space, which is NOT implied by having
        -- FILESTREAM columns: dropping the last one leaves the assignment behind.
-       (SELECT ds.[name] FROM sys.data_spaces ds WITH (NOLOCK)
+       (SELECT ds.[name] FROM sys.data_spaces ds
          WHERE ds.data_space_id = st.filestream_data_space_id) AS [FileStreamFileGroup],
        -- TEXTIMAGE_ON. Like FILESTREAM_ON above, read from the table's own data space rather than
        -- inferred from its columns -- dropping the last large-object column leaves the assignment.
        -- Only emitted when it is NOT the default filegroup, so an ordinary table gains no key.
-       (SELECT lds.[name] FROM sys.data_spaces lds WITH (NOLOCK)
-         JOIN sys.filegroups lfg WITH (NOLOCK) ON lfg.data_space_id = lds.data_space_id AND lfg.is_default = 0
+       (SELECT lds.[name] FROM sys.data_spaces lds
+         JOIN sys.filegroups lfg ON lfg.data_space_id = lds.data_space_id AND lfg.is_default = 0
         WHERE lds.data_space_id = st.lob_data_space_id) AS [TextImageFileGroup],
        st.is_tracked_by_cdc AS [EnableCDC],
        @v_CdcFilegroup AS [CdcFilegroup],
@@ -195,7 +195,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                        CAST(CASE WHEN c.IS_NULLABLE = 'Yes' THEN 1 ELSE 0 END AS BIT) AS [Nullable],
 		               NULLIF(SchemaSmith.fn_StripParenWrapping(COLUMN_DEFAULT), 'NULL') AS [Default],
                        (SELECT SchemaSmith.fn_StripParenWrapping([definition])
-                          FROM sys.check_constraints WITH (NOLOCK)
+                          FROM sys.check_constraints
                           WHERE parent_object_id = st.[object_id]
                             AND parent_column_id = sc.column_id) AS [CheckExpression],
                        SchemaSmith.fn_StripParenWrapping(cc.[definition]) AS ComputedExpression,
@@ -209,21 +209,21 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                        ISNULL(mc.masking_function, '') COLLATE DATABASE_DEFAULT AS DataMaskFunction,
                        ISNULL(sc.encryption_type_desc, 'NONE') COLLATE DATABASE_DEFAULT AS EncryptionType,
                        ISNULL((SELECT '[' + cek.[name] + ']'
-                                 FROM sys.column_encryption_keys cek WITH (NOLOCK)
+                                 FROM sys.column_encryption_keys cek
                                 WHERE cek.column_encryption_key_id = sc.column_encryption_key_id), '') COLLATE DATABASE_DEFAULT AS EncryptionKey,
                        ISNULL(sc.encryption_algorithm_name, '') COLLATE DATABASE_DEFAULT AS EncryptionAlgorithm,
                        '' AS [OldName],
                        JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Column', c.COLUMN_NAME) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
-                  FROM INFORMATION_SCHEMA.COLUMNS c WITH (NOLOCK)
-                  JOIN sys.columns sc WITH (NOLOCK) ON sc.[object_id] = st.[object_id] AND sc.[name] = c.COLUMN_NAME
+                  FROM INFORMATION_SCHEMA.COLUMNS c
+                  JOIN sys.columns sc ON sc.[object_id] = st.[object_id] AND sc.[name] = c.COLUMN_NAME
                   JOIN (SELECT CASE WHEN SCHEMA_NAME(typ.[schema_id]) IN ('sys', 'dbo')
                                     THEN '' ELSE SCHEMA_NAME(typ.[schema_id]) + '.' END + typ.[name] AS USER_TYPE, typ.user_type_id
-                          FROM sys.types typ WITH (NOLOCK)) ut ON ut.user_type_id = sc.user_type_id
-                  LEFT JOIN sys.computed_columns cc WITH (NOLOCK) ON cc.[object_id] = st.[object_id]
+                          FROM sys.types typ) ut ON ut.user_type_id = sc.user_type_id
+                  LEFT JOIN sys.computed_columns cc ON cc.[object_id] = st.[object_id]
                                                                  AND cc.[name] = c.COLUMN_NAME
-                  LEFT JOIN sys.identity_columns ic WITH (NOLOCK) ON ic.[object_id] = st.[object_id]
+                  LEFT JOIN sys.identity_columns ic ON ic.[object_id] = st.[object_id]
                                                                  AND ic.[Name] = c.COLUMN_NAME
-                  LEFT JOIN sys.masked_columns mc WITH (NOLOCK) ON mc.[object_id] = st.[object_id]
+                  LEFT JOIN sys.masked_columns mc ON mc.[object_id] = st.[object_id]
                                                                AND mc.[name] = c.COLUMN_NAME
                   WHERE c.TABLE_SCHEMA = t.TABLE_SCHEMA
                     AND c.TABLE_NAME = t.TABLE_NAME
@@ -269,7 +269,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                -- its indexes are commonly split across filegroups on purpose, so this reads si's own
                -- data_space_id independently of the table's.
                (SELECT '[' + fg.[name] + ']'
-                  FROM sys.filegroups fg WITH (NOLOCK)
+                  FROM sys.filegroups fg
                  WHERE fg.data_space_id = si.data_space_id
                    AND fg.is_default = 0) AS [FileGroup],
                -- Partition placement (#partitioning, K1): read from si's OWN data space, independently of
@@ -277,22 +277,22 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                -- partitioned table may sit on one filegroup, and an index on an ordinary heap may itself be
                -- partitioned -- so inferring either from the other would lose a real design.
                (SELECT '[' + ds.[name] + ']'
-                  FROM sys.data_spaces ds WITH (NOLOCK)
+                  FROM sys.data_spaces ds
                  WHERE ds.data_space_id = si.data_space_id
                    AND ds.[type] = 'PS') AS [PartitionScheme],
                (SELECT '[' + pc.[name] + ']'
-                  FROM sys.data_spaces ds WITH (NOLOCK)
-                  JOIN sys.index_columns pic WITH (NOLOCK) ON pic.[object_id] = si.[object_id]
+                  FROM sys.data_spaces ds
+                  JOIN sys.index_columns pic ON pic.[object_id] = si.[object_id]
                                                           AND pic.index_id = si.index_id
                                                           AND pic.partition_ordinal = 1
-                  JOIN sys.columns pc WITH (NOLOCK) ON pc.[object_id] = pic.[object_id]
+                  JOIN sys.columns pc ON pc.[object_id] = pic.[object_id]
                                                    AND pc.column_id = pic.column_id
                  WHERE ds.data_space_id = si.data_space_id
                    AND ds.[type] = 'PS') AS [PartitionColumn],
                -- BUCKET_COUNT for a HASH index on a memory-optimized table (#J1). sys.hash_indexes is 2014;
                -- safe statically here because the JSON path is 2016+. NULL for any non-hash index, so an
                -- ordinary index gains no key.
-               (SELECT hi.bucket_count FROM sys.hash_indexes hi WITH (NOLOCK)
+               (SELECT hi.bucket_count FROM sys.hash_indexes hi
                  WHERE hi.[object_id] = si.[object_id] AND hi.index_id = si.index_id) AS [BucketCount],
                is_primary_key AS [PrimaryKey],
                is_unique AS [Unique],
@@ -303,10 +303,10 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                CONVERT(BIT, ignore_dup_key) AS [IgnoreDuplicateKey],
                CONVERT(BIT, is_padded) AS [PadIndex],
                (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
-                  FROM sys.index_columns ic WITH (NOLOCK)
+                  FROM sys.index_columns ic
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0) AS [IndexColumns],
                (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY index_column_id)
-                  FROM sys.index_columns ic WITH (NOLOCK)
+                  FROM sys.index_columns ic
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1) AS [IncludeColumns],
 			   CASE WHEN has_filter = 1 THEN SchemaSmith.fn_StripParenWrapping(filter_definition) ELSE NULL END AS [FilterExpression],
 			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + [Value] + '"' AS NVARCHAR(MAX)), ',')
@@ -315,9 +315,9 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                                 FULL OUTER JOIN fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', si.[Name]) c ON i.[Name] = c.[Name]) x
                         WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames))
                    + '}}') AS [Extensions]
-          FROM sys.indexes si WITH (NOLOCK)
+          FROM sys.indexes si
           WHERE si.[object_id] = st.[object_id]
-            AND NOT EXISTS (SELECT * FROM sys.xml_indexes xi WITH (NOLOCK) WHERE xi.[object_id] = si.[object_id] AND xi.index_id = si.index_id)
+            AND NOT EXISTS (SELECT * FROM sys.xml_indexes xi WHERE xi.[object_id] = si.[object_id] AND xi.index_id = si.index_id)
             AND is_hypothetical = 0
             AND is_disabled = 0
             AND index_id > 0
@@ -325,8 +325,8 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
             -- graph_id column. Both names carry a per-table GUID, so emitting the index is the
             -- same undeployable-package problem as emitting the column, and excluding the columns
             -- alone leaves an index pointing at one that is no longer declared.
-            AND NOT EXISTS (SELECT 1 FROM sys.index_columns gic WITH (NOLOCK)
-                            JOIN sys.columns gc WITH (NOLOCK)
+            AND NOT EXISTS (SELECT 1 FROM sys.index_columns gic
+                            JOIN sys.columns gc
                               ON gc.[object_id] = gic.[object_id] AND gc.column_id = gic.column_id
                            WHERE gic.[object_id] = si.[object_id] AND gic.index_id = si.index_id
                              AND gc.graph_type IS NOT NULL)
@@ -338,34 +338,34 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                (SELECT '[' + [Name] COLLATE DATABASE_DEFAULT + ']' FROM sys.xml_indexes i2 WHERE i2.[object_id] = i.[object_id] AND i2.index_id = i.using_xml_index_id AND i.xml_index_type = 1) AS [PrimaryIndex],
                i.secondary_type_desc COLLATE DATABASE_DEFAULT AS [SecondaryIndexType],
 			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + x.[Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
-          FROM sys.xml_indexes i WITH (NOLOCK)
-          JOIN sys.index_columns ic WITH (NOLOCK) ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
+          FROM sys.xml_indexes i
+          JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
           WHERE i.[object_id] = st.[object_id]
           ORDER BY i.[Name]
           FOR JSON AUTO) AS [XmlIndexes],
 	   (SELECT '[' + [Name] + ']' AS [Name],
                (SELECT STRING_AGG(CAST('[' + COL_NAME(fc.[parent_object_id], fc.parent_column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY fc.constraint_column_id)
-                            FROM sys.foreign_key_columns fc WITH (NOLOCK)
+                            FROM sys.foreign_key_columns fc
                             WHERE fk.[object_id] = fc.[constraint_object_id]) AS [Columns],
                '[' + OBJECT_SCHEMA_NAME(referenced_object_id) + ']' AS RelatedTableSchema,
                '[' + OBJECT_NAME(referenced_object_id) + ']' AS RelatedTable,
                (SELECT STRING_AGG(CAST('[' + COL_NAME(fc.[referenced_object_id], fc.referenced_column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY fc.constraint_column_id)
-                            FROM sys.foreign_key_columns fc WITH (NOLOCK)
+                            FROM sys.foreign_key_columns fc
                             WHERE fk.[object_id] = fc.[constraint_object_id]) AS [RelatedColumns],
                REPLACE(fk.delete_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT AS [DeleteAction],
                REPLACE(fk.update_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT AS [UpdateAction],
                JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', fk.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
-          FROM sys.foreign_keys fk WITH (NOLOCK)
+          FROM sys.foreign_keys fk
           WHERE fk.parent_object_id = st.[object_id]
           ORDER BY [Name]
           FOR JSON AUTO) AS [ForeignKeys],
        (SELECT '[' + [Name] + ']' AS [Name], 
                (SELECT STRING_AGG(CAST('[' + COL_NAME(sc.[object_id], sc.column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY sc.stats_column_id)
-                  FROM sys.stats_columns sc WITH (NOLOCK)
+                  FROM sys.stats_columns sc
                   WHERE s.[object_id] = sc.[object_id] AND s.stats_id = sc.stats_id) AS [Columns],
                SchemaSmith.fn_StripParenWrapping([filter_definition]) AS FilterExpression,
 			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Statistic', s.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
-          FROM sys.stats s WITH (NOLOCK)
+          FROM sys.stats s
           WHERE [object_id] = st.[object_id]
             AND auto_created = 0
             AND user_created = 1
@@ -377,15 +377,15 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        (SELECT '[' + [Name] + ']' AS [Name],
                SchemaSmith.fn_StripParenWrapping([definition]) AS [Expression],
                JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', cc.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
-          FROM sys.check_constraints cc WITH (NOLOCK)
+          FROM sys.check_constraints cc
           WHERE parent_object_id = st.[object_id]
             AND parent_column_id = 0
           ORDER BY [Name]
           FOR JSON AUTO) AS [CheckConstraints],
-       (SELECT FullTextCatalog = '[' + (SELECT c.[name] FROM sys.fulltext_catalogs c WITH (NOLOCK) WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id) + ']',
-               KeyIndex = '[' + (SELECT i.[Name] FROM sys.indexes i WITH (NOLOCK) WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id]) + ']',
+       (SELECT FullTextCatalog = '[' + (SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id) + ']',
+               KeyIndex = '[' + (SELECT i.[Name] FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id]) + ']',
                ChangeTracking = change_tracking_state_desc,
-               [StopList] = '[' + (SELECT fs.[name] FROM sys.fulltext_stoplists fs WITH (NOLOCK) WHERE fs.stoplist_id = fi.stoplist_id) + ']',
+               [StopList] = '[' + (SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id) + ']',
                (SELECT STRING_AGG(CAST('[' + COL_NAME(fc.[object_id], fc.column_id) + ']' +
                                        CASE WHEN fc.type_column_id IS NOT NULL
                                             THEN ' TYPE COLUMN [' + COL_NAME(fc.[object_id], fc.type_column_id) + ']'
@@ -409,18 +409,18 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                                        CASE WHEN fc.statistical_semantics = 1
                                             THEN ' STATISTICAL_SEMANTICS' ELSE '' END
                                              AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY COL_NAME(fc.[object_id], fc.column_id))
-                  FROM sys.fulltext_index_columns fc WITH (NOLOCK)
-                  JOIN sys.columns c WITH (NOLOCK) ON c.[object_id] = fc.[object_id] AND c.column_id = fc.column_id
+                  FROM sys.fulltext_index_columns fc
+                  JOIN sys.columns c ON c.[object_id] = fc.[object_id] AND c.column_id = fc.column_id
                   WHERE fi.[object_id] = fc.[object_id]) AS [Columns]
-          FROM sys.fulltext_indexes fi WITH (NOLOCK)
+          FROM sys.fulltext_indexes fi
           WHERE fi.[object_id] = st.[object_id]
           FOR JSON PATH,WITHOUT_ARRAY_WRAPPER) AS [FullTextIndex],
 	   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, default, default) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
-  FROM INFORMATION_SCHEMA.TABLES t WITH (NOLOCK)
-  JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(@p_Schema + '.' + @p_Table)
-  LEFT JOIN sys.change_tracking_tables ctt WITH (NOLOCK) ON ctt.[object_id] = st.[object_id]
-  LEFT JOIN sys.tables h WITH (NOLOCK) ON h.[object_id] = st.history_table_id
-  LEFT JOIN sys.schemas hs WITH (NOLOCK) ON hs.[schema_id] = h.[schema_id]
+  FROM INFORMATION_SCHEMA.TABLES t
+  JOIN sys.tables st ON st.[object_id] = OBJECT_ID(@p_Schema + '.' + @p_Table)
+  LEFT JOIN sys.change_tracking_tables ctt ON ctt.[object_id] = st.[object_id]
+  LEFT JOIN sys.tables h ON h.[object_id] = st.history_table_id
+  LEFT JOIN sys.schemas hs ON hs.[schema_id] = h.[schema_id]
   WHERE TABLE_NAME = @p_Table
     AND TABLE_SCHEMA = @p_Schema
   FOR JSON AUTO, WITHOUT_ARRAY_WRAPPER
