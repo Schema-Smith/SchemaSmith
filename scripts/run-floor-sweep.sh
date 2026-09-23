@@ -137,8 +137,16 @@ if ! dotnet build SchemaSmith.sln -c Release -v q --nologo >/dev/null 2>&1; then
   exit 1
 fi
 
+# FLOOR_FILTER runs a SUBSET by band name, comma-separated:
+#   FLOOR_FILTER=band-mysql-9,band-mariadb-12 bash scripts/run-floor-sweep.sh
+# For re-running the bands a change actually affects instead of the whole list. The full sweep is
+# still what certifies a release -- this exists so that "I added two bands" does not mean re-running
+# sixteen that already passed on the same commit.
 for f in "${FLOORS[@]}"; do
   IFS=':' read -r name image tag port category <<< "$f"
+  if [ -n "${FLOOR_FILTER:-}" ] && ! printf '%s' ",$FLOOR_FILTER," | grep -q ",$name,"; then
+    continue
+  fi
   echo ""
   echo "--- $image:$tag  (port $port, category $category) ---"
   docker rm -f "$name" >/dev/null 2>&1
