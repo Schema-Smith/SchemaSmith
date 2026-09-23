@@ -60,45 +60,45 @@
   CREATE TABLE #TableDefinitions
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(200) NULL,
-    [Name] NVARCHAR(200) NULL,
-    [CompressionType] NVARCHAR(100) NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Name] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
     [XmlCompression] BIT NULL,
     [IsTemporal] BIT NULL,
     [UpdateFillFactor] BIT NULL,
-    [HistoryTableSchema] NVARCHAR(200) NULL,
-    [HistoryTableName] NVARCHAR(200) NULL,
-    [HistoryRetentionPeriod] NVARCHAR(50) NULL,
-    [FileGroup] NVARCHAR(200) NULL,
-    [PartitionScheme] NVARCHAR(200) NULL,
-    [PartitionColumn] NVARCHAR(200) NULL,
-    [FileStreamFileGroup] NVARCHAR(200) NULL,
-    [TextImageFileGroup] NVARCHAR(200) NULL,
-    [CdcFilegroup] NVARCHAR(200) NULL,
-    [Indexes] NVARCHAR(MAX) NULL,
-    [XmlIndexes] NVARCHAR(MAX) NULL,
-    [Columns] NVARCHAR(MAX) NULL,
-    [Statistics] NVARCHAR(MAX) NULL,
-    [FullTextIndex] NVARCHAR(MAX) NULL,
-    [ForeignKeys] NVARCHAR(MAX) NULL,
-    [CheckConstraints] NVARCHAR(MAX) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL,
-    [GraphType] NVARCHAR(10) NULL,
-    [Ledger] NVARCHAR(12) NULL,
+    [HistoryTableSchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [HistoryTableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [HistoryRetentionPeriod] NVARCHAR(50) COLLATE DATABASE_DEFAULT NULL,
+    [FileGroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [PartitionScheme] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [PartitionColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [FileStreamFileGroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TextImageFileGroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [CdcFilegroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Indexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [XmlIndexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [Columns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [Statistics] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [FullTextIndex] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [ForeignKeys] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [CheckConstraints] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    [GraphType] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Ledger] NVARCHAR(12) COLLATE DATABASE_DEFAULT NULL,
     [MemoryOptimized] BIT NULL,
-    [Durability] NVARCHAR(20) NULL,
+    [Durability] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
     [EnableCDC] BIT NULL,
     [EnableChangeTracking] BIT NULL,
     [TrackColumnsUpdated] BIT NULL,
-    [OldName] NVARCHAR(200) NULL,
+    [OldName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [DropColumnsRemovedFromProduct] BIT NULL,
     [DropForeignKeysRemovedFromProduct] BIT NULL,
     [DropCheckConstraintsRemovedFromProduct] BIT NULL,
     [DropExcludeConstraintsRemovedFromProduct] BIT NULL,
     [DropStatisticsRemovedFromProduct] BIT NULL,
     [DropIndexesRemovedFromProduct] BIT NULL,
-    [RebuildPolicyMode] NVARCHAR(20) NULL,
+    [RebuildPolicyMode] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
     [RebuildPolicyThreshold] INT NULL,
     [RebuildPolicyOnOrderMismatch] BIT NULL,
     [RebuildPolicySpecified] BIT NULL,
@@ -110,30 +110,30 @@
   -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
   CREATE TABLE #Tables
   (
-    [Schema] NVARCHAR(200) NULL,
-    [Name] NVARCHAR(200) NULL,
-    [CompressionType] NVARCHAR(100) NOT NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Name] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NOT NULL,
     [XmlCompression] BIT NOT NULL,
     [IsTemporal] BIT NOT NULL,
-    [HistoryTableSchema] NVARCHAR(200) NULL,
-    [HistoryTableName] NVARCHAR(200) NULL,
-    [HistoryRetentionPeriod] NVARCHAR(50) NULL,
-    [FileGroup] NVARCHAR(200) NULL,
-    [PartitionScheme] NVARCHAR(200) NULL,
-    [PartitionColumn] NVARCHAR(200) NULL,
-    [FileStreamFileGroup] NVARCHAR(200) NULL,
-    [TextImageFileGroup] NVARCHAR(200) NULL,
+    [HistoryTableSchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [HistoryTableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [HistoryRetentionPeriod] NVARCHAR(50) COLLATE DATABASE_DEFAULT NULL,
+    [FileGroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [PartitionScheme] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [PartitionColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [FileStreamFileGroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TextImageFileGroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [UpdateFillFactor] BIT NOT NULL,
     [EnableCDC] BIT NOT NULL,
-    [CdcFilegroup] NVARCHAR(200) NULL,
+    [CdcFilegroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [EnableChangeTracking] BIT NOT NULL,
     [TrackColumnsUpdated] BIT NOT NULL,
-    [GraphType] NVARCHAR(10) NULL,
-    [Ledger] NVARCHAR(12) NULL,
+    [GraphType] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Ledger] NVARCHAR(12) COLLATE DATABASE_DEFAULT NULL,
     [MemoryOptimized] BIT NOT NULL,
-    [Durability] NVARCHAR(20) NULL,
-    [OldName] NVARCHAR(200) NULL,
-    [VariantName] NVARCHAR(128) NULL,
+    [Durability] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+    [OldName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
     [NewTable] BIT NULL,
     [DropColumnsRemovedFromProduct] BIT NULL,
     [DropForeignKeysRemovedFromProduct] BIT NULL,
@@ -141,7 +141,7 @@
     [DropExcludeConstraintsRemovedFromProduct] BIT NULL,
     [DropStatisticsRemovedFromProduct] BIT NULL,
     [DropIndexesRemovedFromProduct] BIT NULL,
-    [RebuildPolicyMode] NVARCHAR(20) NULL,
+    [RebuildPolicyMode] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
     [RebuildPolicyThreshold] INT NULL,
     [RebuildPolicyOnOrderMismatch] BIT NULL,
     [RebuildPolicySpecified] BIT NULL,
@@ -157,30 +157,30 @@
   CREATE TABLE #Columns
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(200) NULL,
-    [TableName] NVARCHAR(200) NULL,
-    [ColumnName] NVARCHAR(200) NULL,
-    [DataType] NVARCHAR(MAX) NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [ColumnName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [DataType] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [Nullable] BIT NULL,
     [NullableDeclared] BIT NULL,
-    [Default] NVARCHAR(MAX) NULL,
-    [CheckExpression] NVARCHAR(MAX) NULL,
-    [ComputedExpression] NVARCHAR(MAX) NULL,
+    [Default] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [CheckExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [ComputedExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [Persisted] BIT NULL,
     [Sparse] BIT NULL,
     [FileStream] BIT NULL,
     [IsColumnSet] BIT NULL,
     [BackfillExistingRows] BIT NULL,
-    [Collation] NVARCHAR(500) NULL,
-    [DataMaskFunction] NVARCHAR(500) NULL,
-    [EncryptionType] NVARCHAR(100) NULL,
-    [EncryptionKey] NVARCHAR(500) NULL,
-    [EncryptionAlgorithm] NVARCHAR(500) NULL,
-    [OldName] NVARCHAR(200) NULL,
+    [Collation] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [DataMaskFunction] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [EncryptionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
+    [EncryptionKey] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [EncryptionAlgorithm] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [OldName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [NewColumn] BIT NULL,
-    [ColumnScript] NVARCHAR(MAX) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
+    [ColumnScript] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #Indexes
@@ -191,10 +191,10 @@
   CREATE TABLE #Indexes
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(200) NULL,
-    [TableName] NVARCHAR(200) NULL,
-    [IndexName] NVARCHAR(200) NULL,
-    [CompressionType] NVARCHAR(100) NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [IndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
     [XmlCompression] BIT NULL,
     [PrimaryKey] BIT NULL,
     [Unique] INT NULL,
@@ -202,18 +202,18 @@
     [Clustered] BIT NULL,
     [ColumnStore] BIT NULL,
     [FillFactor] TINYINT NULL,
-    [FilterExpression] NVARCHAR(MAX) NULL,
-    [FileGroup] NVARCHAR(200) NULL,
-    [PartitionScheme] NVARCHAR(200) NULL,
-    [PartitionColumn] NVARCHAR(200) NULL,
+    [FilterExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [FileGroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [PartitionScheme] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [PartitionColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [BucketCount] INT NULL,
     [UpdateFillFactor] BIT NULL,
-    [IndexColumns] NVARCHAR(MAX) NULL,
-    [IncludeColumns] NVARCHAR(MAX) NULL,
+    [IndexColumns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [IncludeColumns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [IgnoreDuplicateKey] BIT NULL,
     [PadIndex] BIT NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #XmlIndexes
@@ -222,15 +222,15 @@
   CREATE TABLE #XmlIndexes
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(200) NULL,
-    [TableName] NVARCHAR(200) NULL,
-    [IndexName] NVARCHAR(200) NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [IndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [IsPrimary] BIT NULL,
-    [Column] NVARCHAR(200) NULL,
-    [PrimaryIndex] NVARCHAR(200) NULL,
-    [SecondaryIndexType] NVARCHAR(500) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
+    [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [PrimaryIndex] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [SecondaryIndexType] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #ForeignKeys
@@ -244,21 +244,21 @@
   CREATE TABLE #ForeignKeys
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(200) NULL,
-    [TableName] NVARCHAR(200) NULL,
-    [KeyName] NVARCHAR(200) NULL,
-    [RelatedTableSchema] NVARCHAR(200) NULL,
-    [RelatedTable] NVARCHAR(200) NULL,
-    [Columns] NVARCHAR(MAX) NULL,
-    [RelatedColumns] NVARCHAR(MAX) NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [KeyName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [RelatedTableSchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [RelatedTable] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Columns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [RelatedColumns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     -- NULLable on ingest, non-null after NORMALIZE. The measured shape had these NOT NULL because the
     -- old SELECT applied ISNULL(..., 'NO ACTION') inline -- the constraint was recording the transform,
     -- not a requirement. Ingest now carries raw values, so the column has to admit them; the value
     -- every consumer sees is unchanged, which is what the equality harness checks.
-    [DeleteAction] NVARCHAR(20) NULL,
-    [UpdateAction] NVARCHAR(20) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
+    [DeleteAction] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+    [UpdateAction] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #CheckConstraints
@@ -267,12 +267,12 @@
   CREATE TABLE #CheckConstraints
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(200) NULL,
-    [TableName] NVARCHAR(200) NULL,
-    [ConstraintName] NVARCHAR(500) NULL,
-    [Expression] NVARCHAR(MAX) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [ConstraintName] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [Expression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #Statistics
@@ -281,15 +281,15 @@
   CREATE TABLE #Statistics
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(200) NULL,
-    [TableName] NVARCHAR(200) NULL,
-    [StatisticName] NVARCHAR(200) NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [StatisticName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     -- NULLable on ingest, defaulted by NORMALIZE -- NOT NULL recorded the old inline ISNULL.
     [SampleSize] TINYINT NULL,
-    [FilterExpression] NVARCHAR(MAX) NULL,
-    [Columns] NVARCHAR(MAX) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
+    [FilterExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [Columns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #FullTextIndexes
@@ -298,15 +298,15 @@
   CREATE TABLE #FullTextIndexes
   (
     [_RowId] BIGINT NULL,
-    [Schema] NVARCHAR(200) NULL,
-    [TableName] NVARCHAR(200) NULL,
-    [FullTextCatalog] NVARCHAR(200) NULL,
-    [KeyIndex] NVARCHAR(200) NULL,
-    [ChangeTracking] NVARCHAR(500) NULL,
-    [StopList] NVARCHAR(MAX) NULL,
-    [Columns] NVARCHAR(MAX) NULL,
-    [ShouldApplyExpression] NVARCHAR(MAX) NULL,
-    [VariantName] NVARCHAR(128) NULL
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [FullTextCatalog] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [KeyIndex] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [ChangeTracking] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [StopList] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [Columns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
 
   -- ===== INGEST SPLIT =====
@@ -637,9 +637,9 @@
   DROP TABLE IF EXISTS #ParentLookup;
   CREATE TABLE #ParentLookup
   (
-    [Schema] NVARCHAR(200) NULL,
-    [Name] NVARCHAR(200) NULL,
-    [OldName] NVARCHAR(200) NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Name] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [OldName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     -- Whether the PARENT is being created by this run. Replaces a correlated NOT EXISTS over #Tables
     -- that ran once per column and compared LOB columns to do it.
     [ParentIsNew] BIT NOT NULL
@@ -681,10 +681,10 @@
   CREATE TABLE #ColumnKeys
   (
     [_RowId] BIGINT NULL,
-    [KeySchema] NVARCHAR(200) NULL,
-    [KeyTableName] NVARCHAR(200) NULL,
-    [KeyColumnName] NVARCHAR(200) NULL,
-    [KeyOldName] NVARCHAR(200) NULL,
+    [KeySchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [KeyTableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [KeyColumnName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [KeyOldName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [IsComputed] BIT NOT NULL
   )
   INSERT INTO #ColumnKeys ([_RowId], [KeySchema], [KeyTableName], [KeyColumnName], [KeyOldName], [IsComputed])

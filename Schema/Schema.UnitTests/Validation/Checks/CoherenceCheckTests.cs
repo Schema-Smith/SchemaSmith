@@ -755,6 +755,62 @@ public class CoherenceCheckTests
     }
 
     [Test]
+    public void IndexOnlyTemplate_IndexColumnsNotDeclaredOnTheTable_IsNotAnError()
+    {
+        // IndexOnlyTableQuenches exists to index a table the package does NOT own -- a vendor product
+        // or a replicated copy, created outside the package, whose columns are deliberately never
+        // declared. So index key parts naming columns absent from the table file are the feature
+        // working, not a defect. Reporting them made `--Validate` exit 2 on a correct package, which
+        // fails the user's CI gate: caught by the release sweep on the shipped lab that teaches this
+        // (Demos/Learn/course4-recipe-13), failing on all four engines.
+        var table = new SqlServerTable
+        {
+            Name = "vendor_order",
+            Schema = "dbo",
+            Indexes = { new SqlServerIndex { Name = "IX_vendor_order_status", IndexColumns = "status" } }
+        };
+        var template = TemplateWithTables("Main", table);
+        template.IndexOnlyTableQuenches = true;
+
+        var findings = new CoherenceCheck().Run(Context(template)).ToList();
+
+        Assert.That(findings, Is.Empty);
+    }
+
+    [Test]
+    public void IndexOnlyTemplate_ForeignKeyLocalColumnNotDeclared_IsNotAnError_ButTheRelatedSideStillIs()
+    {
+        // The two halves are not symmetric and must not be suppressed together: the LOCAL column list
+        // is unowned under this flag, while the RELATED table is a different table the package usually
+        // does declare in full. Over-correcting would blind the half that still has an answer.
+        var related = Customer();
+        var table = new SqlServerTable
+        {
+            Name = "vendor_order",
+            Schema = "dbo",
+            ForeignKeys =
+            {
+                new ForeignKey
+                {
+                    Name = "FK_vendor_order_Customer",
+                    Columns = "customer_ref",
+                    RelatedTable = "Customer",
+                    RelatedColumns = "NoSuchColumn"
+                }
+            }
+        };
+        var template = TemplateWithTables("Main", table, related);
+        template.IndexOnlyTableQuenches = true;
+
+        var findings = new CoherenceCheck().Run(Context(template)).ToList();
+
+        Assert.That(findings.Select(f => f.Code), Has.None.EqualTo("SS-FK-001"),
+            "the local column is owned outside the package under IndexOnlyTableQuenches");
+        Assert.That(findings.Select(f => f.Code), Has.One.EqualTo("SS-FK-004"),
+            "the related table is still declared here, so its column list is still authoritative");
+    }
+
+    [Test]
     public void IndexColumnMissingPlainColumn_StillReportsExactlyOneError()
     {
         // Guard against over-correction: a genuinely bogus plain-column reference (no parens)

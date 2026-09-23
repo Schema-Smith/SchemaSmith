@@ -72,11 +72,21 @@ public sealed class CoherenceCheck : ISchemaCheck
         foreach (var table in template.Tables)
         {
             var location = $"Template '{template.Name}' / Table '{table.Name}'";
+
+            // Under IndexOnlyTableQuenches the package does not own the table's columns -- the table is
+            // created outside it (a vendor product, a replicated copy) and the template manages only its
+            // indexes and statistics. So there is no authoritative local column list to check anything
+            // against, and the checks that need one cannot be evaluated rather than merely passing.
+            // Suppressed on the FLAG, not on "the table declared no columns": columns authored under this
+            // flag are ignored by the deploy, so validating against them would be validating against a
+            // list the deploy does not use -- the same false error in a less obvious costume.
+            var columnsAreOwnedElsewhere = template.IndexOnlyTableQuenches;
+
             foreach (var fk in table.ForeignKeys)
-                findings.AddRange(CheckForeignKey(table, fk, location, tablesByKey));
+                findings.AddRange(CheckForeignKey(table, fk, location, tablesByKey, columnsAreOwnedElsewhere));
 
             foreach (var index in table.Indexes)
-                findings.AddRange(CheckIndex(table, index, location));
+                findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
 
             findings.AddRange(CheckBackfill(table, location));
             findings.AddRange(CheckRebuildPolicy(table, location));
@@ -97,16 +107,22 @@ public sealed class CoherenceCheck : ISchemaCheck
         Table table,
         ForeignKey fk,
         string tableLocation,
-        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey)
+        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey,
+        bool columnsAreOwnedElsewhere)
     {
         var location = $"{tableLocation} / FK '{fk.Name}'";
         var localColumnNames = ColumnNames(table);
         var fkColumns = SplitNames(fk.Columns);
         var fkRelatedColumns = SplitNames(fk.RelatedColumns);
 
-        foreach (var column in fkColumns.Where(column => !localColumnNames.Contains(NormalizeIdentifier(column))))
-            yield return new Finding(Severity.Error, LocalColumnCode, Category, location,
-                $"Local column '{column}' referenced in Columns does not exist on table '{table.Name}'.");
+        // Only the LOCAL half is suppressed under IndexOnlyTableQuenches. The related table is a
+        // different table, usually one the package does declare in full, so its column list stays
+        // authoritative -- and the cardinality check below is a pure string-count comparison that
+        // never needed a column list at all.
+        if (!columnsAreOwnedElsewhere)
+            foreach (var column in fkColumns.Where(column => !localColumnNames.Contains(NormalizeIdentifier(column))))
+                yield return new Finding(Severity.Error, LocalColumnCode, Category, location,
+                    $"Local column '{column}' referenced in Columns does not exist on table '{table.Name}'.");
 
         // Cardinality is a pure string-count comparison — independent of whether the related
         // table resolves, so it always runs.
@@ -200,8 +216,17 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
 
-    private static IEnumerable<Finding> CheckIndex(Table table, Index index, string tableLocation)
+    /// <param name="columnsAreOwnedElsewhere">
+    /// The template sets IndexOnlyTableQuenches, so the table's columns live outside the package and the
+    /// key parts here legitimately name columns it never declares. Indexing a vendor-owned table is the
+    /// whole point of that flag, so reporting its key parts as missing columns fails a package that
+    /// deploys perfectly well -- and `--Validate` exits 2, which fails the user's CI gate.
+    /// </param>
+    private static IEnumerable<Finding> CheckIndex(Table table, Index index, string tableLocation,
+        bool columnsAreOwnedElsewhere)
     {
+        if (columnsAreOwnedElsewhere) yield break;
+
         var location = $"{tableLocation} / Index '{index.Name}'";
         var localColumnNames = ColumnNames(table);
 
