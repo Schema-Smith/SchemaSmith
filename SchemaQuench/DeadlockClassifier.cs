@@ -2,15 +2,17 @@
 
 using System;
 using Microsoft.Data.SqlClient;
+using MySqlConnector;
 using Npgsql;
 
 namespace SchemaQuench;
 
 /// <summary>
 /// Classifies whether an exception represents a database deadlock — the engine's
-/// "rerun the transaction" signal. Recognised across the three platforms by their
-/// locale-independent codes (SQL Server 1205, PostgreSQL <c>40P01</c>) with a message
-/// fallback that also covers MySQL ("Deadlock found …"). Walks the inner-exception chain.
+/// "rerun the transaction" signal. Recognised on every platform by its locale-independent code
+/// (SQL Server 1205, PostgreSQL <c>40P01</c>, MySQL/MariaDB 1213), with an English message fallback
+/// for a deadlock that reaches us through a wrapper that lost the client's exception type. Walks the
+/// inner-exception chain.
 ///
 /// <para>Used by <see cref="DatabaseQuench"/> to retry idempotent convergence procs that lose a
 /// transient deadlock race under parallel iteration — defense-in-depth alongside the SQL-level
@@ -30,10 +32,16 @@ internal static class DeadlockClassifier
                     return true;
                 case PostgresException pg when pg.SqlState == PostgresErrorCodes.DeadlockDetected:
                     return true;
+                // MySQL/MariaDB 1213. Matched on the typed code so this engine is locale-independent
+                // like the other two: MySQL translates server messages (lc_messages), so a deploy on a
+                // non-English server previously depended entirely on the message fallback below --
+                // which is to say, it did not classify at all.
+                case MySqlException { ErrorCode: MySqlErrorCode.LockDeadlock }:
+                    return true;
             }
 
-            // Message fallback — covers MySQL ("Deadlock found …") and any English-locale
-            // message whose typed code we didn't match above.
+            // Message fallback — covers any English-locale message whose typed code we didn't match
+            // above (a deadlock surfaced through a wrapper that loses the client's exception type).
             if (e.Message != null && e.Message.Contains("deadlock", StringComparison.OrdinalIgnoreCase))
                 return true;
         }
@@ -60,15 +68,36 @@ internal static class DeadlockClassifier
     }
 
     /// <summary>
-    /// True for the SQL Server lock-timeout error (1222, "Lock request time out period exceeded").
+    /// True for a lock-wait timeout on any of the three engines: SQL Server 1222 ("Lock request time out
+    /// period exceeded"), MySQL/MariaDB 1205 ("Lock wait timeout exceeded; try restarting transaction"),
+    /// and PostgreSQL <c>55P03</c> (<c>lock_not_available</c>, raised when <c>lock_timeout</c> is set).
     /// <para>
     /// This became reachable when the catalog reads stopped using WITH (NOLOCK): a dirty read waits for
     /// nothing, while a clean one takes schema stability locks that conflict with the schema-modification
-    /// locks concurrent DDL holds — and a deploy is surrounded by concurrent DDL. SQL Server's default
-    /// LOCK_TIMEOUT is infinite, so this only surfaces where a caller or a server default sets one, but
-    /// where it does it is transient contention by definition and re-running is exactly the right answer:
-    /// the convergence procs are idempotent, which is the same property that makes the deadlock retry
-    /// safe.
+    /// locks concurrent DDL holds — and a deploy is surrounded by concurrent DDL. Re-running is exactly
+    /// the right answer: the convergence procs are idempotent, which is the same property that makes the
+    /// deadlock retry safe.
+    /// </para>
+    /// <para>
+    /// <b>How often each engine can actually raise it differs enough to matter.</b> SQL Server's default
+    /// LOCK_TIMEOUT is infinite and PostgreSQL's <c>lock_timeout</c> defaults to 0 (disabled), so on those
+    /// two this surfaces only where a caller or server default sets one. MySQL is the opposite: InnoDB's
+    /// <c>innodb_lock_wait_timeout</c> defaults to 50 seconds, so a MySQL deploy contending with
+    /// concurrent DDL reaches this by default, with nothing configured. Recognising only the SQL Server
+    /// number would have left the engine most likely to raise it as the one that never retried.
+    /// </para>
+    /// <para>
+    /// MySQL's 1205 is a lock-wait timeout, NOT a deadlock — its deadlock is 1213 — so the numbers do not
+    /// line up across engines and each is matched against its own client's typed code. Nothing here reads
+    /// a raw integer off an untyped exception, precisely because 1205 means different things on different
+    /// engines.
+    /// </para>
+    /// <para>
+    /// Deliberately NOT included: PostgreSQL <c>57014</c> (<c>query_canceled</c>, from
+    /// <c>statement_timeout</c>) and MySQL's <c>max_execution_time</c> cancellation. Those are a caller's
+    /// deliberate cap on how long a statement may run, not contention — retrying one fights the intent
+    /// that set it, and a statement slow enough to exceed the cap would simply exceed it again on all
+    /// twenty attempts.
     /// </para>
     /// </summary>
     public static bool IsLockTimeout(Exception ex)
@@ -76,17 +105,37 @@ internal static class DeadlockClassifier
         for (var e = ex; e != null; e = e.InnerException)
             switch (e)
             {
-                case SqlServerErrorException { Number: 1222 }:
-                case SqlException { Number: 1222 }:
+                case SqlServerErrorException { Number: 1222 }:   // wrapped via InfoMessage
+                case SqlException { Number: 1222 }:              // thrown directly
+                    return true;
+                case MySqlException my when IsMySqlLockTimeoutCode(my.ErrorCode):
+                    return true;
+                case PostgresException pg when IsPostgresLockTimeoutState(pg.SqlState):
                     return true;
             }
         return false;
     }
 
     /// <summary>
+    /// InnoDB's lock-wait timeout (1205). Exposed as a code predicate rather than checked inline for the
+    /// same reason <see cref="ConnectionLostClassifier.IsMySqlConnectionLostCode"/> is: MySqlConnector's
+    /// exception cannot be constructed from a test, so this is the only surface where the classification
+    /// can be proven rather than assumed.
+    /// </summary>
+    public static bool IsMySqlLockTimeoutCode(MySqlErrorCode code) =>
+        code == MySqlErrorCode.LockWaitTimeout;
+
+    /// <summary>
+    /// PostgreSQL <c>55P03</c> (<c>lock_not_available</c>) — what a statement raises when
+    /// <c>lock_timeout</c> is set and it waits past it. A string literal avoids depending on an Npgsql
+    /// constant name, matching <see cref="ConnectionLostClassifier.IsPostgresConnectionLostState"/>.
+    /// </summary>
+    public static bool IsPostgresLockTimeoutState(string sqlState) => sqlState == "55P03";
+
+    /// <summary>
     /// True for any transient contention an idempotent convergence proc can recover from by re-running:
-    /// a deadlock (all engines), a SQL Server lock timeout, or the PostgreSQL relation-cache race under
-    /// parallel fan-out.
+    /// a deadlock (all engines), a lock-wait timeout (all engines), or the PostgreSQL relation-cache race
+    /// under parallel fan-out.
     /// </summary>
     public static bool IsRetryableContention(Exception ex) =>
         IsDeadlock(ex) || IsLockTimeout(ex) || IsTransientRelationRace(ex);

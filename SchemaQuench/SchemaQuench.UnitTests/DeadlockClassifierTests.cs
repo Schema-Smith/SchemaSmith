@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using MySqlConnector;
 using Npgsql;
 using NUnit.Framework;
 
@@ -35,6 +36,54 @@ public class DeadlockClassifierTests
         // Guards the widening: only 1205 and 1222 are transient. Re-running anything else just repeats
         // a real failure and hides it behind attempts.
         var ex = new SqlServerErrorException(2627, "Violation of PRIMARY KEY constraint.");
+        Assert.That(DeadlockClassifier.IsRetryableContention(ex), Is.False);
+    }
+
+    // ---- lock-wait timeout on the other two engines -------------------------
+    // The retry shipped recognising only SQL Server's 1222, which left the engine MOST likely to raise a
+    // lock-wait timeout as the one that never retried: SQL Server's LOCK_TIMEOUT is infinite by default
+    // and PostgreSQL's lock_timeout is 0, but InnoDB's innodb_lock_wait_timeout is 50 seconds out of the
+    // box, so a MySQL deploy contending with concurrent DDL reaches it with nothing configured.
+
+    [Test]
+    public void MySqlLockWaitTimeout_1205_IsALockTimeout()
+    {
+        // 1205 is MySQL's LOCK WAIT TIMEOUT, not its deadlock (that is 1213) -- the same number SQL
+        // Server uses for a deadlock. That collision is exactly why each engine is matched on its own
+        // client's typed code and never on a bare integer.
+        Assert.That(DeadlockClassifier.IsMySqlLockTimeoutCode(MySqlErrorCode.LockWaitTimeout), Is.True);
+    }
+
+    [Test]
+    public void MySqlLockDeadlock_1213_IsNotALockTimeout()
+    {
+        // Retryable either way, but it must not be classified as the wrong one: the message an operator
+        // reads names the contention that was hit.
+        Assert.That(DeadlockClassifier.IsMySqlLockTimeoutCode(MySqlErrorCode.LockDeadlock), Is.False);
+    }
+
+    [Test]
+    public void AnUnrelatedMySqlError_IsNotALockTimeout()
+    {
+        Assert.That(DeadlockClassifier.IsMySqlLockTimeoutCode(MySqlErrorCode.DuplicateKeyEntry), Is.False);
+    }
+
+    [Test]
+    public void PostgresException_LockNotAvailable_55P03_IsRetryableContention()
+    {
+        var ex = new PostgresException("canceling statement due to lock timeout", "ERROR", "ERROR", "55P03");
+        Assert.That(DeadlockClassifier.IsLockTimeout(ex), Is.True);
+        Assert.That(DeadlockClassifier.IsRetryableContention(ex), Is.True);
+    }
+
+    [Test]
+    public void PostgresException_QueryCanceled_57014_IsNotRetryableContention()
+    {
+        // statement_timeout is a caller's deliberate cap on how long a statement may run, not contention.
+        // Retrying it fights the intent that set it, and a statement slow enough to exceed the cap would
+        // exceed it again on all twenty attempts.
+        var ex = new PostgresException("canceling statement due to statement timeout", "ERROR", "ERROR", "57014");
+        Assert.That(DeadlockClassifier.IsLockTimeout(ex), Is.False);
         Assert.That(DeadlockClassifier.IsRetryableContention(ex), Is.False);
     }
 
@@ -90,8 +139,20 @@ public class DeadlockClassifierTests
     [Test]
     public void MySqlEnglishMessage_IsDeadlock()
     {
+        // The message fallback, which is all a wrapper that lost the client's exception type leaves us.
         var ex = new Exception("Deadlock found when trying to get lock; try restarting transaction");
         Assert.That(DeadlockClassifier.IsDeadlock(ex), Is.True);
+    }
+
+    [Test]
+    public void MySqlDeadlock_IsClassifiedByCode_NotOnlyByEnglishMessage()
+    {
+        // MySQL translates server messages (lc_messages), so relying on "Deadlock found ..." meant a
+        // deploy against a non-English server classified nothing -- while SQL Server and PostgreSQL were
+        // locale-independent on their codes. Proven through the enum because MySqlConnector's exception
+        // cannot be constructed here; the switch arm in IsDeadlock matches this same member.
+        Assert.That(MySqlErrorCode.LockDeadlock, Is.EqualTo((MySqlErrorCode)1213));
+        Assert.That(DeadlockClassifier.IsMySqlLockTimeoutCode(MySqlErrorCode.LockDeadlock), Is.False);
     }
 
     [Test]
