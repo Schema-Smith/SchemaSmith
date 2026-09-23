@@ -325,7 +325,6 @@
   TRUNCATE TABLE #Statistics
   TRUNCATE TABLE #FullTextIndexes
 
-  -- ===== SHRED #TableDefinitions BEGIN =====
   -- The reset lives inside the region, not with the shared ones above: a client that built these rows
   -- loaded them BEFORE this half ran, and a reset outside the region would wipe them and leave the table
   -- empty for every consumer below.
@@ -425,7 +424,6 @@
       [PreventDrop] BIT '$.PreventDrop'
       ) t;
   
-  -- ===== SHRED #TableDefinitions END =====
 
   -- NORMALIZE -- defaults, identifier bracket-wrapping and canonicalization, applied to whatever is in
   -- the table regardless of how it got there. Every transform here is idempotent: fn_SafeBracketWrap
@@ -484,7 +482,6 @@
          ISNULL([PreventDrop], 0) AS [PreventDrop]
     FROM #TableDefinitions WITH (NOLOCK);
   
-  -- ===== SHRED #Columns BEGIN =====
   -- Removed outright by an ingest path that supplies these rows itself, for the same reason as
   -- #TableDefinitions: a skipped-but-present shred is still compiled, and this is the expensive one --
   -- 6,938 ms of a 1,783-table parse against ~125 ms for the other six child tables combined.
@@ -525,7 +522,6 @@
       [VariantName] NVARCHAR(128) '$.VariantName',
       [OldName] NVARCHAR(500) '$.OldName'
       ) c;
-  -- ===== SHRED #Columns END =====
 
   -- NullableDeclared FIRST, and in its own statement, because it must capture whether the package
   -- declared Nullable AT ALL -- NULL meaning "omitted, let the engine decide". The very next UPDATE

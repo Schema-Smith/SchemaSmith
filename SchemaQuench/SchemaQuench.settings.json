@@ -17,10 +17,6 @@
                                               // shipping something quietly weaker.
         // "CompatEncoding": "", // Override the model-payload encoding chosen for the target's compatibility
                                  // level (Json | Xml). Blank = choose automatically. Diagnostic escape hatch.
-        // "IngestMode": "shred", // SQL Server only — shred (default) has the engine parse the table model;
-                                  // bulk parses it once here and loads the rows, leaving the engine only the
-                                  // normalization and gating that must stay server-side. Both fill the same
-                                  // tables from the same SQL. Worth setting only for very large packages.
         "ConnectionProperties": {}, // Driver-level properties passed through verbatim, e.g.
                                     // { "TrustServerCertificate": "True", "Encrypt": "True" }.
                                     // The --Encrypt / --NoEncrypt switches write the right one of these per platform.

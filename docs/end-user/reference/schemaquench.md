@@ -412,29 +412,6 @@ Two independent adaptations, both automatic. Below **compatibility level** 130 (
 
 For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `Source:CompatEncoding` too, for the queries it builds a delivery script from.
 
-##### Where the model is parsed (`Target:IngestMode`)
-
-Separate from the encoding above, and a performance knob rather than a compatibility one. SchemaSmith
-hands the engine its declared table model and the engine parses it (`shred`, the default). Setting
-`bulk` parses the model once in SchemaSmith instead and loads the rows directly, leaving the engine only
-the normalization and gating passes that have to run server-side.
-
-| Setting | Read by | Values |
-|---|---|---|
-| `Target:IngestMode` | SchemaQuench (deployment), SQL Server only | `shred` (default), `bulk` |
-
-For example `SmithySettings_Target__IngestMode=bulk`.
-
-**Leave it unset. It is a diagnostic, not a tuning knob, and on current code it makes no measurable
-difference.** Measured on a 1,783-table package: 8,489 ms against 8,655 ms for the default — inside the
-run-to-run spread. The reason is that parsing the model was never the expensive part of ingest; the
-per-row normalization that follows is, and both paths run that identically. It is documented because the
-setting exists and you may see it, not because it is worth setting.
-
-Both paths fill the same tables, created by the same SQL, and share the same normalization — the setting
-chooses who produces the raw rows and nothing else, which an equivalence test enforces by running both
-over one model and comparing the results row for row.
-
 > **Don't confuse this with `DeliveryEncoding`.** Two settings, both with "encoding" in the name, and they control unrelated things. **`CompatEncoding`** (this one) is how SchemaSmith talks to SQL Server about *its own schema model* — invisible in your package and in the resulting database. **[`ShouldCast:DeliveryEncoding`](datatongs.md#delivery-encoding-xml-for-legacy-sql-server)** is a DataTongs feature that decides the format of the *data content files it writes* — `Json` or `Xml` — which is what you want when porting data to another platform or handing it to an external vendor. Changing one tells you nothing about the other.
 
 **What it actually changes.** The encoding is how SchemaSmith hands its own parsed model to SQL Server and reads it back — internal plumbing between the tool and the server, not anything about your package, your DDL, or the database that results. Concretely it selects which helper procedures are installed: on `legacy`, five are replaced by XML twins (`BootstrapTableQuench`, `IndexOnlyQuench`, `IndexedViewQuench`, `GenerateTableJson`, `GenerateIndexedViewJson`) and the JSON-only `fn_FormatJson` is not installed at all. The setting is part of the kindle stamp, so changing it re-installs the matching helper set on the next run.

@@ -74,11 +74,7 @@ public static class SettingsContract
             SettingsKeys.DeliverData, SettingsKeys.VerboseLogging, SettingsKeys.FailureContextLines,
             SettingsKeys.BottleneckThresholdMs, SettingsKeys.TrackRunOnceMigrations,
             SettingsKeys.PruneObsoleteMigrationTracking,
-            SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.ScriptTokens,
-            // Deploy-side only, so it belongs here rather than in BaseTargetKeys: SchemaTongs and
-            // DataTongs do not build a deploy working set, and accepting a key a tool never reads is
-            // what the unrecognized-setting warning exists to stop.
-            SettingsKeys.IngestMode
+            SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.ScriptTokens
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.SchemaTongs)).Concat(

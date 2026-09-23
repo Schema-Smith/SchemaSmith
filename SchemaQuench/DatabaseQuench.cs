@@ -1562,15 +1562,6 @@ public class DatabaseQuench
     internal bool ScrubArtifactsEnabled =>
         FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.ScrubArtifacts]?.ToLower() == "true";
 
-    /// <summary>
-    /// Whether this run builds the working set on the client instead of having the engine shred JSON.
-    /// Defaults to the shred, so the client path stays opt-in until it is proven row-for-row equal
-    /// against the shred on real packages.
-    /// </summary>
-    internal bool BulkIngestEnabled =>
-        string.Equals(FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.IngestMode],
-            "bulk", StringComparison.OrdinalIgnoreCase);
-
     internal IReadOnlyList<KeyValuePair<string, string>> SensitiveTokenValues()
     {
         var options = LogHygieneOptions.FromConfiguration(FactoryContainer.ResolveOrCreate<IConfigurationRoot>());
@@ -2062,14 +2053,6 @@ DECLARE @TableDefinitions VARCHAR(MAX)= '{EscapeSqlLiteral(tableJson)}',
         // real locks, where the dirty read they replaced waited for nothing.
         ExecuteNonQueryHandlingMessages(command, retryOnDeadlock: true);
 
-        if (BulkIngestEnabled)
-        {
-            fillTables = BulkLoadTableDefinitions(command, tableJson, fillTables);
-            // Named, for the same reason the selected ingest ENCODING is named: a path chosen from a
-            // setting and never confirmed is one nobody can tell ran. It also means a run that quietly
-            // fell back to the shred cannot be mistaken for a working client ingest.
-            SafeProgressLog("    Model ingest: client-built working set (Target:IngestMode=bulk)");
-        }
 
         // @v_SQL is re-declared because variables, unlike temp tables, do not cross a batch boundary.
         command.CommandText = $@"
@@ -2092,114 +2075,6 @@ SET NOCOUNT ON
         fillFactor.Value = _template.UpdateFillFactor;
         fillFactor.DbType = DbType.Boolean;
         command.Parameters.Add(fillFactor);
-    }
-
-    /// <summary>
-    /// Build #TableDefinitions on the client and bulk-load it, returning the fill script with that
-    /// table's shred removed.
-    /// <para>
-    /// The child shreds below are untouched and keep reading their nested JSON straight out of the rows
-    /// loaded here, so this replaces only the outer pass -- the one that has to split the whole payload
-    /// into per-table fragments before any child can be read.
-    /// </para>
-    /// <para>
-    /// The table's SHAPE still comes from SQL: it is read back off the temp table phase A just created,
-    /// so the client cannot hold a stale idea of the columns. That is the same property that makes the
-    /// two paths safe to run side by side -- SQL owns the shapes and the normalization, the client only
-    /// supplies raw values.
-    /// </para>
-    /// </summary>
-    private string BulkLoadTableDefinitions(IDbCommand command, string tableJson, string fillTables)
-    {
-        if (command is not SqlCommand sqlCommand || sqlCommand.Connection is not { } sqlConnection)
-            throw new Exception(
-                "The client-ingest path needs a SqlCommand to bulk-load through. Target:IngestMode=bulk " +
-                "is SQL Server only; leave it unset to use the engine's own shred.");
-
-        var model = ParseIterationModel(tableJson);
-        AssertEverySchemaIsPopulated(model);
-
-        using var shape = ReadWorkingSetShape(sqlConnection, sqlCommand, "#TableDefinitions");
-
-        WorkingSetRowBuilder.Build(model, WorkingSetShredMap.For(Platform.SqlServer, "#TableDefinitions"), shape);
-        BulkCopy(sqlConnection, sqlCommand, command.CommandTimeout, shape);
-
-        // #Columns is the child table worth taking: on a 1,783-table model its shred is 6,938 ms while
-        // the other six children total ~125 ms between them. They keep shredding, because a second
-        // producer is only worth its drift risk where the time actually is.
-        using var columns = ReadWorkingSetShape(sqlConnection, sqlCommand, "#Columns");
-        WorkingSetRowBuilder.BuildChild(model, "Columns", WorkingSetShredMap.For(Platform.SqlServer, "#Columns"), columns);
-        BulkCopy(sqlConnection, sqlCommand, command.CommandTimeout, columns);
-
-        return ForgeKindler.RemoveShredRegion(
-               ForgeKindler.RemoveShredRegion(fillTables, "#TableDefinitions"), "#Columns");
-    }
-
-
-    /// <summary>
-    /// Read a working-set table's shape off the temp table SQL just created, rather than declaring it
-    /// here. TOP 0 costs nothing, and it means a column added to the CREATE is seen immediately -- where
-    /// <see cref="WorkingSetRowBuilder"/> refuses anything it was not taught to fill, instead of being
-    /// quietly bulk-loaded as NULL.
-    /// </summary>
-    private static DataTable ReadWorkingSetShape(SqlConnection connection, SqlCommand command, string table)
-    {
-        var shape = new DataTable(table);
-        using var probe = connection.CreateCommand();
-        probe.Transaction = command.Transaction;
-        probe.CommandText = $"SELECT TOP 0 * FROM {table}";
-        using var reader = probe.ExecuteReader(CommandBehavior.SchemaOnly);
-        shape.Load(reader);
-        return shape;
-    }
-
-    private static void BulkCopy(SqlConnection connection, SqlCommand command, int timeout, DataTable rows)
-    {
-        using var bulk = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, command.Transaction);
-        bulk.DestinationTableName = rows.TableName;
-        bulk.BulkCopyTimeout = timeout;
-        // By name, never by ordinal: the shape was discovered, and a column reordered in the CREATE would
-        // otherwise silently transpose values between columns of compatible type.
-        foreach (DataColumn column in rows.Columns)
-            bulk.ColumnMappings.Add(column.ColumnName, column.ColumnName);
-        bulk.WriteToServer(rows);
-    }
-
-    /// <summary>
-    /// The missing-Schema check, on the client. It lives inside the shred region the bulk path removes,
-    /// because it only ever read the payload -- and a client that has just built the rows has already
-    /// parsed the model, so re-shredding the whole payload to ask one question would give back a good
-    /// part of what this path saves.
-    /// </summary>
-    private static void AssertEverySchemaIsPopulated(JArray model)
-    {
-        var offender = model.OfType<JObject>()
-            .FirstOrDefault(t => string.IsNullOrWhiteSpace(t["Schema"]?.ToString()));
-        if (offender == null) return;
-
-        var name = offender["Name"]?.ToString();
-        throw new Exception(
-            $"Table JSON is missing Schema for table '{(string.IsNullOrWhiteSpace(name) ? "<unnamed>" : name)}'. " +
-            "Schema must be populated before the table model is ingested — this is a programmer error. " +
-            "In production the SchemaDefaultResolver fills Schema with the platform default or the {{SchemaName}} token; " +
-            "a blank value here means a caller bypassed Template.Load or substituted the token away.");
-    }
-
-    // Parsing the payload is the point of the client path, but a regular template hands every work unit
-    // the identical string, so parsing it once per database would repeat the work this exists to remove.
-    // Keyed on the string itself: a schema template substitutes per iteration and must not reuse another
-    // iteration's model.
-    private JArray _parsedModel;
-    private string _parsedModelSource;
-
-    private JArray ParseIterationModel(string tableJson)
-    {
-        if (ReferenceEquals(_parsedModelSource, tableJson) || string.Equals(_parsedModelSource, tableJson, StringComparison.Ordinal))
-            return _parsedModel;
-
-        _parsedModel = string.IsNullOrWhiteSpace(tableJson) ? [] : JArray.Parse(tableJson);
-        _parsedModelSource = tableJson;
-        return _parsedModel;
     }
 
     #endregion

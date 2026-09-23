@@ -757,45 +757,6 @@ public class ForgeKindlerTests
     }
 
     [Test]
-    public void RemoveShredRegion_TakesOutTheShredAndLeavesTheSharedPassesBehind()
-    {
-        var (_, fill) = ForgeKindler.GetParseTableJsonPhases(Platform.SqlServer);
-        var withoutShred = ForgeKindler.RemoveShredRegion(fill, "#TableDefinitions");
-
-        Assert.That(withoutShred, Does.Not.Contain("INSERT INTO #TableDefinitions"),
-            "The shred must be gone, not merely skipped -- a guarded statement is still compiled.");
-        // The payload guard lives inside the region: it only reads the JSON, and a client that built the
-        // rows has already seen the model.
-        Assert.That(withoutShred, Does.Not.Contain("Table JSON is missing Schema for table"));
-
-        // Everything the two paths share has to survive: normalize, the ShouldApply gating, and the
-        // child shreds that read this table's nested JSON straight back out of it.
-        Assert.That(withoutShred, Does.Contain("UPDATE #TableDefinitions"));
-        Assert.That(withoutShred, Does.Contain("DELETE FROM #TableDefinitions WHERE [_RowId] = "));
-        Assert.That(withoutShred, Does.Contain("INSERT INTO #Columns"));
-
-        // The reset goes WITH the shred. A client loads its rows before this half runs, so a reset left
-        // behind would wipe them and hand every consumer below an empty table -- which is exactly what
-        // happened the first time, and what the equivalence test caught.
-        Assert.That(withoutShred, Does.Not.Contain("TRUNCATE TABLE #TableDefinitions"));
-        // The tables still shredded here keep theirs, because their shred does still re-run on a retry.
-        Assert.That(withoutShred, Does.Contain("TRUNCATE TABLE #Columns"));
-    }
-
-    [Test]
-    public void RemoveShredRegion_RefusesWhenTheRegionIsMissing()
-    {
-        // Silently returning the script unchanged would shred the payload into the table the client is
-        // about to bulk-load, duplicating every row -- indistinguishable downstream from a model that
-        // really declares each table twice.
-        var ex = Assert.Throws<Exception>(() =>
-            ForgeKindler.RemoveShredRegion("SELECT 1", "#TableDefinitions"));
-
-        Assert.That(ex.Message, Does.Contain("#TableDefinitions"));
-        Assert.That(ex.Message, Does.Contain("duplicating every row"));
-    }
-
-    [Test]
     public void GetParseTableJsonPhases_SplitsCreationFromFill_AndLosesNothingButTheMarker()
     {
         var whole = ForgeKindler.GetParseTableJsonScript(Platform.SqlServer);

@@ -295,37 +295,6 @@ public static class ForgeKindler
     }
 
     /// <summary>
-    /// Remove the JSON-shred region for a working-set table, for the ingest path that supplies that
-    /// table's rows itself.
-    /// <para>
-    /// Removed rather than guarded at runtime. A shred left in place behind <c>IF @BulkIngested = 0</c>
-    /// still gets compiled, and compiling a statement that reads a payload this size is a meaningful
-    /// share of what the client-ingest path exists to avoid -- so the statement has to be gone, not
-    /// skipped.
-    /// </para>
-    /// <para>
-    /// Refuses when the region is not found, because the alternative is worse than an error: the shred
-    /// would run, fill the table from JSON, and then the bulk load would append a second copy of every
-    /// row. Nothing downstream distinguishes that from a model that really does declare each table twice.
-    /// </para>
-    /// </summary>
-    public static string RemoveShredRegion(string script, string table)
-    {
-        var begin = $"-- ===== SHRED {table} BEGIN =====";
-        var end = $"-- ===== SHRED {table} END =====";
-
-        var from = script.IndexOf(begin, StringComparison.Ordinal);
-        var to = script.IndexOf(end, StringComparison.Ordinal);
-        if (from < 0 || to < 0 || to < from)
-            throw new Exception(
-                $"No '{table}' shred region in the parse script, so the client-ingest path cannot remove it. " +
-                "Leaving it in would shred the payload into the same table the client is about to load, " +
-                "duplicating every row.");
-
-        return script.Remove(from, to - from + end.Length);
-    }
-
-    /// <summary>
     /// Get the XML-ingest twin of the ParseTableJson script (selected below the OPENJSON compat cliff).
     /// </summary>
     public static string GetParseTableXmlScript(Platform platform)
