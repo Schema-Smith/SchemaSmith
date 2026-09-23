@@ -63,7 +63,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                            WHEN 1 THEN MIN(p.data_compression_desc)
                            ELSE 'MIXED'
                          END COLLATE DATABASE_DEFAULT
-                   FROM sys.partitions AS p WITH (NOLOCK)
+                   FROM sys.partitions AS p
                    WHERE p.[object_id] = st.[object_id]
                      AND p.index_id < 2), 'NONE') AS [CompressionType],
        -- {{XmlCompressionRead}} resolves to p.xml_compression on SQL Server 2025+ and to a NULL literal
@@ -72,7 +72,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        -- before it creates anything; see the comment there. NULL means "this server cannot report it",
        -- which SchemaTongs turns into "keep what the package already said" rather than a silent drop.
        (SELECT CASE WHEN MAX(CONVERT(TINYINT, {{XmlCompressionRead}})) = 1 THEN CONVERT(BIT, 1) END
-          FROM sys.partitions AS p WITH (NOLOCK)
+          FROM sys.partitions AS p
           WHERE p.[object_id] = st.[object_id]
             AND p.index_id < 2) AS [XmlCompression],
        -- Filegroup placement (#filegroups): emit only when the table's data (heap/clustered index,
@@ -257,12 +257,12 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                           WHEN 1 THEN MIN(p.data_compression_desc)
                           ELSE 'MIXED'
                         END COLLATE DATABASE_DEFAULT
-                  FROM sys.partitions AS p WITH (NOLOCK)
+                  FROM sys.partitions AS p
                   WHERE p.[object_id] = si.[object_id]
                     AND p.index_id = si.index_id) AS [CompressionType],
                -- Same kindle-time resolution as the table-level [XmlCompression] above.
                (SELECT CASE WHEN MAX(CONVERT(TINYINT, {{XmlCompressionRead}})) = 1 THEN CONVERT(BIT, 1) END
-                  FROM sys.partitions AS p WITH (NOLOCK)
+                  FROM sys.partitions AS p
                   WHERE p.[object_id] = si.[object_id]
                     AND p.index_id = si.index_id) AS [XmlCompression],
                -- Same emit-only-when-non-default rule as the table-level [FileGroup] above -- a table and

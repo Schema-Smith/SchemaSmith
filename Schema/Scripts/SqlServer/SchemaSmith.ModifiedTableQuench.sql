@@ -146,9 +146,13 @@ BEGIN TRY
                  OR NULLIF(RTRIM(ISNULL(t.[TextImageFileGroup], '')), '') IS NOT NULL
                  OR NULLIF(RTRIM(ISNULL(t.[PartitionScheme], '')), '') IS NOT NULL
                  OR NULLIF(RTRIM(ISNULL(t.[PartitionColumn], '')), '') IS NOT NULL
-                 OR NULLIF(RTRIM(ISNULL(t.[GraphType], '')), '') IS NOT NULL
-                 OR NULLIF(RTRIM(ISNULL(t.[Ledger], '')), '') IS NOT NULL
-                 OR NULLIF(RTRIM(ISNULL(t.[Durability], '')), '') IS NOT NULL
+                 -- Compared against the DEFAULTED values, not against blank. NORMALIZE fills these three
+                 -- for every row ('None', 'Off', 'SCHEMA_AND_DATA') before #Tables is populated, on the
+                 -- XML tier as well, so a blank test is true for every table that exists -- which made
+                 -- this guard unconditionally 1 and cost the extraction the compile saving it was for.
+                 OR RTRIM(ISNULL(t.[GraphType], 'None')) <> 'None'
+                 OR RTRIM(ISNULL(t.[Ledger], 'Off')) <> 'Off'
+                 OR UPPER(RTRIM(ISNULL(t.[Durability], 'SCHEMA_AND_DATA'))) <> 'SCHEMA_AND_DATA'
                  OR ISNULL(t.[MemoryOptimized], 0) = 1
                  OR t.[CdcFilegroup] IS NOT NULL)
     SET @v_NeedsAttributeValidation = 1
@@ -1013,7 +1017,7 @@ BEGIN TRY
                                   'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' REBUILD PARTITION=ALL WITH (DATA_COMPRESSION=' + t.[CompressionType] + ');' + CHAR(13) + CHAR(10) +
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''table'', ''' + t.[Schema] + '.' + t.[Name] + ''', ''modified'');' AS NVARCHAR(MAX))
                            FROM #Tables t WITH (NOLOCK)
-                           LEFT JOIN sys.partitions AS p WITH (NOLOCK) ON p.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+                           LEFT JOIN sys.partitions AS p ON p.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
                                                                       AND p.index_id < 2
                            WHERE t.NewTable = 0
                              AND t.[CompressionType] IN ('NONE', 'ROW', 'PAGE')
@@ -1026,7 +1030,7 @@ BEGIN TRY
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
       SELECT @@SPID, 'table', t.[Schema] + '.' + t.[Name], 'wouldModify'
         FROM #Tables t WITH (NOLOCK)
-        LEFT JOIN sys.partitions AS p WITH (NOLOCK) ON p.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name]) AND p.index_id < 2
+        LEFT JOIN sys.partitions AS p ON p.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name]) AND p.index_id < 2
         WHERE t.NewTable = 0 AND t.[CompressionType] IN ('NONE', 'ROW', 'PAGE')
           AND COALESCE(p.data_compression_desc COLLATE DATABASE_DEFAULT, 'NONE') <> t.[CompressionType]
 
@@ -1060,7 +1064,7 @@ BEGIN TRY
                                     'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' REBUILD PARTITION=ALL WITH (XML_COMPRESSION=' + CASE WHEN t.[XmlCompression] = 1 THEN 'ON' ELSE 'OFF' END + ');' + CHAR(13) + CHAR(10) +
                                     'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''table'', ''' + t.[Schema] + '.' + t.[Name] + ''', ''modified'');' AS NVARCHAR(MAX))
                              FROM #Tables t WITH (NOLOCK)
-                             LEFT JOIN sys.partitions AS p WITH (NOLOCK) ON p.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+                             LEFT JOIN sys.partitions AS p ON p.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
                                                                         AND p.index_id < 2
                              WHERE t.NewTable = 0
                                AND COALESCE(CONVERT(TINYINT, {{XmlCompressionRead}}), 0) <> ISNULL(t.[XmlCompression], 0)
@@ -1071,7 +1075,7 @@ BEGIN TRY
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'table', t.[Schema] + '.' + t.[Name], 'wouldModify'
           FROM #Tables t WITH (NOLOCK)
-          LEFT JOIN sys.partitions AS p WITH (NOLOCK) ON p.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name]) AND p.index_id < 2
+          LEFT JOIN sys.partitions AS p ON p.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name]) AND p.index_id < 2
           WHERE t.NewTable = 0
             AND COALESCE(CONVERT(TINYINT, {{XmlCompressionRead}}), 0) <> ISNULL(t.[XmlCompression], 0)
 

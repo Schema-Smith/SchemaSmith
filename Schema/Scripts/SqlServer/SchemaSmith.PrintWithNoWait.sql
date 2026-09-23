@@ -39,7 +39,9 @@ BEGIN
     BEGIN
       -- No further line ending: whatever remains is the last line.
       SET @v_Line = SUBSTRING(@Message, @v_Pos, @v_End - @v_Pos + 1)
-      IF LEN(@v_Line) > 0 RAISERROR(@v_Line, 10, 100) WITH NOWAIT
+      -- DATALENGTH here too, for the same reason it sizes @v_End above: LEN reports 0 for a line made
+      -- entirely of spaces, so a final line of indentation was silently dropped rather than printed.
+      IF DATALENGTH(@v_Line) > 0 RAISERROR(@v_Line, 10, 100) WITH NOWAIT
       BREAK
     END
 

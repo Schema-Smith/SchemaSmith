@@ -35,7 +35,11 @@ namespace SchemaQuench.IntegrationTests.SqlServer
     /// </para>
     /// </summary>
     [TestFixture]
-    [Category("SqlServer")]
+    // [Explicit] with NO [Category("SqlServer")], the same arrangement FileStreamDeployTests and
+    // OldBinaryXmlKindleTests use and for the same reason: CI selects by `--filter "Category=SqlServer"`,
+    // and a filter that NAMES a category selects the explicit tests carrying it. Carrying the category
+    // here would have put three database-building, minutes-long benchmarks on all five SQL Server legs of
+    // every run. Run it deliberately, by name.
     [Explicit("Benchmark: builds and drops a database, takes minutes, asserts nothing.")]
     [NonParallelizable]
     public class DeployPipelineBenchmark : BaseTableQuenchTests

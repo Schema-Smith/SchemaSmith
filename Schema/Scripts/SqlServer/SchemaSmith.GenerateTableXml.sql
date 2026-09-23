@@ -185,7 +185,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                            WHEN 1 THEN MIN(p.data_compression_desc)
                            ELSE 'MIXED'
                          END COLLATE DATABASE_DEFAULT
-                   FROM sys.partitions AS p WITH (NOLOCK)
+                   FROM sys.partitions AS p
                    WHERE p.[object_id] = st.[object_id]
                      AND p.index_id < 2), 'NONE') AS [CompressionType],
        -- Filegroup placement (#filegroups) -- see JSON twin (GenerateTableJson.sql) for the
@@ -316,7 +316,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                           WHEN 1 THEN MIN(p.data_compression_desc)
                           ELSE 'MIXED'
                         END COLLATE DATABASE_DEFAULT
-                  FROM sys.partitions AS p WITH (NOLOCK)
+                  FROM sys.partitions AS p
                   WHERE p.[object_id] = si.[object_id]
                     AND p.index_id = si.index_id) AS [CompressionType],
                -- Memory-optimized hash-index bucket count (#J1/#8): emit only for a hash index, matching the

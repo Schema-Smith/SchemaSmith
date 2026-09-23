@@ -239,7 +239,13 @@ BEGIN TRY
         IF @v_PkName IS NOT NULL
            AND (@v_PkName <> @v_DeclPkBare
                 OR @v_PkClustered <> @v_DeclPkClustered
-                OR REPLACE(REPLACE(REPLACE(@v_DeclPkCols, '[', ''), ']', ''), ' ', '') <> ISNULL(@v_PkCols, ''))
+                -- Normalized the same way the non-PK index comparison is, and for the same two reasons:
+                -- uppercase BOTH sides so a case-sensitive database collation does not judge every key
+                -- mis-shaped, and strip a declared direction at the comma boundary rather than as a bare
+                -- substring. A PK's live side never reports a direction, so a key declared '[Id] DESC'
+                -- compared as 'IDDESC' against 'Id' and was dropped and re-added on every single run.
+                OR REPLACE(REPLACE(',' + REPLACE(REPLACE(REPLACE(UPPER(@v_DeclPkCols), '[', ''), ']', ''), ' ', '') + ',',
+                                   'ASC,', ','), 'DESC,', ',') <> ',' + UPPER(ISNULL(@v_PkCols, '')) + ',')
         BEGIN
             -- Refuse before touching anything when the data cannot satisfy the declared key. The ALTER would
             -- fail on its own, but this says which table, which key, and what to do about it.
@@ -254,8 +260,12 @@ BEGIN TRY
                     N'SchemaSmith bootstrap: cannot rebuild PRIMARY KEY on ' + @v_QualifiedName + N' as (' +
                     @v_DeclPkCols + N') -- the table holds duplicate rows for that key. The existing key is ' +
                     N'unchanged; resolve the duplicates and re-run.';
-                RAISERROR(@v_PkMsg, 16, 1);
-                RETURN;
+                -- THROW, like every other refusal in this procedure. RAISERROR at severity 16 inside
+                -- this BEGIN TRY transfers straight to the CATCH that rethrows, so the RETURN that used
+                -- to follow was unreachable and the "returns cleanly" reading of it was never what
+                -- happened. Aborting IS right here -- nothing has been altered yet, so the existing key
+                -- really is unchanged -- but it should say so the same way its siblings do.
+                THROW 51000, @v_PkMsg, 1;
             END
 
             RAISERROR('  Rebuilding PRIMARY KEY on %s: the deployed key does not match its declaration', 10, 100, @v_QualifiedName) WITH NOWAIT;
@@ -293,10 +303,24 @@ BEGIN TRY
           WHERE i.PrimaryKey = 0
             AND (si.is_unique <> i.[Unique]
                  OR CASE WHEN si.type_desc = 'CLUSTERED' THEN 1 ELSE 0 END <> i.[Clustered]
-                 OR REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(REPLACE(REPLACE(REPLACE(i.IndexColumns, '[', ''), ']', ''), ' ', '')),
-                                       'ASC', ''), 'DESC', '~'), '~', ' DESC'), ',', ','), '  ', ' ') <>
-                    ISNULL((SELECT STRING_AGG(CAST(c.[name] + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',')
-                                     WITHIN GROUP (ORDER BY ic.key_ordinal)
+                 -- Both sides are wrapped in commas and uppercased before they are compared, and BOTH of
+                 -- those matter:
+                 --
+                 -- UPPER on the LIVE side too. Only the declared side had it, so on a case-sensitive
+                 -- database collation 'SCHEMA,TABLENAME' never equalled the catalog's 'Schema,TableName'
+                 -- and every kindling index was judged mis-shaped and dropped and recreated on every run.
+                 --
+                 -- Comma-anchored direction stripping. The old form replaced the SUBSTRING 'ASC'/'DESC'
+                 -- anywhere it appeared, so a key part merely CONTAINING one was corrupted: 'CASCADE'
+                 -- became 'CADE' and 'DESCRIPTOR' became ' DESCRIPTOR', each producing the same endless
+                 -- churn. Anchoring to the delimiter is what makes that impossible -- 'CASCADE,' has
+                 -- 'ADE,' after its ASC and 'DESCRIPTOR,' has 'RIPTOR,' after its DESC, so neither
+                 -- matches. Stripping ASC first is safe for the same reason: 'DESC,' has an E where
+                 -- 'ASC,' needs an A.
+                 OR REPLACE(REPLACE(',' + REPLACE(REPLACE(REPLACE(UPPER(i.IndexColumns), '[', ''), ']', ''), ' ', '') + ',',
+                                    'ASC,', ','), 'DESC,', ' DESC,') <>
+                    ISNULL((SELECT ',' + UPPER(STRING_AGG(CAST(c.[name] + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',')
+                                     WITHIN GROUP (ORDER BY ic.key_ordinal)) + ','
                               FROM sys.index_columns ic
                               JOIN sys.columns c
                                 ON c.object_id = ic.object_id AND c.column_id = ic.column_id
