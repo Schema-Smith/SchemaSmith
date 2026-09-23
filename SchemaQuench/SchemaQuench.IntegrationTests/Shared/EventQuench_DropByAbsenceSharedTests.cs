@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
 
@@ -165,11 +166,76 @@ public abstract class EventQuench_DropByAbsenceSharedTests : BaseTableQuenchTest
         conn.Close();
     }
 
+    [Test]
+    public void EventQuench_ADisableOnSlaveEvent_IsNotReAppliedOnEveryDeploy()
+    {
+        // MySQL 8.4 renamed the catalog status SLAVESIDE_DISABLED to REPLICA_SIDE_DISABLED. Extraction
+        // was taught the new spelling AND so was the deploy-side comparison, but only the extraction
+        // half had a test. Unmatched, the comparison re-applied a DISABLE ON SLAVE event on EVERY
+        // deploy, forever, at exit 0 with nothing in the log to say why -- the silent per-deploy churn
+        // this release fixes in several places, and the one where the engine version that triggers it
+        // reaches CI on a merge leg only.
+        //
+        // Deploy-twice is the shape that catches it: the second run must have nothing to do. On a server
+        // that still reports the OLD spelling this passes for the other branch of the same CASE, which
+        // is the point -- the event must round-trip on both.
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"EvtSlaveProduct_{uid}";
+        var evt = $"evt_slave_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            var first = RunEventQuench(cmd, SlaveDisabledEvent(evt), product, dropRemoved: true);
+            Assert.That(LiveEventExists(cmd, evt), Is.True, "Setup: the declared event must deploy.");
+            Assert.That(first, Is.Not.Empty,
+                "Setup: the first deploy must actually do something, or the second proving nothing "
+                + "would prove nothing either.");
+
+            var second = RunEventQuench(cmd, SlaveDisabledEvent(evt), product, dropRemoved: true);
+
+            // Scoped to EVENT DDL rather than "no statements at all": every run also re-asserts the
+            // ownership row with an INSERT ... WHERE NOT EXISTS, which is idempotent bookkeeping and
+            // writes nothing the second time. Churn of the EVENT is what the status rename caused and
+            // what this has to catch.
+            var eventDdl = second
+                .Where(s => s.Contains("EVENT", StringComparison.OrdinalIgnoreCase)
+                            && !s.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            Assert.That(eventDdl, Is.Empty,
+                "re-deploying an unchanged DISABLE ON SLAVE event must generate no event DDL. A "
+                + "comparison that cannot read the status back re-applies it on every single deploy, "
+                + "silently, and the deploy still reports success: " + string.Join(" | ", eventDdl));
+        }
+        finally
+        {
+            DropEvent(cmd, evt);
+            conn.Close();
+        }
+    }
+
     // ---- fixtures -------------------------------------------------------------
 
     // Keys are the ones SchemaSmith_EventQuench actually reads (see its _SchemaSmith_Events INSERT):
     // Name, Definition, ScheduleType, Interval, ExecuteAt, Starts, Ends, Status, Preserve, Comment.
     // DISABLE keeps the event from firing during the test run.
+    private static string SlaveDisabledEvent(string name) => $$"""
+[
+  {
+    "Name": "{{name}}",
+    "ScheduleType": "EVERY",
+    "Interval": "1 DAY",
+    "Status": "DISABLE ON SLAVE",
+    "Definition": "SET @ss_test = 1"
+  }
+]
+""";
+
     private static string OneEvent(string name) => $$"""
 [
   {
@@ -209,7 +275,9 @@ public abstract class EventQuench_DropByAbsenceSharedTests : BaseTableQuenchTest
     /// statement list that the caller runs. The whole list is read BEFORE any of it executes, because the
     /// reader holds the connection the statements then run on.
     /// </summary>
-    private void RunEventQuench(IDbCommand cmd, string eventsJson, string productName, bool dropRemoved)
+    /// <summary>Runs the quench and returns the statements it generated, so a caller can assert that a
+    /// second identical run generates NONE -- which is what deploy-time idempotency means here.</summary>
+    private List<string> RunEventQuench(IDbCommand cmd, string eventsJson, string productName, bool dropRemoved)
     {
         var escaped = eventsJson.Replace("'", "''");
         cmd.CommandText =
@@ -228,6 +296,8 @@ public abstract class EventQuench_DropByAbsenceSharedTests : BaseTableQuenchTest
             cmd.CommandText = statement;
             cmd.ExecuteNonQuery();
         }
+
+        return statements;
     }
 
     private void CreateEventByHand(IDbCommand cmd, string name)
