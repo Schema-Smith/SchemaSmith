@@ -13,14 +13,14 @@ name: CI (docs-only companion)
 # match or the deadlock this file prevents comes back from the other direction -- a required context that
 # no longer runs waits forever. A pull request now produces exactly these twelve:
 #   Build & Unit Tests
-#   Integration Tests (SQL Server 2017)        <- new name; "(SQL Server)" no longer exists
-#   Integration Tests (SQL Server latest)      <- new; floating, like the other engines
-#   Integration Tests (PostgreSQL latest)
-#   Integration Tests (PostgreSQL 12)
-#   Integration Tests (MySQL latest)         <- floating; replaced the pinned "(MySQL 8.0)" context
-#   Integration Tests (MySQL 5.7)
-#   Integration Tests (MariaDB latest)       <- floating; replaced the pinned "(MariaDB 11.4)" context
-#   Integration Tests (MariaDB 10.2)
+#   Integration Tests (SQL Server 2017)      <- floor
+#   Integration Tests (SQL Server 2025)      <- ceiling
+#   Integration Tests (PostgreSQL 18)        <- ceiling
+#   Integration Tests (PostgreSQL 12)        <- floor
+#   Integration Tests (MySQL 26)             <- ceiling
+#   Integration Tests (MySQL 5.7)            <- floor
+#   Integration Tests (MariaDB 13)           <- ceiling
+#   Integration Tests (MariaDB 10.2)         <- floor
 #   Genuine Sweep Record
 #   Engine Ceiling Ratchet
 #   Coverage Gate
@@ -30,18 +30,13 @@ name: CI (docs-only companion)
 #   Integration Tests (MariaDB 11.8), (MariaDB 11.4), (MariaDB 10.6)
 #   Integration Tests (SQL Server 2019), (SQL Server 2022), (SQL Server 2025)
 #
-# The floating `latest` legs are REQUIRED, deliberately: an engine release that breaks us should stop a
-# merge, not be scrolled past. They are also why this list can drift without anyone editing it -- when
-# `latest` advances, the CONTEXT NAME does not change, but what it tested does. See the ratchet note in
-# continuous-integration.yml. Do NOT delete the `paths-ignore` in the CI workflow — it exists so a prose
-# fix doesn't spin the three-engine matrix; this pairs with it rather than replacing it.
-#
-# The `paths:` list below is the exact inverse of continuous-integration.yml's `pull_request` `paths-ignore`,
-# and the job `name:` values are the exact required-check contexts from the `main` branch ruleset
-# (`required_status_checks`) — keep both character-identical, or the deadlock returns (a mismatched name
-# leaves the real context unreported). On a MIXED docs+code PR both this and the real CI run for the same
-# contexts; the real jobs finish minutes later and are the most-recent run for each context, so the real
-# result governs the merge.
+# THE CEILING LEGS ARE PINNED MAJORS NOW, NOT `latest`. A floating context keeps its NAME while what it
+# tests changes underneath, so a green history says nothing about which version was green -- and when
+# `latest` happened to resolve to a major already pinned, it was the same suite run twice. Currency is
+# asserted by the Engine Ceiling Ratchet instead: it resolves each engine's `latest` and fails when the
+# declared ceiling moves or has no pinned leg. **When it fires and a ceiling leg is added, the name here
+# and the branch ruleset both have to change with it** -- a required context that no longer runs waits
+# forever, which is this file's own failure mode from the other direction.
 
 on:
   pull_request:
@@ -72,14 +67,14 @@ jobs:
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-sqlserver-latest:
-    name: Integration Tests (SQL Server latest)
+  integration-tests-sqlserver-2025:
+    name: Integration Tests (SQL Server 2025)
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-postgresql-latest:
-    name: Integration Tests (PostgreSQL latest)
+  integration-tests-postgresql-18:
+    name: Integration Tests (PostgreSQL 18)
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
@@ -92,8 +87,8 @@ jobs:
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-mysql-latest:
-    name: Integration Tests (MySQL latest)
+  integration-tests-mysql-26:
+    name: Integration Tests (MySQL 26)
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
@@ -104,8 +99,8 @@ jobs:
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-mariadb-latest:
-    name: Integration Tests (MariaDB latest)
+  integration-tests-mariadb-13:
+    name: Integration Tests (MariaDB 13)
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."

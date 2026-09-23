@@ -150,7 +150,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"}]') || fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2019","image":"mcr.microsoft.com/mssql/server:2019-CU32-GDR11-ubuntu-20.04"},{"ss":"2022","image":"mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"}]') }}
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"}]') || fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2019","image":"mcr.microsoft.com/mssql/server:2019-CU32-GDR11-ubuntu-20.04"},{"ss":"2022","image":"mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"}]') }}
     permissions:
       contents: read
       checks: write
@@ -187,11 +187,17 @@ jobs:
           }
           # The apt source is per SQL Server product line AND per Ubuntu base, so it cannot be
           # hardcoded once the matrix spans four versions. Derive it from the image's own
-          # /etc/os-release, exactly as scripts/run-modern-band-sweep.sh does -- an unrecognised base
-          # must FAIL here rather than install nothing and let the band read as a product failure
-          # (without full-text every SQL Server fixture dies in OneTimeSetUp with error 7609).
+          # /etc/os-release -- an unrecognised base must FAIL here rather than install nothing and let
+          # the band read as a product failure (without full-text every SQL Server fixture dies in
+          # OneTimeSetUp with error 7609).
+          #
+          # curl ONLY, and only when missing, which is what scripts/run-modern-band-sweep.sh does. This
+          # used to also install `systemctl` -- a package that does not exist on Ubuntu 18.04, and never
+          # used by anything here (the restart below is `docker container restart`). It went unnoticed
+          # because the only SQL Server leg was 2019, whose 20.04 base does have it; the 2017 leg added
+          # in this release is 18.04, and this step failed before a single test ran.
           retry docker exec -u 0 mssql apt-get update
-          retry docker exec -u 0 mssql apt-get install -yq curl systemctl
+          retry docker exec -u 0 mssql sh -c 'command -v curl >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl'
           retry docker exec -u 0 mssql sh -c '
             set -e
             . /etc/os-release
