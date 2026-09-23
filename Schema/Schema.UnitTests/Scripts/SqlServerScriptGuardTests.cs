@@ -34,7 +34,8 @@ public class SqlServerScriptGuardTests
         {
             using var stream = SchemaAsm.GetManifestResourceStream(resource);
             if (stream == null) continue;
-            yield return (resource, new StreamReader(stream).ReadToEnd());
+            using var reader = new StreamReader(stream);
+            yield return (resource, reader.ReadToEnd());
         }
     }
 

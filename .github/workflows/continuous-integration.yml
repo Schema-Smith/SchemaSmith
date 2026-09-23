@@ -235,7 +235,29 @@ jobs:
         # STATISTICAL_SEMANTICS full-text columns cannot be created without it, so the tests covering
         # them would silently skip on a runner that lacks it -- and a test that only ever skips proves
         # nothing. mssql-server-fts ships the database as a backup, so this needs no download.
-        run: ./scripts/provision-semantic-db.sh mssql sa "$TEST_PASSWORD"
+        #
+        # NOT FATAL ON 2017, and this is not a shortcut. mssql-server-fts for 2017 ships a
+        # semanticsdb.bak stamped 14.00.0700 while the engine is 14.00.3540, so the restore is refused
+        # with Msg 3169 -- the backup shipped WITH the server cannot be restored INTO that server.
+        # Failing the leg for that makes 2017 permanently uncertifiable over a packaging artifact that
+        # is not ours, and dropping 2017 is not an option: it is a supported version and it earned its
+        # leg by catching a real issue. scripts/run-modern-band-sweep.sh reached this conclusion first
+        # and records the gap in its row; CI now matches it instead of rediscovering it one red run at
+        # a time. The gap is annotated, never silent.
+        #
+        # Every OTHER version still fails hard. Semantic provisioning breaking on 2019/2022/2025 is a
+        # real regression, and tolerating it everywhere to accommodate 2017 would throw away the
+        # coverage this step exists to guarantee.
+        run: |
+          if ./scripts/provision-semantic-db.sh mssql sa "$TEST_PASSWORD"; then exit 0; fi
+          if [ "${{ matrix.ss }}" = "2017" ]; then
+            echo "::warning title=Semantic coverage skipped::SQL Server 2017 ships a semanticsdb.bak"\
+                 "stamped for a different build than the engine (Msg 3169), so STATISTICAL_SEMANTICS"\
+                 "tests self-skip on this leg. Known and accepted; see the comment on this step."
+            exit 0
+          fi
+          echo "::error::Semantic provisioning failed on SQL Server ${{ matrix.ss }}, where it is expected to succeed."
+          exit 1
 
       - name: Rename sa login to TestUser
         run: |

@@ -46,7 +46,8 @@ namespace Schema.UnitTests.Utility
             {
                 using var stream = asm.GetManifestResourceStream(name);
                 if (stream == null) continue;
-                var body = new StreamReader(stream).ReadToEnd();
+                using var reader = new StreamReader(stream);
+                var body = reader.ReadToEnd();
                 foreach (Match m in literal.Matches(body))
                 {
                     var text = m.Groups[1].Value.Replace("''", "'");

@@ -118,7 +118,8 @@ namespace Schema.UnitTests.Capabilities
             {
                 using var stream = SchemaAsm.GetManifestResourceStream(resource);
                 if (stream == null) continue;
-                var sql = new StreamReader(stream).ReadToEnd();
+                using var reader = new StreamReader(stream);
+                var sql = reader.ReadToEnd();
                 // Strip line comments first. These scripts explain their own behaviour in prose, so a
                 // comment saying "records one 'downgraded' row" would otherwise be read as a downgrade and
                 // attributed to whatever literal happened to precede it.
