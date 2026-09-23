@@ -150,7 +150,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"latest","image":"mcr.microsoft.com/mssql/server:latest"}]') || fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2019","image":"mcr.microsoft.com/mssql/server:2019-CU32-GDR11-ubuntu-20.04"},{"ss":"2022","image":"mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"},{"ss":"latest","image":"mcr.microsoft.com/mssql/server:latest"}]') }}
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"}]') || fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2019","image":"mcr.microsoft.com/mssql/server:2019-CU32-GDR11-ubuntu-20.04"},{"ss":"2022","image":"mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"}]') }}
     permissions:
       contents: read
       checks: write
@@ -291,7 +291,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ${{ github.event_name == 'pull_request' && fromJSON('["latest","12"]') || fromJSON('["latest","17","16","15","14","13","12"]') }}
+        pg: ${{ github.event_name == 'pull_request' && fromJSON('["18","12"]') || fromJSON('["18","17","16","15","14","13","12"]') }}
     permissions:
       contents: read
       checks: write
@@ -385,7 +385,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mysql: ${{ github.event_name == 'pull_request' && fromJSON('["latest","5.7"]') || fromJSON('["latest","8.4","8.0","5.7"]') }}
+        mysql: ${{ github.event_name == 'pull_request' && fromJSON('["26","5.7"]') || fromJSON('["26","8.4","8.0","5.7"]') }}
     permissions:
       contents: read
       checks: write
@@ -473,7 +473,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mariadb: ${{ github.event_name == 'pull_request' && fromJSON('["latest","10.2"]') || fromJSON('["latest","11.8","11.4","10.6","10.2"]') }}
+        mariadb: ${{ github.event_name == 'pull_request' && fromJSON('["13","10.2"]') || fromJSON('["13","11.8","11.4","10.6","10.2"]') }}
     permissions:
       contents: read
       checks: write
@@ -548,14 +548,26 @@ jobs:
           only-summary: 'true'
           use-actions-summary: 'true'
 
-  # THE RATCHET. A floating `latest` leg keeps us current by ROTATING coverage, not accumulating it: when
-  # `latest` advances, the version it moved off stops being tested by anything unless somebody pins it.
-  # PostgreSQL proved this the expensive way -- `latest` walked 15 -> 16 -> 17 -> 18 and all three middle
-  # majors sat untested inside a range the docs call continuous.
+  # THE RATCHET, and it is the ONLY thing that resolves `latest`. No test leg floats any more.
   #
-  # So this job fails the moment an engine releases a new major, and clearing it is a deliberate decision
-  # rather than a version bump: pin the outgoing major as a permanent leg, or knowingly accept the hole.
-  # It runs on pull requests too, because that is where somebody is most likely to notice and act.
+  # A floating leg keeps us current by ROTATING coverage rather than accumulating it: when `latest`
+  # advances, the version it moved off stops being tested unless somebody pins it. PostgreSQL proved that
+  # the expensive way -- `latest` walked 15 -> 16 -> 17 -> 18 and all three middle majors sat untested
+  # inside a range the docs call continuous. A floating leg ALSO runs a full suite against whatever the
+  # vendor shipped this morning, which is a result nobody can reproduce, and when it happens to resolve to
+  # a major already pinned it is the same run twice: SQL Server's `latest` and its `2025` leg were exactly
+  # that, two ~1.5 GB boots and two full suites for one digest.
+  #
+  # So every test leg is now an explicit major, and the question a floating leg used to answer --
+  # "has the ceiling moved?" -- is answered HERE, by comparison instead of by a test run. Two
+  # assertions, and the second is the one that used to be missing:
+  #   1. each engine's `latest` still resolves to the major declared in .github/engine-ceilings.json;
+  #   2. that declared major actually HAS a pinned leg in this file. Without (2) the declaration could
+  #      claim a ceiling nothing tests, which is the same hole in a tidier disguise.
+  #
+  # Clearing a failure is a deliberate decision rather than a version bump: add a leg for the new major,
+  # or knowingly accept the hole. It runs on pull requests too, because that is where somebody is most
+  # likely to notice and act.
   engine-ceiling-ratchet:
     name: Engine Ceiling Ratchet
     runs-on: ubuntu-latest
@@ -611,6 +623,29 @@ jobs:
               echo "$engine latest = major $got (expected $want) -- ceiling unchanged."
             fi
           done
+
+          # ASSERTION 2: the declared ceiling must actually HAVE a pinned leg in this file. Without this,
+          # engine-ceilings.json could name a major nothing tests -- the same untested-ceiling hole, just
+          # declared rather than drifted into. Greps this workflow for the version literal in that
+          # engine's matrix, which is deliberately crude: it fails loudly on a reshaped matrix rather
+          # than quietly passing on one it cannot parse.
+          for engine in sqlserver postgresql mysql mariadb; do
+            want=$(expect "$engine")
+            case "$engine" in
+              sqlserver)   key='"ss"' ;;
+              postgresql)  key='pg:' ;;
+              mysql)       key='mysql:' ;;
+              mariadb)     key='mariadb:' ;;
+            esac
+            if ! grep -F "$key" .github/workflows/continuous-integration.yml | grep -qE "\"$want\""; then
+              echo "::error::$engine declares a ceiling of $want in .github/engine-ceilings.json, but no"\
+                   "leg in this workflow pins $want. Add the leg, or lower the declared ceiling on purpose."
+              FAILED=1
+            else
+              echo "$engine ceiling $want has a pinned leg."
+            fi
+          done
+
           exit $FAILED
 
   coverage-gate:

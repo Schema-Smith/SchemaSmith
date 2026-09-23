@@ -61,6 +61,13 @@ FAILED=0
 # name:image:host-port:category -- every leg continuous-integration.yml runs on merge to main, floors
 # first so the fastest-failing and highest-signal bands report before the long tail.
 #
+# EVERY BAND IS AN EXPLICIT MAJOR -- no floating `latest` band. Running `latest` as its own band tests
+# whatever the vendor shipped this morning and records a result nobody can reproduce, and when it
+# happens to resolve to a major already pinned here it is simply the same run twice. What actually
+# needs checking is that the pinned set REACHES the ceiling, which is an assertion, not a test run:
+# assert_latest_is_covered() below resolves each engine's `latest` and fails the sweep if its major
+# is missing from the list. When an engine ratchets, that assertion is what tells you to add a band.
+#
 # LOCAL COVERS MORE THAN CI, NEVER LESS. CI minutes are spent on every push, so its matrix is what we
 # can afford continuously; this sweep runs once per release and can afford the bands CI cannot. Three
 # of these have no CI leg at all and are here for that reason: mysql:9 and mysql:26 sit in the gap
@@ -76,18 +83,17 @@ FLOORS=(
   "band-mariadb-114:mariadb:11.4:13414:MariaDb"
   "band-mariadb-118:mariadb:11.8:13418:MariaDb"
   "band-mariadb-12:mariadb:12:13412:MariaDb"
-  "band-mariadb-latest:mariadb:latest:13498:MariaDb"
+  "band-mariadb-13:mariadb:13:13413:MariaDb"
   "band-mysql-80:mysql:8.0:13480:MySQL"
   "band-mysql-84:mysql:8.4:13484:MySQL"
   "band-mysql-9:mysql:9:13409:MySQL"
   "band-mysql-26:mysql:26:13426:MySQL"
-  "band-mysql-latest:mysql:latest:13489:MySQL"
   "band-postgres-13:postgres:13:15413:PostgreSQL"
   "band-postgres-14:postgres:14:15414:PostgreSQL"
   "band-postgres-15:postgres:15:15415:PostgreSQL"
   "band-postgres-16:postgres:16:15416:PostgreSQL"
   "band-postgres-17:postgres:17:15417:PostgreSQL"
-  "band-postgres-latest:postgres:latest:15499:PostgreSQL"
+  "band-postgres-18:postgres:18:15418:PostgreSQL"
 )
 
 cleanup() {
@@ -96,7 +102,35 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Assert the pinned set REACHES the ceiling, rather than spending a band on `latest`. Resolving it is
+# a version query, not a test run: if `latest` has moved to a major nothing here pins, that is the
+# finding, and the answer is to add a band -- not to let a floating band quietly test it once and
+# record a result nobody can reproduce.
+assert_latest_is_covered() {
+  local img="$1" ver major
+  ver=$(docker run --rm "$img:latest" sh -c 'mysqld --version 2>/dev/null || mariadbd --version 2>/dev/null || postgres --version 2>/dev/null' 2>/dev/null | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | head -1)
+  if [ -z "$ver" ]; then
+    echo "  !! could not resolve $img:latest -- treating as a FAILURE, an unresolved ceiling is the"
+    echo "     exact condition this check exists to catch"
+    FAILED=1; return
+  fi
+  major="${ver%%.*}"
+  # MySQL and MariaDB pin whole majors (9, 26, 13); PostgreSQL does too (18). A band matching either
+  # the bare major or major.minor counts as covering it.
+  if printf '%s
+' "${FLOORS[@]}" | grep -qE ":$img:($major|$major\.[0-9]+):"; then
+    echo "  $img:latest = $ver -- covered by a pinned band"
+  else
+    echo "  !! $img:latest = $ver and NO band pins major $major."
+    echo "     The ceiling moved. Add \"band-$img-$major:$img:$major:<port>:<category>\" to FLOORS,"
+    echo "     and a matching leg to continuous-integration.yml + release.yml REQUIRED_CHECKS."
+    FAILED=1
+  fi
+}
+
 echo "===== Version-floor sweep ====="
+echo "--- ceiling check: is each engine's latest covered by a pinned band? ---"
+for img in mysql mariadb postgres; do assert_latest_is_covered "$img"; done
 echo "Building Release once so every leg runs --no-build..."
 if ! dotnet build SchemaSmith.sln -c Release -v q --nologo >/dev/null 2>&1; then
   echo "FAIL: Release build failed. Fix that first -- the legs below would all fail for the same reason."

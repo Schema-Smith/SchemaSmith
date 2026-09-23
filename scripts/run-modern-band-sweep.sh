@@ -45,9 +45,11 @@ PASSWORD='SchemaSmith!Band2026'
 # left 2019 and latest as CI legs NO local sweep certified -- exactly the hole the floor sweep exists
 # to close for MySQL and PostgreSQL. Release prep should fail here rather than on merge.
 #
-# `latest` and `2025-latest` resolve to the same digest today. That is not redundancy, it is the
-# point: the day SQL Server 2026 ships they diverge, and the floating band is what notices.
-BANDS="14340:2017-latest 14341:2019-latest 14342:2022-latest 14345:2025-latest 14349:latest"
+# NO FLOATING BAND. `latest` and `2025-latest` resolve to the same digest, so running both is one
+# ~1.5 GB boot and one full suite spent twice for a single result. Whether the ceiling has MOVED is a
+# comparison, not a test run, and continuous-integration.yml's ceiling ratchet already makes it --
+# including that the declared ceiling has a pinned leg. When it fires, add the band here.
+BANDS="14340:2017-latest 14341:2019-latest 14342:2022-latest 14345:2025-latest"
 
 cleanup() {
   for band in $BANDS; do
