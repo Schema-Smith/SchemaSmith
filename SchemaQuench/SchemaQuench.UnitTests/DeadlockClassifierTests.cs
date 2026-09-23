@@ -68,6 +68,41 @@ public class DeadlockClassifierTests
         Assert.That(DeadlockClassifier.IsMySqlLockTimeoutCode(MySqlErrorCode.DuplicateKeyEntry), Is.False);
     }
 
+    // ---- the MySQL counterparts of the PostgreSQL relation-cache race ------
+    // Found by the full integration suite at two workers: three failures across four runs, every one an
+    // EXCEPTION rather than a wrong answer, and none of them classified as retryable.
+
+    [Test]
+    public void MySqlConcurrentDdlSkippedTable_1684_IsRetryableContention()
+    {
+        // "Table '...' was skipped since its definition is being modified by concurrent DDL statement".
+        // The same event PostgreSQL reports as "could not open relation with OID" -- already retried
+        // there, and not here, which is the single-engine gap parity is meant to catch.
+        Assert.That(DeadlockClassifier.IsMySqlTransientConcurrencyCode((MySqlErrorCode)1684), Is.True);
+    }
+
+    [Test]
+    public void MySqlAutoIncrementReadFailed_1467_IsRetryableContention()
+    {
+        // The convergence procs create and drop several AUTO_INCREMENT temp tables per call; under
+        // concurrent work units that read can fail outright, and a re-run recreates them.
+        Assert.That(DeadlockClassifier.IsMySqlTransientConcurrencyCode(MySqlErrorCode.AutoIncrementReadFailed), Is.True);
+        Assert.That(MySqlErrorCode.AutoIncrementReadFailed, Is.EqualTo((MySqlErrorCode)1467));
+    }
+
+    [Test]
+    public void AnOrdinaryMySqlError_IsNotTransientConcurrency()
+    {
+        // Guards the widening in the direction that matters: re-running a real failure ten times just
+        // hides it behind attempts and reports the wrong cause at the end.
+        Assert.Multiple(() =>
+        {
+            Assert.That(DeadlockClassifier.IsMySqlTransientConcurrencyCode(MySqlErrorCode.DuplicateKeyEntry), Is.False);
+            Assert.That(DeadlockClassifier.IsMySqlTransientConcurrencyCode(MySqlErrorCode.NoSuchTable), Is.False);
+            Assert.That(DeadlockClassifier.IsMySqlTransientConcurrencyCode(MySqlErrorCode.ParseError), Is.False);
+        });
+    }
+
     [Test]
     public void PostgresException_LockNotAvailable_55P03_IsRetryableContention()
     {

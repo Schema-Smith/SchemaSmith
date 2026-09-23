@@ -274,9 +274,9 @@ public abstract class EventQuench_DropByAbsenceSharedTests : BaseTableQuenchTest
     /// itself -- MySQL cannot PREPARE CREATE EVENT or DROP EVENT (error 1295) -- so it RETURNS an ordered
     /// statement list that the caller runs. The whole list is read BEFORE any of it executes, because the
     /// reader holds the connection the statements then run on.
+    /// <para>Returns the statements it generated, so a caller can assert that a second identical run
+    /// generates NONE -- which is what deploy-time idempotency means here.</para>
     /// </summary>
-    /// <summary>Runs the quench and returns the statements it generated, so a caller can assert that a
-    /// second identical run generates NONE -- which is what deploy-time idempotency means here.</summary>
     private List<string> RunEventQuench(IDbCommand cmd, string eventsJson, string productName, bool dropRemoved)
     {
         var escaped = eventsJson.Replace("'", "''");
@@ -284,17 +284,28 @@ public abstract class EventQuench_DropByAbsenceSharedTests : BaseTableQuenchTest
             $"CALL SchemaSmith_EventQuench('{productName}', '{_mainDb}', '{escaped}', 0, "
             + $"{(dropRemoved ? 1 : 0)}, 'Main')";
 
+        // Retried like every other quench driver in this base class. This one was the exception, and it
+        // is why the event fixtures were the ones that failed a full run at two workers: the procedure
+        // creates and drops several AUTO_INCREMENT temp tables per call, so a sibling worker's DDL can
+        // provoke 1467 or 1684 -- both transient, both retried by the PRODUCT path
+        // (DeadlockClassifier.IsRetryableContention), and neither retried here. A test that does not
+        // retry what production retries is testing something production never does.
         var statements = new List<string>();
-        using (var reader = cmd.ExecuteReader())
+        RetryingTransientConcurrency(() =>
         {
+            statements.Clear();
+            var call = cmd.CommandText;
+            using var reader = cmd.ExecuteReader();
             while (reader.Read())
                 if (!reader.IsDBNull(0)) statements.Add(reader.GetString(0));
-        }
+            reader.Close();
+            cmd.CommandText = call;
+        });
 
         foreach (var statement in statements)
         {
             cmd.CommandText = statement;
-            cmd.ExecuteNonQuery();
+            RetryingTransientConcurrency(() => cmd.ExecuteNonQuery());
         }
 
         return statements;

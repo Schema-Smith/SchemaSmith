@@ -133,10 +133,49 @@ internal static class DeadlockClassifier
     public static bool IsPostgresLockTimeoutState(string sqlState) => sqlState == "55P03";
 
     /// <summary>
+    /// True for the MySQL/MariaDB transient failures a parallel deploy provokes by reading catalog and
+    /// churning temp tables while a sibling work unit runs DDL.
+    /// <para>
+    /// <b>1684</b> — "Table '…' was skipped since its definition is being modified by concurrent DDL
+    /// statement" — is the MySQL equivalent of the PostgreSQL relation-cache race in
+    /// <see cref="IsTransientRelationRace"/>, and arrives for the same reason: a catalog read caught an
+    /// object mid-alter. PostgreSQL's form was already retried and MySQL's was not, which is the accidental
+    /// single-engine gap the platform-parity rule exists to catch. The engine SKIPS the object rather than
+    /// returning a bad row, so the read is incomplete rather than wrong — re-running gets a consistent one.
+    /// </para>
+    /// <para>
+    /// <b>1467</b> — "Failed to read auto-increment value from storage engine" — is transient in the same
+    /// way. The convergence procs create and drop several AUTO_INCREMENT temp tables per call, and under
+    /// concurrent work units that read can fail outright; the retry recreates them.
+    /// </para>
+    /// <para>
+    /// Both are safe for exactly the reason the deadlock retry is: nothing partial survives a failed call
+    /// that a re-run would not recompute, because the convergence procs derive desired-vs-existing from
+    /// scratch every time. Observed against MariaDB and MySQL under two test workers -- three failures in
+    /// four full-assembly runs, every one an exception rather than a wrong answer.
+    /// </para>
+    /// </summary>
+    public static bool IsMySqlTransientConcurrencyCode(MySqlErrorCode code) =>
+        // 1684 has no named member in MySqlConnector's enum, so it is matched by value. Named constants
+        // are preferred everywhere else here precisely because a bare number is easy to misread -- hence
+        // the spelled-out name beside it.
+        code == (MySqlErrorCode)1684                        // ER_WARN_I_S_SKIPPED_TABLE
+        || code == MySqlErrorCode.AutoIncrementReadFailed;  // 1467
+
+    /// <summary>
     /// True for any transient contention an idempotent convergence proc can recover from by re-running:
-    /// a deadlock (all engines), a lock-wait timeout (all engines), or the PostgreSQL relation-cache race
-    /// under parallel fan-out.
+    /// a deadlock (all engines), a lock-wait timeout (all engines), the PostgreSQL relation-cache race, or
+    /// its MySQL/MariaDB counterparts under parallel fan-out.
     /// </summary>
     public static bool IsRetryableContention(Exception ex) =>
-        IsDeadlock(ex) || IsLockTimeout(ex) || IsTransientRelationRace(ex);
+        IsDeadlock(ex) || IsLockTimeout(ex) || IsTransientRelationRace(ex)
+        || IsMySqlTransientConcurrency(ex);
+
+    private static bool IsMySqlTransientConcurrency(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+            if (e is MySqlException my && IsMySqlTransientConcurrencyCode(my.ErrorCode))
+                return true;
+        return false;
+    }
 }

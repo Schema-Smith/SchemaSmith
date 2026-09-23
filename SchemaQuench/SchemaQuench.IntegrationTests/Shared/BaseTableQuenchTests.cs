@@ -57,24 +57,10 @@ public abstract class BaseTableQuenchTests
                              $"CALL SchemaSmith_IndexOnlyQuench('{_productName}', '{_mainDb}', 0, 1, 1);";
         }
 
-        var retry = true;
-        var tries = 0;
-        while (retry && tries++ < 10)
-        {
-            try
-            {
-                cmd.ExecuteNonQuery();
-                retry = false;
-            }
-            catch (Exception e)
-            {
-                // MySQL/MariaDB deadlock error message
-                if (!e.Message.ContainsIgnoringCase("Deadlock found when trying to get lock") &&
-                    !e.Message.ContainsIgnoringCase("Lock wait timeout exceeded"))
-                    throw;
-                Thread.Sleep(1000);
-            }
-        }
+        // Was an inline copy of the same loop, narrower than it needed to be: it knew about deadlock and
+        // lock-wait timeout and not about the concurrent-DDL skip (1684), which is how
+        // RemovedFromProduct_DropsByDefault_WithUnknownIndexesOff failed a full run at two workers.
+        RetryingTransientConcurrency(() => cmd.ExecuteNonQuery());
     }
 
     /// <summary>
@@ -106,22 +92,39 @@ public abstract class BaseTableQuenchTests
         ExecuteWithDeadlockRetry(cmd);
     }
 
-    private void ExecuteWithDeadlockRetry(IDbCommand cmd)
+    private void ExecuteWithDeadlockRetry(IDbCommand cmd) =>
+        RetryingTransientConcurrency(() => cmd.ExecuteNonQuery());
+
+    /// <summary>
+    /// The transient failures two test workers provoke against one shared database. Deadlock and
+    /// lock-wait timeout were always here; the other two were found by the full suite at two workers and
+    /// are the same family — a catalog read or a temp-table operation caught mid-DDL by a sibling.
+    /// <para>These are the test-side mirror of <c>DeadlockClassifier.IsRetryableContention</c>, which is
+    /// what the PRODUCT retries. Matched on message text rather than the typed code because these helpers
+    /// take an <see cref="IDbCommand"/> and stay engine-agnostic; the product, which knows its client,
+    /// matches the codes.</para>
+    /// </summary>
+    protected static bool IsTransientConcurrency(Exception e) =>
+        e.Message.ContainsIgnoringCase("Deadlock found when trying to get lock")
+        || e.Message.ContainsIgnoringCase("Lock wait timeout exceeded")
+        || e.Message.ContainsIgnoringCase("is being modified by concurrent DDL statement")   // 1684
+        || e.Message.ContainsIgnoringCase("Failed to read auto-increment value");            // 1467
+
+    /// <summary>
+    /// Run <paramref name="action"/>, retrying only transient concurrency. Anything else is rethrown
+    /// immediately: a retry loop that swallows real failures turns one clear error into ten slow ones.
+    /// </summary>
+    protected static void RetryingTransientConcurrency(Action action)
     {
-        var retry = true;
-        var tries = 0;
-        while (retry && tries++ < 10)
+        for (var attempt = 1; attempt <= 10; attempt++)
         {
             try
             {
-                cmd.ExecuteNonQuery();
-                retry = false;
+                action();
+                return;
             }
-            catch (Exception e)
+            catch (Exception e) when (attempt < 10 && IsTransientConcurrency(e))
             {
-                if (!e.Message.ContainsIgnoringCase("Deadlock found when trying to get lock") &&
-                    !e.Message.ContainsIgnoringCase("Lock wait timeout exceeded"))
-                    throw;
                 Thread.Sleep(1000);
             }
         }
