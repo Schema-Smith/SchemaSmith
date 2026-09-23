@@ -56,8 +56,16 @@ public abstract class TableQuench_CaseDifferingOwnershipSharedTests : BaseTableQ
         CleanUp(cmd);
         Exec(cmd, $"CREATE TABLE `{Upper}` (`id` INT NOT NULL)");
 
-        // Folding servers collapse this onto the table above, leaving one table with one owner.
-        var caseSensitiveServer = TryExec(cmd, $"CREATE TABLE `{Lower}` (`id` INT NOT NULL)");
+        // Ask the server what it does, rather than inferring it from a CREATE that was allowed to fail.
+        // The old form ran `CREATE TABLE <lower>` and read a swallowed DbException as "this server
+        // folds identifiers" -- so ANY unrelated failure of that statement (a leftover table from an
+        // interrupted run, a permission change, a future image defaulting the variable to 1) silently
+        // downgraded this test to a two-line no-op that skips the entire bug it exists to cover, with
+        // nothing in the output to say so.
+        var caseSensitiveServer = Scalar(cmd, "SELECT @@lower_case_table_names") == "0";
+
+        if (caseSensitiveServer)
+            Exec(cmd, $"CREATE TABLE `{Lower}` (`id` INT NOT NULL)");
 
         try
         {
@@ -111,17 +119,17 @@ public abstract class TableQuench_CaseDifferingOwnershipSharedTests : BaseTableQ
         cmd.ExecuteNonQuery();
     }
 
-    private static bool TryExec(IDbCommand cmd, string sql)
+    /// <summary>Best-effort cleanup: run it, and do not care whether the object was there.</summary>
+    private static void TryExec(IDbCommand cmd, string sql)
     {
         try
         {
             cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
-            return true;
         }
         catch (DbException)
         {
-            return false;
+            // Nothing to clean up, which is a fine outcome for cleanup.
         }
     }
 

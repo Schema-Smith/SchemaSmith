@@ -2,6 +2,7 @@
 
 using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using Schema.DataAccess;
 using Schema.Domain;
 
@@ -374,5 +375,81 @@ public abstract class ForgeKindlerSharedTests
         command.CommandText = $"SELECT IS_FREE_LOCK('{ForgeKindler.GetMySqlKindleLockName(command)}')";
         Assert.That(System.Convert.ToInt64(command.ExecuteScalar()), Is.EqualTo(1),
             "Kindle must release its GET_LOCK when done.");
+    }
+
+    [TestCase("SchemaSmith_ProductOwnership", "ObjectSchema,ObjectName")]
+    [TestCase("SchemaSmith_ExpressionMap", "ObjectSchema,ObjectTable,ObjectName")]
+    public void KindleTheForge_LegacyCaseInsensitiveIdentifierColumns_BootstrapConvergesThemToBinary(
+        string table, string identifierColumns)
+    {
+        // The UPGRADE half of the case-differing-identifier fix, and the half every EXISTING
+        // installation depends on. Every other fixture creates a brand-new database, so these tables are
+        // CREATED with utf8mb4_bin identifier columns and the convergence path is never entered -- which
+        // means a regression to add-missing-columns-only would leave every deployed installation on the
+        // case-INSENSITIVE key, where the second of two case-differing tables silently gets no ownership
+        // row (unprotected, and invisible to drop-by-absence) while the suite stays green.
+        //
+        // So: hand-create the table in its pre-fix shape, force a kindle, and assert the collation moved.
+        using var freshConnection = DbConnectionFactory.ForPlatform(Platform)
+            .GetDbConnection(MainConnectionString);
+        freshConnection.Open();
+        using var command = freshConnection.CreateCommand();
+
+        var columns = identifierColumns.Split(',');
+
+        try
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+            command.ExecuteNonQuery();
+
+            // The pre-fix shape: identifier columns on the TABLE's utf8mb4_unicode_ci default, which is
+            // what a case-insensitive unique key is made of. Only the columns the fix converges are
+            // declared here; Bootstrap adds the rest, which is the same upgrade a real installation gets.
+            var identifierDdl = string.Join(", ", columns.Select(c => $"`{c}` VARCHAR(64) NOT NULL"));
+            command.CommandText = $@"
+                CREATE TABLE `{table}` (
+                    `Id` INT AUTO_INCREMENT PRIMARY KEY,
+                    {identifierDdl}
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
+            command.ExecuteNonQuery();
+
+            // Guards the premise. If the hand-created table somehow already had the target collation,
+            // the assertion below would pass without Bootstrap having converged anything at all.
+            Assert.That(CollationsOf(command, table, columns),
+                Has.All.EqualTo("utf8mb4_unicode_ci"),
+                "the legacy shape must start case-INSENSITIVE, or this test proves nothing");
+
+            // force: the version-gated kindle would otherwise skip after the fixture's initial kindle
+            ForgeKindler.KindleTheForge(command, Platform, forceReKindle: true);
+
+            Assert.That(CollationsOf(command, table, columns), Has.All.EqualTo("utf8mb4_bin"),
+                $"kindling an EXISTING {table} must converge its identifier columns to a case-sensitive "
+                + "collation. Left case-insensitive, the unique key conflates two tables whose names "
+                + "differ only by case and the second one silently goes unowned.");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+            command.ExecuteNonQuery();
+            ForgeKindler.KindleTheForge(command, Platform, forceReKindle: true);
+        }
+    }
+
+    private List<string> CollationsOf(IDbCommand command, string table, IEnumerable<string> columns)
+    {
+        var list = string.Join(",", columns.Select(c => $"'{c}'"));
+        command.CommandText = $@"
+            SELECT COLLATION_NAME
+              FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = '{MainDb}'
+               AND TABLE_NAME = '{table}'
+               AND COLUMN_NAME IN ({list})
+             ORDER BY COLUMN_NAME";
+        var found = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) found.Add(reader.IsDBNull(0) ? null : reader.GetString(0));
+        reader.Close();
+        Assert.That(found, Is.Not.Empty, $"no identifier columns found on {table}");
+        return found;
     }
 }

@@ -57,12 +57,17 @@ public abstract class TableQuench_CaseDifferingTableNamesSharedTests : BaseTable
         Exec(cmd, $"DROP TABLE IF EXISTS `{Sibling}`");
         Exec(cmd, $"CREATE TABLE `{Declared}` (`id` INT NOT NULL, `a` INT NULL)");
 
-        // On lower_case_table_names >= 1 this folds onto the same table and the CREATE is a no-op/failure;
-        // there is then only one table and nothing to conflate, so the test still passes meaningfully.
-        var caseSensitiveServer = TryExec(cmd,
-            $"CREATE TABLE `{Sibling}` (`id` INT NOT NULL, `x` INT NULL, `y` INT NULL)");
+        // On lower_case_table_names >= 1 the sibling folds onto the table above: there is then only one
+        // table and nothing to conflate, so the test still passes meaningfully. Read that from the
+        // server rather than inferring it from a CREATE allowed to fail -- a swallowed exception cannot
+        // tell "this server folds identifiers" from "that statement failed for some other reason", and
+        // the second reading quietly skips the bug this covers.
+        var caseSensitiveServer = Scalar(cmd, "SELECT @@lower_case_table_names") == "0";
         if (caseSensitiveServer)
+        {
+            Exec(cmd, $"CREATE TABLE `{Sibling}` (`id` INT NOT NULL, `x` INT NULL, `y` INT NULL)");
             Exec(cmd, $"INSERT INTO `{Sibling}` VALUES (1, 10, 20)");
+        }
 
         try
         {
@@ -102,17 +107,17 @@ public abstract class TableQuench_CaseDifferingTableNamesSharedTests : BaseTable
         cmd.ExecuteNonQuery();
     }
 
-    private static bool TryExec(IDbCommand cmd, string sql)
+    /// <summary>Best-effort cleanup: run it, and do not care whether the object was there.</summary>
+    private static void TryExec(IDbCommand cmd, string sql)
     {
         try
         {
             cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
-            return true;
         }
         catch (DbException)
         {
-            return false;
+            // Nothing to clean up, which is a fine outcome for cleanup.
         }
     }
 
