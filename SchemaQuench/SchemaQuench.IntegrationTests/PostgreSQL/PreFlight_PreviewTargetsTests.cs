@@ -59,7 +59,6 @@ public class PreFlight_PreviewTargetsTests
         FactoryContainer.Register(_environment);
         LogFactory.Register("ErrorLog", _errorLog);
         LogFactory.Register("ProgressLog", _progressLog);
-        Npgsql.NpgsqlConnection.ClearAllPools();
     }
 
     [TearDown]
@@ -67,7 +66,6 @@ public class PreFlight_PreviewTargetsTests
     {
         LogFactory.Clear();
         FactoryContainer.Unregister<IEnvironment>();
-        Npgsql.NpgsqlConnection.ClearAllPools();
     }
 
     [Test]
@@ -369,7 +367,6 @@ public class PreFlight_PreviewTargetsTests
     {
         try
         {
-            Npgsql.NpgsqlConnection.ClearAllPools();
             using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
             conn.Open();
             using var cmd = conn.CreateCommand();

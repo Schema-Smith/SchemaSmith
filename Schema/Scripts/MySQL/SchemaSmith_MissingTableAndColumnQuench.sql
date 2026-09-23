@@ -26,6 +26,12 @@ BEGIN
     DECLARE v_Sql TEXT;
     DECLARE v_StatusTableName VARCHAR(128);
     DECLARE v_StatusVariant VARCHAR(128);
+    -- The catalog is utf8mb3. Comparing a bare catalog column against a value in the SAME charset lets
+    -- MariaDB push the schema filter down (EXPLAIN: "Scanned 1 database" rather than "Scanned all
+    -- databases"); wrapping the column in CONVERT(... USING utf8mb4) defeated it and cost ~1.8ms per
+    -- database ON THE SERVER, on every deploy. A bare parameter does NOT work -- it carries the
+    -- connection charset -- so the declared local is load-bearing, not decoration.
+    DECLARE v_IsDbName VARCHAR(128) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT p_DatabaseName;
 
     -- Cursor for CREATE TABLE statements (non-generated columns only, ordered by OrdinalPosition).
     -- Still cursor-driven in create_tables_loop below: each new table is a distinct standalone
@@ -748,7 +754,7 @@ BEGIN
         SET c.NewColumn = 0
         WHERE c.NewColumn = 1
           AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS ic
-                      WHERE CONVERT(ic.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                      WHERE ic.TABLE_SCHEMA = v_IsDbName
                         AND CONVERT(ic.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4)
                         AND CONVERT(ic.COLUMN_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4));
 
@@ -783,7 +789,7 @@ BEGIN
             SET t.NewTable = 0
             WHERE t.NewTable = 1
               AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES ist
-                          WHERE CONVERT(ist.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                          WHERE ist.TABLE_SCHEMA = v_IsDbName
                             AND CONVERT(ist.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4));
 
             -- NewColumn was set at parse time, before the restore brought the table back, so the
@@ -793,7 +799,7 @@ BEGIN
             SET c.NewColumn = 0
             WHERE c.NewColumn = 1
               AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS ic
-                          WHERE CONVERT(ic.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                          WHERE ic.TABLE_SCHEMA = v_IsDbName
                             AND CONVERT(ic.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4)
                             AND CONVERT(ic.COLUMN_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4));
         END IF;

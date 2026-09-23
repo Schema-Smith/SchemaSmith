@@ -55,7 +55,6 @@ public class FleetIdentificationDatabaseTests
         FactoryContainer.Register(_environment);
         LogFactory.Register("ErrorLog", _errorLog);
         LogFactory.Register("ProgressLog", _progressLog);
-        Npgsql.NpgsqlConnection.ClearAllPools();
     }
 
     [TearDown]
@@ -64,7 +63,6 @@ public class FleetIdentificationDatabaseTests
         DropControlDb();
         LogFactory.Clear();
         FactoryContainer.Unregister<IEnvironment>();
-        Npgsql.NpgsqlConnection.ClearAllPools();
     }
 
     [Test]
@@ -174,7 +172,6 @@ public class FleetIdentificationDatabaseTests
     {
         try
         {
-            Npgsql.NpgsqlConnection.ClearAllPools();
             using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
             conn.Open();
             using var cmd = conn.CreateCommand();

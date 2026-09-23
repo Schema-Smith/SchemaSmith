@@ -68,12 +68,6 @@ public class SchemaTemplateConnectionProfileTests
             File.WriteAllText(_templatePath, _originalTemplateJson);
     }
 
-    [SetUp]
-    public void SetUp() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [TearDown]
-    public void TearDown() => Npgsql.NpgsqlConnection.ClearAllPools();
-
     [Test]
     [Explicit("Connection profiling — 10 tenants, AllowParallel=true. Run on demand only.")]
     public void Run1_10Tenants_Parallel() => CaptureRun("r1_parallel_10", tenantCount: 10, allowParallel: true);

@@ -58,8 +58,8 @@ BEGIN TRY
              CASE WHEN t.TrackColumnsUpdated = 1 THEN ' WITH (TRACK_COLUMNS_UPDATED = ON)' ELSE '' END + ';' + CHAR(13) + CHAR(10)
         ELSE '' END
       FROM #Tables t WITH (NOLOCK)
-      JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-      LEFT JOIN sys.change_tracking_tables ctt WITH (NOLOCK) ON ctt.[object_id] = st.[object_id]
+      JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+      LEFT JOIN sys.change_tracking_tables ctt ON ctt.[object_id] = st.[object_id]
       WHERE (t.EnableChangeTracking = 1 AND ctt.[object_id] IS NULL)
          OR (t.EnableChangeTracking = 0 AND ctt.[object_id] IS NOT NULL)
          OR (t.EnableChangeTracking = 1 AND ctt.[object_id] IS NOT NULL AND ctt.is_track_columns_updated_on <> t.TrackColumnsUpdated)

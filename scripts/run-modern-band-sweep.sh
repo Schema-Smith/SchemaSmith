@@ -34,8 +34,22 @@ SWEEP_STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SWEEP_ROWS=""
 PASSWORD='SchemaSmith!Band2026'
 
-# port:image -- 2019 is absent on purpose, that is the leg CI already runs.
-BANDS="14340:2017-latest 14342:2022-latest 14345:2025-latest"
+# port:image -- covers every leg continuous-integration.yml runs for SQL Server, and is free to cover
+# MORE. Local sweeps are a SUPERSET of CI, never a subset: CI's matrix is what we can afford on every
+# push, this runs once per release. Same rule scripts/run-floor-sweep.sh follows for the other three
+# engines -- keep both in sync when CI's legs move, and never by REMOVING a band here.
+#
+# It did not always. 2019 used to be excluded here because it was the ONLY SQL Server leg CI ran, so
+# this sweep existed to cover what CI did not. v2.7.0 gave SQL Server a full matrix (2017, 2019, 2022,
+# 2025 and a floating latest) and that inverted the rationale without anyone updating this list, which
+# left 2019 and latest as CI legs NO local sweep certified -- exactly the hole the floor sweep exists
+# to close for MySQL and PostgreSQL. Release prep should fail here rather than on merge.
+#
+# NO FLOATING BAND. `latest` and `2025-latest` resolve to the same digest, so running both is one
+# ~1.5 GB boot and one full suite spent twice for a single result. Whether the ceiling has MOVED is a
+# comparison, not a test run, and continuous-integration.yml's ceiling ratchet already makes it --
+# including that the declared ceiling has a pinned leg. When it fires, add the band here.
+BANDS="14340:2017-latest 14341:2019-latest 14342:2022-latest 14345:2025-latest"
 
 cleanup() {
   for band in $BANDS; do

@@ -65,17 +65,8 @@ public class SchemaTemplateRoundTripTests
             try { Directory.Delete(_tempProductPath, recursive: true); }
             catch { /* best effort — temp cleanup */ }
         }
-        Npgsql.NpgsqlConnection.ClearAllPools();
         FactoryContainer.Clear();
         LogFactory.Clear();
-    }
-
-    [TearDown]
-    public void TearDownClearPgPools()
-    {
-        // Match the PG SchemaTemplateHappyPathTests discipline: bound the connection pool to keep
-        // CI's max_connections=500 ceiling comfortable.
-        Npgsql.NpgsqlConnection.ClearAllPools();
     }
 
     [Test]

@@ -35,9 +35,23 @@ SWEEP_SHA="$(git rev-parse --short HEAD)"
 SWEEP_STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SWEEP_ROWS=""
 
+# Port -> version, so the RECORD names what was certified rather than a number nobody can decode a
+# year later. These four are the whole no-container range: MCR publishes no SQL Server image older
+# than 2017, so majors 10 through 13 can ONLY be covered by a real local install. That is also why
+# this sweep cannot move into CI -- it is not a preference, there is no image to run.
+version_for() {
+  case "$1" in
+    14330) echo "2008 R2 (major 10)" ;;
+    14331) echo "2012 (major 11)" ;;
+    14332) echo "2014 (major 12)" ;;
+    14333) echo "2016 (major 13)" ;;
+    *)     echo "unknown instance" ;;
+  esac
+}
+
 echo "===== 1. GenuineOldBinary, per instance ====="
 for port in 14330 14331 14332 14333; do
-  echo "--- instance $port"
+  echo "--- instance $port -- SQL Server $(version_for "$port")"
   SmithySettings_SqlServer__Server=127.0.0.1 SmithySettings_SqlServer__Port=$port \
   SmithySettings_SqlServer__User=sa SmithySettings_SqlServer__Password='SchemaSmith!Old2026' \
   dotnet test Schema/Schema.IntegrationTests/Schema.IntegrationTests.csproj --no-build \
@@ -45,7 +59,7 @@ for port in 14330 14331 14332 14333; do
     | grep -E "^(Passed!|Failed!|No test)|^  (Failed|Skipped) "
   summary="$(grep -E "^(Passed!|Failed!)" "/tmp/ss-sweep-$port.log" | head -1 | sed "s/ - Duration.*//")"
   expected="7 passed / 4 skipped"; [ "$port" = "14330" ] && expected="6 passed / 5 skipped"
-  SWEEP_ROWS="${SWEEP_ROWS}| SQL Server @ $port | ${summary:-NO RESULT} | $expected |
+  SWEEP_ROWS="${SWEEP_ROWS}| SQL Server $(version_for "$port") @ $port | ${summary:-NO RESULT} | $expected |
 "
 done
 echo "===== 2. 2008 emit-guard cert (default settings; fixture reaches 14330 itself) ====="

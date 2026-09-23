@@ -1,4 +1,4 @@
--- Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
+﻿-- Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 -- Licensed for use and modification with SchemaSmith products only.
 -- Redistribution outside of SchemaSmith product usage is prohibited.
 
@@ -41,6 +41,12 @@ BEGIN
             'Status', CASE e.STATUS WHEN 'ENABLED' THEN 'ENABLE'
                                     WHEN 'DISABLED' THEN 'DISABLE'
                                     WHEN 'SLAVESIDE_DISABLED' THEN 'DISABLE ON SLAVE'
+                                    -- MySQL 8.4 renamed this catalog value as part of its SLAVE ->
+                                    -- REPLICA terminology change. Both spellings mean the same state and
+                                    -- both map to the same DDL, which 8.4 still accepts, so the package
+                                    -- keeps one portable spelling and an extract taken on either version
+                                    -- deploys to the other. MariaDB still reports the older value.
+                                    WHEN 'REPLICA_SIDE_DISABLED' THEN 'DISABLE ON SLAVE'
                                     ELSE e.STATUS END,
             -- A BARE COMPARISON, not CASE ... THEN TRUE. The engines disagree on what that produces:
             -- MySQL emits 1 for it, which is not a JSON boolean, and the generated .json-schema declares

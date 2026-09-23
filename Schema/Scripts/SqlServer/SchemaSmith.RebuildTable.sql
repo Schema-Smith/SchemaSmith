@@ -165,7 +165,7 @@ BEGIN
     ORDER BY c.[_RowId]
 
   DECLARE @v_CapturedIdentity DECIMAL(38, 0) = NULL
-  IF EXISTS (SELECT 1 FROM sys.identity_columns WITH (NOLOCK) WHERE [object_id] = @v_ObjectId AND last_value IS NOT NULL)
+  IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = @v_ObjectId AND last_value IS NOT NULL)
     SET @v_CapturedIdentity = CONVERT(DECIMAL(38, 0), IDENT_CURRENT(@v_Qualified))
 
   -- IDENTITY_INSERT is only needed when the declared identity column ALSO exists on the live table, i.e.
@@ -264,7 +264,7 @@ BEGIN
              'ALTER TABLE [' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '] DROP CONSTRAINT [' + fk.[name] + '];' + @v_CrLf +
              'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''[' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '].[' + fk.[name] + ']'', ''dropped'');'
              AS NVARCHAR(MAX))
-           FROM sys.foreign_keys fk WITH (NOLOCK)
+           FROM sys.foreign_keys fk
            WHERE fk.referenced_object_id = @v_ObjectId
            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
 
@@ -318,7 +318,7 @@ BEGIN
     -- so a preview's manifest lists the inbound keys a real run would take out.
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
       SELECT @@SPID, 'foreignKey', '[' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '].[' + fk.[name] + ']', 'wouldDrop'
-        FROM sys.foreign_keys fk WITH (NOLOCK)
+        FROM sys.foreign_keys fk
         WHERE fk.referenced_object_id = @v_ObjectId
     RETURN
   END

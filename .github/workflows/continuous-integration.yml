@@ -121,15 +121,42 @@ jobs:
           use-actions-summary: 'true'
 
   integration-tests-sqlserver:
-    name: Integration Tests (SQL Server)
+    name: Integration Tests (SQL Server ${{ matrix.ss }})
     runs-on: ubuntu-latest
     needs: [build-and-unit-tests, sweep-record]
+    # SQL Server has the MOST version-specific behaviour of the four engines -- compat-level cliffs, the
+    # OPENJSON/STRING_AGG boundary, catalog columns that arrive in 2017, ledger in 2022, native json in
+    # 2025 -- and until now it had the FEWEST legs: one, 2019, which is neither the floor nor the latest.
+    # The reclaimed minutes from the matrix-shape change are spent here, which is what they were for.
+    #
+    # A pull request runs floor + latest (2017 + latest), the same rule the other engines follow.
+    #
+    # WHY SQL SERVER FLOATS TOO, and why `latest` duplicating the 2025 pin is the point rather than waste.
+    # An earlier draft pinned every SQL Server leg and excluded it from the ratchet, justified by "its legs
+    # are all pinned so there is no floating leg to ratchet" -- which is circular, and leaves the ONE engine
+    # that started this whole investigation (a single pinned 2019 leg that silently decayed) free to decay
+    # again the day the next version ships. `latest` and `2025-latest` are the same digest today, so the
+    # floating leg costs one duplicate run now; the moment a new major ships it picks it up and TESTS it,
+    # rather than merely telling us it exists. Finding out whether the new version breaks us is the whole
+    # purpose -- "catch breaking changes when they happen" (Paul, 2026-09-20). Merge to main runs all four.
+    #
+    # scripts/run-modern-band-sweep.sh remains the evidence these bands are provisionable and green --
+    # it is where 2017/2022/2025 were first proven, and its per-band notes are the source for the
+    # Ubuntu-derived product line used by the full-text install below.
+    # Combinations are defined wholly by `include`, NOT by a `ss:` list plus an `include` that supplies
+    # each image. That shape looks tidier and is wrong: an include entry whose `ss` does not match an
+    # existing combination is ADDED as a new one, so the 2019 and 2022 entries would reappear on a pull
+    # request and silently undo the reduced matrix.
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"}]') || fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2019","image":"mcr.microsoft.com/mssql/server:2019-CU32-GDR11-ubuntu-20.04"},{"ss":"2022","image":"mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"}]') }}
     permissions:
       contents: read
       checks: write
     services:
       sqlserver:
-        image: mcr.microsoft.com/mssql/server:2019-CU32-GDR10-ubuntu-20.04
+        image: ${{ matrix.image }}
         env:
           SA_PASSWORD: ${{ env.TEST_PASSWORD }}
           ACCEPT_EULA: Y
@@ -158,9 +185,30 @@ jobs:
               delay=$((delay*2))
             done
           }
+          # The apt source is per SQL Server product line AND per Ubuntu base, so it cannot be
+          # hardcoded once the matrix spans four versions. Derive it from the image's own
+          # /etc/os-release -- an unrecognised base must FAIL here rather than install nothing and let
+          # the band read as a product failure (without full-text every SQL Server fixture dies in
+          # OneTimeSetUp with error 7609).
+          #
+          # curl ONLY, and only when missing, which is what scripts/run-modern-band-sweep.sh does. This
+          # used to also install `systemctl` -- a package that does not exist on Ubuntu 18.04, and never
+          # used by anything here (the restart below is `docker container restart`). It went unnoticed
+          # because the only SQL Server leg was 2019, whose 20.04 base does have it; the 2017 leg added
+          # in this release is 18.04, and this step failed before a single test ran.
           retry docker exec -u 0 mssql apt-get update
-          retry docker exec -u 0 mssql apt-get install -yq curl systemctl
-          retry docker exec -u 0 mssql curl -fsSL https://packages.microsoft.com/config/ubuntu/20.04/mssql-server-2019.list -o /etc/apt/sources.list.d/mssql-server-2019.list
+          retry docker exec -u 0 mssql sh -c 'command -v curl >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl'
+          retry docker exec -u 0 mssql sh -c '
+            set -e
+            . /etc/os-release
+            case "$VERSION_ID" in
+              18.04) PROD=2017 ;;
+              20.04) PROD=2019 ;;
+              22.04) PROD=2022 ;;
+              24.04) PROD=2025 ;;
+              *) echo "unsupported Ubuntu base $VERSION_ID for mssql-server-fts" >&2; exit 1 ;;
+            esac
+            curl -fsSL "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/mssql-server-${PROD}.list"               -o /etc/apt/sources.list.d/mssql-server.list'
           retry docker exec -u 0 mssql apt-get update
           retry docker exec -u 0 mssql apt-get install -y mssql-server-fts
           docker container restart mssql
@@ -187,7 +235,29 @@ jobs:
         # STATISTICAL_SEMANTICS full-text columns cannot be created without it, so the tests covering
         # them would silently skip on a runner that lacks it -- and a test that only ever skips proves
         # nothing. mssql-server-fts ships the database as a backup, so this needs no download.
-        run: ./scripts/provision-semantic-db.sh mssql sa "$TEST_PASSWORD"
+        #
+        # NOT FATAL ON 2017, and this is not a shortcut. mssql-server-fts for 2017 ships a
+        # semanticsdb.bak stamped 14.00.0700 while the engine is 14.00.3540, so the restore is refused
+        # with Msg 3169 -- the backup shipped WITH the server cannot be restored INTO that server.
+        # Failing the leg for that makes 2017 permanently uncertifiable over a packaging artifact that
+        # is not ours, and dropping 2017 is not an option: it is a supported version and it earned its
+        # leg by catching a real issue. scripts/run-modern-band-sweep.sh reached this conclusion first
+        # and records the gap in its row; CI now matches it instead of rediscovering it one red run at
+        # a time. The gap is annotated, never silent.
+        #
+        # Every OTHER version still fails hard. Semantic provisioning breaking on 2019/2022/2025 is a
+        # real regression, and tolerating it everywhere to accommodate 2017 would throw away the
+        # coverage this step exists to guarantee.
+        run: |
+          if ./scripts/provision-semantic-db.sh mssql sa "$TEST_PASSWORD"; then exit 0; fi
+          if [ "${{ matrix.ss }}" = "2017" ]; then
+            echo "::warning title=Semantic coverage skipped::SQL Server 2017 ships a semanticsdb.bak"\
+                 "stamped for a different build than the engine (Msg 3169), so STATISTICAL_SEMANTICS"\
+                 "tests self-skip on this leg. Known and accepted; see the comment on this step."
+            exit 0
+          fi
+          echo "::error::Semantic provisioning failed on SQL Server ${{ matrix.ss }}, where it is expected to succeed."
+          exit 1
 
       - name: Rename sa login to TestUser
         run: |
@@ -216,7 +286,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ always() }}
         with:
-          name: sqlserver-test-results
+          name: sqlserver-${{ matrix.ss }}-test-results
           path: TestResults
           if-no-files-found: ignore
           retention-days: 7
@@ -238,10 +308,18 @@ jobs:
     # latest + the intermediate/floor versions (14, 13, 12): the real old containers are the only way to
     # exercise the version-adaptive branches below 15 (physical-column-existence questions no override can
     # fake) — attcompression + expression statistics (14), DROP EXPRESSION (13), getOwnedSequence (12).
+    # MATRIX SHAPE (Paul, 2026-09-20). A pull request runs FLOOR + LATEST per engine; the full matrix
+    # runs on merge to main. No nightly -- a scheduled run would re-test code nobody is waiting on.
+    # The intermediate versions are what a PR gives up, and they are the ones that mostly duplicate
+    # the latest leg; the floors are where the version-adaptive branches actually differ, which is why
+    # they are never the ones dropped. The accepted risk is that a break confined to an intermediate
+    # version is caught at merge rather than on the PR, and the mitigation is process, not CI: the full
+    # gate and floor sweep are run locally before a PR is opened -- including, for an external
+    # contribution, by a maintainer on the contributor's behalf.
     strategy:
       fail-fast: false
       matrix:
-        pg: [latest, '14', '13', '12']
+        pg: ${{ github.event_name == 'pull_request' && fromJSON('["18","12"]') || fromJSON('["18","17","16","15","14","13","12"]') }}
     permissions:
       contents: read
       checks: write
@@ -335,7 +413,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mysql: ['8.0', '5.7']
+        mysql: ${{ github.event_name == 'pull_request' && fromJSON('["26","5.7"]') || fromJSON('["26","8.4","8.0","5.7"]') }}
     permissions:
       contents: read
       checks: write
@@ -412,10 +490,18 @@ jobs:
     # Current LTS (11.4, whose new utf8mb4_uca1400_ai_ci default collation exercises the data-delivery
     # collation fix #15), plus 10.6 and the supported floor (10.2). MariaDB 10.2-10.5 lacks JSON_TABLE
     # (recursive-CTE data delivery), RENAME COLUMN/INDEX, JSON_ARRAYAGG, and invisible/descending indexes.
+    # MATRIX SHAPE (Paul, 2026-09-20). A pull request runs FLOOR + LATEST per engine; the full matrix
+    # runs on merge to main. No nightly -- a scheduled run would re-test code nobody is waiting on.
+    # The intermediate versions are what a PR gives up, and they are the ones that mostly duplicate
+    # the latest leg; the floors are where the version-adaptive branches actually differ, which is why
+    # they are never the ones dropped. The accepted risk is that a break confined to an intermediate
+    # version is caught at merge rather than on the PR, and the mitigation is process, not CI: the full
+    # gate and floor sweep are run locally before a PR is opened -- including, for an external
+    # contribution, by a maintainer on the contributor's behalf.
     strategy:
       fail-fast: false
       matrix:
-        mariadb: ['11.4', '10.6', '10.2']
+        mariadb: ${{ github.event_name == 'pull_request' && fromJSON('["13","10.2"]') || fromJSON('["13","11.8","11.4","10.6","10.2"]') }}
     permissions:
       contents: read
       checks: write
@@ -489,6 +575,106 @@ jobs:
           reporter: dotnet-trx
           only-summary: 'true'
           use-actions-summary: 'true'
+
+  # THE RATCHET, and it is the ONLY thing that resolves `latest`. No test leg floats any more.
+  #
+  # A floating leg keeps us current by ROTATING coverage rather than accumulating it: when `latest`
+  # advances, the version it moved off stops being tested unless somebody pins it. PostgreSQL proved that
+  # the expensive way -- `latest` walked 15 -> 16 -> 17 -> 18 and all three middle majors sat untested
+  # inside a range the docs call continuous. A floating leg ALSO runs a full suite against whatever the
+  # vendor shipped this morning, which is a result nobody can reproduce, and when it happens to resolve to
+  # a major already pinned it is the same run twice: SQL Server's `latest` and its `2025` leg were exactly
+  # that, two ~1.5 GB boots and two full suites for one digest.
+  #
+  # So every test leg is now an explicit major, and the question a floating leg used to answer --
+  # "has the ceiling moved?" -- is answered HERE, by comparison instead of by a test run. Two
+  # assertions, and the second is the one that used to be missing:
+  #   1. each engine's `latest` still resolves to the major declared in .github/engine-ceilings.json;
+  #   2. that declared major actually HAS a pinned leg in this file. Without (2) the declaration could
+  #      claim a ceiling nothing tests, which is the same hole in a tidier disguise.
+  #
+  # Clearing a failure is a deliberate decision rather than a version bump: add a leg for the new major,
+  # or knowingly accept the hole. It runs on pull requests too, because that is where somebody is most
+  # likely to notice and act.
+  engine-ceiling-ratchet:
+    name: Engine Ceiling Ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare each floating leg against its expected major
+        run: |
+          set -uo pipefail
+          FAILED=0
+          expect() { python3 -c "import json,sys; print(json.load(open('.github/engine-ceilings.json'))['$1'])"; }
+
+          # Ask the image itself rather than a registry tag name: `latest` is what CI actually runs, so
+          # the version the SERVER reports is the only answer that matches what was tested.
+          actual_postgresql=$(docker run --rm postgres:latest postgres --version | grep -oE '[0-9]+' | head -1)
+          actual_mysql=$(docker run --rm mysql:latest mysqld --version | grep -oE '[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
+          actual_mariadb=$(docker run --rm mariadb:latest mariadbd --version | grep -oE '[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
+
+          # SQL Server resolves by MANIFEST DIGEST rather than by booting the server: the image is ~1.5 GB
+          # and needs an SA password and a startup wait just to answer a version query, while MCR publishes
+          # a `<year>-latest` tag per major. If `latest` still points at the same digest as
+          # `<expected>-latest`, the ceiling has not moved. If it points at none of them, a new major has
+          # shipped -- which is exactly the signal.
+          want_ss=$(expect sqlserver)
+          SS_ACCEPT='application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json'
+          dg() { curl -sS --max-time 30 -I -H "Accept: $SS_ACCEPT" "https://mcr.microsoft.com/v2/mssql/server/manifests/$1" | tr -d '\r' | grep -i '^docker-content-digest:' | awk '{print $2}'; }
+          ss_latest=$(dg latest)
+          ss_want=$(dg "${want_ss}-latest")
+          if [ -z "$ss_latest" ] || [ -z "$ss_want" ]; then
+            echo "::error::Could not resolve the SQL Server manifest digests from MCR. Treating as a failure rather than a pass -- an undetected ceiling is the exact condition this job exists to catch."
+            FAILED=1
+          elif [ "$ss_latest" != "$ss_want" ]; then
+            echo "::error::SQL Server latest no longer matches ${want_ss}-latest, so a new major has shipped."
+            echo "::error::Do BOTH: (1) pin ${want_ss} as a permanent leg in continuous-integration.yml, scripts/run-modern-band-sweep.sh and release.yml's REQUIRED_CHECKS -- or decide out loud to accept the hole; (2) set sqlserver to the new year in .github/engine-ceilings.json."
+            FAILED=1
+          else
+            echo "sqlserver latest = ${want_ss}-latest -- ceiling unchanged."
+          fi
+
+          for engine in postgresql mysql mariadb; do
+            want=$(expect "$engine")
+            eval "got=\$actual_$engine"
+            if [ -z "$got" ]; then
+              echo "::error::Could not determine the $engine major version from its latest image. Treating as a failure rather than a pass -- an undetected ceiling is the exact condition this job exists to catch."
+              FAILED=1
+            elif [ "$got" != "$want" ]; then
+              echo "::error::$engine latest is now major $got; .github/engine-ceilings.json expects $want."
+              echo "::error::This is the ratchet. The floating leg has MOVED, so major $want is now tested by nothing unless it is pinned."
+              echo "::error::Do BOTH: (1) pin $want as a permanent leg in continuous-integration.yml, scripts/run-floor-sweep.sh and release.yml's REQUIRED_CHECKS -- or decide out loud to accept the hole; (2) set $engine to $got in .github/engine-ceilings.json."
+              echo "::error::Updating the json alone is how the gap comes back."
+              FAILED=1
+            else
+              echo "$engine latest = major $got (expected $want) -- ceiling unchanged."
+            fi
+          done
+
+          # ASSERTION 2: the declared ceiling must actually HAVE a pinned leg in this file. Without this,
+          # engine-ceilings.json could name a major nothing tests -- the same untested-ceiling hole, just
+          # declared rather than drifted into. Greps this workflow for the version literal in that
+          # engine's matrix, which is deliberately crude: it fails loudly on a reshaped matrix rather
+          # than quietly passing on one it cannot parse.
+          for engine in sqlserver postgresql mysql mariadb; do
+            want=$(expect "$engine")
+            case "$engine" in
+              sqlserver)   key='"ss"' ;;
+              postgresql)  key='pg:' ;;
+              mysql)       key='mysql:' ;;
+              mariadb)     key='mariadb:' ;;
+            esac
+            if ! grep -F "$key" .github/workflows/continuous-integration.yml | grep -qE "\"$want\""; then
+              echo "::error::$engine declares a ceiling of $want in .github/engine-ceilings.json, but no"\
+                   "leg in this workflow pins $want. Add the leg, or lower the declared ceiling on purpose."
+              FAILED=1
+            else
+              echo "$engine ceiling $want has a pinned leg."
+            fi
+          done
+
+          exit $FAILED
 
   coverage-gate:
     name: Coverage Gate

@@ -10,50 +10,47 @@ AS
 BEGIN
   SET NOCOUNT ON
 
+  -- Walks the message with an advancing position. It used to consume it instead --
+  -- SET @Message = SUBSTRING(@Message, ..., LEN(@Message)) at the end of every iteration -- which
+  -- rebuilt the entire remaining NVARCHAR(MAX) once per line, and re-scanned it from the start to find
+  -- the next line ending. That is quadratic in the size of the message, and the messages this receives
+  -- are generated DDL: on a 1,783-table model, printing one statement's output measured 53,846 ms, with
+  -- the string that produced it built in 620 ms. WhatIf spent its entire time in here.
+  --
+  -- CHARINDEX's third argument does the same search without copying anything, so the message is read
+  -- once end to end.
   DECLARE @v_Line NVARCHAR(MAX)
-  DECLARE @v_CrLfPos INT
   DECLARE @v_LfPos INT
-  DECLARE @v_LineEnd INT
-  DECLARE @v_LineLen INT
+  DECLARE @v_Pos INT = 1
+  DECLARE @v_End INT
 
-  -- Handle NULL or empty input
   IF @Message IS NULL OR LEN(@Message) = 0
     RETURN
 
-  -- Process each line
-  WHILE LEN(@Message) > 0
-  BEGIN
-    -- Find the next line ending (handle both Windows \r\n and Linux \n)
-    SET @v_CrLfPos = CHARINDEX(CHAR(13) + CHAR(10), @Message)
-    SET @v_LfPos = CHARINDEX(CHAR(10), @Message)
+  -- DATALENGTH, not LEN: LEN ignores trailing spaces, which would drop the tail of a line that ends in
+  -- them. NVARCHAR is two bytes per character.
+  SET @v_End = DATALENGTH(@Message) / 2
 
-    IF @v_CrLfPos > 0 AND (@v_LfPos = 0 OR @v_CrLfPos <= @v_LfPos)
+  WHILE @v_Pos <= @v_End
+  BEGIN
+    SET @v_LfPos = CHARINDEX(CHAR(10), @Message, @v_Pos)
+
+    IF @v_LfPos = 0
     BEGIN
-      -- Windows-style line ending (\r\n)
-      SET @v_LineEnd = @v_CrLfPos
-      SET @v_LineLen = 2
-    END
-    ELSE IF @v_LfPos > 0
-    BEGIN
-      -- Linux-style line ending (\n)
-      SET @v_LineEnd = @v_LfPos
-      SET @v_LineLen = 1
-    END
-    ELSE
-    BEGIN
-      -- No more line endings, this is the last line
-      SET @v_Line = @Message
-      RAISERROR(@v_Line, 10, 100) WITH NOWAIT
+      -- No further line ending: whatever remains is the last line.
+      SET @v_Line = SUBSTRING(@Message, @v_Pos, @v_End - @v_Pos + 1)
+      -- DATALENGTH here too, for the same reason it sizes @v_End above: LEN reports 0 for a line made
+      -- entirely of spaces, so a final line of indentation was silently dropped rather than printed.
+      IF DATALENGTH(@v_Line) > 0 RAISERROR(@v_Line, 10, 100) WITH NOWAIT
       BREAK
     END
 
-    -- Extract the line (without the line ending)
-    SET @v_Line = LEFT(@Message, @v_LineEnd - 1)
+    -- Both endings are handled by cutting at the line feed and dropping a carriage return if one sits
+    -- in front of it, which is what the two separate CHARINDEX scans used to work out.
+    SET @v_Line = SUBSTRING(@Message, @v_Pos, @v_LfPos - @v_Pos)
+    IF RIGHT(@v_Line, 1) = CHAR(13) SET @v_Line = LEFT(@v_Line, LEN(@v_Line) - 1)
 
-    -- Output the line with NOWAIT
     RAISERROR(@v_Line, 10, 100) WITH NOWAIT
-
-    -- Remove the processed line from the message
-    SET @Message = SUBSTRING(@Message, @v_LineEnd + @v_LineLen, LEN(@Message))
+    SET @v_Pos = @v_LfPos + 1
   END
 END

@@ -21,7 +21,7 @@ BEGIN TRY
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + f.[Schema] + '.' + f.[TableName] + '.' + f.[KeyName] + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #ForeignKeys f WITH (NOLOCK)
                            WHERE NOT EXISTS (SELECT *
-                                               FROM sys.foreign_keys sf WITH (NOLOCK)
+                                               FROM sys.foreign_keys sf
                                                WHERE sf.[parent_object_id] = OBJECT_ID(f.[Schema] + '.' + f.[TableName])
                                                  AND sf.[name] = SchemaSmith.fn_StripBracketWrapping(f.[KeyName]))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -33,7 +33,7 @@ BEGIN TRY
       SELECT @@SPID, 'foreignKey', f.[Schema] + '.' + f.[TableName] + '.' + f.[KeyName], 'wouldCreate'
         FROM #ForeignKeys f WITH (NOLOCK)
         WHERE NOT EXISTS (SELECT *
-                            FROM sys.foreign_keys sf WITH (NOLOCK)
+                            FROM sys.foreign_keys sf
                             WHERE sf.[parent_object_id] = OBJECT_ID(f.[Schema] + '.' + f.[TableName])
                               AND sf.[name] = SchemaSmith.fn_StripBracketWrapping(f.[KeyName]))
 

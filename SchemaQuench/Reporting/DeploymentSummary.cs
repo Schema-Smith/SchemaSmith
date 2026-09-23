@@ -7,7 +7,7 @@ namespace SchemaQuench.Reporting;
 
 /// <summary>
 /// Root of the Deployment Summary Report record graph (#243). This is the frozen v1 JSON
-/// contract the paid Intelligence add-ons deserialize — field names, casing, nesting, and enum
+/// contract downstream consumers deserialize — field names, casing, nesting, and enum
 /// string values must not change without a schema-version bump. Purely a data model: nothing in
 /// this file (or <see cref="DeploymentSummaryJson"/>) wires into the run, populates itself, or
 /// scrubs content. A later slice (E4) builds and emits instances; E5 fills in
@@ -38,6 +38,13 @@ public sealed record RunInfo(
     int ExitCode,
     bool ResumedFromCheckpoint);
 
+/// <summary>
+/// <para><see cref="DatabaseSource"/> and <see cref="SchemaSource"/> are the source-disclosure fields
+/// (#243 / TemplateTargets): which axis of this unit came from the discovery script and which from a
+/// <c>TemplateTargets</c> override. They live here rather than in the progress log because they are audit
+/// data, and the report is the surface that keeps one row per work unit -- the log emitted the same facts
+/// once per unit, which at 1000 tenants x 3 templates was 3000 lines of audit trail in a progress stream.</para>
+/// </summary>
 public sealed record TargetSummary(
     string Server,
     string Database,
@@ -45,7 +52,9 @@ public sealed record TargetSummary(
     string Template,
     TargetOutcome Outcome,
     long DurationMs,
-    IReadOnlyList<TargetSlotTiming> Slots);
+    IReadOnlyList<TargetSlotTiming> Slots,
+    string DatabaseSource = "",
+    string SchemaSource = "");
 
 /// <summary>Per-target slot timing — distinct from E1's aggregate <see cref="SlotTiming"/>.</summary>
 public sealed record TargetSlotTiming(string Slot, long DurationMs, int ScriptsRun);

@@ -7,7 +7,7 @@
   <ItemGroup>
     <!-- Core dependencies -->
     <PackageVersion Include="log4net" Version="3.4.0" />
-    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.0.2" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.0" />
     <!-- App-local ICU bundled with self-contained Linux publish output of CLI tools.
          Version is centralized via $(IcuVersion) in Directory.Build.props. -->
     <PackageVersion Include="Microsoft.ICU.ICU4C.Runtime" Version="$(IcuVersion)" />
@@ -24,11 +24,11 @@
     <PackageVersion Include="Npgsql" Version="10.0.3" />
 
     <!-- Microsoft.Extensions — Configuration.* on 10.0.11 (latest); other sub-packages on 10.0.5 (latest published) -->
-    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.5" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.5" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
@@ -53,14 +53,14 @@
     <PackageVersion Include="Spectre.Console.Testing" Version="0.54.0" />
 
     <!-- Static analysis (dev-only; PrivateAssets=all in Directory.Build.props keeps it out of the packed NuGet) -->
-    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.33.0.1635" />
+    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.34.0.3385" />
 
     <!-- Test infrastructure -->
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="NSubstitute" Version="6.2.0" />
     <PackageVersion Include="NUnit" Version="4.6.1" />
-    <PackageVersion Include="NUnit.Analyzers" Version="4.14.0" />
+    <PackageVersion Include="NUnit.Analyzers" Version="4.15.0" />
     <PackageVersion Include="NUnit3TestAdapter" Version="6.3.0" />
   </ItemGroup>
 </Project>

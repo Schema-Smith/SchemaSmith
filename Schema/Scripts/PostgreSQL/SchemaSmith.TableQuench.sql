@@ -16,6 +16,24 @@ CREATE OR REPLACE PROCEDURE "SchemaSmith"."TableQuench"
    p_RebuildPolicyThreshold INT = NULL,
    p_RebuildPolicyOnOrderMismatch BOOLEAN = FALSE)
   LANGUAGE plpgsql
+  -- LLVM compilation is never worth it for this work, and the planner has no way to know that.
+  --
+  -- Temp tables built with CREATE TEMPORARY TABLE ... AS are never ANALYZEd, so every query over them
+  -- is planned against default row guesses (140, 270, 200). Push those guesses through a correlated
+  -- NOT EXISTS carrying JSON_ARRAY_ELEMENTS, STRING_AGG and a user function and the estimate explodes:
+  -- the exclude-constraint drop query costed at 2,066,541, clearing jit_above_cost (100,000) and both
+  -- jit_inline_above_cost and jit_optimize_above_cost (500,000). PostgreSQL then compiled, inlined and
+  -- optimised 54 functions for 797ms -- to run a plan that returned zero rows in 30 MICROseconds.
+  -- Every deploy paid that, on every table, whether or not anything had changed.
+  --
+  -- Nothing SchemaSmith asks of the database is shaped like a query JIT helps: these are metadata
+  -- queries over temp tables and catalogs, tens to hundreds of rows, where compilation can never
+  -- amortise. Measured on the PostgreSQL integration suite (417 tests, same image, JIT the only
+  -- variable): 596s -> 199s.
+  --
+  -- A function-level SET is saved and restored around the call and covers every nested CALL below,
+  -- so the caller's own jit setting is left exactly as it was found.
+  SET jit = 'off'
 AS $$
 DECLARE
   table_json TEXT = CASE WHEN LEFT(p_TableDefinitions, 1) = '[' THEN p_TableDefinitions ELSE '[' || p_TableDefinitions || ']' END;

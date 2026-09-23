@@ -62,13 +62,9 @@ public class TableFileNameReconciliationTests
             try { Directory.Delete(_tempProductPath, recursive: true); }
             catch (IOException) { /* best effort — temp cleanup */ }
         }
-        Npgsql.NpgsqlConnection.ClearAllPools();
         FactoryContainer.Clear();
         LogFactory.Clear();
     }
-
-    [TearDown]
-    public void TearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
 
     [Test]
     public void Extraction_NamesTableFilesFromContentSchema_PassesTableFileNameCheck()

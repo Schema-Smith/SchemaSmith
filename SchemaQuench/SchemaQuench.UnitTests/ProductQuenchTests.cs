@@ -1354,24 +1354,95 @@ public class ProductQuenchTests
     }
 
     [Test]
-    public void DispatchWorkUnits_EmitsSourceDisclosureLogPerUnit()
+    public void LogWorkUnitSources_UniformTemplate_CollapsesToOneLineThatStillNamesTheSource()
     {
-        // The dispatch log line must include both axes' sources in a grep-friendly form so an
-        // operator can search e.g. "source: db=TemplateTargets:" or "source: schema=SchemaIdent..."
-        // to see exactly how each unit was selected.
+        // The rollup exists to keep a 1000-tenant run readable, but collapsing to one line is only
+        // half the requirement: the line has to still answer "did an override participate?". A rollup
+        // that emitted a bare count would pass a line-count assertion and be useless.
         WithMinimalSqlServerProductQuench(quench =>
         {
-            var template = new Template
-            {
-                Name = "TenantSchema",
-                Product = quench.LoadedProduct,
-                DatabaseIdentificationScript = "SELECT name FROM sys.databases",
-                SchemaIdentificationScript = "SELECT schema_name FROM sys.schemas"
-            };
-
             var workUnits = new List<WorkUnit>
             {
-                new("primary", "ordering_b", template.Name, "acme")
+                new("primary", "tenant_a", "TenantSchema", "acme")
+                {
+                    DatabaseSource = "DatabaseIdentificationScript",
+                    SchemaSource = "TemplateTargets:TenantSchema:Schemas"
+                },
+                new("primary", "tenant_b", "TenantSchema", "acme")
+                {
+                    DatabaseSource = "DatabaseIdentificationScript",
+                    SchemaSource = "TemplateTargets:TenantSchema:Schemas"
+                },
+                new("primary", "tenant_c", "TenantSchema", "acme")
+                {
+                    DatabaseSource = "DatabaseIdentificationScript",
+                    SchemaSource = "TemplateTargets:TenantSchema:Schemas"
+                }
+            };
+
+            quench.ProgressLogLines.Clear();
+            quench.LogWorkUnitSources(workUnits);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(quench.ProgressLogLines, Has.Count.EqualTo(1),
+                    "three units sharing one source pair are one template's worth of disclosure, not three");
+                Assert.That(quench.ProgressLogLines[0], Does.Contain("TenantSchema")
+                    .And.Contain("3 units")
+                    .And.Contain("DatabaseIdentificationScript")
+                    .And.Contain("TemplateTargets:TenantSchema:Schemas"),
+                    "the collapsed line must still name both sources -- a bare count answers nothing");
+            });
+        });
+    }
+
+    [Test]
+    public void LogWorkUnitSources_OneDeviatingUnit_IsNamedIndividuallyNotAveragedAway()
+    {
+        // The anti-flattening guard, and the assertion most likely to catch a regression that
+        // "passes" by summarising everything. One overridden tenant among many is the whole reason
+        // an operator reads this disclosure at all.
+        WithMinimalSqlServerProductQuench(quench =>
+        {
+            var workUnits = new List<WorkUnit>
+            {
+                new("primary", "tenant_a", "TenantSchema", "acme")
+                {
+                    DatabaseSource = "DatabaseIdentificationScript",
+                    SchemaSource = "SchemaIdentificationScript"
+                },
+                new("primary", "tenant_b", "TenantSchema", "acme")
+                {
+                    DatabaseSource = "DatabaseIdentificationScript",
+                    SchemaSource = "SchemaIdentificationScript"
+                },
+                new("primary", "odd_one_out", "TenantSchema", "acme")
+                {
+                    DatabaseSource = "TemplateTargets:TenantSchema:Databases",
+                    SchemaSource = "SchemaIdentificationScript"
+                }
+            };
+
+            quench.ProgressLogLines.Clear();
+            quench.LogWorkUnitSources(workUnits);
+
+            Assert.That(quench.ProgressLogLines, Has.Some.Matches<string>(s =>
+                s.Contains("[primary].[odd_one_out]") &&
+                s.Contains("TemplateTargets:TenantSchema:Databases")),
+                "the single deviating unit must be named, not hidden behind the majority's count -- "
+                + "otherwise the disclosure reports the opposite of what happened.\n"
+                + string.Join("\n", quench.ProgressLogLines));
+        });
+    }
+
+    [Test]
+    public void LogWorkUnitSources_SeparateTemplates_EachGetTheirOwnRollup()
+    {
+        WithMinimalSqlServerProductQuench(quench =>
+        {
+            var workUnits = new List<WorkUnit>
+            {
+                new("primary", "ordering_b", "TenantSchema", "acme")
                 {
                     DatabaseSource = "DatabaseIdentificationScript",
                     SchemaSource = "TemplateTargets:TenantSchema:Schemas"
@@ -1383,24 +1454,17 @@ public class ProductQuenchTests
                 }
             };
 
-            // LogWorkUnitSources is factored out of DispatchWorkUnits specifically so the log
-            // format is testable without spinning up the dispatcher itself — invoking it directly
-            // exercises the production code path that DispatchWorkUnits delegates to.
             quench.ProgressLogLines.Clear();
             quench.LogWorkUnitSources(workUnits);
 
             Assert.Multiple(() =>
             {
+                Assert.That(quench.ProgressLogLines, Has.Count.EqualTo(2),
+                    "two templates, two rollups");
                 Assert.That(quench.ProgressLogLines, Has.Some.Matches<string>(s =>
-                    s.Contains("[primary].[ordering_b]") &&
-                    s.Contains("[Schema: acme]") &&
-                    s.Contains("source: db=DatabaseIdentificationScript") &&
-                    s.Contains("schema=TemplateTargets:TenantSchema:Schemas")));
+                    s.Contains("'TenantSchema'") && s.Contains("TemplateTargets:TenantSchema:Schemas")));
                 Assert.That(quench.ProgressLogLines, Has.Some.Matches<string>(s =>
-                    s.Contains("[primary].[AppA]") &&
-                    !s.Contains("[Schema:") &&
-                    s.Contains("source: db=TemplateTargets:Core:Databases") &&
-                    s.Contains("schema=(regular template)")));
+                    s.Contains("'Core'") && s.Contains("TemplateTargets:Core:Databases")));
             });
         });
     }

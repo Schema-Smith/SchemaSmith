@@ -1834,20 +1834,62 @@ public class ProductQuench
     }
 
     /// <summary>
-    /// Per-work-unit source disclosure: emit one log line per unit naming the
-    /// source of both axes (script vs TemplateTargets override). The format is greppable both
-    /// per <c>[server].[db]</c> and per <c>source:</c> tag so a reader can scan a large log for
-    /// "which units came from a config override?" in one pass. Factored out of
-    /// <see cref="DispatchWorkUnits"/> so the log format is testable without spinning up the
-    /// dispatcher itself.
+    /// Source disclosure: which axis of each work unit came from the discovery script and which from a
+    /// <c>TemplateTargets</c> override.
+    /// <para>This used to emit one line per unit. At the scale TemplateTargets exists for -- a
+    /// thousand tenants across three templates -- that is ~3000 lines of audit trail in a progress
+    /// stream, which raises the noise floor for exactly the use case the feature targets. The per-unit
+    /// disclosure now lives in the deployment summary report (<c>TargetSummary.DatabaseSource</c> /
+    /// <c>SchemaSource</c>), which already keeps one row per unit and is the right surface for audit
+    /// data. The log keeps the coarse question -- "did an override participate in this run at all?" --
+    /// answerable at a glance.</para>
+    /// <para>The rollup does NOT flatten the interesting case. When units within one template disagree
+    /// about their sources, the deviating ones are named individually: "999 from the script and 1 from
+    /// an override" is precisely what a summary must not hide behind a count.</para>
+    /// <para>Factored out of <see cref="DispatchWorkUnits"/> so the format stays testable without
+    /// spinning up the dispatcher.</para>
     /// </summary>
     internal void LogWorkUnitSources(IReadOnlyList<WorkUnit> workUnits)
     {
-        foreach (var unit in workUnits)
+        if (workUnits.Count == 0) return;
+
+        foreach (var group in workUnits.GroupBy(u => u.TemplateName))
+        {
+            var units = group.ToList();
+            var pairs = units
+                .Select(u => (u.DatabaseSource, u.SchemaSource))
+                .Distinct()
+                .ToList();
+
+            if (pairs.Count == 1)
+            {
+                _progressLog.Info(
+                    $"Template '{group.Key}': {units.Count} unit{(units.Count == 1 ? "" : "s")} — " +
+                    $"db: {pairs[0].DatabaseSource}; schema: {pairs[0].SchemaSource}");
+                continue;
+            }
+
+            // Mixed sources within one template. Report the majority pair as the baseline and name every
+            // unit that departs from it, so a single overridden tenant among a thousand is visible rather
+            // than averaged away.
+            var baseline = units
+                .GroupBy(u => (u.DatabaseSource, u.SchemaSource))
+                .OrderByDescending(g => g.Count())
+                .First().Key;
+            var deviating = units
+                .Where(u => u.DatabaseSource != baseline.DatabaseSource || u.SchemaSource != baseline.SchemaSource)
+                .ToList();
+
             _progressLog.Info(
-                $"[{unit.Server}].[{unit.DatabaseName}]" +
-                $"{(string.IsNullOrEmpty(unit.SchemaName) ? "" : $" [Schema: {unit.SchemaName}]")} " +
-                $"Dispatching work unit (source: db={unit.DatabaseSource}, schema={unit.SchemaSource})");
+                $"Template '{group.Key}': {units.Count} units — " +
+                $"db: {baseline.DatabaseSource}; schema: {baseline.SchemaSource} " +
+                $"({deviating.Count} from a different source, named below)");
+            foreach (var unit in deviating)
+                _progressLog.Info(
+                    $"  [{unit.Server}].[{unit.DatabaseName}]" +
+                    $"{(string.IsNullOrEmpty(unit.SchemaName) ? "" : $" [Schema: {unit.SchemaName}]")} " +
+                    $"— db: {unit.DatabaseSource}; schema: {unit.SchemaSource}");
+        }
     }
 
     /// <summary>
@@ -1942,7 +1984,10 @@ public class ProductQuench
         workUnitStopwatch.Stop();
         _targetResults.Add(new TargetResult(
             quench.LogPrefix, unit.Server, unit.DatabaseName, unit.SchemaName ?? "", unit.TemplateName,
-            TargetResult.DeriveOutcome(quench.QuenchSuccessful, quench.WasSkipped), workUnitStopwatch.ElapsedMilliseconds));
+            TargetResult.DeriveOutcome(quench.QuenchSuccessful, quench.WasSkipped), workUnitStopwatch.ElapsedMilliseconds,
+            // Source disclosure rides the record that already has one row per work unit, so the report
+            // carries the audit trail the progress log used to repeat per unit.
+            unit.DatabaseSource, unit.SchemaSource));
         if (!quench.QuenchSuccessful)
         {
             if (quench.LastFailure != null) _failureRecords.Add(quench.LastFailure);

@@ -80,7 +80,7 @@ namespace Schema.Capabilities
                 15, "PostgreSQL 15", null, DegradeKind.Skip, "table access method (PG15)"));
             // Gated inline in MissingIndexesAndConstraintsQuench rather than by a Supports*.sql function,
             // which is exactly why the completeness guard could not see it: it shipped in v2.5.0 as a real
-            // policy-routed degrade with no row here, invisible to the add-ons that drive off this list.
+            // policy-routed degrade with no row here, invisible to every consumer that drives off this list.
             rows.Add(new("virtual-generated-column", "VIRTUAL generated columns", Platform.PostgreSQL,
                 18, "PostgreSQL 18", null, DegradeKind.Skip, "VIRTUAL generated column (PG18)"));
 
@@ -192,7 +192,7 @@ namespace Schema.Capabilities
                 "CDC (database not enabled)", "CDC enabled on the database (sys.sp_cdc_enable_db)"));
 
             // The second database-gated degrade. Its ObjectType must match the string
-            // SchemaSmith.DegradeUnsupportedFeatures writes, or the add-ons cannot join a manifest row
+            // SchemaSmith.DegradeUnsupportedFeatures writes, or a consumer cannot join a manifest row
             // back to the capability that produced it.
             rows.Add(new("change-tracking-database-toggle", "Change Tracking", Platform.SqlServer,
                 0, "any supported version (needs Change Tracking enabled on the database)", null, DegradeKind.Reduced,

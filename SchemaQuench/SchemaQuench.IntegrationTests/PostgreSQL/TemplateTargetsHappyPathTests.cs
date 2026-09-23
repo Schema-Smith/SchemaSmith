@@ -45,15 +45,6 @@ public class TemplateTargetsHappyPathTests
         _server = config["Target:Server"];
     }
 
-    [SetUp]
-    public void SetUpClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [TearDown]
-    public void TearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [OneTimeTearDown]
-    public void OneTimeTearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
     [Test]
     public void OverrideSchemasListReplacesDiscoveryScript_ExistingTenants()
     {
@@ -87,9 +78,11 @@ public class TemplateTargetsHappyPathTests
                 _progressLog.DidNotReceive().Info(
                     $"[{_server}].[{_mainDb}] [Schema: {extraTenantIgnoredByOverride}] Successfully Quenched");
 
+                // Source disclosure still names the override origin, now as the per-template rollup
+                // rather than a line per work unit (the per-unit detail moved to the report).
                 _progressLog.Received().Info(Arg.Is<string>(s =>
-                    s.Contains("source: ") &&
-                    s.Contains("schema=TemplateTargets:TenantBody:Schemas")));
+                    s.Contains("Template 'TenantBody'") &&
+                    s.Contains("schema: TemplateTargets:TenantBody:Schemas")));
 
                 foreach (var tenant in overrideTenants)
                     AssertMigrationTracked(TenantBodyTemplate, tenant,
@@ -524,8 +517,8 @@ $$;";
     {
         try
         {
-            // Terminate other connections first; PG refuses DROP DATABASE if there are active sessions.
-            Npgsql.NpgsqlConnection.ClearAllPools();
+            // pg_terminate_backend below is what frees the database; PG refuses DROP DATABASE
+            // while any session still holds it.
             using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
             conn.Open();
             using var cmd = conn.CreateCommand();

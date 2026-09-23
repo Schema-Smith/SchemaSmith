@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "The engine version each floating `latest` CI leg is EXPECTED to resolve to.",
+    "",
+    "WHY THIS FILE EXISTS. A floating `latest` leg keeps us current, but it does so by ROTATING coverage",
+    "rather than accumulating it: when `latest` advances 17 -> 18, the leg that tested 17 now tests 18 and",
+    "nothing tests 17 any more. That is not hypothetical -- PostgreSQL's `latest` walked 15 -> 16 -> 17 -> 18",
+    "with nothing pinned behind it, and 15, 16 and 17 sat untested in the middle of a range we document as",
+    "continuous until 2026-09-20.",
+    "",
+    "The ratchet job compares each floating leg's ACTUAL server version against the value here. When an",
+    "engine releases, the job fails, and clearing it is a deliberate two-part decision:",
+    "  1. pin the OUTGOING version as a new permanent leg in continuous-integration.yml (and in",
+    "     scripts/run-floor-sweep.sh, and in release.yml's REQUIRED_CHECKS), or knowingly accept the hole;",
+    "  2. update the value here to the new version.",
+    "",
+    "Doing only (2) is how the gap comes back. The failure message says so.",
+    "",
+    "Match is on the MAJOR version only -- a patch release should not redden CI.",
+    "",
+    "SQL Server is resolved by MANIFEST DIGEST rather than by version string: booting it just to ask its",
+    "version means a ~1.5 GB image, an SA password and a startup wait, while MCR publishes a <year>-latest",
+    "tag per major. `latest` matching `<value>-latest` means the ceiling has not moved. An earlier draft",
+    "excluded SQL Server from this file entirely, reasoning that all its legs were pinned so there was",
+    "nothing to ratchet -- which is circular, and left the one engine that started this investigation free",
+    "to decay again the day the next version ships."
+  ],
+  "sqlserver": "2025",
+  "postgresql": "18",
+  "mysql": "26",
+  "mariadb": "13"
+}

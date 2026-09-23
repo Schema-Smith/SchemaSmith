@@ -217,9 +217,9 @@ BEGIN TRY
   SELECT @v_SQL = STRING_AGG(CAST('RAISERROR(''  Altering index compression for ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ' TO ' + i.[CompressionType] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD PARTITION=ALL WITH (DATA_COMPRESSION=' + i.[CompressionType] + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
     FROM #Indexes i WITH (NOLOCK) 
-    JOIN sys.indexes si WITH (NOLOCK) ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
+    JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                                      AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
-    LEFT JOIN sys.partitions p WITH (NOLOCK) ON p.[object_id] = si.[object_id]
+    LEFT JOIN sys.partitions p ON p.[object_id] = si.[object_id]
                                             AND p.index_id = si.index_id
     WHERE COALESCE(p.data_compression_desc COLLATE DATABASE_DEFAULT, 'NONE') <> i.[CompressionType]
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
@@ -239,8 +239,8 @@ BEGIN TRY
          -- column is a different physical layout.
          [xPartitionScheme] = pds.[name],
          [xPartitionColumn] = (SELECT pc.[name]
-                                 FROM sys.index_columns pic WITH (NOLOCK)
-                                 JOIN sys.columns pc WITH (NOLOCK) ON pc.[object_id] = pic.[object_id] AND pc.column_id = pic.column_id
+                                 FROM sys.index_columns pic
+                                 JOIN sys.columns pc ON pc.[object_id] = pic.[object_id] AND pc.column_id = pic.column_id
                                 WHERE pic.[object_id] = si.[object_id] AND pic.index_id = si.index_id
                                   AND pic.partition_ordinal = 1),
          IndexScript = 'CREATE ' +
@@ -250,28 +250,28 @@ BEGIN TRY
                        'INDEX [' + si.[Name] + '] ON ' + t.[Schema] + '.' + t.[Name] + 
                        CASE WHEN si.[type] NOT IN (5, 6) 
                             THEN ' (' + (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
-                                           FROM sys.index_columns ic WITH (NOLOCK)
+                                           FROM sys.index_columns ic
                                            WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0) + ')' +
-                                 CASE WHEN EXISTS (SELECT * FROM sys.index_columns ic WITH (NOLOCK) WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1)
+                                 CASE WHEN EXISTS (SELECT * FROM sys.index_columns ic WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1)
                                       THEN ' INCLUDE (' +
                                            (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY COL_NAME(ic.[object_id], ic.column_id))
-                                              FROM sys.index_columns ic WITH (NOLOCK)
+                                              FROM sys.index_columns ic
                                               WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1) + ')'
                                       ELSE '' END
                             WHEN si.[type] IN (6) 
                             THEN ' (' + (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY COL_NAME(ic.[object_id], ic.column_id))
-                                           FROM sys.index_columns ic WITH (NOLOCK)
+                                           FROM sys.index_columns ic
                                            WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1) + ')'
                             ELSE '' END +
                        CASE WHEN si.has_filter = 1 THEN ' WHERE ' + SchemaSmith.fn_StripParenWrapping(si.filter_definition) ELSE '' END +
                        CASE WHEN o.[WithOptions] <> '' THEN ' WITH (' + STUFF(o.[WithOptions], 1, 2, '') + ')' ELSE '' END
     INTO #ExistingIndexes
     FROM #Tables t WITH (NOLOCK)
-    JOIN sys.indexes si WITH (NOLOCK) ON si.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+    JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
                                      AND si.index_id > 0
                                      AND is_hypothetical = 0
                                      AND is_disabled = 0
-    LEFT JOIN sys.partitions p WITH (NOLOCK)  ON p.[object_id] = si.[object_id]
+    LEFT JOIN sys.partitions p  ON p.[object_id] = si.[object_id]
                                              AND p.index_id = si.index_id
     CROSS APPLY (SELECT [WithOptions] =
                    CASE WHEN (si.[type] NOT IN (5, 6) AND ISNULL(p.[data_compression_desc], 'NONE') COLLATE DATABASE_DEFAULT IN ('NONE', 'ROW', 'PAGE'))
@@ -279,8 +279,8 @@ BEGIN TRY
                         THEN ', DATA_COMPRESSION=' + ISNULL(p.[data_compression_desc], 'NONE') COLLATE DATABASE_DEFAULT ELSE '' END +
                    CASE WHEN si.ignore_dup_key = 1 THEN ', IGNORE_DUP_KEY=ON' ELSE '' END +
                    CASE WHEN si.is_padded = 1 THEN ', PAD_INDEX=ON' ELSE '' END) o
-    LEFT JOIN sys.filegroups fg WITH (NOLOCK) ON fg.data_space_id = si.data_space_id
-    LEFT JOIN sys.data_spaces pds WITH (NOLOCK) ON pds.data_space_id = si.data_space_id AND pds.[type] = 'PS'
+    LEFT JOIN sys.filegroups fg ON fg.data_space_id = si.data_space_id
+    LEFT JOIN sys.data_spaces pds ON pds.data_space_id = si.data_space_id AND pds.[type] = 'PS'
     WHERE t.MissingTable = 0
       AND NOT EXISTS (SELECT * FROM sys.xml_indexes xi WHERE xi.[object_id] = si.[object_id] AND xi.index_id = si.index_id)
 
@@ -373,7 +373,7 @@ BEGIN TRY
                                     AND ei.[xTableName] = i.[TableName]
                                     AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
     WHERE EXISTS (SELECT * 
-                    FROM sys.xml_indexes si WITH (NOLOCK)
+                    FROM sys.xml_indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
                       AND si.[name] = ei.[xIndexName])
       AND ei.IndexScript <> 'CREATE ' + CASE WHEN i.IsPrimary = 1 THEN 'PRIMARY ' ELSE '' END + 
@@ -393,7 +393,7 @@ BEGIN TRY
     WHERE NOT EXISTS (SELECT * FROM #XmlIndexes i2 WITH (NOLOCK) WHERE i2.[Schema] = ei.[xSchema] AND i2.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(i2.[IndexName]) = ei.[xIndexName])
       AND INDEXPROPERTY(OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]), SchemaSmith.fn_StripBracketWrapping(i.[IndexName]), 'IndexID') IS NULL
       AND EXISTS (SELECT * 
-                    FROM sys.xml_indexes si WITH (NOLOCK)
+                    FROM sys.xml_indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
                       AND si.[name] = ei.[xIndexName])
       AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + CASE WHEN i.IsPrimary = 1 THEN 'PRIMARY ' ELSE '' END + 
@@ -431,16 +431,16 @@ BEGIN TRY
                                  ELSE '' END +
                             CASE WHEN fc.statistical_semantics = 1
                                  THEN ' STATISTICAL_SEMANTICS' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY COL_NAME(fc.[object_id], fc.column_id))
-            FROM sys.fulltext_index_columns fc WITH (NOLOCK)
-            JOIN sys.columns c WITH (NOLOCK) ON c.[object_id] = fc.[object_id] AND c.column_id = fc.column_id
+            FROM sys.fulltext_index_columns fc
+            JOIN sys.columns c ON c.[object_id] = fc.[object_id] AND c.column_id = fc.column_id
             WHERE fi.[object_id] = fc.[object_id]) AS [Columns],
-         FullTextCatalog = '[' + (SELECT c.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_catalogs c WITH (NOLOCK) WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id) + ']',
-         KeyIndex = '[' + (SELECT i.[Name] COLLATE DATABASE_DEFAULT FROM sys.indexes i WITH (NOLOCK) WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id]) + ']',
+         FullTextCatalog = '[' + (SELECT c.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id) + ']',
+         KeyIndex = '[' + (SELECT i.[Name] COLLATE DATABASE_DEFAULT FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id]) + ']',
          ChangeTracking = change_tracking_state_desc COLLATE DATABASE_DEFAULT,
-         [StopList] = '[' + COALESCE((SELECT fs.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_stoplists fs WITH (NOLOCK) WHERE fs.stoplist_id = fi.stoplist_id), 'SYSTEM') + ']'
+         [StopList] = '[' + COALESCE((SELECT fs.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id), 'SYSTEM') + ']'
     INTO #ExistingFullTextIndexes
     FROM #Tables t WITH (NOLOCK)
-    JOIN sys.fulltext_indexes fi WITH (NOLOCK) ON fi.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+    JOIN sys.fulltext_indexes fi ON fi.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
     WHERE t.MissingTable = 0
   
   RAISERROR('Detect Index Changes', 10, 100) WITH NOWAIT
@@ -458,7 +458,7 @@ BEGIN TRY
                    CASE WHEN i.[IgnoreDuplicateKey] = 1 THEN ', IGNORE_DUP_KEY=ON' ELSE '' END +
                    CASE WHEN i.[PadIndex] = 1 THEN ', PAD_INDEX=ON' ELSE '' END) o
     WHERE EXISTS (SELECT * 
-                    FROM sys.indexes si WITH (NOLOCK)
+                    FROM sys.indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
                       AND si.[name] = ei.[xIndexName])
       AND ei.IndexScript <> 'CREATE ' + 
@@ -470,7 +470,7 @@ BEGIN TRY
                                  WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                  ELSE '' END +
                             -- #242: the engine's own rendering of the filter when the mapping vouches for it (fn_ExpressionMapEffective).
-                            CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', i.[IndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si2.filter_definition FROM sys.indexes si2 WITH (NOLOCK) WHERE si2.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si2.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))) ELSE '' END +
+                            CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', i.[IndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si2.filter_definition FROM sys.indexes si2 WHERE si2.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si2.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))) ELSE '' END +
                             CASE WHEN o.[WithOptions] <> '' THEN ' WITH (' + STUFF(o.[WithOptions], 1, 2, '') + ')' ELSE '' END
   
   RAISERROR('Detect Index Renames', 10, 100) WITH NOWAIT
@@ -488,7 +488,7 @@ BEGIN TRY
       -- should be, and the PK is then never created (#304). Only rename when constraint-ness matches.
       AND ei.[IsConstraint] = (CASE WHEN i.[PrimaryKey] = 1 OR i.[UniqueConstraint] = 1 THEN 1 ELSE 0 END)
       AND EXISTS (SELECT *
-                    FROM sys.indexes si WITH (NOLOCK)
+                    FROM sys.indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName])
                       AND si.[name] = ei.[xIndexName])
       AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + 
@@ -500,7 +500,7 @@ BEGIN TRY
                                                                        WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                                                        ELSE '' END +
                                                                   -- #242: keyed on the OLD name -- the mapping row was written under the name the index has now.
-                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', ei.[xIndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si3.filter_definition FROM sys.indexes si3 WITH (NOLOCK) WHERE si3.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) AND si3.[name] = ei.[xIndexName]))) ELSE '' END +
+                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', ei.[xIndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si3.filter_definition FROM sys.indexes si3 WHERE si3.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) AND si3.[name] = ei.[xIndexName]))) ELSE '' END +
                                                                   CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('NONE', 'ROW', 'PAGE'))
                                                                          OR (i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
                                                                        THEN ' WITH (DATA_COMPRESSION=' + RTRIM(ISNULL(i.[CompressionType], '')) + ')'
@@ -561,7 +561,7 @@ BEGIN TRY
          [IsClustered] = CAST(CASE WHEN i.[type_desc] = 'CLUSTERED' THEN 1 ELSE 0 END AS BIT)
     INTO #IndexesToDrop
     FROM #IndexesRemovedFromProduct ir WITH (NOLOCK)
-    JOIN sys.indexes i WITH (NOLOCK) ON i.[object_id] = OBJECT_ID([Schema] + '.' + [TableName]) AND i.[Name] = SchemaSmith.fn_StripBracketWrapping([IndexName])
+    JOIN sys.indexes i ON i.[object_id] = OBJECT_ID([Schema] + '.' + [TableName]) AND i.[Name] = SchemaSmith.fn_StripBracketWrapping([IndexName])
     -- Removed-from-product (ownership-stamped) drop is gated by the cascade flag + per-table
     -- tightening; the unknown (@DropUnknownIndexes) and modified branches below are unaffected.
     WHERE @DropIndexesRemovedFromProduct = 1
@@ -604,7 +604,7 @@ BEGIN TRY
   SELECT @v_SQL = STRING_AGG(CAST('RAISERROR(''  Dropping foreign Key ' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '.' + OBJECT_NAME(fk.parent_object_id) + '.' + fk.[name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE [' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '] DROP CONSTRAINT IF EXISTS [' + fk.[name] + '];' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
     FROM #IndexesToDrop di WITH (NOLOCK)
-    JOIN sys.foreign_keys fk WITH (NOLOCK) ON fk.referenced_object_id = OBJECT_ID(di.[Schema] + '.' + di.[TableName])
+    JOIN sys.foreign_keys fk ON fk.referenced_object_id = OBJECT_ID(di.[Schema] + '.' + di.[TableName])
     WHERE IsConstraint = 1 OR IsUnique = 1
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
   
@@ -616,7 +616,7 @@ BEGIN TRY
     JOIN #ExistingFullTextIndexes ef WITH (NOLOCK) ON id.[Schema] = ef.[Schema]
                                                   AND id.[TableName] = ef.[TableName]
                                                   AND id.[IndexName] = SchemaSmith.fn_StripBracketWrapping(ef.[KeyIndex])
-    JOIN sys.fulltext_indexes fi WITH (NOLOCK) ON fi.[object_id] = OBJECT_ID(ef.[Schema] + '.' + ef.[TableName])
+    JOIN sys.fulltext_indexes fi ON fi.[object_id] = OBJECT_ID(ef.[Schema] + '.' + ef.[TableName])
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   -- #363: WhatIf twin of the embedded 'fullTextIndex'/'dropped' audit above; same predicate.
@@ -627,7 +627,7 @@ BEGIN TRY
         JOIN #ExistingFullTextIndexes ef WITH (NOLOCK) ON id.[Schema] = ef.[Schema]
                                                       AND id.[TableName] = ef.[TableName]
                                                       AND id.[IndexName] = SchemaSmith.fn_StripBracketWrapping(ef.[KeyIndex])
-        JOIN sys.fulltext_indexes fi WITH (NOLOCK) ON fi.[object_id] = OBJECT_ID(ef.[Schema] + '.' + ef.[TableName])
+        JOIN sys.fulltext_indexes fi ON fi.[object_id] = OBJECT_ID(ef.[Schema] + '.' + ef.[TableName])
 
   -- No-drop protection tier (#270): when protected mode is active the caller forces @DropUnknownIndexes
   -- and @DropIndexesRemovedFromProduct to 0, so the unknown and removed-from-product branches of
@@ -648,7 +648,7 @@ BEGIN TRY
                [IndexName] = CAST(SchemaSmith.fn_StripBracketWrapping(ir.[IndexName]) AS NVARCHAR(500)),
                [ObjectType] = CASE WHEN ir.[IsConstraint] = 1 THEN 'constraint' ELSE 'index' END
           FROM #IndexesRemovedFromProduct ir WITH (NOLOCK)
-          JOIN sys.indexes i WITH (NOLOCK) ON i.[object_id] = OBJECT_ID(ir.[Schema] + '.' + ir.[TableName]) AND i.[Name] = SchemaSmith.fn_StripBracketWrapping(ir.[IndexName])
+          JOIN sys.indexes i ON i.[object_id] = OBJECT_ID(ir.[Schema] + '.' + ir.[TableName]) AND i.[Name] = SchemaSmith.fn_StripBracketWrapping(ir.[IndexName])
           WHERE ISNULL((SELECT t.[DropIndexesRemovedFromProduct] FROM #Tables t WITH (NOLOCK) WHERE t.[Schema] = ir.[Schema] AND t.[Name] = ir.[TableName]), 1) = 1
         UNION
         -- Unknown indexes (minus the @DropUnknownIndexes gate)
@@ -698,12 +698,12 @@ BEGIN TRY
          StatisticScript = 'CREATE STATISTICS ' +
                            '[' + si.[Name] + '] ON ' + t.[Schema] + '.' + t.[Name] + ' (' +
                            (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY ic.stats_column_id)
-                              FROM sys.stats_columns ic WITH (NOLOCK)
+                              FROM sys.stats_columns ic
                               WHERE si.[object_id] = ic.[object_id] AND si.stats_id = ic.stats_id) + ')' +
                            CASE WHEN si.has_filter = 1 THEN ' WHERE ' + SchemaSmith.fn_StripParenWrapping(si.filter_definition) ELSE '' END 
     INTO #ExistingStats 
     FROM #Tables t WITH (NOLOCK)
-    JOIN sys.stats si WITH (NOLOCK) ON si.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+    JOIN sys.stats si ON si.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
                                    AND auto_created = 0
                                    AND user_created = 1
                                    AND is_temporary = 0
@@ -722,7 +722,7 @@ BEGIN TRY
     -- StatisticName is bracket-wrapped at parse; wrapping it again read [[name]] against a live [name], so
     -- every statistic was re-created on every index-only deploy. Same form as ModifiedTableQuench now.
     WHERE es.StatisticScript <> 'CREATE STATISTICS ' + s.[StatisticName] + ' ON ' + s.[Schema] + '.' + s.[TableName] + ' (' + s.[Columns] + ')' +
-                                CASE WHEN RTRIM(ISNULL(s.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(s.[Schema], s.[TableName], 'STATISTIC', s.[StatisticName], 'filter', s.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT st2.filter_definition FROM sys.stats st2 WITH (NOLOCK) WHERE st2.[object_id] = OBJECT_ID(s.[Schema] + '.' + s.[TableName]) AND st2.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName])))) ELSE '' END
+                                CASE WHEN RTRIM(ISNULL(s.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(s.[Schema], s.[TableName], 'STATISTIC', s.[StatisticName], 'filter', s.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT st2.filter_definition FROM sys.stats st2 WHERE st2.[object_id] = OBJECT_ID(s.[Schema] + '.' + s.[TableName]) AND st2.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName])))) ELSE '' END
   
   RAISERROR('Drop Modified Statistics', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STRING_AGG(CAST('RAISERROR(''  Dropping statistics ' + sc.[Schema] + '.' + sc.[TableName] + '.' + sc.[StatisticName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -742,7 +742,7 @@ BEGIN TRY
     FROM #Indexes i WITH (NOLOCK)
     WHERE i.[Clustered] = 1
       AND NOT EXISTS (SELECT *
-                        FROM sys.indexes si WITH (NOLOCK)
+                        FROM sys.indexes si
                         WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                           AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
 
@@ -753,7 +753,7 @@ BEGIN TRY
                                        ELSE 'DROP INDEX IF EXISTS [' + si.[Name] + '] ON ' + mct.[Schema] + '.' + mct.[TableName] + ';'
                                        END AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
     FROM #MissingClusteredIndexTables mct WITH (NOLOCK)
-    JOIN sys.indexes si WITH (NOLOCK) ON si.[object_id] = OBJECT_ID(mct.[Schema] + '.' + mct.[TableName])
+    JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(mct.[Schema] + '.' + mct.[TableName])
                                      AND si.[type] IN (1, 5)
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
@@ -765,15 +765,15 @@ BEGIN TRY
   IF EXISTS (SELECT 1
                FROM #Indexes i WITH (NOLOCK)
                WHERE i.[FileGroup] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
-                 AND NOT EXISTS (SELECT * FROM sys.indexes si WITH (NOLOCK) WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
+                 AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
+                 AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
   BEGIN
     DECLARE @v_IdxFGIndex NVARCHAR(1510), @v_IdxFGName NVARCHAR(500)
     SELECT TOP 1 @v_IdxFGIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxFGName = i.[FileGroup]
       FROM #Indexes i WITH (NOLOCK)
       WHERE i.[FileGroup] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.filegroups fg WITH (NOLOCK) WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
-        AND NOT EXISTS (SELECT * FROM sys.indexes si WITH (NOLOCK) WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
+        AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
+        AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
     DECLARE @v_IdxFGMsg NVARCHAR(2000) = 'Index ' + @v_IdxFGIndex + ' declares filegroup ' + @v_IdxFGName +
       ', which does not exist on this database. SchemaSmith does not create filegroups -- create it on the target first, or correct the declared name.';
     THROW 51000, @v_IdxFGMsg, 1;
@@ -785,15 +785,15 @@ BEGIN TRY
   IF EXISTS (SELECT 1
                FROM #Indexes i WITH (NOLOCK)
                WHERE i.[PartitionScheme] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WITH (NOLOCK) WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]))
-                 AND NOT EXISTS (SELECT * FROM sys.indexes si WITH (NOLOCK) WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
+                 AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]))
+                 AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
   BEGIN
     DECLARE @v_IdxPsMissing NVARCHAR(1510), @v_IdxPsMissingName NVARCHAR(500)
     SELECT TOP 1 @v_IdxPsMissing = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxPsMissingName = i.[PartitionScheme]
       FROM #Indexes i WITH (NOLOCK)
       WHERE i.[PartitionScheme] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WITH (NOLOCK) WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]))
-        AND NOT EXISTS (SELECT * FROM sys.indexes si WITH (NOLOCK) WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
+        AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]))
+        AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
     DECLARE @v_IdxPsMissingMsg NVARCHAR(2000) = 'Index ' + @v_IdxPsMissing + ' declares partition scheme ' + @v_IdxPsMissingName +
       ', which does not exist on this database. SchemaSmith does not create partition functions or schemes -- create them on the target first, or correct the declared name.';
     THROW 51000, @v_IdxPsMissingMsg, 1;
@@ -868,7 +868,7 @@ BEGIN TRY
                                        END + ';' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10)) WITHIN GROUP (ORDER BY i.[Schema], i.[TableName], CASE WHEN i.[Clustered] =  1 THEN 0 ELSE 1 END, i.[IndexName])
     FROM #Indexes i WITH (NOLOCK)
     WHERE NOT EXISTS (SELECT * 
-                        FROM sys.indexes si WITH (NOLOCK)
+                        FROM sys.indexes si
                         WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) 
                           AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))    
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
@@ -893,7 +893,7 @@ BEGIN TRY
                                        ELSE '' END + ';' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10)) WITHIN GROUP (ORDER BY i.[Schema], i.[TableName], CASE WHEN i.IsPrimary =  1 THEN 0 ELSE 1 END, i.[IndexName])
     FROM #XmlIndexes i WITH (NOLOCK)
     WHERE NOT EXISTS (SELECT * 
-                        FROM sys.xml_indexes si WITH (NOLOCK)
+                        FROM sys.xml_indexes si
                         WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) 
                           AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))    
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
@@ -916,7 +916,7 @@ BEGIN TRY
                                   ' WITH SAMPLE ' + CAST(ISNULL(s.[SampleSize], 100) AS NVARCHAR(20)) + ' PERCENT;' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
     FROM #Statistics s WITH (NOLOCK)
     WHERE NOT EXISTS (SELECT * 
-                        FROM sys.stats ss WITH (NOLOCK)
+                        FROM sys.stats ss
                         WHERE ss.[object_id] = OBJECT_ID(s.[Schema] + '.' + s.[TableName]) 
                           AND ss.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName]))
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
@@ -928,7 +928,7 @@ BEGIN TRY
     FROM #ExistingFullTextIndexes ei WITH (NOLOCK)
     LEFT JOIN #FullTextIndexes fi WITH (NOLOCK) ON fi.[Schema] = ei.[Schema]
                                                AND fi.[TableName] = ei.[TableName]
-    JOIN sys.fulltext_indexes ft WITH (NOLOCK) ON ft.[object_id] = OBJECT_ID(ei.[Schema] + '.' + ei.[TableName])
+    JOIN sys.fulltext_indexes ft ON ft.[object_id] = OBJECT_ID(ei.[Schema] + '.' + ei.[TableName])
     WHERE RTRIM(ISNULL(fi.[Columns], '')) <> RTRIM(ISNULL(ei.[Columns], ''))
        OR SchemaSmith.fn_StripBracketWrapping(fi.[FullTextCatalog]) <> SchemaSmith.fn_StripBracketWrapping(ei.[FullTextCatalog])
        OR SchemaSmith.fn_StripBracketWrapping(fi.[KeyIndex]) <> SchemaSmith.fn_StripBracketWrapping(ei.[KeyIndex])
@@ -944,7 +944,7 @@ BEGIN TRY
         FROM #ExistingFullTextIndexes ei WITH (NOLOCK)
         LEFT JOIN #FullTextIndexes fi WITH (NOLOCK) ON fi.[Schema] = ei.[Schema]
                                                    AND fi.[TableName] = ei.[TableName]
-        JOIN sys.fulltext_indexes ft WITH (NOLOCK) ON ft.[object_id] = OBJECT_ID(ei.[Schema] + '.' + ei.[TableName])
+        JOIN sys.fulltext_indexes ft ON ft.[object_id] = OBJECT_ID(ei.[Schema] + '.' + ei.[TableName])
         WHERE RTRIM(ISNULL(fi.[Columns], '')) <> RTRIM(ISNULL(ei.[Columns], ''))
            OR SchemaSmith.fn_StripBracketWrapping(fi.[FullTextCatalog]) <> SchemaSmith.fn_StripBracketWrapping(ei.[FullTextCatalog])
            OR SchemaSmith.fn_StripBracketWrapping(fi.[KeyIndex]) <> SchemaSmith.fn_StripBracketWrapping(ei.[KeyIndex])
@@ -959,7 +959,7 @@ BEGIN TRY
                                   CASE WHEN RTRIM(ISNULL(fi.[StopList], '')) <> '' THEN ', STOPLIST = ' + [StopList] ELSE '' END + ';' + CHAR(13) + CHAR(10) +
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''fullTextIndex'', ''' + fi.[Schema] + '.' + fi.[TableName] + ''', ''created'');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
     FROM #FullTextIndexes fi WITH (NOLOCK)
-    WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WITH (NOLOCK) WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
+    WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   -- #363: WhatIf twin of the embedded 'fullTextIndex'/'created' audit above; same predicate.
@@ -967,7 +967,7 @@ BEGIN TRY
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
       SELECT @@SPID, 'fullTextIndex', fi.[Schema] + '.' + fi.[TableName], 'wouldCreate'
         FROM #FullTextIndexes fi WITH (NOLOCK)
-        WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WITH (NOLOCK) WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
+        WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
 
   -- #242: record here, not in the caller -- this proc's temp tables are gone the moment it returns.
   EXEC SchemaSmith.ExpressionMapRecord @WhatIf

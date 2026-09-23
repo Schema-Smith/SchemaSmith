@@ -40,13 +40,19 @@ BEGIN
     SELECT em.AuthoredText, em.CanonicalText, em.EngineVersion
       INTO v_authored, v_canonical, v_rowversion
       FROM SchemaSmith_ExpressionMap em
-     -- Explicit collation on every key comparison: the table is utf8mb4_unicode_ci while a routine parameter
-     -- carries the server default (utf8mb4_0900_ai_ci on MySQL 8, utf8mb4_uca1400_ai_ci on MariaDB 11), and
-     -- mixing them is an "Illegal mix of collations" error rather than a false comparison.
-     WHERE em.ObjectSchema = CONVERT(p_ObjectSchema USING utf8mb4) COLLATE utf8mb4_unicode_ci
-       AND em.ObjectTable = CONVERT(p_ObjectTable USING utf8mb4) COLLATE utf8mb4_unicode_ci
+     -- Explicit collation on every key comparison: a routine parameter carries the server default
+     -- (utf8mb4_0900_ai_ci on MySQL 8, utf8mb4_uca1400_ai_ci on MariaDB 11), and mixing that with the
+     -- column's own collation is an "Illegal mix of collations" error rather than a false comparison.
+     -- The three key members that hold an identifier go through SchemaSmith_IdentifierKey instead of a
+     -- fixed collation, because whether two names are the same object is the server's call
+     -- (lower_case_table_names) -- and the sibling that WRITES these rows, ExpressionMapRecord, has
+     -- always compared them with BINARY. Forcing utf8mb4_unicode_ci here meant the reader and the
+     -- writer disagreed: on a case-sensitive server this could answer for the wrong table.
+     -- ObjectKind and Slot are engine constants, not identifiers, so they keep the fixed collation.
+     WHERE SchemaSmith_IdentifierKey(em.ObjectSchema) = SchemaSmith_IdentifierKey(p_ObjectSchema)
+       AND SchemaSmith_IdentifierKey(em.ObjectTable) = SchemaSmith_IdentifierKey(p_ObjectTable)
        AND em.ObjectKind = CONVERT(p_ObjectKind USING utf8mb4) COLLATE utf8mb4_unicode_ci
-       AND em.ObjectName = CONVERT(p_ObjectName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+       AND SchemaSmith_IdentifierKey(em.ObjectName) = SchemaSmith_IdentifierKey(p_ObjectName)
        AND em.Slot = CONVERT(p_Slot USING utf8mb4) COLLATE utf8mb4_unicode_ci
      LIMIT 1;
 

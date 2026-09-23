@@ -1005,4 +1005,63 @@ public class SchemaGeneratorTests
         public bool? Everywhere { get; set; }
     }
 
+
+    // A string enum can declare its converter on the ENUM TYPE or on the PROPERTY. Both mean the same
+    // thing at runtime, and the generator used to honour only the first -- so a property-level
+    // declaration emitted "integer" and the package that set it failed --Validate against SchemaSmith's
+    // OWN generated schema while deploying perfectly well. The linter contradicted the product.
+    // SqlServerTemplate.ServerToQuench is the real case; these fixtures pin both placements.
+    private enum PlacementEnum { Alpha, Beta }
+
+    [Newtonsoft.Json.JsonConverter(typeof(Newtonsoft.Json.Converters.StringEnumConverter))]
+    private enum TypeDecoratedEnum { Alpha, Beta }
+
+    private class ConverterOnProperty
+    {
+        [Newtonsoft.Json.JsonConverter(typeof(Newtonsoft.Json.Converters.StringEnumConverter))]
+        public PlacementEnum Value { get; set; }
+    }
+
+    private class ConverterOnEnumType
+    {
+        public TypeDecoratedEnum Value { get; set; }
+    }
+
+    private class NoConverter
+    {
+        public PlacementEnum Value { get; set; }
+    }
+
+    [Test]
+    public void StringEnumConverter_OnTheProperty_EmitsAStringNotAnInteger()
+    {
+        var schema = SchemaGenerator.GenerateSchema(typeof(ConverterOnProperty));
+        var value = schema["properties"]?["Value"];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value?["type"]?.ToString(), Is.EqualTo("string"),
+                "a property-level StringEnumConverter round-trips as a string, so the schema must say "
+                + "string -- emitting integer makes --Validate reject a value the deploy accepts");
+            Assert.That(value?["pattern"]?.ToString(), Is.EqualTo("Alpha|Beta"),
+                "and the allowed names must be pinned, or any string would pass");
+        });
+    }
+
+    [Test]
+    public void StringEnumConverter_OnTheEnumType_StillEmitsAString()
+    {
+        // The placement that already worked. Kept so a fix to the property case cannot regress it.
+        var schema = SchemaGenerator.GenerateSchema(typeof(ConverterOnEnumType));
+        Assert.That(schema["properties"]?["Value"]?["type"]?.ToString(), Is.EqualTo("string"));
+    }
+
+    [Test]
+    public void EnumWithNoConverter_IsStillAnInteger()
+    {
+        // The negative guard: an undecorated enum genuinely serializes as its ordinal, so widening the
+        // check must not turn every enum into a string.
+        var schema = SchemaGenerator.GenerateSchema(typeof(NoConverter));
+        Assert.That(schema["properties"]?["Value"]?["type"]?.ToString(), Is.EqualTo("integer"));
+    }
 }

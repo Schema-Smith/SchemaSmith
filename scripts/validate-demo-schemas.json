@@ -1,0 +1,527 @@
+[
+  {
+    "name": "SqlServer-AdventureWorks-Tables",
+    "schema": "Demos/SqlServer/AdventureWorks/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/SqlServer/AdventureWorks/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "SqlServer-AdventureWorks-Products",
+    "schema": "Demos/SqlServer/AdventureWorks/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/SqlServer/AdventureWorks/Product.json"
+  },
+  {
+    "name": "SqlServer-AdventureWorks-Templates",
+    "schema": "Demos/SqlServer/AdventureWorks/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/SqlServer/AdventureWorks/Templates/*/Template.json"
+  },
+  {
+    "name": "SqlServer-Chinook-Tables",
+    "schema": "Demos/SqlServer/Chinook/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/SqlServer/Chinook/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "SqlServer-Chinook-Products",
+    "schema": "Demos/SqlServer/Chinook/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/SqlServer/Chinook/Product.json"
+  },
+  {
+    "name": "SqlServer-Chinook-Templates",
+    "schema": "Demos/SqlServer/Chinook/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/SqlServer/Chinook/Templates/*/Template.json"
+  },
+  {
+    "name": "SqlServer-Northwind-Tables",
+    "schema": "Demos/SqlServer/Northwind/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/SqlServer/Northwind/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "SqlServer-Northwind-Products",
+    "schema": "Demos/SqlServer/Northwind/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/SqlServer/Northwind/Product.json"
+  },
+  {
+    "name": "SqlServer-Northwind-Templates",
+    "schema": "Demos/SqlServer/Northwind/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/SqlServer/Northwind/Templates/*/Template.json"
+  },
+  {
+    "name": "SqlServer-Sakila-Tables",
+    "schema": "Demos/SqlServer/Sakila/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/SqlServer/Sakila/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "SqlServer-Sakila-Products",
+    "schema": "Demos/SqlServer/Sakila/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/SqlServer/Sakila/Product.json"
+  },
+  {
+    "name": "SqlServer-Sakila-Templates",
+    "schema": "Demos/SqlServer/Sakila/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/SqlServer/Sakila/Templates/*/Template.json"
+  },
+  {
+    "name": "SqlServer-Tutorial-Product-ValidProduct-Tables",
+    "schema": "Demos/SqlServer/Tutorials/Product/ValidProduct/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/SqlServer/Tutorials/Product/ValidProduct/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "SqlServer-Tutorial-Product-ValidProduct-Products",
+    "schema": "Demos/SqlServer/Tutorials/Product/ValidProduct/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/SqlServer/Tutorials/Product/ValidProduct/Product.json"
+  },
+  {
+    "name": "SqlServer-Tutorial-Product-ValidProduct-Templates",
+    "schema": "Demos/SqlServer/Tutorials/Product/ValidProduct/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/SqlServer/Tutorials/Product/ValidProduct/Templates/*/Template.json"
+  },
+  {
+    "name": "SqlServer-Tutorial-Template-SaasProduct-Tables",
+    "schema": "Demos/SqlServer/Tutorials/Template/SaasProduct/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/SqlServer/Tutorials/Template/SaasProduct/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "SqlServer-Tutorial-Template-SaasProduct-Products",
+    "schema": "Demos/SqlServer/Tutorials/Template/SaasProduct/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/SqlServer/Tutorials/Template/SaasProduct/Product.json"
+  },
+  {
+    "name": "SqlServer-Tutorial-Template-SaasProduct-Templates",
+    "schema": "Demos/SqlServer/Tutorials/Template/SaasProduct/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/SqlServer/Tutorials/Template/SaasProduct/Templates/*/Template.json"
+  },
+  {
+    "name": "SqlServer-Tutorial-Template-ValidProduct-Tables",
+    "schema": "Demos/SqlServer/Tutorials/Template/ValidProduct/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/SqlServer/Tutorials/Template/ValidProduct/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "SqlServer-Tutorial-Template-ValidProduct-Products",
+    "schema": "Demos/SqlServer/Tutorials/Template/ValidProduct/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/SqlServer/Tutorials/Template/ValidProduct/Product.json"
+  },
+  {
+    "name": "SqlServer-Tutorial-Template-ValidProduct-Templates",
+    "schema": "Demos/SqlServer/Tutorials/Template/ValidProduct/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/SqlServer/Tutorials/Template/ValidProduct/Templates/*/Template.json"
+  },
+  {
+    "name": "PostgreSQL-AdventureWorks-Tables",
+    "schema": "Demos/PostgreSQL/AdventureWorks/.json-schemas/tables.postgresql.schema",
+    "files": "Demos/PostgreSQL/AdventureWorks/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "PostgreSQL-AdventureWorks-Products",
+    "schema": "Demos/PostgreSQL/AdventureWorks/.json-schemas/products.postgresql.schema",
+    "files": "Demos/PostgreSQL/AdventureWorks/Product.json"
+  },
+  {
+    "name": "PostgreSQL-AdventureWorks-Templates",
+    "schema": "Demos/PostgreSQL/AdventureWorks/.json-schemas/templates.postgresql.schema",
+    "files": "Demos/PostgreSQL/AdventureWorks/Templates/*/Template.json"
+  },
+  {
+    "name": "PostgreSQL-AdventureWorks-MaterializedViews",
+    "schema": "Demos/PostgreSQL/AdventureWorks/.json-schemas/materializedviews.postgresql.schema",
+    "files": "Demos/PostgreSQL/AdventureWorks/Templates/**/Materialized Views/**/*.json"
+  },
+  {
+    "name": "PostgreSQL-Chinook-Tables",
+    "schema": "Demos/PostgreSQL/Chinook/.json-schemas/tables.postgresql.schema",
+    "files": "Demos/PostgreSQL/Chinook/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "PostgreSQL-Chinook-Products",
+    "schema": "Demos/PostgreSQL/Chinook/.json-schemas/products.postgresql.schema",
+    "files": "Demos/PostgreSQL/Chinook/Product.json"
+  },
+  {
+    "name": "PostgreSQL-Chinook-Templates",
+    "schema": "Demos/PostgreSQL/Chinook/.json-schemas/templates.postgresql.schema",
+    "files": "Demos/PostgreSQL/Chinook/Templates/*/Template.json"
+  },
+  {
+    "name": "PostgreSQL-Northwind-Tables",
+    "schema": "Demos/PostgreSQL/Northwind/.json-schemas/tables.postgresql.schema",
+    "files": "Demos/PostgreSQL/Northwind/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "PostgreSQL-Northwind-Products",
+    "schema": "Demos/PostgreSQL/Northwind/.json-schemas/products.postgresql.schema",
+    "files": "Demos/PostgreSQL/Northwind/Product.json"
+  },
+  {
+    "name": "PostgreSQL-Northwind-Templates",
+    "schema": "Demos/PostgreSQL/Northwind/.json-schemas/templates.postgresql.schema",
+    "files": "Demos/PostgreSQL/Northwind/Templates/*/Template.json"
+  },
+  {
+    "name": "PostgreSQL-Sakila-Tables",
+    "schema": "Demos/PostgreSQL/Sakila/.json-schemas/tables.postgresql.schema",
+    "files": "Demos/PostgreSQL/Sakila/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "PostgreSQL-Sakila-Products",
+    "schema": "Demos/PostgreSQL/Sakila/.json-schemas/products.postgresql.schema",
+    "files": "Demos/PostgreSQL/Sakila/Product.json"
+  },
+  {
+    "name": "PostgreSQL-Sakila-Templates",
+    "schema": "Demos/PostgreSQL/Sakila/.json-schemas/templates.postgresql.schema",
+    "files": "Demos/PostgreSQL/Sakila/Templates/*/Template.json"
+  },
+  {
+    "name": "MySQL-AdventureWorks-Tables",
+    "schema": "Demos/MySQL/AdventureWorks/.json-schemas/tables.mysql.schema",
+    "files": "Demos/MySQL/AdventureWorks/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "MySQL-AdventureWorks-Products",
+    "schema": "Demos/MySQL/AdventureWorks/.json-schemas/products.mysql.schema",
+    "files": "Demos/MySQL/AdventureWorks/Product.json"
+  },
+  {
+    "name": "MySQL-AdventureWorks-Templates",
+    "schema": "Demos/MySQL/AdventureWorks/.json-schemas/templates.mysql.schema",
+    "files": "Demos/MySQL/AdventureWorks/Templates/*/Template.json"
+  },
+  {
+    "name": "MySQL-Chinook-Tables",
+    "schema": "Demos/MySQL/Chinook/.json-schemas/tables.mysql.schema",
+    "files": "Demos/MySQL/Chinook/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "MySQL-Chinook-Products",
+    "schema": "Demos/MySQL/Chinook/.json-schemas/products.mysql.schema",
+    "files": "Demos/MySQL/Chinook/Product.json"
+  },
+  {
+    "name": "MySQL-Chinook-Templates",
+    "schema": "Demos/MySQL/Chinook/.json-schemas/templates.mysql.schema",
+    "files": "Demos/MySQL/Chinook/Templates/*/Template.json"
+  },
+  {
+    "name": "MySQL-Northwind-Tables",
+    "schema": "Demos/MySQL/Northwind/.json-schemas/tables.mysql.schema",
+    "files": "Demos/MySQL/Northwind/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "MySQL-Northwind-Products",
+    "schema": "Demos/MySQL/Northwind/.json-schemas/products.mysql.schema",
+    "files": "Demos/MySQL/Northwind/Product.json"
+  },
+  {
+    "name": "MySQL-Northwind-Templates",
+    "schema": "Demos/MySQL/Northwind/.json-schemas/templates.mysql.schema",
+    "files": "Demos/MySQL/Northwind/Templates/*/Template.json"
+  },
+  {
+    "name": "MySQL-Sakila-Tables",
+    "schema": "Demos/MySQL/Sakila/.json-schemas/tables.mysql.schema",
+    "files": "Demos/MySQL/Sakila/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "MySQL-Sakila-Products",
+    "schema": "Demos/MySQL/Sakila/.json-schemas/products.mysql.schema",
+    "files": "Demos/MySQL/Sakila/Product.json"
+  },
+  {
+    "name": "MySQL-Sakila-Templates",
+    "schema": "Demos/MySQL/Sakila/.json-schemas/templates.mysql.schema",
+    "files": "Demos/MySQL/Sakila/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-module-04-mysql-Tables",
+    "schema": "Demos/Learn/module-04/mysql/solution/.json-schemas/tables.mysql.schema",
+    "files": "Demos/Learn/module-04/mysql/solution/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-module-04-mysql-Products",
+    "schema": "Demos/Learn/module-04/mysql/solution/.json-schemas/products.mysql.schema",
+    "files": "Demos/Learn/module-04/mysql/solution/Product.json"
+  },
+  {
+    "name": "Learn-module-04-mysql-Templates",
+    "schema": "Demos/Learn/module-04/mysql/solution/.json-schemas/templates.mysql.schema",
+    "files": "Demos/Learn/module-04/mysql/solution/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-module-04-postgres-Tables",
+    "schema": "Demos/Learn/module-04/postgres/solution/.json-schemas/tables.postgresql.schema",
+    "files": "Demos/Learn/module-04/postgres/solution/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-module-04-postgres-Products",
+    "schema": "Demos/Learn/module-04/postgres/solution/.json-schemas/products.postgresql.schema",
+    "files": "Demos/Learn/module-04/postgres/solution/Product.json"
+  },
+  {
+    "name": "Learn-module-04-postgres-Templates",
+    "schema": "Demos/Learn/module-04/postgres/solution/.json-schemas/templates.postgresql.schema",
+    "files": "Demos/Learn/module-04/postgres/solution/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-module-04-sqlserver-Tables",
+    "schema": "Demos/Learn/module-04/sqlserver/solution/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/Learn/module-04/sqlserver/solution/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-module-04-sqlserver-Products",
+    "schema": "Demos/Learn/module-04/sqlserver/solution/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/Learn/module-04/sqlserver/solution/Product.json"
+  },
+  {
+    "name": "Learn-module-04-sqlserver-Templates",
+    "schema": "Demos/Learn/module-04/sqlserver/solution/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/Learn/module-04/sqlserver/solution/Templates/*/Template.json"
+  },
+  {
+    "name": "SqlServer-TenantCRM-Tables",
+    "schema": "Demos/SqlServer/TenantCRM/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/SqlServer/TenantCRM/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "SqlServer-TenantCRM-Products",
+    "schema": "Demos/SqlServer/TenantCRM/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/SqlServer/TenantCRM/Product.json"
+  },
+  {
+    "name": "SqlServer-TenantCRM-Templates",
+    "schema": "Demos/SqlServer/TenantCRM/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/SqlServer/TenantCRM/Templates/*/Template.json"
+  },
+  {
+    "name": "SqlServer-TenantCRM-IndexedViews",
+    "schema": "Demos/SqlServer/TenantCRM/.json-schemas/indexedviews.sqlserver.schema",
+    "files": "Demos/SqlServer/TenantCRM/Templates/**/Indexed Views/**/*.json"
+  },
+  {
+    "name": "PostgreSQL-TenantCRM-Tables",
+    "schema": "Demos/PostgreSQL/TenantCRM/.json-schemas/tables.postgresql.schema",
+    "files": "Demos/PostgreSQL/TenantCRM/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "PostgreSQL-TenantCRM-Products",
+    "schema": "Demos/PostgreSQL/TenantCRM/.json-schemas/products.postgresql.schema",
+    "files": "Demos/PostgreSQL/TenantCRM/Product.json"
+  },
+  {
+    "name": "PostgreSQL-TenantCRM-Templates",
+    "schema": "Demos/PostgreSQL/TenantCRM/.json-schemas/templates.postgresql.schema",
+    "files": "Demos/PostgreSQL/TenantCRM/Templates/*/Template.json"
+  },
+  {
+    "name": "PostgreSQL-TenantCRM-MaterializedViews",
+    "schema": "Demos/PostgreSQL/TenantCRM/.json-schemas/materializedviews.postgresql.schema",
+    "files": "Demos/PostgreSQL/TenantCRM/Templates/**/Materialized Views/**/*.json"
+  },
+  {
+    "name": "MariaDB-AdventureWorks-Tables",
+    "schema": "Demos/MariaDB/AdventureWorks/.json-schemas/tables.mariadb.schema",
+    "files": "Demos/MariaDB/AdventureWorks/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "MariaDB-AdventureWorks-Products",
+    "schema": "Demos/MariaDB/AdventureWorks/.json-schemas/products.mariadb.schema",
+    "files": "Demos/MariaDB/AdventureWorks/Product.json"
+  },
+  {
+    "name": "MariaDB-AdventureWorks-Templates",
+    "schema": "Demos/MariaDB/AdventureWorks/.json-schemas/templates.mariadb.schema",
+    "files": "Demos/MariaDB/AdventureWorks/Templates/*/Template.json"
+  },
+  {
+    "name": "MariaDB-Chinook-Tables",
+    "schema": "Demos/MariaDB/Chinook/.json-schemas/tables.mariadb.schema",
+    "files": "Demos/MariaDB/Chinook/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "MariaDB-Chinook-Products",
+    "schema": "Demos/MariaDB/Chinook/.json-schemas/products.mariadb.schema",
+    "files": "Demos/MariaDB/Chinook/Product.json"
+  },
+  {
+    "name": "MariaDB-Chinook-Templates",
+    "schema": "Demos/MariaDB/Chinook/.json-schemas/templates.mariadb.schema",
+    "files": "Demos/MariaDB/Chinook/Templates/*/Template.json"
+  },
+  {
+    "name": "MariaDB-Northwind-Tables",
+    "schema": "Demos/MariaDB/Northwind/.json-schemas/tables.mariadb.schema",
+    "files": "Demos/MariaDB/Northwind/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "MariaDB-Northwind-Products",
+    "schema": "Demos/MariaDB/Northwind/.json-schemas/products.mariadb.schema",
+    "files": "Demos/MariaDB/Northwind/Product.json"
+  },
+  {
+    "name": "MariaDB-Northwind-Templates",
+    "schema": "Demos/MariaDB/Northwind/.json-schemas/templates.mariadb.schema",
+    "files": "Demos/MariaDB/Northwind/Templates/*/Template.json"
+  },
+  {
+    "name": "MariaDB-Sakila-Tables",
+    "schema": "Demos/MariaDB/Sakila/.json-schemas/tables.mariadb.schema",
+    "files": "Demos/MariaDB/Sakila/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "MariaDB-Sakila-Products",
+    "schema": "Demos/MariaDB/Sakila/.json-schemas/products.mariadb.schema",
+    "files": "Demos/MariaDB/Sakila/Product.json"
+  },
+  {
+    "name": "MariaDB-Sakila-Templates",
+    "schema": "Demos/MariaDB/Sakila/.json-schemas/templates.mariadb.schema",
+    "files": "Demos/MariaDB/Sakila/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-module-04-mariadb-Tables",
+    "schema": "Demos/Learn/module-04/mariadb/solution/.json-schemas/tables.mariadb.schema",
+    "files": "Demos/Learn/module-04/mariadb/solution/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-module-04-mariadb-Products",
+    "schema": "Demos/Learn/module-04/mariadb/solution/.json-schemas/products.mariadb.schema",
+    "files": "Demos/Learn/module-04/mariadb/solution/Product.json"
+  },
+  {
+    "name": "Learn-module-04-mariadb-Templates",
+    "schema": "Demos/Learn/module-04/mariadb/solution/.json-schemas/templates.mariadb.schema",
+    "files": "Demos/Learn/module-04/mariadb/solution/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-course6-module-03-sqlserver-Tables",
+    "schema": "Demos/Learn/course6-module-03/sqlserver/Package/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/Learn/course6-module-03/sqlserver/Package/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-course6-module-03-sqlserver-Products",
+    "schema": "Demos/Learn/course6-module-03/sqlserver/Package/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/Learn/course6-module-03/sqlserver/Package/Product.json"
+  },
+  {
+    "name": "Learn-course6-module-03-sqlserver-Templates",
+    "schema": "Demos/Learn/course6-module-03/sqlserver/Package/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/Learn/course6-module-03/sqlserver/Package/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-course6-module-03-postgres-Tables",
+    "schema": "Demos/Learn/course6-module-03/postgres/Package/.json-schemas/tables.postgresql.schema",
+    "files": "Demos/Learn/course6-module-03/postgres/Package/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-course6-module-03-postgres-Products",
+    "schema": "Demos/Learn/course6-module-03/postgres/Package/.json-schemas/products.postgresql.schema",
+    "files": "Demos/Learn/course6-module-03/postgres/Package/Product.json"
+  },
+  {
+    "name": "Learn-course6-module-03-postgres-Templates",
+    "schema": "Demos/Learn/course6-module-03/postgres/Package/.json-schemas/templates.postgresql.schema",
+    "files": "Demos/Learn/course6-module-03/postgres/Package/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-course6-module-03-mysql-Tables",
+    "schema": "Demos/Learn/course6-module-03/mysql/Package/.json-schemas/tables.mysql.schema",
+    "files": "Demos/Learn/course6-module-03/mysql/Package/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-course6-module-03-mysql-Products",
+    "schema": "Demos/Learn/course6-module-03/mysql/Package/.json-schemas/products.mysql.schema",
+    "files": "Demos/Learn/course6-module-03/mysql/Package/Product.json"
+  },
+  {
+    "name": "Learn-course6-module-03-mysql-Templates",
+    "schema": "Demos/Learn/course6-module-03/mysql/Package/.json-schemas/templates.mysql.schema",
+    "files": "Demos/Learn/course6-module-03/mysql/Package/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-course6-module-03-mariadb-Tables",
+    "schema": "Demos/Learn/course6-module-03/mariadb/Package/.json-schemas/tables.mariadb.schema",
+    "files": "Demos/Learn/course6-module-03/mariadb/Package/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-course6-module-03-mariadb-Products",
+    "schema": "Demos/Learn/course6-module-03/mariadb/Package/.json-schemas/products.mariadb.schema",
+    "files": "Demos/Learn/course6-module-03/mariadb/Package/Product.json"
+  },
+  {
+    "name": "Learn-course6-module-03-mariadb-Templates",
+    "schema": "Demos/Learn/course6-module-03/mariadb/Package/.json-schemas/templates.mariadb.schema",
+    "files": "Demos/Learn/course6-module-03/mariadb/Package/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-sqlserver-Tables",
+    "schema": "Demos/Learn/course4-recipe-09/sqlserver/Package/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/Learn/course4-recipe-09/sqlserver/Package/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-sqlserver-Products",
+    "schema": "Demos/Learn/course4-recipe-09/sqlserver/Package/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/Learn/course4-recipe-09/sqlserver/Package/Product.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-sqlserver-Templates",
+    "schema": "Demos/Learn/course4-recipe-09/sqlserver/Package/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/Learn/course4-recipe-09/sqlserver/Package/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-postgres-Tables",
+    "schema": "Demos/Learn/course4-recipe-09/postgres/Package/.json-schemas/tables.postgresql.schema",
+    "files": "Demos/Learn/course4-recipe-09/postgres/Package/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-postgres-Products",
+    "schema": "Demos/Learn/course4-recipe-09/postgres/Package/.json-schemas/products.postgresql.schema",
+    "files": "Demos/Learn/course4-recipe-09/postgres/Package/Product.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-postgres-Templates",
+    "schema": "Demos/Learn/course4-recipe-09/postgres/Package/.json-schemas/templates.postgresql.schema",
+    "files": "Demos/Learn/course4-recipe-09/postgres/Package/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-mysql-Tables",
+    "schema": "Demos/Learn/course4-recipe-09/mysql/Package/.json-schemas/tables.mysql.schema",
+    "files": "Demos/Learn/course4-recipe-09/mysql/Package/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-mysql-Products",
+    "schema": "Demos/Learn/course4-recipe-09/mysql/Package/.json-schemas/products.mysql.schema",
+    "files": "Demos/Learn/course4-recipe-09/mysql/Package/Product.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-mysql-Templates",
+    "schema": "Demos/Learn/course4-recipe-09/mysql/Package/.json-schemas/templates.mysql.schema",
+    "files": "Demos/Learn/course4-recipe-09/mysql/Package/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-mariadb-Tables",
+    "schema": "Demos/Learn/course4-recipe-09/mariadb/Package/.json-schemas/tables.mariadb.schema",
+    "files": "Demos/Learn/course4-recipe-09/mariadb/Package/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-mariadb-Products",
+    "schema": "Demos/Learn/course4-recipe-09/mariadb/Package/.json-schemas/products.mariadb.schema",
+    "files": "Demos/Learn/course4-recipe-09/mariadb/Package/Product.json"
+  },
+  {
+    "name": "Learn-course4-recipe-09-mariadb-Templates",
+    "schema": "Demos/Learn/course4-recipe-09/mariadb/Package/.json-schemas/templates.mariadb.schema",
+    "files": "Demos/Learn/course4-recipe-09/mariadb/Package/Templates/*/Template.json"
+  },
+  {
+    "name": "Learn-course4-recipe-10-sqlserver-Tables",
+    "schema": "Demos/Learn/course4-recipe-10/sqlserver/Package/.json-schemas/tables.sqlserver.schema",
+    "files": "Demos/Learn/course4-recipe-10/sqlserver/Package/Templates/**/Tables/**/*.json"
+  },
+  {
+    "name": "Learn-course4-recipe-10-sqlserver-Products",
+    "schema": "Demos/Learn/course4-recipe-10/sqlserver/Package/.json-schemas/products.sqlserver.schema",
+    "files": "Demos/Learn/course4-recipe-10/sqlserver/Package/Product.json"
+  },
+  {
+    "name": "Learn-course4-recipe-10-sqlserver-Templates",
+    "schema": "Demos/Learn/course4-recipe-10/sqlserver/Package/.json-schemas/templates.sqlserver.schema",
+    "files": "Demos/Learn/course4-recipe-10/sqlserver/Package/Templates/*/Template.json"
+  }
+]

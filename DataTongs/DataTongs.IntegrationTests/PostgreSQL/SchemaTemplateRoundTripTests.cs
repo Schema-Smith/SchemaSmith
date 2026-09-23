@@ -56,17 +56,8 @@ public class SchemaTemplateRoundTripTests
             try { Directory.Delete(_tempProductPath, recursive: true); }
             catch { /* best effort */ }
         }
-        Npgsql.NpgsqlConnection.ClearAllPools();
         FactoryContainer.Clear();
         LogFactory.Clear();
-    }
-
-    [TearDown]
-    public void TearDownClearPgPools()
-    {
-        // Match the PG round-trip discipline from SchemaTongs: bound the pool to keep CI's
-        // max_connections=500 ceiling comfortable.
-        Npgsql.NpgsqlConnection.ClearAllPools();
     }
 
     [Test]
@@ -203,7 +194,6 @@ INSERT INTO ""{SourceSchema}"".customers (customer_id, code, name) VALUES
 
     private void DropTestDatabase()
     {
-        Npgsql.NpgsqlConnection.ClearAllPools();
         try
         {
             using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);

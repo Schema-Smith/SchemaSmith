@@ -44,15 +44,6 @@ public class SchemaCreationTests
         _server = config["Target:Server"];
     }
 
-    [SetUp]
-    public void SetUpClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [TearDown]
-    public void TearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [OneTimeTearDown]
-    public void OneTimeTearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
     /// <summary>
     /// CreateSchemaIfMissing: false (default) + discovery returns a schema that does not exist
     /// in pg_namespace. The engine must fail that work unit with a clear error referencing the

@@ -208,7 +208,9 @@ public class DeploymentSummaryAssemblerTests
     {
         var summary = AssembleWith();
 
-        Assert.That(summary.SchemaVersion, Is.EqualTo("1.0"));
+        // Pinned deliberately: the version is the contract's own statement that its shape changed,
+        // so a field added without bumping it should redden here rather than ship silently.
+        Assert.That(summary.SchemaVersion, Is.EqualTo("1.1"));
         Assert.That(summary.Tool, Is.EqualTo("SchemaQuench"));
         Assert.That(summary.ToolVersion, Is.EqualTo("2.3.0"));
 

@@ -126,7 +126,8 @@
       "description": "Default filegroup for CDC change tables of EnableCDC tables that declare no CdcFilegroup of their own. A table on a different filegroup gets a new capture instance there; the old one keeps its history. Unset leaves existing placement alone. SQL Server only."
     },
     "ServerToQuench": {
-      "type": "integer"
+      "type": "string",
+      "pattern": "Primary|Secondary|Both"
     }
   },
   "additionalProperties": false,

@@ -26,7 +26,8 @@
             "type": "string"
           },
           "ServerToQuench": {
-            "type": "integer"
+            "type": "string",
+            "pattern": "Primary|Secondary|Both"
           },
           "QuenchSlot": {
             "type": "string",

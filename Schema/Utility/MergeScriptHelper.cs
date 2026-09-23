@@ -21,6 +21,67 @@ namespace Schema.Utility;
 /// </summary>
 public static class MergeScriptHelper
 {
+    // ---- Delivery-scoped catalog memo ----
+    //
+    // Building one table's merge script reads INFORMATION_SCHEMA twice, and GetColumnInfoMySql has six
+    // call sites, so a single table was read roughly four times over. Measured on the 11-table Chinook
+    // demo: of 132 INFORMATION_SCHEMA reads in a no-op quench, 86 -- 65% -- were those two queries. On
+    // MySQL and MariaDB that is not a cheap repeat: every INFORMATION_SCHEMA query materialises to a
+    // DISK-based temporary table, unconditionally, so the lever is FEWER reads rather than faster ones.
+    //
+    // WHY THIS IS SOUND, and the limit that makes it so. SchemaSmith's catalog reads are point-in-time
+    // over a catalog the quench itself mutates, so a global snapshot would be wrong. This memo is not
+    // one: it lives only for the duration of a single data-delivery pass, which performs DML and no DDL
+    // -- the user's own table-data scripts run AFTER DeliverTables returns, and delivery itself only
+    // inserts and updates rows. Outside a scope there is no caching at all, so every other phase behaves
+    // exactly as before.
+    //
+    // ThreadStatic rather than a shared dictionary: work units run in parallel on their own threads and
+    // against their own connections, and one unit's catalog must never answer for another's.
+    [ThreadStatic]
+    private static Dictionary<string, object> _catalogMemo;
+
+    /// <summary>
+    /// Opens a scope in which repeated catalog reads for the same table are answered once. Only valid
+    /// around a run that performs no DDL -- see the note on <see cref="MergeScriptHelper"/>. Disposing
+    /// discards the memo; nested scopes are safe and the outermost one owns the lifetime.
+    /// </summary>
+    public static IDisposable BeginCatalogScope() => CatalogScope.Begin();
+
+    // Open and close are STATIC members of the scope type, not its constructor and Dispose body: the
+    // analyzers refuse a static field assigned in a constructor (S3010) or written from an instance
+    // member (S2696), and they are right that either reads as a surprise. The scope object itself carries
+    // only the "am I the outermost" flag, so a nested scope disposing cannot tear down the outer one's
+    // memo.
+    private sealed class CatalogScope : IDisposable
+    {
+        private readonly bool _owns;
+
+        private CatalogScope(bool owns) => _owns = owns;
+
+        internal static CatalogScope Begin()
+        {
+            var owns = _catalogMemo == null;
+            if (owns) _catalogMemo = new Dictionary<string, object>(StringComparer.Ordinal);
+            return new CatalogScope(owns);
+        }
+
+        private static void Close() => _catalogMemo = null;
+
+        public void Dispose()
+        {
+            if (_owns) Close();
+        }
+    }
+
+    private static T Memoized<T>(string key, Func<T> read) where T : class
+    {
+        if (_catalogMemo == null) return read();
+        if (_catalogMemo.TryGetValue(key, out var cached)) return (T)cached;
+        var value = read();
+        _catalogMemo[key] = value;
+        return value;
+    }
     // SQL Server types that cannot be represented in JSON or compared reliably
     internal const string SqlServerUnsupportedTypeFilter = "AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')";
 
@@ -1755,6 +1816,16 @@ SELECT c.column_name, c.udt_name
         databaseName = databaseName.Trim().Trim('`');
         tableName = tableName.Trim().Trim('`');
 
+        // jsonKeys and excludeAutoIncrement both change the shape of the result, so they are part of the
+        // key rather than ignored -- two callers asking different questions about one table must not
+        // share an answer.
+        var memoKey = $"cols|{databaseName}|{tableName}|{excludeAutoIncrement}|" +
+                      (jsonKeys == null ? "" : string.Join(",", jsonKeys.OrderBy(k => k, StringComparer.Ordinal)));
+        return Memoized(memoKey, () => ReadColumnInfoMySql(cmd, databaseName, tableName, excludeAutoIncrement, jsonKeys));
+    }
+
+    private static List<MySqlColumnInfo> ReadColumnInfoMySql(IDbCommand cmd, string databaseName, string tableName, bool excludeAutoIncrement, HashSet<string> jsonKeys)
+    {
         var jsonCheckColumns = GetJsonCheckConstraintColumnsMySql(cmd, databaseName, tableName);
 
         BindIdentifierParameters(cmd, ("@db", databaseName), ("@table", tableName));
@@ -1818,16 +1889,25 @@ ORDER BY c.ORDINAL_POSITION;
     // but auto-creates a `json_valid(<col>)` CHECK constraint per JSON column. Detect those so MariaDB
     // JSON columns get the same JSON-aware merge treatment as MySQL's native `json` type. Returns empty
     // on MySQL — its native JSON columns carry no such constraint and are detected by DATA_TYPE = 'json'.
-    private static HashSet<string> GetJsonCheckConstraintColumnsMySql(IDbCommand cmd, string databaseName, string tableName)
+    private static HashSet<string> GetJsonCheckConstraintColumnsMySql(IDbCommand cmd, string databaseName, string tableName) =>
+        Memoized($"jsoncheck|{databaseName}|{tableName}", () => ReadJsonCheckConstraintColumnsMySql(cmd, databaseName, tableName));
+
+    private static HashSet<string> ReadJsonCheckConstraintColumnsMySql(IDbCommand cmd, string databaseName, string tableName)
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // INFORMATION_SCHEMA.CHECK_CONSTRAINTS does not exist on MySQL 5.7, and only MariaDB auto-creates the
         // json_valid(<col>) checks detected here (MySQL's native `json` type is detected by DATA_TYPE), so this
         // read is MariaDB-only — return empty on MySQL rather than erroring on the missing catalog view. This is
         // reached directly by DataTongs (which builds merge scripts without the DatabaseQuench delivery gate).
-        cmd.CommandText = "SELECT VERSION()";
-        if ((cmd.ExecuteScalar()?.ToString() ?? string.Empty).IndexOf("MariaDB", StringComparison.OrdinalIgnoreCase) < 0)
-            return result;
+        // One SELECT VERSION() per call was a second round trip per table just to decide whether the
+        // catalog read below applies at all. The server does not change mid-pass.
+        var isMariaDb = Memoized("isMariaDb", () =>
+        {
+            cmd.CommandText = "SELECT VERSION()";
+            return (cmd.ExecuteScalar()?.ToString() ?? string.Empty)
+                .IndexOf("MariaDB", StringComparison.OrdinalIgnoreCase) >= 0 ? "y" : "n";
+        });
+        if (isMariaDb != "y") return result;
 
         BindIdentifierParameters(cmd, ("@db", databaseName), ("@table", tableName));
         cmd.CommandText = @"

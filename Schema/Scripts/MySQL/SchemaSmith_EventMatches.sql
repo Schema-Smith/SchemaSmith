@@ -1,4 +1,4 @@
--- Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
+﻿-- Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 -- Licensed for use and modification with SchemaSmith products only.
 -- Redistribution outside of SchemaSmith product usage is prohibited.
 
@@ -26,6 +26,8 @@ BEGIN
   -- THE CATALOG AND THE DDL DISAGREE ON SPELLING, and every one of these was read off a live server
   -- rather than assumed:
   --   STATUS        catalog ENABLED / DISABLED / SLAVESIDE_DISABLED   vs DDL ENABLE / DISABLE / DISABLE ON SLAVE
+  --                 MySQL 8.4 renamed the third one REPLICA_SIDE_DISABLED; the DDL spelling is unchanged
+  --                 and 8.4 still accepts it, so the package stays portable across both versions.
   --   ON_COMPLETION catalog 'PRESERVE' / 'NOT PRESERVE'               vs a bool in the package
   --   interval      catalog INTERVAL_VALUE + INTERVAL_FIELD, separate vs one string, "1 DAY"
   --   EVENT_TYPE    catalog 'RECURRING' / 'ONE TIME'                  vs DDL EVERY / AT
@@ -49,6 +51,10 @@ BEGIN
          CASE STATUS WHEN 'ENABLED' THEN 'ENABLE'
                      WHEN 'DISABLED' THEN 'DISABLE'
                      WHEN 'SLAVESIDE_DISABLED' THEN 'DISABLE ON SLAVE'
+                     -- MySQL 8.4's spelling of the same state (see GenerateEventJson). Without it the
+                     -- comparison reads the raw catalog value against the package's DDL spelling, so a
+                     -- slave-disabled event never matches and is re-applied on every single deploy.
+                     WHEN 'REPLICA_SIDE_DISABLED' THEN 'DISABLE ON SLAVE'
                      ELSE STATUS END,
          CASE WHEN ON_COMPLETION = 'PRESERVE' THEN 1 ELSE 0 END,
          EVENT_COMMENT,

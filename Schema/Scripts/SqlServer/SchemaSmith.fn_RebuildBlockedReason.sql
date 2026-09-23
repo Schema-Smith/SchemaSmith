@@ -35,7 +35,7 @@ GO
 DECLARE @v_TemporalCheck NVARCHAR(MAX) = ''
 IF SchemaSmith.fn_ServerMajorVersion() >= 13
   SET @v_TemporalCheck = '
-  IF EXISTS (SELECT 1 FROM sys.tables WITH (NOLOCK)
+  IF EXISTS (SELECT 1 FROM sys.tables
              WHERE [object_id] = @v_ObjectId AND temporal_type_desc <> ''NON_TEMPORAL_TABLE'')
     RETURN ''system versioning is enabled (temporal table)''
 '
@@ -50,10 +50,10 @@ BEGIN
   -- table means; this function does not invent a blocking reason for it.
   IF @v_ObjectId IS NULL RETURN NULL
 ' + @v_TemporalCheck + '
-  IF EXISTS (SELECT 1 FROM sys.tables WITH (NOLOCK) WHERE [object_id] = @v_ObjectId AND is_tracked_by_cdc = 1)
+  IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = @v_ObjectId AND is_tracked_by_cdc = 1)
     RETURN ''Change Data Capture is enabled''
 
-  IF EXISTS (SELECT 1 FROM sys.tables WITH (NOLOCK) WHERE [object_id] = @v_ObjectId AND is_replicated = 1)
+  IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = @v_ObjectId AND is_replicated = 1)
     RETURN ''the table is published for replication''
 
   IF EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE [object_id] = @v_ObjectId)
@@ -69,8 +69,8 @@ BEGIN
   -- sys.data_spaces.type = ''PS'' is the partition-scheme discriminator; both the view and partitioning
   -- itself predate the SQL Server 2008 floor, so this is referenced statically like the CDC and replication
   -- predicates above rather than staged behind a version gate.
-  IF EXISTS (SELECT 1 FROM sys.indexes i WITH (NOLOCK)
-               JOIN sys.data_spaces ds WITH (NOLOCK) ON ds.data_space_id = i.data_space_id
+  IF EXISTS (SELECT 1 FROM sys.indexes i
+               JOIN sys.data_spaces ds ON ds.data_space_id = i.data_space_id
               WHERE i.[object_id] = @v_ObjectId AND ds.[type] = ''PS'')
     RETURN ''the table or one of its indexes is partitioned''
 

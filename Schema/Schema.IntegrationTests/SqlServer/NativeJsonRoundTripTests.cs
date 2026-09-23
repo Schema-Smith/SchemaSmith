@@ -5,7 +5,6 @@ using System.Data;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
-using Schema.Utility;
 
 namespace Schema.IntegrationTests.SqlServer;
 
@@ -26,32 +25,29 @@ namespace Schema.IntegrationTests.SqlServer;
 public class NativeJsonRoundTripTests
 {
     private IDbConnection _connection;
-    private string _db;
     private bool _is2025;
 
+    // Uses the suite's already-kindled database rather than creating and kindling its own -- a private
+    // database costs CREATE DATABASE, ~40 kindling scripts and a from-scratch ModifiedTableQuench plan
+    // compile (plans cache per object PER DATABASE), and nothing here needs one: no compatibility level,
+    // filegroup, CDC or change-tracking configuration. Isolation comes from the Json* object names,
+    // dropped at both ends.
+    //
+    // The version probe has to keep its exact shape and ORDER: detect first, and return before touching
+    // anything when the server is below 2025. `_is2025` is what [SetUp] Ignores on, so losing it makes
+    // every test here fail against a 2022 instance instead of skipping. SERVERPROPERTY resolves from any
+    // database, so running it on the suite connection is equivalent to running it on master.
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-        var server = config["SqlServer:Server"] ?? "127.0.0.1";
-        var user = config["SqlServer:User"];
-        var password = config["SqlServer:Password"];
-        var port = config["SqlServer:Port"];
-        var props = ConnectionString.ReadProperties(config, "SqlServer:ConnectionProperties");
-
         _connection = DbConnectionFactory.ForPlatform(Platform.SqlServer)
-            .GetDbConnection(ConnectionString.Build(Platform.SqlServer, server, "master", user, password, port, props));
+            .GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         _connection.Open();
 
         _is2025 = Scalar("SELECT CONVERT(INT, PARSENAME(CONVERT(VARCHAR(64), SERVERPROPERTY('ProductVersion')), 4))") >= 17;
         if (!_is2025) return;
 
-        _db = $"SchemaJson_{Guid.NewGuid():N}"[..30];
-        Exec($"CREATE DATABASE [{_db}]");
-        _connection.ChangeDatabase(_db);
-
-        using var cmd = _connection.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
+        DropOwnObjects();
     }
 
     [SetUp]
@@ -67,18 +63,25 @@ public class NativeJsonRoundTripTests
         if (_connection == null) return;
         try
         {
-            if (_db != null)
-            {
-                _connection.ChangeDatabase("master");
-                Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-                Exec($"DROP DATABASE IF EXISTS [{_db}]");
-            }
+            // Guarded on _is2025 for the same reason setup returns early: below 2025 this fixture
+            // created nothing, so there is nothing to drop.
+            if (_is2025) DropOwnObjects();
         }
         finally
         {
             _connection.Close();
             _connection.Dispose();
         }
+    }
+
+    // Everything this fixture creates, by its own names -- so sharing the suite database cannot leak
+    // state into a sibling fixture or inherit it from one.
+    private void DropOwnObjects()
+    {
+        Exec(@"IF OBJECT_ID('dbo.JsonDeploy', 'U') IS NOT NULL DROP TABLE dbo.JsonDeploy;
+               IF OBJECT_ID('dbo.JsonExtract', 'U') IS NOT NULL DROP TABLE dbo.JsonExtract;
+               IF OBJECT_ID('dbo.JsonIdempotent', 'U') IS NOT NULL DROP TABLE dbo.JsonIdempotent;
+               DELETE FROM SchemaSmith.ProductOwnership WHERE ProductName = 'JsonTest';");
     }
 
     private void Exec(string sql)

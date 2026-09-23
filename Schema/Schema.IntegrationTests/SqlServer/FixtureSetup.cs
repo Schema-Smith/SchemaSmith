@@ -1,8 +1,10 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System.Data.Common;
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Globalization;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
@@ -65,7 +67,79 @@ public class FixtureSetup
         _masterConnectionString = ConnectionString.Build(Platform.SqlServer, _server, "master", _user, _password, _port, _connectionProperties);
         _integrationMainDb = GenerateUniqueDBName("SchemaIntTest");
 
+        DropStaleTestDatabases();
         CreateTestDatabase();
+    }
+
+    /// <summary>How old a test database must be before this sweep will drop it.</summary>
+    private static readonly TimeSpan StaleAfter = TimeSpan.FromHours(3);
+
+    /// <summary>
+    /// Drop test databases abandoned by earlier runs.
+    /// <para><see cref="RunAfterAnyTests"/> drops this run's database — but it never runs when the process
+    /// is killed or <c>OneTimeSetUp</c> throws, so they accumulate. On 2026-09-19 roughly 180 strays were
+    /// cleared by hand across the four engines, the oldest four days old, and more appeared the same day
+    /// from interrupted runs.</para>
+    /// <para>They are not merely untidy. On the MySQL family every <c>INFORMATION_SCHEMA</c> read costs
+    /// roughly 1.8ms per database ON THE SERVER, so a pile of strays taxes every quench; on SQL Server each
+    /// carries its own plan-cache entries. They also quietly corrupted several performance measurements
+    /// before anyone noticed they were there.</para>
+    /// <para>The age cut is what makes this safe to run at startup: the generated name embeds
+    /// <c>yyyyMMdd_HHmmss</c>, so a database belonging to a sibling suite running right now in the same gate
+    /// is far too young to match and is never touched. Anything unparseable is left alone.</para>
+    /// </summary>
+    private void DropStaleTestDatabases()
+    {
+        try
+        {
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_masterConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 120;
+
+            cmd.CommandText = "SELECT [name] FROM sys.databases WHERE [name] LIKE 'SchemaIntTest[_]%'";
+            var stale = new List<string>();
+            using (var reader = cmd.ExecuteReader())
+                while (reader.Read())
+                {
+                    var name = reader.GetString(0);
+                    if (IsOlderThanCutoff(name)) stale.Add(name);
+                }
+
+            foreach (var db in stale)
+            {
+                cmd.CommandText = $@"
+IF DB_ID('{db}') IS NOT NULL
+BEGIN
+    ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE [{db}];
+END";
+                try { cmd.ExecuteNonQuery(); } catch (DbException) { /* in use by a live run; leave it */ }
+            }
+        }
+        catch (DbException)
+        {
+            // Housekeeping must never stop the suite from starting.
+        }
+    }
+
+    /// <summary>True when a generated name's embedded timestamp is older than <see cref="StaleAfter"/>.</summary>
+    private static bool IsOlderThanCutoff(string databaseName)
+    {
+        // <prefix>_yyyyMMdd_HHmmss_<8 hex>
+        var parts = databaseName.Split('_');
+        if (parts.Length < 3) return false;
+        var stamp = $"{parts[^3]}_{parts[^2]}";
+        if (!DateTime.TryParseExact(stamp, "yyyyMMdd_HHmmss", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var created))
+            return false;
+
+        // S6561 warns against DateTime.Now in elapsed-time maths, which is about benchmarking. This is
+        // wall-clock staleness, and it MUST be local: GenerateUniqueDBName stamps the name with
+        // DateTime.Now, so comparing in UTC would misjudge every name by the machine's offset.
+#pragma warning disable S6561
+        return DateTime.Now - created > StaleAfter;
+#pragma warning restore S6561
     }
 
     [OneTimeTearDown]

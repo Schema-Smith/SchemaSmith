@@ -5,6 +5,7 @@ using System.Data;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using NSubstitute;
 using Schema.Domain;
 using Schema.Utility;
@@ -106,6 +107,7 @@ public class ForgeKindlerTests
         Assert.That(scripts, Does.Contain("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.ForeignKeyQuench.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.TableQuench.sql"));
+        Assert.That(scripts, Does.Contain("SchemaSmith.ParseTableJson.sql"));
         Assert.That(scripts, Does.Contain("Kindling_ProductOwnership_Table.sql"));
         Assert.That(scripts, Does.Contain("Kindling_CompletedMigrationScripts_Table.sql"));
         Assert.That(scripts, Does.Contain("Kindling_ChangeAudit_Table.sql"));
@@ -295,7 +297,12 @@ public class ForgeKindlerTests
         // + Kindling_ExpressionMap_Table (#242 -- the authored/canonical expression mapping).
         // + fn_ExpressionMapUnchanged + ExpressionMapRecord (#242 -- the decision and the recording pass).
         // + fn_ExpressionMapEffective (#242 -- whole-script comparisons take the text, not a yes/no).
-        Assert.That(sqlServer.Length, Is.EqualTo(40));
+        // + SchemaSmith.ValidateDeclaredTableAttributes (split OUT of ModifiedTableQuench, not new behaviour:
+        //   the declared-vs-deployed refusals for filegroup/partition/graph/memory-optimized/ledger. SQL Server
+        //   compiles a procedure's statements whether or not they run and caches the plan per object PER
+        //   DATABASE, so those 328 lines were compiled on every first deploy to every database for a feature
+        //   set most packages never touch. Behind a guarded CALL they are not compiled on the common path.)
+        Assert.That(sqlServer.Length, Is.EqualTo(41));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -326,7 +333,9 @@ public class ForgeKindlerTests
         // + ExpressionMapUnchanged + ExpressionMapRecord (#242 -- the decision and the recording pass).
         // + SplitTopLevelList + NormalizeIndexColumnList + StatisticsDefinitionForms (#242 -- declared index and
         //   statistics definitions compared in the form the catalog reads back).
-        Assert.That(postgres.Length, Is.EqualTo(49));
+        // + SchemaSmith.ParseTableJson (the shred as a callable procedure, so SchemaQuench can pass the
+        //   model as an argument instead of escaping it into an anonymous DO block).
+        Assert.That(postgres.Length, Is.EqualTo(50));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
@@ -429,7 +438,11 @@ public class ForgeKindlerTests
         //   ResourceLoader rather than adding a second list entry).
         // + Kindling_ExpressionMap_Table (#242 -- the authored/canonical expression mapping).
         // + ExpressionMapUnchanged + ExpressionMapRecord (#242 -- the decision and the recording pass).
-        Assert.That(mysql.Length, Is.EqualTo(64));
+        // +1 = SchemaSmith_IdentifierKey (the identifier-case policy. Whether two object names name the
+        //   same object is the server's call via lower_case_table_names, and the ownership comparisons
+        //   were each answering it differently from the catalog reads -- which refused a legitimate
+        //   deploy naming a table the package had not declared. One function so every site agrees.).
+        Assert.That(mysql.Length, Is.EqualTo(65));
     }
 
     [Test]
@@ -722,6 +735,60 @@ public class ForgeKindlerTests
         // A distinctive line that only exists in ParseTableJsonIntoTempTables.sql:
         Assert.That(resolved, Does.Contain("Parse Tables from Json"),
             "Resolved TableQuench must contain the ParseJson source body, so a change there changes the hash.");
+    }
+
+    [Test]
+    public void ScriptsSubstitutingParseJson_ContainTheTokenExactlyOnce()
+    {
+        // Substitution is a plain replace-every-occurrence, so a script that names the token a second
+        // time -- in a comment explaining itself, say -- gets the whole parse body pasted in there too.
+        // On PostgreSQL that landed it inside a "--" comment line, which ended the comment and pushed
+        // everything after it outside the procedure body: the shred ran as top-level statements at kindle
+        // time and failed with `column "table_json" does not exist`, nowhere near the real cause.
+        foreach (var platform in new[] { Platform.SqlServer, Platform.PostgreSQL, Platform.MySQL, Platform.MariaDb })
+        foreach (var script in ForgeKindler.GetKindlingScripts(platform).Where(s => s.ReplaceParseJson))
+        {
+            var raw = ResourceLoader.Load(script.FileName, platform);
+            Assert.That(raw, Is.Not.Null, $"{platform}/{script.FileName} should be loadable.");
+            Assert.That(Regex.Matches(raw, Regex.Escape("{{ParseJson}}")).Count, Is.EqualTo(1),
+                $"{platform}/{script.FileName} must name the ParseJson token exactly once -- every " +
+                "occurrence is substituted, including one written in prose.");
+        }
+    }
+
+    [Test]
+    public void GetParseTableJsonPhases_SplitsCreationFromFill_AndLosesNothingButTheMarker()
+    {
+        var whole = ForgeKindler.GetParseTableJsonScript(Platform.SqlServer);
+        var (createTables, fillTables) = ForgeKindler.GetParseTableJsonPhases(Platform.SqlServer);
+
+        // Phase A must create every temp table and fill none of them: that emptiness is the whole point,
+        // because it is the moment a second ingestion path can put its own rows in.
+        Assert.That(createTables, Does.Contain("CREATE TABLE #TableDefinitions"));
+        Assert.That(createTables, Does.Contain("CREATE TABLE #FullTextIndexes"));
+        Assert.That(createTables, Does.Not.Contain("INSERT INTO #"),
+            "Phase A must not fill anything, or the split point is not actually empty.");
+        Assert.That(createTables, Does.Not.Contain("@TableDefinitions"),
+            "Phase A must not touch the payload -- it runs unparameterized so the temp tables land in " +
+            "the session scope, and referencing the payload there would put the literal back in the batch.");
+
+        // Phase B is where the model is consumed, and it must not create the tables it fills: under
+        // sp_executesql those would be nested-scope tables that die before the quench procs run.
+        Assert.That(fillTables, Does.Contain("INSERT INTO #TableDefinitions"));
+        Assert.That(fillTables, Does.Contain("@TableDefinitions"));
+        foreach (var table in new[] { "#TableDefinitions", "#Tables", "#Columns", "#Indexes", "#XmlIndexes",
+                                      "#ForeignKeys", "#CheckConstraints", "#Statistics", "#FullTextIndexes" })
+        {
+            Assert.That(fillTables, Does.Not.Contain($"CREATE TABLE {table}"),
+                $"Phase B must not create {table}; it only fills what phase A created.");
+            // Phase B is retried on transient contention and the retry re-runs this half alone, so it has
+            // to start from empty itself -- nothing re-creates the tables between attempts.
+            Assert.That(fillTables, Does.Contain($"TRUNCATE TABLE {table}"),
+                $"Phase B must reset {table} before filling it, or a retry after a partial run doubles its rows.");
+        }
+
+        Assert.That(createTables + fillTables, Is.EqualTo(whole.Replace("-- ===== INGEST SPLIT =====", "")),
+            "The two phases must be the whole script minus the marker -- nothing dropped, nothing reordered.");
     }
 
     [Test]

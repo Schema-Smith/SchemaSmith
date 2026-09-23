@@ -54,15 +54,6 @@ public class TenantCRMEndToEndTests
         _server = config["Target:Server"];
     }
 
-    [SetUp]
-    public void SetUpClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [TearDown]
-    public void TearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [OneTimeTearDown]
-    public void OneTimeTearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
     /// <summary>
     /// Regression guard for parallel schema-template fan-out (PG). Many tenant schemas deployed
     /// concurrently must all converge cleanly. This previously deadlocked inside

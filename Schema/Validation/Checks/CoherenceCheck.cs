@@ -41,6 +41,9 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string CompressionConflictCode = "SS-CO-001";
     private const string CompressionLevelInertCode = "SS-CO-002";
     private const string DuplicateEventCode = "SS-EVT-001";
+    private const string DuplicateEnumTypeCode = "SS-ENUM-001";
+    private const string DuplicateSequenceCode = "SS-SEQ-001";
+    private const string DuplicateDomainTypeCode = "SS-DOM-001";
     private const string PartitionHalfDeclaredCode = "SS-PART-001";
     private const string PartitionAndFileGroupCode = "SS-PART-002";
     private const string MyPartitionRangeListNoPartitionsCode = "SS-PART-003";
@@ -63,14 +66,27 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckScheduledEvents(template));
 
         foreach (var template in ctx.Templates)
+            findings.AddRange(CheckModeledFolderObjectCoexistence(template));
+
+        foreach (var template in ctx.Templates)
         foreach (var table in template.Tables)
         {
             var location = $"Template '{template.Name}' / Table '{table.Name}'";
+
+            // Under IndexOnlyTableQuenches the package does not own the table's columns -- the table is
+            // created outside it (a vendor product, a replicated copy) and the template manages only its
+            // indexes and statistics. So there is no authoritative local column list to check anything
+            // against, and the checks that need one cannot be evaluated rather than merely passing.
+            // Suppressed on the FLAG, not on "the table declared no columns": columns authored under this
+            // flag are ignored by the deploy, so validating against them would be validating against a
+            // list the deploy does not use -- the same false error in a less obvious costume.
+            var columnsAreOwnedElsewhere = template.IndexOnlyTableQuenches;
+
             foreach (var fk in table.ForeignKeys)
-                findings.AddRange(CheckForeignKey(table, fk, location, tablesByKey));
+                findings.AddRange(CheckForeignKey(table, fk, location, tablesByKey, columnsAreOwnedElsewhere));
 
             foreach (var index in table.Indexes)
-                findings.AddRange(CheckIndex(table, index, location));
+                findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
 
             findings.AddRange(CheckBackfill(table, location));
             findings.AddRange(CheckRebuildPolicy(table, location));
@@ -91,16 +107,22 @@ public sealed class CoherenceCheck : ISchemaCheck
         Table table,
         ForeignKey fk,
         string tableLocation,
-        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey)
+        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey,
+        bool columnsAreOwnedElsewhere)
     {
         var location = $"{tableLocation} / FK '{fk.Name}'";
         var localColumnNames = ColumnNames(table);
         var fkColumns = SplitNames(fk.Columns);
         var fkRelatedColumns = SplitNames(fk.RelatedColumns);
 
-        foreach (var column in fkColumns.Where(column => !localColumnNames.Contains(NormalizeIdentifier(column))))
-            yield return new Finding(Severity.Error, LocalColumnCode, Category, location,
-                $"Local column '{column}' referenced in Columns does not exist on table '{table.Name}'.");
+        // Only the LOCAL half is suppressed under IndexOnlyTableQuenches. The related table is a
+        // different table, usually one the package does declare in full, so its column list stays
+        // authoritative -- and the cardinality check below is a pure string-count comparison that
+        // never needed a column list at all.
+        if (!columnsAreOwnedElsewhere)
+            foreach (var column in fkColumns.Where(column => !localColumnNames.Contains(NormalizeIdentifier(column))))
+                yield return new Finding(Severity.Error, LocalColumnCode, Category, location,
+                    $"Local column '{column}' referenced in Columns does not exist on table '{table.Name}'.");
 
         // Cardinality is a pure string-count comparison — independent of whether the related
         // table resolves, so it always runs.
@@ -194,8 +216,17 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
 
-    private static IEnumerable<Finding> CheckIndex(Table table, Index index, string tableLocation)
+    /// <param name="columnsAreOwnedElsewhere">
+    /// The template sets IndexOnlyTableQuenches, so the table's columns live outside the package and the
+    /// key parts here legitimately name columns it never declares. Indexing a vendor-owned table is the
+    /// whole point of that flag, so reporting its key parts as missing columns fails a package that
+    /// deploys perfectly well -- and `--Validate` exits 2, which fails the user's CI gate.
+    /// </param>
+    private static IEnumerable<Finding> CheckIndex(Table table, Index index, string tableLocation,
+        bool columnsAreOwnedElsewhere)
     {
+        if (columnsAreOwnedElsewhere) yield break;
+
         var location = $"{tableLocation} / Index '{index.Name}'";
         var localColumnNames = ColumnNames(table);
 
@@ -578,6 +609,84 @@ public sealed class CoherenceCheck : ISchemaCheck
                 "Events folder. The scripted form drops and recreates the event on every deploy, undoing " +
                 "what the declared form converged — keep one.");
     }
+
+
+    /// <summary>
+    /// A PostgreSQL enum type, sequence or domain type declared BOTH as JSON and scripted as a .sql file
+    /// in the same folder.
+    /// <para>These three folders are additive by design -- <c>Enum Types/</c>, <c>Sequences/</c> and
+    /// <c>Domain Types/</c> each hold declared <c>.json</c> and scripted <c>.sql</c> side by side, and a
+    /// package using only one of the two is correct and common. Declaring the SAME object both ways is the
+    /// problem, and until now it validated clean: the coexistence rule existed only for scheduled events
+    /// (<c>SS-EVT-001</c>), even though all three of these are already shape-validated.</para>
+    /// <para>Why it matters differs per type, so the messages say what the engine actually does rather than
+    /// warning in the abstract:</para>
+    /// <list type="bullet">
+    /// <item>An enum type's scripted form is a GUARDED <c>CREATE TYPE</c> (<c>EnumTypeQuench.sql</c>), so
+    /// once the type exists the guard skips and the script silently does nothing -- the declared form is
+    /// what converges, and the script is dead weight that reads as if it were in charge.</item>
+    /// <item>A domain type is the same trap and <c>DomainTypeQuench.sql</c> says so outright: there is no
+    /// <c>CREATE OR REPLACE DOMAIN</c>, so a scripted domain is a guarded <c>CREATE DOMAIN</c>.</item>
+    /// <item>For sequences the engine scripts say nothing about a scripted form (checked, not assumed), so
+    /// that message claims no mechanism -- only that two authoring paths for one object is ambiguous.</item>
+    /// </list>
+    /// <para>Deliberately NOT claimed anywhere here: which authoring path wins when both are present. That
+    /// needs SchemaQuench slot-ordering evidence which this check does not have, and guessing it in a
+    /// finding message would be worse than leaving it out.</para>
+    /// </summary>
+    private static IEnumerable<Finding> CheckModeledFolderObjectCoexistence(Template template)
+    {
+        foreach (var finding in CoexistenceFindings(
+                     template, "Enum Types", DuplicateEnumTypeCode, "Enum type",
+                     template.EnumTypes.Select(e => e.Name),
+                     "The scripted form is a guarded CREATE TYPE, so once the type exists the script " +
+                     "silently does nothing while the declared form is what converges"))
+            yield return finding;
+
+        foreach (var finding in CoexistenceFindings(
+                     template, "Domain Types", DuplicateDomainTypeCode, "Domain type",
+                     template.DomainTypes.Select(d => d.Name),
+                     "There is no CREATE OR REPLACE DOMAIN, so the scripted form is a guarded CREATE " +
+                     "DOMAIN and silently does nothing once the domain exists"))
+            yield return finding;
+
+        foreach (var finding in CoexistenceFindings(
+                     template, "Sequences", DuplicateSequenceCode, "Sequence",
+                     template.Sequences.Select(s => s.Name),
+                     "Two authoring paths for one object leave it ambiguous which one is in charge"))
+            yield return finding;
+    }
+
+    private static IEnumerable<Finding> CoexistenceFindings(
+        Template template,
+        string folder,
+        string code,
+        string noun,
+        IEnumerable<string> declaredNames,
+        string consequence)
+    {
+        var declared = declaredNames.Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+        if (declared.Count == 0) yield break;
+
+        var scripted = ScriptedNamesIn(template, folder);
+        if (scripted.Count == 0) yield break;
+
+        foreach (var name in declared.Where(scripted.Contains))
+            yield return new Finding(Severity.Error, code, Category,
+                $"Template '{template.Name}'",
+                $"{noun} '{name}' is declared as JSON and also scripted as a .sql file in the same " +
+                $"{folder} folder. {consequence} — keep one.");
+    }
+
+    // Same folder discriminator and filename-as-object-name convention the events check uses: a
+    // scripted object is named by its file, and the folder is what says which kind it is.
+    private static HashSet<string> ScriptedNamesIn(Template template, string folder) =>
+        template.ObjectScripts?
+            .Where(s => (s.FilePath ?? "").Replace(Path.DirectorySeparatorChar, '/')
+                .Contains($"/{folder}/", StringComparison.OrdinalIgnoreCase))
+            .Select(s => Path.GetFileNameWithoutExtension(s.FilePath ?? ""))
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
 
     // Mirrors SchemaSmith_NormalizeIndexColumns.sql's DESC/ASC suffix handling (source of truth —
     // keep in sync): a trailing " DESC" or " ASC" (case-insensitive) is ordering, not part of the

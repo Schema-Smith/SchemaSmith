@@ -11,6 +11,10 @@ CREATE OR REPLACE PROCEDURE "SchemaSmith"."IndexOnlyQuench"
  p_UpdateFillFactor BOOLEAN = TRUE,
  p_CaptureWouldDrop BOOLEAN = FALSE)
     LANGUAGE plpgsql
+  -- JIT off: see the measurement in SchemaSmith.TableQuench.sql. Every procedure carries this, not just
+  -- the ones that look like entry points -- the product CALLs ModifiedTableQuench and its siblings
+  -- directly (SchemaQuench/DatabaseQuench.cs), so "nested" is not a safe assumption to plan around.
+  SET jit = 'off'
 AS $$
 DECLARE
   table_json TEXT = CASE WHEN LEFT(p_TableDefinitions, 1) = '[' THEN p_TableDefinitions ELSE '[' || p_TableDefinitions || ']' END;

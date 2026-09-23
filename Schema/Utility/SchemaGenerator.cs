@@ -84,7 +84,11 @@ public static class SchemaGenerator
             // setting unexpressible. Undecorated properties are emitted everywhere -- scoping is opt-in.
             if (!AppliesToPlatform(prop, platform)) continue;
 
-            var propSchema = MapType(prop.PropertyType, elementTypeResolver, platform);
+            // Pass the PROPERTY's converter, not just the type's. An enum can carry
+            // [JsonConverter(typeof(StringEnumConverter))] on either, and reading only the type made the
+            // generator emit "integer" for one that serializes as a string -- see MapType.
+            var propSchema = MapType(prop.PropertyType, elementTypeResolver, platform,
+                prop.GetCustomAttribute<JsonConverterAttribute>()?.ConverterType);
             ApplyConstraints(prop, propSchema);
             DocumentPlatforms(prop, propSchema);
 
@@ -136,7 +140,7 @@ public static class SchemaGenerator
         return schema;
     }
 
-    private static JObject MapType(Type type, Func<Type, Type> elementTypeResolver, Platform? platform)
+    private static JObject MapType(Type type, Func<Type, Type> elementTypeResolver, Platform? platform, Type propertyConverter = null)
     {
         type = Nullable.GetUnderlyingType(type) ?? type;
 
@@ -146,7 +150,14 @@ public static class SchemaGenerator
         if (IsNumberType(type)) return new JObject { ["type"] = "number" };
         if (type.IsEnum)
         {
-            if (type.GetCustomAttribute<JsonConverterAttribute>()?.ConverterType == typeof(Newtonsoft.Json.Converters.StringEnumConverter))
+            // The converter may be declared on the ENUM TYPE or on the PROPERTY, and both mean the same
+            // thing at runtime: the value round-trips as a string. Checking only the type emitted
+            // "integer" for SqlServerTemplate.ServerToQuench, which declares it on the property -- so a
+            // package setting `"ServerToQuench": "Primary"` failed --Validate against SchemaSmith's own
+            // generated schema, while the deploy itself was perfectly happy. The linter contradicted the
+            // product. Found via a real converted package (3,020 files) rather than by any test.
+            if (type.GetCustomAttribute<JsonConverterAttribute>()?.ConverterType == typeof(Newtonsoft.Json.Converters.StringEnumConverter)
+                || propertyConverter == typeof(Newtonsoft.Json.Converters.StringEnumConverter))
             {
                 var values = string.Join("|", Enum.GetNames(type));
                 return new JObject { ["type"] = "string", ["pattern"] = values };

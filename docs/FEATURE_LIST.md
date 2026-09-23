@@ -109,7 +109,7 @@ Per-table options, column attributes, and table-scoped behavior beyond the basic
 | Table fill factor | n/a | ✓ | n/a | n/a | `FillFactor` 0–100 on table |
 | Per-table `UpdateFillFactor` | ✓ | ✓ | n/a | n/a | OR'd with template + index level |
 | Temporal tables (system-versioning marker) | ✓ | n/a | n/a | n/a | `IsTemporal` flag |
-| Change Data Capture marker | ✓ | n/a | n/a | n/a | `EnableCDC` flag |
+| Change Data Capture marker | ✓ | n/a | n/a | n/a | `EnableCDC` flag; `CdcFilegroup` places the capture tables |
 | Table rename via `OldName` | ✓ | ✓ | ✓ | ✓ | |
 | Column rename via `OldName` | ✓ | ✓ | ✓ | ✓ | |
 | Conditional table application | ✓ | ✓ | ✓ | ✓ | `ShouldApplyExpression` |

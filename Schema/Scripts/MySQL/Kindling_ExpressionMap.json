@@ -4,12 +4,14 @@
     {
       "Name": "ObjectSchema",
       "DataType": "VARCHAR(64)",
-      "Nullable": false
+      "Nullable": false,
+      "Collation": "utf8mb4_bin"
     },
     {
       "Name": "ObjectTable",
       "DataType": "VARCHAR(64)",
-      "Nullable": false
+      "Nullable": false,
+      "Collation": "utf8mb4_bin"
     },
     {
       "Name": "ObjectKind",
@@ -19,7 +21,8 @@
     {
       "Name": "ObjectName",
       "DataType": "VARCHAR(64)",
-      "Nullable": false
+      "Nullable": false,
+      "Collation": "utf8mb4_bin"
     },
     {
       "Name": "Slot",

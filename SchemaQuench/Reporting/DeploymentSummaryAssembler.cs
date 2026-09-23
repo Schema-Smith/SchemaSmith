@@ -54,7 +54,9 @@ public static class DeploymentSummaryAssembler
                 Template: tr.Template,
                 Outcome: tr.Outcome,
                 DurationMs: tr.DurationMs,
-                Slots: timing.SlotsForScope(tr.ScopeKey)))
+                Slots: timing.SlotsForScope(tr.ScopeKey),
+                DatabaseSource: tr.DatabaseSource,
+                SchemaSource: tr.SchemaSource))
             .ToList();
 
         var mappedMigrationScripts = migrationScripts
@@ -83,7 +85,7 @@ public static class DeploymentSummaryAssembler
         var unsupportedDowngrade = BuildUnsupportedDowngrade(changeAudit);
 
         return new DeploymentSummary(
-            SchemaVersion: "1.0",
+            SchemaVersion: "1.1",
             Tool: "SchemaQuench",
             ToolVersion: toolVersion,
             Run: run,

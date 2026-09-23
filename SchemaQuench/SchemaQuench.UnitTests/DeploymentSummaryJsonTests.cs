@@ -13,7 +13,7 @@ namespace SchemaQuench.UnitTests;
 /// <summary>
 /// E2: proves the DeploymentSummary record graph serializes to the frozen v1 JSON contract
 /// (field names, camelCase keys, enum-as-string, null preservation). The paid Intelligence
-/// add-ons deserialize this JSON, so assertions parse the output with JObject/SelectToken rather
+/// Downstream consumers deserialize this JSON, so assertions parse the output with JObject/SelectToken rather
 /// than substring-matching, and pin down the exact shapes a consumer would rely on.
 /// </summary>
 [TestFixture]
@@ -41,7 +41,9 @@ public class DeploymentSummaryJsonTests
                 Template: "TenantSchema",
                 Outcome: TargetOutcome.Success,
                 DurationMs: 12044,
-                Slots: new List<TargetSlotTiming> { new("ModifiedTables", 8021, 0) }),
+                Slots: new List<TargetSlotTiming> { new("ModifiedTables", 8021, 0) },
+                DatabaseSource: "DatabaseIdentificationScript",
+                SchemaSource: "SchemaIdentificationScript"),
             new(
                 Server: "primary",
                 Database: "TenantB",
@@ -127,6 +129,27 @@ public class DeploymentSummaryJsonTests
         Assert.That(json["failures"], Is.Not.Null);
         Assert.That(json["whatIf"], Is.Not.Null);
         Assert.That(json["objectChanges"], Is.Not.Null);
+    }
+
+    [Test]
+    public void Serialize_EmitsTheSourceDisclosureEachTargetAnnounced()
+    {
+        // The schemaVersion bump to 1.1 announces this shape; nothing asserted the shape itself, and
+        // both fields default to "" -- so dropping the propagation from TargetResult would have produced
+        // a well-formed report carrying two empty strings, with no null, no parse error and no red test.
+        var json = JObject.Parse(DeploymentSummaryJson.Serialize(BuildFullyPopulatedSummary()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(json.SelectToken("targets[0].databaseSource")?.Value<string>(),
+                Is.EqualTo("DatabaseIdentificationScript"));
+            Assert.That(json.SelectToken("targets[0].schemaSource")?.Value<string>(),
+                Is.EqualTo("SchemaIdentificationScript"));
+            // The second target sets neither, which is the ordinary case and must still emit the keys --
+            // a consumer reading targets[].databaseSource should find a field, not a hole.
+            Assert.That(json.SelectToken("targets[1].databaseSource"), Is.Not.Null);
+            Assert.That(json.SelectToken("targets[1].schemaSource"), Is.Not.Null);
+        });
     }
 
     [Test]

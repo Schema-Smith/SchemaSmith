@@ -948,7 +948,7 @@ Controls whether SchemaQuench drops EXCLUDE constraints that exist in the databa
 | Environment | `DropExcludeConstraintsRemovedFromProduct` in `SchemaQuench.settings.json` (or `SmithySettings_DropExcludeConstraintsRemovedFromProduct` environment variable) | `true` |
 | Product | `DropExcludeConstraintsRemovedFromProduct` in `Product.json` — **PostgreSQL packages only** | (inherit) |
 | Template | `DropExcludeConstraintsRemovedFromProduct` in `Template.json` — **PostgreSQL packages only** | (inherit) |
-| Table | `DropExcludeConstraintsRemovedFromProduct` in a table's `.json` file — PostgreSQL only | (inherit) |
+| Table | `DropExcludeConstraintsRemovedFromProduct` in a table's `.json` file — **PostgreSQL packages only** | (inherit) |
 
 > **Warning:** since v2.6.0 the generated `.json-schemas` are filtered per engine, and the SQL Server, MySQL
 > and MariaDB `products.*` / `templates.*` schemas no longer carry this property. Leaving it in a
@@ -956,8 +956,13 @@ Controls whether SchemaQuench drops EXCLUDE constraints that exist in the databa
 > unexpected property (`SS-JSON-001`, Error) and exits `2`, which fails a CI gate. Deployment itself is
 > unaffected — the package still loads — so this bites validation, not a running deploy. Delete the
 > property from those packages; it never did anything on those engines. The environment tier lives in the
-> settings file, which these package schemas do not cover, and the table tier still carries the property
-> on all four engines — annotated `PostgreSQL only.`
+> settings file, which these package schemas do not cover, so it is unaffected at every tier.
+>
+> **Changed again in v2.7.0: the table tier now matches.** It previously carried the property on all four
+> engines, merely annotated `PostgreSQL only`, so the same setting was an `SS-JSON-001` error at the
+> product and template tiers and silently accepted-and-ignored at the table tier. Authoring it in a
+> SQL Server, MySQL or MariaDB **table** file now fails `--Validate` too. Delete it there as well —
+> nothing is lost, it never had an effect on those engines.
 
 Same explicit-false-sticky semantics as the other drop-control flags; only by-absence removal is gated (a modified exclude constraint still reconciles).
 
@@ -974,9 +979,19 @@ Controls whether SchemaQuench drops user-created statistics objects that exist i
 | Scope | Where to set | Default |
 |---|---|---|
 | Environment | `DropStatisticsRemovedFromProduct` in `SchemaQuench.settings.json` (or `SmithySettings_DropStatisticsRemovedFromProduct` environment variable) | `true` |
-| Product | `DropStatisticsRemovedFromProduct` in `Product.json` | (inherit) |
-| Template | `DropStatisticsRemovedFromProduct` in `Template.json` | (inherit) |
-| Table | `DropStatisticsRemovedFromProduct` in a table's `.json` file | (inherit) |
+| Product | `DropStatisticsRemovedFromProduct` in `Product.json` — **SQL Server and PostgreSQL packages only** | (inherit) |
+| Template | `DropStatisticsRemovedFromProduct` in `Template.json` — **SQL Server and PostgreSQL packages only** | (inherit) |
+| Table | `DropStatisticsRemovedFromProduct` in a table's `.json` file — **SQL Server and PostgreSQL packages only** | (inherit) |
+
+> **Warning:** the generated `.json-schemas` are filtered per engine, and the MySQL and MariaDB schemas do
+> not carry this property at any package tier. Leaving it in a MySQL or MariaDB `Product.json`,
+> `Template.json` or table file is not harmless: `--Validate` reports it as an unexpected property
+> (`SS-JSON-001`, Error) and exits `2`, which fails a CI gate. Deployment itself is unaffected — the
+> package still loads — so this bites validation, not a running deploy. Delete the property from those
+> packages; it never did anything there, because neither engine has a separate statistics object to drop.
+> The product and template tiers were filtered in v2.6.0 and **the table tier in v2.7.0**, so a MySQL or
+> MariaDB package that validated clean before may report it now. The environment tier lives in the
+> settings file, which these package schemas do not cover, and is unaffected.
 
 Same explicit-false-sticky semantics as the other drop-control flags; only by-absence removal is gated (a modified statistics object still reconciles), and auto-created statistics are never touched. With the flag on, SQL Server now drops orphaned user-created statistics by absence, matching PostgreSQL.
 

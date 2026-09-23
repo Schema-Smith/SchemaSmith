@@ -53,6 +53,10 @@ BEGIN
     DECLARE v_AcNullable TINYINT;
     DECLARE v_AcDefault LONGTEXT;
     DECLARE v_AcAutoIncrement TINYINT;
+    DECLARE v_Collation VARCHAR(64);
+    DECLARE v_AcCollation VARCHAR(64);
+    DECLARE v_LiveCollation VARCHAR(64);
+    DECLARE v_CollateClauses LONGTEXT;
     DECLARE v_ColExists INT;
     DECLARE v_HasStatusTable INT DEFAULT 0;
     DECLARE v_ClashDetail LONGTEXT;
@@ -64,6 +68,18 @@ BEGIN
     DECLARE v_AiPrimaryKey TINYINT;
     DECLARE v_AiIndexColumns LONGTEXT;
     DECLARE v_IdxExists INT;
+    DECLARE v_ShapeUnique INT;
+    DECLARE v_ShapeKeys LONGTEXT;
+    DECLARE v_DeclKeys LONGTEXT;
+    DECLARE v_ShapeParts INT;
+    DECLARE v_ShapeExprParts INT;
+    DECLARE v_GroupCols LONGTEXT;
+    DECLARE v_GroupPart VARCHAR(256);
+    DECLARE v_GroupIdx INT;
+    DECLARE v_SupportsDescIndex TINYINT;
+    -- MESSAGE_TEXT is a VARCHAR(128) condition item in the server's own charset; a utf8mb4
+    -- variable is refused by MariaDB with "Data too long for condition item" whatever its length.
+    DECLARE v_SignalMsg VARCHAR(128) CHARACTER SET utf8mb3;
     DECLARE v_OldTableName VARCHAR(128);
     DECLARE v_TableRenameOldExists INT;
     DECLARE v_TableRenameNewExists INT;
@@ -152,11 +168,18 @@ BEGIN
         SET v_Default = JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_Idx, '].Default')));
         SET v_AutoIncrement = COALESCE((JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_Idx, '].AutoIncrement'))) IN ('true','1')), 0);
         SET v_ColumnPrimaryKey = COALESCE((JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_Idx, '].PrimaryKey'))) IN ('true','1')), 0);
+        -- Optional per-column collation. The kindling tables otherwise inherit the table default
+        -- (utf8mb4_unicode_ci), which is case-INSENSITIVE -- and for a column that stores an object
+        -- NAME that is wrong on a server where object names are case-sensitive: two names differing
+        -- only by case collapse to one key in a UNIQUE index, so the second object silently gets no
+        -- row. Declaring the collation is how ProductOwnership's uk_object keeps them apart.
+        SET v_Collation = JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_Idx, '].Collation')));
 
         IF v_ColumnList <> '' THEN
             SET v_ColumnList = CONCAT(v_ColumnList, ', ');
         END IF;
         SET v_ColumnList = CONCAT(v_ColumnList, '`', v_ColumnName, '` ', v_DataType,
+            CASE WHEN v_Collation IS NOT NULL AND TRIM(v_Collation) <> '' THEN CONCAT(' COLLATE ', v_Collation) ELSE '' END,
             CASE WHEN v_Nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END,
             CASE WHEN v_AutoIncrement = 1 THEN ' AUTO_INCREMENT' ELSE '' END,
             CASE WHEN v_Default IS NOT NULL AND TRIM(v_Default) <> '' THEN CONCAT(' DEFAULT ', v_Default) ELSE '' END,
@@ -199,6 +222,12 @@ BEGIN
     -- function itself provides.
     SET v_SupportsRenameColumn = IF((VERSION() LIKE '%MariaDB%' AND v_ServerVersionNum >= 1006)
                                      OR (VERSION() NOT LIKE '%MariaDB%' AND v_ServerVersionNum >= 800), 1, 0);
+
+    -- A DESC key part is PARSED AND IGNORED below MySQL 8.0 / MariaDB 10.8: the engine builds an ascending
+    -- index and reports collation 'A'. Comparing a declared DESC against that would rebuild the index on every
+    -- kindle, so below the floor the direction is not part of the shape -- the engine has no opinion to compare.
+    SET v_SupportsDescIndex = IF((VERSION() LIKE '%MariaDB%' AND v_ServerVersionNum >= 1008)
+                                  OR (VERSION() NOT LIKE '%MariaDB%' AND v_ServerVersionNum >= 800), 1, 0);
 
     SET v_RenIdx = 0;
     WHILE v_RenIdx < v_ColumnCount DO
@@ -260,7 +289,7 @@ BEGIN
     -- INFORMATION_SCHEMA inside a JSON_TABLE-sourced query can cache/materialize incorrectly in
     -- MySQL (same optimizer issue documented in SchemaSmith_ParseTableJson.sql).
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapExistingCols;
-    CREATE TEMPORARY TABLE _SchemaSmith_BootstrapExistingCols (ColumnName VARCHAR(128) NOT NULL PRIMARY KEY)
+    CREATE TEMPORARY TABLE _SchemaSmith_BootstrapExistingCols (ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY)
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     -- BINARY on the INFORMATION_SCHEMA-vs-proc-variable comparisons: on MySQL 8.0 the
     -- INFORMATION_SCHEMA columns collate utf8mb4_0900_ai_ci while proc/temp/JSON strings are
@@ -319,13 +348,204 @@ BEGIN
     END WHILE;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapAddColStmts;
 
+    -- Step 4.4: a declared column that EXISTS BUT WITH THE WRONG COLLATION is converged here. Step 4
+    -- only ADDs columns that are missing, so without this an existing deployment keeps whatever
+    -- collation its table was first created with -- and for a column holding an object NAME that is
+    -- not cosmetic: the collation decides whether a UNIQUE index treats two names differing only by
+    -- case as one key. A ci->bin change can only ever SPLIT keys that were previously equal, never
+    -- merge two into one, so this ALTER cannot fail on duplicate values no matter what is stored.
+    -- Only columns that actually declare a Collation are considered; everything else keeps the table
+    -- default and is never rewritten.
+    SET v_AcCnt = COALESCE(JSON_LENGTH(JSON_EXTRACT(p_TableDefinitions, '$.Columns')), 0);
+    SET v_AcIdx = 0;
+    SET v_CollateClauses = '';
+    WHILE v_AcIdx < v_AcCnt DO
+        SET v_AcColName = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].Name')));
+        SET v_AcDataType = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].DataType')));
+        SET v_AcNullable = SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].Nullable')));
+        SET v_AcDefault = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].Default')));
+        SET v_AcCollation = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].Collation')));
+
+        IF v_AcCollation IS NOT NULL AND TRIM(v_AcCollation) <> '' THEN
+            SET v_LiveCollation = NULL;
+            -- BINARY on the INFORMATION_SCHEMA comparisons for the same reason Step 4 uses it: on
+            -- MySQL 8.0 those columns collate utf8mb4_0900_ai_ci while proc variables do not, and a
+            -- bare '=' between them throws 1267.
+            SELECT collation_name INTO v_LiveCollation
+            FROM information_schema.columns
+            WHERE BINARY table_schema = BINARY v_Db
+              AND BINARY table_name = BINARY v_TableName
+              AND BINARY column_name = BINARY v_AcColName
+            LIMIT 1;
+
+            IF v_LiveCollation IS NOT NULL AND BINARY v_LiveCollation <> BINARY v_AcCollation THEN
+                SET v_CollateClauses = CONCAT(v_CollateClauses, IF(v_CollateClauses = '', '', ', '),
+                    'MODIFY COLUMN `', v_AcColName, '` ', v_AcDataType, ' COLLATE ', v_AcCollation,
+                    CASE WHEN v_AcNullable = 1 THEN ' NULL' ELSE ' NOT NULL' END,
+                    CASE WHEN v_AcDefault IS NOT NULL AND TRIM(v_AcDefault) <> '' THEN CONCAT(' DEFAULT ', v_AcDefault) ELSE '' END);
+            END IF;
+        END IF;
+        SET v_AcIdx = v_AcIdx + 1;
+    END WHILE;
+
+    IF v_CollateClauses <> '' THEN
+        SET @exec_sql = CONCAT('ALTER TABLE `', v_TableName, '` ', v_CollateClauses);
+        PREPARE stmt FROM @exec_sql;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
+
+    -- Step 4.5: a declared index that EXISTS UNDER THE RIGHT NAME BUT THE WRONG SHAPE is dropped here, so
+    -- Step 5 rebuilds it. Existence-by-name alone was the hole: an index created by an older SchemaSmith (or by
+    -- hand) kept whatever shape it had while the declaration in the JSON quietly did not hold. Shape is read
+    -- from information_schema and compared only against what this JSON declares: uniqueness and the key column
+    -- list. This runs BEFORE Step 5 takes its existing-index snapshot, so a dropped index reads as missing
+    -- there and is recreated in the same call.
+    SET v_AiCnt = COALESCE(JSON_LENGTH(JSON_EXTRACT(p_TableDefinitions, '$.Indexes')), 0);
+    SET v_AiIdx = 0;
+    WHILE v_AiIdx < v_AiCnt DO
+        SET v_AiIndexName = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Indexes[', v_AiIdx, '].Name')));
+        SET v_AiUnique = SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Indexes[', v_AiIdx, '].Unique')));
+        SET v_AiPrimaryKey = SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Indexes[', v_AiIdx, '].PrimaryKey')));
+        SET v_AiIndexColumns = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Indexes[', v_AiIdx, '].IndexColumns')));
+
+        IF COALESCE(v_AiPrimaryKey, 0) = 1 THEN
+            -- A declared PRIMARY KEY whose deployed key columns differ is swapped in ONE statement: MySQL will
+            -- not let an AUTO_INCREMENT column sit without a key even momentarily, so DROP and ADD cannot be
+            -- separate statements. The rows are untouched.
+            SET v_ShapeKeys = NULL;
+            SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') INTO v_ShapeKeys
+              FROM information_schema.statistics
+             WHERE BINARY table_schema = BINARY v_Db
+               AND BINARY table_name = BINARY v_TableName
+               AND index_name = 'PRIMARY';
+
+            IF v_ShapeKeys IS NOT NULL
+               AND UPPER(v_ShapeKeys) <> UPPER(REPLACE(REPLACE(v_AiIndexColumns, '`', ''), ' ', '')) THEN
+            -- GROUP BY takes plain column names. A prefix length (ScriptPath(200)) and a sort direction are
+            -- both legal in the index declaration and both a syntax error here, so each key part is reduced to
+            -- its column name. No REGEXP_REPLACE: it does not exist on the MySQL 5.7 floor.
+            SET v_GroupCols = '';
+            SET v_GroupIdx = 1;
+            WHILE v_GroupIdx <= (LENGTH(v_AiIndexColumns) - LENGTH(REPLACE(v_AiIndexColumns, ',', '')) + 1) DO
+                SET v_GroupPart = TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(v_AiIndexColumns, ',', v_GroupIdx), ',', -1));
+                IF LOCATE('(', v_GroupPart) > 0 THEN
+                    SET v_GroupPart = TRIM(SUBSTRING_INDEX(v_GroupPart, '(', 1));
+                END IF;
+                IF UPPER(RIGHT(v_GroupPart, 5)) = ' DESC' THEN
+                    SET v_GroupPart = TRIM(LEFT(v_GroupPart, LENGTH(v_GroupPart) - 5));
+                ELSEIF UPPER(RIGHT(v_GroupPart, 4)) = ' ASC' THEN
+                    SET v_GroupPart = TRIM(LEFT(v_GroupPart, LENGTH(v_GroupPart) - 4));
+                END IF;
+                SET v_GroupCols = CONCAT(v_GroupCols, IF(v_GroupCols = '', '', ','), v_GroupPart);
+                SET v_GroupIdx = v_GroupIdx + 1;
+            END WHILE;
+                SET @exec_sql = CONCAT('SELECT COUNT(*) INTO @v_dupes FROM (SELECT 1 FROM `', v_Db, '`.`', v_TableName,
+                                       '` GROUP BY ', v_GroupCols, ' HAVING COUNT(*) > 1) d');
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+                IF COALESCE(@v_dupes, 0) > 0 THEN
+                    SET v_SignalMsg = LEFT(CONCAT('SchemaSmith bootstrap: duplicate rows block the declared PRIMARY KEY on ',
+                                                  v_TableName, '; the existing key is unchanged'), 128);
+                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_SignalMsg;
+                END IF;
+                SET @exec_sql = CONCAT('ALTER TABLE `', v_Db, '`.`', v_TableName, '` DROP PRIMARY KEY, ADD PRIMARY KEY (',
+                                       v_AiIndexColumns, ')');
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+            END IF;
+        ELSE
+            SET v_ShapeUnique = NULL;
+            SET v_ShapeKeys = NULL;
+            SET v_ShapeParts = 0;
+            SET v_ShapeExprParts = 0;
+            -- The key list must be rendered the way the DECLARATION writes it, or a correct index compares
+            -- unequal to itself and is rebuilt on every kindle. information_schema keeps the prefix length in
+            -- sub_part, NOT in column_name -- and the shipped Kindling_CompletedMigrationScripts.json declares
+            -- ScriptPath(200), template_name(50) and schema_name(50), so omitting it rebuilt two indexes on that
+            -- table on every single kindle. Sort direction lives in `collation` ('D' = descending) for the same
+            -- reason. column_name is NULL for a functional key part (8.0.13+), which no bootstrap declaration can
+            -- express, so those are counted and force a rebuild rather than silently comparing equal.
+            SELECT MIN(non_unique),
+                   GROUP_CONCAT(CONCAT(COALESCE(column_name, '?expr'),
+                                       IF(sub_part IS NULL, '', CONCAT('(', sub_part, ')')),
+                                       IF(collation = 'D' AND v_SupportsDescIndex = 1, ' DESC', ''))
+                                ORDER BY seq_in_index SEPARATOR ','),
+                   COUNT(*),
+                   SUM(column_name IS NULL)
+              INTO v_ShapeUnique, v_ShapeKeys, v_ShapeParts, v_ShapeExprParts
+              FROM information_schema.statistics
+             WHERE BINARY table_schema = BINARY v_Db
+               AND BINARY table_name = BINARY v_TableName
+               AND BINARY index_name = BINARY v_AiIndexName;
+
+            -- v_ShapeParts = 0 means the index is not there at all; Step 5 creates it. (v_ShapeKeys can be NULL
+            -- for an index whose every key part is an expression, which is NOT the same thing.)
+            IF v_ShapeParts > 0 THEN
+                -- Declared side: drop backticks and whitespace, upper-case a trailing direction, and let ASC
+                -- render as nothing, which is what the catalog reports for it.
+                SET v_DeclKeys = REPLACE(REPLACE(UPPER(REPLACE(REPLACE(v_AiIndexColumns, '`', ''), ' ', '')),
+                                          'ASC', ''), 'DESC', IF(v_SupportsDescIndex = 1, ' DESC', ''));
+                -- Column names are case-insensitive in MySQL, so the comparison is too: comparing the declared
+                -- casing against the catalog's with BINARY rebuilt a correct index forever.
+                IF v_ShapeExprParts > 0
+                   OR (CASE WHEN v_ShapeUnique = 0 THEN 1 ELSE 0 END) <> COALESCE(v_AiUnique, 0)
+                   OR UPPER(REPLACE(v_ShapeKeys, ' ', '')) <> REPLACE(v_DeclKeys, ' ', '') THEN
+                    -- Upgrading to UNIQUE over data that is not unique would drop the index and then fail to
+                    -- recreate it, leaving the table with neither -- and MySQL DDL commits, so there is no
+                    -- rollback. Refuse while the old index is still in place instead.
+                    IF COALESCE(v_AiUnique, 0) = 1 THEN
+                    -- GROUP BY takes plain column names. A prefix length (ScriptPath(200)) and a sort direction are
+                    -- both legal in the index declaration and both a syntax error here, so each key part is reduced to
+                    -- its column name. No REGEXP_REPLACE: it does not exist on the MySQL 5.7 floor.
+                    SET v_GroupCols = '';
+                    SET v_GroupIdx = 1;
+                    WHILE v_GroupIdx <= (LENGTH(v_AiIndexColumns) - LENGTH(REPLACE(v_AiIndexColumns, ',', '')) + 1) DO
+                        SET v_GroupPart = TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(v_AiIndexColumns, ',', v_GroupIdx), ',', -1));
+                        IF LOCATE('(', v_GroupPart) > 0 THEN
+                            SET v_GroupPart = TRIM(SUBSTRING_INDEX(v_GroupPart, '(', 1));
+                        END IF;
+                        IF UPPER(RIGHT(v_GroupPart, 5)) = ' DESC' THEN
+                            SET v_GroupPart = TRIM(LEFT(v_GroupPart, LENGTH(v_GroupPart) - 5));
+                        ELSEIF UPPER(RIGHT(v_GroupPart, 4)) = ' ASC' THEN
+                            SET v_GroupPart = TRIM(LEFT(v_GroupPart, LENGTH(v_GroupPart) - 4));
+                        END IF;
+                        SET v_GroupCols = CONCAT(v_GroupCols, IF(v_GroupCols = '', '', ','), v_GroupPart);
+                        SET v_GroupIdx = v_GroupIdx + 1;
+                    END WHILE;
+                        SET @exec_sql = CONCAT('SELECT COUNT(*) INTO @v_dupes FROM (SELECT 1 FROM `', v_Db, '`.`', v_TableName,
+                                               '` GROUP BY ', v_GroupCols, ' HAVING COUNT(*) > 1) d');
+                        PREPARE stmt FROM @exec_sql;
+                        EXECUTE stmt;
+                        DEALLOCATE PREPARE stmt;
+                        IF COALESCE(@v_dupes, 0) > 0 THEN
+                            -- MESSAGE_TEXT is capped at 128 characters (MariaDB errors rather than truncating),
+                            -- so the message is short by construction and LEFT() guards a long index name.
+                            SET v_SignalMsg = LEFT(CONCAT('SchemaSmith bootstrap: duplicate rows block UNIQUE ',
+                                                          v_AiIndexName, '; the existing index is unchanged'), 128);
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_SignalMsg;
+                        END IF;
+                    END IF;
+                    SET @exec_sql = CONCAT('ALTER TABLE `', v_Db, '`.`', v_TableName, '` DROP INDEX `', v_AiIndexName, '`');
+                    PREPARE stmt FROM @exec_sql;
+                    EXECUTE stmt;
+                    DEALLOCATE PREPARE stmt;
+                END IF;
+            END IF;
+        END IF;
+        SET v_AiIdx = v_AiIdx + 1;
+    END WHILE;
+
+
     -- Step 5: ADD INDEX per missing non-PK index.
     -- Folded into one ALTER TABLE (all missing indexes as ADD INDEX clauses, in JSON array
     -- order), kept as its own ALTER (not merged with Step 4's) so the add-columns-then-add-
     -- indexes ordering matches the original two-step structure exactly.
     -- Same snapshot-first workaround as Step 4, for the index-existence lookup.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapExistingIdxs;
-    CREATE TEMPORARY TABLE _SchemaSmith_BootstrapExistingIdxs (IndexName VARCHAR(128) NOT NULL PRIMARY KEY)
+    CREATE TEMPORARY TABLE _SchemaSmith_BootstrapExistingIdxs (IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY)
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT IGNORE INTO _SchemaSmith_BootstrapExistingIdxs (IndexName)
     SELECT index_name FROM information_schema.statistics

@@ -6,16 +6,37 @@ name: CI (docs-only companion)
 # only bites contributors WITHOUT admin bypass (an external drive-by fixing a typo); maintainers never see
 # it because the Rule 6 doc/demo carve-out pushes such content straight to `main`.
 #
-# This companion fires on EXACTLY those excluded paths and reports the SAME eight check contexts as success,
-# with no build and no containers. Do NOT delete the `paths-ignore` in the CI workflow — it exists so a prose
-# fix doesn't spin the three-engine matrix; this pairs with it rather than replacing it.
+# This companion fires on EXACTLY those excluded paths and reports the SAME check contexts as success,
+# with no build and no containers.
 #
-# The `paths:` list below is the exact inverse of continuous-integration.yml's `pull_request` `paths-ignore`,
-# and the job `name:` values are the exact required-check contexts from the `main` branch ruleset
-# (`required_status_checks`) — keep both character-identical, or the deadlock returns (a mismatched name
-# leaves the real context unreported). On a MIXED docs+code PR both this and the real CI run for the same
-# contexts; the real jobs finish minutes later and are the most-recent run for each context, so the real
-# result governs the merge.
+# THE SET CHANGED 2026-09-20 with the matrix-shape decision, and the branch ruleset MUST be updated to
+# match or the deadlock this file prevents comes back from the other direction -- a required context that
+# no longer runs waits forever. A pull request now produces exactly these twelve:
+#   Build & Unit Tests
+#   Integration Tests (SQL Server 2017)      <- floor
+#   Integration Tests (SQL Server 2025)      <- ceiling
+#   Integration Tests (PostgreSQL 18)        <- ceiling
+#   Integration Tests (PostgreSQL 12)        <- floor
+#   Integration Tests (MySQL 26)             <- ceiling
+#   Integration Tests (MySQL 5.7)            <- floor
+#   Integration Tests (MariaDB 13)           <- ceiling
+#   Integration Tests (MariaDB 10.2)         <- floor
+#   Genuine Sweep Record
+#   Engine Ceiling Ratchet
+#   Coverage Gate
+# Removed from PR runs (still run on merge to main, so do NOT require them on a PR):
+#   Integration Tests (PostgreSQL 17), (PostgreSQL 16), (PostgreSQL 15), (PostgreSQL 14), (PostgreSQL 13)
+#   Integration Tests (MySQL 8.4), (MySQL 8.0)
+#   Integration Tests (MariaDB 11.8), (MariaDB 11.4), (MariaDB 10.6)
+#   Integration Tests (SQL Server 2019), (SQL Server 2022), (SQL Server 2025)
+#
+# THE CEILING LEGS ARE PINNED MAJORS NOW, NOT `latest`. A floating context keeps its NAME while what it
+# tests changes underneath, so a green history says nothing about which version was green -- and when
+# `latest` happened to resolve to a major already pinned, it was the same suite run twice. Currency is
+# asserted by the Engine Ceiling Ratchet instead: it resolves each engine's `latest` and fails when the
+# declared ceiling moves or has no pinned leg. **When it fires and a ceiling leg is added, the name here
+# and the branch ruleset both have to change with it** -- a required context that no longer runs waits
+# forever, which is this file's own failure mode from the other direction.
 
 on:
   pull_request:
@@ -34,74 +55,149 @@ permissions:
   contents: read
 
 jobs:
+  # WHY A GATE AND NOT JUST `paths`. On a pull_request, GitHub evaluates paths/paths-ignore against the
+  # WHOLE PR DIFF, not the pushed commit -- so a PR touching docs AND code matches this workflow's
+  # `paths` and continuous-integration.yml's `paths-ignore` at the same time, and BOTH run. Every
+  # context below then gets reported twice: once by a real leg, once by a stub that always succeeds in
+  # about three seconds. Observed on PR #419 -- all eight integration contexts had two check runs.
+  #
+  # In practice the stub lands first and the real result overwrites it, which is why the gate held. That
+  # is timing, not a guarantee, and a merge gate should not rest on which job finished first.
+  #
+  # So the stubs only report when nothing else will. The three cases:
+  #   docs-only PR  -> no code changed -> stubs RUN and satisfy the checks (this file's whole purpose)
+  #   mixed PR      -> code changed    -> stubs SKIP, and the real legs report the same contexts
+  #   code-only PR  -> this workflow never triggers at all
+  # A skipped stub therefore only ever happens when a REAL check run of the same name exists, so however
+  # the ruleset treats `skipped`, the authoritative result is present either way.
+  gate:
+    name: Docs-only gate
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.check.outputs.docs_only }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Same patterns as continuous-integration.yml's paths-ignore. A file matching NONE of them is
+          # a file that triggers the real workflow.
+          files=$(gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.number }}/files" --jq '.[].filename')
+          code=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              docs/*|*.md|LICENSE|.gitignore|Demos/*.ps1|Demos/*.sh|Demos/*.sql) ;;
+              *) echo "triggers real CI: $f"; code=1 ;;
+            esac
+          done <<< "$files"
+          if [ "$code" = "1" ]; then
+            echo 'docs_only=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::Code files changed, so continuous-integration.yml is running the real legs. Stubs skipped.'
+          else
+            echo 'docs_only=true' >> "$GITHUB_OUTPUT"
+          fi
+
   build-and-unit-tests:
     name: Build & Unit Tests
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no build required; satisfying the required check."
 
-  integration-tests-sqlserver:
-    name: Integration Tests (SQL Server)
+  integration-tests-sqlserver-2017:
+    name: Integration Tests (SQL Server 2017)
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-postgresql-latest:
-    name: Integration Tests (PostgreSQL latest)
+  integration-tests-sqlserver-2025:
+    name: Integration Tests (SQL Server 2025)
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-postgresql-14:
-    name: Integration Tests (PostgreSQL 14)
+  integration-tests-postgresql-18:
+    name: Integration Tests (PostgreSQL 18)
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-postgresql-13:
-    name: Integration Tests (PostgreSQL 13)
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "docs-only change — no integration run required."
+
 
   integration-tests-postgresql-12:
     name: Integration Tests (PostgreSQL 12)
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-mysql-80:
-    name: Integration Tests (MySQL 8.0)
+  integration-tests-mysql-26:
+    name: Integration Tests (MySQL 26)
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
 
   integration-tests-mysql-57:
     name: Integration Tests (MySQL 5.7)
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-mariadb-114:
-    name: Integration Tests (MariaDB 11.4)
+  integration-tests-mariadb-13:
+    name: Integration Tests (MariaDB 13)
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
 
-  integration-tests-mariadb-106:
-    name: Integration Tests (MariaDB 10.6)
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "docs-only change — no integration run required."
 
   integration-tests-mariadb-102:
     name: Integration Tests (MariaDB 10.2)
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no integration run required."
 
+  # Never stubbed before 2026-09-20, and latent rather than harmless: sweep-record lives in
+  # continuous-integration.yml, which carries paths-ignore for docs -- so if this context is required, an
+  # external contributor's docs-only PR waits on it forever. Maintainers would never hit it, because the
+  # Rule 6 carve-out pushes docs straight to main. Stubbed here so it is safe whether the ruleset requires
+  # it or not; a stub for a non-required context costs nothing.
+  sweep-record:
+    name: Genuine Sweep Record
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "docs-only change — the recorded genuine-binary sweep still covers this tree."
+
+  engine-ceiling-ratchet:
+    name: Engine Ceiling Ratchet
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "docs-only change — no engine ceiling check required."
+
   coverage-gate:
     name: Coverage Gate
+    needs: gate
+    if: needs.gate.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
       - run: echo "docs-only change — no coverage run required."

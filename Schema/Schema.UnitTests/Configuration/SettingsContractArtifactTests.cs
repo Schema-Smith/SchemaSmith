@@ -11,7 +11,7 @@ namespace Schema.UnitTests.Configuration;
 /// <summary>
 /// Pins the committed <c>settings-contract.json</c> to the contract in code.
 /// <para>The artifact exists so the other side of the boundary has something concrete to check
-/// against — SchemaForge's parity gate reads it (or calls <see cref="SettingsContract"/> directly)
+/// against — an external parity gate reads it (or calls <see cref="SettingsContract"/> directly)
 /// instead of transcribing keys by hand, which is the half of that gate that would otherwise rot.
 /// It also makes a settings change visible in a PR diff rather than buried in code.</para>
 /// <para>A published artifact nobody verifies is the same unreliable promise as an unverified

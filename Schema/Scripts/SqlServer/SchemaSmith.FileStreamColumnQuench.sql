@@ -45,17 +45,17 @@ BEGIN TRY
             WHERE c.[FileStream] = 1
               AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName]), SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'ColumnId') IS NULL
               AND NOT EXISTS (SELECT 1
-                                FROM sys.columns rc WITH (NOLOCK)
-                                JOIN sys.index_columns ic WITH (NOLOCK)
+                                FROM sys.columns rc
+                                JOIN sys.index_columns ic
                                   ON ic.[object_id] = rc.[object_id] AND ic.column_id = rc.column_id AND ic.is_included_column = 0
-                                JOIN sys.indexes i WITH (NOLOCK)
+                                JOIN sys.indexes i
                                   ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
                                WHERE rc.[object_id] = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
                                  AND rc.is_rowguidcol = 1
                                  AND rc.is_nullable = 0
                                  AND (i.is_primary_key = 1 OR i.is_unique_constraint = 1)
                                  -- a composite key does not make the guid column unique on its own
-                                 AND (SELECT COUNT(*) FROM sys.index_columns ic2 WITH (NOLOCK)
+                                 AND (SELECT COUNT(*) FROM sys.index_columns ic2
                                        WHERE ic2.[object_id] = i.[object_id] AND ic2.index_id = i.index_id
                                          AND ic2.is_included_column = 0) = 1)
              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -72,7 +72,7 @@ BEGIN TRY
     (SELECT 'RAISERROR(''  Binding ' + t.[Schema] + '.' + t.[Name] + ' to FILESTREAM filegroup ' + t.[FileStreamFileGroup] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
             'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (FILESTREAM_ON = ' + t.[FileStreamFileGroup] + ');' + CHAR(13) + CHAR(10)
        FROM #Tables t WITH (NOLOCK)
-       JOIN sys.tables st WITH (NOLOCK) ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+       JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
       WHERE t.[FileStreamFileGroup] IS NOT NULL
         AND st.filestream_data_space_id IS NULL
         AND EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)

@@ -49,15 +49,6 @@ public class SchemaTemplatePerfSmokeTests
         _mainDb = config["ScriptTokens:MainDB"];
     }
 
-    [SetUp]
-    public void SetUp() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [TearDown]
-    public void TearDown() => Npgsql.NpgsqlConnection.ClearAllPools();
-
-    [OneTimeTearDown]
-    public void OneTimeTearDownClearPgPools() => Npgsql.NpgsqlConnection.ClearAllPools();
-
     [Test]
     [Explicit("Perf smoke — opt-in. Runs a 50-tenant fan-out as a scale anchor; do not include in default CI.")]
     public void Schema_Template_Fifty_Tenant_Perf_Smoke()

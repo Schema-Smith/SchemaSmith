@@ -53,7 +53,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 
 ```jsonc
 {
-  "schemaVersion": "1.0",           // contract version of this report shape
+  "schemaVersion": "1.1",           // contract version of this report shape
   "tool": "SchemaQuench",
   "toolVersion": "2.2.0.0",
   "run": {
@@ -75,6 +75,8 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
       "template": "Tenant",
       "outcome": "Success",         // Success | Failed | Skipped
       "durationMs": 14820,
+      "databaseSource": "DatabaseIdentificationScript",
+      "schemaSource": "TemplateTargets:TenantSchema:Schemas",
       "slots": [
         { "slot": "ModifiedTables", "durationMs": 9120, "scriptsRun": 3 },
         { "slot": "ObjectScripts",  "durationMs": 4110, "scriptsRun": 12 }
@@ -131,7 +133,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 
 | Key | Meaning |
 | --- | --- |
-| `schemaVersion` | Contract version of the report shape — currently `"1.0"`. |
+| `schemaVersion` | Contract version of the report shape — currently `"1.1"`. |
 | `tool` | Always `"SchemaQuench"`. |
 | `toolVersion` | The CLI version that wrote the report — the same string `--version` prints. |
 | `run` | Run-level facts: product, platform, timing, mode, outcome. |
@@ -165,6 +167,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `outcome` | `Success`, `Failed`, or `Skipped`. |
 | `durationMs` | Milliseconds spent on this target. |
 | `slots[]` | Per-slot timing for this target: `slot`, `durationMs`, `scriptsRun`. |
+| `databaseSource` / `schemaSource` | Where each axis of this target came from — the discovery script, or a `TemplateTargets` override naming the template and key. This is the run's source-disclosure audit trail: it answers "was this tenant selected by the script, or overridden in config?" per target. Empty on a run with no source information recorded. |
 
 ### `migrationScripts[]`
 

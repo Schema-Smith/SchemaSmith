@@ -33,23 +33,50 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -uo pipefail
-          # Check names must match the CI job names exactly. The PostgreSQL, MySQL, and MariaDB
-          # integration jobs are each a matrix over latest + the supported floor, so every leg is a
-          # separate check (e.g. "Integration Tests (PostgreSQL 14)") and all must have passed. A
-          # release must not cut with any leg, the Coverage Gate, or check-headers red.
+          # Check names must match the CI job names exactly. Every engine's integration job is a matrix,
+          # so each leg is a separate check (e.g. "Integration Tests (PostgreSQL 14)") and all must have
+          # passed. A release must not cut with any leg, the Coverage Gate, or check-headers red.
+          #
+          # A RELEASE GATES ON EVERY LEG (Paul, 2026-09-20). Twenty integration legs plus the four
+          # non-integration checks. That is the point of a release gate: the tag is the artifact users
+          # install, so it must not cut with ANY supported version red -- including the floating `latest`
+          # legs, which are where an engine release that broke us would show up first.
+          #
+          # THIS IS THE MERGE-TO-MAIN SET, NOT THE PULL-REQUEST SET, and the difference is deliberate.
+          # Since 2026-09-20 a pull request runs a reduced matrix (floor + latest per engine) while
+          # merge to main runs the full one, so main produces MORE checks than a PR does. A release is
+          # cut from main and must be held to the full matrix -- listing only the PR set here would let
+          # a release pass without ever having run PostgreSQL 14/13, MariaDB 10.6, or SQL Server
+          # 2019/2022.
+          #
+          # KEEP IN SYNC with continuous-integration.yml's matrices AND with the `main` branch ruleset
+          # (which carries the PR set) AND with ci-docs-only-companion.yml (which stubs the PR set). A
+          # name here that CI no longer produces fails the release with "check not found"; a name CI
+          # produces that is missing here lets a red leg through silently -- the worse of the two.
           REQUIRED_CHECKS=(
             "Build & Unit Tests"
-            "Integration Tests (SQL Server)"
-            "Integration Tests (PostgreSQL latest)"
+            "Integration Tests (SQL Server 2017)"
+            "Integration Tests (SQL Server 2019)"
+            "Integration Tests (SQL Server 2022)"
+            "Integration Tests (SQL Server 2025)"
+            "Integration Tests (PostgreSQL 18)"
+            "Integration Tests (PostgreSQL 17)"
+            "Integration Tests (PostgreSQL 16)"
+            "Integration Tests (PostgreSQL 15)"
             "Integration Tests (PostgreSQL 14)"
             "Integration Tests (PostgreSQL 13)"
             "Integration Tests (PostgreSQL 12)"
+            "Integration Tests (MySQL 26)"
+            "Integration Tests (MySQL 8.4)"
             "Integration Tests (MySQL 8.0)"
             "Integration Tests (MySQL 5.7)"
+            "Integration Tests (MariaDB 13)"
+            "Integration Tests (MariaDB 11.8)"
             "Integration Tests (MariaDB 11.4)"
             "Integration Tests (MariaDB 10.6)"
             "Integration Tests (MariaDB 10.2)"
             "Genuine Sweep Record"
+            "Engine Ceiling Ratchet"
             "Coverage Gate"
             "check-headers"
           )

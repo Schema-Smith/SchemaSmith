@@ -45,6 +45,12 @@ BEGIN
 
     DECLARE v_ConflictingTable VARCHAR(128);
     DECLARE v_ConflictingOwner VARCHAR(100);
+    -- The catalog is utf8mb3. Comparing a bare catalog column against a value in the SAME charset lets
+    -- MariaDB push the schema filter down (EXPLAIN: "Scanned 1 database" rather than "Scanned all
+    -- databases"); wrapping the column in CONVERT(... USING utf8mb4) defeated it and cost ~1.8ms per
+    -- database ON THE SERVER, on every deploy. A bare parameter does NOT work -- it carries the
+    -- connection charset -- so the declared local is load-bearing, not decoration.
+    DECLARE v_IsDbName VARCHAR(128) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT p_DatabaseName;
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'BEGIN ModifiedTableQuench');
 
@@ -227,7 +233,7 @@ BEGIN
           FROM _SchemaSmith_Tables t
           LEFT JOIN (SELECT p.TABLE_NAME, p.PARTITION_METHOD, p.PARTITION_EXPRESSION
                        FROM INFORMATION_SCHEMA.PARTITIONS p
-                      WHERE CONVERT(p.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                      WHERE p.TABLE_SCHEMA = v_IsDbName
                         AND p.PARTITION_NAME IS NOT NULL
                         AND p.PARTITION_ORDINAL_POSITION = 1) lp
             ON CONVERT(lp.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
@@ -241,7 +247,7 @@ BEGIN
                 -- Gated on a declared count so RANGE/LIST (named partitions, no declared count) is untouched.
                 OR (t.PartitionCount IS NOT NULL AND t.PartitionCount > 0
                     AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS pc
-                          WHERE CONVERT(pc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                          WHERE pc.TABLE_SCHEMA = v_IsDbName
                             AND CONVERT(pc.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
                             AND pc.PARTITION_NAME IS NOT NULL) <> t.PartitionCount));
 
@@ -285,7 +291,7 @@ BEGIN
         -- "Can't reopen table"), which the declared-vs-deployed comparison would otherwise need.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PartitionVerdict;
         CREATE TEMPORARY TABLE _SchemaSmith_PartitionVerdict (
-            TableName VARCHAR(128) NOT NULL PRIMARY KEY,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
             DeclaredCount INT NOT NULL,
             DeployedCount INT NOT NULL,
             PrefixMismatch VARCHAR(128) DEFAULT NULL,
@@ -298,12 +304,12 @@ BEGIN
                (SELECT COUNT(*) FROM _SchemaSmith_Partitions dp
                  WHERE CONVERT(dp.TableName USING utf8mb4) = CONVERT(t.TableName USING utf8mb4)),
                (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS pc
-                 WHERE CONVERT(pc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                 WHERE pc.TABLE_SCHEMA = v_IsDbName
                    AND CONVERT(pc.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
                    AND pc.PARTITION_NAME IS NOT NULL),
                COALESCE((SELECT MAX(UPPER(TRIM(COALESCE(pm.PARTITION_DESCRIPTION, ''))) = 'MAXVALUE')
                            FROM INFORMATION_SCHEMA.PARTITIONS pm
-                          WHERE CONVERT(pm.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                          WHERE pm.TABLE_SCHEMA = v_IsDbName
                             AND CONVERT(pm.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
                             AND pm.PARTITION_NAME IS NOT NULL), 0)
           FROM _SchemaSmith_Tables t
@@ -319,7 +325,7 @@ BEGIN
                SELECT dp.PartitionName
                  FROM _SchemaSmith_Partitions dp
                  JOIN INFORMATION_SCHEMA.PARTITIONS lp
-                   ON CONVERT(lp.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                   ON lp.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(lp.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(dp.TableName) USING utf8mb4)
                   AND lp.PARTITION_NAME IS NOT NULL
                   AND lp.PARTITION_ORDINAL_POSITION = dp.Ordinal + 1
@@ -338,7 +344,7 @@ BEGIN
            SET v.RemovedName = (
                SELECT lp.PARTITION_NAME
                  FROM INFORMATION_SCHEMA.PARTITIONS lp
-                WHERE CONVERT(lp.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                WHERE lp.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(lp.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(v.TableName) USING utf8mb4)
                   AND lp.PARTITION_NAME IS NOT NULL
                   AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Partitions dp
@@ -386,7 +392,7 @@ BEGIN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PartitionAdds;
         CREATE TEMPORARY TABLE _SchemaSmith_PartitionAdds (
             RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
-            TableName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PartitionName VARCHAR(128) NOT NULL,
             PartitionValues TEXT DEFAULT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -621,12 +627,19 @@ BEGIN
     -- STEP 0: OWNERSHIP VALIDATION
     -- =======================
     -- Check if any tables in the definition are owned by a different product
+    -- SchemaSmith_IdentifierKey rather than CONVERT(... USING utf8mb4) on the identifier halves:
+    -- CONVERT() yields the charset's DEFAULT collation, which is case-INSENSITIVE, so this check used
+    -- to treat `CaseProbe` and `caseprobe` as one table. On a server with lower_case_table_names = 0
+    -- those are two different tables, and a second product declaring the lowercase twin was refused
+    -- with "Table CaseProbe is already owned by another product" -- naming a table it had not
+    -- declared. IdentifierKey asks the server which it is and folds both sides only when the server
+    -- folds identifiers itself, so behaviour on lower_case_table_names >= 1 is unchanged.
     SELECT po.ObjectName, po.ProductName
     INTO v_ConflictingTable, v_ConflictingOwner
     FROM _SchemaSmith_Tables t
     INNER JOIN SchemaSmith_ProductOwnership po
-        ON CONVERT(po.ObjectName USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
-        AND CONVERT(po.ObjectSchema USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+        ON SchemaSmith_IdentifierKey(po.ObjectName) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName))
+        AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
         AND po.ObjectType = 'TABLE'
     WHERE CONVERT(po.ProductName USING utf8mb4) != CONVERT(p_ProductName USING utf8mb4)
     LIMIT 1;
@@ -651,7 +664,7 @@ BEGIN
     -- table (ER_CANT_REOPEN_TABLE 1137); the second reference reads the copy.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTables;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingTables (
-        TableName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     -- No TABLE_TYPE filter: the original per-row checks read INFORMATION_SCHEMA.TABLES unfiltered (which
@@ -663,7 +676,7 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTablesN;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingTablesN (
-        TableName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT INTO _SchemaSmith_ExistingTablesN (TableName) SELECT TableName FROM _SchemaSmith_ExistingTables;
@@ -682,7 +695,7 @@ BEGIN
     IF p_WhatIf = 0 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_TableRenames;
         CREATE TEMPORARY TABLE _SchemaSmith_TableRenames (
-            OldTableName VARCHAR(128) NOT NULL,
+            OldTableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             NewTableName VARCHAR(128) NOT NULL,
             PRIMARY KEY (OldTableName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -786,7 +799,7 @@ BEGIN
     -- 'wouldRebuild' audit row and the full printed sequence are both there -- and no statement runs.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildFacts;
     CREATE TEMPORARY TABLE _SchemaSmith_RebuildFacts (
-        TableName VARCHAR(128) NOT NULL PRIMARY KEY,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
         ModificationPasses INT NOT NULL DEFAULT 0,
         HasColumnDrop TINYINT NOT NULL DEFAULT 0,
         HasOrderMismatch TINYINT NOT NULL DEFAULT 0
@@ -911,7 +924,7 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildColumnOrder;
     CREATE TEMPORARY TABLE _SchemaSmith_RebuildColumnOrder (
-        TableName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         DeclaredPos INT NOT NULL,
         DeclaredSeq INT NOT NULL,
         LivePos INT NOT NULL
@@ -927,7 +940,7 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildColumnOrderPeer;
     CREATE TEMPORARY TABLE _SchemaSmith_RebuildColumnOrderPeer (
-        TableName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         DeclaredPos INT NOT NULL,
         DeclaredSeq INT NOT NULL,
         LivePos INT NOT NULL
@@ -954,7 +967,7 @@ BEGIN
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildElection;
     CREATE TEMPORARY TABLE _SchemaSmith_RebuildElection (
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
-        TableName VARCHAR(128) NOT NULL
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     -- The policy is resolved once in a derived table so the collation-normalising CONVERT/COLLATE around
@@ -1066,8 +1079,8 @@ BEGIN
 
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColumnCollationFKsToDrop;
             CREATE TEMPORARY TABLE _SchemaSmith_ColumnCollationFKsToDrop (
-                TableName VARCHAR(128) NOT NULL,
-                ConstraintName VARCHAR(128) NOT NULL,
+                TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+                ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
                 PRIMARY KEY (TableName, ConstraintName)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1081,7 +1094,7 @@ BEGIN
                   AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
                   AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
               INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON CONVERT(kcu.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                  ON kcu.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(kcu.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4)
                   AND CONVERT(kcu.COLUMN_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4)
                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
@@ -1097,7 +1110,7 @@ BEGIN
                   AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
                   AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
               INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON CONVERT(kcu.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                  ON kcu.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4)
                   AND CONVERT(kcu.REFERENCED_COLUMN_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4)
              WHERE c.NewColumn = 0 AND c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation;
@@ -1700,8 +1713,8 @@ BEGIN
     -- Create helper table to copy defined columns (avoids referencing _SchemaSmith_Columns multiple times)
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DefinedColumns;
     CREATE TEMPORARY TABLE _SchemaSmith_DefinedColumns (
-        TableName VARCHAR(128) NOT NULL,
-        ColumnName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         OldName VARCHAR(128) NULL,
         INDEX idx_table_col (TableName, ColumnName),
         INDEX idx_table_old (TableName, OldName)
@@ -1717,8 +1730,8 @@ BEGIN
     -- Create helper table for columns to drop (used by all subsequent cursors)
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColumnsToDrop;
     CREATE TEMPORARY TABLE _SchemaSmith_ColumnsToDrop (
-        TableName VARCHAR(128) NOT NULL,
-        ColumnName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, ColumnName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1750,8 +1763,8 @@ BEGIN
     IF p_CaptureWouldDrop = 1 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropColumns;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropColumns (
-            TableName VARCHAR(128) NOT NULL,
-            ColumnName VARCHAR(128) NOT NULL
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
         INSERT INTO _SchemaSmith_WouldDropColumns (TableName, ColumnName)
@@ -1794,8 +1807,8 @@ BEGIN
         -- could otherwise attempt to drop the same FK twice and error on the second attempt).
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKsToDrop;
         CREATE TEMPORARY TABLE _SchemaSmith_FKsToDrop (
-            TableName VARCHAR(128) NOT NULL,
-            ConstraintName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1806,7 +1819,7 @@ BEGIN
             CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-            ON CONVERT(kcu.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON kcu.TABLE_SCHEMA = v_IsDbName
             AND CONVERT(kcu.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND CONVERT(kcu.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
         INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
@@ -1822,7 +1835,7 @@ BEGIN
             CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-            ON CONVERT(kcu.REFERENCED_TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON kcu.REFERENCED_TABLE_SCHEMA = v_IsDbName
             AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND CONVERT(kcu.REFERENCED_COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
         INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
@@ -1861,8 +1874,8 @@ BEGIN
         -- Drop check constraints that reference columns being dropped
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CKsToDrop;
         CREATE TEMPORARY TABLE _SchemaSmith_CKsToDrop (
-            TableName VARCHAR(128) NOT NULL,
-            ConstraintName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1922,8 +1935,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- Drop indexes that use columns being dropped
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxsToDrop;
         CREATE TEMPORARY TABLE _SchemaSmith_IdxsToDrop (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1933,7 +1946,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             CONVERT(s.INDEX_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.STATISTICS s
-            ON CONVERT(s.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON s.TABLE_SCHEMA = v_IsDbName
             AND CONVERT(s.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND CONVERT(s.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
         WHERE UPPER(s.INDEX_NAME) != 'PRIMARY';
@@ -1969,8 +1982,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- Drop generated columns that reference columns being dropped
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColsToDrop;
         CREATE TEMPORARY TABLE _SchemaSmith_GenColsToDrop (
-            TableName VARCHAR(128) NOT NULL,
-            ColumnName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, ColumnName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1983,7 +1996,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             CONVERT(isc_gen.COLUMN_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.COLUMNS isc_gen
-            ON CONVERT(isc_gen.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON isc_gen.TABLE_SCHEMA = v_IsDbName
             AND CONVERT(isc_gen.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND isc_gen.GENERATION_EXPRESSION IS NOT NULL
             AND isc_gen.GENERATION_EXPRESSION != ''
@@ -2030,7 +2043,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                       '` DROP COLUMN `', CONVERT(ctd.ColumnName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`')
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON CONVERT(isc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON isc.TABLE_SCHEMA = v_IsDbName
             AND CONVERT(isc.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND CONVERT(isc.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
         -- Not a generated column (those were handled above)
@@ -2046,7 +2059,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                       GROUP_CONCAT(CONCAT('DROP COLUMN `', CONVERT(ctd.ColumnName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`') ORDER BY ctd.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON CONVERT(isc.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON isc.TABLE_SCHEMA = v_IsDbName
             AND CONVERT(isc.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
             AND CONVERT(isc.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
         WHERE (isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
@@ -2160,8 +2173,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             -- the same division of labour the drop-column path above relies on.
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CollationFKsToDrop;
             CREATE TEMPORARY TABLE _SchemaSmith_CollationFKsToDrop (
-                TableName VARCHAR(128) NOT NULL,
-                ConstraintName VARCHAR(128) NOT NULL,
+                TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+                ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
                 PRIMARY KEY (TableName, ConstraintName)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -2174,7 +2187,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                   ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
                   AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
               INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON CONVERT(kcu.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                  ON kcu.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(kcu.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
              WHERE t.NewTable = 0 AND t.Collation IS NOT NULL AND ist.TABLE_COLLATION != t.Collation;
@@ -2189,7 +2202,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                   ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
                   AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
               INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON CONVERT(kcu.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                  ON kcu.TABLE_SCHEMA = v_IsDbName
                   AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
              WHERE t.NewTable = 0 AND t.Collation IS NOT NULL AND ist.TABLE_COLLATION != t.Collation;
 
@@ -2757,12 +2770,17 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
         -- INSERT IGNORE skips existing ownership rows, so a toggled PreventDrop would not take
         -- effect without this refresh UPDATE carrying the current per-table flag onto the row.
+        -- Same identifier-key treatment as STEP 0, and for a sharper reason: the INSERT above matches
+        -- its rows with BINARY, so a case-insensitive join here refreshed PreventDrop from whichever
+        -- of two case-differing tables the collation happened to pick. ProductName stays on a plain
+        -- comparison -- a product name is not a server identifier and lower_case_table_names has
+        -- nothing to say about it.
         UPDATE SchemaSmith_ProductOwnership po
           JOIN _SchemaSmith_Tables t
-            ON CONVERT(po.ObjectName USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
+            ON SchemaSmith_IdentifierKey(po.ObjectName) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName))
          SET po.PreventDrop = COALESCE(t.PreventDrop, 0)
          WHERE CONVERT(po.ProductName USING utf8mb4) = CONVERT(p_ProductName USING utf8mb4)
-           AND CONVERT(po.ObjectSchema USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+           AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
            AND po.ObjectType = 'TABLE';
     END IF;
 
@@ -2778,7 +2796,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Capture tables suppressed by PreventDrop (would drop by absence)');
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropTables;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropTables (
-            TableName VARCHAR(128) NOT NULL
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
         INSERT INTO _SchemaSmith_WouldDropTables (TableName)
@@ -2822,7 +2840,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         SELECT DISTINCT CONNECTION_ID(), CONCAT('  Partitioned table removed from product, not dropped (data-loss guard): ', po.ObjectName)
         FROM SchemaSmith_ProductOwnership po
         INNER JOIN INFORMATION_SCHEMA.PARTITIONS ip
-            ON CONVERT(ip.TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+            ON ip.TABLE_SCHEMA = v_IsDbName
            AND CONVERT(ip.TABLE_NAME USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
            AND ip.PARTITION_NAME IS NOT NULL
         WHERE CONVERT(po.ProductName USING utf8mb4) = CONVERT(p_ProductName USING utf8mb4)
@@ -2853,7 +2871,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                                    '` DROP FOREIGN KEY `', CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`')
             FROM SchemaSmith_ProductOwnership po
             INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                ON CONVERT(kcu.REFERENCED_TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                ON kcu.REFERENCED_TABLE_SCHEMA = v_IsDbName
                AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
             INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 ON CONVERT(tc.TABLE_SCHEMA USING utf8mb4) = CONVERT(kcu.TABLE_SCHEMA USING utf8mb4)
@@ -2878,8 +2896,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             -- (TableName, ConstraintName) like SchemaSmith_ForeignKeyQuench's approach.
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_InboundFKsToDrop;
             CREATE TEMPORARY TABLE _SchemaSmith_InboundFKsToDrop (
-                TableName VARCHAR(128) NOT NULL,
-                ConstraintName VARCHAR(128) NOT NULL,
+                TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+                ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
                 PRIMARY KEY (TableName, ConstraintName)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -2889,7 +2907,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
             FROM SchemaSmith_ProductOwnership po
             INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                ON CONVERT(kcu.REFERENCED_TABLE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                ON kcu.REFERENCED_TABLE_SCHEMA = v_IsDbName
                AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
             INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 ON CONVERT(tc.TABLE_SCHEMA USING utf8mb4) = CONVERT(kcu.TABLE_SCHEMA USING utf8mb4)
@@ -2993,7 +3011,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_TablesToDrop;
             CREATE TEMPORARY TABLE _SchemaSmith_TablesToDrop (
                 RowId INT AUTO_INCREMENT PRIMARY KEY,
-                TableName VARCHAR(128) NOT NULL,
+                TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
                 DropSql TEXT NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -3114,7 +3132,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- dropped (and any dropped out-of-band) as gone, so their ownership rows are reconciled here.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTables;
         CREATE TEMPORARY TABLE _SchemaSmith_ExistingTables (
-            TableName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_ExistingTables (TableName)
@@ -3244,8 +3262,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- subqueries used, so composite index column lists compare byte-for-byte as before.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectSnap;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxDetectSnap (
-        TableName VARCHAR(128) NOT NULL,
-        IndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         NonUnique TINYINT DEFAULT 0,
         IndexType VARCHAR(32),
         NormColumns TEXT,
@@ -3316,8 +3334,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- it read INFORMATION_SCHEMA (not a temp) on both sides. The second reference reads this copy.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectNames;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxDetectNames (
-        TableName VARCHAR(128) NOT NULL,
-        IndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, IndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT INTO _SchemaSmith_IdxDetectNames (TableName, IndexName)
@@ -3332,8 +3350,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- =========================================================================
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexRenames;
     CREATE TEMPORARY TABLE _SchemaSmith_IndexRenames (
-        TableName VARCHAR(128) NOT NULL,
-        OldIndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        OldIndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         NewIndexName VARCHAR(128) NOT NULL,
         PRIMARY KEY (TableName, OldIndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -3432,8 +3450,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- =========================================================================
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifiedIndexes;
     CREATE TEMPORARY TABLE _SchemaSmith_ModifiedIndexes (
-        TableName VARCHAR(128) NOT NULL,
-        IndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, IndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -3530,8 +3548,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- Catalog snapshot (one row per index; SEQ_IN_INDEX = 1). Mirrors STEP 8's _SchemaSmith_Step8Idx.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropStep8IdxCat;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropStep8IdxCat (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_WouldDropStep8IdxCat (TableName, IndexName)
@@ -3545,8 +3563,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- _SchemaSmith_Indexes) out of the capture set.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropStep8DefIdx;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropStep8DefIdx (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_WouldDropStep8DefIdx (TableName, IndexName)
@@ -3556,8 +3574,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropStep8Indexes;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropStep8Indexes (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -3649,8 +3667,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- collapsing the original LEFT JOIN s + EXISTS s2 into a single snapshot reference (no 1137).
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8Idx;
         CREATE TEMPORARY TABLE _SchemaSmith_Step8Idx (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             NonUnique TINYINT DEFAULT 0,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -3663,9 +3681,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- FK rows referencing a product table (for the FK-before-index drop join). Same-schema FKs.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8KCU;
         CREATE TEMPORARY TABLE _SchemaSmith_Step8KCU (
-            TableName VARCHAR(128) NOT NULL,
-            ConstraintName VARCHAR(128) NOT NULL,
-            ReferencedTableName VARCHAR(128) DEFAULT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ReferencedTableName VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
             KEY ix_s8kcu (ReferencedTableName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_Step8KCU (TableName, ConstraintName, ReferencedTableName)
@@ -3677,8 +3695,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8TC;
         CREATE TEMPORARY TABLE _SchemaSmith_Step8TC (
-            TableName VARCHAR(128) NOT NULL,
-            ConstraintName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             KEY ix_s8tc (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_Step8TC (TableName, ConstraintName)
@@ -3689,8 +3707,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexesToDrop;
         CREATE TEMPORARY TABLE _SchemaSmith_IndexesToDrop (
-            TableName VARCHAR(128) NOT NULL,
-            IndexName VARCHAR(128) NOT NULL,
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             IsUnique TINYINT DEFAULT 0,
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -3920,7 +3938,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PeriodsToDrop;
                 CREATE TEMPORARY TABLE _SchemaSmith_PeriodsToDrop (
                     RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
-                    TableName VARCHAR(128) NOT NULL,
+                    TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
                     PeriodName VARCHAR(128) NOT NULL
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

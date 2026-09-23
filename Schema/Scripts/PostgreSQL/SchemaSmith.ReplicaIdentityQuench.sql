@@ -9,6 +9,10 @@
 -- Callers must therefore invoke this AFTER the index pass. #407
 CREATE OR REPLACE PROCEDURE "SchemaSmith"."ReplicaIdentityQuench"(p_WhatIf BOOLEAN = FALSE)
     LANGUAGE plpgsql
+  -- JIT off: see the measurement in SchemaSmith.TableQuench.sql. Every procedure carries this, not just
+  -- the ones that look like entry points -- the product CALLs ModifiedTableQuench and its siblings
+  -- directly (SchemaQuench/DatabaseQuench.cs), so "nested" is not a safe assumption to plan around.
+  SET jit = 'off'
 AS $$
 DECLARE
     sql_script TEXT;

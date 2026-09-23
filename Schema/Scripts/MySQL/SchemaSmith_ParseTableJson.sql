@@ -67,7 +67,7 @@ BEGIN
     -- time. TableName remains an indexed lookup column but is no longer the uniqueness constraint.
     CREATE TEMPORARY TABLE _SchemaSmith_Tables (
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
-        TableName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         Engine VARCHAR(50) DEFAULT 'InnoDB',
         Collation VARCHAR(100) DEFAULT NULL,
         OldName VARCHAR(128) DEFAULT NULL,
@@ -194,7 +194,7 @@ BEGIN
     -- when used in correlated subqueries (both in JSON_TABLE and UPDATE contexts).
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTables;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingTables (
-        TableName VARCHAR(128) NOT NULL PRIMARY KEY
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     INSERT INTO _SchemaSmith_ExistingTables (TableName)
@@ -226,8 +226,8 @@ BEGIN
     -- _SchemaSmith_Columns until ShouldApply DELETE removes the one whose expression evaluates false.
     CREATE TEMPORARY TABLE _SchemaSmith_Columns (
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
-        TableName VARCHAR(128) NOT NULL,
-        ColumnName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         OrdinalPosition INT NOT NULL DEFAULT 0,
         DataType VARCHAR(100) NOT NULL,
         IsNullable TINYINT DEFAULT 1,
@@ -353,8 +353,8 @@ BEGIN
     -- Snapshot existing columns into a temp table (same optimizer workaround as tables)
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingColumns;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingColumns (
-        TableName VARCHAR(128) NOT NULL,
-        ColumnName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, ColumnName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -458,8 +458,8 @@ BEGIN
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColDeps2;
 
     CREATE TEMPORARY TABLE _SchemaSmith_GenColDeps (
-        TableName VARCHAR(128) NOT NULL,
-        ColumnName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ColumnNameStripped VARCHAR(128) NOT NULL,
         GeneratedExpression TEXT NOT NULL,
         DependencyLevel INT DEFAULT 0,
@@ -467,8 +467,8 @@ BEGIN
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     CREATE TEMPORARY TABLE _SchemaSmith_GenColDeps2 (
-        TableName VARCHAR(128) NOT NULL,
-        ColumnName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ColumnNameStripped VARCHAR(128) NOT NULL,
         GeneratedExpression TEXT NOT NULL,
         DependencyLevel INT DEFAULT 0,
@@ -555,8 +555,8 @@ BEGIN
     -- RowId is the synthetic primary key (see _SchemaSmith_Tables above for rationale).
     CREATE TEMPORARY TABLE _SchemaSmith_Indexes (
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
-        TableName VARCHAR(128) NOT NULL,
-        IndexName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         IsPrimaryKey TINYINT DEFAULT 0,
         IsUnique TINYINT DEFAULT 0,
         IndexType VARCHAR(20) DEFAULT 'BTREE',
@@ -615,7 +615,7 @@ BEGIN
     -- RowId is the synthetic primary key (see _SchemaSmith_Tables above for rationale).
     CREATE TEMPORARY TABLE _SchemaSmith_ForeignKeys (
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
-        TableName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         KeyName VARCHAR(128) NOT NULL,
         Columns TEXT NOT NULL,
         RelatedTableSchema VARCHAR(128) DEFAULT NULL,
@@ -664,8 +664,8 @@ BEGIN
     -- RowId is the synthetic primary key (see _SchemaSmith_Tables above for rationale).
     CREATE TEMPORARY TABLE _SchemaSmith_CheckConstraints (
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
-        TableName VARCHAR(128) NOT NULL,
-        ConstraintName VARCHAR(128) NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         Expression TEXT NOT NULL,
         ShouldApply TINYINT DEFAULT 1,
         ShouldApplyExpression VARCHAR(4000) DEFAULT NULL,

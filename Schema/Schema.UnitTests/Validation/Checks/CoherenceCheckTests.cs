@@ -59,6 +59,107 @@ public class CoherenceCheckTests
         return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
     }
 
+    // ---- Modeled folder objects declared BOTH ways (SS-ENUM-001 / SS-SEQ-001 / SS-DOM-001) ----
+    //
+    // Enum Types/, Sequences/ and Domain Types/ are additive by design: each holds declared .json and
+    // scripted .sql side by side, and using one or the other is correct and common. Declaring the SAME
+    // object both ways is the defect, and it used to validate clean -- the coexistence rule existed only
+    // for scheduled events, even though all three of these are already shape-validated.
+
+    private static Template PgTemplateWithFolder(string folderPath, params string[] scriptedFileNames)
+    {
+        var template = new Template { Name = "T" };
+        var folder = new TemplateFolder { FolderPath = folderPath, QuenchSlot = TemplateQuenchSlot.Objects };
+        foreach (var name in scriptedFileNames)
+            folder.Scripts.Add(new SqlScript { Name = name, FilePath = $"/pkg/T/{folderPath}/{name}.sql" });
+        template.ScriptFolders.Add(folder);
+        return template;
+    }
+
+    private static Finding[] RunOnPg(Template template)
+    {
+        var product = new Product
+        {
+            Name = "Acme",
+            Platform = Platform.PostgreSQL,
+            TemplateOrder = new System.Collections.Generic.List<string>()
+        };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    [Test]
+    public void EnumTypeDeclaredAsJsonAndScripted_IsReported()
+    {
+        var template = PgTemplateWithFolder("Enum Types", "order_status");
+        template.EnumTypes.Add(new PostgreSqlEnumType { Name = "order_status" });
+
+        var findings = RunOnPg(template);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Select(f => f.Code), Has.Member("SS-ENUM-001"));
+            Assert.That(findings.Single(f => f.Code == "SS-ENUM-001").Message,
+                Does.Contain("order_status").And.Contain("guarded CREATE TYPE"),
+                "the message has to say what the engine actually does -- the scripted form silently "
+                + "no-ops once the type exists, which is why this is worth reporting at all");
+        });
+    }
+
+    [Test]
+    public void SequenceDeclaredAsJsonAndScripted_IsReported()
+    {
+        var template = PgTemplateWithFolder("Sequences", "invoice_seq");
+        template.Sequences.Add(new PostgreSqlSequence { Name = "invoice_seq" });
+
+        var findings = RunOnPg(template);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Select(f => f.Code), Has.Member("SS-SEQ-001"));
+            Assert.That(findings.Single(f => f.Code == "SS-SEQ-001").Message,
+                Does.Not.Contain("guarded"),
+                "the engine scripts say nothing about a scripted sequence, so this message must claim "
+                + "no mechanism -- inventing one would be worse than the warning it replaces");
+        });
+    }
+
+    [Test]
+    public void DomainTypeDeclaredAsJsonAndScripted_IsReported()
+    {
+        var template = PgTemplateWithFolder("Domain Types", "positive_amount");
+        template.DomainTypes.Add(new PostgreSqlDomainType { Name = "positive_amount" });
+
+        Assert.That(RunOnPg(template).Select(f => f.Code), Has.Member("SS-DOM-001"));
+    }
+
+    [Test]
+    public void ObjectDeclaredOnlyOneWay_IsNotReported()
+    {
+        // The guard that keeps this check from punishing the normal case. Both halves matter: a package
+        // that only scripts, and a package that only declares, are each perfectly valid.
+        var scriptedOnly = PgTemplateWithFolder("Enum Types", "order_status");
+
+        var declaredOnly = new Template { Name = "T" };
+        declaredOnly.EnumTypes.Add(new PostgreSqlEnumType { Name = "order_status" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunOnPg(scriptedOnly).Select(f => f.Code), Has.No.Member("SS-ENUM-001"));
+            Assert.That(RunOnPg(declaredOnly).Select(f => f.Code), Has.No.Member("SS-ENUM-001"));
+        });
+    }
+
+    [Test]
+    public void SameNameInADifferentFolder_IsNotReported()
+    {
+        // The folder is what says which KIND an object is, so a sequence script named like the enum
+        // must not trip the enum rule. Without this the three checks would report each other's objects.
+        var template = PgTemplateWithFolder("Sequences", "order_status");
+        template.EnumTypes.Add(new PostgreSqlEnumType { Name = "order_status" });
+
+        Assert.That(RunOnPg(template).Select(f => f.Code), Has.No.Member("SS-ENUM-001"));
+    }
+
     [Test]
     public void MemoryOptimizedWithFileGroup_IsError()
     {
@@ -651,6 +752,62 @@ public class CoherenceCheckTests
         var findings = new CoherenceCheck().Run(ctx).ToList();
 
         Assert.That(findings, Is.Empty);
+    }
+
+    [Test]
+    public void IndexOnlyTemplate_IndexColumnsNotDeclaredOnTheTable_IsNotAnError()
+    {
+        // IndexOnlyTableQuenches exists to index a table the package does NOT own -- a vendor product
+        // or a replicated copy, created outside the package, whose columns are deliberately never
+        // declared. So index key parts naming columns absent from the table file are the feature
+        // working, not a defect. Reporting them made `--Validate` exit 2 on a correct package, which
+        // fails the user's CI gate: caught by the release sweep on the shipped lab that teaches this
+        // (Demos/Learn/course4-recipe-13), failing on all four engines.
+        var table = new SqlServerTable
+        {
+            Name = "vendor_order",
+            Schema = "dbo",
+            Indexes = { new SqlServerIndex { Name = "IX_vendor_order_status", IndexColumns = "status" } }
+        };
+        var template = TemplateWithTables("Main", table);
+        template.IndexOnlyTableQuenches = true;
+
+        var findings = new CoherenceCheck().Run(Context(template)).ToList();
+
+        Assert.That(findings, Is.Empty);
+    }
+
+    [Test]
+    public void IndexOnlyTemplate_ForeignKeyLocalColumnNotDeclared_IsNotAnError_ButTheRelatedSideStillIs()
+    {
+        // The two halves are not symmetric and must not be suppressed together: the LOCAL column list
+        // is unowned under this flag, while the RELATED table is a different table the package usually
+        // does declare in full. Over-correcting would blind the half that still has an answer.
+        var related = Customer();
+        var table = new SqlServerTable
+        {
+            Name = "vendor_order",
+            Schema = "dbo",
+            ForeignKeys =
+            {
+                new ForeignKey
+                {
+                    Name = "FK_vendor_order_Customer",
+                    Columns = "customer_ref",
+                    RelatedTable = "Customer",
+                    RelatedColumns = "NoSuchColumn"
+                }
+            }
+        };
+        var template = TemplateWithTables("Main", table, related);
+        template.IndexOnlyTableQuenches = true;
+
+        var findings = new CoherenceCheck().Run(Context(template)).ToList();
+
+        Assert.That(findings.Select(f => f.Code), Has.None.EqualTo("SS-FK-001"),
+            "the local column is owned outside the package under IndexOnlyTableQuenches");
+        Assert.That(findings.Select(f => f.Code), Has.One.EqualTo("SS-FK-004"),
+            "the related table is still declared here, so its column list is still authoritative");
     }
 
     [Test]

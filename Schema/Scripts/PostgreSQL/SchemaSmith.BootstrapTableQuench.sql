@@ -20,6 +20,10 @@
 CREATE OR REPLACE PROCEDURE "SchemaSmith"."BootstrapTableQuench"
   (p_TableDefinitions TEXT)
   LANGUAGE plpgsql
+  -- JIT off: see the measurement in SchemaSmith.TableQuench.sql. Every procedure carries this, not just
+  -- the ones that look like entry points -- the product CALLs ModifiedTableQuench and its siblings
+  -- directly (SchemaQuench/DatabaseQuench.cs), so "nested" is not a safe assumption to plan around.
+  SET jit = 'off'
 AS $$
 DECLARE
     v_def JSONB := p_TableDefinitions::jsonb;
@@ -39,6 +43,17 @@ DECLARE
     v_idx_cols TEXT;
     v_old_name TEXT;
     v_col_old_name TEXT;
+    v_oid OID;
+    v_actual_unique BOOLEAN;
+    v_actual_nnd BOOLEAN;
+    v_actual_sig TEXT;
+    v_expected_sig TEXT;
+    v_expected_nnd BOOLEAN;
+    v_conname TEXT;
+    v_actual_extra BOOLEAN;
+    v_pk_name TEXT;
+    v_has_dupes BOOLEAN;
+    v_group_cols TEXT;
 BEGIN
     v_schema := TRIM(BOTH FROM (v_def->>'Schema'));
     v_name := TRIM(BOTH FROM (v_def->>'Name'));
@@ -134,6 +149,147 @@ BEGIN
     IF v_sql IS NOT NULL THEN
         EXECUTE 'ALTER TABLE "' || v_schema || '"."' || v_name || '" ' || v_sql;
     END IF;
+
+    -- Step 4.4: a declared PRIMARY KEY whose deployed shape differs is swapped IN PLACE -- dropped and re-added
+    -- in one ALTER TABLE, which PostgreSQL applies atomically and which never touches the table's rows. Leaving
+    -- the PK alone was a real gap: a PK is exactly the kind of key whose drift matters, and "rebuild the table"
+    -- is not an acceptable answer for SchemaSmith's own tables.
+    FOR v_idx IN SELECT value FROM jsonb_array_elements(v_def->'Indexes')
+                  WHERE COALESCE((value->>'PrimaryKey')::boolean, false) = true
+    LOOP
+        v_idx_name := v_idx->>'Name';
+
+        SELECT con.conname,
+               (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+                  FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                  JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum)
+          INTO v_pk_name, v_actual_sig
+          FROM pg_constraint con
+         WHERE con.conrelid = to_regclass('"' || v_schema || '"."' || v_name || '"')
+           AND con.contype = 'p';
+        CONTINUE WHEN v_pk_name IS NULL;   -- no PK deployed: Step 2's CREATE TABLE owns that case
+
+        SELECT string_agg(REPLACE(btrim(k.col), '"', ''), ',' ORDER BY k.ord)
+          INTO v_expected_sig
+          FROM unnest(string_to_array(v_idx->>'IndexColumns', ',')) WITH ORDINALITY AS k(col, ord);
+
+        IF v_pk_name IS DISTINCT FROM v_idx_name OR v_actual_sig IS DISTINCT FROM v_expected_sig THEN
+            -- Refuse rather than half-apply when the data cannot satisfy the new key: the ALTER would fail on
+            -- its own, but its message names a system-generated index, not the declaration that asked for it.
+            -- The DECLARED column list, which carries its own quoting: an unquoted name would be folded to
+            -- lower case here and the pre-check would fail with "column does not exist" on a correct table.
+            -- The DECLARED column list, which carries its own quoting -- an unquoted name would be folded
+            -- to lower case and the pre-check would fail with "column does not exist" on a correct table -- but
+            -- with any sort direction removed, which GROUP BY does not accept.
+            SELECT string_agg(CASE WHEN lower(right(btrim(x), 5)) = ' desc'
+                                        THEN btrim(left(btrim(x), length(btrim(x)) - 5))
+                                   WHEN lower(right(btrim(x), 4)) = ' asc'
+                                        THEN btrim(left(btrim(x), length(btrim(x)) - 4))
+                                   ELSE btrim(x) END, ',')
+              INTO v_group_cols
+              FROM unnest(string_to_array(v_idx->>'IndexColumns', ',')) AS x;
+            EXECUTE 'SELECT EXISTS (SELECT 1 FROM "' || v_schema || '"."' || v_name || '" GROUP BY ' ||
+                    v_group_cols || ' HAVING COUNT(*) > 1)' INTO v_has_dupes;
+            IF v_has_dupes THEN
+                RAISE EXCEPTION 'SchemaSmith bootstrap: cannot rebuild PRIMARY KEY %.% as (%) -- the table holds duplicate rows for that key. The existing key is unchanged; resolve the duplicates and re-run.',
+                    v_schema, v_name, v_expected_sig;
+            END IF;
+            RAISE NOTICE '  Rebuilding PRIMARY KEY %.%: the deployed key does not match its declaration', v_schema, v_name;
+            EXECUTE 'ALTER TABLE "' || v_schema || '"."' || v_name || '" DROP CONSTRAINT "' || v_pk_name ||
+                    '", ADD CONSTRAINT "' || v_idx_name || '" PRIMARY KEY (' || (v_idx->>'IndexColumns') || ')';
+        END IF;
+    END LOOP;
+
+
+    -- Step 4.5: a declared index that EXISTS UNDER THE RIGHT NAME BUT THE WRONG SHAPE is dropped here, so the
+    -- create below rebuilds it. Existence-by-name alone was the hole: an index created by an older SchemaSmith
+    -- (or by hand) kept whatever shape it had, CREATE INDEX IF NOT EXISTS said "already there", and the
+    -- declaration in the JSON quietly did not hold -- which is how ProductOwnership's one-owner invariant could
+    -- go missing on a database that had simply never run a since-deleted migration script. Shape is read from
+    -- the catalog, not from text, and compared only against what this JSON actually declares: uniqueness, the
+    -- NULLS NOT DISTINCT form, and the key signature.
+    FOR v_idx IN SELECT value FROM jsonb_array_elements(v_def->'Indexes')
+                  WHERE COALESCE((value->>'PrimaryKey')::boolean, false) = false
+    LOOP
+        v_idx_name := v_idx->>'Name';
+        -- Scoped to THIS table: an index name is unique per schema, not per table, so matching on name
+        -- alone could compare (and then drop) an index belonging to another table in the same schema.
+        SELECT c.oid INTO v_oid
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          JOIN pg_index i ON i.indexrelid = c.oid
+         WHERE n.nspname = v_schema AND c.relname = v_idx_name AND c.relkind IN ('i', 'I')
+           AND i.indrelid = to_regclass('"' || v_schema || '"."' || v_name || '"');
+        CONTINUE WHEN v_oid IS NULL;   -- missing entirely: the create below handles it
+
+        SELECT i.indisunique INTO v_actual_unique FROM pg_index i WHERE i.indexrelid = v_oid;
+
+        -- indnullsnotdistinct is PG15+; naming it statically is a parse error below 15, even unreached.
+        IF v_pg15 THEN
+            EXECUTE 'SELECT indnullsnotdistinct FROM pg_index WHERE indexrelid = $1' INTO v_actual_nnd USING v_oid;
+        ELSE
+            v_actual_nnd := false;
+        END IF;
+
+        -- One normaliser on both sides: strip spaces, quotes, parentheses and ::text casts, so the engine's
+        -- rendering of a key -- COALESCE(("IndexName")::text, ''::text) -- compares equal to the form emitted
+        -- below without either side having to guess the other's punctuation.
+        -- pg_get_indexdef(oid, colno, true) returns the key EXPRESSION only -- it suppresses the sort
+        -- direction -- so DESC is read from indoption's low bit and appended, matching how the declared side
+        -- spells it. Without this a declared "col DESC" rebuilt forever, and a deployed DESC where the
+        -- declaration says ascending compared equal and was never corrected.
+        SELECT string_agg(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                            pg_get_indexdef(v_oid, k.ord::int, true), ' ', ''), '"', ''), '::text', ''), '(', ''), ')', '')
+                          || CASE WHEN (SELECT i.indoption[k.ord - 1] & 1 FROM pg_index i WHERE i.indexrelid = v_oid) = 1
+                                  THEN ' DESC' ELSE '' END,
+                          ',' ORDER BY k.ord)
+          INTO v_actual_sig
+          FROM generate_series(1, (SELECT i.indnkeyatts FROM pg_index i WHERE i.indexrelid = v_oid)) AS k(ord);
+
+        -- A partial index (or one carrying INCLUDE columns) is a shape no bootstrap declaration can express, so
+        -- it cannot be what the declaration asks for.
+        SELECT i.indpred IS NOT NULL OR i.indnatts > i.indnkeyatts INTO v_actual_extra
+          FROM pg_index i WHERE i.indexrelid = v_oid;
+
+        v_expected_nnd := COALESCE((v_idx->>'NullsNotDistinct')::boolean, false) AND v_pg15;
+        -- Declared side, normalised the same way, with an explicit ASC meaning what the catalog shows for it.
+
+        SELECT string_agg(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                   CASE WHEN COALESCE((v_idx->>'NullsNotDistinct')::boolean, false) AND NOT v_pg15
+                             AND EXISTS (SELECT 1 FROM jsonb_array_elements(v_def->'Columns') c
+                                          WHERE '"' || (c.value->>'Name') || '"' = btrim(k.col)
+                                            AND COALESCE((c.value->>'Nullable')::boolean, true))
+                        THEN 'COALESCE(' || btrim(k.col) || '::text, '''')'
+                        -- An explicit ASC is what the catalog renders as nothing, so it is dropped rather than
+                        -- compared. Plain string functions, not a regex, so nothing rests on the regex dialect.
+                        WHEN lower(right(btrim(k.col), 4)) = ' asc'
+                             THEN btrim(left(btrim(k.col), length(btrim(k.col)) - 4))
+                        ELSE btrim(k.col) END,
+                   ' ', ''), '"', ''), '::text', ''), '(', ''), ')', ''),
+                 ',' ORDER BY k.ord)
+          INTO v_expected_sig
+          FROM unnest(string_to_array(v_idx->>'IndexColumns', ',')) WITH ORDINALITY AS k(col, ord);
+
+        IF v_actual_unique IS DISTINCT FROM COALESCE((v_idx->>'Unique')::boolean, false)
+           OR v_actual_nnd IS DISTINCT FROM v_expected_nnd
+           OR COALESCE(v_actual_extra, false)
+           OR v_actual_sig IS DISTINCT FROM v_expected_sig THEN
+            RAISE NOTICE '  Rebuilding %.%: the deployed index does not match its declaration', v_schema, v_idx_name;
+            -- An index that BACKS a constraint cannot be dropped as an index -- PostgreSQL refuses with
+            -- "cannot drop index ... because constraint ... requires it". A hand-added UNIQUE constraint is
+            -- exactly the by-hand case this step exists for, so drop it as the constraint it is and let the
+            -- create below rebuild the declared index. (The SQL Server twin has always done this.)
+            SELECT con.conname INTO v_conname
+              FROM pg_constraint con
+             WHERE con.conindid = v_oid AND con.contype IN ('p', 'u', 'x');
+            IF v_conname IS NOT NULL THEN
+                EXECUTE 'ALTER TABLE "' || v_schema || '"."' || v_name || '" DROP CONSTRAINT "' || v_conname || '"';
+            ELSE
+                EXECUTE 'DROP INDEX "' || v_schema || '"."' || v_idx_name || '"';
+            END IF;
+        END IF;
+    END LOOP;
+
 
     -- Step 5: CREATE INDEX IF NOT EXISTS for non-PK indexes, folded into one batch
     -- (PG supports IF NOT EXISTS natively and runs a multi-statement EXECUTE string). Order preserved.
