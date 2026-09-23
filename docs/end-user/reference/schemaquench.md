@@ -330,7 +330,7 @@ When `UpdateTables` is `false`, steps 4 through 16 are skipped entirely. When `I
 
 SchemaSmith deploys the same package to SQL Server, PostgreSQL, MySQL, and MariaDB — and within each platform, it adapts to the target server's version rather than demanding uniformity. You declare one package; SchemaQuench detects the engine version of each target and does the right thing for that target. When you need to enforce a version floor, declare it once in `Product.json`.
 
-### Supported engine floors
+### Supported engine range
 
 These are the minimum versions SchemaSmith supports for deployment:
 
@@ -340,6 +340,22 @@ These are the minimum versions SchemaSmith supports for deployment:
 | PostgreSQL | 12 |
 | MySQL | 5.7 |
 | MariaDB | 10.2 |
+
+**And the other end of the range is measured, not assumed — new in v2.7.0.** Every engine also has a
+CI leg pinned to that engine's **`latest`** tag, so each release is exercised against whatever the vendor
+currently ships, alongside the floor and the long-term-support versions in between. A deliberate ratchet
+sits behind it: when an engine publishes a new major, that leg's build **fails** rather than quietly
+rolling forward, because a floating leg rotates coverage instead of accumulating it — the version it used
+to test stops being tested the moment it moves. Clearing that failure is a decision (pin the outgoing
+version as a permanent leg, or knowingly accept the hole), which is what keeps "through current" from
+decaying into "current as of whenever someone last looked".
+
+> **What "verified against current" does and does not promise.** It means the full suite runs green on
+> that engine — SchemaSmith's SQL parses, deploys and compares correctly there. It does **not** mean every
+> feature a newer version introduced is modelled: a data type or DDL form SchemaSmith does not know about
+> is carried through as an opaque type string or simply not offered, rather than supported natively. If
+> you depend on something a recent release added, check the [Engine Version
+> Compatibility](#engine-version-compatibility) matrix below for whether it is declared.
 
 **These floors are enforced automatically — you don't declare anything.** Before any deployment (SchemaQuench) or extraction (SchemaTongs) work begins, the target server's version is detected and logged; a below-floor server aborts the run with a clear "unsupported version" message instead of failing later with a raw engine error. For SQL Server, the target database's `compatibility_level` is checked too — it must be `100` or higher (SQL Server 2008); a database below that is reported distinctly from a too-old server. Between compatibility levels 100 and 120 SchemaSmith ingests its schema model as XML rather than JSON (`OPENJSON`'s JSON path is a parse error below 130) — automatically, see [Version-adaptive code generation](#version-adaptive-code-generation) below. `MinimumVersion` (below) is a separate, opt-in gate for raising the floor *further* per product.
 

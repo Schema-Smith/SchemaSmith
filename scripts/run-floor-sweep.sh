@@ -60,6 +60,14 @@ FAILED=0
 
 # name:image:host-port:category -- every leg continuous-integration.yml runs on merge to main, floors
 # first so the fastest-failing and highest-signal bands report before the long tail.
+#
+# LOCAL COVERS MORE THAN CI, NEVER LESS. CI minutes are spent on every push, so its matrix is what we
+# can afford continuously; this sweep runs once per release and can afford the bands CI cannot. Three
+# of these have no CI leg at all and are here for that reason: mysql:9 and mysql:26 sit in the gap
+# between the 8.4 LTS leg and the floating latest, and mariadb:12 sits between 11.8 and 13. A floating
+# `latest` ROTATES -- the day MySQL 27 ships, nothing tests 26 any more -- so without these the middle
+# of a range we document as continuous is exactly where nobody looks. Adding a CI leg for them is a
+# separate decision with a per-push cost; covering them here costs one release's wall clock.
 FLOORS=(
   "floor-mariadb-102:mariadb:10.2:13402:MariaDb"
   "floor-mysql-57:mysql:5.7:13457:MySQL"
@@ -67,9 +75,12 @@ FLOORS=(
   "band-mariadb-106:mariadb:10.6:13406:MariaDb"
   "band-mariadb-114:mariadb:11.4:13414:MariaDb"
   "band-mariadb-118:mariadb:11.8:13418:MariaDb"
+  "band-mariadb-12:mariadb:12:13412:MariaDb"
   "band-mariadb-latest:mariadb:latest:13498:MariaDb"
   "band-mysql-80:mysql:8.0:13480:MySQL"
   "band-mysql-84:mysql:8.4:13484:MySQL"
+  "band-mysql-9:mysql:9:13409:MySQL"
+  "band-mysql-26:mysql:26:13426:MySQL"
   "band-mysql-latest:mysql:latest:13489:MySQL"
   "band-postgres-13:postgres:13:15413:PostgreSQL"
   "band-postgres-14:postgres:14:15414:PostgreSQL"
