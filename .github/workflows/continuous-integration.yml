@@ -150,7 +150,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-ubuntu-18.04"},{"ss":"latest","image":"mcr.microsoft.com/mssql/server:latest"}]') || fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-ubuntu-18.04"},{"ss":"2019","image":"mcr.microsoft.com/mssql/server:2019-CU32-GDR10-ubuntu-20.04"},{"ss":"2022","image":"mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"},{"ss":"latest","image":"mcr.microsoft.com/mssql/server:latest"}]') }}
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"latest","image":"mcr.microsoft.com/mssql/server:latest"}]') || fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2019","image":"mcr.microsoft.com/mssql/server:2019-CU32-GDR11-ubuntu-20.04"},{"ss":"2022","image":"mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"},{"ss":"latest","image":"mcr.microsoft.com/mssql/server:latest"}]') }}
     permissions:
       contents: read
       checks: write
