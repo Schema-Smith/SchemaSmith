@@ -1787,7 +1787,19 @@ Data deliveries are the one exception to "one match wins": when a table declares
 
 ## .json-schemas Folder
 
-Your IDE can help you write correct JSON if you point it at the right schemas. The `.json-schemas/` directory at the package root contains JSON Schema definition files generated automatically by SchemaTongs **on the fly** from the live C# domain types -- no embedded files, no shipped artifacts, just a snapshot of the engine's exact current shape.
+Your IDE helps you write correct JSON without being configured to. The `.json-schemas/` directory at the package root contains JSON Schema definition files generated automatically by SchemaTongs **on the fly** from the live C# domain types -- no embedded files, no shipped artifacts, just a snapshot of the engine's exact current shape.
+
+Every package JSON opens with a `$schema` key naming its schema by relative path, which is what makes an editor pick it up with no `json.schemas` entry or equivalent:
+
+```json
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[dbo].[Orders]",
+```
+
+SchemaTongs writes it on extraction, and `--WriteSchemasOnly` adds it to a package extracted before v2.7.0. It is ignored at deploy time, and deleting it costs you nothing but editor validation — **but it comes back**: the next extraction or `--WriteSchemasOnly` against that package adds it again, because SchemaSmith cannot tell a key you removed on purpose from one that was never written. If you would rather map the schemas yourself, expect to remove it each time rather than once. A file whose schema is missing from `.json-schemas/` is never stamped at all, so a package that keeps only some of its schemas gets references only for those.
+
+**A package carrying the key will not load on SchemaSmith v2.6.0 or earlier**, which is worth knowing if the same package is deployed by more than one version during an upgrade.
 
 Each file carries a platform infix matching the package's platform -- `<platform>` is `sqlserver`, `postgresql`, `mysql`, or `mariadb`:
 

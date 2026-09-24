@@ -1,4 +1,5 @@
 {
+  "$schema": "../../.json-schemas/templates.mysql.schema",
   "Name": "Main",
   "DatabaseIdentificationScript": "SELECT schema_name FROM information_schema.schemata WHERE schema_name = '{{TargetDb}}'",
   "ScriptFolders": []

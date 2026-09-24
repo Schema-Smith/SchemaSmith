@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/events.mysql.schema",
   "Name": "archive_old_sessions",
   "ScheduleType": "EVERY",
   "Interval": "7 DAY",

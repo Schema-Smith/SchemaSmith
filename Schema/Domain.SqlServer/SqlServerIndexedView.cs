@@ -9,6 +9,12 @@ namespace Schema.Domain.SqlServer
 {
     public class SqlServerIndexedView : DynamicBase
     {
+        // See Product.SchemaRef. Root of its own file, so it carries the reference; the nested
+        // types on DynamicBase deliberately do not.
+        [SchemaProperty(Description = "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time.")]
+        [JsonProperty("$schema", Order = 0, NullValueHandling = NullValueHandling.Ignore)]
+        public string SchemaRef { get; set; }
+
         [SchemaProperty(Required = true)]
         [JsonProperty(Order = 1)]
         public string Name { get; set; } = "";

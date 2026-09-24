@@ -1,4 +1,5 @@
 {
+    "$schema": "../../.json-schemas/templates.postgresql.schema",
     "Name": "Bogus", 
     "DatabaseIdentificationScript": "",
     "VersionStampScript": "DO $$\nBEGIN\n  RAISE EXCEPTION 'BAD DICTIONARY';\nEND $$ LANGUAGE plpgsql;",

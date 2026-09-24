@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
   "Name": "[ShipmentEvent]",
   "Columns": [
     { "Name": "[ShipmentEventId]", "DataType": "INT", "ShouldApplyExpression": "", "OldName": "", "VariantName": "", "Collation": "", "DataMaskFunction": "", "EncryptionType": "NONE", "EncryptionKey": "", "EncryptionAlgorithm": "" },

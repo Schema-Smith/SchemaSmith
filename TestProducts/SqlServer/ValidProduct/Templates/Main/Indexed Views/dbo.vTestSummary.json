@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/indexedviews.sqlserver.schema",
   "Name": "[vTestSummary]",
   "Schema": "[dbo]",
   "Definition": "SELECT [Status], COUNT_BIG(*) AS StatusCount FROM [dbo].[TestTable] GROUP BY [Status]",

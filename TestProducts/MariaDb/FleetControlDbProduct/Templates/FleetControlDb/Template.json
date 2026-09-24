@@ -1,4 +1,5 @@
 {
+    "$schema": "../../.json-schemas/templates.mariadb.schema",
     "Name": "FleetControlDb",
     "DatabaseIdentificationScript": "SELECT db_name FROM fleet_registry",
     "IdentificationDatabase": "schemasmith_fleet_control_my",

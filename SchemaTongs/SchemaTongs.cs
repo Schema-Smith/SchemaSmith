@@ -187,7 +187,7 @@ public class SchemaTongs
         }
 
         if (modified)
-            JsonHelper.Write(templateFile, template);
+            WritePackageObject(templateFile, template, "templates");
     }
 
 
@@ -342,9 +342,20 @@ public class SchemaTongs
 
         RepositoryHelper.WriteSchemaFiles(_productPath, _platform, _progressLog.Warn);
 
+        // Product.json and Template.json are written during init, before the schemas above exist, and
+        // a later extraction does not rewrite them -- so they cannot pick up a $schema reference the
+        // way the object files do (WritePackageObject). Stamped here, once the schemas are on disk.
+        // Neither file carries variants, so this is outside the byte-for-byte promise that governs
+        // object files.
+        RepositoryHelper.StampSchemaRef(_productPath, Path.Combine(_productPath, "Product.json"),
+            "products", _platform, _progressLog.Warn);
+        RepositoryHelper.StampSchemaRef(_productPath, Path.Combine(_templatePath, "Template.json"),
+            "templates", _platform, _progressLog.Warn);
+
         CastDatabaseObjects(targetDb);
         CleanupResolvedSqulerrorFiles();
         ProcessOrphanedFiles();
+
         GenerateInvalidObjectCleanupScript();
         EmitUnqualifiedReferenceAudit();
         _stopwatch.Stop();
@@ -921,6 +932,35 @@ public class SchemaTongs
         file.WriteAllText(scriptPath, sb.ToString());
 
         _progressLog.Warn($"{_invalidScripts.Count} invalid script(s) detected. Cleanup script written to {scriptPath}");
+    }
+
+    /// <summary>
+    /// Writes one package object file, setting its <c>$schema</c> reference first.
+    /// </summary>
+    /// <remarks>
+    /// The reference is set on the OBJECT being serialized rather than stamped onto the folder
+    /// afterwards, and that distinction is the whole point: only a file this run actually writes can
+    /// gain one. Re-extraction folds the variant active against the source and must leave every other
+    /// file byte-for-byte identical -- an inactive variant describes a different target. A package-wide
+    /// pass cannot honour that, because nothing on disk distinguishes a file extraction declined to
+    /// rewrite from one it never saw; mtime cannot either, since a file written moments before the run
+    /// looks exactly like one written during it.
+    /// <para>
+    /// No reference when the schema for that kind is absent -- a dangling <c>$schema</c> reads as a
+    /// broken schema in an editor and is worse than none.
+    /// </para>
+    /// </remarks>
+    private void WritePackageObject<T>(string filePath, T obj, string schemaKind) where T : class
+    {
+        var schemaFile = Path.Combine(_productPath, ".json-schemas",
+            $"{schemaKind}.{_platform.ToCanonicalString().ToLower()}.schema");
+        if (obj != null && FileWrapper.GetFromFactory().Exists(schemaFile))
+        {
+            var property = obj.GetType().GetProperty("SchemaRef");
+            property?.SetValue(obj,
+                RepositoryHelper.BuildSchemaRef(_productPath, filePath, schemaKind, _platform));
+        }
+        JsonHelper.Write(filePath, obj);
     }
 
     private void ProcessOrphanedFiles()
@@ -2136,7 +2176,7 @@ SELECT s.name AS SchemaName, v.name AS ViewName
                     idx.FilterExpression = RewriteJsonExpression(idx.FilterExpression, relPath, $"Index.FilterExpression '{idx.Name}'");
             }
             _progressLog.Info($"    Casting {viewFile}");
-            JsonHelper.Write(viewFile, viewObj);
+            WritePackageObject(viewFile, viewObj, "indexedviews");
             _stats.IndexedViews++;
         }
     }
@@ -2321,7 +2361,7 @@ SELECT con.conname AS ""Name"",
                             ImportTableHelper.PreserveListOrder(tableObj, original, _objectOrder);
                 }
                 ScrubSchemaForTemplate(tableObj, tableFile);
-                JsonHelper.Write(tableFile, tableObj);
+                WritePackageObject(tableFile, tableObj, "tables");
                 _stats.Tables++;
             }
             catch (NpgsqlException ex)
@@ -2416,7 +2456,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
             var typeObj = JsonConvert.DeserializeObject<PostgreSqlDomainType>(typeJson);
             if (_isSchemaTemplate) typeObj.Schema = null;
             var file = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".json"));
-            JsonHelper.Write(file, typeObj);
+            WritePackageObject(file, typeObj, "domaintypes");
             _stats.DomainTypes++;
         }
     }
@@ -2478,7 +2518,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
             var typeObj = JsonConvert.DeserializeObject<PostgreSqlEnumType>(typeJson);
             if (_isSchemaTemplate) typeObj.Schema = null;
             var file = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".json"));
-            JsonHelper.Write(file, typeObj);
+            WritePackageObject(file, typeObj, "enumtypes");
             _stats.EnumTypes++;
         }
     }
@@ -2659,7 +2699,7 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
             var seqObj = JsonConvert.DeserializeObject<PostgreSqlSequence>(seqJson);
             if (_isSchemaTemplate) seqObj.Schema = null;
             var file = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".json"));
-            JsonHelper.Write(file, seqObj);
+            WritePackageObject(file, seqObj, "sequences");
             _stats.Sequences++;
         }
     }
@@ -2801,7 +2841,7 @@ SELECT mv.schemaname, mv.matviewname
                     idx.FilterExpression = RewriteJsonExpression(idx.FilterExpression, relPath, $"Index.FilterExpression '{idx.Name}'");
             }
             _progressLog.Info($"    Casting {viewFile}");
-            JsonHelper.Write(viewFile, viewObj);
+            WritePackageObject(viewFile, viewObj, "materializedviews");
             _stats.MaterializedViews++;
         }
     }
@@ -3021,7 +3061,7 @@ SELECT EVENT_NAME
 
             var eventObj = JsonConvert.DeserializeObject<MySqlEvent>(eventJson);
             var file = ResolveOutputPath(castPath, EncodeObjectFileName("", name, ".json"));
-            JsonHelper.Write(file, eventObj);
+            WritePackageObject(file, eventObj, "events");
             _stats.Events++;
         }
     }
@@ -3185,7 +3225,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                             ImportTableHelper.PreserveListOrder(tableObj, original, _objectOrder);
                     }
 
-                    JsonHelper.Write(filename, tableObj);
+                    WritePackageObject(filename, tableObj, "tables");
                     _stats.Tables++;
                 }
                 catch (MySqlException ex)
@@ -3358,7 +3398,7 @@ SELECT cc.name AS [Name],
                     // values on the in-memory table object before serialization (design §7.2), and rewrite
                     // source-schema-qualified refs inside expression-bearing JSON properties (design §7.3).
                     ScrubSchemaForTemplate(tableObj, filename);
-                    JsonHelper.Write(filename, tableObj);
+                    WritePackageObject(filename, tableObj, "tables");
                     _stats.Tables++;
                 }
                 catch (SqlException ex)

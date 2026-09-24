@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/materializedviews.postgresql.schema",
   "Name": "vstateprovincecountryregion",
   "Schema": "person",
   "Definition": " SELECT sp.stateprovinceid,\n    sp.stateprovincecode,\n    sp.isonlystateprovinceflag,\n    sp.name AS stateprovincename,\n    sp.territoryid,\n    cr.countryregioncode,\n    cr.name AS countryregionname\n   FROM (person.stateprovince sp\n     JOIN person.countryregion cr ON (((sp.countryregioncode)::text = (cr.countryregioncode)::text)));",

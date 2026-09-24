@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/enumtypes.postgresql.schema",
   "Schema": "public",
   "Name": "order_status",
   "Values": ["placed", "picked", "shipped", "delivered"]

@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
   "Name": "`Widget`",
   "Columns": [
     { "Name": "`Id`", "DataType": "int", "AutoIncrement": true },

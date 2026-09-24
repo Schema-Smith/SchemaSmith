@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
   "Name": "vendor_order",
   "Indexes": [
     {

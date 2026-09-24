@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.sqlserver.schema",
   "Name": "Cookbook",
   "ValidationScript": "SELECT CASE WHEN EXISTS (SELECT 1 FROM sys.databases WHERE name = 'cookbook_r14') THEN 1 ELSE 0 END",
   "TemplateOrder": [

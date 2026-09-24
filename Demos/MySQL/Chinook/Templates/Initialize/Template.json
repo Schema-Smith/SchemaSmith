@@ -1,4 +1,5 @@
 {
+  "$schema": "../../.json-schemas/templates.mysql.schema",
   "Name": "Initialize",
   "DatabaseIdentificationScript": "SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME = 'TestMain' AND NOT EXISTS (SELECT * FROM information_schema.schemata WHERE SCHEMA_NAME = '{{ChinookDb}}')",
   "ScriptFolders": [

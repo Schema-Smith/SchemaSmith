@@ -41,8 +41,10 @@ cd "$(dirname "$0")/.." || exit 1
 # SQL Server is NOT here: its bands need full-text install and semantic-DB provisioning, which
 # scripts/run-modern-band-sweep.sh already does for 2017/2022/2025. The two together cover the matrix.
 #
-# Versions mirror continuous-integration.yml's matrices; keep them in sync when CI's legs move. `latest`
-# is deliberately floating in both places -- it is the tripwire for an engine release breaking us.
+# Versions mirror continuous-integration.yml's matrices; keep them in sync when CI's legs move. Nothing
+# floats in either place -- see :64 below, and continuous-integration.yml's own "No test leg floats any
+# more". A floating band was the old tripwire for an engine release breaking us; the ceiling sweep is
+# what covers that now, deliberately, because a float makes every run a different test.
 set -u
 
 TEST_USER='TestUser'
@@ -71,10 +73,11 @@ FAILED=0
 # LOCAL COVERS MORE THAN CI, NEVER LESS. CI minutes are spent on every push, so its matrix is what we
 # can afford continuously; this sweep runs once per release and can afford the bands CI cannot. Three
 # of these have no CI leg at all and are here for that reason: mysql:9 and mysql:26 sit in the gap
-# between the 8.4 LTS leg and the floating latest, and mariadb:12 sits between 11.8 and 13. A floating
-# `latest` ROTATES -- the day MySQL 27 ships, nothing tests 26 any more -- so without these the middle
-# of a range we document as continuous is exactly where nobody looks. Adding a CI leg for them is a
-# separate decision with a per-push cost; covering them here costs one release's wall clock.
+# between the 8.4 LTS leg and the ceiling band, and mariadb:12 sits between 11.8 and 13. The ceiling
+# band only ever tests the TOP of the range, and assert_latest_is_covered() ratchets it upward as each
+# engine ships a major -- so without these the middle of a range we document as continuous is exactly
+# where nobody looks. Adding a CI leg for them is a separate decision with a per-push cost; covering
+# them here costs one release's wall clock.
 FLOORS=(
   "floor-mariadb-102:mariadb:10.2:13402:MariaDb"
   "floor-mysql-57:mysql:5.7:13457:MySQL"

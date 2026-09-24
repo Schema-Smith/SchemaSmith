@@ -1,4 +1,5 @@
 {
+    "$schema": ".json-schemas/products.mysql.schema",
     "Name": "InvalidServer",
     "ValidationScript": "SELECT 0",
     "TemplateOrder": [],

@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.mysql.schema",
   "Name": "OrdersService",
   "ValidationScript": "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = '{{TargetDb}}') THEN 1 ELSE 0 END",
   "TemplateOrder": ["Main"],

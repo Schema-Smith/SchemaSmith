@@ -18,6 +18,12 @@ namespace Schema.Domain
 {
     public class Template
     {
+        // See Product.SchemaRef for why this is a declared member rather than a deserializer
+        // exception: MissingMemberHandling.Error would otherwise reject the whole file.
+        [SchemaProperty(Description = "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time.")]
+        [JsonProperty("$schema", Order = 0, NullValueHandling = NullValueHandling.Ignore)]
+        public string SchemaRef { get; set; }
+
         [SchemaProperty(Required = true)]
         [JsonProperty(Order = 1)]
         public string Name { get; set; } = "";

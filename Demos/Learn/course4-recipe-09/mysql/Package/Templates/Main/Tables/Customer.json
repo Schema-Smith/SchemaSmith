@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
   "Name": "`Customer`",
   "Extensions": { "BusinessDomain": "Identity", "DataOwner": "identity-team", "Description": "Registered customers", "RetentionPolicy": "7y" },
   "Columns": [

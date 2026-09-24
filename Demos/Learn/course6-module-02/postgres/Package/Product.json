@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.postgresql.schema",
   "Name": "Shop",
   "MinimumVersion": "15",
   "TemplateOrder": [

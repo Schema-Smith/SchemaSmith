@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/domaintypes.postgresql.schema",
   "Schema": "public",
   "Name": "email_address",
   "DataType": "character varying(256)",

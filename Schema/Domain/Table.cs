@@ -13,6 +13,13 @@ namespace Schema.Domain
 {
     public class Table : DynamicBase
     {
+        // See Product.SchemaRef. Declared on Table rather than on DynamicBase deliberately: only a
+        // root-of-file object may carry "$schema", so a stray one nested inside a Column, Index,
+        // ForeignKey or CheckConstraint still fails loudly the way any other unknown key does.
+        [SchemaProperty(Description = "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time.")]
+        [JsonProperty("$schema", Order = 0, NullValueHandling = NullValueHandling.Ignore)]
+        public string SchemaRef { get; set; }
+
         [SchemaProperty(Required = true)]
         [JsonProperty(Order = 2)]
         public string Name { get; set; } = "";

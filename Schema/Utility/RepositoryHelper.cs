@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Schema.Domain;
@@ -330,7 +331,10 @@ public static class RepositoryHelper
     /// (e.g. CheckExpression, GenerationExpression). Reuses the canonical platform→subclass mapping
     /// in <see cref="PlatformDeserializer"/> rather than duplicating it.
     /// </summary>
-    private static Func<Type, Type> PlatformElementResolver(Platform platform) => t =>
+    // internal, like GetTypeForSchemaFile: the generated-schema tests have to drive the real resolver.
+    // A stub one returns null element types and NullReferences inside the generator, which reads as a
+    // product bug rather than a wrong test.
+    internal static Func<Type, Type> PlatformElementResolver(Platform platform) => t =>
         t == typeof(Column) ? PlatformDeserializer.GetColumnType(platform)
         : t == typeof(Schema.Domain.Index) ? PlatformDeserializer.GetIndexType(platform)
         : t == typeof(ForeignKey) ? PlatformDeserializer.GetForeignKeyType(platform)
@@ -393,6 +397,187 @@ public static class RepositoryHelper
         if (platform == Platform.PostgreSQL)
             files.Add($"sequences.{platformName}.schema");
         return files.ToArray();
+    }
+
+    /// <summary>
+    /// Maps a package object-type folder to the schema kind that validates what is inside it.
+    /// Returns null for a folder no generated schema covers, which is not an error: script folders
+    /// and anything a user adds alongside them simply get no <c>$schema</c>.
+    /// </summary>
+    private static string SchemaKindForFolder(string folderName) => folderName switch
+    {
+        "Tables" => "tables",
+        "Indexed Views" => "indexedviews",
+        "Materialized Views" => "materializedviews",
+        "Events" => "events",
+        "Domain Types" => "domaintypes",
+        "Enum Types" => "enumtypes",
+        "Sequences" => "sequences",
+        _ => null
+    };
+
+    /// <summary>
+    /// The <c>$schema</c> value for one package JSON file: the relative path from that file to the
+    /// package's generated schema for its kind.
+    /// </summary>
+    /// <remarks>
+    /// Always forward slashes. <see cref="Path.GetRelativePath"/> emits the platform separator, and a
+    /// Windows-authored package carrying <c>..\.json-schemas\tables.sqlserver.schema</c> resolves in
+    /// no editor on any OS — including on Windows, where VS Code wants a URI-style path. Getting this
+    /// wrong is silent: the key is present, looks right in a diff, and simply never validates.
+    /// </remarks>
+    public static string BuildSchemaRef(string productPath, string jsonFilePath, string schemaKind, Platform platform)
+    {
+        var schemaFile = Path.Combine(productPath, ".json-schemas",
+            $"{schemaKind}.{platform.ToCanonicalString().ToLower()}.schema");
+        var fromDirectory = Path.GetDirectoryName(Path.GetFullPath(jsonFilePath)) ?? productPath;
+        return Path.GetRelativePath(fromDirectory, Path.GetFullPath(schemaFile)).Replace('\\', '/');
+    }
+
+    /// <summary>
+    /// Writes a <c>$schema</c> reference into every JSON file in the package that a generated schema
+    /// covers, so editors and third-party validators pick the schema up with no per-user setup.
+    /// Idempotent: a file already carrying the right reference is left untouched.
+    /// </summary>
+    /// <remarks>
+    /// No-ops when the package has no <c>.json-schemas</c> folder — a reference to a file that was
+    /// never generated would validate nothing and show the user a broken path.
+    /// <para>
+    /// Edits the file as TEXT rather than deserializing and re-serializing. A typed round-trip would
+    /// rewrite all 3,000-plus shipped package files through the current serializer, and every setting
+    /// that has shifted since a file was authored (DefaultValueHandling dropping a now-default value,
+    /// property order, an <c>Extensions</c> fragment's inner formatting) would land as an unreviewable
+    /// diff wrapped around the one line being added.
+    /// </para>
+    /// </remarks>
+    /// <summary>
+    /// Adds the <c>$schema</c> reference to ONE package file. Returns true if the file changed.
+    /// </summary>
+    /// <remarks>
+    /// For the two package-level files, <c>Product.json</c> and <c>Template.json</c>, which are
+    /// written during init -- before <c>.json-schemas</c> exists -- and are not rewritten by a later
+    /// extraction. Neither carries variants, so stamping them does not touch the byte-for-byte
+    /// promise that applies to object files.
+    /// </remarks>
+    public static bool StampSchemaRef(string productPath, string jsonFilePath, string schemaKind,
+        Platform platform, Action<string> warn = null)
+    {
+        var file = FileWrapper.GetFromFactory();
+        var schemaFile = Path.Combine(productPath, ".json-schemas",
+            $"{schemaKind}.{platform.ToCanonicalString().ToLower()}.schema");
+        if (!file.Exists(jsonFilePath) || !file.Exists(schemaFile)) return false;
+
+        try
+        {
+            var original = file.ReadAllText(jsonFilePath);
+            var updated = WithSchemaRef(original, BuildSchemaRef(productPath, jsonFilePath, schemaKind, platform));
+            if (updated == null || updated == original) return false;
+            file.WriteAllText(jsonFilePath, updated);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            (warn ?? (m => LogFactory.GetLogger(nameof(RepositoryHelper)).Warn(m)))(
+                $"'{jsonFilePath}' could not be stamped with a $schema reference ({ex.Message}). "
+                + "The file is unchanged; deploy behavior is unaffected.");
+            return false;
+        }
+    }
+
+    public static int StampSchemaRefs(string productPath, Platform platform, Action<string> warn = null)
+    {
+        var file = FileWrapper.GetFromFactory();
+        var directory = DirectoryWrapper.GetFromFactory();
+        if (!directory.Exists(Path.Combine(productPath, ".json-schemas"))) return 0;
+        warn ??= message => LogFactory.GetLogger(nameof(RepositoryHelper)).Warn(message);
+
+        var stamped = 0;
+        foreach (var (jsonFile, kind) in EnumerateSchemaCoveredFiles(productPath, directory))
+        {
+            // Per FILE, not per folder. A package can hold some of its schemas and not others, and a
+            // reference to the one that is missing is worse than no reference: editors report it as a
+            // broken schema rather than silently skipping, and nothing in the deploy path would ever
+            // surface it.
+            if (!file.Exists(Path.Combine(productPath, ".json-schemas",
+                    $"{kind}.{platform.ToCanonicalString().ToLower()}.schema")))
+                continue;
+
+            var reference = BuildSchemaRef(productPath, jsonFile, kind, platform);
+            try
+            {
+                var original = file.ReadAllText(jsonFile);
+                var updated = WithSchemaRef(original, reference);
+                if (updated == null || updated == original) continue;
+                file.WriteAllText(jsonFile, updated);
+                stamped++;
+            }
+            catch (Exception ex)
+            {
+                // One unparseable file must not abort the package: the rest are still correct, and the
+                // name is what the user needs in order to go look at it.
+                warn($"'{jsonFile}' could not be stamped with a $schema reference ({ex.Message}). "
+                     + "The file is unchanged; deploy behavior is unaffected.");
+            }
+        }
+        return stamped;
+    }
+
+    private static IEnumerable<(string Path, string Kind)> EnumerateSchemaCoveredFiles(string productPath, IDirectory directory)
+    {
+        var productFile = Path.Combine(productPath, "Product.json");
+        if (FileWrapper.GetFromFactory().Exists(productFile))
+            yield return (productFile, "products");
+
+        var templatesRoot = Path.Combine(productPath, "Templates");
+        if (!directory.Exists(templatesRoot)) yield break;
+
+        foreach (var templateDirectory in directory.GetDirectories(templatesRoot, "*", SearchOption.TopDirectoryOnly))
+        {
+            var templateFile = Path.Combine(templateDirectory, "Template.json");
+            if (FileWrapper.GetFromFactory().Exists(templateFile))
+                yield return (templateFile, "templates");
+
+            foreach (var objectDirectory in directory.GetDirectories(templateDirectory, "*", SearchOption.TopDirectoryOnly))
+            {
+                var kind = SchemaKindForFolder(Path.GetFileName(objectDirectory));
+                if (kind == null) continue;
+
+                // Recursive: tables are commonly foldered (Tables/Core, Tables/Reference) and the
+                // schema still covers them at any depth.
+                foreach (var jsonFile in directory.GetFiles(objectDirectory, "*.json", SearchOption.AllDirectories))
+                    yield return (jsonFile, kind);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns <paramref name="json"/> with <c>$schema</c> present as its first property, or null if
+    /// the text is not a JSON object this can safely edit.
+    /// </summary>
+    private static string WithSchemaRef(string json, string reference)
+    {
+        // Parse purely as a guard. The result is thrown away and the edit is textual, but a file that
+        // does not parse is a file this must not rewrite.
+        if (JToken.Parse(json) is not JObject parsed) return null;
+
+        var encoded = JsonConvert.ToString(reference);
+        if (parsed["$schema"] is not null)
+        {
+            var current = parsed["$schema"].Type == JTokenType.String ? parsed["$schema"].Value<string>() : null;
+            if (current == reference) return json;
+            var existing = new Regex("\"\\$schema\"\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\"|null)");
+            return existing.IsMatch(json) ? existing.Replace(json, $"\"$schema\": {encoded}", 1) : null;
+        }
+
+        // Insert as the first property, matching the indentation the next line already uses so the
+        // result is byte-identical to the original but for the added line.
+        var opening = new Regex("^(\\s*\\{)(\\r?\\n)([ \\t]*)");
+        var match = opening.Match(json);
+        if (!match.Success) return null;
+        var indent = match.Groups[3].Value;
+        var newline = match.Groups[2].Value;
+        return opening.Replace(json,
+            $"{match.Groups[1].Value}{newline}{indent}\"$schema\": {encoded},{newline}{indent}", 1);
     }
 
     internal static string GetValidationScript(string templateName, Platform platform) => platform.GetBasePlatform() switch

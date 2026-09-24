@@ -29,12 +29,21 @@ while IFS= read -r d; do
   case "$pkg" in
     */Fixtures/Validate/StaleSchema/*) continue;;
   esac
+  # Also adds each package file's $schema reference. The two skips above are what protects the
+  # fixtures whose state IS the thing under test; every other package -- fixtures included -- should
+  # look like a real package, and a real package carries the reference.
   if SmithySettings_Product__Path="$pkg" dotnet "$TONGS" --WriteSchemasOnly >/dev/null 2>&1; then
     # PartialCommittedSchemas IS regenerated -- a stale schema there fires SS-STALE-001, which
     # short-circuits the JSON-schema pass its test asserts on -- but --WriteSchemasOnly writes EVERY
     # type, filling the one-type gap that is the fixture's actual subject. Re-open the gap after.
+    # The $schema reference has to come out with it. --WriteSchemasOnly writes the tables schema and
+    # then stamps against it, so by the time the gap is re-opened the table JSON already points at
+    # the file about to be deleted -- a dangling reference an editor reports as a broken schema.
     case "$pkg" in
-      */Fixtures/Validate/PartialCommittedSchemas/*) rm -f "$pkg"/.json-schemas/tables.*.schema;;
+      */Fixtures/Validate/PartialCommittedSchemas/*)
+        rm -f "$pkg"/.json-schemas/tables.*.schema
+        find "$pkg" -path "*/Tables/*.json" -type f -exec sed -i '/"\$schema"[[:space:]]*:/d' {} +
+        ;;
     esac
     ok=$((ok+1))
   else

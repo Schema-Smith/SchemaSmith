@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.mysql.schema",
   "Name": "IdentityService",
   "ValidationScript": "",
   "MinimumVersion": "8.0",

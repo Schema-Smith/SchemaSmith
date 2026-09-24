@@ -52,9 +52,13 @@ namespace Schema.UnitTests.Domain
         // "DataDeliveries" leads because it carries no Order at all -- Newtonsoft sorts unordered
         // properties ahead of ordered ones. "Extensions" trails for the same reason from DynamicBase.
         // Neither is an accident to fix; both are pinned so they cannot drift unnoticed.
+        //
+        // "$schema" sits second here but FIRST in the emitted JSON: DataDeliveries is [JsonIgnore]d,
+        // so it is in this reflected list and in no file. $schema leads every package file it is
+        // stamped into, which is the convention editors expect.
         [Test]
         public void Table_SerializedShape_IsPinned() => AssertOrder<Table>(
-            "DataDeliveries", "Name", "Columns", "Indexes", "ForeignKeys", "CheckConstraints",
+            "DataDeliveries", "$schema", "Name", "Columns", "Indexes", "ForeignKeys", "CheckConstraints",
             "ShouldApplyExpression", "DataDelivery", "VariantName", "DropColumnsRemovedFromProduct",
             "DropForeignKeysRemovedFromProduct", "DropCheckConstraintsRemovedFromProduct",
             "DropExcludeConstraintsRemovedFromProduct", "DropStatisticsRemovedFromProduct",

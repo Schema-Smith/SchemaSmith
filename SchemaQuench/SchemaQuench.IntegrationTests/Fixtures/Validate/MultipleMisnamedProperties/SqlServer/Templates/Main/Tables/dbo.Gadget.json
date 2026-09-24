@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
   "Naem": "[Gadget]",
   "Columns": [
     { "Name": "[Id]", "DataType": "INT" }

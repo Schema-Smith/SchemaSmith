@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.mysql.schema",
   "Name": "LearnConnect",
   "ValidationScript": "SELECT 1",
   "TemplateOrder": ["Main"],

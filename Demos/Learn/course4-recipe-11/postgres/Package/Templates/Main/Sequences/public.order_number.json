@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/sequences.postgresql.schema",
   "Schema": "public",
   "Name": "order_number",
   "DataType": "bigint",

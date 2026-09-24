@@ -1,4 +1,5 @@
 {
+  "$schema": "../../.json-schemas/templates.sqlserver.schema",
   "Name": "Main",
   "DatabaseIdentificationScript": "SELECT [Name] FROM sys.databases WHERE [Name] LIKE 'shop[_]patch[_]%'",
   "ScriptFolders": [

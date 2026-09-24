@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
   "Name": "`DataCatalog`",
   "Columns": [
     { "Name": "`TableName`", "DataType": "VARCHAR(256)" },

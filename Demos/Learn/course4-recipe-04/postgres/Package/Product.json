@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.postgresql.schema",
   "Name": "CookbookAssets",
   "ValidationScript": "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_database WHERE datname = 'cookbook_r4') THEN 1 ELSE 0 END",
   "TemplateOrder": ["Main"],

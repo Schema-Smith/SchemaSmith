@@ -1,4 +1,5 @@
 {
+  "$schema": "../../.json-schemas/templates.sqlserver.schema",
   "Name": "Main",
   "DatabaseIdentificationScript": "SELECT [Name] FROM master.sys.databases WHERE [Name] LIKE 'shop_tenant_%'",
   "BaselineValidationScript": "SELECT CAST(CASE WHEN COALESCE((SELECT MAX(Version) FROM dbo.SchemaVersion WHERE Product = 'Shop'), 0) <= 1 THEN 1 ELSE 0 END AS BIT)",

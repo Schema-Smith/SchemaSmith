@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.sqlserver.schema",
   "Name": "OrdersRef",
   "MinimumVersion": "2016",
   "ValidationScript": "SELECT 1",

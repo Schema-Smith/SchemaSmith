@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.mariadb.schema",
   "Name": "Northwind",
   "ValidationScript": "SELECT EXISTS(SELECT * FROM information_schema.schemata WHERE SCHEMA_NAME IN ('{{NorthwindDb}}', 'TestMain'))",
   "TemplateOrder": [

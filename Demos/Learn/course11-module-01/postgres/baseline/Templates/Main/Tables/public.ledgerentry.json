@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
   "Schema": "public",
   "Name": "ledgerentry",
   "Columns": [

@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
   "Name": "[ProductModelProductDescriptionCulture]",
   "Columns": [
     {

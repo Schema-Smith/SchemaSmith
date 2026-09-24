@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
   "Name": "SalesOrder",
   "Columns": [
     { "Name": "OrderId", "DataType": "INT", "AutoIncrement": true },

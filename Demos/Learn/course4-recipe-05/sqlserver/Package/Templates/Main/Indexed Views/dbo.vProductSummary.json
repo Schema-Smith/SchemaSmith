@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/indexedviews.sqlserver.schema",
   "Name": "[vProductSummary]",
   "Schema": "[dbo]",
   "Definition": "SELECT [Name], COUNT_BIG(*) AS ProductCount, SUM([Price]) AS TotalPrice FROM [dbo].[Product] GROUP BY [Name]",

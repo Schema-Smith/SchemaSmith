@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.sqlserver.schema",
   "Name": "Shop",
   "ValidationScript": "SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.databases WHERE name = '{{DependencyDb}}') AND CAST(SERVERPROPERTY('ProductMajorVersion') AS INT) >= 14 THEN 1 ELSE 0 END AS BIT)",
   "TemplateOrder": [

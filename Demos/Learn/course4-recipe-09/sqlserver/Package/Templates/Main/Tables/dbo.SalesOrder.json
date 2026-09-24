@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
   "Schema": "dbo",
   "Name": "SalesOrder",
   "Extensions": { "BusinessDomain": "Sales", "DataOwner": "revenue-team", "Description": "Customer orders", "RetentionPolicy": "10y" },

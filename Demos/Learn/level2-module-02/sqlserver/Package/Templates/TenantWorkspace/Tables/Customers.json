@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
   "Name": "[Customers]",
   "Columns": [
     { "Name": "[CustomerID]", "DataType": "INT IDENTITY(1,1)" },

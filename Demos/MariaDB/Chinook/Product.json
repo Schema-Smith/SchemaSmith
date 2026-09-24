@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.mariadb.schema",
   "Name": "Chinook",
   "ValidationScript": "SELECT EXISTS(SELECT * FROM information_schema.schemata WHERE SCHEMA_NAME IN ('{{ChinookDb}}', 'TestMain'))",
   "TemplateOrder": [

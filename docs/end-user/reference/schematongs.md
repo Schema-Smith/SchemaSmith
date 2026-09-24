@@ -43,7 +43,7 @@ SchemaTongs connects to the source database, reads every enabled object type, an
 
 ### Schema-only mode
 
-If you just need to regenerate the `.json-schemas/*.schema` validation files for an existing product -- without connecting to a database -- use the `--WriteSchemasOnly` switch. The product path comes from your `SchemaTongs.settings.json` (or an environment variable override), not from the command line:
+If you just need to regenerate the `.json-schemas/*.schema` validation files for an existing product -- without connecting to a database -- use the `--WriteSchemasOnly` switch. It also adds the `$schema` reference to each package file that lacks one, which is how a package extracted before v2.7.0 gains editor validation without being re-extracted. The product path comes from your `SchemaTongs.settings.json` (or an environment variable override), not from the command line:
 
 ```bash
 # Run from the directory that contains SchemaTongs.settings.json with Product:Path already set
@@ -453,8 +453,9 @@ The first extraction is where your schema package is born. When SchemaTongs runs
 4. Generates `Template.json` with a `DatabaseIdentificationScript` targeting the source database.
 5. Creates all standard script folders for the active platform (see [Default Folders](schema-packages.md#default-folders)).
 6. Creates a `.json-schemas/` directory with JSON Schema validation files generated **on the fly** from the live engine types.
+7. Writes a `$schema` reference into each package JSON, pointing at the matching file from step 6, so editors validate the package with no per-user configuration.
 
-On subsequent runs against an existing package, SchemaTongs overwrites object scripts and table definitions with the current database state. It does not modify `Product.json` or `Template.json` -- if you change `Platform`, `Name`, or `TemplateOrder` after the first extraction, those edits stick.
+On subsequent runs against an existing package, SchemaTongs overwrites object scripts and table definitions with the current database state. It does not modify the content of `Product.json` or `Template.json` -- if you change `Platform`, `Name`, or `TemplateOrder` after the first extraction, those edits stick. The one exception is the `$schema` reference from step 7: it is added if absent and otherwise left alone, which means **a reference you deleted on purpose is written again on the next run** -- there is no record distinguishing it from one that was never there.
 
 ### Helper procedures
 
