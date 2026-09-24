@@ -140,6 +140,36 @@ public static class SchemaGenerator
         return schema;
     }
 
+
+    /// <summary>
+    /// The regex for a string-converted enum, ANCHORED and CASE-FOLDED so the schema accepts exactly what
+    /// the product accepts -- no more, no less.
+    /// <para>
+    /// Both halves are corrections, and they fail in opposite directions. UNANCHORED, JSON Schema's
+    /// `pattern` is a substring match, so <c>XPrimaryY</c> satisfied <c>Primary|Secondary|Both</c>. Our own
+    /// loader rejects that value (SS-LOAD-001), which is why it was invisible here -- but these schema files
+    /// are also consumed by Ajv in CI and by editors, and NEITHER has our loader. For them the bad value
+    /// passed lint and surfaced at deploy time instead.
+    /// </para>
+    /// <para>
+    /// CASE-FOLDED because <c>StringEnumConverter</c> reads case-insensitively, so the product accepts
+    /// <c>primary</c> and <c>PRIMARY</c> while the old pattern rejected both -- the linter contradicting the
+    /// product, which is the same defect this method's enum handling was already fixed for once. ECMA-262,
+    /// the flavour JSON Schema mandates, has no inline <c>(?i)</c> flag, so the folding has to be spelled out
+    /// per character. The result is unreadable and that is fine: it is a generated artifact, and being wrong
+    /// in a file people skim costs more than being ugly in one they do not.
+    /// </para>
+    /// </summary>
+    private static string EnumPattern(Type type) =>
+        "^(?:" + string.Join("|", Enum.GetNames(type).Select(CaseInsensitiveLiteral)) + ")$";
+
+    /// <summary>Spells a literal as per-character classes, the only way to express case-insensitivity in
+    /// ECMA-262 without an inline flag. Non-letters pass through escaped.</summary>
+    private static string CaseInsensitiveLiteral(string name) =>
+        string.Concat(name.Select(c =>
+            char.IsLetter(c) ? $"[{char.ToUpperInvariant(c)}{char.ToLowerInvariant(c)}]"
+                             : System.Text.RegularExpressions.Regex.Escape(c.ToString())));
+
     private static JObject MapType(Type type, Func<Type, Type> elementTypeResolver, Platform? platform, Type propertyConverter = null)
     {
         type = Nullable.GetUnderlyingType(type) ?? type;
@@ -159,8 +189,7 @@ public static class SchemaGenerator
             if (type.GetCustomAttribute<JsonConverterAttribute>()?.ConverterType == typeof(Newtonsoft.Json.Converters.StringEnumConverter)
                 || propertyConverter == typeof(Newtonsoft.Json.Converters.StringEnumConverter))
             {
-                var values = string.Join("|", Enum.GetNames(type));
-                return new JObject { ["type"] = "string", ["pattern"] = values };
+                return new JObject { ["type"] = "string", ["pattern"] = EnumPattern(type) };
             }
             return new JObject { ["type"] = "integer" };
         }

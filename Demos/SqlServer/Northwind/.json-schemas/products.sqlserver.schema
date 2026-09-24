@@ -27,15 +27,15 @@
           },
           "ServerToQuench": {
             "type": "string",
-            "pattern": "Primary|Secondary|Both"
+            "pattern": "^(?:[Pp][Rr][Ii][Mm][Aa][Rr][Yy]|[Ss][Ee][Cc][Oo][Nn][Dd][Aa][Rr][Yy]|[Bb][Oo][Tt][Hh])$"
           },
           "QuenchSlot": {
             "type": "string",
-            "pattern": "Before|After|None"
+            "pattern": "^(?:[Bb][Ee][Ff][Oo][Rr][Ee]|[Aa][Ff][Tt][Ee][Rr]|[Nn][Oo][Nn][Ee])$"
           },
           "ObjectType": {
             "type": "string",
-            "pattern": "None|Views|Functions|Procedures|Triggers|Schemas|DataTypes|FullTextCatalogs|FullTextStopLists|XMLSchemaCollections|DDLTriggers|IndexedViews|Synonyms|SchemaBoundViews|SchemaBoundFunctions|DomainTypes|EnumTypes|CompositeTypes|TriggerFunctions|WindowFunctions|Aggregates|Sequences|Rules|MaterializedViews|Collations|Publications|Events"
+            "pattern": "^(?:[Nn][Oo][Nn][Ee]|[Vv][Ii][Ee][Ww][Ss]|[Ff][Uu][Nn][Cc][Tt][Ii][Oo][Nn][Ss]|[Pp][Rr][Oo][Cc][Ee][Dd][Uu][Rr][Ee][Ss]|[Tt][Rr][Ii][Gg][Gg][Ee][Rr][Ss]|[Ss][Cc][Hh][Ee][Mm][Aa][Ss]|[Dd][Aa][Tt][Aa][Tt][Yy][Pp][Ee][Ss]|[Ff][Uu][Ll][Ll][Tt][Ee][Xx][Tt][Cc][Aa][Tt][Aa][Ll][Oo][Gg][Ss]|[Ff][Uu][Ll][Ll][Tt][Ee][Xx][Tt][Ss][Tt][Oo][Pp][Ll][Ii][Ss][Tt][Ss]|[Xx][Mm][Ll][Ss][Cc][Hh][Ee][Mm][Aa][Cc][Oo][Ll][Ll][Ee][Cc][Tt][Ii][Oo][Nn][Ss]|[Dd][Dd][Ll][Tt][Rr][Ii][Gg][Gg][Ee][Rr][Ss]|[Ii][Nn][Dd][Ee][Xx][Ee][Dd][Vv][Ii][Ee][Ww][Ss]|[Ss][Yy][Nn][Oo][Nn][Yy][Mm][Ss]|[Ss][Cc][Hh][Ee][Mm][Aa][Bb][Oo][Uu][Nn][Dd][Vv][Ii][Ee][Ww][Ss]|[Ss][Cc][Hh][Ee][Mm][Aa][Bb][Oo][Uu][Nn][Dd][Ff][Uu][Nn][Cc][Tt][Ii][Oo][Nn][Ss]|[Dd][Oo][Mm][Aa][Ii][Nn][Tt][Yy][Pp][Ee][Ss]|[Ee][Nn][Uu][Mm][Tt][Yy][Pp][Ee][Ss]|[Cc][Oo][Mm][Pp][Oo][Ss][Ii][Tt][Ee][Tt][Yy][Pp][Ee][Ss]|[Tt][Rr][Ii][Gg][Gg][Ee][Rr][Ff][Uu][Nn][Cc][Tt][Ii][Oo][Nn][Ss]|[Ww][Ii][Nn][Dd][Oo][Ww][Ff][Uu][Nn][Cc][Tt][Ii][Oo][Nn][Ss]|[Aa][Gg][Gg][Rr][Ee][Gg][Aa][Tt][Ee][Ss]|[Ss][Ee][Qq][Uu][Ee][Nn][Cc][Ee][Ss]|[Rr][Uu][Ll][Ee][Ss]|[Mm][Aa][Tt][Ee][Rr][Ii][Aa][Ll][Ii][Zz][Ee][Dd][Vv][Ii][Ee][Ww][Ss]|[Cc][Oo][Ll][Ll][Aa][Tt][Ii][Oo][Nn][Ss]|[Pp][Uu][Bb][Ll][Ii][Cc][Aa][Tt][Ii][Oo][Nn][Ss]|[Ee][Vv][Ee][Nn][Tt][Ss])$"
           },
           "ShouldApplyExpression": {
             "type": "string",
@@ -68,14 +68,14 @@
     },
     "Platform": {
       "type": "string",
-      "pattern": "Unknown|PostgreSQL|SqlServer|MySQL|MariaDb"
+      "pattern": "^(?:[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Pp][Oo][Ss][Tt][Gg][Rr][Ee][Ss][Qq][Ll]|[Ss][Qq][Ll][Ss][Ee][Rr][Vv][Ee][Rr]|[Mm][Yy][Ss][Qq][Ll]|[Mm][Aa][Rr][Ii][Aa][Dd][Bb])$"
     },
     "MinimumVersion": {
       "type": "string"
     },
     "CheckConstraintStyle": {
       "type": "string",
-      "pattern": "ColumnLevel|TableLevel"
+      "pattern": "^(?:[Cc][Oo][Ll][Uu][Mm][Nn][Ll][Ee][Vv][Ee][Ll]|[Tt][Aa][Bb][Ll][Ee][Ll][Ee][Vv][Ee][Ll])$"
     },
     "DropTablesRemovedFromProduct": {
       "type": "boolean"
