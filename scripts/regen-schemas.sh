@@ -23,8 +23,13 @@ while IFS= read -r d; do
   # must STAY stale (it is what SS-STALE-001 detects) and PartialCommittedSchemas must keep ONE
   # type's schema missing (--WriteSchemasOnly writes every type and would fill the gap).
   # Every other Validate fixture MUST be regenerated, including the Misnamed* ones -- their defect
-  # is a bad property in the package JSON, not a stale schema, and SS-STALE-001 short-circuits the
-  # JSON-schema pass, so a stale schema there masks the very finding the test asserts.
+  # is a bad property in the package JSON, not a stale schema, and a fixture carrying BOTH reports
+  # two findings where its test asserts one.
+  #
+  # This used to claim SS-STALE-001 "short-circuits the JSON-schema pass". It does not, and both the
+  # code and the user docs say so: JsonSchemaCheck validates a stale type in Pass 2 anyway, against
+  # the merged schema, because a stale file is out of date rather than meaningless. Regenerating
+  # these fixtures was still the right thing; the reason given for it was wrong.
   # StaleSchema must STAY stale -- its staleness is what SS-STALE-001 detects.
   case "$pkg" in
     */Fixtures/Validate/StaleSchema/*) continue;;
@@ -33,9 +38,9 @@ while IFS= read -r d; do
   # fixtures whose state IS the thing under test; every other package -- fixtures included -- should
   # look like a real package, and a real package carries the reference.
   if SmithySettings_Product__Path="$pkg" dotnet "$TONGS" --WriteSchemasOnly >/dev/null 2>&1; then
-    # PartialCommittedSchemas IS regenerated -- a stale schema there fires SS-STALE-001, which
-    # short-circuits the JSON-schema pass its test asserts on -- but --WriteSchemasOnly writes EVERY
-    # type, filling the one-type gap that is the fixture's actual subject. Re-open the gap after.
+    # PartialCommittedSchemas IS regenerated -- a stale schema there would fire SS-STALE-001 on top
+    # of the finding its test asserts -- but --WriteSchemasOnly writes EVERY type, filling the
+    # one-type gap that is the fixture's actual subject. Re-open the gap after.
     # The $schema reference has to come out with it. --WriteSchemasOnly writes the tables schema and
     # then stamps against it, so by the time the gap is re-opened the table JSON already points at
     # the file about to be deleted -- a dangling reference an editor reports as a broken schema.
