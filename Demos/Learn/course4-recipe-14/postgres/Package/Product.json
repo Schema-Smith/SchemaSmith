@@ -5,9 +5,7 @@
   "TemplateOrder": [
     "Main"
   ],
-  "ScriptTokens": {
-    "MainDb": "cookbook_r14"
-  },
+  "ScriptTokens": {},
   "ScriptFolders": [],
   "AfterBranchNameMask": "",
   "Platform": "PostgreSQL"
