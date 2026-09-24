@@ -80,7 +80,17 @@ public class DataTongs
         var disableTriggers = config[SettingsKeys.ShouldCast.DisableTriggers]?.ToLower() == "true";
         var tokenizeScripts = config[SettingsKeys.ShouldCast.TokenizeScripts]?.ToLower() != "false";
         var mergeUpdate = config[SettingsKeys.ShouldCast.MergeUpdate]?.ToLower() != "false";
-        var mergeDelete = config[SettingsKeys.ShouldCast.MergeDelete]?.ToLower() != "false";
+        // OPT-IN, unlike its siblings above, because this is the one flag in the family whose "on" state
+        // DESTROYS DATA: it emits the delete branch, which removes target rows the extracted source does
+        // not contain. Every other ShouldCast flag here defaults on harmlessly, and `!= "false"` was
+        // copied across all of them -- so an ABSENT MergeDelete derived Insert/Update/Delete, and
+        // deleting the key was not the same as setting it false. The shipped settings file sets it
+        // false explicitly, which is why no test and no sample ever exercised the real default.
+        //
+        // The sibling that expresses the same idea already defaults conservatively: ShouldCast:MergeType
+        // is "Insert/Update". A derived default that is MORE destructive than the explicit one it stands
+        // in for is the wrong way round.
+        var mergeDelete = config[SettingsKeys.ShouldCast.MergeDelete]?.ToLower() == "true";
 
         // PostgreSQL-specific options
         var disableRules = config[SettingsKeys.ShouldCast.DisableRules]?.ToLower() == "true";

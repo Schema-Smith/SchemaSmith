@@ -103,7 +103,7 @@ The typical placement inside a schema package is `ScriptPath` pointing at `Templ
 | `ShouldCast:OutputContentFiles` | bool | `true` | Write raw data to sibling `.tabledata` content files. Set to `false` to skip writing content files (and, transitively, to skip `ConfigureDataDelivery` since the configurator needs a content file path to record). |
 | `ShouldCast:DisableTriggers` | bool | `false` | Wraps the generated script with platform-appropriate trigger disable/enable. |
 | `ShouldCast:MergeUpdate` | bool | `true` | Includes the update branch (matched rows whose data has changed). |
-| `ShouldCast:MergeDelete` | bool | `true` | Includes the delete branch (target rows missing from the source). On all four platforms: SQL Server / PostgreSQL emit `WHEN NOT MATCHED BY SOURCE THEN DELETE` inside the `MERGE`; MySQL and MariaDB emit an `INSERT ... ON DUPLICATE KEY UPDATE` followed by a separate `DELETE WHERE NOT EXISTS` step (because they have no `MERGE`). |
+| `ShouldCast:MergeDelete` | bool | `false` | **Opt-in, because this branch deletes data.** Includes the delete branch (target rows missing from the source). On all four platforms: SQL Server / PostgreSQL emit `WHEN NOT MATCHED BY SOURCE THEN DELETE` inside the `MERGE`; MySQL and MariaDB emit an `INSERT ... ON DUPLICATE KEY UPDATE` followed by a separate `DELETE WHERE NOT EXISTS` step (because they have no `MERGE`). |
 | `ShouldCast:MergeType` | string | `Insert/Update` | Default `DataDelivery:MergeType` for tables that don't set it explicitly. Values: `None`, `Insert`, `Insert/Update`, `Insert/Update/Delete`. Used when writing `DataDelivery` blocks via `--ConfigureDataDelivery`. |
 | `ShouldCast:ConfigureDataDelivery` | bool | `false` | After extraction, write a `DataDelivery` block into each matching table's JSON file. See [--ConfigureDataDelivery](#--configuredatadelivery). |
 | `ShouldCast:TokenizeScripts` | bool | `true` | **All source engines.** Embeds each table's extracted row data in the merge script as a `{{<table>.tabledata}}` content token instead of inline JSON/XML text, matching SchemaTongs' tokenization behavior. DataTongs wires the matching `ScriptTokens` entry automatically -- see [Content-file tokenization](#tokenizescripts). Set to `false` to inline the literal row data in generated scripts instead. |
@@ -452,7 +452,13 @@ When a table's config doesn't set `MergeType` explicitly, the default is derived
 |:---:|:---:|---|
 | `true` | `true` | `Insert/Update/Delete` |
 | `true` | `false` | `Insert/Update` |
-| `false` | any | `Insert` |
+| `false` | `true` | `Insert/Update/Delete` |
+| `false` | `false` | `Insert` |
+
+> **`MergeDelete` is tested first, so it is not subordinate to `MergeUpdate`.** This table used to read
+> "`false` | any | `Insert`", which was wrong in the destructive direction: setting `MergeUpdate=false`
+> to be conservative does NOT suppress the delete branch. Turn deletes off with `MergeDelete`, or set the
+> table's `MergeType` explicitly -- a per-table `MergeType` always wins over the derived default.
 
 A per-table `MergeType` on the `Tables[]` entry always wins over the derived default.
 
