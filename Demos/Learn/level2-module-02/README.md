@@ -91,7 +91,7 @@ schemaquench --ConfigFile:deploy.settings.json
 
 ```
 Quenching Template: Shared
-[localhost,11433].[learn] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
+Template 'Shared': 1 unit - db: DatabaseIdentificationScript; schema: (regular template)
 [localhost,11433].[learn]         Adding new table [dbo].[Tenants]
 [localhost,11433].[learn] Successfully Quenched
 ```
@@ -101,9 +101,7 @@ Then `TenantWorkspace` discovers the three active tenants and dispatches **one w
 
 ```
 Quenching Template: TenantWorkspace
-[localhost,11433].[learn] [Schema: acme] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
-[localhost,11433].[learn] [Schema: beta] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
-[localhost,11433].[learn] [Schema: globex] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
+Template 'TenantWorkspace': 3 units - db: DatabaseIdentificationScript; schema: SchemaIdentificationScript
 [localhost,11433].[learn] [Schema: acme]   Creating schema [acme] (CreateIfMissing: true)
 [localhost,11433].[learn] [Schema: beta]   Creating schema [beta] (CreateIfMissing: true)
 [localhost,11433].[learn] [Schema: globex]   Creating schema [globex] (CreateIfMissing: true)
@@ -152,10 +150,7 @@ The discovery query now returns four tenants, so the fan-out dispatches four wor
 the **new** one does any work:
 
 ```
-[localhost,11433].[learn] [Schema: acme] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
-[localhost,11433].[learn] [Schema: beta] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
-[localhost,11433].[learn] [Schema: globex] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
-[localhost,11433].[learn] [Schema: initech] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
+Template 'TenantWorkspace': 4 units - db: DatabaseIdentificationScript; schema: SchemaIdentificationScript
 [localhost,11433].[learn] [Schema: initech]   Creating schema [initech] (CreateIfMissing: true)
 [localhost,11433].[learn] [Schema: initech]         Adding new table [initech].[Contacts]
 [localhost,11433].[learn] [Schema: initech]         Adding new table [initech].[Customers]

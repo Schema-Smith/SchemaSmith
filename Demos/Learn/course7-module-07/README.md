@@ -53,10 +53,7 @@ Four tenants dispatched — `fleet_tenant_005` is absent, because its `FleetRegi
 `Active = 0`:
 
 ```
-[localhost,11433].[fleet_tenant_001] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_002] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_003] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_004] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
+Template 'Main': 4 units - db: DatabaseIdentificationScript; schema: (regular template)
 ```
 
 Each tenant then: `Kindling the forge` → tables quenched → `Successfully Quenched`; the run ends
@@ -101,13 +98,12 @@ schemaquench --ConfigFile:quench.settings.json
 ```
 
 ```
-[localhost,11433].[fleet_tenant_001] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_002] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_003] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
+Template 'Main': 3 units - db: DatabaseIdentificationScript; schema: (regular template)
 ```
 
-`fleet_tenant_004` dropped off — no `TemplateTargets` edit, no settings-file edit, just an `UPDATE`
-against the control plane. (Restore it to `Active = 1` afterward to get back to the four-tenant baseline.)
+**Four units became three** — `fleet_tenant_004` dropped off with no `TemplateTargets` edit and no
+settings-file edit, just an `UPDATE` against the control plane. The count in the rollup is the roster;
+which tenants it resolved to is one entry per target in the deployment summary report. (Restore it to `Active = 1` afterward to get back to the four-tenant baseline.)
 The deactivation statement's shape differs slightly by engine:
 
 | Engine | Statement |
