@@ -276,3 +276,12 @@ Server Linux image exists -- so this file is the standing evidence that it ran, 
 | SQL Server 2012 (major 11) @ 14331 | Passed!  - Failed:     0, Passed:     7, Skipped:     4, Total:    11, Duration: 1 m - Schema.IntegrationTests.dll (net10.0) | 7 passed / 4 skipped |
 | SQL Server 2014 (major 12) @ 14332 | Passed!  - Failed:     0, Passed:     7, Skipped:     4, Total:    11, Duration: 50 s - Schema.IntegrationTests.dll (net10.0) | 7 passed / 4 skipped |
 | SQL Server 2016 (major 13) @ 14333 | Passed!  - Failed:     0, Passed:     7, Skipped:     4, Total:    11, Duration: 37 s - Schema.IntegrationTests.dll (net10.0) | 7 passed / 4 skipped |
+
+## 2026-09-24T21:17:56Z - commit dfbc4923
+
+| Target | Result | Expected |
+|---|---|---|
+| SQL Server 2008 R2 (major 10) @ 14330 | Passed!  - Failed:     0, Passed:     6, Skipped:     5, Total:    11, Duration: 51 s - Schema.IntegrationTests.dll (net10.0) | 6 passed / 5 skipped |
+| SQL Server 2012 (major 11) @ 14331 | Passed!  - Failed:     0, Passed:     7, Skipped:     4, Total:    11, Duration: 1 m 20 s - Schema.IntegrationTests.dll (net10.0) | 7 passed / 4 skipped |
+| SQL Server 2014 (major 12) @ 14332 | Passed!  - Failed:     0, Passed:     7, Skipped:     4, Total:    11, Duration: 1 m 12 s - Schema.IntegrationTests.dll (net10.0) | 7 passed / 4 skipped |
+| SQL Server 2016 (major 13) @ 14333 | Passed!  - Failed:     0, Passed:     7, Skipped:     4, Total:    11, Duration: 2 m 14 s - Schema.IntegrationTests.dll (net10.0) | 7 passed / 4 skipped |
