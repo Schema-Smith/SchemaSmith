@@ -435,22 +435,6 @@ public static class RepositoryHelper
     }
 
     /// <summary>
-    /// Writes a <c>$schema</c> reference into every JSON file in the package that a generated schema
-    /// covers, so editors and third-party validators pick the schema up with no per-user setup.
-    /// Idempotent: a file already carrying the right reference is left untouched.
-    /// </summary>
-    /// <remarks>
-    /// No-ops when the package has no <c>.json-schemas</c> folder — a reference to a file that was
-    /// never generated would validate nothing and show the user a broken path.
-    /// <para>
-    /// Edits the file as TEXT rather than deserializing and re-serializing. A typed round-trip would
-    /// rewrite all 3,000-plus shipped package files through the current serializer, and every setting
-    /// that has shifted since a file was authored (DefaultValueHandling dropping a now-default value,
-    /// property order, an <c>Extensions</c> fragment's inner formatting) would land as an unreviewable
-    /// diff wrapped around the one line being added.
-    /// </para>
-    /// </remarks>
-    /// <summary>
     /// Adds the <c>$schema</c> reference to ONE package file. Returns true if the file changed.
     /// </summary>
     /// <remarks>
@@ -472,7 +456,7 @@ public static class RepositoryHelper
             var original = file.ReadAllText(jsonFilePath);
             var updated = WithSchemaRef(original, BuildSchemaRef(productPath, jsonFilePath, schemaKind, platform));
             if (updated == null || updated == original) return false;
-            file.WriteAllText(jsonFilePath, updated);
+            file.WriteAllText(jsonFilePath, PreservingBom(file, jsonFilePath, updated));
             return true;
         }
         // Narrow, not blanket: a malformed file (JsonException) or one that cannot be read or rewritten
@@ -492,6 +476,22 @@ public static class RepositoryHelper
         }
     }
 
+    /// <summary>
+    /// Writes a <c>$schema</c> reference into every JSON file in the package that a generated schema
+    /// covers, so editors and third-party validators pick the schema up with no per-user setup.
+    /// Idempotent: a file already carrying the right reference is left untouched.
+    /// </summary>
+    /// <remarks>
+    /// No-ops when the package has no <c>.json-schemas</c> folder — a reference to a file that was
+    /// never generated would validate nothing and show the user a broken path.
+    /// <para>
+    /// Edits the file as TEXT rather than deserializing and re-serializing. A typed round-trip would
+    /// rewrite all 3,000-plus shipped package files through the current serializer, and every setting
+    /// that has shifted since a file was authored (DefaultValueHandling dropping a now-default value,
+    /// property order, an <c>Extensions</c> fragment's inner formatting) would land as an unreviewable
+    /// diff wrapped around the one line being added.
+    /// </para>
+    /// </remarks>
     public static int StampSchemaRefs(string productPath, Platform platform, Action<string> warn = null)
     {
         var file = FileWrapper.GetFromFactory();
@@ -516,7 +516,7 @@ public static class RepositoryHelper
                 var original = file.ReadAllText(jsonFile);
                 var updated = WithSchemaRef(original, reference);
                 if (updated == null || updated == original) continue;
-                file.WriteAllText(jsonFile, updated);
+                file.WriteAllText(jsonFile, PreservingBom(file, jsonFile, updated));
                 stamped++;
             }
             // One unparseable or unwritable file must not abort the package: the rest are still correct,
@@ -565,6 +565,83 @@ public static class RepositoryHelper
     /// Returns <paramref name="json"/> with <c>$schema</c> present as its first property, or null if
     /// the text is not a JSON object this can safely edit.
     /// </summary>
+    /// <summary>
+    /// Re-attaches a UTF-8 BOM the round-trip would otherwise drop. <c>ReadAllText</c> consumes a BOM and
+    /// <c>WriteAllText</c> does not re-emit one, so stamping a BOM'd file silently rewrote it without —
+    /// contradicting this path's promise that the output is byte-identical but for the reference. Prepending
+    /// U+FEFF is enough: UTF-8 encodes it back to the same three bytes, and the next read strips it again.
+    /// </summary>
+    private static string PreservingBom(IFile file, string path, string updated)
+    {
+        byte[] head;
+        try
+        {
+            head = file.ReadAllBytes(path);
+        }
+        catch (IOException) { return updated; }
+        catch (UnauthorizedAccessException) { return updated; }
+
+        var hadBom = head is { Length: >= 3 } && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF;
+        return hadBom ? "﻿" + updated : updated;
+    }
+
+    /// <summary>
+    /// The span of the ROOT object's <c>$schema</c> VALUE in the raw text, or null if the root has no
+    /// such property. Scans at brace depth so a <c>$schema</c> nested inside <c>Extensions</c> — legal,
+    /// author-supplied, and quite possibly earlier in the file — is never mistaken for the root's own.
+    /// </summary>
+    private static (int Start, int Length)? RootSchemaValueSpan(string json)
+    {
+        var depth = 0;
+        var i = 0;
+        while (i < json.Length)
+        {
+            var c = json[i];
+            if (c == '"')
+            {
+                var end = EndOfJsonString(json, i);
+                // A key sits at depth 1 only when it belongs to the root object itself.
+                if (depth == 1 && string.CompareOrdinal(json, i, "\"$schema\"", 0, 9) == 0 && end == i + 9)
+                {
+                    var j = end;
+                    while (j < json.Length && char.IsWhiteSpace(json[j])) j++;
+                    if (j < json.Length && json[j] == ':')
+                    {
+                        j++;
+                        while (j < json.Length && char.IsWhiteSpace(json[j])) j++;
+                        if (j < json.Length && json[j] == '"') return (j, EndOfJsonString(json, j) - j);
+                        if (string.CompareOrdinal(json, j, "null", 0, 4) == 0) return (j, 4);
+                        return null;
+                    }
+                }
+                i = end;
+                continue;
+            }
+
+            if (c is '{' or '[') depth++;
+            else if (c is '}' or ']') depth--;
+            i++;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Index one past the closing quote of the JSON string starting at <paramref name="start"/>,
+    /// honouring backslash escapes so an embedded <c>\"</c> does not end it early.
+    /// </summary>
+    private static int EndOfJsonString(string s, int start)
+    {
+        var i = start + 1;
+        while (i < s.Length)
+        {
+            if (s[i] == '\\') { i += 2; continue; }
+            if (s[i] == '"') return i + 1;
+            i++;
+        }
+        return s.Length;
+    }
+
     private static string WithSchemaRef(string json, string reference)
     {
         // Parse purely as a guard. The result is thrown away and the edit is textual, but a file that
@@ -576,8 +653,17 @@ public static class RepositoryHelper
         {
             var current = parsed["$schema"].Type == JTokenType.String ? parsed["$schema"].Value<string>() : null;
             if (current == reference) return json;
-            var existing = new Regex("\"\\$schema\"\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\"|null)");
-            return existing.IsMatch(json) ? existing.Replace(json, $"\"$schema\": {encoded}", 1) : null;
+
+            // Locate the ROOT object's own "$schema" by scanning at brace depth, NOT with a whole-file
+            // regex. Extensions is arbitrary author-supplied JSON, so a nested "$schema" is legal and may
+            // appear first in the text -- a first-match replace overwrote the author's value, left the
+            // root reference stale, and still reported success.
+            var span = RootSchemaValueSpan(json);
+            // Decline rather than edit the wrong key: the parse says a root reference exists, so failing
+            // to find it in the text means this method does not understand the file.
+            if (span is null) return null;
+            return string.Concat(json.AsSpan(0, span.Value.Start), encoded,
+                                 json.AsSpan(span.Value.Start + span.Value.Length));
         }
 
         // Insert as the first property, matching the indentation the next line already uses so the

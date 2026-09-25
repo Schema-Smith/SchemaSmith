@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Schema.Domain;
@@ -292,5 +293,115 @@ public class SchemaRefStampingTests
         var json = JsonConvert.SerializeObject(new SqlServerTable { Name = "Orders" }, Formatting.Indented);
 
         Assert.That(json, Does.Not.Contain("$schema"));
+    }
+
+    // ---- the root's own $schema, not the first one that happens to appear ----
+
+    [Test]
+    public void StampSchemaRef_WithANestedSchemaKeyFirst_RewritesTheROOTReference()
+    {
+        // Extensions is arbitrary author-supplied JSON, so a "$schema" inside it is legal and is the
+        // natural thing for an author pointing at their own extension schema. The edit used to be a
+        // whole-file regex taking the FIRST textual match, so it overwrote the author's nested value,
+        // left the root reference stale, and returned true -- silent corruption, counted as a success.
+        var root = Path.Join(Path.GetTempPath(), "ss-nested-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Join(root, ".json-schemas"));
+            File.WriteAllText(Path.Join(root, ".json-schemas", "products.sqlserver.schema"), "{}");
+            File.WriteAllText(Path.Join(root, "Product.json"),
+                """
+                {
+                  "Name": "P",
+                  "Extensions": { "$schema": "DO-NOT-TOUCH" },
+                  "$schema": "stale/path.schema"
+                }
+                """);
+
+            RepositoryHelper.StampSchemaRefs(root, Platform.SqlServer, _ => { });
+
+            var after = File.ReadAllText(Path.Join(root, "Product.json"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(after, Does.Contain("\"DO-NOT-TOUCH\""),
+                    "the author's nested Extensions.$schema must be left exactly as written");
+                Assert.That(after, Does.Not.Contain("stale/path.schema"),
+                    "the ROOT $schema is the one that was stale and the one that must be rewritten");
+                Assert.That(after, Does.Contain(".json-schemas/products.sqlserver.schema"),
+                    "the root reference should now name the generated schema");
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Test]
+    public void StampSchemaRef_OnAFileWithAUtf8Bom_KeepsTheBom()
+    {
+        // ReadAllText consumes a BOM and WriteAllText does not re-emit one, so stamping silently
+        // rewrote a BOM'd file without it -- contradicting this path's own promise that the output is
+        // byte-identical but for the added line. Some shipped Schema/Scripts files carry a BOM
+        // deliberately (it round-trips through SSMS), so dropping one is content loss, not tidying.
+        var root = Path.Join(Path.GetTempPath(), "ss-bom-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Join(root, ".json-schemas"));
+            File.WriteAllText(Path.Join(root, ".json-schemas", "products.sqlserver.schema"), "{}");
+
+            var productJson = Path.Join(root, "Product.json");
+            File.WriteAllText(productJson, "{\n  \"Name\": \"P\"\n}", new UTF8Encoding(true));
+            Assert.That(File.ReadAllBytes(productJson)[..3], Is.EqualTo(new byte[] { 0xEF, 0xBB, 0xBF }),
+                "premise: the fixture must actually start with a BOM, or this proves nothing");
+
+            RepositoryHelper.StampSchemaRefs(root, Platform.SqlServer, _ => { });
+
+            var bytes = File.ReadAllBytes(productJson);
+            Assert.Multiple(() =>
+            {
+                Assert.That(bytes[..3], Is.EqualTo(new byte[] { 0xEF, 0xBB, 0xBF }), "the BOM must survive stamping");
+                Assert.That(File.ReadAllText(productJson), Does.Contain("$schema"), "and the file must still be stamped");
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Test]
+    public void StampSchemaRef_WithANestedSchemaKeyAndNoRootOne_LeavesTheNestedValueAlone()
+    {
+        // The control for the test above: with no root reference the INSERT path runs, and it must not
+        // touch the nested value either.
+        var root = Path.Join(Path.GetTempPath(), "ss-nested2-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Join(root, ".json-schemas"));
+            File.WriteAllText(Path.Join(root, ".json-schemas", "products.sqlserver.schema"), "{}");
+            File.WriteAllText(Path.Join(root, "Product.json"),
+                """
+                {
+                  "Name": "P",
+                  "Extensions": { "$schema": "DO-NOT-TOUCH" }
+                }
+                """);
+
+            RepositoryHelper.StampSchemaRefs(root, Platform.SqlServer, _ => { });
+
+            var after = File.ReadAllText(Path.Join(root, "Product.json"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(after, Does.Contain("\"DO-NOT-TOUCH\""), "nested value must survive the insert");
+                Assert.That(after.IndexOf(".json-schemas/products.sqlserver.schema", StringComparison.Ordinal),
+                    Is.LessThan(after.IndexOf("DO-NOT-TOUCH", StringComparison.Ordinal)),
+                    "the inserted root reference leads the file, ahead of the nested one");
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
 }
