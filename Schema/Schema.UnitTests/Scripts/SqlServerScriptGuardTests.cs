@@ -151,6 +151,86 @@ public class SqlServerScriptGuardTests
         });
     }
 
+    /// <summary>
+    /// No member carries back-to-back <c>&lt;summary&gt;</c> blocks.
+    /// <para>
+    /// A doc comment separated from its member by an inserted member is silently adopted by the new one,
+    /// so that member ends up with two summaries — the first describing something else — and the original
+    /// with none. It compiles, it never throws, and the only symptom is a reader being told the wrong
+    /// thing. Twelve sites existed when this was written: eleven from methods reordered away from their
+    /// docs, and one from a fix that inserted three helpers anchored on a signature, which put them
+    /// between that signature and its own comment.
+    /// </para>
+    /// <para>
+    /// The guard is the deliverable, not the twelve edits: this catches the mistake at the moment it is
+    /// made rather than at a downstream consumer's re-pack, which is how the twelfth was actually found.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void NoMemberCarriesBackToBackSummaryBlocks()
+    {
+        var dir = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
+        while (dir != null && !File.Exists(Path.Join(dir.FullName, "SchemaSmith.sln"))) dir = dir.Parent;
+        Assert.That(dir, Is.Not.Null, "could not locate the repository root");
+
+        var offenders = new List<string>();
+        var scanned = 0;
+        foreach (var project in new[] { "Schema", "SchemaQuench", "SchemaTongs", "DataTongs", "SchemaShears" })
+        {
+            var root = new DirectoryInfo(Path.Join(dir!.FullName, project));
+            if (!root.Exists) continue;
+            foreach (var cs in root.GetFiles("*.cs", SearchOption.AllDirectories))
+            {
+                if (cs.FullName.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                 || cs.FullName.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+                    continue;
+                scanned++;
+                var lines = File.ReadAllLines(cs.FullName);
+                for (var i = 0; i < lines.Length; i++)
+                {
+                    if (!lines[i].Contains("</summary>", StringComparison.Ordinal)) continue;
+                    var j = i + 1;
+                    while (j < lines.Length && lines[j].Trim().Length == 0) j++;
+                    if (j < lines.Length && lines[j].Contains("<summary>", StringComparison.Ordinal))
+                        offenders.Add($"{Path.GetFileName(cs.FullName)}:{i + 1}");
+                }
+            }
+        }
+
+        Assert.That(scanned, Is.GreaterThan(100), "almost no sources were scanned, so this proves nothing");
+        Assert.That(offenders, Is.Empty,
+            "A member carries two <summary> blocks, so the first one describes a different member and that "
+            + "member has none. This does not throw and does not fail a build -- the only symptom is a "
+            + "reader being told the wrong thing about the code in front of them. Offenders:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    [Test]
+    public void PaddingToleranceFollowsTheProduct_PerProperty_NotBlanket()
+    {
+        // Anchoring the patterns created one fresh instance of the defect it closed: RebuildPolicy.Mode is
+        // read as (… ?? "NEVER").Trim().ToUpperInvariant(), so " NEVER " DEPLOYS, and an anchored pattern
+        // rejected it. MergeType is read with a bare Equals(…, OrdinalIgnoreCase) and does NOT trim, so
+        // " Insert " is genuinely invalid there. Both directions are pinned here because the tempting fix --
+        // \s* on every pattern -- would make the linter accept what MergeType rejects, which is the same
+        // error pointing the other way.
+        var mode = Schema.Utility.SchemaGenerator.DeclaredPatternForTest(
+            "NEVER|ALWAYS|THRESHOLD", true, allowPadding: true);
+        var mergeType = Schema.Utility.SchemaGenerator.DeclaredPatternForTest(
+            "Insert|Insert/Update|Insert/Update/Delete", true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Regex.IsMatch(" NEVER ", mode), Is.True,
+                "the product trims Mode before comparing, so padding deploys and the schema must accept it");
+            Assert.That(Regex.IsMatch("never", mode), Is.True, "and case still folds");
+            Assert.That(Regex.IsMatch(" XNEVERY ", mode), Is.False, "padding tolerance is not a licence to unanchor");
+            Assert.That(Regex.IsMatch(" Insert ", mergeType), Is.False,
+                "MergeType does NOT trim, so padded values are correctly still rejected -- tolerance is "
+                + "per-property and measured, never blanket");
+        });
+    }
+
     [Test]
     public void NoCatalogReadBuiltInCSharpCarriesTheNolockHint()
     {

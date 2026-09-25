@@ -223,12 +223,6 @@
             "MergeDisableTriggers": {
               "type": "boolean"
             },
-            "MergeDisableRules": {
-              "type": "boolean"
-            },
-            "MergeUpdateDescendents": {
-              "type": "boolean"
-            },
             "ShouldApplyExpression": {
               "type": "string"
             },
@@ -263,12 +257,6 @@
                 "type": "string"
               },
               "MergeDisableTriggers": {
-                "type": "boolean"
-              },
-              "MergeDisableRules": {
-                "type": "boolean"
-              },
-              "MergeUpdateDescendents": {
                 "type": "boolean"
               },
               "ShouldApplyExpression": {
@@ -322,7 +310,7 @@
       "properties": {
         "Mode": {
           "type": "string",
-          "pattern": "^(?:[Nn][Ee][Vv][Ee][Rr]|[Aa][Ll][Ww][Aa][Yy][Ss]|[Tt][Hh][Rr][Ee][Ss][Hh][Oo][Ll][Dd])$",
+          "pattern": "^\\s*(?:[Nn][Ee][Vv][Ee][Rr]|[Aa][Ll][Ww][Aa][Yy][Ss]|[Tt][Hh][Rr][Ee][Ss][Hh][Oo][Ll][Dd])\\s*$",
           "description": "When to rebuild the table instead of altering it in place. NEVER (the default) always alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of pending changes reaches Threshold, which is then required."
         },
         "Threshold": {

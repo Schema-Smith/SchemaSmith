@@ -277,12 +277,6 @@ public class SchemaTongs
     private int _sourceMajor;
 
     /// <summary>
-    /// Excludes a LIVE ledger view (<c>&lt;table&gt;_Ledger</c>), which a ledger table generates and
-    /// which carries no engine-reserved name prefix — only <c>sys.tables.ledger_view_id</c> identifies
-    /// it. That column is 2022+, so the clause is added only when the source is new enough to have it;
-    /// referencing it statically would fail to bind on an older server.
-    /// </summary>
-    /// <summary>
     /// Whether the SOURCE server can report XML_COMPRESSION. It DEPLOYS from SQL Server 2022 but only
     /// READS from 2025 -- sys.partitions.xml_compression does not exist before then -- and the legacy XML
     /// ingest path cannot read it at any version. Where this is false the package being refreshed is the
@@ -292,6 +286,12 @@ public class SchemaTongs
     private bool SourceCanReportXmlCompression =>
         _platform == Platform.SqlServer && _sourceMajor >= 17 && _ingestEncoding != IngestEncoding.Xml;
 
+    /// <summary>
+    /// Excludes a LIVE ledger view (<c>&lt;table&gt;_Ledger</c>), which a ledger table generates and
+    /// which carries no engine-reserved name prefix — only <c>sys.tables.ledger_view_id</c> identifies
+    /// it. That column is 2022+, so the clause is added only when the source is new enough to have it;
+    /// referencing it statically would fail to bind on an older server.
+    /// </summary>
     private string LedgerViewFilter() =>
         _sourceMajor >= 16
             ? Environment.NewLine + "   AND NOT EXISTS (SELECT 1 FROM sys.tables lt WHERE lt.ledger_view_id = o.object_id)"

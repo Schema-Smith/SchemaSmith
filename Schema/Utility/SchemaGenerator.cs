@@ -225,11 +225,12 @@ public static class SchemaGenerator
     /// keep their exact semantics.
     /// </para>
     /// </summary>
-    private static string DeclaredPattern(string pattern, bool ignoreCase)
+    private static string DeclaredPattern(string pattern, bool ignoreCase, bool allowPadding = false)
     {
+        var pad = allowPadding ? @"\s*" : "";
         var alreadyAnchored = pattern.StartsWith('^') && pattern.EndsWith('$');
         if (!ignoreCase)
-            return alreadyAnchored ? pattern : $"^(?:{pattern})$";
+            return alreadyAnchored ? pattern : $"^{pad}(?:{pattern}){pad}$";
 
         // Only meaningful on a plain literal alternation, which is what every case-folded declaration is.
         // Folding a pattern with metacharacters would corrupt it, so refuse rather than guess.
@@ -239,20 +240,20 @@ public static class SchemaGenerator
                 $"PatternIgnoreCase is only valid on a plain literal alternation; '{pattern}' has regex "
                 + "metacharacters. Fold it by hand or drop the flag.");
 
-        return "^(?:" + string.Join("|", core.Split('|').Select(CaseInsensitiveLiteral)) + ")$";
+        return $"^{pad}(?:" + string.Join("|", core.Split('|').Select(CaseInsensitiveLiteral)) + $"){pad}$";
     }
 
     /// <summary>Test seam for the anchoring guard: the emission rule without reflecting over a
     /// whole generated schema to recover one property's pattern.</summary>
-    internal static string DeclaredPatternForTest(string pattern, bool ignoreCase) =>
-        DeclaredPattern(pattern, ignoreCase);
+    internal static string DeclaredPatternForTest(string pattern, bool ignoreCase, bool allowPadding = false) =>
+        DeclaredPattern(pattern, ignoreCase, allowPadding);
 
     private static void ApplyConstraints(PropertyInfo prop, JObject propSchema)
     {
         var attr = prop.GetCustomAttribute<SchemaPropertyAttribute>();
         if (attr == null) return;
         if (!string.IsNullOrEmpty(attr.Pattern))
-            propSchema["pattern"] = DeclaredPattern(attr.Pattern, attr.PatternIgnoreCase);
+            propSchema["pattern"] = DeclaredPattern(attr.Pattern, attr.PatternIgnoreCase, attr.PatternAllowPadding);
         if (!double.IsNaN(attr.Minimum)) propSchema["minimum"] = attr.Minimum;
         if (!double.IsNaN(attr.Maximum)) propSchema["maximum"] = attr.Maximum;
         if (attr.MaxLength >= 0) propSchema["maxLength"] = attr.MaxLength;

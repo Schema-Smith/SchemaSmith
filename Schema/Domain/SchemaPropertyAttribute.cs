@@ -29,6 +29,25 @@ namespace Schema.Domain
         /// </para>
         /// </summary>
         public bool PatternIgnoreCase { get; set; }
+
+        /// <summary>
+        /// Set when the PRODUCT trims this property before comparing, so the emitted pattern tolerates
+        /// surrounding whitespace the deploy tolerates.
+        /// <para>
+        /// This exists because anchoring the patterns created a fresh instance of the very defect it
+        /// closed: <c>RebuildPolicy.Mode</c> is read as <c>(… ?? "NEVER").Trim().ToUpperInvariant()</c>, so
+        /// <c>" NEVER "</c> deploys — and an anchored pattern rejected it. The linter contradicting the
+        /// product, one whitespace at a time.
+        /// </para>
+        /// <para>
+        /// Opt-in per property, and MEASURED, for the same reason <see cref="PatternIgnoreCase"/> is:
+        /// <c>MergeType</c> compares with a bare <c>Equals(…, OrdinalIgnoreCase)</c> and does NOT trim, so
+        /// <c>" Insert "</c> genuinely is invalid there and the pattern must keep rejecting it. Encoding
+        /// <c>\s*</c> into every pattern would make the linter accept what those properties reject — the
+        /// same error pointing the other way.
+        /// </para>
+        /// </summary>
+        public bool PatternAllowPadding { get; set; }
         public double Minimum { get; set; } = double.NaN;
         public double Maximum { get; set; } = double.NaN;
         public double MultipleOf { get; set; } = double.NaN;

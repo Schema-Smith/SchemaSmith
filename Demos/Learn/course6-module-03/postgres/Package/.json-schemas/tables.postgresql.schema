@@ -273,10 +273,12 @@
               "type": "boolean"
             },
             "MergeDisableRules": {
-              "type": "boolean"
+              "type": "boolean",
+              "description": "PostgreSQL only."
             },
             "MergeUpdateDescendents": {
-              "type": "boolean"
+              "type": "boolean",
+              "description": "PostgreSQL only."
             },
             "ShouldApplyExpression": {
               "type": "string"
@@ -315,10 +317,12 @@
                 "type": "boolean"
               },
               "MergeDisableRules": {
-                "type": "boolean"
+                "type": "boolean",
+                "description": "PostgreSQL only."
               },
               "MergeUpdateDescendents": {
-                "type": "boolean"
+                "type": "boolean",
+                "description": "PostgreSQL only."
               },
               "ShouldApplyExpression": {
                 "type": "string"
@@ -379,7 +383,7 @@
       "properties": {
         "Mode": {
           "type": "string",
-          "pattern": "^(?:[Nn][Ee][Vv][Ee][Rr]|[Aa][Ll][Ww][Aa][Yy][Ss]|[Tt][Hh][Rr][Ee][Ss][Hh][Oo][Ll][Dd])$",
+          "pattern": "^\\s*(?:[Nn][Ee][Vv][Ee][Rr]|[Aa][Ll][Ww][Aa][Yy][Ss]|[Tt][Hh][Rr][Ee][Ss][Hh][Oo][Ll][Dd])\\s*$",
           "description": "When to rebuild the table instead of altering it in place. NEVER (the default) always alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of pending changes reaches Threshold, which is then required."
         },
         "Threshold": {

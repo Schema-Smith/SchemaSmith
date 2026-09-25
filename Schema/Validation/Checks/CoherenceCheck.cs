@@ -411,13 +411,6 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
-    /// MariaDB per-column <c>WITHOUT SYSTEM VERSIONING</c> coherence — issue #408.
-    /// <para>Verified on 11.4: MariaDB <b>accepts the clause on a table that is not system-versioned and
-    /// silently discards it</b> — no error, and <c>EXTRA</c> comes back empty. So the declaration is inert,
-    /// and nothing at deploy time can tell the author, because nothing failed.</para>
-    /// <para>Warning rather than Error: it is legal and deployable, and a table may gain versioning later.</para>
-    /// </summary>
-    /// <summary>
     /// #417: <c>CdcFilegroup</c> only places a CDC change table, so on a table without <c>EnableCDC</c> it does
     /// nothing, and the deploy has no reason to mention it. Table-level only: a template default legitimately
     /// covers a mix of CDC and non-CDC tables.
@@ -431,6 +424,13 @@ public sealed class CoherenceCheck : ISchemaCheck
             "table to place and the setting does nothing — set EnableCDC, or drop CdcFilegroup.");
     }
 
+    /// <summary>
+    /// MariaDB per-column <c>WITHOUT SYSTEM VERSIONING</c> coherence — issue #408.
+    /// <para>Verified on 11.4: MariaDB <b>accepts the clause on a table that is not system-versioned and
+    /// silently discards it</b> — no error, and <c>EXTRA</c> comes back empty. So the declaration is inert,
+    /// and nothing at deploy time can tell the author, because nothing failed.</para>
+    /// <para>Warning rather than Error: it is legal and deployable, and a table may gain versioning later.</para>
+    /// </summary>
     private static IEnumerable<Finding> CheckSystemVersioningExclusions(Table table, string tableLocation)
     {
         if (table is not MariaDbTable mariaTable || mariaTable.IsSystemVersioned) yield break;
@@ -442,15 +442,6 @@ public sealed class CoherenceCheck : ISchemaCheck
                 "the exclusion does nothing — set IsSystemVersioned, or drop WithoutSystemVersioning.");
     }
 
-    /// <summary>
-    /// MySQL/MariaDB compression table options that cannot be combined.
-    /// <para><b>Both engines REFUSE the combination, and neither error names what is wrong.</b> Verified
-    /// live: MySQL 8.0 rejects <c>COMPRESSION</c> alongside <c>ROW_FORMAT=COMPRESSED</c> with 1031
-    /// ("Table storage engine ... doesn't have this option"); MariaDB 11.4 rejects <c>PAGE_COMPRESSED</c>
-    /// with the same row format as errno 140 ("Wrong create options"). Both name the table and neither
-    /// names the option, so without this the author gets an error that could mean almost anything.</para>
-    /// <para>Error rather than Warning: the deploy cannot succeed, so there is nothing to weigh.</para>
-    /// </summary>
     /// <summary>
     /// SQL Server partition placement declared as half a pair, or contradicting a filegroup
     /// (#partitioning, K1).
@@ -498,6 +489,15 @@ public sealed class CoherenceCheck : ISchemaCheck
                 "It lives on one data space — declare one or the other, not both.");
     }
 
+    /// <summary>
+    /// MySQL/MariaDB compression table options that cannot be combined.
+    /// <para><b>Both engines REFUSE the combination, and neither error names what is wrong.</b> Verified
+    /// live: MySQL 8.0 rejects <c>COMPRESSION</c> alongside <c>ROW_FORMAT=COMPRESSED</c> with 1031
+    /// ("Table storage engine ... doesn't have this option"); MariaDB 11.4 rejects <c>PAGE_COMPRESSED</c>
+    /// with the same row format as errno 140 ("Wrong create options"). Both name the table and neither
+    /// names the option, so without this the author gets an error that could mean almost anything.</para>
+    /// <para>Error rather than Warning: the deploy cannot succeed, so there is nothing to weigh.</para>
+    /// </summary>
     private static IEnumerable<Finding> CheckCompressionOptions(Table table, string tableLocation)
     {
         if (table is not MySqlTable mySqlTable) yield break;

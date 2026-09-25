@@ -590,16 +590,6 @@ public static class ForgeKindler
         => GetKindlingScripts(platform).Select(s => s.FileName).ToArray();
 
     /// <summary>
-    /// Read the current kindle stamp, or null if the marker table doesn't exist yet (fresh install)
-    /// or holds no row. Uses a guard so a missing table returns null rather than raising an error.
-    ///
-    /// PostgreSQL note: the original CASE WHEN to_regclass(...) ELSE (SELECT ... FROM KindleStamp) END
-    /// approach fails at PARSE TIME on a fresh database — PG validates all table references in the
-    /// query text regardless of which CASE branch will execute. We avoid the static table reference
-    /// by querying pg_class/pg_namespace instead, and only issuing the second SELECT when the table
-    /// is confirmed to exist.
-    /// </summary>
-    /// <summary>
     /// Does the kindle-stamp store exist at all? Distinguishes "never kindled here" (a hard error on a
     /// read-only target) from "kindled, but currency unknown" (a warning). ReadStamp collapses both to
     /// null, which is right for its own callers and wrong for this one.
@@ -698,6 +688,16 @@ public static class ForgeKindler
     private static string Abbreviate(string stamp) =>
         string.IsNullOrEmpty(stamp) ? "(none)" : (stamp.Length <= 12 ? stamp : stamp[..12] + "…");
 
+    /// <summary>
+    /// Read the current kindle stamp, or null if the marker table doesn't exist yet (fresh install)
+    /// or holds no row. Uses a guard so a missing table returns null rather than raising an error.
+    ///
+    /// PostgreSQL note: the original CASE WHEN to_regclass(...) ELSE (SELECT ... FROM KindleStamp) END
+    /// approach fails at PARSE TIME on a fresh database — PG validates all table references in the
+    /// query text regardless of which CASE branch will execute. We avoid the static table reference
+    /// by querying pg_class/pg_namespace instead, and only issuing the second SELECT when the table
+    /// is confirmed to exist.
+    /// </summary>
     internal static string ReadStamp(IDbCommand command, Platform platform)
     {
         if (platform == Platform.PostgreSQL)

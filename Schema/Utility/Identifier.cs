@@ -14,13 +14,6 @@ namespace Schema.Utility;
 public static class Identifier
 {
     /// <summary>
-    /// Strips one layer of platform-appropriate delimiter wrapping from
-    /// <paramref name="value"/>. Bracket-quoted SQL Server identifiers (<c>[name]</c>),
-    /// double-quoted PostgreSQL identifiers (<c>"name"</c>), and backtick-quoted MySQL
-    /// identifiers (<c>`name`</c>) are unwrapped; embedded delimiter escape sequences
-    /// (<c>]]</c>, <c>""</c>, <c>``</c>) are collapsed.
-    /// </summary>
-    /// <summary>
     /// Escapes the platform delimiter inside a raw identifier so it can be safely wrapped:
     /// SQL Server <c>]</c>→<c>]]</c>, PostgreSQL <c>"</c>→<c>""</c>, MySQL/MariaDB <c>`</c>→<c>``</c>.
     /// The caller supplies the surrounding delimiters (e.g. <c>[{EscapeDelimited(name, p)}]</c>).
@@ -40,6 +33,13 @@ public static class Identifier
         };
     }
 
+    /// <summary>
+    /// Strips one layer of platform-appropriate delimiter wrapping from
+    /// <paramref name="value"/>. Bracket-quoted SQL Server identifiers (<c>[name]</c>),
+    /// double-quoted PostgreSQL identifiers (<c>"name"</c>), and backtick-quoted MySQL
+    /// identifiers (<c>`name`</c>) are unwrapped; embedded delimiter escape sequences
+    /// (<c>]]</c>, <c>""</c>, <c>``</c>) are collapsed.
+    /// </summary>
     public static string Unwrap(string value, Platform platform)
     {
         if (string.IsNullOrEmpty(value)) return value;

@@ -793,16 +793,6 @@ namespace Schema.Domain
             }
         }
 
-        /// <summary>
-        /// Loads DECLARATIVE events from the same Events/ folder that has always held scripted ones.
-        /// <para>Only *.json is read here; a *.sql file in that folder is still picked up by the scripted
-        /// Objects slot exactly as before, so no existing package changes behaviour. That is deliberate:
-        /// promoting events to a managed type must not strip a folder users already populate.</para>
-        /// </summary>
-        /// <summary>
-        /// Loads DECLARATIVE enum types from the same Enum Types/ folder that has always held scripted
-        /// ones. Only *.json is read here; a *.sql file there still runs through the Objects slot.
-        /// </summary>
         /// <summary>Loads DECLARATIVE sequences from the Sequences/ folder; *.sql there still runs scripted.</summary>
         private void LoadSequences(Platform platform, bool tolerateComponentLoadErrors)
         {
@@ -862,6 +852,10 @@ namespace Schema.Domain
             }
         }
 
+        /// <summary>
+        /// Loads DECLARATIVE enum types from the same Enum Types/ folder that has always held scripted
+        /// ones. Only *.json is read here; a *.sql file there still runs through the Objects slot.
+        /// </summary>
         private void LoadEnumTypes(Platform platform, bool tolerateComponentLoadErrors)
         {
             if (platform != Platform.PostgreSQL) return;
@@ -891,6 +885,12 @@ namespace Schema.Domain
             }
         }
 
+        /// <summary>
+        /// Loads DECLARATIVE events from the same Events/ folder that has always held scripted ones.
+        /// <para>Only *.json is read here; a *.sql file in that folder is still picked up by the scripted
+        /// Objects slot exactly as before, so no existing package changes behaviour. That is deliberate:
+        /// promoting events to a managed type must not strip a folder users already populate.</para>
+        /// </summary>
         private void LoadEvents(Platform platform, bool tolerateComponentLoadErrors)
         {
             if (platform.GetBasePlatform() != Platform.MySQL) return;
