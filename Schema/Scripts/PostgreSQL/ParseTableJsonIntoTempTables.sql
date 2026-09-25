@@ -15,7 +15,16 @@
            elem ->> 'Name' AS "Name",
            COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(elem ->> 'VariantName', '') AS "VariantName",
-           COALESCE(elem ->> 'OldName', '') AS "OldName",
+           -- An editor that quotes identifiers stores OldName WITH the quotes -- "users", not users.
+           -- PostgreSQL takes an authored name verbatim, so the rename match downstream found nothing,
+           -- NO rename happened, the new name was created empty and the old object survived
+           -- unreferenced -- and a later deploy with a Drop...RemovedFromProduct flag then dropped it
+           -- WITH ITS DATA. Strip one wrapping pair here, once, so the match and the emitted DDL agree.
+           -- SQL Server and MySQL already unwrap at their rename sites (fn_StripBracketWrapping /
+           -- SchemaSmith_StripBacktickWrapping); PostgreSQL was the engine that did not.
+           CASE WHEN (elem ->> 'OldName') LIKE '"%"' AND LENGTH(elem ->> 'OldName') > 1
+                THEN SUBSTRING((elem ->> 'OldName'), 2, LENGTH(elem ->> 'OldName') - 2)
+                ELSE COALESCE(elem ->> 'OldName', '') END AS "OldName",
            COALESCE((elem ->> 'RowLevelSecurity')::BOOLEAN, false) AS "RowLevelSecurity",
            COALESCE((elem ->> 'ForceRowLevelSecurity')::BOOLEAN, false) AS "ForceRowLevelSecurity",
            COALESCE(elem ->> 'AccessMethod', '') AS "AccessMethod",
@@ -74,7 +83,16 @@
            COALESCE(celem ->> 'Compression', '') AS "Compression",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName",
-           COALESCE(celem ->> 'OldName', '') AS "OldName",
+           -- An editor that quotes identifiers stores OldName WITH the quotes -- "users", not users.
+           -- PostgreSQL takes an authored name verbatim, so the rename match downstream found nothing,
+           -- NO rename happened, the new name was created empty and the old object survived
+           -- unreferenced -- and a later deploy with a Drop...RemovedFromProduct flag then dropped it
+           -- WITH ITS DATA. Strip one wrapping pair here, once, so the match and the emitted DDL agree.
+           -- SQL Server and MySQL already unwrap at their rename sites (fn_StripBracketWrapping /
+           -- SchemaSmith_StripBacktickWrapping); PostgreSQL was the engine that did not.
+           CASE WHEN (celem ->> 'OldName') LIKE '"%"' AND LENGTH(celem ->> 'OldName') > 1
+                THEN SUBSTRING((celem ->> 'OldName'), 2, LENGTH(celem ->> 'OldName') - 2)
+                ELSE COALESCE(celem ->> 'OldName', '') END AS "OldName",
            COALESCE(celem ->> 'CheckExpression', '') AS "CheckExpression"
       FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
       CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Columns')::JSON) AS celem(value);
