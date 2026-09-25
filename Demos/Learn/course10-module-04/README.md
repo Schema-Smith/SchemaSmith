@@ -11,9 +11,10 @@ Two moving parts, and it's worth keeping them straight:
    `SchemaSmith.TableQuench` reads a serialized model payload to deploy your tables. On a modern
    tier it reads that payload as JSON (`OPENJSON`); below SQL Server database compatibility level
    130 it reads the **same** payload as XML, because `OPENJSON` parse-errors down there. Same
-   proc name, same package, no flag — the engine swaps the body at kindle time. You never see it.
-   The knob that governs it, `Target:CompatEncoding` (`auto｜legacy｜modern`, default `auto`),
-   is SQL-Server-only and almost never touched.
+   proc name, same package, no flag — the engine swaps the body at kindle time. You do not choose it,
+   but as of 2.7.0 you can *see* it: pre-flight names the encoding per database, right under the
+   detected-version line. The knob that governs it, `Target:CompatEncoding`
+   (`auto｜legacy｜modern`, default `auto`), is SQL-Server-only and almost never touched.
 
 2. **When you shred a model-payload token in your *own* SQL, the choice is yours.** The
    `{{TableSchema}}`-family tokens each ship an always-present **XML twin** — `{{TableXml}}`,
@@ -40,18 +41,28 @@ shred.
 
 ---
 
-## Part A — deploy the package (the engine's encoding switch is invisible)
-
-<!-- TRAINING-RELEASE-PIN #encoding-log -- on 2.7.0, SchemaQuench logs "[db] model ingest encoding: Json|Xml" after
-the "detected SQL Server version" line. Retitle Part A (the switch is automatic, no longer invisible), replace
-"nothing in the log or the result tells you which" with the new log line on both tiers, and adjust the intro's
-"You never see it". -->
+## Part A — deploy the package (watch the engine's encoding switch)
 
 The `sqlserver/package` declares two tables — `dbo.Widget` (a model worth serializing) and
 `dbo.TableCatalog` (an audit table Part B fills). Deploying it to any tier looks identical from
-the outside. The `learn_2008` deploy reads its model payload as XML internally; the `learn_2022`
-deploy reads it as JSON — and nothing in the log or the result tells you which, because it does
-not matter. The tables land the same way on both.
+the outside. The `learn_2008` deploy reads its model payload as XML internally; the `learn_2022` deploy reads it
+as JSON. The tables land the same way on both — but the log now says which route it took, on the line
+straight after the detected version:
+
+```
+[learn_2022] detected SQL Server version 16.0.4260.1 (compatibility level 160)
+[learn_2022] model ingest encoding: Json (auto)
+```
+
+```
+[learn_2008] detected SQL Server version 16.0.4260.1 (compatibility level 100)
+[learn_2008] model ingest encoding: Xml (auto)
+```
+
+One server, one package, two encodings — and `(auto)` says the engine decided rather than a setting.
+Same binary, same compatibility level 100 that drives every other degrade in this course. Run the 2016
+tier too and you will see `Json (auto)` at compatibility level 130, which is the boundary itself: 130 is
+modern, and only below it does the payload go to XML.
 
 ```
 cd sqlserver
