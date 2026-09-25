@@ -347,9 +347,9 @@ public class SchemaTongs
         // way the object files do (WritePackageObject). Stamped here, once the schemas are on disk.
         // Neither file carries variants, so this is outside the byte-for-byte promise that governs
         // object files.
-        RepositoryHelper.StampSchemaRef(_productPath, Path.Combine(_productPath, "Product.json"),
+        RepositoryHelper.StampSchemaRef(_productPath, Path.Join(_productPath, "Product.json"),
             "products", _platform, _progressLog.Warn);
-        RepositoryHelper.StampSchemaRef(_productPath, Path.Combine(_templatePath, "Template.json"),
+        RepositoryHelper.StampSchemaRef(_productPath, Path.Join(_templatePath, "Template.json"),
             "templates", _platform, _progressLog.Warn);
 
         CastDatabaseObjects(targetDb);
@@ -952,7 +952,7 @@ public class SchemaTongs
     /// </remarks>
     private void WritePackageObject<T>(string filePath, T obj, string schemaKind) where T : class
     {
-        var schemaFile = Path.Combine(_productPath, ".json-schemas",
+        var schemaFile = Path.Join(_productPath, ".json-schemas",
             $"{schemaKind}.{_platform.ToCanonicalString().ToLower()}.schema");
         if (obj != null && FileWrapper.GetFromFactory().Exists(schemaFile))
         {

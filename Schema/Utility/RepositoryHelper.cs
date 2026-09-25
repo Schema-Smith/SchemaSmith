@@ -428,7 +428,7 @@ public static class RepositoryHelper
     /// </remarks>
     public static string BuildSchemaRef(string productPath, string jsonFilePath, string schemaKind, Platform platform)
     {
-        var schemaFile = Path.Combine(productPath, ".json-schemas",
+        var schemaFile = Path.Join(productPath, ".json-schemas",
             $"{schemaKind}.{platform.ToCanonicalString().ToLower()}.schema");
         var fromDirectory = Path.GetDirectoryName(Path.GetFullPath(jsonFilePath)) ?? productPath;
         return Path.GetRelativePath(fromDirectory, Path.GetFullPath(schemaFile)).Replace('\\', '/');
@@ -463,7 +463,7 @@ public static class RepositoryHelper
         Platform platform, Action<string> warn = null)
     {
         var file = FileWrapper.GetFromFactory();
-        var schemaFile = Path.Combine(productPath, ".json-schemas",
+        var schemaFile = Path.Join(productPath, ".json-schemas",
             $"{schemaKind}.{platform.ToCanonicalString().ToLower()}.schema");
         if (!file.Exists(jsonFilePath) || !file.Exists(schemaFile)) return false;
 
@@ -475,7 +475,15 @@ public static class RepositoryHelper
             file.WriteAllText(jsonFilePath, updated);
             return true;
         }
-        catch (Exception ex)
+        // Narrow, not blanket: a malformed file (JsonException) or one that cannot be read or rewritten
+        // (IOException / UnauthorizedAccessException) must not abort the package, but a NullReference or
+        // an InvalidOperation here is a defect in this method and should surface rather than be logged
+        // as if the user's file were at fault.
+        catch (JsonException ex) { return WarnNotStamped(ex); }
+        catch (IOException ex) { return WarnNotStamped(ex); }
+        catch (UnauthorizedAccessException ex) { return WarnNotStamped(ex); }
+
+        bool WarnNotStamped(Exception ex)
         {
             (warn ?? (m => LogFactory.GetLogger(nameof(RepositoryHelper)).Warn(m)))(
                 $"'{jsonFilePath}' could not be stamped with a $schema reference ({ex.Message}). "
@@ -488,7 +496,7 @@ public static class RepositoryHelper
     {
         var file = FileWrapper.GetFromFactory();
         var directory = DirectoryWrapper.GetFromFactory();
-        if (!directory.Exists(Path.Combine(productPath, ".json-schemas"))) return 0;
+        if (!directory.Exists(Path.Join(productPath, ".json-schemas"))) return 0;
         warn ??= message => LogFactory.GetLogger(nameof(RepositoryHelper)).Warn(message);
 
         var stamped = 0;
@@ -498,7 +506,7 @@ public static class RepositoryHelper
             // reference to the one that is missing is worse than no reference: editors report it as a
             // broken schema rather than silently skipping, and nothing in the deploy path would ever
             // surface it.
-            if (!file.Exists(Path.Combine(productPath, ".json-schemas",
+            if (!file.Exists(Path.Join(productPath, ".json-schemas",
                     $"{kind}.{platform.ToCanonicalString().ToLower()}.schema")))
                 continue;
 
@@ -511,29 +519,32 @@ public static class RepositoryHelper
                 file.WriteAllText(jsonFile, updated);
                 stamped++;
             }
-            catch (Exception ex)
-            {
-                // One unparseable file must not abort the package: the rest are still correct, and the
-                // name is what the user needs in order to go look at it.
-                warn($"'{jsonFile}' could not be stamped with a $schema reference ({ex.Message}). "
-                     + "The file is unchanged; deploy behavior is unaffected.");
-            }
+            // One unparseable or unwritable file must not abort the package: the rest are still correct,
+            // and the name is what the user needs in order to go look at it. Narrowed to the three that
+            // the file actually causes -- a defect in this loop should still surface as a crash.
+            catch (JsonException ex) { WarnNotStamped(jsonFile, ex); }
+            catch (IOException ex) { WarnNotStamped(jsonFile, ex); }
+            catch (UnauthorizedAccessException ex) { WarnNotStamped(jsonFile, ex); }
         }
         return stamped;
+
+        void WarnNotStamped(string path, Exception ex) =>
+            warn($"'{path}' could not be stamped with a $schema reference ({ex.Message}). "
+                 + "The file is unchanged; deploy behavior is unaffected.");
     }
 
     private static IEnumerable<(string Path, string Kind)> EnumerateSchemaCoveredFiles(string productPath, IDirectory directory)
     {
-        var productFile = Path.Combine(productPath, "Product.json");
+        var productFile = Path.Join(productPath, "Product.json");
         if (FileWrapper.GetFromFactory().Exists(productFile))
             yield return (productFile, "products");
 
-        var templatesRoot = Path.Combine(productPath, "Templates");
+        var templatesRoot = Path.Join(productPath, "Templates");
         if (!directory.Exists(templatesRoot)) yield break;
 
         foreach (var templateDirectory in directory.GetDirectories(templatesRoot, "*", SearchOption.TopDirectoryOnly))
         {
-            var templateFile = Path.Combine(templateDirectory, "Template.json");
+            var templateFile = Path.Join(templateDirectory, "Template.json");
             if (FileWrapper.GetFromFactory().Exists(templateFile))
                 yield return (templateFile, "templates");
 

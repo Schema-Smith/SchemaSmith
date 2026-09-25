@@ -191,25 +191,25 @@ public class SchemaRefStampingTests
         // fixture is built that way on purpose. Stamping on folder presence alone wrote a reference
         // to a file that was not there, which an editor reports as a broken schema and which nothing
         // in the deploy path would ever surface.
-        var root = Path.Combine(Path.GetTempPath(), "ss-partial-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Join(Path.GetTempPath(), "ss-partial-" + Guid.NewGuid().ToString("N"));
         try
         {
-            Directory.CreateDirectory(Path.Combine(root, ".json-schemas"));
-            Directory.CreateDirectory(Path.Combine(root, "Templates", "Main", "Tables"));
+            Directory.CreateDirectory(Path.Join(root, ".json-schemas"));
+            Directory.CreateDirectory(Path.Join(root, "Templates", "Main", "Tables"));
 
             // products exists; tables deliberately does not.
-            File.WriteAllText(Path.Combine(root, ".json-schemas", "products.sqlserver.schema"), "{}");
-            File.WriteAllText(Path.Combine(root, "Product.json"), "{\n  \"Name\": \"P\"\n}");
-            File.WriteAllText(Path.Combine(root, "Templates", "Main", "Tables", "dbo.Widget.json"),
+            File.WriteAllText(Path.Join(root, ".json-schemas", "products.sqlserver.schema"), "{}");
+            File.WriteAllText(Path.Join(root, "Product.json"), "{\n  \"Name\": \"P\"\n}");
+            File.WriteAllText(Path.Join(root, "Templates", "Main", "Tables", "dbo.Widget.json"),
                 "{\n  \"Name\": \"[Widget]\"\n}");
 
             RepositoryHelper.StampSchemaRefs(root, Platform.SqlServer, _ => { });
 
             Assert.Multiple(() =>
             {
-                Assert.That(File.ReadAllText(Path.Combine(root, "Product.json")),
+                Assert.That(File.ReadAllText(Path.Join(root, "Product.json")),
                     Does.Contain("$schema"), "products schema exists, so Product.json should be stamped.");
-                Assert.That(File.ReadAllText(Path.Combine(root, "Templates", "Main", "Tables", "dbo.Widget.json")),
+                Assert.That(File.ReadAllText(Path.Join(root, "Templates", "Main", "Tables", "dbo.Widget.json")),
                     Does.Not.Contain("$schema"),
                     "tables schema is absent, so the table file must NOT gain a dangling reference.");
             });
@@ -223,18 +223,18 @@ public class SchemaRefStampingTests
     [Test]
     public void StampSchemaRefs_NoOpsWhenThePackageHasNoSchemasAtAll()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ss-noschemas-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Join(Path.GetTempPath(), "ss-noschemas-" + Guid.NewGuid().ToString("N"));
         try
         {
             Directory.CreateDirectory(root);
-            File.WriteAllText(Path.Combine(root, "Product.json"), "{\n  \"Name\": \"P\"\n}");
+            File.WriteAllText(Path.Join(root, "Product.json"), "{\n  \"Name\": \"P\"\n}");
 
             var stamped = RepositoryHelper.StampSchemaRefs(root, Platform.SqlServer, _ => { });
 
             Assert.Multiple(() =>
             {
                 Assert.That(stamped, Is.Zero);
-                Assert.That(File.ReadAllText(Path.Combine(root, "Product.json")), Does.Not.Contain("$schema"));
+                Assert.That(File.ReadAllText(Path.Join(root, "Product.json")), Does.Not.Contain("$schema"));
             });
         }
         finally
@@ -246,17 +246,17 @@ public class SchemaRefStampingTests
     [Test]
     public void StampSchemaRefs_IsIdempotent()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ss-idem-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Join(Path.GetTempPath(), "ss-idem-" + Guid.NewGuid().ToString("N"));
         try
         {
-            Directory.CreateDirectory(Path.Combine(root, ".json-schemas"));
-            File.WriteAllText(Path.Combine(root, ".json-schemas", "products.sqlserver.schema"), "{}");
-            File.WriteAllText(Path.Combine(root, "Product.json"), "{\n  \"Name\": \"P\"\n}");
+            Directory.CreateDirectory(Path.Join(root, ".json-schemas"));
+            File.WriteAllText(Path.Join(root, ".json-schemas", "products.sqlserver.schema"), "{}");
+            File.WriteAllText(Path.Join(root, "Product.json"), "{\n  \"Name\": \"P\"\n}");
 
             var first = RepositoryHelper.StampSchemaRefs(root, Platform.SqlServer, _ => { });
-            var afterFirst = File.ReadAllText(Path.Combine(root, "Product.json"));
+            var afterFirst = File.ReadAllText(Path.Join(root, "Product.json"));
             var second = RepositoryHelper.StampSchemaRefs(root, Platform.SqlServer, _ => { });
-            var afterSecond = File.ReadAllText(Path.Combine(root, "Product.json"));
+            var afterSecond = File.ReadAllText(Path.Join(root, "Product.json"));
 
             Assert.Multiple(() =>
             {
