@@ -110,6 +110,36 @@ Look in the generated `cast/` folder. Two artifacts, and the difference matters:
   it's for running the merge by hand, handing to a DBA, dropping into a script folder as an override,
   or using the data outside SchemaQuench entirely.
 
+**Open that script before you hand it to anybody.** You are about to give someone a statement that writes
+to their table, and the shape of it is the whole question:
+
+```sql
+MERGE INTO [dbo].[IsoCurrency] AS Target
+USING ( SELECT [Code],[CurrencyName],[IsoNumber] FROM OPENJSON(@v_json) WITH (...) ) AS Source
+ON Source.[Code] = Target.[Code]
+WHEN MATCHED AND (...) THEN
+  UPDATE SET ...
+WHEN NOT MATCHED BY TARGET THEN
+  INSERT (...) VALUES (...)
+;
+```
+
+Two branches: update what matches, insert what is missing. **Nothing deletes.** Rows in the target that
+the content file does not mention are left exactly where they are.
+
+That is the default, and it is opt-in for a reason. Add `"MergeDelete": true` to `ShouldCast` and a third
+branch appears:
+
+```sql
+WHEN NOT MATCHED BY SOURCE THEN
+  DELETE
+```
+
+Now the script is a **full sync**: anything in the table that is not in your content file is removed. That
+is a legitimate thing to want — it is what `MergeType: "Insert/Update/Delete"` asks for on a declared
+`DataDelivery` — but it is a very different script to hand a DBA, and the only visible difference is those
+two lines. Read the branches before you run it, every time.
+
 (`cast/` is generated output — leave it out of source control.)
 
 ## Per-engine notes
