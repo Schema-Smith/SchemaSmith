@@ -562,10 +562,6 @@ public static class RepositoryHelper
     }
 
     /// <summary>
-    /// Returns <paramref name="json"/> with <c>$schema</c> present as its first property, or null if
-    /// the text is not a JSON object this can safely edit.
-    /// </summary>
-    /// <summary>
     /// Re-attaches a UTF-8 BOM the round-trip would otherwise drop. <c>ReadAllText</c> consumes a BOM and
     /// <c>WriteAllText</c> does not re-emit one, so stamping a BOM'd file silently rewrote it without —
     /// contradicting this path's promise that the output is byte-identical but for the reference. Prepending
@@ -642,6 +638,10 @@ public static class RepositoryHelper
         return s.Length;
     }
 
+    /// <summary>
+    /// Returns <paramref name="json"/> with <c>$schema</c> present as its first property, or null if
+    /// the text is not a JSON object this can safely edit.
+    /// </summary>
     private static string WithSchemaRef(string json, string reference)
     {
         // Parse purely as a guard. The result is thrown away and the edit is textual, but a file that
