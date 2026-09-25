@@ -294,7 +294,7 @@ public class SchemaTongs
 
     private string LedgerViewFilter() =>
         _sourceMajor >= 16
-            ? Environment.NewLine + "   AND NOT EXISTS (SELECT 1 FROM sys.tables lt WITH (NOLOCK) WHERE lt.ledger_view_id = o.object_id)"
+            ? Environment.NewLine + "   AND NOT EXISTS (SELECT 1 FROM sys.tables lt WHERE lt.ledger_view_id = o.object_id)"
             : "";
 
     public void CastTemplate()
@@ -3373,7 +3373,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
 SELECT cc.name AS [Name],
        SchemaSmith.fn_StripParenWrapping(cc.definition) AS [Expression],
        cc.parent_column_id
-  FROM sys.check_constraints cc WITH (NOLOCK)
+  FROM sys.check_constraints cc
  WHERE cc.parent_object_id = OBJECT_ID('{EscapeSql(tableSchema)}.{EscapeSql(tableName)}')
  ORDER BY cc.name";
 

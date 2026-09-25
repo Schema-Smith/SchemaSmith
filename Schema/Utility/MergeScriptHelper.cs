@@ -380,13 +380,13 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE,
        CAST(CASE WHEN c.DATA_TYPE IN ('binary','varbinary','image') THEN 1 ELSE 0 END AS BIT) AS IsBinary,
        CAST(CASE WHEN c.DATA_TYPE = 'xml' THEN 1 ELSE 0 END AS BIT) AS IsXml
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc WITH (NOLOCK) ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
   JOIN (SELECT CASE WHEN SCHEMA_NAME(st2.[schema_id]) IN ('sys', 'dbo')
                     THEN '' ELSE SCHEMA_NAME(st2.[schema_id]) + '.' END + st2.[name] AS [name], st2.user_type_id, st2.[schema_id]
-          FROM sys.types st2 WITH (NOLOCK)) st ON st.user_type_id = sc.user_type_id
-  LEFT JOIN sys.identity_columns ident WITH (NOLOCK) ON ident.[Name] = c.COLUMN_NAME
+          FROM sys.types st2) st ON st.user_type_id = sc.user_type_id
+  LEFT JOIN sys.identity_columns ident ON ident.[Name] = c.COLUMN_NAME
                                                     AND ident.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
-  LEFT JOIN sys.computed_columns cc WITH (NOLOCK) ON cc.[name] = c.COLUMN_NAME
+  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
                                                  AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
@@ -622,20 +622,20 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE,
         BindIdentifierParameters(cmd, ("@objname", $"{tableSchema}.{tableName}"));
         const string aggExpr = "CASE WHEN sc.is_nullable = 1 THEN '*' ELSE '' END + '[' + COL_NAME(ic.[object_id], ic.column_id) + ']'";
         const string fromWhere = @"
-  FROM sys.indexes si WITH (NOLOCK)
-  JOIN sys.index_columns ic WITH (NOLOCK) ON ic.[object_id] = si.[object_id]
+  FROM sys.indexes si
+  JOIN sys.index_columns ic ON ic.[object_id] = si.[object_id]
                                          AND ic.index_id = si.index_id
-  JOIN sys.columns sc WITH (NOLOCK) ON sc.[object_id] = ic.[object_id]
+  JOIN sys.columns sc ON sc.[object_id] = ic.[object_id]
                                    AND sc.column_id = ic.column_id
   WHERE si.[object_id] = OBJECT_ID(@objname)
     AND si.index_id = (SELECT TOP 1 si2.index_id
-                         FROM sys.indexes si2 WITH (NOLOCK)
+                         FROM sys.indexes si2
                          WHERE si2.[object_id] = si.[object_id]
                            AND si2.is_unique = 1
                          ORDER BY CASE WHEN is_primary_key = 1 THEN 0 ELSE 1 END,
                                   (SELECT COUNT(*)
-                                    FROM sys.index_columns ic2 WITH (NOLOCK)
-                                    JOIN sys.columns sc WITH (NOLOCK) ON sc.[object_id] = ic2.[object_id] AND sc.column_id = ic2.column_id
+                                    FROM sys.index_columns ic2
+                                    JOIN sys.columns sc ON sc.[object_id] = ic2.[object_id] AND sc.column_id = ic2.column_id
                                     WHERE ic2.[object_id] = si2.[object_id]
                                       AND sc.is_nullable = 0))
 ";
@@ -995,8 +995,8 @@ WHEN MATCHED AND ({updateCompare}) THEN
                        ELSE '[' + c.COLUMN_NAME + ']' END";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc WITH (NOLOCK) ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
-  LEFT JOIN sys.computed_columns cc WITH (NOLOCK) ON cc.[name] = c.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
@@ -1051,7 +1051,7 @@ WHEN MATCHED AND ({updateCompare}) THEN
     {
         BindIdentifierParameters(cmd, ("@objname", $"{tableSchema}.{tableName}"));
         cmd.CommandText = $@"
-SELECT CAST(CASE WHEN EXISTS (SELECT * FROM sys.identity_columns WITH (NOLOCK) WHERE [object_id] = OBJECT_ID(@objname))
+SELECT CAST(CASE WHEN EXISTS (SELECT * FROM sys.identity_columns WHERE [object_id] = OBJECT_ID(@objname))
                  THEN 1 ELSE 0 END AS BIT)
 ";
         return cmd.ExecuteScalar() as bool? ?? false;
@@ -1063,7 +1063,7 @@ SELECT CAST(CASE WHEN EXISTS (SELECT * FROM sys.identity_columns WITH (NOLOCK) W
         var names = string.Join(",", jsonKeys.Select(k => $"'{k.Replace("'", "''")}'"));
         BindIdentifierParameters(cmd, ("@objname", $"{tableSchema}.{tableName}"));
         cmd.CommandText = $@"
-SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c WITH (NOLOCK)
+SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
                               WHERE c.[object_id] = OBJECT_ID(@objname)
                                 AND c.[name] IN ({names}))
                  THEN 1 ELSE 0 END AS BIT)
@@ -1097,14 +1097,14 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c WITH (NOLOCK)
                       CASE WHEN USER_TYPE IN ('GEOGRAPHY', 'GEOMETRY') THEN ', [' + c.COLUMN_NAME + '.STSrid] INT' ELSE '' END";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc WITH (NOLOCK) ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
   JOIN (SELECT CASE WHEN SCHEMA_NAME(st.[schema_id]) IN ('sys', 'dbo')
                     THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END + st.[name] AS USER_TYPE, st.user_type_id
-          FROM sys.types st WITH (NOLOCK)) st ON st.user_type_id = sc.user_type_id
-  LEFT JOIN sys.xml_schema_collections xc WITH (NOLOCK) ON xc.xml_collection_id = sc.xml_collection_id
-  LEFT JOIN sys.identity_columns ident WITH (NOLOCK) ON ident.[Name] = COLUMN_NAME
+          FROM sys.types st) st ON st.user_type_id = sc.user_type_id
+  LEFT JOIN sys.xml_schema_collections xc ON xc.xml_collection_id = sc.xml_collection_id
+  LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
                                                     AND ident.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
-  LEFT JOIN sys.computed_columns cc WITH (NOLOCK) ON cc.[name] = c.COLUMN_NAME
+  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
@@ -1127,10 +1127,10 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c WITH (NOLOCK)
         var aggExpr = "'        [' + c.COLUMN_NAME + ']'";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc WITH (NOLOCK) ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
-  LEFT JOIN sys.identity_columns ident WITH (NOLOCK) ON ident.[Name] = COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
                                                     AND ident.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
-  LEFT JOIN sys.computed_columns cc WITH (NOLOCK) ON cc.[name] = c.COLUMN_NAME
+  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
@@ -1161,10 +1161,10 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c WITH (NOLOCK)
                   '[' + c.COLUMN_NAME + ']'";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc WITH (NOLOCK) ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
-  LEFT JOIN sys.identity_columns ident WITH (NOLOCK) ON ident.[Name] = COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
                                                     AND ident.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
-  LEFT JOIN sys.computed_columns cc WITH (NOLOCK) ON cc.[name] = c.COLUMN_NAME
+  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND ident.[Name] IS NULL

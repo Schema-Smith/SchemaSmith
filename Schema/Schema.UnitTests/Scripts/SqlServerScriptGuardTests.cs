@@ -68,6 +68,68 @@ public class SqlServerScriptGuardTests
         }
     }
 
+    /// <summary>
+    /// The C# sources that BUILD SQL Server catalog queries as string literals. The sibling guard below
+    /// scans these because the resource-based one structurally cannot: it enumerates manifest resources
+    /// filtered to <c>.EndsWith(".sql")</c>, and a query assembled in C# is neither. v2.7.0 dropped the
+    /// NOLOCK hint from every <c>.sql</c> script and stated the property as a fact, while 33 catalog
+    /// reads in these three files kept it and the green guard said nothing.
+    /// </summary>
+    private static IEnumerable<(string Name, string Source)> CatalogBuildingCSharpSources()
+    {
+        // Walk up from the test binary to the repo root, then take the three product files by path.
+        var dir = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
+        while (dir != null && !File.Exists(Path.Join(dir.FullName, "SchemaSmith.sln"))) dir = dir.Parent;
+        Assert.That(dir, Is.Not.Null, "could not locate the repository root from the test directory");
+
+        foreach (var rel in new[]
+                 {
+                     Path.Join("Schema", "Utility", "MergeScriptHelper.cs"),
+                     Path.Join("DataTongs", "DataTongs.cs"),
+                     Path.Join("SchemaTongs", "SchemaTongs.cs"),
+                 })
+        {
+            var full = Path.Join(dir!.FullName, rel);
+            Assert.That(File.Exists(full), $"expected to scan '{rel}' but it is not there -- if it moved, "
+                                           + "move this list with it rather than letting the guard go quiet");
+            yield return (rel, File.ReadAllText(full));
+        }
+    }
+
+    [Test]
+    public void NoCatalogReadBuiltInCSharpCarriesTheNolockHint()
+    {
+        // Same property as the script guard, different surface. Reads of the USER'S OWN data tables are
+        // deliberately not matched: DataTongs extracts row data WITH (NOLOCK) on purpose, to avoid
+        // blocking a production OLTP workload while it reads. That is a different decision from reading
+        // the catalog dirty, and inverting it would change locking behaviour against live tables.
+        var catalogRead = new Regex(
+            @"(?:\bsys\.|\bINFORMATION_SCHEMA\.)\s*\[?\w+\]?\s+(?:AS\s+)?\w*\s*WITH\s*\(\s*NOLOCK",
+            RegexOptions.IgnoreCase);
+
+        var offenders = new List<string>();
+        var scanned = 0;
+        foreach (var (name, source) in CatalogBuildingCSharpSources())
+        {
+            scanned++;
+            foreach (Match m in catalogRead.Matches(source))
+                offenders.Add($"{name}: {Regex.Replace(m.Value, @"\s+", " ")}");
+        }
+
+        // Guards the premise, exactly as the sibling test does: a regex that matched nothing because
+        // nothing was scanned would pass while proving nothing at all.
+        Assert.That(scanned, Is.EqualTo(3), "the C# sources were not all scanned, so this proves nothing");
+
+        Assert.That(offenders, Is.Empty,
+            "A system-catalog read built in C# carries WITH (NOLOCK). This is the same hazard the script "
+            + "guard covers and it is NOT covered by that guard, which only sees embedded .sql resources. "
+            + "The sharpest case is MergeScriptHelper.GetKeyColumnsSqlServer: it picks a MERGE's KEY "
+            + "COLUMNS from sys.indexes/sys.index_columns/sys.columns, so a dirty read that skips a row "
+            + "produces a MERGE keyed on the wrong columns -- no error, wrong rows updated or deleted. "
+            + "Reads of the user's own data tables are intentional and are not matched. Offenders:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
     [Test]
     public void NoCatalogReadCarriesTheNolockHint()
     {
