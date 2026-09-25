@@ -96,6 +96,61 @@ public class SqlServerScriptGuardTests
         }
     }
 
+    /// <summary>
+    /// Every hand-declared <c>[SchemaProperty(Pattern = …)]</c> must reach the generated schema anchored.
+    /// A JSON Schema pattern is a PARTIAL match, so an unanchored alternation is wrong in the permissive
+    /// direction for every consumer that lacks SchemaSmith's own loader — Ajv in CI, and every editor the
+    /// <c>$schema</c> feature was just built to serve. 21 of 25 declarations shipped unanchored; the
+    /// generator now anchors centrally and this holds it there.
+    /// </summary>
+    [Test]
+    public void EveryDeclaredSchemaPropertyPattern_ReachesTheSchemaAnchored()
+    {
+        var offenders = new List<string>();
+        var checked_ = 0;
+        foreach (var type in SchemaAsm.GetTypes().Where(t => t is { IsClass: true, IsAbstract: false }))
+        {
+            foreach (var prop in type.GetProperties())
+            {
+                var attr = prop.GetCustomAttribute<Schema.Domain.SchemaPropertyAttribute>();
+                if (attr == null || string.IsNullOrEmpty(attr.Pattern)) continue;
+                checked_++;
+
+                var emitted = Schema.Utility.SchemaGenerator.DeclaredPatternForTest(
+                    attr.Pattern, attr.PatternIgnoreCase);
+                if (!emitted.StartsWith('^') || !emitted.EndsWith('$'))
+                    offenders.Add($"{type.Name}.{prop.Name}: {emitted}");
+            }
+        }
+
+        Assert.That(checked_, Is.GreaterThan(15), "no declared patterns were found, so this proves nothing");
+        Assert.That(offenders, Is.Empty,
+            "A declared pattern reaches the generated schema unanchored. JSON Schema patterns are partial "
+            + "matches, so 'NEVER|ALWAYS' accepts 'XNEVERY' and 'Y|N' accepts any string containing a Y or "
+            + "an N -- permissive exactly where the schema is the only check a third-party editor has. "
+            + "Offenders:\n  " + string.Join("\n  ", offenders));
+    }
+
+    [Test]
+    public void CaseInsensitivelyReadProperties_EmitAPatternThatAcceptsTheCasingsTheProductDoes()
+    {
+        // The two whose product-side reads were actually measured. MergeType compares OrdinalIgnoreCase
+        // and RebuildPolicy.Mode upper-cases first, so both deploy from lower case while a case-sensitive
+        // pattern failed --Validate on them: the linter contradicting the product.
+        var mergeType = Schema.Utility.SchemaGenerator.DeclaredPatternForTest(
+            "Insert|Insert/Update|Insert/Update/Delete", true);
+        var mode = Schema.Utility.SchemaGenerator.DeclaredPatternForTest("NEVER|ALWAYS|THRESHOLD", true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Regex.IsMatch("insert/update", mergeType), Is.True, "the product accepts it, so must the schema");
+            Assert.That(Regex.IsMatch("Insert/Update", mergeType), Is.True);
+            Assert.That(Regex.IsMatch("XInsertY", mergeType), Is.False, "and it must still be anchored");
+            Assert.That(Regex.IsMatch("never", mode), Is.True, "the product upper-cases before comparing");
+            Assert.That(Regex.IsMatch("XNEVERY", mode), Is.False);
+        });
+    }
+
     [Test]
     public void NoCatalogReadBuiltInCSharpCarriesTheNolockHint()
     {

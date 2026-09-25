@@ -184,7 +184,7 @@
           },
           "MatchType": {
             "type": "string",
-            "pattern": "FULL|PARTIAL|SIMPLE"
+            "pattern": "^(?:FULL|PARTIAL|SIMPLE)$"
           },
           "Extensions": {}
         },
@@ -244,7 +244,7 @@
             },
             "MergeType": {
               "type": "string",
-              "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+              "pattern": "^(?:[Ii][Nn][Ss][Ee][Rr][Tt]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]/[Dd][Ee][Ll][Ee][Tt][Ee])$"
             },
             "MatchColumns": {
               "type": "string"
@@ -271,7 +271,7 @@
             },
             "ContentEncoding": {
               "type": "string",
-              "pattern": "Json|Xml"
+              "pattern": "^(?:Json|Xml)$"
             }
           },
           "additionalProperties": false
@@ -286,7 +286,7 @@
               },
               "MergeType": {
                 "type": "string",
-                "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+                "pattern": "^(?:[Ii][Nn][Ss][Ee][Rr][Tt]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]/[Dd][Ee][Ll][Ee][Tt][Ee])$"
               },
               "MatchColumns": {
                 "type": "string"
@@ -313,7 +313,7 @@
               },
               "ContentEncoding": {
                 "type": "string",
-                "pattern": "Json|Xml"
+                "pattern": "^(?:Json|Xml)$"
               }
             },
             "additionalProperties": false
@@ -362,7 +362,7 @@
       "properties": {
         "Mode": {
           "type": "string",
-          "pattern": "NEVER|ALWAYS|THRESHOLD",
+          "pattern": "^(?:[Nn][Ee][Vv][Ee][Rr]|[Aa][Ll][Ww][Aa][Yy][Ss]|[Tt][Hh][Rr][Ee][Ss][Hh][Oo][Ll][Dd])$",
           "description": "When to rebuild the table instead of altering it in place. NEVER (the default) always alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of pending changes reaches Threshold, which is then required."
         },
         "Threshold": {
@@ -478,11 +478,11 @@
           },
           "Permissive": {
             "type": "string",
-            "pattern": "PERMISSIVE|RESTRICTIVE"
+            "pattern": "^(?:PERMISSIVE|RESTRICTIVE)$"
           },
           "Command": {
             "type": "string",
-            "pattern": "ALL|SELECT|INSERT|UPDATE|DELETE"
+            "pattern": "^(?:ALL|SELECT|INSERT|UPDATE|DELETE)$"
           },
           "Roles": {
             "type": "string"
@@ -531,7 +531,7 @@
     },
     "ReplicaIdentity": {
       "type": "string",
-      "pattern": "DEFAULT|FULL|NOTHING|INDEX",
+      "pattern": "^(?:DEFAULT|FULL|NOTHING|INDEX)$",
       "description": "PostgreSQL only. The table's REPLICA IDENTITY, which determines what a logical-replication publication sends for an UPDATE or DELETE — and whether either is permitted at all on a published table. INDEX requires ReplicaIdentityIndex. Omit to leave the server's current setting alone."
     },
     "ReplicaIdentityIndex": {

@@ -15,7 +15,9 @@ public class DataDelivery
     [JsonProperty(Order = 1)]
     public string ContentFile { get; set; }
 
-    [SchemaProperty(Pattern = "Insert|Insert/Update|Insert/Update/Delete")]
+    // Product-side read measured: DataDeliveryProcessor compares OrdinalIgnoreCase, so "insert/update"
+    // deploys and the pattern must accept it.
+    [SchemaProperty(Pattern = "Insert|Insert/Update|Insert/Update/Delete", PatternIgnoreCase = true)]
     [JsonProperty(Order = 2)]
     public string MergeType { get; set; }
 

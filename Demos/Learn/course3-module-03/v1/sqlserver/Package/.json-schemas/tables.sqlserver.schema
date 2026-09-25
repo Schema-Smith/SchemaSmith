@@ -56,7 +56,7 @@
           },
           "EncryptionType": {
             "type": "string",
-            "pattern": "DETERMINISTIC|RANDOMIZED|NONE"
+            "pattern": "^(?:DETERMINISTIC|RANDOMIZED|NONE)$"
           },
           "EncryptionKey": {
             "type": "string"
@@ -273,7 +273,7 @@
             },
             "MergeType": {
               "type": "string",
-              "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+              "pattern": "^(?:[Ii][Nn][Ss][Ee][Rr][Tt]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]/[Dd][Ee][Ll][Ee][Tt][Ee])$"
             },
             "MatchColumns": {
               "type": "string"
@@ -300,7 +300,7 @@
             },
             "ContentEncoding": {
               "type": "string",
-              "pattern": "Json|Xml"
+              "pattern": "^(?:Json|Xml)$"
             }
           },
           "additionalProperties": false
@@ -315,7 +315,7 @@
               },
               "MergeType": {
                 "type": "string",
-                "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+                "pattern": "^(?:[Ii][Nn][Ss][Ee][Rr][Tt]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]/[Dd][Ee][Ll][Ee][Tt][Ee])$"
               },
               "MatchColumns": {
                 "type": "string"
@@ -342,7 +342,7 @@
               },
               "ContentEncoding": {
                 "type": "string",
-                "pattern": "Json|Xml"
+                "pattern": "^(?:Json|Xml)$"
               }
             },
             "additionalProperties": false
@@ -387,7 +387,7 @@
       "properties": {
         "Mode": {
           "type": "string",
-          "pattern": "NEVER|ALWAYS|THRESHOLD",
+          "pattern": "^(?:[Nn][Ee][Vv][Ee][Rr]|[Aa][Ll][Ww][Aa][Yy][Ss]|[Tt][Hh][Rr][Ee][Ss][Hh][Oo][Ll][Dd])$",
           "description": "When to rebuild the table instead of altering it in place. NEVER (the default) always alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of pending changes reaches Threshold, which is then required."
         },
         "Threshold": {
@@ -431,7 +431,7 @@
           },
           "SecondaryIndexType": {
             "type": "string",
-            "pattern": "VALUE|PATH|PROPERTY"
+            "pattern": "^(?:VALUE|PATH|PROPERTY)$"
           },
           "ShouldApplyExpression": {
             "type": "string"
@@ -592,11 +592,11 @@
     },
     "GraphType": {
       "type": "string",
-      "pattern": "None|Node|Edge"
+      "pattern": "^(?:None|Node|Edge)$"
     },
     "Ledger": {
       "type": "string",
-      "pattern": "Off|AppendOnly|Updatable"
+      "pattern": "^(?:Off|AppendOnly|Updatable)$"
     },
     "TextImageFileGroup": {
       "type": "string"
@@ -616,7 +616,7 @@
     },
     "Durability": {
       "type": "string",
-      "pattern": "SCHEMA_AND_DATA|SCHEMA_ONLY",
+      "pattern": "^(?:SCHEMA_AND_DATA|SCHEMA_ONLY)$",
       "description": "Memory-optimized durability: SCHEMA_AND_DATA (default, data persists) or SCHEMA_ONLY (rows are transient). Only meaningful with MemoryOptimized. Create-time only."
     },
     "CdcFilegroup": {

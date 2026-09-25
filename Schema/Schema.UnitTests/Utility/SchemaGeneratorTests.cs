@@ -159,8 +159,19 @@ public class SchemaGeneratorTests
     [Test]
     public void ShouldApplyPatternConstraint()
     {
+        // Asserts what the pattern ACCEPTS, not its text. The literal form was what let 21 declarations
+        // ship unanchored: a text assertion passes just as happily over a pattern that also accepts
+        // "XNO ACTIONY", which is the defect (Rule 32 -- assert the outcome, not the mechanism).
         var schema = SchemaGenerator.GenerateSchema(typeof(PatternClass));
-        Assert.That(schema["properties"]?["Action"]?["pattern"]?.ToString(), Is.EqualTo("NO ACTION|CASCADE"));
+        var pattern = schema["properties"]?["Action"]?["pattern"]?.ToString();
+        Assert.Multiple(() =>
+        {
+            Assert.That(pattern, Is.Not.Null);
+            Assert.That(Regex.IsMatch("NO ACTION", pattern!), Is.True);
+            Assert.That(Regex.IsMatch("CASCADE", pattern!), Is.True);
+            Assert.That(Regex.IsMatch("XNO ACTIONY", pattern!), Is.False,
+                "an unanchored pattern accepts a value wrapped in anything, which no consumer wants");
+        });
     }
 
     [Test]
@@ -249,7 +260,15 @@ public class SchemaGeneratorTests
         var dataDelivery = schema["properties"]?["DataDelivery"]?["oneOf"]?[0];
         var mergeType = dataDelivery?["properties"]?["MergeType"];
         Assert.That(mergeType?["type"]?.ToString(), Is.EqualTo("string"));
-        Assert.That(mergeType?["pattern"]?.ToString(), Is.EqualTo("Insert|Insert/Update|Insert/Update/Delete"));
+        var mergePattern = mergeType?["pattern"]?.ToString();
+        Assert.Multiple(() =>
+        {
+            Assert.That(mergePattern, Is.Not.Null);
+            Assert.That(Regex.IsMatch("Insert/Update", mergePattern!), Is.True);
+            Assert.That(Regex.IsMatch("insert/update", mergePattern!), Is.True,
+                "the product compares OrdinalIgnoreCase, so the schema must not reject what deploys");
+            Assert.That(Regex.IsMatch("XInsertY", mergePattern!), Is.False, "and it must be anchored");
+        });
 
         var fkItems = schema["properties"]?["ForeignKeys"]?["items"];
         Assert.That(fkItems?["properties"]?["DeleteAction"]?["pattern"]?.ToString(), Is.EqualTo("^(NO ACTION|RESTRICT|CASCADE|SET NULL|SET DEFAULT)?$"));
@@ -675,8 +694,11 @@ public class SchemaGeneratorTests
         Assert.That(oneOf, Is.Not.Null, "DataDelivery schema should accept single object OR array");
         Assert.That(oneOf![0]?["type"]?.ToString(), Is.EqualTo("object"));
         Assert.That(oneOf![1]?["type"]?.ToString(), Is.EqualTo("array"));
-        Assert.That(oneOf![0]?["properties"]?["MergeType"]?["pattern"]?.ToString(),
-            Is.EqualTo("Insert|Insert/Update|Insert/Update/Delete"));
+        var oneOfMergePattern = oneOf![0]?["properties"]?["MergeType"]?["pattern"]?.ToString();
+        Assert.That(oneOfMergePattern, Is.Not.Null);
+        Assert.That(Regex.IsMatch("Insert/Update", oneOfMergePattern!), Is.True);
+        Assert.That(Regex.IsMatch("XInsertY", oneOfMergePattern!), Is.False,
+            "the oneOf branch carries the same anchored pattern as the bare-object branch");
     }
 
     [Test]

@@ -14,7 +14,7 @@
     },
     "DataType": {
       "type": "string",
-      "pattern": "smallint|integer|bigint",
+      "pattern": "^(?:smallint|integer|bigint)$",
       "description": "The sequence's data type: smallint, integer or bigint. Defaults to bigint, matching PostgreSQL."
     },
     "Start": {

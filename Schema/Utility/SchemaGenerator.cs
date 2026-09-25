@@ -209,11 +209,50 @@ public static class SchemaGenerator
         return BuildObjectSchema(type, elementTypeResolver, platform);
     }
 
+    /// <summary>
+    /// Anchors a hand-declared <see cref="SchemaPropertyAttribute.Pattern"/>, and case-folds it when the
+    /// property says the product reads it case-insensitively.
+    /// <para>
+    /// The enum path was fixed for exactly this in the same release; this is the other emitter, and it had
+    /// the identical defect in both directions. A JSON Schema pattern is a PARTIAL match, so the declared
+    /// <c>NEVER|ALWAYS|THRESHOLD</c> accepted <c>XNEVERY</c> — and <c>Y|N</c> accepted any string
+    /// containing a Y or an N. Anchoring here rather than in 21 declarations is the point: it makes the
+    /// omission unrepresentable instead of relying on the next author remembering.
+    /// </para>
+    /// <para>
+    /// An already-anchored declaration is passed through untouched, so the four that were written
+    /// correctly (including the optional-empty <c>^(…)?$</c> forms, which double-anchoring would break)
+    /// keep their exact semantics.
+    /// </para>
+    /// </summary>
+    private static string DeclaredPattern(string pattern, bool ignoreCase)
+    {
+        var alreadyAnchored = pattern.StartsWith('^') && pattern.EndsWith('$');
+        if (!ignoreCase)
+            return alreadyAnchored ? pattern : $"^(?:{pattern})$";
+
+        // Only meaningful on a plain literal alternation, which is what every case-folded declaration is.
+        // Folding a pattern with metacharacters would corrupt it, so refuse rather than guess.
+        var core = alreadyAnchored ? pattern[1..^1] : pattern;
+        if (core.Any(c => "[](){}*+?.\\^$".Contains(c)))
+            throw new InvalidOperationException(
+                $"PatternIgnoreCase is only valid on a plain literal alternation; '{pattern}' has regex "
+                + "metacharacters. Fold it by hand or drop the flag.");
+
+        return "^(?:" + string.Join("|", core.Split('|').Select(CaseInsensitiveLiteral)) + ")$";
+    }
+
+    /// <summary>Test seam for the anchoring guard: the emission rule without reflecting over a
+    /// whole generated schema to recover one property's pattern.</summary>
+    internal static string DeclaredPatternForTest(string pattern, bool ignoreCase) =>
+        DeclaredPattern(pattern, ignoreCase);
+
     private static void ApplyConstraints(PropertyInfo prop, JObject propSchema)
     {
         var attr = prop.GetCustomAttribute<SchemaPropertyAttribute>();
         if (attr == null) return;
-        if (!string.IsNullOrEmpty(attr.Pattern)) propSchema["pattern"] = attr.Pattern;
+        if (!string.IsNullOrEmpty(attr.Pattern))
+            propSchema["pattern"] = DeclaredPattern(attr.Pattern, attr.PatternIgnoreCase);
         if (!double.IsNaN(attr.Minimum)) propSchema["minimum"] = attr.Minimum;
         if (!double.IsNaN(attr.Maximum)) propSchema["maximum"] = attr.Maximum;
         if (attr.MaxLength >= 0) propSchema["maxLength"] = attr.MaxLength;

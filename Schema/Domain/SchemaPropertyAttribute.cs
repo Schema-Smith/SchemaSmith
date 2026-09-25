@@ -7,7 +7,28 @@ namespace Schema.Domain
     [AttributeUsage(AttributeTargets.Property)]
     public class SchemaPropertyAttribute : Attribute
     {
+        /// <summary>
+        /// A JSON Schema <c>pattern</c> for this property. Declare it UNANCHORED and as a plain
+        /// alternation (<c>A|B|C</c>) — <see cref="Schema.Utility.SchemaGenerator"/> anchors it on the way
+        /// out. JSON Schema patterns are partial matches (draft 2020-12 §6.3.3), so an unanchored
+        /// <c>NEVER|ALWAYS</c> accepts <c>XNEVERY</c>, and <c>Y|N</c> accepts any string containing a Y or
+        /// an N. Anchoring centrally rather than per declaration is deliberate: 21 of 25 declarations were
+        /// written without anchors, which says the next one will be too.
+        /// </summary>
         public string Pattern { get; set; }
+
+        /// <summary>
+        /// Set when the PRODUCT reads this property case-insensitively, so the emitted pattern accepts the
+        /// same casings a deploy does. Without it the linter contradicts the product: <c>MergeType</c>
+        /// compares <c>OrdinalIgnoreCase</c> and <c>RebuildPolicy.Mode</c> upper-cases before comparing, so
+        /// both accept <c>never</c> / <c>insert/update</c> while a case-sensitive pattern rejected them.
+        /// <para>
+        /// Opt-in per property BECAUSE IT MUST BE MEASURED, not assumed: only these two had their
+        /// product-side reads read. Applying case-folding to a property the product compares exactly would
+        /// be the same class of mistake in the other direction. Valid only on a plain literal alternation.
+        /// </para>
+        /// </summary>
+        public bool PatternIgnoreCase { get; set; }
         public double Minimum { get; set; } = double.NaN;
         public double Maximum { get; set; } = double.NaN;
         public double MultipleOf { get; set; } = double.NaN;

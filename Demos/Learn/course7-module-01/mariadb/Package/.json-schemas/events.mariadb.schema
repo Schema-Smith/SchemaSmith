@@ -14,7 +14,7 @@
     },
     "ScheduleType": {
       "type": "string",
-      "pattern": "EVERY|AT"
+      "pattern": "^(?:EVERY|AT)$"
     },
     "Interval": {
       "type": "string",
@@ -38,7 +38,7 @@
     },
     "Status": {
       "type": "string",
-      "pattern": "ENABLE|DISABLE|DISABLE ON SLAVE"
+      "pattern": "^(?:ENABLE|DISABLE|DISABLE ON SLAVE)$"
     },
     "Preserve": {
       "type": "boolean"

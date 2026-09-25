@@ -101,7 +101,7 @@
       "properties": {
         "Mode": {
           "type": "string",
-          "pattern": "NEVER|ALWAYS|THRESHOLD",
+          "pattern": "^(?:[Nn][Ee][Vv][Ee][Rr]|[Aa][Ll][Ww][Aa][Yy][Ss]|[Tt][Hh][Rr][Ee][Ss][Hh][Oo][Ll][Dd])$",
           "description": "When to rebuild the table instead of altering it in place. NEVER (the default) always alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of pending changes reaches Threshold, which is then required."
         },
         "Threshold": {
