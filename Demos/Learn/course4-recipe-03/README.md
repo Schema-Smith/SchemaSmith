@@ -22,6 +22,12 @@ schema package.
 # SQL Server
 ../lab-sql.sh sqlserver cookbook_r3 --file sqlserver/seed-server.sql
 
+# PostgreSQL
+../lab-sql.sh postgres cookbook_r3 --file postgres/seed-server.sql
+
+# MySQL
+../lab-sql.sh mysql cookbook_r3 --file mysql/seed-server.sql
+
 # MariaDB
 ../lab-sql.sh mariadb cookbook_r3 --file mariadb/seed-server.sql
 ```
