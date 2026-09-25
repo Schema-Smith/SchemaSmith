@@ -1351,6 +1351,56 @@ public class CoherenceCheckTests
         return new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg")).ToList();
     }
 
+    // ---- SS-IDENT-001: a " in a PostgreSQL name is refused, because no stored form of it deploys ----
 
+    private static PostgreSqlTable QTable(string tableName = "invoice", string columnName = "id",
+                                          string tableOldName = null, string columnOldName = null) =>
+        new()
+        {
+            Name = tableName,
+            Schema = "public",
+            OldName = tableOldName,
+            Columns = { new PostgreSqlColumn { Name = columnName, DataType = "integer", OldName = columnOldName } }
+        };
 
+    [TestCase("in\"voice", "id", null, null, TestName = "quote in the table name")]
+    [TestCase("invoice", "a\"b", null, null, TestName = "quote in a column name")]
+    [TestCase("invoice", "id", "ol\"d", null, TestName = "quote in the table OldName")]
+    [TestCase("invoice", "id", null, "ol\"d", TestName = "quote in a column OldName")]
+    public void AQuoteInAPostgreSqlName_IsRefused(string t, string c, string tOld, string cOld)
+    {
+        // Every one of these reaches PostgreSQL DDL as a wrapped identifier, and the wrap does not escape,
+        // so the deploy emits invalid SQL. The OldName cases matter most: there the failure is SILENT --
+        // the rename matches nothing, the new object is created, and the old one is orphaned for a later
+        // drop-by-absence to remove with its rows.
+        var finding = RunPg(QTable(t, c, tOld, cOld)).Single(f => f.Code == "SS-IDENT-001");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Error), "invalid DDL is not a warning");
+            Assert.That(finding.Message, Does.Contain("double-quote"), finding.Message);
+            Assert.That(finding.Message, Does.Contain("Rename"), "the message has to say what to do");
+        });
+    }
+
+    [Test]
+    public void OrdinaryPostgreSqlNames_AreNotRefused()
+    {
+        // The control that matters: 114 shipped Demos/PostgreSQL files carry ordinary quoted-lowercase
+        // names, and a check that fired on those would fail --Validate across the whole demo catalogue.
+        Assert.That(RunPg(QTable()).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
+    }
+
+    [Test]
+    public void AQuoteInANonPostgreSqlName_IsNotRefusedHere()
+    {
+        // SQL Server and the MySQL family escape at their own wrap sites, so this limit is PostgreSQL's
+        // alone -- scoping it by platform is what keeps it from becoming a cross-engine false error.
+        var sql = new SqlServerTable
+        {
+            Name = "in\"voice", Schema = "dbo",
+            Columns = { new SqlServerColumn { Name = "id", DataType = "int" } }
+        };
+        Assert.That(RunFor(sql, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
+    }
 }

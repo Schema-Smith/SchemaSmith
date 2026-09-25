@@ -22,8 +22,13 @@
            -- WITH ITS DATA. Strip one wrapping pair here, once, so the match and the emitted DDL agree.
            -- SQL Server and MySQL already unwrap at their rename sites (fn_StripBracketWrapping /
            -- SchemaSmith_StripBacktickWrapping); PostgreSQL was the engine that did not.
+           -- Collapse "" to " ONLY when a wrapper was stripped. Inside a quoted PostgreSQL
+           -- identifier "" denotes one ", so the escaped form "a""b" names the column the catalog
+           -- stores as a"b -- and stripping the wrapper alone left a""b, which matches nothing and
+           -- silently skips the rename exactly as the unwrapped case did. Outside a wrapper the
+           -- doubling is literal, so it is deliberately NOT collapsed there.
            CASE WHEN (elem ->> 'OldName') LIKE '"%"' AND LENGTH(elem ->> 'OldName') > 1
-                THEN SUBSTRING((elem ->> 'OldName'), 2, LENGTH(elem ->> 'OldName') - 2)
+                THEN REPLACE(SUBSTRING((elem ->> 'OldName'), 2, LENGTH(elem ->> 'OldName') - 2), '""', '"')
                 ELSE COALESCE(elem ->> 'OldName', '') END AS "OldName",
            COALESCE((elem ->> 'RowLevelSecurity')::BOOLEAN, false) AS "RowLevelSecurity",
            COALESCE((elem ->> 'ForceRowLevelSecurity')::BOOLEAN, false) AS "ForceRowLevelSecurity",
@@ -90,8 +95,13 @@
            -- WITH ITS DATA. Strip one wrapping pair here, once, so the match and the emitted DDL agree.
            -- SQL Server and MySQL already unwrap at their rename sites (fn_StripBracketWrapping /
            -- SchemaSmith_StripBacktickWrapping); PostgreSQL was the engine that did not.
+           -- Collapse "" to " ONLY when a wrapper was stripped. Inside a quoted PostgreSQL
+           -- identifier "" denotes one ", so the escaped form "a""b" names the column the catalog
+           -- stores as a"b -- and stripping the wrapper alone left a""b, which matches nothing and
+           -- silently skips the rename exactly as the unwrapped case did. Outside a wrapper the
+           -- doubling is literal, so it is deliberately NOT collapsed there.
            CASE WHEN (celem ->> 'OldName') LIKE '"%"' AND LENGTH(celem ->> 'OldName') > 1
-                THEN SUBSTRING((celem ->> 'OldName'), 2, LENGTH(celem ->> 'OldName') - 2)
+                THEN REPLACE(SUBSTRING((celem ->> 'OldName'), 2, LENGTH(celem ->> 'OldName') - 2), '""', '"')
                 ELSE COALESCE(celem ->> 'OldName', '') END AS "OldName",
            COALESCE(celem ->> 'CheckExpression', '') AS "CheckExpression"
       FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem

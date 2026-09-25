@@ -33,6 +33,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string RlsWithoutPoliciesCode = "SS-RLS-001";
     private const string PoliciesWithoutRlsCode = "SS-RLS-002";
     private const string ReplicaIdentityIndexMissingCode = "SS-RI-001";
+    private const string QuotedIdentifierCode = "SS-IDENT-001";
     private const string ReplicaIdentityIndexUnknownCode = "SS-RI-002";
     private const string ReplicaIdentityIndexNotUniqueCode = "SS-RI-003";
     private const string ReplicaIdentityIndexIgnoredCode = "SS-RI-004";
@@ -92,6 +93,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckRebuildPolicy(table, location));
             findings.AddRange(CheckRowLevelSecurity(table, location));
             findings.AddRange(CheckReplicaIdentity(table, location));
+        findings.AddRange(CheckPostgreSqlQuotedIdentifier(table, location));
             findings.AddRange(CheckSystemVersioningExclusions(table, location));
             findings.AddRange(CheckCdcFilegroup(table, location));
             findings.AddRange(CheckCompressionOptions(table, location));
@@ -355,6 +357,54 @@ public sealed class CoherenceCheck : ISchemaCheck
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// A <c>"</c> in a PostgreSQL object name is refused, because no stored form of such a name deploys.
+    /// <para>
+    /// The quench re-wraps a stored name as <c>'"' || Name || '"'</c> without escaping, so a bare
+    /// <c>a"b</c> emits <c>"a"b"</c> — invalid DDL — while the escaped form <c>a""b</c> would emit
+    /// correctly but is never what extraction writes, since extraction writes the RAW catalog name. The
+    /// two directions disagree, so no consumer can be correct by construction, and the failure lands at
+    /// deploy time as a syntax error that names nothing useful.
+    /// </para>
+    /// <para>
+    /// Refusing here is deliberately the 2.7.0 answer rather than escaping the ~101 emission sites: it
+    /// states the limit, fails at lint time with something actionable, and cannot break a working package
+    /// because such a package has never deployed. Supporting the name properly is 2.8.0 work — see the
+    /// roadmap entry — and when it lands this check is what gets deleted.
+    /// </para>
+    /// </summary>
+    private static IEnumerable<Finding> CheckPostgreSqlQuotedIdentifier(Table table, string tableLocation)
+    {
+        if (table is not PostgreSqlTable) yield break;
+
+        foreach (var (kind, name) in NamedParts(table))
+        {
+            if (string.IsNullOrEmpty(name) || !name.Contains('"')) continue;
+            yield return new Finding(Severity.Error, QuotedIdentifierCode, Category, tableLocation,
+                $"{kind} name '{name}' contains a double-quote character, which PostgreSQL allows but " +
+                "SchemaSmith cannot deploy: the name is re-wrapped in double quotes without escaping, so " +
+                "every stored form of it produces invalid DDL. Rename the object to remove the quote.");
+        }
+    }
+
+    /// <summary>Every name on a table that reaches PostgreSQL DDL as a wrapped identifier.</summary>
+    private static IEnumerable<(string Kind, string Name)> NamedParts(Table table)
+    {
+        yield return ("Table", table.Name);
+        // Schema is resolved through IDeliverableTable, uniformly across platforms -- the same route
+        // the duplicate check uses at :285, rather than a property Table itself does not carry.
+        var schema = (table as IDeliverableTable)?.Schema;
+        if (!string.IsNullOrEmpty(schema)) yield return ("Schema", schema);
+        if (!string.IsNullOrEmpty(table.OldName)) yield return ("Table OldName", table.OldName);
+        foreach (var c in table.Columns)
+        {
+            yield return ("Column", c.Name);
+            if (!string.IsNullOrEmpty(c.OldName)) yield return ("Column OldName", c.OldName);
+        }
+        foreach (var i in table.Indexes) yield return ("Index", i.Name);
+        foreach (var f in table.ForeignKeys) yield return ("Foreign key", f.Name);
     }
 
     /// <summary>
