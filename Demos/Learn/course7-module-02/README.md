@@ -17,7 +17,7 @@ All four engines. This builds directly on Module 1 (database-per-tenant fan-out)
 - The [sandbox](../docker) is up and verified (all four engines healthy).
 - The fleet exists — run [`../course7-setup`](../course7-setup) once (creates `fleet_tenant_001`…`005`,
   on each engine). Module 1 recommended first.
-- The CLI is on your PATH — `schemaquench --version` answers **2.4.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships the same native `Shop` `Package/` as
 Module 1 (the catalog `DatabaseIdentificationScript` is retained — that's what the config *overrides*),

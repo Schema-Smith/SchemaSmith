@@ -33,7 +33,7 @@ Every modern application stores flexible JSON alongside structured columns. How 
 - Three-engine sandbox is up (`Demos/Learn/docker`).
 - **Run course9-setup first** ([`../course9-setup/README.md`](../course9-setup/README.md)) so the `orders`, `catalog`, and `sessions` databases exist. This module is additive — it deploys one new table per service into those existing databases.
 - Module 1 does not need to have been deployed first. The new tables have no foreign keys to Module 1's tables.
-- `schemaquench --version` answers **2.4.0** or later.
+- `schemaquench --version` answers **2.7.0** or later.
 
 ## Steps
 

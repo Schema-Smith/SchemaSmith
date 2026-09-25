@@ -39,7 +39,7 @@ The **version registry** (`SchemaVersion` / `schema_version`) is standing infras
    CREATE TABLE IF NOT EXISTS schema_version (product VARCHAR(128) NOT NULL PRIMARY KEY, version INT NOT NULL);
    ```
 3. The `quench.settings.json` files carry `"KindleTheForge": true` (on by default; shown here for clarity). The first deploy into a fresh database installs SchemaSmith's helper objects ("kindles the forge") before it does anything else.
-4. The validation-script family is in the stable release; run the lab with the installed `schemaquench` (no from-source build needed). Each command below is run from an engine/version directory, e.g. `sqlserver/v1`.
+4. **The CLI is on your PATH** — `schemaquench --version` answers **2.7.0** or later. The validation-script family itself is long-shipped, but this lab's package carries a `$schema` reference, which SchemaSmith only learned to read in 2.7.0; an older CLI refuses to load the package at all. Each command below is run from an engine/version directory, e.g. `sqlserver/v1`.
 
 ## Scenario 1 — ValidationScript pass
 

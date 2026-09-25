@@ -24,7 +24,7 @@ targeting `ordersservice_dev`.
 
   It creates the twelve `ordersservice_{dev,staging,prod}` databases across the four engines and
   reports `PASS` for each.
-- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.4.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later).
 
 ## Step 1: Establish the base (the v1 package)
 

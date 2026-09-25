@@ -32,7 +32,7 @@ facts that live outside the database.
   `learn_2022` (compat 160), `learn_2016` (compat 130), and `learn_2008` (compat 100) on the SQL
   Server instance at `localhost,11433`. This module deploys into those databases — it does not
   create them.
-- `schemaquench --version` answers **2.4.0** or later (for the `{{CompatibilityLevel}}` token).
+- `schemaquench --version` answers **2.7.0** or later (for the `{{CompatibilityLevel}}` token).
 
 ## Step 0 — stand up the control table (run this first)
 

@@ -18,7 +18,7 @@ And `DataDelivery` is now either a single object (as before) or an **array** of 
 > **Engine floor:** on your own server this lab needs **SQL Server 2016+** or **MySQL 8.0+** — it uses automatic data delivery, which needs `OPENJSON` / `JSON_TABLE`. PostgreSQL and MariaDB run it at any supported version. The Docker sandbox is already above the floor.
 
 - **The sandbox is up.** SQL Server (`localhost,11433`), PostgreSQL (`localhost:15432`), MySQL (`localhost:13306`), MariaDB (`localhost:13307`), all `…/Learn!Passw0rd`.
-- **The CLI is on your PATH** — `schemaquench --version` answers **2.4.0** or later.
+- **The CLI is on your PATH** — `schemaquench --version` answers **2.7.0** or later.
 - **Two databases per engine.** The lab creates `cookbook_r7_dev` and `cookbook_r7_main`; the template's `DatabaseIdentificationScript` targets both, so **one quench deploys to both** and the gates steer the data. Create them first (SQL Server shown):
   ```sql
   CREATE DATABASE cookbook_r7_dev;

@@ -13,7 +13,7 @@ Everything runs against `vault_m3`.
 ## Before you start
 
 - The [sandbox](../docker) is up and [`../course11-setup`](../course11-setup) has been run once.
-- The CLI is on your PATH: `schemaquench --version` answers **2.6.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
 
 > SQL Server needs a partition scheme in `vault_m3`. Create it once:
 > ```bash

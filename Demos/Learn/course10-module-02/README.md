@@ -43,7 +43,7 @@ for each — `{{CompatibilityLevel}}` and `{{ServerMajorVersion}}` — usable in
   `learn_2016` (compat 130) and `learn_2022` (compat 160) on the SQL Server instance, and the
   PostgreSQL 12 floor beside the current 16. This module deploys into those databases — it does
   not create them. See that lab's ports-and-tiers table.
-- `schemaquench --version` answers **2.4.0** or later. Folder/component/sentinel gating shipped
+- `schemaquench --version` answers **2.7.0** or later. Folder/component/sentinel gating shipped
   earlier; the `{{CompatibilityLevel}}` / `{{ServerMajorVersion}}` tokens shipped in 2.4.0.
 
 ## SQL Server — one package, two compatibility levels, three levers

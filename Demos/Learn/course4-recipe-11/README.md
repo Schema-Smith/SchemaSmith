@@ -14,7 +14,7 @@ Everything runs against `cookbook_r11` on PostgreSQL.
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup)
   once — it creates `cookbook_r11`).
-- The CLI is on your PATH: `schemaquench --version` answers **2.6.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
 
 ## Step 1: Watch the scripted form lie to you
 

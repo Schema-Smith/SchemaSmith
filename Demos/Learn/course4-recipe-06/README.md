@@ -14,7 +14,7 @@ Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships `inst
 ## Before you start
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup) once — it creates `cookbook_r6`).
-- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.4.0.0` or later). The PostgreSQL and MySQL recyclebin hooks require v2.3.0 or later — stock v2.1.0 had no MySQL hooks and a broken PostgreSQL hook; SQL Server worked on v2.1.0.
+- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later).
 
 ## Step 1: Deploy, then install the hooks
 

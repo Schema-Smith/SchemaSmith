@@ -22,7 +22,7 @@ package never declares its columns — only the indexes you want on it.
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup)
   once — it creates `cookbook_r13`).
-- The CLI is on your PATH: `schemaquench --version` answers **2.6.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
 
 ## Step 1: Let the "vendor" create its table
 

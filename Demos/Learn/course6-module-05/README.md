@@ -11,7 +11,7 @@ an incident response — the object-level patch that a full-product deploy would
 ## Before you start
 
 - The [sandbox](../docker) is up and verified (all four engines healthy).
-- The CLI is on your PATH — `schemaquench --version` and `schemashears --version` answer **2.4.0** or later.
+- The CLI is on your PATH — `schemaquench --version` and `schemashears --version` answer **2.7.0** or later.
 
 The lab uses two **dedicated** databases per engine — `shop_patch_canary` (where the safe patch lands) and
 `shop_patch_scratch` (the throwaway where we stage the disaster) — so nothing here touches the shared Course 6

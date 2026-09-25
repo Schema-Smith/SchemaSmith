@@ -24,7 +24,7 @@ This lab ships one product, `BillingService`, on all four engines. Each engine f
 
 - The [sandbox](../docker) is up (`docker compose up -d`) and verified (`./verify-sandbox.sh` /
   `.\verify-sandbox.ps1` — all four engines `PASS`).
-- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.4.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later).
 
 ## Step 1: Look at the token contract
 

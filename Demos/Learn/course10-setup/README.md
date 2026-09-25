@@ -35,7 +35,7 @@ mixed-version story itself needs the sandbox.
 
 - The four-engine sandbox is up (`Demos/Learn/docker`) — see [`../README.md`](../README.md).
   This script adds the floor engines on top of it.
-- `schemaquench --version` answers **2.4.0** or later on your PATH. All four engine floors and
+- `schemaquench --version` answers **2.7.0** or later on your PATH. All four engine floors and
   the conditional tokens Course 10 uses shipped in 2.4.0. New to the CLI? Install it in
   [Course 1, Module 1](https://learn.schemasmith.com/01-install-connect/).
 

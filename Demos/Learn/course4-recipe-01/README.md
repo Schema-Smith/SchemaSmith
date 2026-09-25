@@ -19,7 +19,7 @@ Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships the f
 - The [sandbox](../docker) is up (`docker compose up -d`) and verified (all four engines `PASS`).
 - The Course 4 databases exist — run [`../course4-setup`](../course4-setup) once (creates `cookbook_r1_prod`
   and `cookbook_r1_nonprod`, among others).
-- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.4.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later).
 
 ## Step 1: Look at what drives the gates
 

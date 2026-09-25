@@ -21,7 +21,7 @@ points at is itself a table you query, not a literal value.
   PostgreSQL, MySQL, and MariaDB) on each engine and seeds each one's
   `Tenants` table (Dev and Prod list all five tenants — Dev has `005` inactive, Prod has it active; Empty
   gets the table with zero rows).
-- The CLI is on your PATH — `schemaquench --version` answers **2.4.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 Each engine folder ships the same native `Shop` `Package/` — its `Template.json` now carries
 `IdentificationDatabase: "{{ControlDb}}"` alongside the `DatabaseIdentificationScript` — plus three

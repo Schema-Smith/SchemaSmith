@@ -26,7 +26,7 @@ past by accident.
 - **Run [`course10-setup`](../course10-setup/README.md) first** so the mixed fleet is standing:
   PostgreSQL 16 (`15432`) and the PostgreSQL 12 floor (`15433`), plus the SQL Server tiers on
   `localhost,11433`. This module deploys into those; it does not create them.
-- `schemaquench --version` and `schematongs --version` both answer **2.4.0** or later.
+- `schemaquench --version` and `schematongs --version` both answer **2.7.0** or later.
 
 ---
 

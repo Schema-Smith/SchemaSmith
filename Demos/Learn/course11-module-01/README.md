@@ -14,7 +14,7 @@ Three engine families, three different mechanisms, one posture. All against `vau
 ## Before you start
 
 - The [sandbox](../docker) is up, and [`../course11-setup`](../course11-setup) has been run once.
-- The CLI is on your PATH: `schemaquench --version` answers **2.6.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
 
 > **What setup created, and why that matters.** `course11-setup` created a SQL Server partition
 > function (`pf_vault_year`) and two schemes (`ps_vault_year`, `ps_vault_year_alt`), plus a PostgreSQL

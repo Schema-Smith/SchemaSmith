@@ -13,7 +13,7 @@ database on the same connection; PostgreSQL and MySQL/MariaDB can't, so this rec
 - The [sandbox](../docker) is up and verified.
 - The two databases exist — run [`./setup-dbs.sh`](./setup-dbs.sh) once. It creates `Shop_Primary`
   (the publisher) and `Shop_Replica` (the subscriber), both empty. `--reset` drops and recreates both.
-- The CLI is on your PATH — `schemaquench --version` answers **2.4.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 `sqlserver/Package/Product.json` carries two templates, in order:
 

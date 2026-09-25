@@ -14,7 +14,7 @@ and 2 first.
 - The [sandbox](../docker) is up and verified (all four engines healthy).
 - The fleet exists — run [`../course7-setup`](../course7-setup) once (creates `fleet_tenant_001`…`005`).
 - `fleet_tenant_006` does **not** exist yet (that's the point). If a Module 1 run left it, drop it first.
-- The CLI is on your PATH — `schemaquench --version` answers **2.4.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 Each engine folder ships the same native `Shop` `Package/` as Modules 1–2, plus three settings files —
 all naming a roster of one existing tenant (`001`) and one that doesn't exist yet (`006`):

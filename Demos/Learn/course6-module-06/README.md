@@ -11,7 +11,7 @@ Structural validation (Module 3) catches the typo — a missing `DataType`, a mi
 ## Before you start
 
 - **No sandbox, no database, no credentials.** `--Validate` (and `schematongs --WriteSchemasOnly`, used later) never connect to an engine. This lab is entirely database-free.
-- **The CLI is on your PATH** — `schemaquench --version` answers **2.6.0** or later. This lab quotes `--Validate` output verbatim so you can diff your own against it, and 2.6.0 tidied the output: a finding's location is printed once, as the line's prefix, instead of twice. On 2.5.0 every check still fires and every fix still works, but `SS-FK-002`, `SS-TOK-001` and `SS-STALE-001` will each read slightly differently from the boards below.
+- **The CLI is on your PATH** — `schemaquench --version` answers **2.7.0** or later. This lab quotes `--Validate` output verbatim so you can diff your own against it, and 2.7.0 tidied the output: a finding's location is printed once, as the line's prefix, instead of twice. On 2.7.0 every check still fires and every fix still works, but `SS-FK-002`, `SS-TOK-001` and `SS-STALE-001` will each read slightly differently from the boards below.
 - Each engine package under `sqlserver/`, `postgres/`, `mysql/`, and `mariadb/` ships **deliberately broken** — that's the starting point. You'll fix it.
 
 > **Path binding note:** if `--SchemaPackagePath:./sqlserver/Package` doesn't bind in your shell, pass the absolute path via the environment instead: `SmithySettings_SchemaPackagePath="$(pwd)/sqlserver/Package" schemaquench --Validate`. Run `schematongs --WriteSchemasOnly` from *inside* a `Package` directory (it defaults to `.`).

@@ -39,7 +39,7 @@ two-engine feature, not because a third engine was skipped.
 
 - The [sandbox](../docker) is up (`docker compose up -d`) and verified (`./verify-sandbox.sh` /
   `.\verify-sandbox.ps1` — SQL Server and PostgreSQL `PASS`).
-- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.4.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later).
 
 ## Step 1: Look at the two templates
 

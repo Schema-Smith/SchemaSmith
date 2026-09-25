@@ -13,7 +13,7 @@ Everything runs against `vault_m2`.
 ## Before you start
 
 - The [sandbox](../docker) is up and [`../course11-setup`](../course11-setup) has been run once.
-- The CLI is on your PATH: `schemaquench --version` answers **2.6.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
 - You have run [Course 8, Module 2](../course8-module-02) — its Beat 3 is the CDC rebuild refusal, and
   this module builds on it rather than repeating it.
 

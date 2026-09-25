@@ -35,7 +35,7 @@ shred.
   the three SQL Server tiers (`learn_2022` / `learn_2016` / `learn_2008` on `localhost,11433`)
   and the floor engines from the `mixed-fleet` profile — PostgreSQL 12 (`15433`), MySQL 5.7
   (`13316`), MariaDB 10.2 (`13317`). This module deploys into those; it does not create them.
-- `schemaquench --version` answers **2.4.0** or later (for the encoding switch and the XML twin
+- `schemaquench --version` answers **2.7.0** or later (for the encoding switch and the XML twin
   tokens).
 
 ---

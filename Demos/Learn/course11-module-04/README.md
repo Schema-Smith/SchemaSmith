@@ -14,7 +14,7 @@ Runs against `vault_m4`.
 
 - The [sandbox](../docker) is up and [`../course11-setup`](../course11-setup) has been run once — it
   created the `vault_ts` tablespace this module uses.
-- The CLI is on your PATH: `schemaquench --version` answers **2.6.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
 
 ## Step 1: A DBA places a table by hand
 

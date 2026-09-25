@@ -13,7 +13,7 @@ fleet, tune it, handle drift, and resume a partial failure. M5 is the middle ste
 
 - The [sandbox](../docker) is up and verified (all four engines healthy).
 - The fleet exists — run [`../course7-setup`](../course7-setup) once if you haven't already.
-- The CLI is on your PATH — `schemaquench --version` answers **2.4.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 Each engine folder ships a `baseline/` package (the established fleet state), an `after/` package (adds the
 `UQ_Customer_Email` unique index to `Customer`), two settings files, and drift + reset helpers for the two

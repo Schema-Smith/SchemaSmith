@@ -24,7 +24,7 @@ level, including the oldest tier in the fleet.
 - **Run [`course10-setup`](../course10-setup/README.md) first** so the mixed fleet is standing:
   `learn_2022` (compat 160) and `learn_2008` (compat 100) on the shared SQL Server instance
   (`localhost,11433`), and current-tier PostgreSQL 16 (`localhost:15432`).
-- `schemaquench --version` answers **2.5.0 or later** — this recipe runs on the released CLI, no
+- `schemaquench --version` answers **2.7.0 or later** — this recipe runs on the released CLI, no
   from-source override. 2.5.0 is a true minimum, not a pin: earlier releases rejected
   `ContentEncoding: "Xml"` on every engine except SQL Server, which is what Part 4 turns on.
 

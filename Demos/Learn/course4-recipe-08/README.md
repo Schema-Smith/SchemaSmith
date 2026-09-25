@@ -31,7 +31,7 @@ Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships two p
 ## Before you start
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup) once — it creates `cookbook_r8`).
-- The CLI is on your PATH (`schemaquench --version` → `2.4.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` → `2.7.0.0` or later).
 
 ## Step 1: Install the hooks
 
