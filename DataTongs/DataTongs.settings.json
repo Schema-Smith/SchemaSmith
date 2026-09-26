@@ -13,7 +13,12 @@
         // "CompatEncoding": "", // Override the payload encoding chosen for the source server
                                  // (Json | Xml). Blank = choose automatically.
         "ConnectionProperties": {
-            "TrustServerCertificate": "True" // Trust self-signed certificates (recommended for development)
+            // Extra connection-string properties, and they are PER ENGINE -- a key one engine does not know
+            // is rejected outright, so this ships empty rather than pre-filled. SQL Server against a
+            // self-signed certificate wants:
+            //     "TrustServerCertificate": "True"
+            // MySQL and MariaDB reject that key with `Option 'trustservercertificate' not supported`, so do
+            // not leave it here when Platform is MySQL or MariaDb.
         }
     },
     "ScriptPath": "", // Output path for generated merge scripts

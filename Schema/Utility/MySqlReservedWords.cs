@@ -90,14 +90,22 @@ public static class MySqlReservedWords
 
     /// <summary>
     /// Always quote an identifier with backticks, escaping embedded backticks.
+    /// <para>Accepts either a raw name or an already-wrapped one, so re-quoting is idempotent. The unwrap is
+    /// ONE PAIR, via <see cref="Unquote"/>: this used <c>.Trim('`')</c>, which strips EVERY backtick at each
+    /// end, so a raw name beginning or ending with a backtick was destroyed on the way in — the name
+    /// <c>a`</c> came out as <c>`a`</c>, which is the name <c>a</c>. Ordinary names are unaffected either
+    /// way, which is why it went unnoticed. The deployed <c>SchemaSmith_QuoteIdentifier</c> carried the same
+    /// flaw and was fixed with it, so the two halves still agree.</para>
+    /// <para>The residual is unavoidable rather than an oversight: a RAW name that itself begins and ends
+    /// with a backtick cannot be told apart from the delimited form of the name between them, so <c>`x`</c>
+    /// reads as <c>x</c>. SQL Server carries the identical limit with <c>[ ]</c>, both halves agree on that
+    /// reading, and the end-user docs state it.</para>
     /// </summary>
     public static string Quote(string identifier)
     {
         if (string.IsNullOrEmpty(identifier)) return "``";
 
-        // Remove existing backticks and re-quote
-        var unquoted = identifier.Trim().Trim('`');
-        var escaped = unquoted.Replace("`", "``");
+        var escaped = Unquote(identifier).Replace("`", "``");
         return $"`{escaped}`";
     }
 

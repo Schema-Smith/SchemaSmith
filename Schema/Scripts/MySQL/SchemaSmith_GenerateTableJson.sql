@@ -43,7 +43,7 @@ BEGIN
     -- The CASE form evaluates identically on both. Verified live against 5.7 and 8.0.
     -- Get table metadata
     SELECT JSON_OBJECT(
-        'Name', CONCAT('`', t.TABLE_NAME, '`'),
+        'Name', SchemaSmith_QuoteIdentifier(t.TABLE_NAME),
         'Engine', t.ENGINE,
         'RowFormat', t.ROW_FORMAT,
         'CharacterSet', SUBSTRING_INDEX(t.TABLE_COLLATION, '_', 1),
@@ -120,7 +120,7 @@ BEGIN
         -- trap IsSystemVersioned documents in that pass. It also keeps a MariaDB-only property out of
         -- every MySQL package, whose schema does not declare it and would reject it. #408
         JSON_REMOVE(JSON_OBJECT(
-            'Name', CONCAT('`', c.COLUMN_NAME, '`'),
+            'Name', SchemaSmith_QuoteIdentifier(c.COLUMN_NAME),
             'DataType', c.COLUMN_TYPE,
             'Nullable', CASE WHEN c.IS_NULLABLE = 'YES' THEN TRUE ELSE FALSE END,
             -- SchemaSmith_NormalizeColumnDefault folds MariaDB's divergent COLUMN_DEFAULT reporting
@@ -277,7 +277,7 @@ BEGIN
                 'IndexType', s.INDEX_TYPE,
                 'IndexColumns', GROUP_CONCAT(
                     CASE WHEN s.COLUMN_NAME IS NOT NULL THEN
-                        CONCAT('`', s.COLUMN_NAME, '`',
+                        CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME),
                             CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
                             CASE WHEN s.COLLATION = 'D' THEN ' DESC' ELSE '' END
                         )
@@ -311,7 +311,7 @@ BEGIN
                 'UniqueConstraint', CASE WHEN s.INDEX_NAME = 'PRIMARY' OR s.NON_UNIQUE = 0 THEN TRUE ELSE FALSE END,
                 'IndexType', s.INDEX_TYPE,
                 'IndexColumns', GROUP_CONCAT(
-                    CONCAT('`', s.COLUMN_NAME, '`',
+                    CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME),
                         CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
                         CASE WHEN s.COLLATION = 'D' THEN ' DESC' ELSE '' END
                     )
@@ -336,7 +336,7 @@ BEGIN
         SELECT JSON_OBJECT(
             'Name', tc.CONSTRAINT_NAME,
             'Columns', (
-                SELECT GROUP_CONCAT(CONCAT('`', kcu2.COLUMN_NAME, '`') ORDER BY kcu2.ORDINAL_POSITION SEPARATOR ',')
+                SELECT GROUP_CONCAT(SchemaSmith_QuoteIdentifier(kcu2.COLUMN_NAME) ORDER BY kcu2.ORDINAL_POSITION SEPARATOR ',')
                 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu2
                 WHERE kcu2.CONSTRAINT_SCHEMA = p_Schema
                   AND kcu2.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
@@ -346,9 +346,9 @@ BEGIN
                 WHEN rc.UNIQUE_CONSTRAINT_SCHEMA = p_Schema THEN ''
                 ELSE rc.UNIQUE_CONSTRAINT_SCHEMA
             END,
-            'RelatedTable', CONCAT('`', rc.REFERENCED_TABLE_NAME, '`'),
+            'RelatedTable', SchemaSmith_QuoteIdentifier(rc.REFERENCED_TABLE_NAME),
             'RelatedColumns', (
-                SELECT GROUP_CONCAT(CONCAT('`', kcu3.REFERENCED_COLUMN_NAME, '`') ORDER BY kcu3.ORDINAL_POSITION SEPARATOR ',')
+                SELECT GROUP_CONCAT(SchemaSmith_QuoteIdentifier(kcu3.REFERENCED_COLUMN_NAME) ORDER BY kcu3.ORDINAL_POSITION SEPARATOR ',')
                 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu3
                 WHERE kcu3.CONSTRAINT_SCHEMA = p_Schema
                   AND kcu3.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
@@ -400,7 +400,7 @@ WHERE tc.TABLE_SCHEMA = @v_ccSchema
     FROM (
         SELECT JSON_OBJECT(
             'Name', s.INDEX_NAME,
-            'Columns', GROUP_CONCAT(CONCAT('`', s.COLUMN_NAME, '`') ORDER BY s.SEQ_IN_INDEX SEPARATOR ','),
+            'Columns', GROUP_CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME) ORDER BY s.SEQ_IN_INDEX SEPARATOR ','),
             'Comment', CASE WHEN MAX(s.INDEX_COMMENT) = '' THEN NULL ELSE MAX(s.INDEX_COMMENT) END
         ) AS ft_json,
                s.INDEX_NAME AS ft_name
