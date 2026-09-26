@@ -51,8 +51,8 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_en
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Fg NVARCHAR(260) OUTPUT',
     @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Fg = @v_CdcFilegroup OUTPUT
 SELECT [Line] FROM SchemaSmith.fn_FormatJson(REPLACE(REPLACE(REPLACE((
-SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
-       '[' + TABLE_NAME + ']' AS [Name],
+SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
+       QUOTENAME(TABLE_NAME) AS [Name],
        -- sys.partitions is one row PER PARTITION, and compression can legitimately differ across
        -- partitions of the same index -- a scalar read here raised Msg 512 on a partitioned table.
        -- Aggregate instead: a single shared value round-trips as before; non-uniform compression
@@ -79,7 +79,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        -- index_id 0/1) lives on a non-default filegroup, so an ordinary table on PRIMARY (or whatever
        -- the target's default filegroup is) stays exactly as minimal as before this change. Filegroups
        -- predate every supported SQL Server version -- no version gate needed.
-       (SELECT '[' + fg.[name] + ']'
+       (SELECT QUOTENAME(fg.[name])
           FROM sys.indexes tfg
           JOIN sys.filegroups fg ON fg.data_space_id = tfg.data_space_id
          WHERE tfg.[object_id] = st.[object_id]
@@ -94,13 +94,13 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        --
        -- sys.data_spaces.type = 'PS' and sys.index_columns.partition_ordinal both predate the supported
        -- floor, so no version gate. partition_ordinal = 1 because SQL Server partitions on ONE column.
-       (SELECT '[' + ds.[name] + ']'
+       (SELECT QUOTENAME(ds.[name])
           FROM sys.indexes tps
           JOIN sys.data_spaces ds ON ds.data_space_id = tps.data_space_id
          WHERE tps.[object_id] = st.[object_id]
            AND tps.index_id IN (0, 1)
            AND ds.[type] = 'PS') AS [PartitionScheme],
-       (SELECT '[' + pc.[name] + ']'
+       (SELECT QUOTENAME(pc.[name])
           FROM sys.indexes tps
           JOIN sys.data_spaces ds ON ds.data_space_id = tps.data_space_id
           JOIN sys.index_columns pic ON pic.[object_id] = tps.[object_id]
@@ -155,9 +155,9 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        -- path's STRING_AGG is 2017), so this proc never kindles on a binary lacking either. The XML twin
        -- has no such shield and must gate the retention reads at >= 14 explicitly; see the note there.
        CASE WHEN st.temporal_type = 2 AND (hs.[name] <> TABLE_SCHEMA OR h.[name] <> TABLE_NAME + '_Hist')
-            THEN '[' + hs.[name] + ']' END AS [HistoryTableSchema],
+            THEN QUOTENAME(hs.[name]) END AS [HistoryTableSchema],
        CASE WHEN st.temporal_type = 2 AND (hs.[name] <> TABLE_SCHEMA OR h.[name] <> TABLE_NAME + '_Hist')
-            THEN '[' + h.[name] + ']' END AS [HistoryTableName],
+            THEN QUOTENAME(h.[name]) END AS [HistoryTableName],
        -- Reads history_retention_period_unit_desc ('DAY'/'WEEK'/'MONTH'/'YEAR'/'INFINITE') rather than the
        -- numeric history_retention_period_unit code: the desc needs no separately-maintained code table
        -- (its 4 finite values pluralize by simple string concatenation), which is exactly what went wrong
@@ -182,10 +182,10 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
             THEN CAST(1 AS BIT) END AS [PreventDrop],
        '' AS [OldName],
        (SELECT *
-          FROM (SELECT '[' + c.COLUMN_NAME + ']' AS [Name],
+          FROM (SELECT QUOTENAME(c.COLUMN_NAME) AS [Name],
                        UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
                                                CASE WHEN sc.xml_collection_id <> 0
-                                                    THEN (SELECT '[' + SCHEMA_NAME(xc.[schema_id]) + '].[' + xc.[name] + ']' FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
+                                                    THEN (SELECT QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                     END,
                                                sc.is_rowguidcol) +
                                           CASE WHEN ic.column_id IS NOT NULL
@@ -208,7 +208,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                        ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') AS [Collation],
                        ISNULL(mc.masking_function, '') COLLATE DATABASE_DEFAULT AS DataMaskFunction,
                        ISNULL(sc.encryption_type_desc, 'NONE') COLLATE DATABASE_DEFAULT AS EncryptionType,
-                       ISNULL((SELECT '[' + cek.[name] + ']'
+                       ISNULL((SELECT QUOTENAME(cek.[name])
                                  FROM sys.column_encryption_keys cek
                                 WHERE cek.column_encryption_key_id = sc.column_encryption_key_id), '') COLLATE DATABASE_DEFAULT AS EncryptionKey,
                        ISNULL(sc.encryption_algorithm_name, '') COLLATE DATABASE_DEFAULT AS EncryptionAlgorithm,
@@ -247,10 +247,10 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
           ORDER BY CASE WHEN @p_ObjectOrder = 'Physical'
                         THEN (SELECT c2.ORDINAL_POSITION FROM INFORMATION_SCHEMA.COLUMNS c2
                                WHERE c2.TABLE_SCHEMA = @p_Schema AND c2.TABLE_NAME = @p_Table
-                                 AND '[' + c2.COLUMN_NAME + ']' = x.[Name]) END,
+                                 AND QUOTENAME(c2.COLUMN_NAME) = x.[Name]) END,
                    CASE WHEN @p_ObjectOrder = 'Physical' THEN NULL ELSE x.[Name] END
           FOR JSON AUTO) AS [Columns],
-       (SELECT '[' + [Name] + ']' AS [Name],
+       (SELECT QUOTENAME([Name]) AS [Name],
                -- Same per-partition aggregation as the table-level [CompressionType] above.
                (SELECT CASE COUNT(DISTINCT p.data_compression_desc)
                           WHEN 0 THEN NULL
@@ -268,7 +268,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                -- Same emit-only-when-non-default rule as the table-level [FileGroup] above -- a table and
                -- its indexes are commonly split across filegroups on purpose, so this reads si's own
                -- data_space_id independently of the table's.
-               (SELECT '[' + fg.[name] + ']'
+               (SELECT QUOTENAME(fg.[name])
                   FROM sys.filegroups fg
                  WHERE fg.data_space_id = si.data_space_id
                    AND fg.is_default = 0) AS [FileGroup],
@@ -276,11 +276,11 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                -- the table's. An index is not required to be aligned -- a nonclustered index on a
                -- partitioned table may sit on one filegroup, and an index on an ordinary heap may itself be
                -- partitioned -- so inferring either from the other would lose a real design.
-               (SELECT '[' + ds.[name] + ']'
+               (SELECT QUOTENAME(ds.[name])
                   FROM sys.data_spaces ds
                  WHERE ds.data_space_id = si.data_space_id
                    AND ds.[type] = 'PS') AS [PartitionScheme],
-               (SELECT '[' + pc.[name] + ']'
+               (SELECT QUOTENAME(pc.[name])
                   FROM sys.data_spaces ds
                   JOIN sys.index_columns pic ON pic.[object_id] = si.[object_id]
                                                           AND pic.index_id = si.index_id
@@ -302,10 +302,10 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                CASE WHEN fill_factor = 100 THEN 0 ELSE fill_factor END AS [FillFactor],
                CONVERT(BIT, ignore_dup_key) AS [IgnoreDuplicateKey],
                CONVERT(BIT, is_padded) AS [PadIndex],
-               (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
+               (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
                   FROM sys.index_columns ic
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0) AS [IndexColumns],
-               (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY index_column_id)
+               (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY index_column_id)
                   FROM sys.index_columns ic
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1) AS [IncludeColumns],
 			   CASE WHEN has_filter = 1 THEN SchemaSmith.fn_StripParenWrapping(filter_definition) ELSE NULL END AS [FilterExpression],
@@ -332,10 +332,10 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                              AND gc.graph_type IS NOT NULL)
           ORDER BY [Name]
           FOR JSON AUTO) AS [Indexes],
-       (SELECT '[' + i.[name] COLLATE DATABASE_DEFAULT + ']' AS [Name],
-               '[' + COL_NAME(i.[Object_id], ic.column_id) + ']' AS [Column],
+       (SELECT QUOTENAME(i.[name] COLLATE DATABASE_DEFAULT) AS [Name],
+               QUOTENAME(COL_NAME(i.[Object_id], ic.column_id)) AS [Column],
                CONVERT(BIT, CASE WHEN i.xml_index_type = 0 THEN 1 ELSE 0 END) AS [IsPrimary],
-               (SELECT '[' + [Name] COLLATE DATABASE_DEFAULT + ']' FROM sys.xml_indexes i2 WHERE i2.[object_id] = i.[object_id] AND i2.index_id = i.using_xml_index_id AND i.xml_index_type = 1) AS [PrimaryIndex],
+               (SELECT QUOTENAME([Name] COLLATE DATABASE_DEFAULT) FROM sys.xml_indexes i2 WHERE i2.[object_id] = i.[object_id] AND i2.index_id = i.using_xml_index_id AND i.xml_index_type = 1) AS [PrimaryIndex],
                i.secondary_type_desc COLLATE DATABASE_DEFAULT AS [SecondaryIndexType],
 			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + x.[Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.xml_indexes i
@@ -343,13 +343,13 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
           WHERE i.[object_id] = st.[object_id]
           ORDER BY i.[Name]
           FOR JSON AUTO) AS [XmlIndexes],
-	   (SELECT '[' + [Name] + ']' AS [Name],
-               (SELECT STRING_AGG(CAST('[' + COL_NAME(fc.[parent_object_id], fc.parent_column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY fc.constraint_column_id)
+	   (SELECT QUOTENAME([Name]) AS [Name],
+               (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(fc.[parent_object_id], fc.parent_column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY fc.constraint_column_id)
                             FROM sys.foreign_key_columns fc
                             WHERE fk.[object_id] = fc.[constraint_object_id]) AS [Columns],
-               '[' + OBJECT_SCHEMA_NAME(referenced_object_id) + ']' AS RelatedTableSchema,
-               '[' + OBJECT_NAME(referenced_object_id) + ']' AS RelatedTable,
-               (SELECT STRING_AGG(CAST('[' + COL_NAME(fc.[referenced_object_id], fc.referenced_column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY fc.constraint_column_id)
+               QUOTENAME(OBJECT_SCHEMA_NAME(referenced_object_id)) AS RelatedTableSchema,
+               QUOTENAME(OBJECT_NAME(referenced_object_id)) AS RelatedTable,
+               (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(fc.[referenced_object_id], fc.referenced_column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY fc.constraint_column_id)
                             FROM sys.foreign_key_columns fc
                             WHERE fk.[object_id] = fc.[constraint_object_id]) AS [RelatedColumns],
                REPLACE(fk.delete_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT AS [DeleteAction],
@@ -359,8 +359,8 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
           WHERE fk.parent_object_id = st.[object_id]
           ORDER BY [Name]
           FOR JSON AUTO) AS [ForeignKeys],
-       (SELECT '[' + [Name] + ']' AS [Name], 
-               (SELECT STRING_AGG(CAST('[' + COL_NAME(sc.[object_id], sc.column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY sc.stats_column_id)
+       (SELECT QUOTENAME([Name]) AS [Name], 
+               (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(sc.[object_id], sc.column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY sc.stats_column_id)
                   FROM sys.stats_columns sc
                   WHERE s.[object_id] = sc.[object_id] AND s.stats_id = sc.stats_id) AS [Columns],
                SchemaSmith.fn_StripParenWrapping([filter_definition]) AS FilterExpression,
@@ -374,7 +374,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
             AND [Name] NOT LIKE 'hind[_]%'
           ORDER BY [Name]
           FOR JSON AUTO) AS [Statistics],
-       (SELECT '[' + [Name] + ']' AS [Name],
+       (SELECT QUOTENAME([Name]) AS [Name],
                SchemaSmith.fn_StripParenWrapping([definition]) AS [Expression],
                JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', cc.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.check_constraints cc
@@ -382,11 +382,11 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
             AND parent_column_id = 0
           ORDER BY [Name]
           FOR JSON AUTO) AS [CheckConstraints],
-       (SELECT FullTextCatalog = '[' + (SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id) + ']',
-               KeyIndex = '[' + (SELECT i.[Name] FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id]) + ']',
+       (SELECT FullTextCatalog = QUOTENAME((SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
+               KeyIndex = QUOTENAME((SELECT i.[Name] FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
                ChangeTracking = change_tracking_state_desc,
-               [StopList] = '[' + (SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id) + ']',
-               (SELECT STRING_AGG(CAST('[' + COL_NAME(fc.[object_id], fc.column_id) + ']' +
+               [StopList] = QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)),
+               (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)) +
                                        CASE WHEN fc.type_column_id IS NOT NULL
                                             THEN ' TYPE COLUMN [' + COL_NAME(fc.[object_id], fc.type_column_id) + ']'
                                             ELSE '' END +

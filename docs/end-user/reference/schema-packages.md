@@ -160,6 +160,48 @@ The value is token-resolvable (`"IdentificationDatabase": "{{ControlDb}}"`), so 
 
 ---
 
+## How Object Names Are Stored
+
+Each engine stores names in a package the way that engine writes them, and it matters if you hand-edit a
+file.
+
+| Engine | Stored as | Example |
+| --- | --- | --- |
+| SQL Server | delimited, in square brackets | `"Name": "[Order Details]"` |
+| MySQL / MariaDB | delimited, in backticks | ``"Name": "`Order Details`"`` |
+| PostgreSQL | **bare**, with no delimiters | `"Name": "order_details"` |
+
+### If a name contains its own delimiter character, double it
+
+This is the engine's own rule, not a SchemaSmith invention — SQL Server's `QUOTENAME` and MySQL's own quoting
+both work this way — and SchemaTongs writes it for you. It only needs your attention when you type a name
+into a file by hand.
+
+**A `]` inside a SQL Server name is written `]]`:**
+
+| The object is really named | Write it as |
+| --- | --- |
+| `Total` | `[Total]` |
+| `Total]` | `[Total]]]` |
+| `a]b` | `[a]]b]` |
+| `[x]` | `[[x]]]` |
+
+**A backtick inside a MySQL or MariaDB name is written with two backticks** — a column really named
+``a`b`` is written ``` `a``b` ```.
+
+**PostgreSQL needs none of this**, because its names are stored bare: a column really named `a"b` is written
+`a"b`, with nothing added and nothing doubled.
+
+> **Get the doubling wrong and the change is silently skipped, not rejected.** A name that does not match
+> what is deployed is read as a *different* object, so a rename finds nothing to rename: the new name is
+> created as an empty object and the old one is left in place, no longer described by your package. If a
+> later deploy runs with the matching `Drop…RemovedFromProduct` flag, it then removes that leftover object
+> **and its rows**. Nothing errors along the way, because every step did exactly what it was asked to.
+> If you are not certain, let SchemaTongs write the name: extract the object once and copy what it produced.
+
+**The simplest advice is still to avoid these characters in names.** Nothing here is a limitation you have to
+work around — it is what to do if you have inherited a schema that already uses them.
+
 ## Custom Script Folders
 
 By default, every template uses the platform's standard folder layout (see [Default Folders](#default-folders) below). When you need to **add a folder** that isn't in the defaults, **rename a folder**, or **change which slot a folder runs in**, you declare your own `ScriptFolders` array on `Template.json`.
