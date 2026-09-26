@@ -65,6 +65,18 @@ BEGIN
                     ''
                 ),
                 ') ENGINE=', COALESCE(t.Engine, 'InnoDB'),
+                -- DEFAULT CHARACTER SET / COLLATE -- the table's declared collation, which this option list omitted
+                -- entirely while carrying ENGINE, ROW_FORMAT, the CREATE_OPTIONS four, encryption, AUTO_INCREMENT,
+                -- COMMENT, TABLESPACE and DATA DIRECTORY. Without it a table declaring utf8mb3_general_ci was created
+                -- at the SERVER default, so every string column relying on the table default got the wrong collation --
+                -- silently, and collation decides case sensitivity and sort order, hence comparison and uniqueness.
+                -- Found by deploying Demos/{MySQL,MariaDB}/Sakila, which nothing had ever done.
+                -- The charset is DERIVED from the collation's prefix rather than read from a separate column: that is
+                -- the form the table-collation change pass in ModifiedTableQuench already uses, the table-level
+                -- CharacterSet is not parsed into _SchemaSmith_Tables at all, and deriving it guarantees the two agree.
+                CASE WHEN t.Collation IS NOT NULL AND t.Collation != ''
+                     THEN CONCAT(' DEFAULT CHARACTER SET ', SUBSTRING_INDEX(t.Collation, '_', 1), ' COLLATE ', t.Collation)
+                     ELSE '' END,
                 CASE WHEN t.RowFormat IS NOT NULL AND t.RowFormat != ''
                      THEN CONCAT(' ROW_FORMAT=', t.RowFormat)
                      ELSE '' END,
@@ -491,6 +503,18 @@ BEGIN
                           ''
                       ),
                       ') ENGINE=', COALESCE(t.Engine, 'InnoDB'),
+                      -- DEFAULT CHARACTER SET / COLLATE -- the table's declared collation, which this option list omitted
+                      -- entirely while carrying ENGINE, ROW_FORMAT, the CREATE_OPTIONS four, encryption, AUTO_INCREMENT,
+                      -- COMMENT, TABLESPACE and DATA DIRECTORY. Without it a table declaring utf8mb3_general_ci was created
+                      -- at the SERVER default, so every string column relying on the table default got the wrong collation --
+                      -- silently, and collation decides case sensitivity and sort order, hence comparison and uniqueness.
+                      -- Found by deploying Demos/{MySQL,MariaDB}/Sakila, which nothing had ever done.
+                      -- The charset is DERIVED from the collation's prefix rather than read from a separate column: that is
+                      -- the form the table-collation change pass in ModifiedTableQuench already uses, the table-level
+                      -- CharacterSet is not parsed into _SchemaSmith_Tables at all, and deriving it guarantees the two agree.
+                      CASE WHEN t.Collation IS NOT NULL AND t.Collation != ''
+                           THEN CONCAT(' DEFAULT CHARACTER SET ', SUBSTRING_INDEX(t.Collation, '_', 1), ' COLLATE ', t.Collation)
+                           ELSE '' END,
                       CASE WHEN t.RowFormat IS NOT NULL AND t.RowFormat != ''
                            THEN CONCAT(' ROW_FORMAT=', t.RowFormat)
                            ELSE '' END,
