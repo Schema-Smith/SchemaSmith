@@ -59,6 +59,11 @@ public abstract class BacktickWrappingAgreesWithIdentifierUnwrapSharedTests
         yield return new TestCaseData("`Order Details`").SetName("delimited name with a space");
         yield return new TestCaseData("`a``b`").SetName("delimited name containing an escaped backtick");
         yield return new TestCaseData("``").SetName("delimited empty name");
+        // THE ONE INPUT ON WHICH THE TWO HALVES ACTUALLY DIVERGED, and the original eight cases all missed
+        // it: a LONE delimiter. C# Unquote threw ArgumentOutOfRangeException (it both starts and ends with a
+        // backtick, so Substring(1, -1)) while the deployed function guarded on length and returned the
+        // input. An agreement gate that omits the disagreeing input is not a gate.
+        yield return new TestCaseData("`").SetName("lone delimiter");
         // TRIM(BOTH) eats every backtick at each end, so these are where the two halves part company.
         yield return new TestCaseData("`a``").SetName("DIVERGED: name ending in a backtick");
         yield return new TestCaseData("```a`").SetName("DIVERGED: name starting with a backtick");

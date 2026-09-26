@@ -117,7 +117,12 @@ public static class MySqlReservedWords
         if (string.IsNullOrEmpty(identifier)) return identifier;
 
         var trimmed = identifier.Trim();
-        if (trimmed.StartsWith("`") && trimmed.EndsWith("`"))
+        // Length >= 2 is load-bearing, not defensive. A LONE backtick both starts and ends with one, so
+        // without it Substring(1, -1) threw ArgumentOutOfRangeException -- and Unwrap's SQL Server and
+        // PostgreSQL arms both already guarded on length while this one did not. The deployed
+        // SchemaSmith_StripBacktickWrapping guards and returns the input unchanged, so the two halves of the
+        // convention disagreed on exactly that input: one returned a value, the other threw.
+        if (trimmed.Length >= 2 && trimmed.StartsWith("`") && trimmed.EndsWith("`"))
         {
             var unquoted = trimmed.Substring(1, trimmed.Length - 2);
             return unquoted.Replace("``", "`");

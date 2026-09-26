@@ -59,9 +59,67 @@ public class StripBracketWrappingAgreesWithIdentifierUnwrapTests
         yield return new TestCaseData("[Order Details]").SetName("delimited name with a space");
         yield return new TestCaseData("[a]]b]").SetName("delimited name containing an escaped ]");
         yield return new TestCaseData("[]").SetName("delimited empty name");
+        // The lone-delimiter inputs, for the same reason as the MySQL gate: these are where a
+        // length-unguarded strip would part company with its C# counterpart. Both halves happen to agree
+        // here, and the point of the cases is that the gate now proves it rather than never asking.
+        yield return new TestCaseData("[").SetName("lone opening delimiter");
+        yield return new TestCaseData("]").SetName("lone closing delimiter");
         yield return new TestCaseData("[[x]]]").SetName("DIVERGED: delimited form of the name [x]");
         yield return new TestCaseData("[[Orders]]]").SetName("DIVERGED: delimited form of the name [Orders]");
         yield return new TestCaseData("[[a]]b]]]").SetName("DIVERGED: brackets AND an escaped ]");
+    }
+
+    /// <summary>
+    /// <c>fn_SafeBracketWrap</c> must produce the same delimited form SQL Server's own <c>QUOTENAME</c>
+    /// produces. The engine is the oracle here, deliberately.
+    /// <para>REGRESSION GUARD. The wrap is literally <c>'[' + fn_StripBracketWrapping(x) + ']'</c>, and when
+    /// the strip gained its <c>]]</c> → <c>]</c> collapse the wrap got no matching re-escape. The
+    /// correctly-escaped <c>[a]]b]</c> then normalised to the INVALID <c>[a]b]</c>, where the inner <c>]</c>
+    /// terminates the identifier early. This runs in the NORMALIZE step of
+    /// <c>ParseTableJsonIntoTempTables</c>, so an object whose name contains a <c>]</c> could not be CREATED
+    /// by a deploy at all — strictly worse than the rename bug the collapse fixed.</para>
+    /// <para>WHY NOT A ROUND TRIP, which is what I reached for first: asserting
+    /// <c>strip(wrap(x)) == x</c> passes whenever the two halves are consistently wrong. It let
+    /// <c>ends]</c> through, because the wrap emits the malformed <c>[ends]]</c> and the strip reads that
+    /// back as <c>ends]</c> by its own rules — self-consistent and unparseable. Comparing against
+    /// <c>QUOTENAME</c> asks the only question that matters: would SQL Server read this as the name we
+    /// meant.</para>
+    /// </summary>
+    [TestCaseSource(nameof(RawNames))]
+    public void SafeBracketWrapMatchesQuoteName(string rawName)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT SchemaSmith.fn_SafeBracketWrap(@p), QUOTENAME(@p)";
+        var p = cmd.CreateParameter();
+        p.ParameterName = "@p";
+        p.Value = rawName;
+        cmd.Parameters.Add(p);
+
+        using var reader = cmd.ExecuteReader();
+        Assert.That(reader.Read(), Is.True);
+        var ours = reader.GetString(0);
+        var engines = reader.GetString(1);
+
+        Assert.That(ours, Is.EqualTo(engines),
+            $"fn_SafeBracketWrap('{rawName}') produced '{ours}' where SQL Server's own QUOTENAME produces "
+            + $"'{engines}'. The wrap must re-escape what the strip collapses, or the normalize step turns a "
+            + "correctly escaped name into DDL the engine cannot parse and the object cannot be created.");
+    }
+
+    /// <summary>
+    /// RAW names, which is what the wrap is handed. Deliberately excludes a name that is ITSELF bracketed:
+    /// the wrap strips one layer before wrapping, so it tolerates an already-delimited input, and a raw
+    /// <c>[x]</c> is indistinguishable from the delimited form of <c>x</c>. That residual is documented for
+    /// both engines and is not what this guards.
+    /// </summary>
+    private static IEnumerable<TestCaseData> RawNames()
+    {
+        yield return new TestCaseData("Orders").SetName("ordinary name");
+        yield return new TestCaseData("Order Details").SetName("name with a space");
+        yield return new TestCaseData("a]b").SetName("REGRESSION: contains one ]");
+        yield return new TestCaseData("a]]b").SetName("REGRESSION: contains two consecutive ]");
+        yield return new TestCaseData("ends]").SetName("REGRESSION: ends in ]");
+        yield return new TestCaseData("]starts").SetName("REGRESSION: starts with ]");
     }
 
     [TestCaseSource(nameof(Identifiers))]
