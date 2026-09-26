@@ -1403,4 +1403,214 @@ public class CoherenceCheckTests
         };
         Assert.That(RunFor(sql, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
     }
+
+    // ---- SS-IDENT-001's POPULATION: one case per name kind that reaches the unescaped re-wrap ----
+    //
+    // A case per kind, deliberately, because the population is a hand-written helper and a kind dropped
+    // from it fails silently -- the check still passes, on a smaller set. Three of the original kinds
+    // (Schema, Index, Foreign key) shipped with no test at all and were only ever exercised by an
+    // out-of-band probe, which is exactly how that happens.
+    //
+    // Every kind below was read at its emission site in the shipped PostgreSQL quench scripts and
+    // confirmed to concatenate the stored value between bare double quotes with no doubling. Names that
+    // go through QUOTE_IDENT are NOT here and must not be added: a policy name (MissingIndexesAnd
+    // ConstraintsQuench:321/375/410) escapes correctly, so refusing a quote in one would be a restriction
+    // the engine does not impose.
+
+    private static System.Collections.Generic.IEnumerable<TestCaseData> QuotedTableNameKinds()
+    {
+        PostgreSqlTable Base() => new()
+        {
+            Name = "invoice",
+            Schema = "public",
+            Columns = { new PostgreSqlColumn { Name = "id", DataType = "integer" } }
+        };
+
+        PostgreSqlTable With(System.Action<PostgreSqlTable> mutate)
+        {
+            var t = Base();
+            mutate(t);
+            return t;
+        }
+
+        yield return new TestCaseData(With(t => t.Name = "in\"voice"), "Table").SetName("table name");
+        yield return new TestCaseData(With(t => t.Schema = "pub\"lic"), "Schema").SetName("schema name");
+        yield return new TestCaseData(With(t => t.OldName = "ol\"d"), "Table OldName").SetName("table OldName");
+        yield return new TestCaseData(With(t => t.Columns[0].Name = "a\"b"), "Column").SetName("column name");
+        yield return new TestCaseData(With(t => t.Columns[0].OldName = "ol\"d"), "Column OldName").SetName("column OldName");
+        yield return new TestCaseData(
+            With(t => t.Indexes.Add(new PostgreSqlIndex { Name = "ix\"1", IndexColumns = "id" })),
+            "Index").SetName("index name");
+        yield return new TestCaseData(
+            With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
+                { Name = "fk\"1", Columns = "id", RelatedTable = "customer", RelatedColumns = "id" })),
+            "Foreign key").SetName("foreign key name");
+
+        // The four table-tier kinds the original population missed.
+        yield return new TestCaseData(
+            With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
+            {
+                Name = "fk_1", Columns = "id", RelatedTable = "cus\"tomer", RelatedColumns = "id"
+            })),
+            "Foreign key RelatedTable").SetName("FK RelatedTable");
+        yield return new TestCaseData(
+            With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
+            {
+                Name = "fk_1", Columns = "id", RelatedTable = "customer", RelatedColumns = "id",
+                RelatedTableSchema = "ot\"her"
+            })),
+            "Foreign key RelatedTableSchema").SetName("FK RelatedTableSchema");
+        yield return new TestCaseData(
+            With(t => t.CheckConstraints.Add(new PostgreSqlCheckConstraint { Name = "ck\"1", Expression = "id > 0" })),
+            "Check constraint").SetName("check constraint name");
+        yield return new TestCaseData(
+            With(t => t.ExcludeConstraints.Add(new ExcludeConstraint { Name = "ex\"1" })),
+            "Exclude constraint").SetName("exclude constraint name");
+        yield return new TestCaseData(
+            With(t => t.Statistics.Add(new Schema.Domain.PostgreSQL.Statistic { Name = "st\"1", StatisticsColumns = "id" })),
+            "Statistics").SetName("statistics name");
+
+        // ReplicaIdentityIndex is a POINTER at an index, and the realistic shape is a quote in the pointer
+        // while the index it names is clean -- which is also the only shape that isolates this kind from
+        // the Index kind above.
+        yield return new TestCaseData(
+            With(t =>
+            {
+                t.Indexes.Add(new PostgreSqlIndex { Name = "uq_invoice", IndexColumns = "id", Unique = true });
+                t.ReplicaIdentity = "INDEX";
+                t.ReplicaIdentityIndex = "uq\"invoice";
+            }),
+            "ReplicaIdentityIndex").SetName("ReplicaIdentityIndex pointer");
+    }
+
+    [TestCaseSource(nameof(QuotedTableNameKinds))]
+    public void EveryTableTierNameKind_WithAQuote_IsRefused(PostgreSqlTable table, string expectedKind)
+    {
+        var findings = RunPg(table).Where(f => f.Code == "SS-IDENT-001").ToList();
+
+        Assert.That(findings.Select(f => f.Message).ToList(),
+            Has.Some.StartsWith($"{expectedKind} '"),
+            $"no SS-IDENT-001 names the '{expectedKind}' kind — the population helper has dropped it");
+        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "invalid DDL is not a warning");
+    }
+
+    private static System.Collections.Generic.IEnumerable<TestCaseData> QuotedModeledObjectKinds()
+    {
+        Template With(System.Action<Template> mutate)
+        {
+            var t = new Template { Name = "Main" };
+            mutate(t);
+            return t;
+        }
+
+        yield return new TestCaseData(
+            With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
+                { Name = "mv\"1", Schema = "public", Definition = "SELECT 1" })),
+            "Materialized view").SetName("materialized view name");
+        yield return new TestCaseData(
+            With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
+                { Name = "mv_1", Schema = "pub\"lic", Definition = "SELECT 1" })),
+            "Materialized view schema").SetName("materialized view schema");
+        yield return new TestCaseData(
+            With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
+            {
+                Name = "mv_1", Schema = "public", Definition = "SELECT 1",
+                Indexes = { new PostgreSqlIndex { Name = "ix\"1", IndexColumns = "id" } }
+            })),
+            "Materialized view index").SetName("materialized view index name");
+        yield return new TestCaseData(
+            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = "st\"atus", Schema = "public" })),
+            "Enum type").SetName("enum type name");
+        yield return new TestCaseData(
+            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = "status", Schema = "pub\"lic" })),
+            "Enum type schema").SetName("enum type schema");
+        yield return new TestCaseData(
+            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = "sq\"1", Schema = "public" })),
+            "Sequence").SetName("sequence name");
+        yield return new TestCaseData(
+            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = "sq_1", Schema = "pub\"lic" })),
+            "Sequence schema").SetName("sequence schema");
+        yield return new TestCaseData(
+            With(t => t.DomainTypes.Add(new PostgreSqlDomainType
+                { Name = "em\"ail", Schema = "public", DataType = "text" })),
+            "Domain type").SetName("domain type name");
+        yield return new TestCaseData(
+            With(t => t.DomainTypes.Add(new PostgreSqlDomainType
+                { Name = "email", Schema = "pub\"lic", DataType = "text" })),
+            "Domain type schema").SetName("domain type schema");
+        yield return new TestCaseData(
+            With(t => t.DomainTypes.Add(new PostgreSqlDomainType
+            {
+                Name = "email", Schema = "public", DataType = "text",
+                CheckConstraints = { new PostgreSqlDomainConstraint { Name = "ck\"1", Expression = "VALUE <> ''" } }
+            })),
+            "Domain type check constraint").SetName("domain type check constraint name");
+    }
+
+    [TestCaseSource(nameof(QuotedModeledObjectKinds))]
+    public void EveryModeledObjectNameKind_WithAQuote_IsRefused(Template template, string expectedKind)
+    {
+        var product = new Product
+        {
+            Name = "Acme",
+            Platform = Platform.PostgreSQL,
+            TemplateOrder = new System.Collections.Generic.List<string>()
+        };
+        var findings = new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg"))
+            .Where(f => f.Code == "SS-IDENT-001").ToList();
+
+        Assert.That(findings.Select(f => f.Message).ToList(),
+            Has.Some.StartsWith($"{expectedKind} '"),
+            $"no SS-IDENT-001 names the '{expectedKind}' kind — the population helper has dropped it");
+        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "invalid DDL is not a warning");
+    }
+
+    [Test]
+    public void ACleanlyNamedModeledObjectPackage_IsNotRefused()
+    {
+        // The control for the widened half. Every shipped PostgreSQL demo carries ordinary lowercase names
+        // for these objects, so a check that fired on them would redden --Validate across the catalogue.
+        var template = new Template { Name = "Main" };
+        template.MaterializedViews.Add(new PostgreSqlMaterializedView
+        {
+            Name = "mv_sales", Schema = "public", Definition = "SELECT 1",
+            Indexes = { new PostgreSqlIndex { Name = "ix_mv_sales", IndexColumns = "id" } }
+        });
+        template.EnumTypes.Add(new PostgreSqlEnumType { Name = "status", Schema = "public" });
+        template.Sequences.Add(new PostgreSqlSequence { Name = "sq_invoice", Schema = "public" });
+        template.DomainTypes.Add(new PostgreSqlDomainType
+        {
+            Name = "email", Schema = "public", DataType = "text",
+            CheckConstraints = { new PostgreSqlDomainConstraint { Name = "ck_email", Expression = "VALUE <> ''" } }
+        });
+
+        var product = new Product
+        {
+            Name = "Acme",
+            Platform = Platform.PostgreSQL,
+            TemplateOrder = new System.Collections.Generic.List<string>()
+        };
+
+        Assert.That(new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg"))
+            .Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
+    }
+
+    [Test]
+    public void APolicyNameWithAQuote_IsNotRefused()
+    {
+        // Not an oversight -- CREATE/ALTER/DROP POLICY all wrap the name with QUOTE_IDENT, which doubles an
+        // embedded quote correctly, so the DDL is valid and there is nothing to refuse. Pinned because the
+        // obvious next move on this check is "add every remaining name", and this is the one that must not
+        // be added.
+        var table = new PostgreSqlTable
+        {
+            Name = "invoice",
+            Schema = "public",
+            Columns = { new PostgreSqlColumn { Name = "id", DataType = "integer" } },
+            RowLevelSecurity = true,
+            Policies = { new PostgreSqlPolicy { Name = "ten\"ant_read", UsingExpression = "true" } }
+        };
+
+        Assert.That(RunPg(table).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
+    }
 }

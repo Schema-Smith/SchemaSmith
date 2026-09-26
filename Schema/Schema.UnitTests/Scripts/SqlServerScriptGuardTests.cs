@@ -167,6 +167,13 @@ public class SqlServerScriptGuardTests
     /// </para>
     /// </summary>
     [Test]
+    // WHAT THIS GUARD DOES NOT CATCH, stated so nobody reads a green run as "doc comments are attributed
+    // correctly". It sees only the DOUBLED shape: two summary blocks with nothing between them. The
+    // accident that prompted it was the OTHER shape -- a member inserted between an existing summary and
+    // the member it belonged to, leaving ONE summary sitting above the wrong member. There is exactly one
+    // summary there, so nothing here can see it; deciding a summary describes the member below it is a
+    // reading, not a pattern match. The doubled shape is the half that IS mechanical, and it is the half
+    // that shows up when the insertion lands just after a doc comment instead of just before one.
     public void NoMemberCarriesBackToBackSummaryBlocks()
     {
         var dir = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
@@ -192,7 +199,10 @@ public class SqlServerScriptGuardTests
                     var j = i + 1;
                     while (j < lines.Length && lines[j].Trim().Length == 0) j++;
                     if (j < lines.Length && lines[j].Contains("<summary>", StringComparison.Ordinal))
-                        offenders.Add($"{Path.GetFileName(cs.FullName)}:{i + 1}");
+                        // The path relative to the repository root, not the bare file name: several projects
+                        // carry same-named files (two Statistic.cs, two SqlServerTable-adjacent partials), so
+                        // a bare name leaves the reader grepping for which one.
+                        offenders.Add($"{Path.GetRelativePath(dir!.FullName, cs.FullName)}:{i + 1}");
                 }
             }
         }

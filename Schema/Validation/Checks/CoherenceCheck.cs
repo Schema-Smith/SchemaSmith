@@ -70,6 +70,9 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckModeledFolderObjectCoexistence(template));
 
         foreach (var template in ctx.Templates)
+            findings.AddRange(CheckPostgreSqlQuotedIdentifierOnModeledObjects(template));
+
+        foreach (var template in ctx.Templates)
         foreach (var table in template.Tables)
         {
             var location = $"Template '{template.Name}' / Table '{table.Name}'";
@@ -93,7 +96,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckRebuildPolicy(table, location));
             findings.AddRange(CheckRowLevelSecurity(table, location));
             findings.AddRange(CheckReplicaIdentity(table, location));
-        findings.AddRange(CheckPostgreSqlQuotedIdentifier(table, location));
+            findings.AddRange(CheckPostgreSqlQuotedIdentifier(table, location));
             findings.AddRange(CheckSystemVersioningExclusions(table, location));
             findings.AddRange(CheckCdcFilegroup(table, location));
             findings.AddRange(CheckCompressionOptions(table, location));
@@ -377,20 +380,47 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// </summary>
     private static IEnumerable<Finding> CheckPostgreSqlQuotedIdentifier(Table table, string tableLocation)
     {
-        if (table is not PostgreSqlTable) yield break;
+        if (table is not PostgreSqlTable pgTable) return [];
+        return QuotedIdentifierFindings(NamedParts(pgTable), tableLocation);
+    }
 
-        foreach (var (kind, name) in NamedParts(table))
+    /// <summary>
+    /// The modeled-object populations — materialized views, enum types, sequences, domain types — which
+    /// reach the identical unescaped re-wrap as a table's own names and were outside the check's original
+    /// table-only population.
+    /// <para>Not platform-gated, because these four collections are typed to PostgreSQL-only classes: a
+    /// non-PostgreSQL package cannot populate them at all, so there is no cross-engine false error to
+    /// guard against the way there is for a table.</para>
+    /// </summary>
+    private static IEnumerable<Finding> CheckPostgreSqlQuotedIdentifierOnModeledObjects(Template template) =>
+        QuotedIdentifierFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'");
+
+    private static IEnumerable<Finding> QuotedIdentifierFindings(
+        IEnumerable<(string Kind, string Name)> parts,
+        string location)
+    {
+        foreach (var (kind, name) in parts)
         {
             if (string.IsNullOrEmpty(name) || !name.Contains('"')) continue;
-            yield return new Finding(Severity.Error, QuotedIdentifierCode, Category, tableLocation,
-                $"{kind} name '{name}' contains a double-quote character, which PostgreSQL allows but " +
+            // "{kind} '{name}'" rather than "{kind} name '{name}'": several kinds already end in the noun
+            // (Table OldName, ReplicaIdentityIndex), and appending "name" to those read as "Table OldName
+            // name 'old'".
+            yield return new Finding(Severity.Error, QuotedIdentifierCode, Category, location,
+                $"{kind} '{name}' contains a double-quote character, which PostgreSQL allows but " +
                 "SchemaSmith cannot deploy: the name is re-wrapped in double quotes without escaping, so " +
                 "every stored form of it produces invalid DDL. Rename the object to remove the quote.");
         }
     }
 
-    /// <summary>Every name on a table that reaches PostgreSQL DDL as a wrapped identifier.</summary>
-    private static IEnumerable<(string Kind, string Name)> NamedParts(Table table)
+    /// <summary>
+    /// Every name on a table that reaches PostgreSQL DDL as a wrapped identifier.
+    /// <para>Each kind here was read at its emission site in the shipped quench scripts and carries the
+    /// stored value between bare double quotes with no doubling. A name wrapped by <c>QUOTE_IDENT</c>
+    /// escapes correctly and so is deliberately ABSENT — a policy name is the case that looks like an
+    /// omission and is not one. Column <em>lists</em> are also out: they route through
+    /// <c>QuoteColumnList</c>/<c>QuoteIndexColumnList</c>, and <c>SchemaRef</c> is read by no script.</para>
+    /// </summary>
+    private static IEnumerable<(string Kind, string Name)> NamedParts(PostgreSqlTable table)
     {
         yield return ("Table", table.Name);
         // Schema is resolved through IDeliverableTable, uniformly across platforms -- the same route
@@ -404,7 +434,57 @@ public sealed class CoherenceCheck : ISchemaCheck
             if (!string.IsNullOrEmpty(c.OldName)) yield return ("Column OldName", c.OldName);
         }
         foreach (var i in table.Indexes) yield return ("Index", i.Name);
-        foreach (var f in table.ForeignKeys) yield return ("Foreign key", f.Name);
+        foreach (var f in table.ForeignKeys)
+        {
+            yield return ("Foreign key", f.Name);
+            // The REFERENCED table's schema and name are wrapped at ForeignKeyQuench:18 exactly as the
+            // local ones are, and are NOT covered by checking the related table's own declaration: a
+            // package may reference a table it does not declare, and SS-FK-002 resolves the reference
+            // without ever looking at whether the stored text can be emitted.
+            if (f is PostgreSqlForeignKey { RelatedTableSchema: { Length: > 0 } relatedSchema })
+                yield return ("Foreign key RelatedTableSchema", relatedSchema);
+            if (!string.IsNullOrEmpty(f.RelatedTable)) yield return ("Foreign key RelatedTable", f.RelatedTable);
+        }
+        foreach (var cc in table.CheckConstraints) yield return ("Check constraint", cc.Name);
+        foreach (var ec in table.ExcludeConstraints) yield return ("Exclude constraint", ec.Name);
+        foreach (var st in table.Statistics) yield return ("Statistics", st.Name);
+        // A pointer, not a declaration -- so it is its own kind. When it names a declared index the index
+        // reports separately, which is honest: both the CREATE and the REPLICA IDENTITY clause break.
+        if (!string.IsNullOrEmpty(table.ReplicaIdentityIndex))
+            yield return ("ReplicaIdentityIndex", table.ReplicaIdentityIndex);
+    }
+
+    /// <summary>Every name on a modeled non-table object that reaches PostgreSQL DDL as a wrapped identifier.</summary>
+    private static IEnumerable<(string Kind, string Name)> ModeledObjectNamedParts(Template template)
+    {
+        foreach (var view in template.MaterializedViews)
+        {
+            yield return ("Materialized view", view.Name);
+            if (!string.IsNullOrEmpty(view.Schema)) yield return ("Materialized view schema", view.Schema);
+            // MissingMaterializedViewIndexesQuench:110 wraps an index name on a view exactly as the table
+            // path does, so a view's indexes are part of this population rather than the table one.
+            foreach (var index in view.Indexes) yield return ("Materialized view index", index.Name);
+        }
+
+        foreach (var enumType in template.EnumTypes)
+        {
+            yield return ("Enum type", enumType.Name);
+            if (!string.IsNullOrEmpty(enumType.Schema)) yield return ("Enum type schema", enumType.Schema);
+        }
+
+        foreach (var sequence in template.Sequences)
+        {
+            yield return ("Sequence", sequence.Name);
+            if (!string.IsNullOrEmpty(sequence.Schema)) yield return ("Sequence schema", sequence.Schema);
+        }
+
+        foreach (var domain in template.DomainTypes)
+        {
+            yield return ("Domain type", domain.Name);
+            if (!string.IsNullOrEmpty(domain.Schema)) yield return ("Domain type schema", domain.Schema);
+            foreach (var check in domain.CheckConstraints)
+                yield return ("Domain type check constraint", check.Name);
+        }
     }
 
     /// <summary>
