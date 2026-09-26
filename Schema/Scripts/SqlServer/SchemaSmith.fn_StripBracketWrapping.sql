@@ -4,26 +4,31 @@
 
 IF OBJECT_ID('SchemaSmith.fn_StripBracketWrapping') IS NOT NULL DROP FUNCTION SchemaSmith.fn_StripBracketWrapping
 GO
--- Collapses ]] to ] on each strip, because inside a delimited SQL Server identifier ]] DENOTES ONE ].
+-- Removes ONE layer of [ ] wrapping and collapses ]] to ] on that strip, because inside a delimited SQL
+-- Server identifier ]] DENOTES ONE ].
 --
--- Without it this function disagreed with the catalog about any name containing a ]: the correctly
--- delimited form of the column named a]b is [a]]b], and stripping the wrapper alone returned a]]b --
--- four characters against the catalog's three. Measured on SQL Server 2022. Everywhere that matters,
--- that mismatch is SILENT: a rename whose OldName carries an escaped ] matches nothing, so the new
--- column is created, the old one is orphaned, and a later deploy with a Drop...RemovedFromProduct flag
--- removes the orphan WITH ITS DATA. The same defect was fixed on PostgreSQL ("" -> ") in this release;
--- this is the SQL Server half, found by comparing this function against Identifier.Unwrap, which has
--- always collapsed correctly.
+-- This is the exact inverse of delimiting, and it is deliberately a single strip rather than a loop.
+-- Delimiting wraps a name once, so unwrapping removes one pair; stripping repeatedly over-strips a name
+-- that legitimately CONTAINS brackets. The correctly delimited form of the column named [x] is [[x]]], and
+-- the loop this replaced returned x where the name is [x] -- measured on SQL Server 2022. Ordinary names
+-- are unaffected either way: [Orders] and Orders unwrap identically, which is what made it safe to change
+-- on a function with 422 call sites across 17 files.
 --
--- The WHILE loop is deliberately LEFT ALONE here and is tracked separately: it strips repeatedly, so it
--- disagrees with Identifier.Unwrap on bracket-shaped input (this returns x for [[x]], the helper returns
--- [x]) and it rewrites a bare name that merely LOOKS wrapped. Changing it moves 422 call sites at once
--- and is a product decision, not a bug fix.
+-- It MUST agree with Identifier.Unwrap, which has always been a single conditional strip. The deploy
+-- unwraps the package side in C# and the catalog side here, so a disagreement is a rename that matches
+-- nothing: the new object is created, the old one survives undeclared, and a later deploy carrying the
+-- matching Drop...RemovedFromProduct flag removes the orphan WITH ITS DATA. That agreement is pinned by
+-- StripBracketWrappingAgreesWithIdentifierUnwrapTests rather than left to inspection.
+--
+-- What this does NOT do, so nobody reads more into it: a BARE name that merely looks wrapped is still
+-- unwrapped. An undelimited [x] returns x, because nothing in a stored string distinguishes it from the
+-- delimited form of x. Only the caller knows whether a value was delimited, and both halves behave the
+-- same way here, so the two still agree.
 CREATE FUNCTION SchemaSmith.fn_StripBracketWrapping(@p_Input NVARCHAR(MAX))
   RETURNS NVARCHAR(MAX)
 AS
 BEGIN
-  WHILE LEFT(RTRIM(@p_Input), 1) = '[' AND RIGHT(RTRIM(@p_Input), 1) = ']'
+  IF LEFT(RTRIM(@p_Input), 1) = '[' AND RIGHT(RTRIM(@p_Input), 1) = ']'
     SET @p_Input = REPLACE(SUBSTRING(RTRIM(@p_Input), 2, LEN(RTRIM(@p_Input)) - 2), ']]', ']')
 
   RETURN @p_Input
