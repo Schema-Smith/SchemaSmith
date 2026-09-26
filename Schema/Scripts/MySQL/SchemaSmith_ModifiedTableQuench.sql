@@ -840,9 +840,7 @@ BEGIN
           OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
           OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
               AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                  CASE WHEN c.DefaultValue LIKE '''%'''
-                       THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                       ELSE c.DefaultValue END)
+                  SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
               AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                   c.DefaultValue, isc.DATA_TYPE) = 0)
           OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
@@ -1179,9 +1177,7 @@ BEGIN
               -- since GenerateTableJson wraps string/enum defaults in quotes for DDL but INFORMATION_SCHEMA stores raw values)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
                   AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      CASE WHEN c.DefaultValue LIKE '''%'''
-                           THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                           ELSE c.DefaultValue END)
+                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
@@ -1259,9 +1255,7 @@ BEGIN
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
                   AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      CASE WHEN c.DefaultValue LIKE '''%'''
-                           THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                           ELSE c.DefaultValue END)
+                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
@@ -1352,9 +1346,7 @@ BEGIN
               -- since GenerateTableJson wraps string/enum defaults in quotes for DDL but INFORMATION_SCHEMA stores raw values)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
                   AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      CASE WHEN c.DefaultValue LIKE '''%'''
-                           THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                           ELSE c.DefaultValue END)
+                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
@@ -1435,9 +1427,7 @@ BEGIN
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
                   AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      CASE WHEN c.DefaultValue LIKE '''%'''
-                           THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                           ELSE c.DefaultValue END)
+                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
@@ -1516,9 +1506,7 @@ BEGIN
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
                   AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      CASE WHEN c.DefaultValue LIKE '''%'''
-                           THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                           ELSE c.DefaultValue END)
+                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),

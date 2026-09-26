@@ -525,6 +525,9 @@ public static class ForgeKindler
                 new("SchemaSmith_UpperDataType.sql"),
                 new("SchemaSmith_StripIntDisplayWidth.sql"),
                 new("SchemaSmith_NormalizeColumnDefault.sql"),
+                // The DESIRED-side twin of the line above, so both sides of the default comparison fold
+                // the same way. Must follow it: it calls it.
+                new("SchemaSmith_NormalizeDeclaredDefault.sql"),
                 new("SchemaSmith_NumericDefaultsEqual.sql"),
                 new("SchemaSmith_ColumnOnUpdateClause.sql"),
                 new("SchemaSmith_IndexIsVisible.sql"),
