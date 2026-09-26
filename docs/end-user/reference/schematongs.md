@@ -581,6 +581,38 @@ This is a surgical fix, not a default. Enable it on functions where:
 
 **The risk that makes this opt-in:** if a computed column is persisted or indexed on a 500-million-row table, dropping that dependency means rebuilding the persisted column or index after the function is updated -- which could take a very long time and impact production availability. For functions that rarely change, the right approach is to leave this flag off and write a migration script that handles the dependencies carefully when the function truly needs to change.
 
+### The preamble runs on every deploy, not only when the function changed
+
+This is the consequence to understand before enabling it, because it is visible in every deployment summary.
+
+The preamble is unconditional: it drops the dependents, then `CREATE OR ALTER` runs, then later steps in the
+quench put the dependents back. That is what buys you a function script that is idempotent like every other
+function script -- one file, no special handling, correct whether the function is new or changed. The
+alternative is a create-only-when-missing guard, which leaves an *existing* function un-updated, so a
+changed body needs a hand-written migration script to get deployed at all. Neither choice is free; this one
+trades a repeated rebuild for not having to notice when a function's body changed.
+
+What that means in practice:
+
+- **A re-deploy of an unchanged database is not a no-op.** The dependent computed column and its indexes are
+  genuinely dropped and recreated every time, so the deployment summary reports them as created on every
+  run. Nothing is wrong; the objects end up exactly as declared. It is the reason a package using this flag
+  will never report a zero-change second deploy.
+- **`--WhatIf` does not show it.** WhatIf does not execute the preamble, so the dependents are never dropped
+  and nothing reads as missing -- a WhatIf run against a converged database reports no change while a real
+  deploy performs the rebuild. Do not use WhatIf to size the work this flag causes; read the function script.
+- **Dropped column ids are never reused, and that ceiling is real.** SQL Server assigns a new `column_id`
+  from `sys.tables.max_column_id_used + 1` on every `ALTER TABLE ... ADD`, and never reclaims the old one.
+  A table whose computed column is re-added on every deploy therefore burns one id per deploy: measured on
+  the shipped AdventureWorks demo, `Sales.Customer` holds **7 columns with `max_column_id_used` at 13** after
+  a handful of deploys. `ALTER TABLE ... ADD` starts failing once the next id would pass the 1,024-column
+  ceiling, however few columns the table actually has -- so a pipeline that deploys many times a day has a
+  finite budget on that table. `SELECT max_column_id_used FROM sys.tables` is how you check, and rebuilding
+  the table is how you reset it.
+
+None of this argues against the flag where it fits the three conditions above. It argues for knowing what
+you will see afterwards, so a rebuild you chose does not read as a defect later.
+
 ---
 
 ## Encrypted Object Handling (SQL Server)
