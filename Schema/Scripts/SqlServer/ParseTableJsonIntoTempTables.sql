@@ -997,15 +997,15 @@
          -- located and sliced rather than trimmed by a fixed count. Mirrors IndexOnlyQuench.sql's
          -- declared-side parse exactly.
          [Columns]         = (SELECT STRING_AGG(CAST(CASE WHEN RTRIM([value]) LIKE '% LANGUAGE [0-9]%'
-                                                   THEN SchemaSmith.fn_SafeBracketWrap(LEFT(RTRIM([value]), CHARINDEX(' LANGUAGE ', RTRIM([value])) - 1)) +
+                                                   THEN SchemaSmith.fn_SafeBracketWrapFullTextColumn(LEFT(RTRIM([value]), CHARINDEX(' LANGUAGE ', RTRIM([value])) - 1)) +
                                                         ' LANGUAGE ' + SUBSTRING(RTRIM([value]), CHARINDEX(' LANGUAGE ', RTRIM([value])) + 10, 4000)
                                                    -- A column may carry STATISTICAL_SEMANTICS with no LANGUAGE. Without this branch the whole
                                                    -- token would be bracket-wrapped as part of the column name ([Body STATISTICAL_SEMANTICS]),
                                                    -- which never matches the live-side render and churns the index on every deploy.
                                                    WHEN RTRIM([value]) LIKE '% STATISTICAL[_]SEMANTICS'
-                                                        THEN SchemaSmith.fn_SafeBracketWrap(LEFT(RTRIM([value]), CHARINDEX(' STATISTICAL_SEMANTICS', RTRIM([value])) - 1)) +
+                                                        THEN SchemaSmith.fn_SafeBracketWrapFullTextColumn(LEFT(RTRIM([value]), CHARINDEX(' STATISTICAL_SEMANTICS', RTRIM([value])) - 1)) +
                                                              ' STATISTICAL_SEMANTICS'
-                                                   ELSE SchemaSmith.fn_SafeBracketWrap([value])
+                                                   ELSE SchemaSmith.fn_SafeBracketWrapFullTextColumn([value])
                                                    END AS NVARCHAR(MAX)), ',')
                                 FROM STRING_SPLIT([Columns], ',')
                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> '');

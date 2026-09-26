@@ -302,7 +302,12 @@ public class ForgeKindlerTests
         //   compiles a procedure's statements whether or not they run and caches the plan per object PER
         //   DATABASE, so those 328 lines were compiled on every first deploy to every database for a feature
         //   set most packages never touch. Behind a guarded CALL they are not compiled on the common path.)
-        Assert.That(sqlServer.Length, Is.EqualTo(41));
+        // +1 = SchemaSmith.fn_SafeBracketWrapFullTextColumn (a full-text column is not always ONE
+        //   identifier -- [Doc] TYPE COLUMN [DocType] is two and a keyword -- and it survived the wrapper
+        //   only while the wrap did not escape. The split has to happen INSIDE the wrap, because LANGUAGE
+        //   and STATISTICAL_SEMANTICS are peeled first and would claim the value before a sibling branch
+        //   could see it.).
+        Assert.That(sqlServer.Length, Is.EqualTo(42));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns

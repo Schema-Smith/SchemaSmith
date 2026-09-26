@@ -359,6 +359,9 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_StripBracketWrapping.sql"),
                 new("SchemaSmith.fn_NormalizeDataType.sql"),
                 new("SchemaSmith.fn_SafeBracketWrap.sql"),
+                // Full-text columns are not always ONE identifier ([Doc] TYPE COLUMN [DocType]), so the
+                // split has to happen inside the wrap. Must follow fn_SafeBracketWrap, which it calls.
+                new("SchemaSmith.fn_SafeBracketWrapFullTextColumn.sql"),
                 new("SchemaSmith.fn_SplitList.sql"),
                 new("SchemaSmith.fn_ServerMajorVersion.sql"),
                 new("SchemaSmith.fn_NormalizeTemporalRetentionPeriod.sql"),

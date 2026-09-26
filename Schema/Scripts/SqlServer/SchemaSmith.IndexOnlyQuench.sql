@@ -174,14 +174,14 @@ BEGIN TRY
          -- for IndexColumns above -- then reattach it; the LCID is variable-length so it's located and
          -- sliced rather than trimmed by a fixed count.
          [Columns] = (SELECT STRING_AGG(CAST(CASE WHEN RTRIM([value]) LIKE '% LANGUAGE [0-9]%'
-                                                   THEN SchemaSmith.fn_SafeBracketWrap(LEFT(RTRIM([value]), CHARINDEX(' LANGUAGE ', RTRIM([value])) - 1)) +
+                                                   THEN SchemaSmith.fn_SafeBracketWrapFullTextColumn(LEFT(RTRIM([value]), CHARINDEX(' LANGUAGE ', RTRIM([value])) - 1)) +
                                                         ' LANGUAGE ' + SUBSTRING(RTRIM([value]), CHARINDEX(' LANGUAGE ', RTRIM([value])) + 10, 4000)
                                                    -- Mirrors ParseTableJsonIntoTempTables: STATISTICAL_SEMANTICS can appear with no LANGUAGE, and
                                                    -- must be peeled rather than bracket-wrapped into the column name.
                                                    WHEN RTRIM([value]) LIKE '% STATISTICAL[_]SEMANTICS'
-                                                        THEN SchemaSmith.fn_SafeBracketWrap(LEFT(RTRIM([value]), CHARINDEX(' STATISTICAL_SEMANTICS', RTRIM([value])) - 1)) +
+                                                        THEN SchemaSmith.fn_SafeBracketWrapFullTextColumn(LEFT(RTRIM([value]), CHARINDEX(' STATISTICAL_SEMANTICS', RTRIM([value])) - 1)) +
                                                              ' STATISTICAL_SEMANTICS'
-                                                   ELSE SchemaSmith.fn_SafeBracketWrap([value])
+                                                   ELSE SchemaSmith.fn_SafeBracketWrapFullTextColumn([value])
                                                    END AS NVARCHAR(MAX)), ',') FROM STRING_SPLIT(f.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
          f.[ShouldApplyExpression], f.[VariantName]
     INTO #FullTextIndexes
