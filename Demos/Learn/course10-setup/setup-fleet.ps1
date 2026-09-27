@@ -33,7 +33,11 @@ $script:failed = $false
 
 function Invoke-SqlServerExec {
     param([Parameter(Mandatory)][string]$Sql)
-    $out = docker exec $SqlServerContainer /opt/mssql-tools18/bin/sqlcmd `
+    # 2017 ships only /opt/mssql-tools; 2019+ ship the 18 path. Self-contained by design, as in the twin.
+    $sc = '/opt/mssql-tools18/bin/sqlcmd'
+    docker exec $SqlServerContainer sh -c "test -x $sc" 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { $sc = '/opt/mssql-tools/bin/sqlcmd' }
+    $out = docker exec $SqlServerContainer $sc `
         -S localhost -U sa -P 'Learn!Passw0rd' -C -b -h -1 -W -Q "SET NOCOUNT ON; $Sql" 2>&1
     return ($out -join [Environment]::NewLine).Trim()
 }

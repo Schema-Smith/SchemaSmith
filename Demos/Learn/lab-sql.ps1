@@ -75,6 +75,19 @@ function Get-LabContainerMariaClient {
     return $client
 }
 
+# The SQL Server 2017 image ships ONLY /opt/mssql-tools; 2019+ ship /opt/mssql-tools18. Probe once per
+# container and cache, exactly as the MariaDB client is handled -- see the Bash twin for why the wrong
+# path looks identical to a server that never came up.
+$script:LabSqlcmdCache = @{}
+function Get-LabContainerSqlcmd {
+    param([Parameter(Mandatory)][string]$Container)
+    if ($script:LabSqlcmdCache.ContainsKey($Container)) { return $script:LabSqlcmdCache[$Container] }
+    docker exec $Container sh -c 'test -x /opt/mssql-tools18/bin/sqlcmd' 2>&1 | Out-Null
+    $sqlcmd = if ($LASTEXITCODE -eq 0) { '/opt/mssql-tools18/bin/sqlcmd' } else { '/opt/mssql-tools/bin/sqlcmd' }
+    $script:LabSqlcmdCache[$Container] = $sqlcmd
+    return $sqlcmd
+}
+
 # PowerShell 5.1 wraps a native command's redirected stderr in ErrorRecords, which
 # $ErrorActionPreference='Stop' (set by most lab scripts) turns into a terminating error
 # before we can inspect the exit code. Reading them as plain text keeps our own message
@@ -118,7 +131,7 @@ function Invoke-LabSql {
     else {
         $container = Get-LabContainer $Engine
         switch ($Engine) {
-            'sqlserver' { $out = docker exec $container /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d $Database -h -1 -W -Q "SET NOCOUNT ON; $Sql" 2>&1 }
+            'sqlserver' { $sc = Get-LabContainerSqlcmd $container; $out = docker exec $container $sc -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d $Database -h -1 -W -Q "SET NOCOUNT ON; $Sql" 2>&1 }
             'postgres'  { $out = docker exec $container psql -U postgres -d $Database -v ON_ERROR_STOP=1 -tAc $Sql 2>&1 }
             'mysql'     { $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container mysql -uroot -N -s -D $Database -e $Sql 2>&1 }
             'mariadb'   { $mc = Get-LabContainerMariaClient -Container $container; $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container $mc -uroot -N -s -D $Database -e $Sql 2>&1 }
@@ -162,7 +175,7 @@ function Invoke-LabSqlFile {
             throw "LAB-SQL: could not stage '$([System.IO.Path]::GetFileName($Path))' into $container."
         }
         switch ($Engine) {
-            'sqlserver' { $out = docker exec $container /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d $Database -i /tmp/lab-seed.sql 2>&1 }
+            'sqlserver' { $sc = Get-LabContainerSqlcmd $container; $out = docker exec $container $sc -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d $Database -i /tmp/lab-seed.sql 2>&1 }
             'postgres'  { $out = docker exec $container psql -U postgres -d $Database -v ON_ERROR_STOP=1 -f /tmp/lab-seed.sql 2>&1 }
             'mysql'     { $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container mysql -uroot -D $Database -e 'source /tmp/lab-seed.sql' 2>&1 }
             'mariadb'   { $mc = Get-LabContainerMariaClient -Container $container; $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container $mc -uroot -D $Database -e 'source /tmp/lab-seed.sql' 2>&1 }

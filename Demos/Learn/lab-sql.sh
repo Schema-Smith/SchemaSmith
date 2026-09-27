@@ -60,6 +60,24 @@ lab_container_maria_client() {
   fi
 }
 
+# The SQL Server 2017 image ships ONLY /opt/mssql-tools; 2019 and later ship /opt/mssql-tools18.
+# Hardcoding the 18 path made every 2017 run fail the same way a server that never started does -- and
+# that is not a cosmetic difference: the compose healthcheck used the same path, so the container never
+# went healthy, sqlserver-init never created the `learn` database, and every lab on the leg reported
+# NOT-RUN rather than a reachable engine. Same shape, and same fix, as the MariaDB client probe above.
+_lab_sqlcmd_cache=""
+lab_container_sqlcmd() {
+  if [ -z "$_lab_sqlcmd_cache" ]; then
+    if docker exec "$1" sh -c 'test -x /opt/mssql-tools18/bin/sqlcmd' >/dev/null 2>&1; then
+      _lab_sqlcmd_cache=/opt/mssql-tools18/bin/sqlcmd
+    else
+      _lab_sqlcmd_cache=/opt/mssql-tools/bin/sqlcmd
+    fi
+  fi
+  printf '%s' "$_lab_sqlcmd_cache"
+}
+
+
 # Trim leading and trailing whitespace so output matches the PowerShell twin exactly.
 lab_trim() {
   local s="$1"
@@ -91,7 +109,7 @@ lab_sql() {
     case "$engine" in
       # MSYS_NO_PATHCONV keeps Git Bash from rewriting the container's /opt/... path;
       # it's harmless on Linux/macOS.
-      sqlserver) out=$(MSYS_NO_PATHCONV=1 docker exec "$container" /opt/mssql-tools18/bin/sqlcmd \
+      sqlserver) sc=$(lab_container_sqlcmd "$container"); out=$(MSYS_NO_PATHCONV=1 docker exec "$container" "$sc" \
                          -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d "$db" -h -1 -W \
                          -Q "SET NOCOUNT ON; $sql" 2>"$errfile"); rc=$? ;;
       postgres)  out=$(docker exec "$container" psql -U postgres -d "$db" -v ON_ERROR_STOP=1 -tAc "$sql" 2>"$errfile"); rc=$? ;;
@@ -141,7 +159,7 @@ lab_sql_file() {
       return 1
     fi
     case "$engine" in
-      sqlserver) out=$(MSYS_NO_PATHCONV=1 docker exec "$container" /opt/mssql-tools18/bin/sqlcmd \
+      sqlserver) sc=$(lab_container_sqlcmd "$container"); out=$(MSYS_NO_PATHCONV=1 docker exec "$container" "$sc" \
                          -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d "$db" -i /tmp/lab-seed.sql 2>&1); rc=$? ;;
       postgres)  out=$(MSYS_NO_PATHCONV=1 docker exec "$container" psql -U postgres -d "$db" -v ON_ERROR_STOP=1 -f /tmp/lab-seed.sql 2>&1); rc=$? ;;
       mysql)     out=$(MSYS_NO_PATHCONV=1 docker exec -e 'MYSQL_PWD=Learn!Passw0rd' "$container" mysql -uroot -D "$db" -e 'source /tmp/lab-seed.sql' 2>&1); rc=$? ;;
