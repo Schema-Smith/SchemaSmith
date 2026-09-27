@@ -14,6 +14,8 @@ You'll use all **three levers**, coarsest to finest:
 | **Component** | `ShouldApplyExpression` + `VariantName` on a table/index/column/… | two variants of one index; the applied variant prints ` (variant: …)` in the log |
 | **Sentinel** | a `RAISERROR('SCHEMASMITH: SHOULD NOT APPLY', …)` in the script body | a migration that gates *itself* out below compat 160 |
 
+> **Engine floor:** this lab deploys into the `learn_2022` tier, which is a database at **compatibility level 160** — a level only **SQL Server 2022+** offers. On an older engine [`course10-setup`](../course10-setup/README.md) cannot provision that tier and the lab stops with *"No database targets discovered"*. The sandbox default is 2022, so this only applies if you have pointed `MSSQL_IMAGE` at an older release. The other engines in this lab are unaffected.
+
 ## The footgun this module turns on
 
 On PostgreSQL, MySQL and MariaDB, "what version is this server?" answers "what syntax can I

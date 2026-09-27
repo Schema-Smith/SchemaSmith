@@ -18,6 +18,8 @@ Set `"ContentEncoding": "Xml"` on the delivery and SchemaSmith shreds the payloa
 data-type methods (`.nodes()`/`.value()`) instead — a path that works at *every* compatibility
 level, including the oldest tier in the fleet.
 
+> **Engine floor:** this lab deploys into the `learn_2022` tier, which is a database at **compatibility level 160** — a level only **SQL Server 2022+** offers. On an older engine [`course10-setup`](../course10-setup/README.md) cannot provision that tier and the lab stops with *"No database targets discovered"*. The sandbox default is 2022, so this only applies if you have pointed `MSSQL_IMAGE` at an older release. The other engines in this lab are unaffected.
+
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`).

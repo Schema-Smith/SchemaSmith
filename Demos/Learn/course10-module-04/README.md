@@ -29,6 +29,8 @@ axis) and not the server binary. On this fleet: `learn_2022` (compat 160) and `l
 130) both clear it and take the JSON shred; `learn_2008` (compat 100) does not and takes the XML
 shred.
 
+> **Engine floor:** this lab deploys into the `learn_2022` tier, which is a database at **compatibility level 160** — a level only **SQL Server 2022+** offers. On an older engine [`course10-setup`](../course10-setup/README.md) cannot provision that tier and the lab stops with *"No database targets discovered"*. The sandbox default is 2022, so this only applies if you have pointed `MSSQL_IMAGE` at an older release. The other engines in this lab are unaffected.
+
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`).

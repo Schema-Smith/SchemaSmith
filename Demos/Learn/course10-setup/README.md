@@ -31,6 +31,8 @@ containers. If you want to point one lab at your own server, you can still do th
 using [Use your own server](../README.md#use-your-own-server-instead-no-docker) — but the
 mixed-version story itself needs the sandbox.
 
+> **Engine floor — the SQL Server tiers need SQL Server 2022 or later.** The three tiers are *compatibility levels on one instance*, and a server only offers the levels its own release supports: 2017 caps at 140 and 2019 at 150, so **`learn_2022` (level 160) cannot be provisioned below 2022**. `provision_sqlserver_tier` issues the `CREATE DATABASE` and the `ALTER … SET COMPATIBILITY_LEVEL` in one batch, so an unsupported level aborts the batch and the database is not created at all — which is the safe outcome, because a lab then fails with *"No database targets discovered"* rather than quietly deploying into a database sitting at the wrong level. Measured: on 2019 and 2017 the tier is absent and every lab targeting it fails; on 2022 the whole fleet provisions and all of Course 10 passes. The sandbox default is 2022, so this only bites if you have overridden `MSSQL_IMAGE` to an older release.
+
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`) — see [`../README.md`](../README.md).
