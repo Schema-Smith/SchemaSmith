@@ -184,6 +184,36 @@ BEGIN
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'BEGIN MissingTableAndColumnQuench');
 
+    -- IDEMPOTENCY REFRESH -- this proc is re-CALLed on retryable contention, and it must survive that.
+    --
+    -- The NewTable / NewColumn flags are computed by ParseTableJson, which is a SEPARATE, EARLIER command.
+    -- So on a retry they still describe the catalog as it was BEFORE the failed attempt ran, and anything
+    -- that attempt already created is still flagged new -- the create loop replays it and the deploy dies
+    -- with "Table 'X' already exists". A transient blip the retry exists to absorb became a failed deploy.
+    -- Reproduced on MariaDB 11.8 with the 5-database fleet in Demos/Learn/course7-module-01: four tables
+    -- created, contention in the add-columns pass, retry, dead on the first CREATE.
+    --
+    -- Re-deriving both flags here is what makes ExecuteNonQueryHandlingMessages' documented contract true
+    -- ("the convergence procs recompute desired-vs-existing every run") rather than working around it.
+    --
+    -- ON A FIRST CALL THIS CHANGES NOTHING -- nothing declared-new exists yet, so the UPDATE matches no
+    -- row. That is what keeps it low-risk: it is inert except on the replay it exists for.
+    --
+    -- ONLY NewTable NEEDS THIS. The COLUMN half was already handled: the post-rename clear further down
+    -- ("clear NewColumn for any column now present under its (possibly renamed) table") re-derives
+    -- NewColumn against the live catalog and its comment names this very failure mode -- "add-columns
+    -- below would try to re-add an existing column (duplicate-column error)". So the replay hazard was
+    -- understood and fixed for columns and simply never applied to tables. Adding a second column clear
+    -- here was redundant, and mutation testing is what showed it: disabling it changed nothing, because
+    -- the existing clear already covered the case.
+    UPDATE _SchemaSmith_Tables t
+       SET t.NewTable = 0
+     WHERE t.NewTable = 1
+       AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES x
+                    WHERE BINARY x.TABLE_SCHEMA = BINARY p_DatabaseName
+                      AND BINARY x.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName));
+
+
     -- A CustomTableRestore hook restores tables being added in case they were custom-dropped
     -- (recycled) previously; mirrors the SQL Server / PostgreSQL hook.
     SET @has_custom_restore = (SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES

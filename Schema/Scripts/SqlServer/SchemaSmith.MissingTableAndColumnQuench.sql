@@ -170,11 +170,44 @@ BEGIN TRY
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
-    UPDATE #Tables
-      SET NewTable = 0
-      WHERE NewTable = 1
-        AND OBJECT_ID([Schema] + '.' + [Name]) IS NOT NULL
   END
+
+  -- IDEMPOTENCY REFRESH -- this proc is re-EXECed on retryable contention, and it must survive that.
+  --
+  -- NewTable / NewColumn are computed by ParseTableJsonIntoTempTables, a SEPARATE, EARLIER command. On a
+  -- retry they therefore still describe the catalog as it was BEFORE the failed attempt ran, so anything
+  -- that attempt already created is still flagged new: the create pass replays it and the deploy dies with
+  -- "There is already an object named 'X'". The retry exists to absorb transient contention and instead
+  -- turned it into a failed deploy. Reproduced on the MySQL family first (MariaDB 11.8, the 5-database
+  -- fleet in Demos/Learn/course7-module-01); this engine carries the identical shape.
+  --
+  -- This re-derivation is what makes ExecuteNonQueryHandlingMessages' documented contract true -- "the
+  -- convergence procs recompute desired-vs-existing every run" -- rather than working around it.
+  -- PostgreSQL's twin never had the bug: it gates every add on a live NOT EXISTS against
+  -- information_schema instead of trusting a flag, which is the behaviour being restored here.
+  --
+  -- ON A FIRST PASS THIS CHANGES NOTHING: nothing declared-new exists yet, so neither UPDATE matches a
+  -- row. It is inert except on the replay it exists for.
+  --
+  -- IT WAS ALREADY HERE, gated behind IF OBJECT_ID('SchemaSmith.CustomTableRestore') IS NOT NULL -- a hook
+  -- almost no deployment installs. So the table half was written for the restore case and happened to be
+  -- the general fix, switched off for everyone who does not use the hook.
+  --
+  -- The COLUMN half is needed too, and not for a new table's own columns: parse leaves those unflagged
+  -- (NewColumn is set only when ParentIsNew = 0). It is for a NEW column on an EXISTING table, which a
+  -- replay would re-ALTER-ADD, and for a new table's COMPUTED columns, which parse DOES flag because they
+  -- are added in a later pass rather than inline in the CREATE.
+  UPDATE #Tables
+    SET NewTable = 0
+    WHERE NewTable = 1
+      AND OBJECT_ID([Schema] + '.' + [Name]) IS NOT NULL
+
+  UPDATE #Columns
+    SET NewColumn = 0
+    WHERE NewColumn = 1
+      AND COLUMNPROPERTY(OBJECT_ID([Schema] + '.' + [TableName]),
+                         SchemaSmith.fn_StripBracketWrapping([ColumnName]), 'ColumnId') IS NOT NULL
+
 
 
   -- TEXTIMAGE_ON is REJECTED by SQL Server (error 1709) on a table with no large-object column, and that
