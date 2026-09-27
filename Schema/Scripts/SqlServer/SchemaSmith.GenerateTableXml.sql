@@ -175,8 +175,8 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 12
   EXEC sp_executesql N'INSERT INTO #HashIndexMeta ([index_id], [bucket_count]) SELECT index_id, bucket_count FROM sys.hash_indexes WHERE [object_id] = @p_ObjId',
     N'@p_ObjId INT', @p_ObjId = @v_ObjectId
 ;WITH XMLNAMESPACES ('http://james.newtonking.com/projects/json' AS json)
-SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
-       '[' + TABLE_NAME + ']' AS [Name],
+SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
+       QUOTENAME(TABLE_NAME) AS [Name],
        -- Mirrors the JSON proc's per-partition aggregation (see GenerateTableJson.sql): sys.partitions
        -- is one row per partition, and a scalar read raised Msg 512 on a partitioned table. A shared
        -- value round-trips; non-uniform compression across partitions emits the 'MIXED' sentinel.
@@ -206,13 +206,13 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        --
        -- sys.data_spaces.type = 'PS' and sys.index_columns.partition_ordinal both predate the supported
        -- floor, so no version gate. partition_ordinal = 1 because SQL Server partitions on ONE column.
-       (SELECT '[' + ds.[name] + ']'
+       (SELECT QUOTENAME(ds.[name])
           FROM sys.indexes tps
           JOIN sys.data_spaces ds ON ds.data_space_id = tps.data_space_id
          WHERE tps.[object_id] = st.[object_id]
            AND tps.index_id IN (0, 1)
            AND ds.[type] = 'PS') AS [PartitionScheme],
-       (SELECT '[' + pc.[name] + ']'
+       (SELECT QUOTENAME(pc.[name])
           FROM sys.indexes tps
           JOIN sys.data_spaces ds ON ds.data_space_id = tps.data_space_id
           JOIN sys.index_columns pic ON pic.[object_id] = tps.[object_id]
@@ -256,7 +256,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
             THEN 'true' END AS [PreventDrop],
        '' AS [OldName],
        (SELECT 'true' AS [@json:Array],
-                       '[' + c.COLUMN_NAME + ']' AS [Name],
+                       QUOTENAME(c.COLUMN_NAME) AS [Name],
                        UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
                                                CASE WHEN sc.xml_collection_id <> 0
                                                     THEN (SELECT '[' + SCHEMA_NAME(xc.[schema_id]) + '].[' + xc.[name] + ']' FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
@@ -332,11 +332,11 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                -- the table's. An index is not required to be aligned -- a nonclustered index on a
                -- partitioned table may sit on one filegroup, and an index on an ordinary heap may itself be
                -- partitioned -- so inferring either from the other would lose a real design.
-               (SELECT '[' + ds.[name] + ']'
+               (SELECT QUOTENAME(ds.[name])
                   FROM sys.data_spaces ds
                  WHERE ds.data_space_id = si.data_space_id
                    AND ds.[type] = 'PS') AS [PartitionScheme],
-               (SELECT '[' + pc.[name] + ']'
+               (SELECT QUOTENAME(pc.[name])
                   FROM sys.data_spaces ds
                   JOIN sys.index_columns pic ON pic.[object_id] = si.[object_id]
                                                           AND pic.index_id = si.index_id

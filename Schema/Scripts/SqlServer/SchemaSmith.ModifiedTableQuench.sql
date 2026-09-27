@@ -481,16 +481,16 @@ BEGIN TRY
     -- take TEMPDB's collation while a catalog name carries the DATABASE's. The old form compared two
     -- database-collated values (the function returns one), so without this the change would work
     -- wherever those two collations happen to agree and fail where they do not.
-    JOIN INFORMATION_SCHEMA.COLUMNS ic ON C.[Schema] COLLATE DATABASE_DEFAULT = '[' + ic.TABLE_SCHEMA + ']'
-                                                     AND C.[TableName] COLLATE DATABASE_DEFAULT = '[' + ic.TABLE_NAME + ']'
-                                                     AND C.[ColumnName] COLLATE DATABASE_DEFAULT = '[' + ic.COLUMN_NAME + ']'
+    JOIN INFORMATION_SCHEMA.COLUMNS ic ON C.[Schema] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.TABLE_SCHEMA)
+                                                     AND C.[TableName] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.TABLE_NAME)
+                                                     AND C.[ColumnName] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.COLUMN_NAME)
     JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(ic.TABLE_SCHEMA + '.' + ic.TABLE_NAME) AND sc.[name] = ic.COLUMN_NAME
     JOIN (SELECT CASE WHEN SCHEMA_NAME(st.[schema_id]) IN ('sys', 'dbo')
                       THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END + st.[name] AS USER_TYPE, st.user_type_id
             FROM sys.types st) st ON st.user_type_id = sc.user_type_id
     LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
                                                       AND ident.[object_id] = OBJECT_ID(TABLE_SCHEMA + '.' + TABLE_NAME)
-    LEFT JOIN sys.computed_columns cc ON c.ColumnName COLLATE DATABASE_DEFAULT = '[' + cc.[name] + ']'
+    LEFT JOIN sys.computed_columns cc ON c.ColumnName COLLATE DATABASE_DEFAULT = QUOTENAME(cc.[name])
                                                    AND cc.[object_id] = OBJECT_ID(C.[Schema] + '.' + C.[TableName])
     LEFT JOIN #ColMeta cm ON cm.[object_id] = sc.[object_id] AND cm.column_id = sc.column_id
     WHERE t.NewTable = 0
@@ -564,15 +564,15 @@ BEGIN TRY
 
   RAISERROR('Detect Column Drops', 10, 100) WITH NOWAIT
   INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly])
-    SELECT t.[Schema], [TableName] = t.[Name], [ColumnName] = '[' + COLUMN_NAME + ']', '', '', 0, 0, 1
+    SELECT t.[Schema], [TableName] = t.[Name], [ColumnName] = QUOTENAME(COLUMN_NAME), '', '', 0, 0, 1
       FROM #Tables t WITH (NOLOCK)
-      JOIN INFORMATION_SCHEMA.COLUMNS ON t.[Schema] COLLATE DATABASE_DEFAULT = '[' + TABLE_SCHEMA + ']'
-                                                   AND t.[Name] COLLATE DATABASE_DEFAULT = '[' + TABLE_NAME + ']' 
+      JOIN INFORMATION_SCHEMA.COLUMNS ON t.[Schema] COLLATE DATABASE_DEFAULT = QUOTENAME(TABLE_SCHEMA)
+                                                   AND t.[Name] COLLATE DATABASE_DEFAULT = QUOTENAME(TABLE_NAME) 
       WHERE NOT EXISTS (SELECT * 
                           FROM #Columns c WITH (NOLOCK)
                           WHERE c.[Schema] = t.[Schema]
                             AND c.[TableName] = t.[Name]
-                            AND c.[ColumnName] COLLATE DATABASE_DEFAULT = '[' + COLUMN_NAME + ']')
+                            AND c.[ColumnName] COLLATE DATABASE_DEFAULT = QUOTENAME(COLUMN_NAME))
         AND NOT (t.IsTemporal = 1 AND COLUMN_NAME IN ('ValidFrom', 'ValidTo'))
         AND NOT EXISTS (SELECT 1 FROM #EngineOwnedColumns g WITH (NOLOCK)
                          WHERE g.TableSchema = TABLE_SCHEMA AND g.TableName = TABLE_NAME
@@ -667,9 +667,9 @@ BEGIN TRY
     INTO #DeclaredColumnOrder
     FROM #Columns c WITH (NOLOCK)
     JOIN INFORMATION_SCHEMA.COLUMNS ic
-      ON c.[Schema] COLLATE DATABASE_DEFAULT = '[' + ic.TABLE_SCHEMA + ']'
-     AND c.[TableName] COLLATE DATABASE_DEFAULT = '[' + ic.TABLE_NAME + ']'
-     AND c.[ColumnName] COLLATE DATABASE_DEFAULT = '[' + ic.COLUMN_NAME + ']'
+      ON c.[Schema] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.TABLE_SCHEMA)
+     AND c.[TableName] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.TABLE_NAME)
+     AND c.[ColumnName] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.COLUMN_NAME)
 
   IF OBJECT_ID('tempdb..#RebuildOrderMismatch') IS NOT NULL DROP TABLE #RebuildOrderMismatch
   SELECT DISTINCT a.[Schema], a.[TableName]

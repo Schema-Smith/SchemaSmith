@@ -662,7 +662,7 @@
     [ColumnName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL
   )
   INSERT INTO #ExistingColumns ([Schema], [TableName], [ColumnName])
-  SELECT '[' + s.[name] + ']', '[' + o.[name] + ']', '[' + col.[name] + ']'
+  SELECT QUOTENAME(s.[name]), QUOTENAME(o.[name]), QUOTENAME(col.[name])
     FROM sys.columns col
     JOIN sys.objects o ON o.[object_id] = col.[object_id] AND o.[type] = 'U'
     JOIN sys.schemas s ON s.[schema_id] = o.[schema_id];
