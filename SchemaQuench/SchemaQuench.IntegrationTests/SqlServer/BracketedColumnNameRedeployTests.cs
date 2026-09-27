@@ -92,6 +92,18 @@ public class BracketedColumnNameRedeployTests
                         $"after deploy {deploy} the column '{RawColumnName}' must exist. If it is missing, "
                         + "Detect Column Drops elected a column the product declares -- the data-loss half, "
                         + "which was latent only while the malformed DROP statement could not parse.");
+
+                    // A ROW goes in after the first deploy, and its value is read back after the second.
+                    // sys.columns CANNOT tell a surviving column from a dropped-and-recreated one -- both
+                    // leave a column of the right name and type behind -- so presence alone would pass over
+                    // exactly the data loss this guards. The value is the only thing that distinguishes
+                    // them, and with the comparison fixed the DROP now PARSES, so the channel is live.
+                    if (deploy == 1) InsertProbeRow(cmd);
+                    else
+                        Assert.That(ProbeValue(cmd), Is.EqualTo(ProbeRowValue),
+                            "the column's ROWS must survive the redeploy. A recreated column would satisfy "
+                            + "sys.columns and return NULL here, which is the data loss wearing a passing "
+                            + "test as a disguise.");
                 }
             }
             finally
@@ -116,6 +128,29 @@ public class BracketedColumnNameRedeployTests
                 catch (IOException) { /* a held log handle must not fail a passing test */ }
             }
         }
+    }
+
+    private const string ProbeRowValue = "keep-me";
+
+    private static void InsertProbeRow(IDbCommand cmd)
+    {
+        // The column name is escaped for the DDL/DML the same way the product escapes it.
+        cmd.CommandText = $"INSERT INTO dbo.{TableName} ([Id], [{RawColumnName.Replace("]", "]]")}]) "
+                          + "VALUES (1, @v)";
+        cmd.Parameters.Clear();
+        var p = cmd.CreateParameter();
+        p.ParameterName = "@v";
+        p.Value = ProbeRowValue;
+        cmd.Parameters.Add(p);
+        cmd.ExecuteNonQuery();
+        cmd.Parameters.Clear();
+    }
+
+    private static string ProbeValue(IDbCommand cmd)
+    {
+        cmd.CommandText = $"SELECT [{RawColumnName.Replace("]", "]]")}] FROM dbo.{TableName} WHERE [Id] = 1";
+        var v = cmd.ExecuteScalar();
+        return v == null || v == DBNull.Value ? null : v.ToString();
     }
 
     private static bool ColumnExists(IDbCommand cmd, string db)
