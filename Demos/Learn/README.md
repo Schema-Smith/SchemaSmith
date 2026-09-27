@@ -147,14 +147,17 @@ automatic data delivery, which needs `OPENJSON` (SQL Server 2016) or `JSON_TABLE
 | Your engine | Runs every lab at | Below that |
 |---|---|---|
 | **SQL Server** | **2016** | Most labs still run; the ones that need more stop at pre-flight and name the version |
-| **MySQL** | **8.0** | Data delivery has no fallback on 5.7, so those labs stop rather than deploy a schema with no rows |
+| **MySQL** | **8.0** | 17 labs stop at pre-flight naming the version. Two reasons: most ship packages declaring the `utf8mb4_0900_ai_ci` collation, which is 8.0-only, and a few use 8.0 JSON syntax in their own scripts. Data delivery also has no `JSON_TABLE` fallback on 5.7 |
 | **PostgreSQL** | **12** | Every lab runs at PostgreSQL's floor |
 | **MariaDB** | **10.2** | Every lab runs at MariaDB's floor |
 
-Labs that need a newer engine say so under **Before you start**. If your server is below one, the
-run stops at pre-flight naming the version it needs — it won't deploy half a schema and leave you
-guessing. Nothing here applies to PostgreSQL or MariaDB: both do everything these labs ask at their
-floors.
+Labs that need a newer engine say so under **Before you start**, and each one **declares its floor in
+`Product.json`** so the refusal happens at pre-flight and names the version. That declaration is what makes
+the guarantee real: without it a lab does not stop, it fails part-way through with whatever the engine
+objected to first — on MySQL 5.7 that was `Unknown collation: 'utf8mb4_0900_ai_ci'`, which names a collation
+rather than a version and leaves you to work out that the lab wanted a newer server. It will not deploy half
+a schema and leave you guessing. Nothing here applies to PostgreSQL or MariaDB: both do everything these labs
+ask at their floors.
 
 A few SQL Server labs go one better and ship *two* variants of the same object, picking one from the
 detected version — you get the same result either way, and the lab says so. That is the same
