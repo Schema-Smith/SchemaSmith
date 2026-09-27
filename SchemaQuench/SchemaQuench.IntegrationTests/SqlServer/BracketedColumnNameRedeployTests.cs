@@ -1,17 +1,18 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
-using log4net;
+using System.Data.Common;
+using System.Data;
+using System.IO;
+using System;
+using Microsoft.Extensions.Configuration;
 using NSubstitute;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
-using Microsoft.Extensions.Configuration;
 using Schema.IntegrationTests;
 using Schema.Isolators;
 using Schema.Utility;
-using System;
-using System.Data;
-using System.IO;
+using log4net;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -117,7 +118,11 @@ public class BracketedColumnNameRedeployTests
                                       + $"DROP DATABASE [{db}]; END";
                     cmd.ExecuteNonQuery();
                 }
-                catch { /* best-effort cleanup */ }
+                // Typed rather than bare: a teardown drop can legitimately fail if the engine refuses it
+                // (DbException) or the connection is no longer usable (InvalidOperationException). Anything
+                // else here is a real fault and should not be swallowed by a passing test's cleanup.
+                catch (DbException) { /* best-effort cleanup */ }
+                catch (InvalidOperationException) { /* connection already unusable */ }
                 conn.Close();
                 LogFactory.Clear();
                 FactoryContainer.Unregister<IEnvironment>();

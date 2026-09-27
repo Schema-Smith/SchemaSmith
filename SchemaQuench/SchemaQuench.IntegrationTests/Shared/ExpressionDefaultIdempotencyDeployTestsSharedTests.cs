@@ -1,14 +1,15 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
-using log4net;
+using System.Data.Common;
+using System.IO;
+using System;
 using NSubstitute;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.IntegrationTests;
 using Schema.Isolators;
 using Schema.Utility;
-using System;
-using System.IO;
+using log4net;
 
 namespace SchemaQuench.IntegrationTests.Shared;
 
@@ -112,7 +113,11 @@ public abstract class ExpressionDefaultIdempotencyDeployTestsSharedTests
                     cmd.CommandText = $"DROP DATABASE IF EXISTS `{db}`;";
                     cmd.ExecuteNonQuery();
                 }
-                catch { /* best-effort cleanup */ }
+                // Typed rather than bare: a teardown drop can legitimately fail if the engine refuses it
+                // (DbException) or the connection is no longer usable (InvalidOperationException). Anything
+                // else here is a real fault and should not be swallowed by a passing test's cleanup.
+                catch (DbException) { /* best-effort cleanup */ }
+                catch (InvalidOperationException) { /* connection already unusable */ }
                 conn.Close();
                 // Release the appenders BEFORE deleting the tree: --LogPath points inside tempDir here, so
                 // log4net still holds 'SchemaQuench - Errors.log' open and the recursive delete throws
