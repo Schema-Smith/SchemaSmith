@@ -175,8 +175,8 @@ BEGIN TRY
                AND COLUMNPROPERTY(OBJECT_ID(@v_QualifiedName), @v_ColRenameNew, 'AllowsNull') IS NOT NULL
             BEGIN
                 DECLARE @v_ColClashMsg NVARCHAR(2048) =
-                  'BootstrapTableQuench: both ' + @v_QualifiedName + '.[' + @v_ColRenameOld + '] (OldName) and [' +
-                  @v_ColRenameNew + '] already exist; resolve manually before bootstrap can rename.';
+                  'BootstrapTableQuench: both ' + @v_QualifiedName + '.' + QUOTENAME(@v_ColRenameOld) + ' (OldName) and ' +
+                  QUOTENAME(@v_ColRenameNew) + ' already exist; resolve manually before bootstrap can rename.';
                 THROW 51000, @v_ColClashMsg, 1;
             END
 
@@ -270,7 +270,7 @@ BEGIN TRY
 
             RAISERROR('  Rebuilding PRIMARY KEY on %s: the deployed key does not match its declaration', 10, 100, @v_QualifiedName) WITH NOWAIT;
             BEGIN TRANSACTION;
-            SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' DROP CONSTRAINT [' + @v_PkName + N']';
+            SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' DROP CONSTRAINT ' + QUOTENAME(@v_PkName);
             EXEC(@v_SQL);
             SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' ADD CONSTRAINT ' + @v_DeclPkName +
                          N' PRIMARY KEY ' + CASE WHEN @v_DeclPkClustered = 1 THEN N'CLUSTERED' ELSE N'NONCLUSTERED' END +

@@ -46,6 +46,15 @@ public class BracketedColumnNameRedeployTests
     private const string DeclaredColumnName = "[a]]b]";  // its correct delimited form
     private const string RawIndexName = "IX]Probe";      // what the catalog stores
     private const string DeclaredIndexName = "[IX]]Probe]";
+    private const string ParentTable = "BracketParentProbe";
+    private const string RawParentCol = "c]d";
+    private const string DeclaredParentCol = "[c]]d]";
+    private const string RawFkName = "FK]Probe";
+    private const string DeclaredFkName = "[FK]]Probe]";
+    private const string RawCheckName = "CK]Probe";
+    private const string DeclaredCheckName = "[CK]]Probe]";
+    private const string RawStatName = "ST]Probe";
+    private const string DeclaredStatName = "[ST]]Probe]";
 
     [Test]
     public void ABracketedColumnDeploysRedeploysAndIsNeverDropped()
@@ -103,6 +112,23 @@ public class BracketedColumnNameRedeployTests
                         + "lands in #IndexesRemovedFromProduct and is dropped although the package declares "
                         + "it. Same data-loss shape as the column, a different object.");
 
+                    // The FOREIGN KEY, CHECK CONSTRAINT and STATISTIC each carry a ] too. They are
+                    // separate emission and ownership paths from the index, and until now NOTHING
+                    // anywhere deployed a delimiter-bearing object of any of these kinds -- which is why
+                    // the index defect went unnoticed for so long. Each is asserted by NAME after every
+                    // deploy, so a drop-and-recreate or an ownership mismatch shows up here.
+                    Assert.That(ObjectExists(cmd, "sys.foreign_keys", RawFkName), Is.True,
+                        $"after deploy {deploy} the foreign key '{RawFkName}' must exist");
+                    Assert.That(ObjectExists(cmd, "sys.check_constraints", RawCheckName), Is.True,
+                        $"after deploy {deploy} the check constraint '{RawCheckName}' must exist");
+                    Assert.That(ObjectExists(cmd, "sys.stats", RawStatName), Is.True,
+                        $"after deploy {deploy} the statistic '{RawStatName}' must exist");
+                    // The FK's TARGET column also carries a ], so the related-column rendering is covered
+                    // rather than only the FK name. A parent column that went missing would leave the FK
+                    // pointing at nothing, which is a different failure from the FK itself being dropped.
+                    Assert.That(ColumnExistsOn(cmd, ParentTable, RawParentCol), Is.True,
+                        $"after deploy {deploy} the parent column '{RawParentCol}' must exist");
+
                     // A ROW goes in after the first deploy, and its value is read back after the second.
                     // sys.columns CANNOT tell a surviving column from a dropped-and-recreated one -- both
                     // leave a column of the right name and type behind -- so presence alone would pass over
@@ -144,6 +170,33 @@ public class BracketedColumnNameRedeployTests
         }
     }
 
+    private static bool ColumnExistsOn(IDbCommand cmd, string table, string column)
+    {
+        cmd.CommandText = "SELECT COUNT(*) FROM sys.columns WHERE [object_id] = "
+                          + "OBJECT_ID('dbo." + table + "') AND [name] = @n";
+        cmd.Parameters.Clear();
+        var prm = cmd.CreateParameter();
+        prm.ParameterName = "@n";
+        prm.Value = column;
+        cmd.Parameters.Add(prm);
+        var found = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+        cmd.Parameters.Clear();
+        return found;
+    }
+
+    private static bool ObjectExists(IDbCommand cmd, string catalogView, string name)
+    {
+        cmd.CommandText = "SELECT COUNT(*) FROM " + catalogView + " WHERE [name] = @n";
+        cmd.Parameters.Clear();
+        var prm = cmd.CreateParameter();
+        prm.ParameterName = "@n";
+        prm.Value = name;
+        cmd.Parameters.Add(prm);
+        var found = Convert.ToInt32(cmd.ExecuteScalar()) >= 1;
+        cmd.Parameters.Clear();
+        return found;
+    }
+
     private static bool IndexExists(IDbCommand cmd, string indexName)
     {
         cmd.CommandText = "SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = "
@@ -162,14 +215,26 @@ public class BracketedColumnNameRedeployTests
 
     private static void InsertProbeRow(IDbCommand cmd)
     {
-        // The column name is escaped for the DDL/DML the same way the product escapes it.
+        // The parent row comes FIRST. The probe column is now the child side of a ]-bearing foreign key, so
+        // without it the insert is refused -- which is itself evidence the FK was created correctly, but it
+        // is not what this test is measuring.
+        cmd.CommandText = $"IF NOT EXISTS (SELECT 1 FROM dbo.[{ParentTable}]) "
+                          + $"INSERT INTO dbo.[{ParentTable}] ([{DeclaredParentCol.Trim('[', ']').Replace("]]", "]").Replace("]", "]]")}]) "
+                          + "VALUES (@v)";
+        cmd.Parameters.Clear();
+        var pp = cmd.CreateParameter();
+        pp.ParameterName = "@v";
+        pp.Value = ProbeRowValue;
+        cmd.Parameters.Add(pp);
+        cmd.ExecuteNonQuery();
+        cmd.Parameters.Clear();
+
         cmd.CommandText = $"INSERT INTO dbo.{TableName} ([Id], [{RawColumnName.Replace("]", "]]")}]) "
                           + "VALUES (1, @v)";
-        cmd.Parameters.Clear();
-        var p = cmd.CreateParameter();
-        p.ParameterName = "@v";
-        p.Value = ProbeRowValue;
-        cmd.Parameters.Add(p);
+        var prm = cmd.CreateParameter();
+        prm.ParameterName = "@v";
+        prm.Value = ProbeRowValue;
+        cmd.Parameters.Add(prm);
         cmd.ExecuteNonQuery();
         cmd.Parameters.Clear();
     }
@@ -215,6 +280,20 @@ public class BracketedColumnNameRedeployTests
         // the column through #ExistingColumns and Detect Column Drops, the index through ownership
         // matching against fn_listextendedproperty's BARE name, which puts a declared index into
         // #IndexesRemovedFromProduct (@DropIndexesRemovedFromProduct defaults to 1).
+        // The PARENT table, so the foreign key has a ]-bearing target to point at. Its referenced column
+        // carries a ] as well, which exercises the RelatedColumns rendering rather than only the FK name.
+        File.WriteAllText(Path.Join(tables, $"dbo.{ParentTable}.json"),
+            "{\n  \"Schema\": \"[dbo]\",\n"
+            + $"  \"Name\": \"[{ParentTable}]\",\n  \"Columns\": [\n"
+            + $"    {{ \"Name\": \"{DeclaredParentCol}\", \"DataType\": \"VARCHAR(40)\", \"Nullable\": false }}\n"
+            + "  ],\n  \"Indexes\": [\n"
+            + $"    {{ \"Name\": \"[PK_{ParentTable}]\", \"PrimaryKey\": true, \"Unique\": true, "
+            + $"\"UniqueConstraint\": true, \"IndexColumns\": \"{DeclaredParentCol}\" }}\n  ]\n}}\n");
+
+        // ONE package carrying a ] on every object kind whose emission or ownership path the sweep touched:
+        // a COLUMN, an INDEX, a FOREIGN KEY (name and related column), a CHECK CONSTRAINT and a STATISTIC.
+        // Before this, nothing anywhere deployed a delimiter-bearing object of the last three kinds, which
+        // is precisely why the index defect survived unnoticed -- the guard did not exist to catch it.
         File.WriteAllText(Path.Join(tables, $"dbo.{TableName}.json"),
             "{\n  \"Schema\": \"[dbo]\",\n"
             + $"  \"Name\": \"[{TableName}]\",\n  \"Columns\": [\n"
@@ -223,7 +302,14 @@ public class BracketedColumnNameRedeployTests
             + "  ],\n  \"Indexes\": [\n"
             + $"    {{ \"Name\": \"[PK_{TableName}]\", \"PrimaryKey\": true, \"Unique\": true, "
             + "\"UniqueConstraint\": true, \"IndexColumns\": \"[Id]\" },\n"
-            + $"    {{ \"Name\": \"{DeclaredIndexName}\", \"IndexColumns\": \"{DeclaredColumnName}\" }}\n  ]\n}}\n");
+            + $"    {{ \"Name\": \"{DeclaredIndexName}\", \"IndexColumns\": \"{DeclaredColumnName}\" }}\n"
+            + "  ],\n  \"ForeignKeys\": [\n"
+            + $"    {{ \"Name\": \"{DeclaredFkName}\", \"Columns\": \"{DeclaredColumnName}\", "
+            + $"\"RelatedTable\": \"[{ParentTable}]\", \"RelatedColumns\": \"{DeclaredParentCol}\" }}\n"
+            + "  ],\n  \"CheckConstraints\": [\n"
+            + $"    {{ \"Name\": \"{DeclaredCheckName}\", \"Expression\": \"[Id] >= 0\" }}\n"
+            + "  ],\n  \"Statistics\": [\n"
+            + $"    {{ \"Name\": \"{DeclaredStatName}\", \"Columns\": \"{DeclaredColumnName}\" }}\n  ]\n}}\n");
     }
 
     private void SetupSharedMocks()

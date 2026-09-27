@@ -21,7 +21,7 @@ GO
 --
 -- The declared side and the live-side render in ModifiedTableQuench are compared AS STRINGS for drift, so
 -- both must produce the same text. For an ordinary name they do: this emits [Doc] TYPE COLUMN [DocType],
--- identical to the live side's  ' TYPE COLUMN [' + COL_NAME(...) + ']'  concatenation. A name containing a
+-- identical to the live side's  ' TYPE COLUMN ' + QUOTENAME(COL_NAME(...)) + ''  concatenation. A name containing a
 -- ] still differs, because the live side does not escape either -- that is the unescaped-emission gap
 -- tracked for 2.8.0, not something this function can close alone.
 CREATE FUNCTION [SchemaSmith].[fn_SafeBracketWrapFullTextColumn](@p_Input NVARCHAR(MAX))

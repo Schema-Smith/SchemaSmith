@@ -226,7 +226,7 @@ BEGIN TRY
 
             RAISERROR('  Rebuilding PRIMARY KEY on %s: the deployed key does not match its declaration', 10, 100, @v_QualifiedName) WITH NOWAIT;
             BEGIN TRANSACTION;
-            SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' DROP CONSTRAINT [' + @v_PkName + N']';
+            SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' DROP CONSTRAINT ' + QUOTENAME(@v_PkName);
             EXEC(@v_SQL);
             SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' ADD CONSTRAINT ' + @v_DeclPkName +
                          N' PRIMARY KEY ' + CASE WHEN @v_DeclPkClustered = 1 THEN N'CLUSTERED' ELSE N'NONCLUSTERED' END +

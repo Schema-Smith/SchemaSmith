@@ -388,7 +388,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                [StopList] = QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)),
                (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)) +
                                        CASE WHEN fc.type_column_id IS NOT NULL
-                                            THEN ' TYPE COLUMN [' + COL_NAME(fc.[object_id], fc.type_column_id) + ']'
+                                            THEN ' TYPE COLUMN ' + QUOTENAME(COL_NAME(fc.[object_id], fc.type_column_id)) + ''
                                             ELSE '' END +
                                        -- Full-text LANGUAGE churn: emit only when it deviates from the column's
                                        -- own collation-implied default -- stamping every column would churn every

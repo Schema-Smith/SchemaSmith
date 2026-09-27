@@ -456,7 +456,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                [StopList] = QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)),
                STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)) +
                                        CASE WHEN fc.type_column_id IS NOT NULL
-                                            THEN ' TYPE COLUMN [' + COL_NAME(fc.[object_id], fc.type_column_id) + ']'
+                                            THEN ' TYPE COLUMN ' + QUOTENAME(COL_NAME(fc.[object_id], fc.type_column_id)) + ''
                                             ELSE '' END +
                                        -- Full-text LANGUAGE churn: same emit-only-when-non-default rule and
                                        -- byte-identical contract as the JSON twin (GenerateTableJson.sql). Kept
