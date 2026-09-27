@@ -121,6 +121,134 @@ EXEC sys.sp_addextendedproperty 'MS_Description', 'A rich table', 'SCHEMA', [dbo
     }
 
     [Test]
+    public void GenerateTableXml_TypedXmlColumn_ExtractsSameTwoPartCollectionNameAs_GenerateTableJson()
+    {
+        // A typed XML column carries a TWO-PART schema-collection name, and it is the only identifier in
+        // either proc that is not a single name. That makes it the one place a QUOTENAME conversion can go
+        // wrong in a way no single-name test would notice: wrapping the whole  schema + '].[' + name
+        // concatenation in ONE QUOTENAME escapes the interior ']' and collapses the two parts into the single
+        // name  schema].[name . Both fixtures above declare an UNTYPED  Doc XML NULL, so neither reaches this
+        // path at all -- the rendering was unguarded on both encodings.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE XML SCHEMA COLLECTION dbo.XSC_Equiv AS
+N'<xsd:schema xmlns:xsd=""http://www.w3.org/2001/XMLSchema"" targetNamespace=""urn:ss:equiv"">
+    <xsd:element name=""r"" type=""xsd:string""/>
+  </xsd:schema>';
+";
+        // Separate batches: a collection reference in CREATE TABLE is resolved when the batch COMPILES, so
+        // a collection created earlier in the same batch does not exist yet.
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = "CREATE TABLE dbo.XmlEquivTyped (Id INT NOT NULL, Doc XML(dbo.XSC_Equiv) NULL);";
+        cmd.ExecuteNonQuery();
+
+        var jsonModel = (SqlServerTable)PlatformDeserializer.DeserializeTable(
+            GenerateTableJson(cmd, "dbo", "XmlEquivTyped"), Platform.SqlServer);
+        var xmlModel = (SqlServerTable)PlatformDeserializer.DeserializeTable(
+            ModelXmlSerializer.FromIngestXml(GenerateTableXml(cmd, "dbo", "XmlEquivTyped")), Platform.SqlServer);
+
+        var jsonDoc = jsonModel.Columns.Single(c => c.Name == "[Doc]");
+        var xmlDoc = xmlModel.Columns.Single(c => c.Name == "[Doc]");
+
+        Assert.Multiple(() =>
+        {
+            // Pinned literally on BOTH sides: equality alone would hold if both encodings collapsed the name
+            // the same way, and a collapsed name is a data type the engine cannot resolve on redeploy.
+            Assert.That(jsonDoc.DataType, Does.Contain("[dbo].[XSC_Equiv]"),
+                "the JSON proc must render the collection as a TWO-PART name");
+            Assert.That(xmlDoc.DataType, Does.Contain("[dbo].[XSC_Equiv]"),
+                "the XML twin must render the same two-part name -- one QUOTENAME around the whole "
+                + "concatenation escapes the interior ']' and yields the single name dbo].[XSC_Equiv");
+            Assert.That(NormalizeMinusExtensions(xmlModel), Is.EqualTo(NormalizeMinusExtensions(jsonModel)));
+        });
+
+        conn.Close();
+    }
+
+    [Test]
+    public void GenerateTableXml_IdentifiersContainingABracket_ExtractSameModelAs_GenerateTableJson()
+    {
+        // The XML twin rendered its EXTRACTION identifiers as a raw '[' + catalog_name + ']' where the JSON
+        // proc uses QUOTENAME. For every ordinary name those are BYTE-IDENTICAL, which is exactly why the
+        // equivalence tests above passed over the divergence for as long as they existed: none of their
+        // fixtures contains a ']'. A name that does contain one renders as the unparseable [a]b] on the XML
+        // side and the correct [a]]b] on the JSON side, so extraction through the legacy encoding produced a
+        // model naming objects that do not exist -- and a deploy from it would treat the real ones as
+        // undeclared.
+        //
+        // The names below carry a ']' into each container the raw wraps fed: column, index name and index
+        // column list, FK name plus its related schema/table/column, statistics name and columns, check
+        // constraint name, and the full-text key index. Equality against the JSON proc is asserted, and so
+        // are the literal escaped forms -- equality ALONE would pass if both encodings regressed the same
+        // way, which is the failure this pair of procs is most prone to.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.[Par]]ent] (Id INT NOT NULL PRIMARY KEY, [Co]]de] VARCHAR(20) NOT NULL);
+CREATE UNIQUE INDEX [UX_Par]]ent_Co]]de] ON dbo.[Par]]ent] ([Co]]de]);
+
+CREATE TABLE dbo.[Ri]]ch] (
+    Id INT NOT NULL,
+    [Na]]me] NVARCHAR(100) NOT NULL,
+    Amount DECIMAL(10,2) NULL,
+    [Par]]entCode] VARCHAR(20) NULL,
+    Flag BIT NOT NULL,
+    CONSTRAINT [PK_Ri]]ch] PRIMARY KEY CLUSTERED (Id),
+    CONSTRAINT [CK_Ri]]ch_Amount] CHECK (Amount >= 0),
+    CONSTRAINT [FK_Ri]]ch_Par]]ent] FOREIGN KEY ([Par]]entCode]) REFERENCES dbo.[Par]]ent] ([Co]]de])
+);
+CREATE NONCLUSTERED INDEX [IX_Ri]]ch_Na]]me] ON dbo.[Ri]]ch] ([Na]]me] DESC) INCLUDE (Amount) WHERE Flag = 1;
+CREATE STATISTICS [ST_Ri]]ch_Amount] ON dbo.[Ri]]ch] (Amount);
+CREATE FULLTEXT INDEX ON dbo.[Ri]]ch] ([Na]]me]) KEY INDEX [PK_Ri]]ch] ON FT_Catalog WITH CHANGE_TRACKING = AUTO, STOPLIST = SL_Test;
+";
+        cmd.ExecuteNonQuery();
+
+        var rawJson = GenerateTableJson(cmd, "dbo", "Ri]ch");
+        var rawXml = GenerateTableXml(cmd, "dbo", "Ri]ch");
+
+        // Emptiness is asserted BEFORE parsing, and on both encodings. Each proc resolves the table with
+        // OBJECT_ID(@p_Schema + '.' + @p_Table); undelimited, that is NULL for a ']'-bearing name, the inner
+        // JOIN sys.tables matches nothing, and the proc returns an empty rowset -- so a ']'-named table
+        // extracted as NOTHING AT ALL on both encodings. Parsing first reported only "Root element is
+        // missing", which names neither the proc nor the cause.
+        Assert.That(rawJson, Is.Not.Empty,
+            "GenerateTableJson returned NOTHING for a table whose name contains a ']'. It resolves the table "
+            + "with OBJECT_ID on a concatenated name, which needs QUOTENAME on each part or it is NULL.");
+        Assert.That(rawXml, Is.Not.Empty,
+            "GenerateTableXml returned NOTHING for a table whose name contains a ']'. Same cause as the JSON "
+            + "twin: OBJECT_ID over an undelimited concatenation resolves to NULL.");
+
+        var jsonModel = (SqlServerTable)PlatformDeserializer.DeserializeTable(rawJson, Platform.SqlServer);
+        var xmlModel = (SqlServerTable)PlatformDeserializer.DeserializeTable(
+            ModelXmlSerializer.FromIngestXml(rawXml), Platform.SqlServer);
+
+        Assert.Multiple(() =>
+        {
+            // The JSON proc is the reference encoding, so its own rendering is pinned first: if THIS drifts
+            // the equality assertion below would still hold while both sides were wrong together.
+            Assert.That(jsonModel.Name, Is.EqualTo("[Ri]]ch]"),
+                "the JSON proc must escape the ] in a table name -- it is the reference encoding here");
+            Assert.That(jsonModel.Columns.Select(c => c.Name), Does.Contain("[Na]]me]"),
+                "the JSON proc must escape the ] in a column name");
+
+            Assert.That(xmlModel.Name, Is.EqualTo("[Ri]]ch]"),
+                "the XML twin rendered a raw '[' + name + ']', producing the unparseable [Ri]ch]");
+            Assert.That(xmlModel.Columns.Select(c => c.Name), Does.Contain("[Na]]me]"),
+                "the XML twin must escape the ] in a column name the same way the JSON proc does");
+
+            Assert.That(NormalizeMinusExtensions(xmlModel), Is.EqualTo(NormalizeMinusExtensions(jsonModel)),
+                "every container -- index name and columns, FK name and its related table/column, statistics, "
+                + "check constraint, full-text key index -- must read identically through both encodings. A "
+                + "difference here is an extraction that names objects the database does not have.");
+        });
+
+        conn.Close();
+    }
+
+    [Test]
     public void GenerateTableXml_PartitionedTableWithMixedCompression_ExtractsSameModelAs_GenerateTableJson()
     {
         // Task C1-0b: sys.partitions is one row PER PARTITION; the prior scalar CompressionType

@@ -33,7 +33,7 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
     SELECT @p_Ledger = CASE ledger_type_desc WHEN ''APPEND_ONLY_LEDGER_TABLE'' THEN ''AppendOnly''
                                              WHEN ''UPDATABLE_LEDGER_TABLE'' THEN ''Updatable'' END
       FROM sys.tables
-     WHERE [object_id] = OBJECT_ID(@p_Schema + ''.'' + @p_Table);',
+     WHERE [object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table));',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Ledger NVARCHAR(12) OUTPUT',
     @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Ledger = @v_Ledger OUTPUT
 -- CDC change-table filegroup (#417). The cdc schema exists only in a CDC-enabled database, so the read is
@@ -45,7 +45,7 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_en
   EXEC sp_executesql N'
     SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN ''['' + fg.[name] + '']'' END
       FROM (SELECT TOP 1 ct.filegroup_name FROM cdc.change_tables ct WITH (NOLOCK)
-             WHERE ct.source_object_id = OBJECT_ID(@p_Schema + ''.'' + @p_Table)
+             WHERE ct.source_object_id = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table))
              ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
       JOIN sys.filegroups fg ON fg.[name] = newest.filegroup_name;',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Fg NVARCHAR(260) OUTPUT',
@@ -417,7 +417,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
           FOR JSON PATH,WITHOUT_ARRAY_WRAPPER) AS [FullTextIndex],
 	   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, default, default) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
   FROM INFORMATION_SCHEMA.TABLES t
-  JOIN sys.tables st ON st.[object_id] = OBJECT_ID(@p_Schema + '.' + @p_Table)
+  JOIN sys.tables st ON st.[object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table))
   LEFT JOIN sys.change_tracking_tables ctt ON ctt.[object_id] = st.[object_id]
   LEFT JOIN sys.tables h ON h.[object_id] = st.history_table_id
   LEFT JOIN sys.schemas hs ON hs.[schema_id] = h.[schema_id]
