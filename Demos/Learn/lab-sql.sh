@@ -165,8 +165,12 @@ lab_sql_file() {
       sqlserver) sc=$(lab_container_sqlcmd "$container"); out=$(MSYS_NO_PATHCONV=1 docker exec "$container" "$sc" \
                          -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d "$db" -i /tmp/lab-seed.sql 2>&1); rc=$? ;;
       postgres)  out=$(MSYS_NO_PATHCONV=1 docker exec "$container" psql -U postgres -d "$db" -v ON_ERROR_STOP=1 -f /tmp/lab-seed.sql 2>&1); rc=$? ;;
-      mysql)     out=$(MSYS_NO_PATHCONV=1 docker exec -e 'MYSQL_PWD=Learn!Passw0rd' "$container" mysql -uroot -D "$db" -e 'source /tmp/lab-seed.sql' 2>&1); rc=$? ;;
-      mariadb)   mc=$(lab_container_maria_client "$container"); out=$(MSYS_NO_PATHCONV=1 docker exec -e 'MYSQL_PWD=Learn!Passw0rd' "$container" "$mc" -uroot -D "$db" -e 'source /tmp/lab-seed.sql' 2>&1); rc=$? ;;
+      # The seed file is fed on STDIN, not via -e 'source ...'. `source` is a mysql CLIENT command rather
+      # than SQL: it worked on 8.0 and MySQL 26.7 rejects it outright (ERROR 1064 near 'source /tmp/lab-seed.sql'),
+      # which broke four course4 recipes on the ceiling. Redirecting the file is plain SQL and behaves the
+      # same on every supported version, so this is the portable form and not a 26-specific patch.
+      mysql)     out=$(MSYS_NO_PATHCONV=1 docker exec -e 'MYSQL_PWD=Learn!Passw0rd' "$container" sh -c "mysql -uroot -D '$db' < /tmp/lab-seed.sql" 2>&1); rc=$? ;;
+      mariadb)   mc=$(lab_container_maria_client "$container"); out=$(MSYS_NO_PATHCONV=1 docker exec -e 'MYSQL_PWD=Learn!Passw0rd' "$container" sh -c "$mc -uroot -D '$db' < /tmp/lab-seed.sql" 2>&1); rc=$? ;;
     esac
   fi
   if [ "$rc" -ne 0 ]; then

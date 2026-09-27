@@ -181,8 +181,8 @@ function Invoke-LabSqlFile {
         switch ($Engine) {
             'sqlserver' { $sc = Get-LabContainerSqlcmd $container; $out = docker exec $container $sc -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d $Database -i /tmp/lab-seed.sql 2>&1 }
             'postgres'  { $out = docker exec $container psql -U postgres -d $Database -v ON_ERROR_STOP=1 -f /tmp/lab-seed.sql 2>&1 }
-            'mysql'     { $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container mysql -uroot -D $Database -e 'source /tmp/lab-seed.sql' 2>&1 }
-            'mariadb'   { $mc = Get-LabContainerMariaClient -Container $container; $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container $mc -uroot -D $Database -e 'source /tmp/lab-seed.sql' 2>&1 }
+            'mysql'     { $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container sh -c "mysql -uroot -D $Database < /tmp/lab-seed.sql" 2>&1 }
+            'mariadb'   { $mc = Get-LabContainerMariaClient -Container $container; $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container sh -c "$mc -uroot -D $Database < /tmp/lab-seed.sql" 2>&1 }
         }
     }
     if ($LASTEXITCODE -ne 0) {
