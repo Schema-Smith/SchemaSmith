@@ -91,7 +91,7 @@ BEGIN TRY
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Table ' + tp.[Schema] + '.' + tp.[TableName] + ' owned by different product. [' + tp.[Value] + ']'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
                            FROM #Tables t WITH (NOLOCK)
                            JOIN #TableProperties tp WITH (NOLOCK) ON t.[Schema] = tp.[Schema]
-                                                                 AND t.[Name] = '[' + tp.TableName + ']'
+                                                                 AND t.[Name] = QUOTENAME(tp.TableName)
                            WHERE tp.PropertyName = 'ProductName'
                              AND tp.[value] <> @ProductName
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -100,7 +100,7 @@ BEGIN TRY
   IF EXISTS (SELECT *
                FROM #Tables t WITH (NOLOCK)
                JOIN #TableProperties tp WITH (NOLOCK) ON t.[Schema] = tp.[Schema]
-                                                     AND t.[Name] = '[' + tp.TableName + ']'
+                                                     AND t.[Name] = QUOTENAME(tp.TableName)
                WHERE tp.PropertyName = 'ProductName'
                  AND tp.[value] <> @ProductName)
   BEGIN
@@ -205,7 +205,7 @@ BEGIN TRY
         AND NOT EXISTS (SELECT *
                           FROM #Tables t WITH (NOLOCK)
                           WHERE t.[Schema] = tp.[Schema]
-                            AND t.[Name] = '[' + tp.TableName + ']')
+                            AND t.[Name] = QUOTENAME(tp.TableName))
       FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_SQL IS NOT NULL EXEC(@v_SQL)
   END
@@ -228,7 +228,7 @@ BEGIN TRY
         AND NOT EXISTS (SELECT *
                           FROM #Tables t WITH (NOLOCK)
                           WHERE t.[Schema] = tp.[Schema]
-                            AND t.[Name] = '[' + tp.TableName + ']')
+                            AND t.[Name] = QUOTENAME(tp.TableName))
         -- A dropped ledger table is RETAINED as MSSQL_DroppedLedgerTable_<name>_<guid>, inheriting the
         -- extended properties of the table it came from -- including the ProductName stamp this pass
         -- selects on. Without this it reads as "a table removed from the product" on every later
@@ -290,7 +290,7 @@ BEGIN TRY
       RAISERROR('Drop inbound foreign keys referencing tables removed from the product', 10, 100) WITH NOWAIT
       SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping inbound foreign Key ' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '.' + OBJECT_NAME(fk.parent_object_id) + '.' + fk.[name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                       'IF OBJECT_ID(''[' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + fk.[name] + ']'') IS NOT NULL ALTER TABLE [' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '] DROP CONSTRAINT [' + fk.[name] + '];' + CHAR(13) + CHAR(10) +
-                                      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''[' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '].[' + fk.[name] + ']'', ''dropped'');' AS NVARCHAR(MAX))
+                                      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''', ''dropped'');' AS NVARCHAR(MAX))
                                FROM #TablesRemovedFromProduct t WITH (NOLOCK)
                                JOIN sys.foreign_keys fk ON fk.referenced_object_id = OBJECT_ID(t.[Schema] + '.[' + t.[TableName] + ']')
                                FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -350,7 +350,7 @@ BEGIN TRY
                              AND NOT EXISTS (SELECT *
                                                FROM #Tables t WITH (NOLOCK)
                                                WHERE t.[Schema] = tp.[Schema]
-                                                 AND t.[Name] = '[' + tp.TableName + ']')
+                                                 AND t.[Name] = QUOTENAME(tp.TableName))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
@@ -364,7 +364,7 @@ BEGIN TRY
 
   RAISERROR('Identify indexes removed from the product', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexesRemovedFromProduct') IS NOT NULL DROP TABLE #IndexesRemovedFromProduct
-  SELECT xp.[Schema], xp.TableName, xp.IndexName, IsConstraint = CAST(CASE WHEN OBJECT_ID(xp.[Schema] + '.' + xp.IndexName) IS NOT NULL THEN 1 ELSE 0 END AS BIT)
+  SELECT xp.[Schema], xp.TableName, xp.IndexName, IsConstraint = CAST(CASE WHEN OBJECT_ID(xp.[Schema] + '.' + QUOTENAME(xp.IndexName)) IS NOT NULL THEN 1 ELSE 0 END AS BIT)
     INTO #IndexesRemovedFromProduct
     FROM #IndexProperties xp
     WHERE xp.[value] = @ProductName
@@ -372,12 +372,12 @@ BEGIN TRY
                         FROM #Indexes i WITH (NOLOCK) 
                         WHERE i.[Schema] = xp.[Schema] 
                           AND i.TableName = xp.TableName
-                          AND i.IndexName = '[' + xp.IndexName + ']')
+                          AND i.IndexName = QUOTENAME(xp.IndexName))
       AND NOT EXISTS (SELECT * 
                         FROM #XmlIndexes i WITH (NOLOCK) 
                         WHERE i.[Schema] = xp.[Schema] 
                           AND i.TableName = xp.TableName
-                          AND i.IndexName = '[' + xp.IndexName + ']')
+                          AND i.IndexName = QUOTENAME(xp.IndexName))
 
   -- 2016-era per-column catalog metadata (dynamic data masking + Always Encrypted) is version-gated so this
   -- shared apply proc CREATEs on a genuine pre-2016 binary: a STATIC sys.masked_columns / encryption_* column
@@ -960,7 +960,7 @@ BEGIN TRY
     EXEC(N'INSERT INTO #SemanticCols ([object_id], column_id) SELECT [object_id], column_id FROM sys.fulltext_index_columns WHERE statistical_semantics = 1')
   IF OBJECT_ID('tempdb..#ExistingFullTextIndexes') IS NOT NULL DROP TABLE #ExistingFullTextIndexes
   SELECT t.[Schema], [TableName] = t.[Name],
-         STUFF((SELECT ',' + '[' + COL_NAME(fc.[object_id], fc.column_id) + ']' +
+         STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)) +
                             CASE WHEN fc.type_column_id IS NOT NULL
                                  THEN ' TYPE COLUMN [' + COL_NAME(fc.[object_id], fc.type_column_id) + ']'
                                  ELSE '' END +
@@ -985,10 +985,10 @@ BEGIN TRY
             JOIN sys.columns c ON c.[object_id] = fc.[object_id] AND c.column_id = fc.column_id
             WHERE fi.[object_id] = fc.[object_id]
             ORDER BY COL_NAME(fc.[object_id], fc.column_id) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS [Columns],
-         FullTextCatalog = '[' + (SELECT c.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id) + ']',
-         KeyIndex = '[' + (SELECT i.[Name] COLLATE DATABASE_DEFAULT FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id]) + ']',
+         FullTextCatalog = QUOTENAME((SELECT c.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
+         KeyIndex = QUOTENAME((SELECT i.[Name] COLLATE DATABASE_DEFAULT FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
          ChangeTracking = change_tracking_state_desc COLLATE DATABASE_DEFAULT,
-         [StopList] = '[' + COALESCE((SELECT fs.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id), 'SYSTEM') + ']'
+         [StopList] = QUOTENAME(COALESCE((SELECT fs.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id), 'SYSTEM'))
     INTO #ExistingFullTextIndexes
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.fulltext_indexes fi ON fi.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
@@ -1119,19 +1119,19 @@ BEGIN TRY
                        CASE WHEN si.[type] IN (5, 6) THEN 'COLUMNSTORE ' ELSE '' END + 
                        'INDEX [' + si.[Name] + '] ON ' + t.[Schema] + '.' + t.[Name] + 
                        CASE WHEN si.[type] NOT IN (5, 6)
-                            THEN ' (' + STUFF((SELECT ',' + '[' + COL_NAME(ic.[object_id], ic.column_id) + ']' + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
+                            THEN ' (' + STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                                            FROM sys.index_columns ic
                                            WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0
                                            ORDER BY key_ordinal FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') + ')' +
                                  CASE WHEN EXISTS (SELECT * FROM sys.index_columns ic WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1)
                                       THEN ' INCLUDE (' +
-                                           STUFF((SELECT ',' + '[' + COL_NAME(ic.[object_id], ic.column_id) + ']'
+                                           STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id))
                                               FROM sys.index_columns ic
                                               WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1
                                               ORDER BY COL_NAME(ic.[object_id], ic.column_id) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') + ')'
                                       ELSE '' END
                             WHEN si.[type] IN (6)
-                            THEN ' (' + STUFF((SELECT ',' + '[' + COL_NAME(ic.[object_id], ic.column_id) + ']'
+                            THEN ' (' + STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id))
                                            FROM sys.index_columns ic
                                            WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1
                                            ORDER BY COL_NAME(ic.[object_id], ic.column_id) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') + ')'
@@ -1298,11 +1298,11 @@ BEGIN TRY
                                   CASE WHEN IsConstraint = 1
                                        THEN CASE WHEN OBJECT_ID(ir.[Schema] + '.' + ir.[NewName]) IS NULL
                                                  THEN 'EXEC sp_rename N''' + SchemaSmith.fn_StripBracketWrapping(ir.[Schema]) + '.' + ir.[OldName] + ''', N''' + SchemaSmith.fn_StripBracketWrapping(ir.[NewName]) + ''', N''OBJECT'';'
-                                                 ELSE 'IF OBJECT_ID(''' + ir.[Schema] + '.[' + ir.[OldName] + ']'') IS NOT NULL ALTER TABLE ' + ir.[Schema] + '.' + ir.[TableName] + ' DROP CONSTRAINT [' + ir.[OldName] + '];'
+                                                 ELSE 'IF OBJECT_ID(''' + ir.[Schema] + '.[' + ir.[OldName] + ']'') IS NOT NULL ALTER TABLE ' + ir.[Schema] + '.' + ir.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(ir.[OldName]) + ';'
                                                  END
                                        ELSE CASE WHEN INDEXPROPERTY(OBJECT_ID(ir.[Schema] + '.' + ir.[TableName]), SchemaSmith.fn_StripBracketWrapping(ir.[NewName]), 'IndexID') IS NULL
                                                  THEN 'EXEC sp_rename N''' + SchemaSmith.fn_StripBracketWrapping(ir.[Schema]) + '.' + SchemaSmith.fn_StripBracketWrapping(ir.[TableName]) + '.' + ir.[OldName] + ''', N''' + SchemaSmith.fn_StripBracketWrapping(ir.[NewName]) + ''', N''INDEX'';'
-                                                 ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + ir.[Schema] + '.' + ir.[TableName] + '''), ''' + ir.[OldName] + ''', ''IndexID'') IS NOT NULL DROP INDEX [' + ir.[OldName] + '] ON ' + ir.[Schema] + '.' + ir.[TableName] + ';'
+                                                 ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + ir.[Schema] + '.' + ir.[TableName] + '''), ''' + ir.[OldName] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(ir.[OldName]) + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ';'
                                                  END
                                        END AS NVARCHAR(MAX))
                            FROM #IndexRenames ir WITH (NOLOCK)
@@ -1367,7 +1367,7 @@ BEGIN TRY
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Renaming ' + [OldName] + ' to ' + [NewName] + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN INDEXPROPERTY(OBJECT_ID(ir.[Schema] + '.' + ir.[TableName]), SchemaSmith.fn_StripBracketWrapping(ir.[NewName]), 'IndexID') IS NULL
                                        THEN 'EXEC sp_rename N''' + SchemaSmith.fn_StripBracketWrapping(ir.[Schema]) + '.' + SchemaSmith.fn_StripBracketWrapping(ir.[TableName]) + '.' + ir.[OldName] + ''', N''' + SchemaSmith.fn_StripBracketWrapping(ir.[NewName]) + ''', N''INDEX'';'
-                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + ir.[Schema] + '.' + ir.[TableName] + '''), ''' + ir.[OldName] + ''', ''IndexID'') IS NOT NULL DROP INDEX [' + ir.[OldName] + '] ON ' + ir.[Schema] + '.' + ir.[TableName] + ';'
+                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + ir.[Schema] + '.' + ir.[TableName] + '''), ''' + ir.[OldName] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(ir.[OldName]) + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ';'
                                        END AS NVARCHAR(MAX))
                            FROM #XmlIndexRenames ir WITH (NOLOCK)
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -1488,8 +1488,8 @@ BEGIN TRY
   RAISERROR('Drop Unknown and Modified Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Dropping ' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + di.[Schema] + '.' + di.[TableName] + '.' + di.[IndexName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN IsConstraint = 1
-                                       THEN 'IF OBJECT_ID(''' + di.[Schema] + '.[' + di.[IndexName] + ']'') IS NOT NULL ALTER TABLE ' + di.[Schema] + '.' + di.[TableName] + ' DROP CONSTRAINT [' + di.[IndexName] + '];'
-                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + di.[Schema] + '.' + di.[TableName] + '''), ''' + di.[IndexName] + ''', ''IndexID'') IS NOT NULL DROP INDEX [' + di.[IndexName] + '] ON ' + di.[Schema] + '.' + di.[TableName] + ';'
+                                       THEN 'IF OBJECT_ID(''' + di.[Schema] + '.[' + di.[IndexName] + ']'') IS NOT NULL ALTER TABLE ' + di.[Schema] + '.' + di.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(di.[IndexName]) + ';'
+                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + di.[Schema] + '.' + di.[TableName] + '''), ''' + di.[IndexName] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(di.[IndexName]) + ' ON ' + di.[Schema] + '.' + di.[TableName] + ';'
                                        END + CHAR(13) + CHAR(10) +
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + di.[Schema] + '.' + di.[TableName] + '.' + di.[IndexName] + ''', ''dropped'');'
                                   FROM #IndexesToDrop di WITH (NOLOCK)
@@ -1779,7 +1779,7 @@ BEGIN TRY
                                                               '@level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ' +
                                                               '@level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''';' AS NVARCHAR(MAX))
                            FROM #Tables t WITH (NOLOCK)
-                           WHERE NOT EXISTS (SELECT * FROM #TableProperties tp WITH (NOLOCK) WHERE t.[Schema] = tp.[Schema] AND t.[Name] = '[' + tp.TableName + ']' AND tp.PropertyName = 'ProductName')
+                           WHERE NOT EXISTS (SELECT * FROM #TableProperties tp WITH (NOLOCK) WHERE t.[Schema] = tp.[Schema] AND t.[Name] = QUOTENAME(tp.TableName) AND tp.PropertyName = 'ProductName')
                              AND OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NOT NULL  -- and the table physically exists
                              AND t.[MemoryOptimized] = 0  -- memory-optimized tables reject extended properties; their ownership is tracked in SchemaSmith.ProductOwnership below
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -1889,12 +1889,12 @@ BEGIN TRY
   IF OBJECT_ID('tempdb..#ExistingFKs') IS NOT NULL DROP TABLE #ExistingFKs
   SELECT t.[Schema], [TableName] = t.[Name],
          FKName = fk.[Name],
-         FKScript = '(' + STUFF((SELECT ',' + '[' + COL_NAME(fc.[parent_object_id], fc.parent_column_id) + ']'
+         FKScript = '(' + STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[parent_object_id], fc.parent_column_id))
                              FROM sys.foreign_key_columns fc
                              WHERE fk.[object_id] = fc.[constraint_object_id]
                              ORDER BY fc.constraint_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') + ')' +
                     ' REFERENCES [' + OBJECT_SCHEMA_NAME(referenced_object_id) + '].[' + OBJECT_NAME(referenced_object_id) + '] ' +
-                    '(' + STUFF((SELECT ',' + '[' + COL_NAME(fc.[referenced_object_id], fc.referenced_column_id) + ']'
+                    '(' + STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[referenced_object_id], fc.referenced_column_id))
                              FROM sys.foreign_key_columns fc
                              WHERE fk.[object_id] = fc.[constraint_object_id]
                              ORDER BY fc.constraint_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') + ')' +
@@ -1928,8 +1928,8 @@ BEGIN TRY
   IF OBJECT_ID('tempdb..#ExistingStats') IS NOT NULL DROP TABLE #ExistingStats
   SELECT t.[Schema], [TableName] = t.[Name], [StatsName] = si.[Name],
          StatisticScript = 'CREATE STATISTICS ' +
-                           '[' + si.[Name] + '] ON ' + t.[Schema] + '.' + t.[Name] + ' (' +
-                           STUFF((SELECT ',' + '[' + COL_NAME(ic.[object_id], ic.column_id) + ']'
+                           QUOTENAME(si.[Name]) + ' ON ' + t.[Schema] + '.' + t.[Name] + ' (' +
+                           STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id))
                               FROM sys.stats_columns ic
                               WHERE si.[object_id] = ic.[object_id] AND si.stats_id = ic.stats_id
                               ORDER BY ic.stats_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') + ')' +
@@ -2176,7 +2176,7 @@ BEGIN TRY
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping ' + CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + mct.[Schema] + '.' + mct.[TableName] + '.' + si.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1
                                        THEN 'IF OBJECT_ID(''' + mct.[Schema] + '.[' + si.[Name] + ']'') IS NOT NULL ALTER TABLE ' + mct.[Schema] + '.' + mct.[TableName] + ' DROP CONSTRAINT [' + si.[Name] + '];'
-                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + mct.[Schema] + '.' + mct.[TableName] + '''), ''' + si.[Name] + ''', ''IndexID'') IS NOT NULL DROP INDEX [' + si.[Name] + '] ON ' + mct.[Schema] + '.' + mct.[TableName] + ';'
+                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + mct.[Schema] + '.' + mct.[TableName] + '''), ''' + si.[Name] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(si.[Name]) + ' ON ' + mct.[Schema] + '.' + mct.[TableName] + ';'
                                        END AS NVARCHAR(MAX))
                            FROM #MissingClusteredIndexTables mct WITH (NOLOCK)
                            JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(mct.[Schema] + '.' + mct.[TableName])

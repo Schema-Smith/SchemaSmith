@@ -311,7 +311,7 @@ BEGIN
       WHERE t.[MemoryOptimized] = 1 AND t.NewTable = 0
 
     IF OBJECT_ID('tempdb..#MOIndexDrift') IS NOT NULL DROP TABLE #MOIndexDrift
-    SELECT DISTINCT FullName = '[' + COALESCE(d.sch, p.sch) + '].[' + COALESCE(d.tbl, p.tbl) + ']'
+    SELECT DISTINCT FullName = QUOTENAME(COALESCE(d.sch, p.sch)) + '.' + QUOTENAME(COALESCE(d.tbl, p.tbl))
       INTO #MOIndexDrift
       FROM #MODeclIx d
       FULL OUTER JOIN #MODeplIx p ON p.sch = d.sch AND p.tbl = d.tbl AND p.ixname = d.ixname

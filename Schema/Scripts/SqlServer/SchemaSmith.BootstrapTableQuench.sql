@@ -51,7 +51,7 @@ BEGIN TRY
     IF @v_SchemaBare = '' OR @v_NameBare = ''
         THROW 51000, 'BootstrapTableQuench: JSON must contain non-blank Schema and Name.', 1;
 
-    DECLARE @v_QualifiedName NVARCHAR(1000) = '[' + @v_SchemaBare + '].[' + @v_NameBare + ']';
+    DECLARE @v_QualifiedName NVARCHAR(1000) = QUOTENAME(@v_SchemaBare) + '.' + QUOTENAME(@v_NameBare);
     DECLARE @v_FullKey NVARCHAR(1000) = @v_SchemaBare + '.' + @v_NameBare;
 
     -- Step 1: TABLE-level declarative rename (OldName), run BEFORE CREATE TABLE IF NOT EXISTS below --
@@ -59,7 +59,7 @@ BEGIN TRY
     -- row of its history.
     IF @v_OldNameBare <> ''
     BEGIN
-        DECLARE @v_OldQualifiedName NVARCHAR(1000) = '[' + @v_SchemaBare + '].[' + @v_OldNameBare + ']';
+        DECLARE @v_OldQualifiedName NVARCHAR(1000) = QUOTENAME(@v_SchemaBare) + '.' + QUOTENAME(@v_OldNameBare);
         IF OBJECT_ID(@v_OldQualifiedName, 'U') IS NOT NULL AND OBJECT_ID(@v_QualifiedName, 'U') IS NOT NULL
         BEGIN
             -- Name the objects. Refusing is right, but an operator told only that "a" table clashes has

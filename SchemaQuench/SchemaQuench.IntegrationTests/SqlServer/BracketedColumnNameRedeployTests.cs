@@ -44,6 +44,8 @@ public class BracketedColumnNameRedeployTests
     private const string TableName = "BracketColumnProbe";
     private const string RawColumnName = "a]b";          // what the catalog stores
     private const string DeclaredColumnName = "[a]]b]";  // its correct delimited form
+    private const string RawIndexName = "IX]Probe";      // what the catalog stores
+    private const string DeclaredIndexName = "[IX]]Probe]";
 
     [Test]
     public void ABracketedColumnDeploysRedeploysAndIsNeverDropped()
@@ -94,6 +96,13 @@ public class BracketedColumnNameRedeployTests
                         + "Detect Column Drops elected a column the product declares -- the data-loss half, "
                         + "which was latent only while the malformed DROP statement could not parse.");
 
+                    Assert.That(IndexExists(cmd, RawIndexName), Is.True,
+                        $"after deploy {deploy} the index '{RawIndexName}' must exist. Index ownership is "
+                        + "matched against the BARE catalog name from fn_listextendedproperty, so a raw wrap "
+                        + "renders [IX]Probe] and can never equal the declared [IX]]Probe] -- the index then "
+                        + "lands in #IndexesRemovedFromProduct and is dropped although the package declares "
+                        + "it. Same data-loss shape as the column, a different object.");
+
                     // A ROW goes in after the first deploy, and its value is read back after the second.
                     // sys.columns CANNOT tell a surviving column from a dropped-and-recreated one -- both
                     // leave a column of the right name and type behind -- so presence alone would pass over
@@ -133,6 +142,20 @@ public class BracketedColumnNameRedeployTests
                 catch (IOException) { /* a held log handle must not fail a passing test */ }
             }
         }
+    }
+
+    private static bool IndexExists(IDbCommand cmd, string indexName)
+    {
+        cmd.CommandText = "SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = "
+                          + "OBJECT_ID('dbo." + TableName + "') AND [name] = @n";
+        cmd.Parameters.Clear();
+        var prm = cmd.CreateParameter();
+        prm.ParameterName = "@n";
+        prm.Value = indexName;
+        cmd.Parameters.Add(prm);
+        var found = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+        cmd.Parameters.Clear();
+        return found;
     }
 
     private const string ProbeRowValue = "keep-me";
@@ -187,14 +210,20 @@ public class BracketedColumnNameRedeployTests
             + $"\"SELECT [name] FROM sys.databases WHERE [name] = '{db}'\",\n"
             + "  \"ScriptFolders\": []\n}\n");
 
-        // The declared name carries the escape, which is what extraction now writes.
+        // The declared names carry the escape, which is what extraction now writes. TWO defects are
+        // covered by one package: a ]-bearing COLUMN and a ]-bearing INDEX. They fail differently --
+        // the column through #ExistingColumns and Detect Column Drops, the index through ownership
+        // matching against fn_listextendedproperty's BARE name, which puts a declared index into
+        // #IndexesRemovedFromProduct (@DropIndexesRemovedFromProduct defaults to 1).
         File.WriteAllText(Path.Join(tables, $"dbo.{TableName}.json"),
-            "{\n  \"Schema\": \"[dbo]\",\n" + $"  \"Name\": \"[{TableName}]\",\n  \"Columns\": [\n"
+            "{\n  \"Schema\": \"[dbo]\",\n"
+            + $"  \"Name\": \"[{TableName}]\",\n  \"Columns\": [\n"
             + "    { \"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false },\n"
-            + $"    {{ \"Name\": \"{DeclaredColumnName.Replace("\\", "\\\\")}\", \"DataType\": \"VARCHAR(40)\", \"Nullable\": true }}\n"
+            + $"    {{ \"Name\": \"{DeclaredColumnName}\", \"DataType\": \"VARCHAR(40)\", \"Nullable\": true }}\n"
             + "  ],\n  \"Indexes\": [\n"
             + $"    {{ \"Name\": \"[PK_{TableName}]\", \"PrimaryKey\": true, \"Unique\": true, "
-            + "\"UniqueConstraint\": true, \"IndexColumns\": \"[Id]\" }\n  ]\n}\n");
+            + "\"UniqueConstraint\": true, \"IndexColumns\": \"[Id]\" },\n"
+            + $"    {{ \"Name\": \"{DeclaredIndexName}\", \"IndexColumns\": \"{DeclaredColumnName}\" }}\n  ]\n}}\n");
     }
 
     private void SetupSharedMocks()

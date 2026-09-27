@@ -262,7 +262,7 @@ BEGIN
   SELECT @v_DropInboundFkSql = STUFF((SELECT @v_CrLf + CAST(
              'RAISERROR(''  Dropping inbound foreign key [' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '].[' + fk.[name] + ']'', 10, 100) WITH NOWAIT;' + @v_CrLf +
              'ALTER TABLE [' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '] DROP CONSTRAINT [' + fk.[name] + '];' + @v_CrLf +
-             'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''[' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '].[' + fk.[name] + ']'', ''dropped'');'
+             'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''', ''dropped'');'
              AS NVARCHAR(MAX))
            FROM sys.foreign_keys fk
            WHERE fk.referenced_object_id = @v_ObjectId

@@ -249,17 +249,17 @@ BEGIN TRY
                        CASE WHEN si.[type] IN (5, 6) THEN 'COLUMNSTORE ' ELSE '' END +
                        'INDEX [' + si.[Name] + '] ON ' + t.[Schema] + '.' + t.[Name] + 
                        CASE WHEN si.[type] NOT IN (5, 6) 
-                            THEN ' (' + (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
+                            THEN ' (' + (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
                                            FROM sys.index_columns ic
                                            WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0) + ')' +
                                  CASE WHEN EXISTS (SELECT * FROM sys.index_columns ic WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1)
                                       THEN ' INCLUDE (' +
-                                           (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY COL_NAME(ic.[object_id], ic.column_id))
+                                           (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY COL_NAME(ic.[object_id], ic.column_id))
                                               FROM sys.index_columns ic
                                               WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1) + ')'
                                       ELSE '' END
                             WHEN si.[type] IN (6) 
-                            THEN ' (' + (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY COL_NAME(ic.[object_id], ic.column_id))
+                            THEN ' (' + (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY COL_NAME(ic.[object_id], ic.column_id))
                                            FROM sys.index_columns ic
                                            WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1) + ')'
                             ELSE '' END +
@@ -414,7 +414,7 @@ BEGIN TRY
   RAISERROR('Collect Existing FullText Indexes', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #ExistingFullTextIndexes
   SELECT t.[Schema], [TableName] = t.[Name],
-         (SELECT STRING_AGG(CAST('[' + COL_NAME(fc.[object_id], fc.column_id) + ']' +
+         (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)) +
                             CASE WHEN fc.type_column_id IS NOT NULL
                                  THEN ' TYPE COLUMN [' + COL_NAME(fc.[object_id], fc.type_column_id) + ']'
                                  ELSE '' END +
@@ -434,10 +434,10 @@ BEGIN TRY
             FROM sys.fulltext_index_columns fc
             JOIN sys.columns c ON c.[object_id] = fc.[object_id] AND c.column_id = fc.column_id
             WHERE fi.[object_id] = fc.[object_id]) AS [Columns],
-         FullTextCatalog = '[' + (SELECT c.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id) + ']',
-         KeyIndex = '[' + (SELECT i.[Name] COLLATE DATABASE_DEFAULT FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id]) + ']',
+         FullTextCatalog = QUOTENAME((SELECT c.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
+         KeyIndex = QUOTENAME((SELECT i.[Name] COLLATE DATABASE_DEFAULT FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
          ChangeTracking = change_tracking_state_desc COLLATE DATABASE_DEFAULT,
-         [StopList] = '[' + COALESCE((SELECT fs.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id), 'SYSTEM') + ']'
+         [StopList] = QUOTENAME(COALESCE((SELECT fs.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id), 'SYSTEM'))
     INTO #ExistingFullTextIndexes
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.fulltext_indexes fi ON fi.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
@@ -696,8 +696,8 @@ BEGIN TRY
   DROP TABLE IF EXISTS #ExistingStats
   SELECT t.[Schema], [TableName] = t.[Name], [StatsName] = si.[Name],
          StatisticScript = 'CREATE STATISTICS ' +
-                           '[' + si.[Name] + '] ON ' + t.[Schema] + '.' + t.[Name] + ' (' +
-                           (SELECT STRING_AGG(CAST('[' + COL_NAME(ic.[object_id], ic.column_id) + ']' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY ic.stats_column_id)
+                           QUOTENAME(si.[Name]) + ' ON ' + t.[Schema] + '.' + t.[Name] + ' (' +
+                           (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY ic.stats_column_id)
                               FROM sys.stats_columns ic
                               WHERE si.[object_id] = ic.[object_id] AND si.stats_id = ic.stats_id) + ')' +
                            CASE WHEN si.has_filter = 1 THEN ' WHERE ' + SchemaSmith.fn_StripParenWrapping(si.filter_definition) ELSE '' END 
