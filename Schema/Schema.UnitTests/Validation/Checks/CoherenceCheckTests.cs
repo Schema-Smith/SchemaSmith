@@ -59,6 +59,80 @@ public class CoherenceCheckTests
         return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
     }
 
+    // ---- Product MinimumVersion the engine cannot resolve (SS-VER-001) ----
+    //
+    // A declared MinimumVersion the deploy cannot parse aborts the run before any object is touched --
+    // correct fail-closed behaviour, but --Validate had nothing to say about it, so the author's first
+    // signal was a refused deployment. MinimumVersion carries no [SchemaProperty], so no pattern reaches
+    // the generated .json-schema and JsonSchemaCheck cannot see it either.
+    //
+    // The check calls the SAME VersionHelper.ParseDeclaredVersion the deploy calls, deliberately: any other
+    // formulation lets the linter and the deploy disagree about what resolves, which is the bug one level up.
+
+    private static Finding[] RunOnProduct(string minimumVersion, Platform platform)
+    {
+        var product = new Product
+        {
+            Name = "Acme",
+            Platform = platform,
+            MinimumVersion = minimumVersion,
+            TemplateOrder = new System.Collections.Generic.List<string>()
+        };
+        return new CoherenceCheck().Run(
+            new ValidationContext(product, new[] { new Template { Name = "T" } }, "pkg")).ToArray();
+    }
+
+    // SQL Server is the only platform where a WELL-FORMED value can fail to resolve: a year >= 2000 is
+    // looked up in a closed table of release years, so an in-between year is unresolvable while looking
+    // entirely plausible to whoever typed it.
+    [TestCase("2013")]
+    [TestCase("2018")]
+    [TestCase("2020")]
+    [TestCase("2023")]
+    [TestCase("2024")]
+    public void UnresolvableSqlServerYear_IsReported(string declared)
+    {
+        var findings = RunOnProduct(declared, Platform.SqlServer);
+        Assert.That(findings.Select(f => f.Code), Does.Contain("SS-VER-001"),
+            $"MinimumVersion '{declared}' is not a SQL Server release year, so ParseDeclaredVersion returns "
+            + "null and the deploy aborts. --Validate must say so first.");
+        Assert.That(findings.Single(f => f.Code == "SS-VER-001").Message, Does.Contain(declared),
+            "the finding must name the offending value -- a message that does not is half a finding");
+    }
+
+    [TestCase("2008")]
+    [TestCase("2016")]
+    [TestCase("2022")]
+    [TestCase("2025")]
+    [TestCase("13")]
+    public void ResolvableSqlServerVersion_IsNotReported(string declared) =>
+        Assert.That(RunOnProduct(declared, Platform.SqlServer).Select(f => f.Code),
+            Does.Not.Contain("SS-VER-001"), $"'{declared}' resolves, so there is nothing to report");
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("   ")]
+    public void AbsentMinimumVersion_IsNotReported(string declared) =>
+        Assert.That(RunOnProduct(declared, Platform.SqlServer).Select(f => f.Code),
+            Does.Not.Contain("SS-VER-001"),
+            "MinimumVersion is optional -- absent is not invalid, and the deploy returns early on it too");
+
+    // The MySQL family and PostgreSQL parse arithmetically, so they resolve any well-formed value and can
+    // only fail on a non-numeric one. Asserted so the check is known to behave per platform rather than
+    // assumed to.
+    [TestCase("8.0", Platform.MySQL)]
+    [TestCase("10.6", Platform.MariaDb)]
+    [TestCase("12", Platform.PostgreSQL)]
+    public void ResolvableOnTheArithmeticPlatforms_IsNotReported(string declared, Platform platform) =>
+        Assert.That(RunOnProduct(declared, platform).Select(f => f.Code), Does.Not.Contain("SS-VER-001"));
+
+    [TestCase("eight", Platform.MySQL)]
+    [TestCase("latest", Platform.PostgreSQL)]
+    [TestCase("ten-six", Platform.MariaDb)]
+    public void NonNumericOnTheArithmeticPlatforms_IsReported(string declared, Platform platform) =>
+        Assert.That(RunOnProduct(declared, platform).Select(f => f.Code), Does.Contain("SS-VER-001"));
+
+
     // ---- Modeled folder objects declared BOTH ways (SS-ENUM-001 / SS-SEQ-001 / SS-DOM-001) ----
     //
     // Enum Types/, Sequences/ and Domain Types/ are additive by design: each holds declared .json and

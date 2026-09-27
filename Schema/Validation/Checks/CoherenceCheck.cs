@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using Schema.Delivery;
 using Schema.Domain;
+using Schema.Utility;
 using Schema.Domain.MariaDb;
 using Schema.Domain.MySQL;
 using Schema.Domain.PostgreSQL;
@@ -38,6 +39,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string ReplicaIdentityIndexNotUniqueCode = "SS-RI-003";
     private const string ReplicaIdentityIndexIgnoredCode = "SS-RI-004";
     private const string VersioningExclusionInertCode = "SS-SV-001";
+    private const string MinimumVersionUnresolvableCode = "SS-VER-001";
     private const string CdcFilegroupInertCode = "SS-CDC-001";
     private const string CompressionConflictCode = "SS-CO-001";
     private const string CompressionLevelInertCode = "SS-CO-002";
@@ -63,6 +65,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             .ToDictionary(g => g.Key, g => g.ToList());
 
         var findings = new List<Finding>();
+        findings.AddRange(CheckMinimumVersion(ctx.Product));
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckScheduledEvents(template));
 
@@ -154,11 +157,47 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
+    /// A declared <c>MinimumVersion</c> the engine cannot resolve aborts the deploy before any object is
+    /// touched. That refusal is correct — the gap was that nothing said so EARLIER, so the author's first
+    /// signal was a failed deployment.
+    /// <para>This calls <see cref="VersionHelper.ParseDeclaredVersion"/>, the same function
+    /// <c>ProductQuench.ValidateMinimumVersion</c> calls. That is deliberate rather than convenient: any
+    /// re-implementation here could disagree with the deploy about what resolves, which is a worse version
+    /// of the bug being fixed.</para>
+    /// <para><c>MinimumVersion</c> carries no <c>[SchemaProperty]</c>, so no pattern reaches the generated
+    /// <c>.json-schema</c> and <c>JsonSchemaCheck</c> cannot cover this. Only SQL Server can reject a
+    /// WELL-FORMED value: a year >= 2000 is looked up in a closed table of release years, so 2013 / 2018 /
+    /// 2020 / 2023 / 2024 are unresolvable while looking entirely plausible. PostgreSQL and the MySQL family
+    /// parse arithmetically and fail only on a non-numeric value.</para>
+    /// </summary>
+    private static IEnumerable<Finding> CheckMinimumVersion(Product product)
+    {
+        // Absent is not invalid -- MinimumVersion is optional, and the deploy returns early on it too.
+        if (string.IsNullOrWhiteSpace(product.MinimumVersion))
+            yield break;
+
+        if (VersionHelper.ParseDeclaredVersion(product.MinimumVersion, product.Platform) != null)
+            yield break;
+
+        yield return new Finding(Severity.Error, MinimumVersionUnresolvableCode, Category,
+            $"Product '{product.Name}'",
+            $"MinimumVersion '{product.MinimumVersion}' is not a valid {product.Platform} version, so the "
+            + "deploy will refuse this package before touching any object."
+            + (product.Platform == Platform.SqlServer
+                ? " On SQL Server a value of 2000 or more is read as a RELEASE YEAR and must be one of "
+                  + "2008, 2012, 2014, 2016, 2017, 2019, 2022 or 2025 — an in-between year such as 2018 or "
+                  + "2020 does not resolve. A major version number (13, 16) also works."
+                : " Use a numeric version such as " + (product.Platform.GetBasePlatform() == Platform.MySQL
+                    ? "'8.0' or '10.6'." : "'12' or '16'.")));
+    }
+
+    /// <summary>
     /// BackfillExistingRows renders as ALTER TABLE ... WITH VALUES, which SQL Server rejects as a SYNTAX
     /// error when the column has no DEFAULT — so the deploy path only emits it alongside one. That guard
     /// keeps the batch runnable but makes the setting a silent no-op, which is the shape worth catching
     /// here: the author asked for existing rows to be populated and nothing would populate them.
     /// </summary>
+
     private static IEnumerable<Finding> CheckBackfill(Table table, string tableLocation)
     {
         foreach (var column in table.Columns.OfType<SqlServerColumn>()
