@@ -43,7 +43,7 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
 DECLARE @v_CdcFilegroup NVARCHAR(260) = NULL
 IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   EXEC sp_executesql N'
-    SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN ''['' + fg.[name] + '']'' END
+    SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN QUOTENAME(fg.[name]) END
       FROM (SELECT TOP 1 ct.filegroup_name FROM cdc.change_tables ct WITH (NOLOCK)
              WHERE ct.source_object_id = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table))
              ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest

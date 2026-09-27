@@ -83,8 +83,12 @@ function Get-LabContainerSqlcmd {
     param([Parameter(Mandatory)][string]$Container)
     if ($script:LabSqlcmdCache.ContainsKey($Container)) { return $script:LabSqlcmdCache[$Container] }
     docker exec $Container sh -c 'test -x /opt/mssql-tools18/bin/sqlcmd' 2>&1 | Out-Null
+    $probeRan = ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 1)
     $sqlcmd = if ($LASTEXITCODE -eq 0) { '/opt/mssql-tools18/bin/sqlcmd' } else { '/opt/mssql-tools/bin/sqlcmd' }
-    $script:LabSqlcmdCache[$Container] = $sqlcmd
+    # Only remember an answer the probe actually produced. docker exec also returns 125/126/127 when the
+    # CONTAINER is missing or not running, and caching that would pin the v17 path for the life of the
+    # process -- a pre-flight run before the sandbox is up would poison every later call.
+    if ($probeRan) { $script:LabSqlcmdCache[$Container] = $sqlcmd }
     return $sqlcmd
 }
 

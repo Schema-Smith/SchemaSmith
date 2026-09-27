@@ -206,12 +206,24 @@ BEGIN
     -- understood and fixed for columns and simply never applied to tables. Adding a second column clear
     -- here was redundant, and mutation testing is what showed it: disabling it changed nothing, because
     -- the existing clear already covered the case.
+    -- THE TABLE_TYPE FILTER IS LOAD-BEARING. Parse builds its existing-tables snapshot with
+    -- TABLE_TYPE IN ('BASE TABLE','SYSTEM VERSIONED'); INFORMATION_SCHEMA.TABLES also lists VIEW (and
+    -- SEQUENCE / SYSTEM VIEW on MariaDB). Without the same filter, "exists" here is wider than the flag
+    -- being cleared, so a package declaring a table where a VIEW of that name exists -- the ordinary
+    -- "replace the view with a real table" migration -- would have NewTable cleared and be skipped, or
+    -- fall into ALTER TABLE ... ADD COLUMN and fail with ER_WRONG_OBJECT. Ask the same question parse asked.
+    --
+    -- The schema is compared against v_IsDbName rather than p_DatabaseName for the measured reason given
+    -- where that local is declared: a bare parameter carries the connection charset and defeats the
+    -- schema-filter pushdown, which cost ~1.8ms per database on the server on every deploy. BINARY stays on
+    -- TABLE_NAME so this agrees with parse on case sensitivity.
     UPDATE _SchemaSmith_Tables t
        SET t.NewTable = 0
      WHERE t.NewTable = 1
        AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES x
-                    WHERE BINARY x.TABLE_SCHEMA = BINARY p_DatabaseName
-                      AND BINARY x.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName));
+                    WHERE x.TABLE_SCHEMA = v_IsDbName
+                      AND BINARY x.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                      AND x.TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED'));
 
 
     -- A CustomTableRestore hook restores tables being added in case they were custom-dropped

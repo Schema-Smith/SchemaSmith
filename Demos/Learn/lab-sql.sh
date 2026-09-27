@@ -62,19 +62,22 @@ lab_container_maria_client() {
 
 # The SQL Server 2017 image ships ONLY /opt/mssql-tools; 2019 and later ship /opt/mssql-tools18.
 # Hardcoding the 18 path made every 2017 run fail the same way a server that never started does -- and
-# that is not a cosmetic difference: the compose healthcheck used the same path, so the container never
-# went healthy, sqlserver-init never created the `learn` database, and every lab on the leg reported
-# NOT-RUN rather than a reachable engine. Same shape, and same fix, as the MariaDB client probe above.
-_lab_sqlcmd_cache=""
+# that is not cosmetic: the compose healthcheck used the same path, so the container never went healthy,
+# sqlserver-init never created the `learn` database, and every lab on the leg reported NOT-RUN.
+#
+# NOT CACHED, deliberately. The first version cached in a script-level variable, which was dead code: the
+# call sites use $( ), that runs in a SUBSHELL, and the assignment never reached the parent -- so it probed
+# every call anyway while reading as if it did not. Caching it properly would need keying by CONTAINER, and
+# an unkeyed cache is actively wrong the moment two SQL Server containers are in play (probe 2017, cache the
+# non-18 path, then talk to a 2022 container that ships only mssql-tools18 -> 'no such file', i.e. exactly
+# the misdiagnosis this function exists to prevent). One probe per call is what lab_container_maria_client
+# above already does, so this matches its sibling instead of inventing a third shape.
 lab_container_sqlcmd() {
-  if [ -z "$_lab_sqlcmd_cache" ]; then
-    if docker exec "$1" sh -c 'test -x /opt/mssql-tools18/bin/sqlcmd' >/dev/null 2>&1; then
-      _lab_sqlcmd_cache=/opt/mssql-tools18/bin/sqlcmd
-    else
-      _lab_sqlcmd_cache=/opt/mssql-tools/bin/sqlcmd
-    fi
+  if docker exec "$1" sh -c 'test -x /opt/mssql-tools18/bin/sqlcmd' >/dev/null 2>&1; then
+    printf '%s' /opt/mssql-tools18/bin/sqlcmd
+  else
+    printf '%s' /opt/mssql-tools/bin/sqlcmd
   fi
-  printf '%s' "$_lab_sqlcmd_cache"
 }
 
 

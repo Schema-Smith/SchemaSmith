@@ -166,7 +166,7 @@ BEGIN TRY
     SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + T.[Schema] + '.' + T.[Name] + ' Restored'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
                              FROM #Tables T WITH (NOLOCK)
                              WHERE NewTable = 1
-                               AND OBJECT_ID([Schema] + '.' + [Name]) IS NOT NULL
+                               AND OBJECT_ID([Schema] + '.' + [Name], 'U') IS NOT NULL
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
@@ -174,38 +174,48 @@ BEGIN TRY
 
   -- IDEMPOTENCY REFRESH -- this proc is re-EXECed on retryable contention, and it must survive that.
   --
-  -- NewTable / NewColumn are computed by ParseTableJsonIntoTempTables, a SEPARATE, EARLIER command. On a
-  -- retry they therefore still describe the catalog as it was BEFORE the failed attempt ran, so anything
-  -- that attempt already created is still flagged new: the create pass replays it and the deploy dies with
-  -- "There is already an object named 'X'". The retry exists to absorb transient contention and instead
-  -- turned it into a failed deploy. Reproduced on the MySQL family first (MariaDB 11.8, the 5-database
-  -- fleet in Demos/Learn/course7-module-01); this engine carries the identical shape.
+  -- Re-derive both flags against the live catalog, so a declared object that ALREADY EXISTS is routed to
+  -- the reconcile passes instead of having its creation replayed.
   --
-  -- This re-derivation is what makes ExecuteNonQueryHandlingMessages' documented contract true -- "the
-  -- convergence procs recompute desired-vs-existing every run" -- rather than working around it.
-  -- PostgreSQL's twin never had the bug: it gates every add on a live NOT EXISTS against
-  -- information_schema instead of trusting a flag, which is the behaviour being restored here.
+  -- WHY THIS IS HERE ON *THIS* ENGINE, stated carefully, because the obvious reason is wrong. On the MySQL
+  -- family the reason is a contention retry: there the quench proc is re-CALLed on its own, while the flags
+  -- were computed by an earlier command, so a replay re-creates whatever the failed attempt already made.
+  -- **SQL Server does not have that exposure.** DatabaseQuench sends the parse FILL half and the quench in
+  -- ONE command text, and the fill TRUNCATEs and re-derives the working set -- ParseTableJsonIntoTempTables
+  -- says so explicitly ("the fill half has to be safe to run twice against the same working set"). So a
+  -- retry here already re-computes the flags, and this UPDATE is not what makes the retry safe.
   --
-  -- ON A FIRST PASS THIS CHANGES NOTHING: nothing declared-new exists yet, so neither UPDATE matches a
-  -- row. It is inert except on the replay it exists for.
+  -- What it DOES fix on this engine is a SIMULTANEOUS TABLE AND COLUMN RENAME, which has nothing to do with
+  -- retries. Declare table a -> b and, inside it, column x -> y. All three of parse's NewColumn exclusions
+  -- miss: y does not exist under a, and b does not exist yet, so x-under-b misses too. NewColumn stays 1.
+  -- Both rename passes above then run, y now genuinely exists, and the add-columns pass emitted
+  -- ALTER TABLE b ADD y -> "Column names in each table must be unique". Placed after both renames, this
+  -- clears the flag and the deploy converges. That is the testable justification, and it needs no
+  -- contention harness.
   --
-  -- IT WAS ALREADY HERE, gated behind IF OBJECT_ID('SchemaSmith.CustomTableRestore') IS NOT NULL -- a hook
-  -- almost no deployment installs. So the table half was written for the restore case and happened to be
-  -- the general fix, switched off for everyone who does not use the hook.
+  -- ON A FIRST PASS THIS CHANGES NOTHING: nothing declared-new exists yet, so neither UPDATE matches a row.
   --
-  -- The COLUMN half is needed too, and not for a new table's own columns: parse leaves those unflagged
-  -- (NewColumn is set only when ParentIsNew = 0). It is for a NEW column on an EXISTING table, which a
-  -- replay would re-ALTER-ADD, and for a new table's COMPUTED columns, which parse DOES flag because they
-  -- are added in a later pass rather than inline in the CREATE.
+  -- THE TABLE HALF WAS ALREADY HERE, gated behind IF OBJECT_ID('SchemaSmith.CustomTableRestore') IS NOT NULL
+  -- -- a hook almost no deployment installs. Ungating it changes nothing for hook users: it was the last
+  -- statement inside that block and it is now the first after it, so the order relative to the restore calls
+  -- is unchanged.
+  --
+  -- THE 'U' TYPE FILTER IS LOAD-BEARING, NOT TIDINESS. Parse asks OBJECT_ID(..., 'U'); without the same
+  -- filter here, "exists" is strictly wider than the flag being cleared. OBJECT_ID with no type resolves a
+  -- VIEW, and COLUMNPROPERTY returns a ColumnId for a view's columns (both measured on 2022) -- so a package
+  -- declaring a table where a VIEW of that name exists, the ordinary "replace the view with a real table"
+  -- migration, had both flags cleared and was SILENTLY SKIPPED, reporting success with the table absent.
+  -- Before ungating, that case failed loudly with Msg 2714, which names the object. Losing an accurate error
+  -- for a silent no-op is strictly worse than the bug being fixed.
   UPDATE #Tables
     SET NewTable = 0
     WHERE NewTable = 1
-      AND OBJECT_ID([Schema] + '.' + [Name]) IS NOT NULL
+      AND OBJECT_ID([Schema] + '.' + [Name], 'U') IS NOT NULL
 
   UPDATE #Columns
     SET NewColumn = 0
     WHERE NewColumn = 1
-      AND COLUMNPROPERTY(OBJECT_ID([Schema] + '.' + [TableName]),
+      AND COLUMNPROPERTY(OBJECT_ID([Schema] + '.' + [TableName], 'U'),
                          SchemaSmith.fn_StripBracketWrapping([ColumnName]), 'ColumnId') IS NOT NULL
 
 

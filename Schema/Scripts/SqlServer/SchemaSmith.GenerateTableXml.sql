@@ -64,7 +64,7 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 13
   EXEC sp_executesql N'
     INSERT INTO #ColMeta ([column_id], GeneratedAlwaysType, MaskingFunction, EncryptionType, EncryptionKey, EncryptionAlgorithm)
     SELECT sc.column_id, sc.generated_always_type, mc.masking_function, sc.encryption_type_desc,
-           (SELECT ''['' + cek.[name] + '']'' FROM sys.column_encryption_keys cek WHERE cek.column_encryption_key_id = sc.column_encryption_key_id),
+           (SELECT QUOTENAME(cek.[name]) FROM sys.column_encryption_keys cek WHERE cek.column_encryption_key_id = sc.column_encryption_key_id),
            sc.encryption_algorithm_name
       FROM sys.columns sc
       LEFT JOIN sys.masked_columns mc ON mc.[object_id] = sc.[object_id] AND mc.column_id = sc.column_id
@@ -138,7 +138,7 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
 -- catalog's "default filegroup") and the default itself both extract no key, so existing packages are unchanged.
 DECLARE @v_CdcFilegroup NVARCHAR(260) = NULL
 IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
-  EXEC sp_executesql N'SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN ''['' + fg.[name] + '']'' END FROM (SELECT TOP 1 ct.filegroup_name FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest JOIN sys.filegroups fg ON fg.[name] = newest.filegroup_name',
+  EXEC sp_executesql N'SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN QUOTENAME(fg.[name]) END FROM (SELECT TOP 1 ct.filegroup_name FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest JOIN sys.filegroups fg ON fg.[name] = newest.filegroup_name',
     N'@p_ObjId INT, @p_Fg NVARCHAR(260) OUTPUT', @p_ObjId = @v_ObjectId, @p_Fg = @v_CdcFilegroup OUTPUT
 
 -- Memory-optimized (Hekaton) is 2014 (major 12); is_memory_optimized / durability_desc are 2014 columns,

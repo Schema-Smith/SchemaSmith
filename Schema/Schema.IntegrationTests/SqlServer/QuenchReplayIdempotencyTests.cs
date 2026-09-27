@@ -2,6 +2,7 @@
 
 using System;
 using System.Data;
+using System.Data.Common;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -35,6 +36,7 @@ public class QuenchReplayIdempotencyTests
     private IDbConnection _connection = null!;
     private const string NewTable = "replay_new_tbl_ss";
     private const string ExistingTable = "replay_existing_tbl_ss";
+    private const string ViewCollision = "replay_view_collision_ss";
 
     [SetUp]
     public void SetUp()
@@ -92,6 +94,45 @@ public class QuenchReplayIdempotencyTests
 
         Assert.That(ColumnCount(ExistingTable), Is.EqualTo(2),
             "the replay must not have changed the table");
+    }
+
+    /// <summary>
+    /// A declared table colliding with an existing VIEW must NOT be silently skipped.
+    /// <para>The refresh above clears the new-object flags for anything that already exists, and "exists"
+    /// has to mean the same thing the parse step meant: <c>OBJECT_ID(..., 'U')</c>. Without the type
+    /// argument <c>OBJECT_ID</c> resolves a VIEW, and <c>COLUMNPROPERTY</c> returns a ColumnId for a view's
+    /// columns — both measured on 2022 — so the ordinary "replace the view with a real table" migration had
+    /// BOTH flags cleared, emitted no DDL at all, and reported SUCCESS with the table absent.</para>
+    /// <para>Before the refresh was ungated this case failed with Msg 2714, which names the object. Trading
+    /// an accurate error for a silent no-op is worse than the bug the refresh fixes, so the loud failure is
+    /// what this asserts: the deploy must still object, by any means, rather than quietly do nothing.</para>
+    /// </summary>
+    [Test]
+    public void ADeclaredTableCollidingWithAView_IsNotSilentlySkipped()
+    {
+        Exec($"IF OBJECT_ID('dbo.{ViewCollision}') IS NOT NULL DROP VIEW dbo.[{ViewCollision}]");
+        Exec($"CREATE VIEW dbo.[{ViewCollision}] AS SELECT 1 AS [Id], 'x' AS [Label]");
+        try
+        {
+            Parse(TableJson(ViewCollision,
+                "    { \"Name\": \"[Label]\", \"DataType\": \"VARCHAR(40)\", \"Nullable\": true }"));
+
+            // The table cannot be created while the view holds the name, so the ONLY acceptable outcomes are
+            // an error or an attempt that errors. A clean return means the deploy decided there was nothing
+            // to do -- which is the silent-skip regression.
+            // Catch, not Throws: Throws<T> is EXACT-type and the engine raises SqlException, which
+            // DERIVES from DbException. Assert.Throws quietly failed on the type while the product was
+            // doing exactly the right thing (Msg 2714).
+            Assert.Catch<DbException>(Quench,
+                $"a package declaring table dbo.{ViewCollision} where a VIEW of that name exists must FAIL, "
+                + "not succeed silently. If this passes, the new-object flags were cleared by an existence "
+                + "test wider than the one parse used ('U' omitted), the create pass emitted nothing, and the "
+                + "deploy reported success with the table absent.");
+        }
+        finally
+        {
+            Exec($"IF OBJECT_ID('dbo.{ViewCollision}') IS NOT NULL DROP VIEW dbo.[{ViewCollision}]");
+        }
     }
 
     private static string TableJson(string table, string secondColumn) =>
