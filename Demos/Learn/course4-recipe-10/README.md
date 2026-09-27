@@ -8,6 +8,8 @@ tables the model flagged. This is the SQL-Server-only replication setup demo (#2
 cross-database `EXEC` from an After Script only works because SQL Server can address a second
 database on the same connection; PostgreSQL and MySQL/MariaDB can't, so this recipe doesn't port.
 
+> **Engine floor:** on your own server this lab needs **SQL Server 2017+** — its `replicate [ALWAYS]` After Script builds the subscriber's DDL with `STRING_AGG` (2017+) over `OPENJSON` (2016+). `Product.json` declares `MinimumVersion: 2017`, so pre-flight refuses a lower server by name instead of failing part-way through the script. There is no other engine to fall back to here: the cross-database `EXEC` the whole recipe is built on is SQL Server only. The Docker sandbox is already above the floor.
+
 ## Before you start
 
 - The [sandbox](../docker) is up and verified.
