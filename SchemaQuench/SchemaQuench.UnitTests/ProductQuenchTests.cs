@@ -1909,6 +1909,36 @@ public class ProductQuenchTests
         });
     }
 
+    // A token defined in BOTH the product and the template must resolve to the TEMPLATE's value here, as it
+    // does for every script the template runs (Template.Load: "template takes precedence"). This built the
+    // lookup product-first and TokenReplace keeps the FIRST entry (TryAdd), so the product won -- the database
+    // list deciding where the template deploys was read from a different database than the one the template's
+    // own scripts see under the same token name.
+    [Test]
+    public void ResolveIdentificationDatabase_TokenInBothProductAndTemplate_TemplateWins()
+    {
+        WithMinimalSqlServerProductQuench(quench =>
+        {
+            var template = new Template
+            {
+                IdentificationDatabase = "{{Registry}}",
+                NonQueryTokens = new Dictionary<string, string> { { "Registry", "tmpl_registry" } }
+            };
+            Assert.That(quench.InvokeResolveIdentificationDatabase(template), Is.EqualTo("tmpl_registry"),
+                "the template's own value must win, exactly as it does for the template's scripts");
+        }, productScriptTokensJson: "{ \"Registry\": \"prod_registry\" }");
+    }
+
+    // The product value still applies when the template does not define the token.
+    [Test]
+    public void ResolveIdentificationDatabase_TokenOnlyInProduct_ProductValueUsed()
+    {
+        WithMinimalSqlServerProductQuench(quench =>
+            Assert.That(quench.InvokeResolveIdentificationDatabase(new Template { IdentificationDatabase = "{{Registry}}" }),
+                Is.EqualTo("prod_registry")),
+            productScriptTokensJson: "{ \"Registry\": \"prod_registry\" }");
+    }
+
     [Test]
     public void ComposeIdentificationConnectionString_NoOverride_TargetsIdentificationDb()
     {
@@ -2335,7 +2365,8 @@ public class ProductQuenchTests
         System.Action<RecordingWorkUnitProductQuench> body,
         string secondaryServers = null,
         IReadOnlyDictionary<string, string> extraConfig = null,
-        IEnvironment environment = null)
+        IEnvironment environment = null,
+        string productScriptTokensJson = null)
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -2349,13 +2380,10 @@ public class ProductQuenchTests
             file.Exists(schemaPackagePath).Returns(false);
             directory.Exists(schemaPackagePath).Returns(true);
             file.Exists(productPath).Returns(true);
-            file.ReadAllText(productPath).Returns("""
-                                                  {
-                                                    "Name": "TestProduct",
-                                                    "Platform": "SqlServer",
-                                                    "ScriptFolders": []
-                                                  }
-                                                  """);
+            file.ReadAllText(productPath).Returns(
+                "{ \"Name\": \"TestProduct\", \"Platform\": \"SqlServer\", \"ScriptFolders\": []"
+                + (productScriptTokensJson == null ? "" : ", \"ScriptTokens\": " + productScriptTokensJson)
+                + " }");
 
             var configValues = new Dictionary<string, string>
             {
