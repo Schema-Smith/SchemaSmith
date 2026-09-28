@@ -146,7 +146,7 @@ automatic data delivery, which needs `OPENJSON` (SQL Server 2016) or `JSON_TABLE
 
 | Your engine | Runs every lab at | Below that |
 |---|---|---|
-| **SQL Server** | **2016** | Most labs still run; the ones that need more stop at pre-flight and name the version |
+| **SQL Server** | **2016**, or **2022** for Course 10 | Most labs run at 2016. Course 10's five tier labs deploy into a database at **compatibility level 160**, which only 2022+ offers, so they stop at pre-flight naming the version. A few labs ship *two* variants of an object and pick one from the detected version |
 | **MySQL** | **8.0** | 17 labs stop at pre-flight naming the version. Two reasons: most ship packages declaring the `utf8mb4_0900_ai_ci` collation, which is 8.0-only, and a few use 8.0 JSON syntax in their own scripts. Data delivery also has no `JSON_TABLE` fallback on 5.7 |
 | **PostgreSQL** | **12** | Every lab runs at PostgreSQL's floor |
 | **MariaDB** | **10.6** | Three labs build their snapshot/catalog tables with `JSON_TABLE`, which MariaDB only gained in 10.6, so they stop at pre-flight naming the version. Every other lab runs at MariaDB's 10.2 floor |

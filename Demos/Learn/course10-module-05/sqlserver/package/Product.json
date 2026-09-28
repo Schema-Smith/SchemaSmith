@@ -1,6 +1,7 @@
 {
   "$schema": ".json-schemas/products.sqlserver.schema",
   "Name": "GadgetCatalog",
+  "MinimumVersion": "2022",
   "ValidationScript": "SELECT 1",
   "TemplateOrder": [
     "Main"

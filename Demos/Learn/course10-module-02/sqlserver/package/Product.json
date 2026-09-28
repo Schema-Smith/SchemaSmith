@@ -1,6 +1,7 @@
 {
   "$schema": ".json-schemas/products.sqlserver.schema",
   "Name": "ReadingPlatform",
+  "MinimumVersion": "2022",
   "ValidationScript": "SELECT CAST(1 AS BIT)",
   "TemplateOrder": [
     "Main"
