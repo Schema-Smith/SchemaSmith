@@ -651,6 +651,11 @@ namespace Schema.Domain
             DatabaseIdentificationScript = SqlScript.TokenReplace(DatabaseIdentificationScript ?? "", tokens);
             VersionStampScript = SqlScript.TokenReplace(VersionStampScript ?? "", tokens);
             BaselineValidationScript = SqlScript.TokenReplace(BaselineValidationScript ?? "", tokens);
+            // The fourth identification script gets the same treatment as the other three; the reference docs
+            // say all of them can interpolate tokens, and this one ran verbatim. Null stays null -- it is what
+            // "not a schema template" means.
+            if (SchemaIdentificationScript != null)
+                SchemaIdentificationScript = SqlScript.TokenReplace(SchemaIdentificationScript, tokens);
         }
 
         /// <summary>

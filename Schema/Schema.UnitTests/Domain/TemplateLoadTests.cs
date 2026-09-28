@@ -78,6 +78,62 @@ namespace Schema.UnitTests.Domain
             });
         }
 
+        // SchemaIdentificationScript must be token-replaced exactly like DatabaseIdentificationScript. The reference
+        // docs say the identification scripts "can interpolate query-tokens", and three of them did -- this one
+        // ran verbatim, so SELECT '{{TenantName}}' reached SchemaDiscovery as the literal text and the deploy
+        // refused the discovered name for containing '{'. Asserted as AGREEMENT with the database script rather
+        // than against a hand-written literal, so the test pins "same treatment" and not the quoting rule.
+        [Test]
+        public void Load_TokenReplacesSchemaIdentificationScript_TheSameWayAsDatabaseIdentificationScript()
+        {
+            var templateJson = @"{
+                ""Name"": ""Tenants"",
+                ""DatabaseIdentificationScript"": ""SELECT '{{TenantName}}'"",
+                ""SchemaIdentificationScript"": ""SELECT '{{TenantName}}'"",
+                ""ScriptTokens"": { ""TenantName"": ""acme"" }
+            }";
+            var templatePath = Path.Join("C:", "products", "Templates", "Tenants", "Template.json");
+            _mockFile.Exists(templatePath).Returns(true);
+            _mockFile.ReadAllText(templatePath).Returns(templateJson);
+            _mockDirectory.Exists(Path.Join("C:", "products", "Templates", "Tenants", "Tables")).Returns(false);
+
+            var product = new Product
+            {
+                Name = "TestProduct",
+                Platform = Platform.SqlServer,
+                FilePath = Path.Join("C:", "products", "Product.json")
+            };
+
+            var template = Template.Load("Tenants", product);
+
+            Assert.That(template.SchemaIdentificationScript, Does.Not.Contain("{{"),
+                "SchemaIdentificationScript still carries the raw token -- discovery will run it verbatim");
+            Assert.That(template.SchemaIdentificationScript, Does.Contain("acme"));
+            Assert.That(template.SchemaIdentificationScript, Is.EqualTo(template.DatabaseIdentificationScript),
+                "the two identification scripts must receive identical token treatment");
+        }
+
+        // The replacement must not turn an ABSENT script into an empty one. IsSchemaTemplate reads
+        // IsNullOrWhiteSpace so either is safe today, but a null is what "not a schema template" means.
+        [Test]
+        public void Load_LeavesAnAbsentSchemaIdentificationScriptNull()
+        {
+            var templateJson = @"{ ""Name"": ""Main"", ""DatabaseIdentificationScript"": ""SELECT 1"" }";
+            var templatePath = Path.Join("C:", "products", "Templates", "Main", "Template.json");
+            _mockFile.Exists(templatePath).Returns(true);
+            _mockFile.ReadAllText(templatePath).Returns(templateJson);
+            _mockDirectory.Exists(Path.Join("C:", "products", "Templates", "Main", "Tables")).Returns(false);
+
+            var template = Template.Load("Main", new Product
+            {
+                Name = "TestProduct", Platform = Platform.SqlServer, FilePath = Path.Join("C:", "products", "Product.json")
+            });
+
+            Assert.That(template.SchemaIdentificationScript, Is.Null);
+            Assert.That(template.IsSchemaTemplate, Is.False);
+        }
+
+
         [Test]
         public void Load_SqlServer_ReturnsTemplateWithCorrectProperties()
         {
