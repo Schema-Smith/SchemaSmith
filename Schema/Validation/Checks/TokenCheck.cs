@@ -141,10 +141,16 @@ public sealed class TokenCheck : ISchemaCheck
                 findings.Add(new Finding(Severity.Error, MalformedCode, Category, scannedFile,
                     $"Contains an unmatched '{{{{' with no closing '}}}}'."));
 
-            foreach (var token in TokenHelper.GetTokensFromString(text).Where(t => TokenIdentifierPattern.IsMatch(t)))
+            foreach (var token in TokenHelper.GetTokensFromString(text))
             {
+                // A REFERENCE is whatever the resolver would substitute, so the reference set uses the
+                // resolver's own rule and nothing narrower. Filtering it by TokenIdentifierPattern reported a
+                // token named "My Token" as never referenced (SS-TOK-003) while the deploy substituted it.
                 referenced.Add(token);
                 if (defined.Contains(token)) continue;
+                // The identifier filter belongs HERE and only here: it keeps text that merely looks like a
+                // token -- a PostgreSQL array literal '{{ns,http://...}}' -- out of UNDEFINED detection.
+                if (!TokenIdentifierPattern.IsMatch(token)) continue;
                 if (!flaggedUndefined.Add((scannedFile, token))) continue;
                 findings.Add(new Finding(Severity.Error, UndefinedCode, Category, scannedFile,
                     $"References undefined token '{{{{{token}}}}}'."));

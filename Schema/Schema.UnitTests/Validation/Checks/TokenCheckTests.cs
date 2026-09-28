@@ -139,6 +139,47 @@ public class TokenCheckTests
         Assert.That(findings[0].Severity, Is.EqualTo(Severity.Warning));
     }
 
+    // A defined token whose NAME the resolver accepts but TokenIdentifierPattern rejects must count as
+    // referenced. The deploy substitutes {{My Token}} -- TokenHelper.GetTokensFromString takes any {{...}} under
+    // 100 characters with no newline -- so reporting it "never referenced" (SS-TOK-003) is a false warning on a
+    // package that works. The identifier filter exists ONLY to keep text that merely looks like a token (a
+    // PostgreSQL array literal) out of UNDEFINED detection; its own comment says so. It was also narrowing the
+    // REFERENCE set, which is the defect.
+    [TestCase("My Token", TestName = "ReferencedToken_WithASpace_IsNotReportedUnused")]
+    [TestCase("my-token", TestName = "ReferencedToken_WithAHyphen_IsNotReportedUnused")]
+    [TestCase("[Region]", TestName = "ReferencedToken_WithBrackets_IsNotReportedUnused")]
+    [TestCase("2ndPass", TestName = "ReferencedToken_WithALeadingDigit_IsNotReportedUnused")]
+    public void ReferencedToken_OutsideTheIdentifierPattern_IsNotReportedUnused(string name)
+    {
+        var productFile = Path.Join(PackagePath, "Product.json");
+        var scriptFile = Path.Join(PackagePath, "Templates", "Main", "Before Scripts", "Init.sql");
+        JsonFiles(productFile);
+        SqlFiles(scriptFile);
+        FileContent(productFile, @"{ ""Name"": ""Acme"", ""ScriptTokens"": { """ + name + @""": ""x"" } }");
+        FileContent(scriptFile, "SELECT '{{" + name + "}}'");
+
+        var findings = new TokenCheck().Run(Context()).ToList();
+
+        Assert.That(findings.Select(f => f.Code), Does.Not.Contain("SS-TOK-003"),
+            $"'{name}' is referenced as {{{{{name}}}}} and the deploy substitutes it, so it is not unused");
+        Assert.That(findings, Is.Empty, "a defined, referenced token is not a finding of any kind");
+    }
+
+    // The same name DEFINED but genuinely NOT referenced must still warn -- the fix widens what counts as a
+    // reference, it must not silence the check.
+    [Test]
+    public void UnreferencedToken_OutsideTheIdentifierPattern_IsStillReportedUnused()
+    {
+        var productFile = Path.Join(PackagePath, "Product.json");
+        JsonFiles(productFile);
+        FileContent(productFile, @"{ ""Name"": ""Acme"", ""ScriptTokens"": { ""My Token"": ""x"" } }");
+
+        var findings = new TokenCheck().Run(Context()).ToList();
+
+        Assert.That(findings.Select(f => f.Code), Does.Contain("SS-TOK-003"));
+    }
+
+
     [Test]
     public void SchemaNameToken_NotFlagged()
     {
