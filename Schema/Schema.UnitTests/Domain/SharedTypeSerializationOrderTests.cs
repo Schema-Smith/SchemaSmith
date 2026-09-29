@@ -65,8 +65,10 @@ namespace Schema.UnitTests.Domain
             "DropIndexesRemovedFromProduct", "OldName", "PreventDrop", "RebuildPolicy", "Extensions");
 
         [Test]
+        // "NullableDeclared" leads for the DataDeliveries reason above: it is [JsonIgnore]d, so it is in this
+        // reflected list and in no file and no .json-schema.
         public void Column_SerializedShape_IsPinned() => AssertOrder<Column>(
-            "Name", "DataType", "Nullable", "Default", "ShouldApplyExpression", "OldName", "VariantName",
+            "NullableDeclared", "Name", "DataType", "Nullable", "Default", "ShouldApplyExpression", "OldName", "VariantName",
             "Extensions");
 
         [Test]

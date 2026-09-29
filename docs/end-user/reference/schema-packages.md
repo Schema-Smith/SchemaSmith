@@ -739,6 +739,12 @@ On SQL Server a computed column's type is derived from its expression -- the DDL
 its `DataType` is descriptive: it is never applied and never compared. A change to the expression is what
 changes the column.
 
+**Nullability is optional.** Leave `Nullable` out of a computed or generated column and the
+engine decides -- in practice nullable, whatever the source columns are -- and SchemaSmith never narrows it.
+Declare `"Nullable": false` to ask for `NOT NULL`: SQL Server honours it on a `PERSISTED` column, PostgreSQL and
+MySQL on any generated column. MariaDB cannot declare `NOT NULL` on a generated column at all, so there the engine
+always decides. Ask for `NOT NULL` only where every existing row's expression is non-NULL, or the deploy fails.
+
 ---
 
 ## Memory-Optimized Tables (SQL Server)

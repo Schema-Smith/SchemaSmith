@@ -178,4 +178,103 @@ public class TableQuench_ComputedColumnIdempotencyTests : BaseTableQuenchTests
         cmd.ExecuteNonQuery();
         conn.Close();
     }
+
+    // Through the model, as the deploy sends it. An omitted Nullable on a PERSISTED computed column is the engine's
+    // to decide. The product used to serialize every omitted Nullable as an explicit false, so this reached the
+    // procedure as a NOT NULL request: against a live nullable column whose rows make the expression NULL, the
+    // deploy dropped the column, failed to put it back, and left the table without it.
+    [Test]
+    public void AnOmittedNullable_LeavesAnExistingNullablePersistedComputedColumn_InPlace()
+    {
+        var uniqueId = Guid.NewGuid().ToString("N")[..8];
+        var tableName = $"OmittedNullPersisted_{uniqueId}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            cmd.CommandText = $@"SET QUOTED_IDENTIFIER ON;
+                CREATE TABLE dbo.[{tableName}] ([Id] INT NOT NULL, [RetentionDays] INT NULL, [RetentionWeeks] AS ([RetentionDays] / 7) PERSISTED);
+                INSERT dbo.[{tableName}] ([Id], [RetentionDays]) VALUES (1, NULL), (2, 30);";
+            cmd.ExecuteNonQuery();
+            var columnId = ColumnId(cmd, tableName, "RetentionWeeks");
+
+            var json = DeployJson.ThroughTheModel($$"""
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[{{tableName}}]",
+                    "Columns": [
+                        { "Name": "[Id]", "DataType": "INT" },
+                        { "Name": "[RetentionDays]", "DataType": "INT", "Nullable": true },
+                        { "Name": "[RetentionWeeks]", "DataType": "INT", "ComputedExpression": "[RetentionDays]/(7)", "Persisted": true }
+                    ]
+                }
+                """, Platform.SqlServer);
+            // Authored in SQL Server's stored form: this table has no ExpressionMap record yet, so a differently
+            // spelled expression would be re-applied once by design, and nullability must be the only question.
+            Assert.That(json, Does.Not.Contain("\"Nullable\": false"),
+                "precondition: an omitted Nullable must reach the procedure as omitted");
+
+            RunTableQuenchProc(cmd, json);
+
+            Assert.That(ColumnId(cmd, tableName, "RetentionWeeks"), Is.EqualTo(columnId),
+                "the existing nullable computed column was dropped although the package never asked for NOT NULL");
+            cmd.CommandText = $"SELECT COUNT(*) FROM dbo.[{tableName}] WHERE [RetentionWeeks] IS NULL";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the row whose expression is NULL must survive");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS dbo.[{tableName}]";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    [TestCase(null, true)]
+    [TestCase(false, false)]
+    public void APersistedComputedColumn_IsCreatedWithTheNullabilityThePackageAsksFor(bool? declared, bool expectNullable)
+    {
+        var uniqueId = Guid.NewGuid().ToString("N")[..8];
+        var tableName = $"CreatedNullPersisted_{uniqueId}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            var nullable = declared.HasValue ? $", \"Nullable\": {declared.Value.ToString().ToLowerInvariant()}" : "";
+            var json = DeployJson.ThroughTheModel($$"""
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[{{tableName}}]",
+                    "Columns": [
+                        { "Name": "[Id]", "DataType": "INT" },
+                        { "Name": "[RetentionDays]", "DataType": "INT" },
+                        { "Name": "[RetentionWeeks]", "DataType": "INT", "ComputedExpression": "RetentionDays / 7", "Persisted": true{{nullable}} }
+                    ]
+                }
+                """, Platform.SqlServer);
+
+            RunTableQuenchProc(cmd, json);
+            var columnId = ColumnId(cmd, tableName, "RetentionWeeks");
+            cmd.CommandText = $"SELECT is_nullable FROM sys.columns WHERE object_id = OBJECT_ID('dbo.[{tableName}]') AND name = 'RetentionWeeks'";
+            Assert.That(Convert.ToBoolean(cmd.ExecuteScalar()), Is.EqualTo(expectNullable));
+
+            RunTableQuenchProc(cmd, json);
+            Assert.That(ColumnId(cmd, tableName, "RetentionWeeks"), Is.EqualTo(columnId), "the rerun must leave the column alone");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS dbo.[{tableName}]";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static int ColumnId(System.Data.IDbCommand cmd, string table, string column)
+    {
+        cmd.CommandText = $"SELECT ISNULL((SELECT column_id FROM sys.columns WHERE object_id = OBJECT_ID('dbo.[{table}]') AND name = '{column}'), 0)";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
 }

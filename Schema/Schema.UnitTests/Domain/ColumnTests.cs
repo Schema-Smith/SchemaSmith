@@ -69,5 +69,46 @@ namespace Schema.UnitTests.Domain
             Assert.That(deserialized.VariantName, Is.EqualTo("EU region"));
         }
 
+        // The deploy hands the procedures the SERIALIZED model (Template.TableSchema, and SerializeAll on MySQL), so
+        // whether a package declared Nullable at all only survives if serialization preserves it. It did not: an
+        // omitted Nullable went out as an explicit false, and the SQL Server rule that an omitted Nullable on a
+        // computed column lets the engine decide could never fire outside a hand-written test -- which is how a
+        // nullable PERSISTED column was dropped and could not be put back on a table whose rows made it NULL.
+        private static string SerializedAsTheDeployDoes(string columnJson) =>
+            Newtonsoft.Json.Linq.JArray.FromObject(new[] { JsonConvert.DeserializeObject<Column>(columnJson) }).ToString();
+
+        [Test]
+        public void AnOmittedNullable_IsNotSerialized_SoTheProceduresCanTellItWasOmitted()
+        {
+            const string json = "{ \"Name\": \"Doubled\", \"DataType\": \"INT\" }";
+            var column = JsonConvert.DeserializeObject<Column>(json);
+
+            Assert.That(column.Nullable, Is.False, "an omitted Nullable still reads as false in the model");
+            Assert.That(column.NullableDeclared, Is.False);
+            Assert.That(SerializedAsTheDeployDoes(json), Does.Not.Contain("Nullable"));
+            Assert.That(Schema.Utility.JsonHelper.SerializeAll(new[] { column }), Does.Not.Contain("Nullable"));
+        }
+
+        [TestCase("false")]
+        [TestCase("true")]
+        public void ADeclaredNullable_IsSerialized_WhicheverValueItHas(string declared)
+        {
+            var json = "{ \"Name\": \"Doubled\", \"DataType\": \"INT\", \"Nullable\": " + declared + " }";
+            var column = JsonConvert.DeserializeObject<Column>(json);
+
+            Assert.That(column.NullableDeclared, Is.True);
+            Assert.That(SerializedAsTheDeployDoes(json), Does.Contain("\"Nullable\": " + declared));
+            Assert.That(Schema.Utility.JsonHelper.SerializeAll(new[] { column }), Does.Contain("\"Nullable\": " + declared));
+        }
+
+        [Test]
+        public void SettingNullableInCode_CountsAsDeclaringIt()
+        {
+            var column = new Column { Name = "Id", DataType = "INT", Nullable = false };
+
+            Assert.That(column.NullableDeclared, Is.True);
+            Assert.That(JsonConvert.SerializeObject(column), Does.Contain("\"Nullable\":false"));
+        }
+
     }
 }

@@ -15,8 +15,26 @@ namespace Schema.Domain
         [JsonProperty(Order = 2)]
         public string DataType { get; set; } = "";
 
+        // Whether the package said anything at all is itself information: on a computed or generated column an
+        // omitted Nullable lets the engine decide, where an explicit false asks for NOT NULL. The deploy hands the
+        // procedures the serialized model, so the omission has to survive serialization to be seen there.
         [JsonProperty(Order = 3)]
-        public bool Nullable { get; set; }
+        public bool Nullable
+        {
+            get => _nullable;
+            set
+            {
+                _nullable = value;
+                NullableDeclared = true;
+            }
+        }
+
+        private bool _nullable;
+
+        [JsonIgnore]
+        public bool NullableDeclared { get; private set; }
+
+        public bool ShouldSerializeNullable() => NullableDeclared;
 
         [JsonProperty(Order = 4)]
         public string Default { get; set; }

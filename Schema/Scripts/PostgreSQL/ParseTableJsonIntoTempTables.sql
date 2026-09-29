@@ -79,6 +79,7 @@
            celem ->> 'Name' AS "Name",
            COALESCE(celem ->> 'DataType', '') AS "DataType",
            COALESCE((celem ->> 'Nullable')::BOOLEAN, false) AS "Nullable",
+           (celem ->> 'Nullable') IS NOT NULL AS "NullableDeclared",
            COALESCE(celem ->> 'Default', '') AS "Default",
            COALESCE(celem ->> 'Collation', '') AS "Collation",
            -- An expression is only ever a generated column on PostgreSQL, so an omitted Generated beside one means
@@ -110,6 +111,18 @@
            COALESCE(celem ->> 'CheckExpression', '') AS "CheckExpression"
       FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
       CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Columns')::JSON) AS celem(value);
+
+    -- A generated column's nullability is the engine's unless the package states one, as on SQL Server. Taking the
+    -- live value (nullable for a new column) makes every comparison downstream agree without touching any of them;
+    -- reading an omission as NOT NULL narrowed the column a deploy late, and failed outright on rows whose
+    -- expression is NULL.
+    UPDATE temp_columns tc
+       SET "Nullable" = COALESCE((SELECT NOT a.attnotnull
+                                    FROM pg_attribute a
+                                   WHERE a.attrelid = to_regclass('"' || tc."TableSchema" || '"."' || tc."TableName" || '"')
+                                     AND a.attname = tc."Name" AND a.attnum > 0 AND NOT a.attisdropped), TRUE)
+     WHERE NOT tc."NullableDeclared"
+       AND tc."Generated" = 'ALWAYS' AND COALESCE(tc."GenerationExpression", '') <> '';
 
     -- PostgreSQL names an array type _element in the catalog, and that is what extraction used to emit, so
     -- packages in the wild carry both spellings: "_text" and "text[]". They mean the same column. Fold the

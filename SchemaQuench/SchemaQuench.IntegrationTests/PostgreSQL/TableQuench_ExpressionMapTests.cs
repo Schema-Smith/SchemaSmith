@@ -107,6 +107,14 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         return (bool)cmd.ExecuteScalar()!;
     }
 
+    private static bool LabelIsNotNull(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"SELECT COALESCE((SELECT a.attnotnull FROM pg_attribute a
+                                               WHERE a.attrelid = to_regclass('""public"".""{table}""')
+                                                 AND a.attname = 'label' AND NOT a.attisdropped), FALSE)";
+        return (bool)cmd.ExecuteScalar()!;
+    }
+
     private static long ConstraintOid(IDbCommand cmd, string table)
     {
         cmd.CommandText = $@"SELECT COALESCE((SELECT con.oid::bigint FROM pg_catalog.pg_constraint con
@@ -160,6 +168,37 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
                 Assert.That(ConstraintOid(ctx.Cmd, ctx.Table), Is.EqualTo(firstOid),
                     $"pass {pass}: the constraint was dropped and re-created for an unchanged declaration");
             }
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
+    // An explicit NOT NULL arrives with the column, on the first deploy -- it was added nullable and narrowed a
+    // deploy later, which also fails outright on a table whose rows make the expression NULL.
+    [Test]
+    public void AGeneratedColumnDeclaredNotNull_IsBuiltNotNull_OnTheFirstDeploy()
+    {
+        var ctx = NewTable(@"""tag"" text NOT NULL");
+        try
+        {
+            var json = DeployJson.ThroughTheModel($$"""
+                {
+                    "Schema": "public",
+                    "Name": "{{ctx.Table}}",
+                    "Columns": [
+                        { "Name": "tag", "DataType": "text", "Nullable": false },
+                        { "Name": "label", "DataType": "text", "Nullable": false, "Generated": "ALWAYS", "GenerationExpression": "upper(tag) || 'x'" }
+                    ]
+                }
+                """, Platform.PostgreSQL);
+            RunTableQuenchProc(ctx.Cmd, json);
+            Assert.That(LabelIsNotNull(ctx.Cmd, ctx.Table), Is.True, "the first deploy must build the declared NOT NULL");
+            var firstOid = TableOid(ctx.Cmd, ctx.Table);
+            var firstAttNum = GeneratedColumnAttNum(ctx.Cmd, ctx.Table);
+
+            RunTableQuenchProc(ctx.Cmd, json);
+            Assert.That(GeneratedColumnAttNum(ctx.Cmd, ctx.Table), Is.EqualTo(firstAttNum));
+            Assert.That(TableOid(ctx.Cmd, ctx.Table), Is.EqualTo(firstOid));
+            Assert.That(LabelIsNotNull(ctx.Cmd, ctx.Table), Is.True);
         }
         finally { ctx.Drop(); ctx.Dispose(); }
     }
@@ -265,6 +304,11 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
             var firstAttNum = GeneratedColumnAttNum(ctx.Cmd, ctx.Table);
             var firstOid = TableOid(ctx.Cmd, ctx.Table);
             Assert.That(firstAttNum, Is.Not.Zero, "setup: the generated column must exist after the first deploy");
+            // Declared nullable, or omitted -- which leaves nullability to the engine, and a generated column is
+            // nullable unless asked otherwise. Pinned because a SET NOT NULL changes neither the attnum nor the table
+            // oid below, so a narrowing deploy would otherwise pass as idempotent.
+            Assert.That(LabelIsNotNull(ctx.Cmd, ctx.Table), Is.False,
+                "a generated column the package did not declare NOT NULL must not be narrowed");
             ctx.Cmd.CommandText = $@"SELECT generation_expression FROM information_schema.columns
                                       WHERE table_schema = 'public' AND table_name = '{ctx.Table}' AND column_name = 'label'";
             Assert.That(ctx.Cmd.ExecuteScalar() as string, Does.Contain("::text"),
