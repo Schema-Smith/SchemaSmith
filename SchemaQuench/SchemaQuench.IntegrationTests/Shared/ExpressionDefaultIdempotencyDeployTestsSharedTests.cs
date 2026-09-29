@@ -64,6 +64,12 @@ public abstract class ExpressionDefaultIdempotencyDeployTestsSharedTests
                 conn.ChangeDatabase(db);
                 ForgeKindler.KindleTheForge(cmd, Platform);
 
+                // Below MySQL 8.0.13 there is no expression default to compare -- the column degrades, which
+                // DefaultExpressionGatingTests covers.
+                cmd.CommandText = "SELECT SchemaSmith_SupportsDefaultExpression()";
+                if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+                    Assert.Ignore("Target does not support expression defaults (MySQL < 8.0.13).");
+
                 config["SchemaPackagePath"] = tempDir;
 
                 // Deploy 1 creates the table. Each deploy writes its summary to its own directory so one

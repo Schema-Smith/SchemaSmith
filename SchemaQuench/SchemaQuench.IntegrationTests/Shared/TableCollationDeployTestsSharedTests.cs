@@ -83,10 +83,10 @@ public abstract class TableCollationDeployTestsSharedTests
                     _environment.DidNotReceive().Exit(2);
                     _environment.DidNotReceive().Exit(3);
 
-                    var tableCollation = ScalarOrNull(cmd,
-                        $"SELECT TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='CollationProbe'");
-                    var overrideCollation = ScalarOrNull(cmd, ColumnCollationSql(db, "BinOverride"));
-                    var inheritedCollation = ScalarOrNull(cmd, ColumnCollationSql(db, "Inherited"));
+                    var tableCollation = ModernCollationName(ScalarOrNull(cmd,
+                        $"SELECT TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='CollationProbe'"));
+                    var overrideCollation = ModernCollationName(ScalarOrNull(cmd, ColumnCollationSql(db, "BinOverride")));
+                    var inheritedCollation = ModernCollationName(ScalarOrNull(cmd, ColumnCollationSql(db, "Inherited")));
 
                     Assert.Multiple(() =>
                     {
@@ -124,6 +124,11 @@ public abstract class TableCollationDeployTestsSharedTests
             }
         }
     }
+
+    // MySQL before 8.0.30 and MariaDB before 10.6 name utf8mb3 collations by their old alias (utf8_general_ci);
+    // same collation, older spelling, so fold it rather than pin the modern engines' rendering.
+    private static string ModernCollationName(string name) =>
+        name != null && name.StartsWith("utf8_", StringComparison.OrdinalIgnoreCase) ? "utf8mb3_" + name[5..] : name;
 
     private static string ColumnCollationSql(string db, string column) =>
         $"SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='{db}' "

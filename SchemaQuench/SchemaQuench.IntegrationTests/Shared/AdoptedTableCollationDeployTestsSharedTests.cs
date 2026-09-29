@@ -142,12 +142,17 @@ public abstract class AdoptedTableCollationDeployTestsSharedTests
     }
 
     private static string TableCollation(System.Data.IDbCommand cmd, string db) =>
-        ScalarOrNull(cmd, "SELECT TABLE_COLLATION FROM information_schema.TABLES "
-                          + $"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='AdoptedProbe'");
+        ModernCollationName(ScalarOrNull(cmd, "SELECT TABLE_COLLATION FROM information_schema.TABLES "
+                          + $"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='AdoptedProbe'"));
 
     private static string ColumnCollation(System.Data.IDbCommand cmd, string db, string column) =>
-        ScalarOrNull(cmd, "SELECT COLLATION_NAME FROM information_schema.COLUMNS "
-                          + $"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='AdoptedProbe' AND COLUMN_NAME='{column}'");
+        ModernCollationName(ScalarOrNull(cmd, "SELECT COLLATION_NAME FROM information_schema.COLUMNS "
+                          + $"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='AdoptedProbe' AND COLUMN_NAME='{column}'"));
+
+    // MySQL before 8.0.30 and MariaDB before 10.6 name utf8mb3 collations by their old alias (utf8_general_ci);
+    // same collation, older spelling, so fold it rather than pin the modern engines' rendering.
+    private static string ModernCollationName(string name) =>
+        name != null && name.StartsWith("utf8_", StringComparison.OrdinalIgnoreCase) ? "utf8mb3_" + name[5..] : name;
 
     private static bool ForeignKeyExists(System.Data.IDbCommand cmd, string db)
     {
