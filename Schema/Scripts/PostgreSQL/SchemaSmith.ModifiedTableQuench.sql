@@ -680,7 +680,10 @@ BEGIN
                               WHERE ec."TableSchema" = c."TableSchema"
                                 AND ec."TableName" = c."TableName"
                                 AND ec."CheckName" = c."Name"
-                                AND ec."Expression" = c."Expression")
+                                AND (ec."Expression" = c."Expression"
+                                     -- #242: PostgreSQL rewrites what it stores, so ask what was applied before calling the text a change.
+                                     OR "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'CHECK', c."Name",
+                                          'expression', c."Expression", ec."Expression")))
             AND NOT EXISTS (SELECT 1
                               FROM temp_columns col
                               WHERE col."TableSchema" = ec."TableSchema"
@@ -707,7 +710,10 @@ BEGIN
                           WHERE ec."TableSchema" = c."TableSchema"
                             AND ec."TableName" = c."TableName"
                             AND ec."CheckName" = c."Name"
-                            AND ec."Expression" = c."Expression")
+                            AND (ec."Expression" = c."Expression"
+                                 -- #242: PostgreSQL rewrites what it stores, so ask what was applied before calling the text a change.
+                                 OR "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'CHECK', c."Name",
+                                      'expression', c."Expression", ec."Expression")))
         -- Column-level checks (CK_<table>_<column>) are owned by the column pass below, not the
         -- table-level CheckConstraints array; excluding them here prevents a phantom drop on every run.
         AND NOT EXISTS (SELECT 1
@@ -739,7 +745,10 @@ BEGIN
                               WHERE ec."TableSchema" = c."TableSchema"
                                 AND ec."TableName" = c."TableName"
                                 AND ec."CheckName" = c."Name"
-                                AND ec."Expression" = c."Expression")
+                                AND (ec."Expression" = c."Expression"
+                                     -- #242: PostgreSQL rewrites what it stores, so ask what was applied before calling the text a change.
+                                     OR "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'CHECK', c."Name",
+                                          'expression', c."Expression", ec."Expression")))
             AND NOT EXISTS (SELECT 1
                               FROM temp_columns col
                               WHERE col."TableSchema" = ec."TableSchema"

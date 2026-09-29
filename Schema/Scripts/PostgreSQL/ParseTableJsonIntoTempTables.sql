@@ -81,7 +81,11 @@
            COALESCE((celem ->> 'Nullable')::BOOLEAN, false) AS "Nullable",
            COALESCE(celem ->> 'Default', '') AS "Default",
            COALESCE(celem ->> 'Collation', '') AS "Collation",
-           COALESCE(celem ->> 'Generated', 'NEVER') AS "Generated",
+           -- An expression is only ever a generated column on PostgreSQL, so an omitted Generated beside one means
+           -- ALWAYS. Reading it as NEVER built a plain column that every later comparison then read as generated.
+           CASE WHEN NULLIF(celem ->> 'Generated', '') IS NOT NULL THEN celem ->> 'Generated'
+                WHEN NULLIF(celem ->> 'GenerationExpression', '') IS NOT NULL THEN 'ALWAYS'
+                ELSE 'NEVER' END AS "Generated",
            COALESCE(celem ->> 'GenerationExpression', '') AS "GenerationExpression",
            COALESCE((celem ->> 'Virtual')::BOOLEAN, false) AS "Virtual",
            COALESCE(celem ->> 'Storage', '') AS "Storage",

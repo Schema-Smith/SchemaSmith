@@ -49,6 +49,21 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         }
         """;
 
+    // The reference documents a computed column with no DataType -- SQL Server derives the type from the
+    // expression, and a computed column cannot be declared with one in DDL at all. The deploy serializes the domain
+    // model, where an omitted DataType is "" -- so that is what reaches the procedure, not an absent key (which lands
+    // as NULL, compares as unknown, and would let this test pass over the defect).
+    private static string ComputedJsonWithDataType(string table, string expression, bool persisted, string dataType) => $$"""
+        {
+            "Schema": "[dbo]",
+            "Name": "[{{table}}]",
+            "Columns": [
+                {"Name": "[Qty]", "DataType": "INT", "Nullable": false},
+                {"Name": "[Doubled]", "DataType": "{{dataType}}", "ComputedExpression": "{{expression}}", "Persisted": {{(persisted ? "true" : "false")}}}
+            ]
+        }
+        """;
+
     private static int ConstraintObjectId(IDbCommand cmd, string table)
     {
         cmd.CommandText = $@"SELECT ISNULL((SELECT ck.[object_id] FROM sys.check_constraints ck
@@ -156,6 +171,31 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
                 RunTableQuenchProc(cmd, json);
                 Assert.That(ComputedColumnId(cmd, table), Is.EqualTo(firstId),
                     $"pass {pass}: the computed column was dropped and re-added for an unchanged declaration");
+            }
+        });
+    }
+
+    // A computed column's type is derived from its expression; the DDL cannot state one, so a declared DataType is
+    // never applied. Comparing it anyway re-added the column on every deploy whenever the two disagreed -- an omitted
+    // one ('' against the catalog's INT) or a different one (BIGINT for Qty * 2) -- a table rewrite when PERSISTED.
+    [TestCase(false, "")]
+    [TestCase(true, "")]
+    [TestCase(true, "BIGINT")]
+    public void AComputedColumnsDeclaredDataType_NeverDropsAndReAddsIt(bool persisted, string dataType)
+    {
+        var table = $"ExprMapNoTy_{Guid.NewGuid():N}"[..20];
+        WithTable(table, $"CREATE TABLE dbo.[{table}] ([Qty] INT NOT NULL)", cmd =>
+        {
+            var json = ComputedJsonWithDataType(table, "Qty * 2", persisted, dataType);
+            RunTableQuenchProc(cmd, json);
+            var firstId = ComputedColumnId(cmd, table);
+            Assert.That(firstId, Is.Not.Zero, "setup: the computed column must exist after the first deploy");
+
+            for (var pass = 2; pass <= 3; pass++)
+            {
+                RunTableQuenchProc(cmd, json);
+                Assert.That(ComputedColumnId(cmd, table), Is.EqualTo(firstId),
+                    $"pass {pass}: a computed column declared with DataType '{dataType}' was dropped and re-added");
             }
         });
     }

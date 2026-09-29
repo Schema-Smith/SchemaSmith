@@ -74,6 +74,39 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         }
         """;
 
+    private static string TableCheckJson(Ctx ctx, string expression) => $$"""
+        {
+            "Schema": "public",
+            "Name": "{{ctx.Table}}",
+            "Columns": [
+                { "Name": "tag", "DataType": "text", "Nullable": true }
+            ],
+            "CheckConstraints": [
+                { "Name": "ck_tag", "Expression": "{{expression}}" }
+            ]
+        }
+        """;
+
+    // GenerationExpression with no Generated -- what the reference's PostgreSQL column section tells you to write.
+    private static string GeneratedWithoutGeneratedJson(Ctx ctx, string expression) => $$"""
+        {
+            "Schema": "public",
+            "Name": "{{ctx.Table}}",
+            "Columns": [
+                { "Name": "tag", "DataType": "text", "Nullable": false },
+                { "Name": "label", "DataType": "text", "Nullable": true, "GenerationExpression": "{{expression}}" }
+            ]
+        }
+        """;
+
+    private static bool LabelIsGenerated(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"SELECT COALESCE((SELECT a.attgenerated = 's' FROM pg_attribute a
+                                               WHERE a.attrelid = to_regclass('""public"".""{table}""')
+                                                 AND a.attname = 'label' AND NOT a.attisdropped), FALSE)";
+        return (bool)cmd.ExecuteScalar()!;
+    }
+
     private static long ConstraintOid(IDbCommand cmd, string table)
     {
         cmd.CommandText = $@"SELECT COALESCE((SELECT con.oid::bigint FROM pg_catalog.pg_constraint con
@@ -126,6 +159,87 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
                 RunTableQuenchProc(ctx.Cmd, json);
                 Assert.That(ConstraintOid(ctx.Cmd, ctx.Table), Is.EqualTo(firstOid),
                     $"pass {pass}: the constraint was dropped and re-created for an unchanged declaration");
+            }
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
+    // The same rewrite through the table-level CheckConstraints array, which was compared by text alone: only the
+    // column-level CheckExpression path consulted the mapping, so this churned on every deploy.
+    [Test]
+    public void ATableLevelCheckWhoseLiteralTheEngineCasts_IsNotReCreatedOnEveryDeploy()
+    {
+        var ctx = NewTable(@"""tag"" text NULL");
+        try
+        {
+            var json = TableCheckJson(ctx, "starts_with(tag, 'a')");
+            RunTableQuenchProc(ctx.Cmd, json);
+            var firstOid = ConstraintOid(ctx.Cmd, ctx.Table);
+            Assert.That(firstOid, Is.Not.Zero, "setup: the constraint must exist after the first deploy");
+            Assert.That(LiveCheckDefinition(ctx.Cmd, ctx.Table), Does.Contain("::text"),
+                "precondition: this only tests something if the engine really did rewrite the literal");
+
+            for (var pass = 2; pass <= 3; pass++)
+            {
+                RunTableQuenchProc(ctx.Cmd, json);
+                Assert.That(ConstraintOid(ctx.Cmd, ctx.Table), Is.EqualTo(firstOid),
+                    $"pass {pass}: the table-level check was dropped and re-created for an unchanged declaration");
+            }
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
+    // Quiet on churn must not mean blind to drift, on the table-level path too.
+    [Test]
+    public void AnOutOfBandEditToATableLevelCheck_IsStillReApplied()
+    {
+        var ctx = NewTable(@"""tag"" text NULL");
+        try
+        {
+            var json = TableCheckJson(ctx, "starts_with(tag, 'a')");
+            RunTableQuenchProc(ctx.Cmd, json);
+            ctx.Cmd.CommandText = $@"ALTER TABLE ""public"".""{ctx.Table}"" DROP CONSTRAINT ck_tag;
+                                     ALTER TABLE ""public"".""{ctx.Table}"" ADD CONSTRAINT ck_tag CHECK (starts_with(tag, 'z'));";
+            ctx.Cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(ctx.Cmd, json);
+
+            Assert.That(LiveCheckDefinition(ctx.Cmd, ctx.Table), Does.Contain("'a'").And.Not.Contain("'z'"),
+                "a hand-edited table-level check must be put back to the declaration");
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
+    // A GenerationExpression is only ever a generated column on PostgreSQL, so omitting Generated must not change
+    // what is built. It did: the create paths built a PLAIN column while the comparison treated it as generated,
+    // and the next deploy failed with 55000 "... is not a stored generated column". Both create paths are covered
+    // -- a new table, and a new column on an existing one.
+    [TestCase(true)]
+    [TestCase(false)]
+    public void AGeneratedColumnDeclaredWithoutGenerated_IsBuiltGenerated_AndStaysPut(bool tableExistsFirst)
+    {
+        var ctx = NewTable(@"""tag"" text NOT NULL");
+        try
+        {
+            if (!tableExistsFirst)
+            {
+                ctx.Cmd.CommandText = $@"DROP TABLE ""public"".""{ctx.Table}""";
+                ctx.Cmd.ExecuteNonQuery();
+            }
+            var json = GeneratedWithoutGeneratedJson(ctx, "upper(tag) || 'x'");
+            RunTableQuenchProc(ctx.Cmd, json);
+            Assert.That(LabelIsGenerated(ctx.Cmd, ctx.Table), Is.True,
+                "a column declared with a GenerationExpression must be built as a generated column");
+            var firstOid = TableOid(ctx.Cmd, ctx.Table);
+            var firstAttNum = GeneratedColumnAttNum(ctx.Cmd, ctx.Table);
+
+            for (var pass = 2; pass <= 3; pass++)
+            {
+                RunTableQuenchProc(ctx.Cmd, json);
+                Assert.That(GeneratedColumnAttNum(ctx.Cmd, ctx.Table), Is.EqualTo(firstAttNum),
+                    $"pass {pass}: the generated column was re-created for an unchanged declaration");
+                Assert.That(TableOid(ctx.Cmd, ctx.Table), Is.EqualTo(firstOid),
+                    $"pass {pass}: the table was rebuilt for an unchanged declaration");
             }
         }
         finally { ctx.Drop(); ctx.Dispose(); }
