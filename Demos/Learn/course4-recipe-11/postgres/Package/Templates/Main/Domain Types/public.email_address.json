@@ -2,7 +2,7 @@
   "$schema": "../../../.json-schemas/domaintypes.postgresql.schema",
   "Schema": "public",
   "Name": "email_address",
-  "DataType": "character varying(256)",
+  "DataType": "VARCHAR(256)",
   "NotNull": true,
   "CheckConstraints": [
     { "Name": "email_address_has_at", "Expression": "VALUE LIKE '%@%'" }

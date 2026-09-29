@@ -26,9 +26,7 @@ level, including the oldest tier in the fleet.
 - **Run [`course10-setup`](../course10-setup/README.md) first** so the mixed fleet is standing:
   `learn_2022` (compat 160) and `learn_2008` (compat 100) on the shared SQL Server instance
   (`localhost,11433`), and current-tier PostgreSQL 16 (`localhost:15432`).
-- `schemaquench --version` answers **2.7.0 or later** — this recipe runs on the released CLI, no
-  from-source override. 2.5.0 is a true minimum, not a pin: earlier releases rejected
-  `ContentEncoding: "Xml"` on every engine except SQL Server, which is what Part 4 turns on.
+- `schemaquench --version` answers **2.7.0 or later**.
 
 ## Part 1 — the problem: JSON delivery hits the compat-130 cliff
 
@@ -45,14 +43,18 @@ The table itself deploys fine — only the *data delivery* hits the cliff. Under
 `warn` policy, SchemaQuench skips just that delivery with a clear message and leaves the table
 empty, rather than failing the whole run:
 
-<!-- TRAINING-RELEASE-PIN #encoding-log -- on 2.7.0 a "model ingest encoding: Xml" line follows the detected-version line
-below; add it to the excerpt. -->
 ```
-[localhost,11433].[learn_2008]   detected SQL Server version 16.0.4260.1 (compatibility level 100)
+[localhost,11433].[learn_2008]   [learn_2008] detected SQL Server version 16.0.4260.1 (compatibility level 100)
+[localhost,11433].[learn_2008]   [learn_2008] model ingest encoding: Xml (auto)
 [localhost,11433].[learn_2008]   Delivering table data
 [localhost,11433].[learn_2008]     [SKIPPED - requires compatibility level 130 for JSON delivery] JSON data delivery for dbo.CountryCode requires SQL Server compatibility level 130 (target is at 100); re-encode this delivery as XML ("ContentEncoding": "Xml") to deploy it on a legacy-compat target.
 [localhost,11433].[learn_2008] Successfully Quenched
 ```
+
+Read the second line. SchemaQuench has already switched *its own* model ingest to
+XML for this compat-100 database — automatically, and it tells you so. Your delivery gets no such
+switch: the payload is your data, so its encoding is yours to declare. That is the gap this recipe
+closes.
 
 Exit code `0` — `warn` skips and the run still succeeds. Row count after: `0` — the table was
 created, but the delivery that would have populated it never ran.
@@ -180,9 +182,6 @@ tiers — you don't maintain a JSON copy for modern targets and an XML copy for 
 
 ## Part 4 — parity: XML is accepted everywhere, for different reasons
 
-**Requires SchemaSmith 2.5.0 or newer.** Before that, `ContentEncoding: "Xml"` was rejected on
-every engine except SQL Server.
-
 The interesting part isn't that all four engines take the encoding — it's *why* you would ask for
 it, which is not the same question on each:
 
@@ -208,6 +207,7 @@ schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 ```
 [localhost].[learn]         Create new table public.countrycode
 [localhost].[learn]         Add missing Constraint public.countrycode.pk_countrycode
+[localhost].[learn]       Add missing Product ownership to tables
 [localhost].[learn]   Delivering table data
 [localhost].[learn]     Delivering public.countrycode
 [localhost].[learn] Successfully Quenched
@@ -279,6 +279,10 @@ convention Part 2 told you to follow. You didn't configure that. NULL-as-absent-
 rule you have to remember when authoring by hand; it's what the extractor emits, because it's how
 the shred reads the file at the other end. The hand-written payload in Part 2 was written to match
 *this*, not the other way round.
+
+`--DeliveryEncoding` is the switch that decides what a consumer can run. Don't reach for
+`Source:CompatEncoding` here — it sounds related, but it only chooses how DataTongs reads a SQL
+Server source's catalog while building its output; the files and scripts come out the same either way.
 
 `--DeliveryEncoding` takes `Json` (the default) or `Xml`, and **both work on every source engine.**
 SQL Server builds the XML natively; PostgreSQL, MySQL and MariaDB extract their normal JSON and

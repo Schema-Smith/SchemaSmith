@@ -126,13 +126,12 @@ category flips to `false`:
 "DropUnknownIndexes": false,
 "DropForeignKeysRemovedFromProduct": false,
 "DropCheckConstraintsRemovedFromProduct": false,
-"DropExcludeConstraintsRemovedFromProduct": false,
 "DropStatisticsRemovedFromProduct": false
 ```
 
-<!-- TRAINING-RELEASE-PIN #fix-shears-stamp -- on 2.7.0, drop DropExcludeConstraintsRemovedFromProduct from this list
-and say why: SchemaShears now stamps a flag only on engines that accept it (exclude constraints are PostgreSQL-only,
-statistics SQL Server + PostgreSQL). On 2.6.0 the stamp above is what is emitted, and --Validate on the patch fails. -->
+It stamps only the flags your engine accepts: PostgreSQL's patch also carries
+`"DropExcludeConstraintsRemovedFromProduct": false` (exclude constraints exist nowhere else), and MySQL and
+MariaDB have no `DropStatisticsRemovedFromProduct` to stamp.
 
 ## Step 3: Deploy the patch safely
 

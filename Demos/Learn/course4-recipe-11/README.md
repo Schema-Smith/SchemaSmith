@@ -64,7 +64,7 @@ Put the file back to `'%@%'` before moving on, and clear the hand-made domain so
 `postgres/Package/Templates/Main/` carries three folders the engine reconciles for you — no scripts:
 
 ```
-Domain Types/public.email_address.json  # character varying(256), NOT NULL, CHECK (VALUE LIKE '%@%')
+Domain Types/public.email_address.json  # VARCHAR(256), NOT NULL, CHECK (VALUE LIKE '%@%')
 Enum Types/public.order_status.json     # placed, picked, shipped, delivered
 Sequences/public.order_number.json      # bigint, starts at 1000
 Tables/public.customer_order.json       # a table typed BY the domain and the enum
@@ -86,11 +86,6 @@ schemaquench --ConfigFile:deploy.settings.json      # exit 0, and nothing change
 cd ..
 ```
 
-> **Spell the base type the way PostgreSQL reports it.** The domain declares
-> `"DataType": "character varying(256)"`, not `VARCHAR(256)`. PostgreSQL canonicalises aliases when it
-> stores them, and SchemaSmith compares your declared spelling against what the catalog reports — so an
-> alias (`VARCHAR`, `INT`, `BOOL`, `DECIMAL`) never matches and the deploy stops. Use the canonical name.
-
 ## Step 3: Change the model — this time it takes
 
 Add a value to the enum. Append `"returned"` to `Values` in `public.order_status.json` and re-quench:
@@ -105,7 +100,18 @@ cd postgres && schemaquench --ConfigFile:deploy.settings.json ; cd ..
 It landed, **in the order you declared it** — not appended wherever the engine felt like putting it.
 Compare that to Step 1: same kind of edit, same kind of object, opposite outcome.
 
-The domain converges the same way. Set `"NotNull": false` and add
+Now make the edit that Step 1 could not. In `public.email_address.json`, change the CHECK's
+`Expression` to `VALUE LIKE '%@%.%'` — same name, new rule — and re-quench:
+
+```bash
+cd postgres && schemaquench --ConfigFile:deploy.settings.json ; cd ..
+#         Altering constraint email_address_has_at on domain type public.email_address
+../lab-sql.sh postgres cookbook_r11 "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conname LIKE '%email%'"
+# → email_address_has_at|CHECK (((VALUE)::text ~~ '%@%.%'::text))
+```
+
+The exact edit the guarded script swallowed in Step 1 lands here, because nothing guards a declaration
+from being compared. The rest of the domain converges the same way. Set `"NotNull": false` and add
 `"Default": "'unknown@example.com'"`, re-quench, and check:
 
 ```bash
@@ -115,15 +121,6 @@ The domain converges the same way. Set `"NotNull": false` and add
 
 Both moved. Put them back and re-quench, and they move back — the declaration is the truth, and the
 database follows it in either direction.
-
-<!-- TRAINING-RELEASE-PIN #415 -- on 2.7.0, delete this note, declare VARCHAR(256) in public.email_address.json,
-     and move the convergence beat in Step 3 onto the domain CHECK. Verified fixed on main 2026-09-10. -->
-> **Two things this lab works around on 2.6.0, both fixed on `main` and shipping in 2.7.0.**
-> **(1)** The domain declares `character varying(256)` rather than `VARCHAR(256)` — on 2.6.0 a type
-> *alias* can never deploy. **(2)** Editing a domain check constraint's `Expression` while leaving its
-> `Name` alone is ignored on 2.6.0, which is why Step 3's convergence beat uses `NotNull`/`Default` and
-> the enum instead. Both were reported from this lab and fixed; on 2.7.0 the alias deploys and the
-> `CHECK` converges, and this lab will teach those directly.
 
 ## Step 4: Watch it refuse the things it cannot do
 
@@ -139,7 +136,7 @@ domain and every column that uses it. Migrate it with a script, or correct the d
 
 Exit **2**. PostgreSQL has no `ALTER DOMAIN … TYPE` — it is a syntax error, not an unsupported
 operation — so the only way to deliver it is to drop the domain, which drops every column typed by it.
-SchemaSmith names both types and stops. Put it back to `character varying(256)`.
+SchemaSmith names both types and stops. Put it back to `VARCHAR(256)`.
 
 **Removing an enum value.** Take `"returned"` back out of `Values` and re-quench:
 

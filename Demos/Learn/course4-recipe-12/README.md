@@ -107,7 +107,7 @@ for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r12 "SELECT EVENT_DEFINITIO
 Seven days, on both engines. Identical edit to Step 1, opposite result — because nothing is guarding
 the declaration against being read. Put it back to 30 and re-quench, and it goes back.
 
-## Step 4: Remove one — and watch what is *not* removed
+## Step 4: Remove by absence — and watch what is *not* removed
 
 Drop-by-absence is opt-in. Turn it on at the environment level in `deploy.settings.json`:
 
@@ -134,15 +134,19 @@ for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r12 "SELECT GROUP_CONCAT(EV
 `archive_old_sessions` is gone — the package stopped declaring it, so the deploy removed it.
 `handmade_probe` is untouched, because SchemaSmith never created it. Removal reaches only what the
 product owns; an event some DBA wrote at 2am is not yours to delete, and the tool does not pretend
-otherwise. Restore the file and re-quench to bring the archive sweep back.
+otherwise.
 
-<!-- TRAINING-RELEASE-PIN #415 -- on 2.7.0, delete this note; Step 4 can then remove the only declared
-     event rather than one of two. Verified fixed on main 2026-09-10. -->
-> **Known limitation on 2.6.0, fixed on `main` and shipping in 2.7.0.** Removing the **last** declared
-> event does not drop it on 2.6.0 — an empty `Events/` folder skips the by-absence comparison entirely,
-> so the event stays deployed. That is why this step removes one of two rather than the only one.
-> Reported from this lab and fixed; on 2.7.0 an empty `Events/` folder means "declare none", and
-> ownership still holds — a hand-created event survives it.
+Now take the package all the way down. Delete `Events/purge_old_sessions.json` too, leaving `Events/`
+empty, and re-quench:
+
+```bash
+for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r12 "SELECT GROUP_CONCAT(EVENT_NAME ORDER BY EVENT_NAME) FROM information_schema.EVENTS WHERE EVENT_SCHEMA='cookbook_r12'"; done
+# → handmade_probe
+```
+
+An empty folder is a declaration too: it says "this product owns no events", so the last one goes the
+same way the first did — and ownership still holds, so `handmade_probe` survives even a package that
+declares nothing. Restore both files and re-quench to bring the sweeps back.
 
 ## Cleanup
 

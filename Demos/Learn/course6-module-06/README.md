@@ -11,7 +11,7 @@ Structural validation (Module 3) catches the typo — a missing `DataType`, a mi
 ## Before you start
 
 - **No sandbox, no database, no credentials.** `--Validate` (and `schematongs --WriteSchemasOnly`, used later) never connect to an engine. This lab is entirely database-free.
-- **The CLI is on your PATH** — `schemaquench --version` answers **2.7.0** or later. This lab quotes `--Validate` output verbatim so you can diff your own against it, and 2.7.0 tidied the output: a finding's location is printed once, as the line's prefix, instead of twice. On 2.7.0 every check still fires and every fix still works, but `SS-FK-002`, `SS-TOK-001` and `SS-STALE-001` will each read slightly differently from the boards below.
+- **The CLI is on your PATH** — `schemaquench --version` answers **2.7.0 or later**. This lab quotes `--Validate` output verbatim so you can diff your own against it.
 - Each engine package under `sqlserver/`, `postgres/`, `mysql/`, and `mariadb/` ships **deliberately broken** — that's the starting point. You'll fix it.
 
 > **Path binding note:** if `--SchemaPackagePath:./sqlserver/Package` doesn't bind in your shell, pass the absolute path via the environment instead: `SmithySettings_SchemaPackagePath="$(pwd)/sqlserver/Package" schemaquench --Validate`. Run `schematongs --WriteSchemasOnly` from *inside* a `Package` directory (it defaults to `.`).
@@ -101,25 +101,24 @@ The editor `.json-schemas` that give you red-squiggle validation in your IDE are
 1. Hand-edit `sqlserver/Package/.json-schemas/tables.sqlserver.schema` — narrow any `"maxLength": 128` to `"maxLength": 1`, so it no longer matches fresh generation.
 2. Re-run `--Validate`:
    ```
-   ERROR [SS-STALE-001] .../tables.sqlserver.schema: Committed .json-schemas are stale - regenerate via --WriteSchemasOnly.
+   ERROR [SS-STALE-001] .../tables.sqlserver.schema: Committed .json-schemas are stale - regenerate via --WriteSchemasOnly. Structural validation used the current model merged with this file's authored custom-property governance.
    ```
    Exit `2`.
 3. Regenerate (database-free), from inside the `Package` directory:
    ```
    cd sqlserver/Package && schematongs --WriteSchemasOnly && cd ../..
    ```
+   ```
+   Regenerating .json-schemas for Shop (SqlServer)...
+   Done. 0 created, 1 updated, 3 already current.
+   All package files already reference their schema.
+   ```
 4. Re-run `--Validate` → `PASS - no issues found`, exit `0`. The staleness finding is gone.
 
-<!-- TRAINING-RELEASE-PIN #416 -- on 2.7.0, fold the second sentence into the board above and delete
-     this note. The message gained it in #416; 2.6.0 prints only the first. Certified on main 2026-09-10. -->
-> **From SchemaSmith 2.7.0 the finding says more, and the extra clause matters.** It reads
-> `… regenerate via --WriteSchemasOnly. Structural validation used the current model merged with this
-> file's authored custom-property governance.` Through 2.6.0 a stale type **short-circuited** structural
-> validation, so any `Extensions` governance you had authored into that file — the kind
-> [Module 3](../course6-module-03) has you write — silently stopped being enforced while the only finding
-> pointed at the schema file rather than at the violation. From 2.7.0 the stale type is validated against
-> the current model *merged with* your recovered fragment, so your rules keep applying while the file is
-> stale. Staleness is still an error worth fixing; it is no longer a hole in your governance.
+The second sentence matters. Any `Extensions` governance you authored into that file — the kind
+[Module 3](../course6-module-03) has you write — is recovered from it and merged with the current model,
+so your rules keep applying while the file is stale. Staleness is an error worth fixing; it is not a hole
+in your governance.
 
 ## Scenario 5b — when your schemas are *malformed*, not merely stale
 
@@ -132,8 +131,7 @@ Induce it. Replace `sqlserver/Package/.json-schemas/tables.sqlserver.schema` wit
 JSON at all:
 
 ```bash
-printf '{ "not valid json
-' > sqlserver/Package/.json-schemas/tables.sqlserver.schema
+printf '{ "not valid json\n' > sqlserver/Package/.json-schemas/tables.sqlserver.schema
 ```
 
 Re-run `--Validate`:
@@ -144,29 +142,23 @@ against a freshly generated schema instead, so any custom-property governance au
 (Extensions required/enum rules) was NOT applied this run. Regenerate via --WriteSchemasOnly.
 ```
 
-Exit `2`. Now clear it — and this is where the malformed case stops behaving like the stale one.
-
-**The finding's own advice does not work here.** Do exactly what it says and you get a stack trace:
+Exit `2`. Clear it the way the finding says — regenerate:
 
 ```bash
-cd sqlserver/Package && schematongs --WriteSchemasOnly
-# EXCEPTION - Newtonsoft.Json.JsonReaderException: Unterminated string. Expected delimiter: "
-# exit 3
+cd sqlserver/Package && schematongs --WriteSchemasOnly && cd ../..
 ```
 
-`--WriteSchemasOnly` **reads** the committed schema before rewriting it, so it can preserve the
-`Extensions` fragment you authored — which is the behaviour you want in every other situation, and
-exactly the behaviour that cannot cope with a file it is unable to parse. **Delete the unreadable file
-first, then regenerate:**
-
-```bash
-cd sqlserver/Package && rm .json-schemas/tables.sqlserver.schema && schematongs --WriteSchemasOnly && cd ../..
+```
+Regenerating .json-schemas for Shop (SqlServer)...
+WARNING: 'tables.sqlserver.schema' could not be parsed (Unterminated string. Expected delimiter: ". Path '', line 2, position 0.) and was regenerated from the current model. Any hand-authored "Extensions" governance it carried (required properties, enum rules) was NOT preserved and must be re-applied.
+Done. 0 created, 1 updated, 3 already current.
+All package files already reference their schema.
 ```
 
-Exit `0`, the schema is rebuilt, and `--Validate` is clean again. **Note what deleting cost you:** the
-authored governance that lived in that file is gone with it, and you re-apply the fragment by hand —
-which is the whole reason the finding warns you it was not enforced. (The circular advice is a reported
-rough edge; the remedy above is what works today.)
+Exit `0`, the schema is rebuilt, and `--Validate` is clean again. **Read the warning before you move on.**
+A stale file hands its governance forward; a malformed one cannot, so the regenerated file carries none of
+the rules you authored into it. Re-apply the fragment by hand — the tool can rebuild the structure, but
+only you know what your rules were.
 
 ### Why the wording earns its length
 
@@ -189,13 +181,6 @@ Same package, same violation, and the one finding that mattered has vanished. Th
 names the consequence rather than the cause — and why it says so **unconditionally**, even for a package
 that authored no governance at all: an unparseable file cannot be inspected to find out whether it
 carried any, and a false reassurance would be worse than a redundant warning.
-
-<!-- TRAINING-RELEASE-PIN #415 -- the governance sentence arrived in #415. On 2.6.0 the finding reads
-     "...validated against a freshly generated schema instead. Regenerate via --WriteSchemasOnly." with
-     no governance clause. Delete this note at 2.7.0. Certified on main 2026-09-10. -->
-> **On SchemaSmith 2.6.0 this finding is shorter** — it stops after "validated against a freshly generated
-> schema instead" and never mentions governance. Same exit code, same fallback, same silent
-> non-enforcement; you simply were not told about the part that matters. From 2.7.0 it says so.
 
 ## Scenario 6 — make it a gate
 
