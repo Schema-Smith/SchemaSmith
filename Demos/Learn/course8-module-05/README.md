@@ -20,8 +20,7 @@ situations a plain redeploy doesn't cover, and *when to reach for which*.
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`) — see [`../README.md`](../README.md).
-- `schemaquench --version` answers on your PATH. No from-source override — this module uses only
-  long-shipped features (checkpointing, `--ResumeQuench`, `CompletedMigrationScripts`).
+- `schemaquench --version` answers **2.7.0 or later** on your PATH.
 
 ## Step 1 — create the sandbox database
 

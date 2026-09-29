@@ -8,7 +8,7 @@ A pricing bug double-applied a discount: every `OrderItem` on a **May 2026** `Sa
 
 ## Before you start
 
-- The four-engine sandbox is up (`Demos/Learn/docker`) and `schemaquench --version` answers on your PATH (build from `main` if needed).
+- The four-engine sandbox is up (`Demos/Learn/docker`) and `schemaquench --version` answers **2.7.0 or later** on your PATH.
 - Run **[`course6-setup`](../course6-setup/)** first. It seeds `shop_tenant_a`, `shop_tenant_b`, `shop_tenant_c` on each engine with the price defect, and creates the scoped **`datafix_user`** role (see [`course6-setup/seed/<engine>/datafix_role.sql`](../course6-setup/seed/)).
 
 Confirm the defect is present (SQL Server shown; swap the client per engine):

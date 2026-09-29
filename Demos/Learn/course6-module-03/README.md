@@ -13,7 +13,7 @@ Your schema lives in Git. Before anything reaches a database, you want two guara
 - This lab needs no sandbox and no running database — it validates JSON files against JSON Schema.
 - Each engine package under `sqlserver/`, `postgres/`, `mysql/`, and `mariadb/` already ships its generated `.json-schemas/` with a governance fragment applied. You can validate them as-is, or regenerate and re-apply to practice the workflow.
 - To validate locally you need Node. This lab uses `ajv-cli`: `npx ajv-cli@5 ...`. In CI, the `GrantBirki/json-yaml-validate` action does the same thing with no setup.
-- To regenerate the schemas you need the SchemaSmith CLI on your PATH (`schematongs --version`). Regeneration is database-free.
+- To regenerate the schemas you need the SchemaSmith CLI on your PATH (`schematongs --version` answers **2.7.0 or later**). Regeneration is database-free.
 
 > **Local `ajv-cli` note:** `ajv-cli` reads schemas by file extension and does not recognize the `.schema` extension. Copy the schema to a `.json` file first, then validate. The `GrantBirki/json-yaml-validate` CI action reads `.schema` files directly — this is a local-tool convenience only.
 

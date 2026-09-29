@@ -15,7 +15,7 @@ It's a trimmed slice of the classic Chinook schema: `Artist`, `Album`, `Track`, 
 ## Before you start
 
 - The [sandbox](../docker) is up (`docker compose up -d`).
-- The CLI is on your PATH (`schematongs --version`).
+- The CLI is on your PATH (`schematongs --version` answers **2.7.0 or later**).
 
 ## Step 1: Stand up the "existing" database
 

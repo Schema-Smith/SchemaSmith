@@ -28,10 +28,10 @@ schemaquench --version
 Expected:
 
 ```
-SchemaQuench - Version: 2.4.0.0
+SchemaQuench - Version: 2.7.0.0
 ```
 
-Your exact version may be `2.1.0.0` or later — any version line means the CLI is installed and on your PATH. If the command isn't found, revisit the install guide.
+Your exact version may be later — anything from `2.7.0.0` up is fine. The lab packages need 2.7.0, so an older version line means upgrade before you go on. If the command isn't found, revisit the install guide.
 
 ## Step 2: Connect and kindle each engine
 

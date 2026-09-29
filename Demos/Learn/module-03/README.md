@@ -12,7 +12,7 @@ edited `starter/` should look like when you're done.
 
 - The [sandbox](../docker) is up (`docker compose up -d`) and you completed [Module 2](../module-02),
   so the `Widget` table already exists on `learn`.
-- The CLI is on your PATH (`schemaquench --version`).
+- The CLI is on your PATH (`schemaquench --version` answers **2.7.0 or later**).
 
 > If you're starting fresh, deploy a `starter/` first to lay down the original `Widget`:
 > `cd <engine>/starter && schemaquench --ConfigFile:deploy.settings.json`.
