@@ -43,7 +43,7 @@ Two real errors and a lean, no database touched:
 
 - **`SS-DUP-001`** — `OrderItem` has two `[Quantity]` columns and neither is gated. A duplicate that would blow up at `CREATE TABLE`.
 - **`SS-TOK-001`** — `Customer`'s `[Email]` column is gated on `{{IncludePiiColumns}}`, a token nobody defined. It would silently evaluate to nothing at deploy.
-- **`SS-FK-002`** (warning) — `OrderItem` declares `[FK_OrderItem_Supplier]` pointing at a `[Supplier]` table that isn't in the package. That is a warning, not an error, because the deploy creates a foreign key to any table that already exists on the target, declared or not. Here it's a mistake — nothing creates `Supplier` — but the linter can't know that without a database. A package that sets `"DropTablesRemovedFromProduct": false` (a patch or a bootstrap — a deliberately partial deployment) gets no warning at all, since references outside it are the point.
+- **`SS-FK-002`** (warning) — `OrderItem` declares `[FK_OrderItem_Supplier]` pointing at a `[Supplier]` table that isn't in the package. That is a warning, not an error, because the deploy creates a foreign key to any table that already exists on the target, declared or not. Here it's a mistake — nothing creates `Supplier` — but the linter can't know that without a database. In a deliberately partial package -- a SchemaShears patch, a bootstrap -- the same warning is expected and you read past it.
 
 ## Scenario 2 — clear the board
 

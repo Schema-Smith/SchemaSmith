@@ -97,16 +97,8 @@ public sealed class CoherenceCheck : ISchemaCheck
             // list the deploy does not use -- the same false error in a less obvious costume.
             var columnsAreOwnedElsewhere = template.IndexOnlyTableQuenches;
 
-            // A package that keeps tables it does not declare is a partial deployment -- a SchemaShears patch
-            // stamps this, a bootstrap sets it -- so a foreign key into the rest of the database is expected.
-            // False locks, exactly as the deploy cascades it: a template cannot re-enable what its product
-            // turned off.
-            var undeclaredTablesAreExpected = !ctx.Product.DropTablesRemovedFromProduct
-                                              || template.DropTablesRemovedFromProduct == false;
-
             foreach (var fk in table.ForeignKeys)
-                findings.AddRange(CheckForeignKey(table, fk, location, tablesByKey, columnsAreOwnedElsewhere,
-                    undeclaredTablesAreExpected));
+                findings.AddRange(CheckForeignKey(table, fk, location, tablesByKey, columnsAreOwnedElsewhere));
 
             foreach (var index in table.Indexes)
                 findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
@@ -132,8 +124,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         ForeignKey fk,
         string tableLocation,
         IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey,
-        bool columnsAreOwnedElsewhere,
-        bool undeclaredTablesAreExpected)
+        bool columnsAreOwnedElsewhere)
     {
         var location = $"{tableLocation} / FK '{fk.Name}'";
         var localColumnNames = ColumnNames(table);
@@ -160,9 +151,10 @@ public sealed class CoherenceCheck : ISchemaCheck
         if (!tablesByKey.TryGetValue((schema, name), out var relatedTables))
         {
             // A warning, not an error: the deploy creates a foreign key to any table that exists on the target,
-            // declared or not, so an unresolved reference is only a likely mistake.
-            if (!undeclaredTablesAreExpected)
-                yield return new Finding(Severity.Warning, RelatedTableCode, Category, location,
+            // declared or not, so an unresolved reference is only a likely mistake. Never silenced -- not even for
+            // a partial deployment such as a SchemaShears patch, where it is expected: DropTablesRemovedFromProduct
+            // false is also a common safety setting on a complete product, and there it would hide a real typo.
+            yield return new Finding(Severity.Warning, RelatedTableCode, Category, location,
                     $"RelatedTable '{fk.RelatedTable}' does not resolve to any table in the package (resolved schema '{schema}'). The deploy succeeds only if it already exists on the target.");
             yield break;
         }

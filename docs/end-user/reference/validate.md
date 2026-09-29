@@ -74,7 +74,7 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | Code | Severity | Meaning |
 |------|----------|---------|
 | `SS-FK-001` | Error | A foreign key's `Columns` entry names a column that doesn't exist on the local table. |
-| `SS-FK-002` | Warning | A foreign key's `RelatedTable` doesn't resolve to any table in the package. A warning rather than an error because the deploy creates a foreign key to any table that already exists on the target, declared or not. **Not reported at all when `DropTablesRemovedFromProduct` is `false`** on the product or the template — a deliberately partial deployment, such as a SchemaShears patch or a bootstrap, references tables it does not declare by design. |
+| `SS-FK-002` | Warning | A foreign key's `RelatedTable` doesn't resolve to any table in the package. A warning rather than an error because the deploy creates a foreign key to any table that already exists on the target, declared or not. A partial deployment such as a SchemaShears patch or a bootstrap references tables it does not declare by design, so expect the warning there; it still exits 0. |
 | `SS-FK-004` | Error | A foreign key's `RelatedColumns` entry names a column that doesn't exist on the related table. |
 | `SS-FK-005` | Error | `Columns` and `RelatedColumns` have different entry counts -- the column lists must be the same length. |
 | `SS-IDX-001` | Error | An index's `IndexColumns` entry names a column that doesn't exist on the table. |

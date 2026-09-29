@@ -577,33 +577,18 @@ public class CoherenceCheckTests
         Assert.That(findings[0].Category, Is.EqualTo("Coherence"));
     }
 
-    // A package that will not drop tables it does not declare is a partial deployment -- a SchemaShears patch
-    // stamps exactly this, and a bootstrap sets it -- so a reference outside it is expected, not suspicious.
-    [Test]
-    public void FkRelatedTableMissing_IsSilent_WhenProductKeepsUndeclaredTables()
+    // Never silenced, whatever the drop flags say. A partial deployment (a SchemaShears patch, a bootstrap) expects
+    // references outside itself, but DropTablesRemovedFromProduct false is also a common safety setting on a complete
+    // product, where silence would hide a misspelled RelatedTable until the FK failed at deploy.
+    [TestCase(false, null)]
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    [TestCase(true, true)]
+    public void FkRelatedTableMissing_IsAWarningWhateverTheDropFlagsSay(bool productDropsTables, bool? templateDropsTables)
     {
-        Assert.That(RunDanglingFk(productDropsTables: false, templateDropsTables: null), Is.Empty);
-    }
+        var findings = RunDanglingFk(productDropsTables, templateDropsTables);
 
-    [Test]
-    public void FkRelatedTableMissing_IsSilent_WhenTemplateOverrideKeepsUndeclaredTables()
-    {
-        Assert.That(RunDanglingFk(productDropsTables: true, templateDropsTables: false), Is.Empty);
-    }
-
-    // The deploy cascades drop flags with false LOCKING (ProductQuench.ResolveCascadedFlag): a template cannot
-    // re-enable drops its product turned off. The linter must reach the same answer the deploy does.
-    [Test]
-    public void FkRelatedTableMissing_IsSilent_WhenTemplateCannotReenableDropsTheProductTurnedOff()
-    {
-        Assert.That(RunDanglingFk(productDropsTables: false, templateDropsTables: true), Is.Empty);
-    }
-
-    [Test]
-    public void FkRelatedTableMissing_IsWarning_WhenBothTiersDropTables()
-    {
-        Assert.That(RunDanglingFk(productDropsTables: true, templateDropsTables: true).Select(f => f.Code),
-            Is.EqualTo(new[] { "SS-FK-002" }));
+        Assert.That(findings.Select(f => (f.Code, f.Severity)), Is.EqualTo(new[] { ("SS-FK-002", Severity.Warning) }));
     }
 
     [Test]

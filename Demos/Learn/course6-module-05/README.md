@@ -137,13 +137,17 @@ Lint it before it goes anywhere:
 
 ```bash
 schemaquench --Validate --SchemaPackagePath:./patch
-# PASS - no issues found
 ```
 
-`OrderItem`'s foreign keys point at `Product` and `SalesOrder`, which the patch leaves out. That is not a
-finding: with `DropTablesRemovedFromProduct` stamped `false`, the package says it is a partial deployment, so
-references into the rest of the database are expected. (The same keys in an ordinary package get an
-`SS-FK-002` warning.)
+```
+WARN [SS-FK-002] Template 'Main' / Table '[OrderItem]' / FK '[FK_OrderItem_Product]': RelatedTable '[Product]' does not resolve to any table in the package (resolved schema 'dbo'). The deploy succeeds only if it already exists on the target.
+WARN [SS-FK-002] Template 'Main' / Table '[OrderItem]' / FK '[FK_OrderItem_SalesOrder]': RelatedTable '[SalesOrder]' does not resolve to any table in the package (resolved schema 'dbo'). The deploy succeeds only if it already exists on the target.
+0 error(s), 2 warning(s)
+```
+
+Exit `0`. `OrderItem`'s foreign keys point at `Product` and `SalesOrder`, which the patch leaves out on
+purpose -- they are already on the target -- so these two warnings are exactly what you expect here. Read them
+anyway: the same warning in a package you meant to be complete is a misspelled `RelatedTable`.
 
 ## Step 3: Deploy the patch safely
 
