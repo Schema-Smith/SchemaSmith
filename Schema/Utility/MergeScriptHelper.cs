@@ -226,11 +226,9 @@ public static class MergeScriptHelper
 
     private static bool IsBelowStringAggCliffSqlServer(IDbCommand cmd)
     {
-        // Honour the same override the model-ingest encoding honours. These two decisions are the SAME
-        // decision -- compat < 130 OR server major < 14, as the comment above says they must be -- but only
-        // one of them could be forced, so DataTongs could not be made to build a legacy merge script at all.
-        // That matters most for the one tool whose OUTPUT is the product: a delivery file handed to an
-        // external vendor could not be generated in the legacy shape on modern hardware.
+        // Honour the same override the model-ingest encoding honours: the two decisions are the same decision,
+        // so they must be forceable together. This picks how the script is BUILT, not what it contains --
+        // the consumer-facing shred form is ShouldCast:DeliveryEncoding.
         var forced = CompatEncodingOverride();
         if (!string.IsNullOrWhiteSpace(forced))
             return CompatEncoding.Select(forced, null, int.MaxValue) == IngestEncoding.Xml;
