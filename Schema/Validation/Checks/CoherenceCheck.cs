@@ -232,7 +232,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static IEnumerable<Finding> CheckRebuildPolicy(RebuildPolicy policy, string owner, string location)
     {
         if (policy == null) yield break;
-        var isThreshold = string.Equals(policy.Mode, "THRESHOLD", StringComparison.OrdinalIgnoreCase);
+        // Spaces only, as the deploy trims on every engine.
+        var isThreshold = string.Equals(policy.Mode?.Trim(' '), "THRESHOLD", StringComparison.OrdinalIgnoreCase);
 
         if (isThreshold && policy.Threshold is not >= 1)
             yield return new Finding(Severity.Error, RebuildThresholdCode, Category, location,

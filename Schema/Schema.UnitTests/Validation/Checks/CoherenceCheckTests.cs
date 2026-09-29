@@ -380,6 +380,22 @@ public class CoherenceCheckTests
             .Any(f => f.Code == "SS-TBL-001"), Is.False);
     }
 
+    // The deploy trims Mode on every engine, so a padded THRESHOLD is THRESHOLD -- the check must read it the same way.
+    [TestCase(" THRESHOLD")]
+    [TestCase("threshold ")]
+    public void PaddedThresholdMode_WithoutAThreshold_IsSsTbl001(string mode)
+    {
+        Assert.That(RunOn(OrderWith(new RebuildPolicy { Mode = mode })).Select(f => f.Code), Does.Contain("SS-TBL-001"));
+    }
+
+    [TestCase(" THRESHOLD")]
+    [TestCase("threshold ")]
+    public void PaddedThresholdMode_WithAThreshold_IsClean(string mode)
+    {
+        Assert.That(RunOn(OrderWith(new RebuildPolicy { Mode = mode, Threshold = 50 }))
+            .Where(f => f.Code is "SS-TBL-001" or "SS-TBL-002").Select(f => f.Message), Is.Empty);
+    }
+
     [Test]
     public void AlwaysAndNeverWithoutAThreshold_AreClean()
     {
