@@ -108,6 +108,14 @@ schemaquench --ConfigFile:quench.settings.removed.json     # exit 0 -- now the r
 cd ..
 ```
 
+**SQL Server:**
+
+```text
+        Retaining table [dbo].LedgerEntry - removed from product but protected by PreventDrop
+```
+
+**MySQL and MariaDB:**
+
 ```text
     Table LedgerEntry removed from product but PreventDrop is set - skipping drop (protected)
 ```

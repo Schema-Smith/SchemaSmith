@@ -107,10 +107,14 @@ Check it:
 
 ## Part 3 — and where it still will not
 
-Make the view **encrypted** and try the same widening with the setting still on.
+Make the view **encrypted** and try the same widening with the setting still on. Part 2 already widened
+`Actor` to `NVARCHAR(128)`, so start again from the baseline first -- otherwise there is no widening left
+to attempt, and `encrypt-view` (which declares the baseline's `NVARCHAR(64)`) is refused as a narrowing.
 
 ```bash
+../lab-sql.sh sqlserver vault_m2 "DROP VIEW IF EXISTS dbo.vw_AuditActors; DROP TABLE IF EXISTS dbo.AuditTrail"
 cd sqlserver
+schemaquench --ConfigFile:quench.settings.baseline.json       # exit 0 -- back to NVARCHAR(64)
 schemaquench --ConfigFile:quench.settings.encrypt-view.json   # exit 0 -- the view is now WITH ENCRYPTION
 schemaquench --ConfigFile:quench.settings.encrypted.json      # exit 2
 cd ..

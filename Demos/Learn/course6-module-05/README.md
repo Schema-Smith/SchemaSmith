@@ -176,18 +176,27 @@ tenant fast, with no collateral.
 ## Step 4: The deliberate override
 
 Suppression is a **default**, not a cage. When you genuinely intend to drop, `--AllowDrops:<categories>` leaves
-those categories enabled. Rebuild the patch allowing table drops, and deploy it to a fresh scratch:
+those categories enabled. Rebuild the patch allowing table drops, and deploy it to a fresh scratch. Step 1 left
+`shop_patch_scratch` with three tables gone and `OrderItem` rows pointing at nothing, so rebuild it first — the
+baseline cannot put foreign keys back over orphaned rows:
 
 ```bash
+../lab-sql.sh sqlserver master "DROP DATABASE IF EXISTS shop_patch_scratch; CREATE DATABASE shop_patch_scratch"
+../lab-sql.sh sqlserver shop_patch_scratch --file ../course6-setup/seed/sqlserver/shop.sql
 cd sqlserver     # back into the engine folder
-schemaquench --ConfigFile:quench.settings.baseline.json     # restore the owned fleet first
+schemaquench --ConfigFile:quench.settings.baseline.json     # restore the owned fleet
 schemashears --Source:Package --Manifest:patch-manifest.txt --Output:patch-allowdrops --AllowDrops:Tables
-schemaquench --ConfigFile:quench.settings.allowdrops.json   # SchemaPackagePath: ./patch-allowdrops
+schemaquench --ConfigFile:quench.settings.allowdrops.json   # SchemaPackagePath: ./patch-allowdrops -- exit 2
 ```
 
 Now `patch-allowdrops/Product.json` leaves `DropTablesRemovedFromProduct` alone (the other six stay `false`),
-and the omitted tables drop — because you said so. The stamp protects you by default and gets out of your way
-when you mean it.
+and the deploy drops `Customer`, `Product` and `SalesOrder` — because you said so. Then it fails exactly as
+Step 1 did, exit `2`: the patch still carries `OrderItem`, whose foreign keys point at the tables it just
+dropped. (Every engine stops there; the message differs.)
+
+That is the override doing precisely what you asked, and no more. It takes the safety net away; it does not
+make the drop a good idea. Allow a category only when nothing left in the patch still depends on what it lets
+go — here, that is never, which is exactly why the stamp is the default.
 
 ## Cleanup
 
