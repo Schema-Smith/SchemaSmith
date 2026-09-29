@@ -1589,10 +1589,16 @@ BEGIN TRY
 
   RAISERROR('Drop Check Constraints Referencing Modified Columns', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping check constraint ' + fc.[Schema] + '.' + fc.[TableName] + '.' + fc.CheckName + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'IF OBJECT_ID(''' + fc.[Schema] + '.' + QUOTENAME(fc.CheckName) + ''') IS NOT NULL ALTER TABLE ' + fc.[Schema] + '.' + fc.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(fc.CheckName) + ';' AS NVARCHAR(MAX))
+                                  'IF OBJECT_ID(''' + fc.[Schema] + '.' + QUOTENAME(fc.CheckName) + ''') IS NOT NULL ALTER TABLE ' + fc.[Schema] + '.' + fc.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(fc.CheckName) + ';' + CHAR(13) + CHAR(10) +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', ''' + fc.[Schema] + '.' + fc.[TableName] + '.' + fc.CheckName + ''', ''dropped'');' AS NVARCHAR(MAX))
                            FROM #ChecksToDropForChanges fc WITH (NOLOCK)
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  -- WhatIf twin of the embedded audit above; same source.
+  IF @WhatIf = 1
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+      SELECT @@SPID, 'constraint', fc.[Schema] + '.' + fc.[TableName] + '.' + fc.CheckName, 'wouldDrop'
+        FROM #ChecksToDropForChanges fc WITH (NOLOCK)
 
   RAISERROR('Verify CDC Capture-Instance Headroom For Tables With Column Changes', 10, 100) WITH NOWAIT
   -- CDC deliberately stays ON through the column work. Disabling it here used to drop the capture
@@ -2059,10 +2065,16 @@ BEGIN TRY
   
   RAISERROR('Drop Modified Check Constraints', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping check constraint ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[CheckName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'IF OBJECT_ID(''' + cc.[Schema] + '.' + QUOTENAME(cc.[CheckName]) + ''') IS NOT NULL ALTER TABLE ' + cc.[Schema] + '.' + cc.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(cc.[CheckName]) + ';' AS NVARCHAR(MAX))
+                                  'IF OBJECT_ID(''' + cc.[Schema] + '.' + QUOTENAME(cc.[CheckName]) + ''') IS NOT NULL ALTER TABLE ' + cc.[Schema] + '.' + cc.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(cc.[CheckName]) + ';' + CHAR(13) + CHAR(10) +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', ''' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[CheckName] + ''', ''dropped'');' AS NVARCHAR(MAX))
                            FROM #CheckChanges cc WITH (NOLOCK)
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  -- WhatIf twin of the embedded audit above; same source.
+  IF @WhatIf = 1
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+      SELECT @@SPID, 'constraint', cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[CheckName], 'wouldDrop'
+        FROM #CheckChanges cc WITH (NOLOCK)
 
   -- No-drop protection tier (#270): when protected mode is active the caller forces
   -- @DropCheckConstraintsRemovedFromProduct to 0 so the drop block below never runs. Record the

@@ -553,4 +553,21 @@ public class ImportTableHelperTests
         Assert.That(reimported.DataDelivery[0].ContentFile, Is.EqualTo("authored.json"));
         Assert.That(reimported.DataDelivery[0].VariantName, Is.EqualTo("v"));
     }
+
+    // Re-extracting an unchanged database must rewrite nothing. The first re-extraction of every package added
+    // "ShouldApplyExpression": "", "VariantName": "" and (MySQL) "OldName": "" throughout: carrying authored
+    // properties forward coalesced a key the file never had to an empty string, and an empty string serializes.
+    // The fresh JSON below is shaped like each engine's generator output -- PostgreSQL's already carries the empty
+    // ShouldApplyExpression/OldName, MySQL's carries none -- so both ways of arriving at "unset" are covered.
+    [TestCase(Platform.MySQL, """{ "Name": "customer", "Columns": [ { "Name": "customer_id", "DataType": "int" } ], "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`customer_id`" } ] }""")]
+    [TestCase(Platform.PostgreSQL, """{ "Name": "device", "Columns": [ { "Name": "device_id", "DataType": "int4", "ShouldApplyExpression": "", "OldName": "" } ], "Indexes": [ { "Name": "device_pkey", "PrimaryKey": true, "Unique": true, "IndexColumns": "device_id", "ShouldApplyExpression": "" } ], "ShouldApplyExpression": "", "OldName": "" }""")]
+    public void ReExtractingAnUnchangedTable_WritesTheSameFile(Platform platform, string extractedJson)
+    {
+        var onDisk = JsonHelper.Serialize(PlatformDeserializer.DeserializeTable(extractedJson, platform));
+
+        var reExtracted = PlatformDeserializer.DeserializeTable(extractedJson, platform);
+        ImportTableHelper.PreserveDataDeliveryAndCustomProperties(reExtracted, PlatformDeserializer.DeserializeTable(onDisk, platform), _ => true);
+
+        Assert.That(JsonHelper.Serialize(reExtracted), Is.EqualTo(onDisk));
+    }
 }

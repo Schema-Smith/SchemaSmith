@@ -124,6 +124,36 @@
      WHERE NOT tc."NullableDeclared"
        AND tc."Generated" = 'ALWAYS' AND COALESCE(tc."GenerationExpression", '') <> '';
 
+    -- A column typed by an enum, domain or composite type is compared against the catalog's own spelling of it --
+    -- schema-qualified, and quoted for a domain -- so any other spelling re-altered the column on every deploy, and a
+    -- bare name did not resolve at all outside the search path (a schema-template tenant table typed by its own
+    -- tenant's enum failed with 42704). Resolve each user-defined type name once, here: a bare name in the table's own
+    -- schema first, then public; a qualified one as written, quoted or not. Then spell it as the catalog does, so the
+    -- DDL finds it and every comparison downstream agrees. A name that is also a built-in type is left alone, as are
+    -- arrays and typmods.
+    UPDATE temp_columns tc
+       SET "DataType" = r."Rendered"
+      FROM (SELECT c."_RowId",
+                   (SELECT CASE WHEN ty.typtype = 'd' THEN '"' || ns.nspname || '"."' || ty.typname || '"'
+                                ELSE ns.nspname || '.' || ty.typname END
+                      FROM pg_type ty
+                      JOIN pg_namespace ns ON ns.oid = ty.typnamespace
+                     WHERE ty.typtype IN ('e', 'd', 'c')
+                       AND ty.typname = COALESCE(m[3], LOWER(m[4]))
+                       AND ns.nspname = ANY (CASE WHEN m[1] IS NOT NULL OR m[2] IS NOT NULL
+                                                  THEN ARRAY[COALESCE(m[1], LOWER(m[2]))]
+                                                  ELSE ARRAY[c."TableSchema", 'public'] END)
+                       AND NOT EXISTS (SELECT 1 FROM pg_type bt JOIN pg_namespace bn ON bn.oid = bt.typnamespace
+                                        WHERE bn.nspname = 'pg_catalog' AND bt.typname = ty.typname)
+                     ORDER BY ns.nspname = c."TableSchema" DESC
+                     LIMIT 1) AS "Rendered"
+              FROM temp_columns c
+              CROSS JOIN LATERAL REGEXP_MATCH(TRIM(c."DataType"),
+                   '^(?:(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\.)?(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))$') AS m
+             WHERE COALESCE(c."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%') r
+     WHERE tc."_RowId" = r."_RowId"
+       AND r."Rendered" IS NOT NULL;
+
     -- PostgreSQL names an array type _element in the catalog, and that is what extraction used to emit, so
     -- packages in the wild carry both spellings: "_text" and "text[]". They mean the same column. Fold the
     -- catalog spelling to the SQL one FIRST, so the synonym mapping below sees a normal element name and
