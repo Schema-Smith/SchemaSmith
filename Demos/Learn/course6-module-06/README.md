@@ -18,19 +18,19 @@ Structural validation (Module 3) catches the typo — a missing `DataType`, a mi
 
 ## Scenario 1 — read the board
 
-Run the linter against the broken SQL Server package (swap `sqlserver` for `postgres` / `mysql` / `mariadb` — the same three errors reproduce on every engine):
+Run the linter against the broken SQL Server package (swap `sqlserver` for `postgres` / `mysql` / `mariadb` — the same board reproduces on every engine):
 
 ```
 schemaquench --Validate --SchemaPackagePath:./sqlserver/Package
 ```
 
-It exits `2` and prints exactly three errors, one from each check engine:
+It exits `2` and prints two errors and a warning:
 
 ```
 ERROR [SS-DUP-001] Template 'Main' / Table '[OrderItem]': Duplicate column name '[Quantity]' at Template 'Main' / Table '[OrderItem]' - 2 entries share this name and at least one is not gated by ShouldApplyExpression.
-ERROR [SS-FK-002] Template 'Main' / Table '[OrderItem]' / FK '[FK_OrderItem_Supplier]': RelatedTable '[Supplier]' does not resolve to any known table (resolved schema 'dbo').
 ERROR [SS-TOK-001] .../dbo.Customer.json: References undefined token '{{IncludePiiColumns}}'.
-3 error(s), 0 warning(s)
+WARN [SS-FK-002] Template 'Main' / Table '[OrderItem]' / FK '[FK_OrderItem_Supplier]': RelatedTable '[Supplier]' does not resolve to any table in the package (resolved schema 'dbo'). The deploy succeeds only if it already exists on the target.
+2 error(s), 1 warning(s)
 ```
 
 > **Your `SS-TOK-001` will show the real path where you cloned the repo** in place of the `...` above. Every
@@ -39,16 +39,15 @@ ERROR [SS-TOK-001] .../dbo.Customer.json: References undefined token '{{IncludeP
 > Template 'Main' / Table '[OrderItem]'"), because *which* table holds the duplicate is the finding, not just
 > where it was found.
 
-
-Three real errors, no database touched:
+Two real errors and a lean, no database touched:
 
 - **`SS-DUP-001`** — `OrderItem` has two `[Quantity]` columns and neither is gated. A duplicate that would blow up at `CREATE TABLE`.
-- **`SS-FK-002`** — `OrderItem` declares `[FK_OrderItem_Supplier]` pointing at a `[Supplier]` table that isn't in the package. You forgot to include the table.
 - **`SS-TOK-001`** — `Customer`'s `[Email]` column is gated on `{{IncludePiiColumns}}`, a token nobody defined. It would silently evaluate to nothing at deploy.
+- **`SS-FK-002`** (warning) — `OrderItem` declares `[FK_OrderItem_Supplier]` pointing at a `[Supplier]` table that isn't in the package. That is a warning, not an error, because the deploy creates a foreign key to any table that already exists on the target, declared or not. Here it's a mistake — nothing creates `Supplier` — but the linter can't know that without a database. A package that sets `"DropTablesRemovedFromProduct": false` (a patch or a bootstrap — a deliberately partial deployment) gets no warning at all, since references outside it are the point.
 
 ## Scenario 2 — clear the board
 
-Fix each error and re-run. Three edits:
+Fix both errors, and the mistake behind the warning, then re-run. Three edits:
 
 1. **`SS-DUP-001`** — in `sqlserver/Package/Templates/Main/Tables/dbo.OrderItem.json`, remove the duplicate ungated `[Quantity]` column (keep the original).
 2. **`SS-FK-002`** — in the same file, remove the `[SupplierId]` column *and* the `[FK_OrderItem_Supplier]` foreign key (the `[Supplier]` table was never part of this package).
@@ -79,7 +78,7 @@ Both are gated on the **defined** `{{Edition}}` token, and each carries a distin
 
 ## Scenario 4 — a lean, not a gate
 
-Every finding so far has been an error. `--Validate` also has a warning tier, and a warning never gates the exit code. Induce it:
+You met the warning tier in Scenario 1: a warning never gates the exit code. Here it is on its own, on a package that is otherwise clean. Induce it:
 
 1. Rename `sqlserver/Package/Templates/Main/Tables/dbo.OrderItem.json` to `sqlserver/Package/Templates/Main/Tables/orderitem-legacy.json`.
 2. Re-run:
@@ -188,7 +187,7 @@ carried any, and a false reassurance would be worse than a redundant warning.
 
 ## Cross-platform
 
-The same three-error board reproduces on all four engines. Only the identifier quoting and native type spellings differ (`[dbo]` schema and bracket quoting on SQL Server; lowercase `public` and unquoted lowercase identifiers on PostgreSQL; backtick-quoted, schema-less names on MySQL and MariaDB). On MySQL and MariaDB, foreign-key resolution is **name-only** — there are no schemas within a database — so `SS-FK-002` resolves `Supplier` by bare name.
+The same board — two errors and a warning — reproduces on all four engines. Only the identifier quoting and native type spellings differ (`[dbo]` schema and bracket quoting on SQL Server; lowercase `public` and unquoted lowercase identifiers on PostgreSQL; backtick-quoted, schema-less names on MySQL and MariaDB). On MySQL and MariaDB, foreign-key resolution is **name-only** — there are no schemas within a database — so `SS-FK-002` resolves `Supplier` by bare name.
 
 `SS-FILE-NAME-003`'s canonical name carries the same schema rule: SQL Server keeps it (`dbo.<table>.json`, from the table's `"Schema": "[dbo]"`), while PostgreSQL, MySQL, and MariaDB are schema-less (`<table>.json`) — PostgreSQL because these packages leave `Schema` empty and rely on the default `public`, MySQL and MariaDB because they have no schemas within a database at all.
 

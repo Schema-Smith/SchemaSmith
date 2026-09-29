@@ -537,34 +537,73 @@ public class CoherenceCheckTests
             + string.Join("; ", findings.Select(f => f.Code + " " + f.Message)));
     }
 
-    [Test]
-    public void FkRelatedTableMissing_IsError()
+    private static SqlServerTable OrderReferencingMissingTable() => new()
     {
-        var order = new SqlServerTable
+        Name = "Order",
+        Schema = "dbo",
+        Columns = { new SqlServerColumn { Name = "Id", DataType = "int" }, new SqlServerColumn { Name = "CustomerId", DataType = "int" } },
+        ForeignKeys =
         {
-            Name = "Order",
-            Schema = "dbo",
-            Columns = { new SqlServerColumn { Name = "Id", DataType = "int" }, new SqlServerColumn { Name = "CustomerId", DataType = "int" } },
-            ForeignKeys =
+            new SqlServerForeignKey
             {
-                new SqlServerForeignKey
-                {
-                    Name = "FK_Order_Customer",
-                    Columns = "CustomerId",
-                    RelatedTable = "NoSuchTable",
-                    RelatedTableSchema = "dbo",
-                    RelatedColumns = "Id"
-                }
+                Name = "FK_Order_Customer",
+                Columns = "CustomerId",
+                RelatedTable = "NoSuchTable",
+                RelatedTableSchema = "dbo",
+                RelatedColumns = "Id"
             }
-        };
-        var ctx = Context(TemplateWithTables("Main", order));
+        }
+    };
 
-        var findings = new CoherenceCheck().Run(ctx).ToList();
+    private static Finding[] RunDanglingFk(bool productDropsTables, bool? templateDropsTables)
+    {
+        var product = Product();
+        product.DropTablesRemovedFromProduct = productDropsTables;
+        var template = TemplateWithTables("Main", OrderReferencingMissingTable());
+        template.DropTablesRemovedFromProduct = templateDropsTables;
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    // The deploy creates a foreign key to a table the package does not declare, provided the table exists on the
+    // target -- so an unresolved RelatedTable is a lean, not a certainty that the deploy fails.
+    [Test]
+    public void FkRelatedTableMissing_IsWarning()
+    {
+        var findings = RunDanglingFk(productDropsTables: true, templateDropsTables: null);
 
         Assert.That(findings, Has.Exactly(1).Items);
-        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
         Assert.That(findings[0].Code, Is.EqualTo("SS-FK-002"));
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Warning));
         Assert.That(findings[0].Category, Is.EqualTo("Coherence"));
+    }
+
+    // A package that will not drop tables it does not declare is a partial deployment -- a SchemaShears patch
+    // stamps exactly this, and a bootstrap sets it -- so a reference outside it is expected, not suspicious.
+    [Test]
+    public void FkRelatedTableMissing_IsSilent_WhenProductKeepsUndeclaredTables()
+    {
+        Assert.That(RunDanglingFk(productDropsTables: false, templateDropsTables: null), Is.Empty);
+    }
+
+    [Test]
+    public void FkRelatedTableMissing_IsSilent_WhenTemplateOverrideKeepsUndeclaredTables()
+    {
+        Assert.That(RunDanglingFk(productDropsTables: true, templateDropsTables: false), Is.Empty);
+    }
+
+    // The deploy cascades drop flags with false LOCKING (ProductQuench.ResolveCascadedFlag): a template cannot
+    // re-enable drops its product turned off. The linter must reach the same answer the deploy does.
+    [Test]
+    public void FkRelatedTableMissing_IsSilent_WhenTemplateCannotReenableDropsTheProductTurnedOff()
+    {
+        Assert.That(RunDanglingFk(productDropsTables: false, templateDropsTables: true), Is.Empty);
+    }
+
+    [Test]
+    public void FkRelatedTableMissing_IsWarning_WhenBothTiersDropTables()
+    {
+        Assert.That(RunDanglingFk(productDropsTables: true, templateDropsTables: true).Select(f => f.Code),
+            Is.EqualTo(new[] { "SS-FK-002" }));
     }
 
     [Test]

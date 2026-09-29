@@ -133,6 +133,18 @@ It stamps only the flags your engine accepts: PostgreSQL's patch also carries
 `"DropExcludeConstraintsRemovedFromProduct": false` (exclude constraints exist nowhere else), and MySQL and
 MariaDB have no `DropStatisticsRemovedFromProduct` to stamp.
 
+Lint it before it goes anywhere:
+
+```bash
+schemaquench --Validate --SchemaPackagePath:./patch
+# PASS - no issues found
+```
+
+`OrderItem`'s foreign keys point at `Product` and `SalesOrder`, which the patch leaves out. That is not a
+finding: with `DropTablesRemovedFromProduct` stamped `false`, the package says it is a partial deployment, so
+references into the rest of the database are expected. (The same keys in an ordinary package get an
+`SS-FK-002` warning.)
+
 ## Step 3: Deploy the patch safely
 
 Deploy the SchemaShears patch to the real canary, `shop_patch_canary`:

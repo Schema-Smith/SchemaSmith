@@ -1,0 +1,15 @@
+{
+  "Name": "[Order]",
+  "Columns": [
+    { "Name": "[Id]", "DataType": "INT" },
+    { "Name": "[CustomerId]", "DataType": "INT" }
+  ],
+  "Indexes": [
+    { "Name": "[PK_Order]", "PrimaryKey": true, "Unique": true, "IndexColumns": "[Id]" }
+  ],
+  "ForeignKeys": [
+    { "Name": "[FK_Order_Customer]", "Columns": "[CustomerId]", "RelatedTable": "[Customer]", "RelatedColumns": "[Id]" }
+  ],
+  "CheckConstraints": [],
+  "Schema": "[dbo]"
+}
