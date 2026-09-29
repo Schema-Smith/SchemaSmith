@@ -561,6 +561,8 @@ public class ImportTableHelperTests
     // ShouldApplyExpression/OldName, MySQL's carries none -- so both ways of arriving at "unset" are covered.
     [TestCase(Platform.MySQL, """{ "Name": "customer", "Columns": [ { "Name": "customer_id", "DataType": "int" } ], "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`customer_id`" } ] }""")]
     [TestCase(Platform.PostgreSQL, """{ "Name": "device", "Columns": [ { "Name": "device_id", "DataType": "int4", "ShouldApplyExpression": "", "OldName": "" } ], "Indexes": [ { "Name": "device_pkey", "PrimaryKey": true, "Unique": true, "IndexColumns": "device_id", "ShouldApplyExpression": "" } ], "ShouldApplyExpression": "", "OldName": "" }""")]
+    [TestCase(Platform.SqlServer, """{ "Schema": "[dbo]", "Name": "[Customer]", "Columns": [ { "Name": "[Id]", "DataType": "INT" }, { "Name": "[Doubled]", "DataType": "INT", "ComputedExpression": "[Id]*(2)", "Persisted": true, "Nullable": false } ], "Indexes": [ { "Name": "[PK_Customer]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }""")]
+    [TestCase(Platform.MariaDb, """{ "Name": "customer", "Columns": [ { "Name": "customer_id", "DataType": "int(11)" } ], "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`customer_id`" } ] }""")]
     public void ReExtractingAnUnchangedTable_WritesTheSameFile(Platform platform, string extractedJson)
     {
         var onDisk = JsonHelper.Serialize(PlatformDeserializer.DeserializeTable(extractedJson, platform));

@@ -245,6 +245,41 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
         });
     }
 
+    // Converting an existing plain NOT NULL column to a generated one, Nullable omitted. Only an already-generated
+    // column has a nullability to keep; carrying the plain column's NOT NULL into the new generated one emitted
+    // "... VIRTUAL NOT NULL", a syntax error on MariaDB, and on MySQL froze a nullability the package never asked for.
+    [Test]
+    public void ConvertingAPlainNotNullColumnToGenerated_DeploysAndLeavesNullabilityToTheEngine()
+    {
+        var table = $"ExprMapCnv_{Guid.NewGuid():N}"[..20];
+        WithConnection(table, cmd =>
+        {
+            cmd.CommandText = $@"DROP TABLE IF EXISTS `{_mainDb}`.`{table}`;
+                                 CREATE TABLE `{_mainDb}`.`{table}` (`Id` INT NOT NULL, `Tag` VARCHAR(50) NULL, `Label` VARCHAR(60) NOT NULL DEFAULT '', PRIMARY KEY (`Id`));";
+            cmd.ExecuteNonQuery();
+            var json = DeployJson.ThroughTheModel($$"""
+                [
+                {
+                    "Name": "{{table}}",
+                    "Columns": [
+                        { "Name": "Id", "DataType": "INT", "Nullable": false },
+                        { "Name": "Tag", "DataType": "VARCHAR(50)", "Nullable": true },
+                        { "Name": "Label", "DataType": "VARCHAR(60)", "GenerationExpression": "concat(`Tag`, 'x')", "Generated": "VIRTUAL" }
+                    ],
+                    "Indexes": [
+                        { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" }
+                    ]
+                }
+                ]
+                """, Platform);
+
+            RunTableQuenchProc(cmd, json);
+
+            Assert.That(LiveGenerationExpression(cmd, table), Is.Not.Empty, "the column must now be generated");
+            Assert.That(LabelIsNullable(cmd, table), Is.True, "an omitted Nullable is the engine's -- nullable -- not the old plain column's");
+        });
+    }
+
     private bool LabelIsNullable(IDbCommand cmd, string table)
     {
         cmd.CommandText = $@"SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS

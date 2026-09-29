@@ -71,6 +71,13 @@ public class UserTypeResolutionTests : BaseTableQuenchTests
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
+    private static string ModifiedColumnNames(IDbCommand cmd)
+    {
+        cmd.CommandText = @"SELECT COALESCE(STRING_AGG(""ObjectName"", ', '), '') FROM ""SchemaSmith"".""ChangeAudit""
+                             WHERE ""SessionId"" = pg_backend_pid() AND ""ObjectType"" = 'column' AND ""ActionType"" = 'modified'";
+        return "modified: " + cmd.ExecuteScalar();
+    }
+
     private static void ClearAudit(IDbCommand cmd)
     {
         cmd.CommandText = @"DELETE FROM ""SchemaSmith"".""ChangeAudit"" WHERE ""SessionId"" = pg_backend_pid()";
@@ -116,5 +123,100 @@ public class UserTypeResolutionTests : BaseTableQuenchTests
             env.Cmd.CommandText = $@"DROP TYPE IF EXISTS public.""{decoy}"" CASCADE;";
             env.Cmd.ExecuteNonQuery();
         }
+    }
+
+    private void Exec(Env env, string sql)
+    {
+        env.Cmd.CommandText = sql;
+        env.Cmd.ExecuteNonQuery();
+    }
+
+    private string ColumnTypeRendered(Env env, string column)
+    {
+        env.Cmd.CommandText = $@"SELECT format_type(a.atttypid, a.atttypmod) FROM pg_attribute a
+                                  WHERE a.attrelid = to_regclass('""{env.Schema}"".customer') AND a.attname = '{column}'";
+        return env.Cmd.ExecuteScalar() as string;
+    }
+
+    // A mixed-case type (what Prisma and EF generate) must keep its quotes: rendered bare, PostgreSQL folds it to
+    // lowercase and the DDL cannot find it.
+    [Test]
+    public void AMixedCaseQuotedType_KeepsItsQuotes_AndIsNotReAltered()
+    {
+        using var env = NewSchemaWithTypes();
+        Exec(env, $@"CREATE TYPE ""{env.Schema}"".""Role"" AS ENUM ('bronze', 'admin');");
+        var json = TableJson(env.Schema, "\\\"Role\\\"", "email");
+
+        RunTableQuenchProc(env.Cmd, json);
+        Assert.That(ColumnType(env.Cmd, env.Schema, "tier"), Is.EqualTo($"{env.Schema}.Role"));
+
+        ClearAudit(env.Cmd);
+        RunTableQuenchProc(env.Cmd, json);
+        Assert.That(ModifiedColumns(env.Cmd), Is.Zero);
+    }
+
+    // A standalone composite type qualifies; the fallback to public works for a type the table's schema lacks.
+    [Test]
+    public void ACompositeTypeInPublic_ResolvesFromATenantTable()
+    {
+        using var env = NewSchemaWithTypes();
+        var composite = $"utrc_{Guid.NewGuid():N}"[..12];
+        Exec(env, $@"CREATE TYPE public.""{composite}"" AS (street text, city text);");
+        try
+        {
+            var json = TableJson(env.Schema, "tier", composite);
+            RunTableQuenchProc(env.Cmd, json);
+            Assert.That(ColumnType(env.Cmd, env.Schema, "email"), Is.EqualTo($"public.{composite}"));
+
+            ClearAudit(env.Cmd);
+            RunTableQuenchProc(env.Cmd, json);
+            Assert.That(ModifiedColumns(env.Cmd), Is.Zero);
+        }
+        finally { Exec(env, $@"DROP TABLE IF EXISTS ""{env.Schema}"".customer; DROP TYPE IF EXISTS public.""{composite}"";"); }
+    }
+
+    // An existing column keeps the type it already has: a same-named type appearing later in the table's own
+    // schema must not re-resolve it, or the deploy would change the column's type.
+    [Test]
+    public void AnExistingColumnsType_IsNotReResolvedToALaterSameNamedType()
+    {
+        using var env = NewSchemaWithTypes();
+        var shared = $"utrs_{Guid.NewGuid():N}"[..12];
+        Exec(env, $@"CREATE TYPE public.""{shared}"" AS ENUM ('bronze');
+                     CREATE TABLE ""{env.Schema}"".customer (id integer NOT NULL, tier public.""{shared}"" NOT NULL DEFAULT 'bronze', email ""{env.Schema}"".email);");
+        try
+        {
+            Exec(env, $@"CREATE TYPE ""{env.Schema}"".""{shared}"" AS ENUM ('bronze');");
+            ClearAudit(env.Cmd);
+
+            RunTableQuenchProc(env.Cmd, TableJson(env.Schema, shared, "email"));
+
+            Assert.That(ColumnType(env.Cmd, env.Schema, "tier"), Is.EqualTo($"public.{shared}"));
+            Assert.That(ModifiedColumns(env.Cmd), Is.Zero, ModifiedColumnNames(env.Cmd));
+        }
+        finally { Exec(env, $@"DROP TABLE IF EXISTS ""{env.Schema}"".customer; DROP TYPE IF EXISTS public.""{shared}"";"); }
+    }
+
+    // A table is also a row type (typtype 'c'), and SQL-standard spellings are not catalog names: a table in the
+    // schema named like one must never capture a column declared with that spelling.
+    [Test]
+    public void ATableNamedLikeAnSqlTypeSpelling_DoesNotCaptureTheColumn()
+    {
+        using var env = NewSchemaWithTypes();
+        Exec(env, $@"CREATE TABLE ""{env.Schema}"".""character"" (x int);");
+        var json = $$"""
+            {
+                "Schema": "{{env.Schema}}",
+                "Name": "customer",
+                "Columns": [
+                    { "Name": "id", "DataType": "integer" },
+                    { "Name": "code", "DataType": "character", "Nullable": true }
+                ]
+            }
+            """;
+
+        RunTableQuenchProc(env.Cmd, json);
+
+        Assert.That(ColumnTypeRendered(env, "code"), Is.EqualTo("character(1)"));
     }
 }

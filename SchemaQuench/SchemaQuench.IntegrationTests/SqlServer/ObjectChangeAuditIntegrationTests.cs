@@ -299,6 +299,48 @@ public class ObjectChangeAuditIntegrationTests : BaseTableQuenchTests
         }
         """;
 
+    // The summary is a COUNT, so presence is not enough: a check reading two changing columns is matched once per
+    // column, and must still be counted once -- in a real run and under WhatIf, where a check whose column AND
+    // expression both change also sits in both drop sets.
+    [TestCase(false, "dropped")]
+    [TestCase(true, "wouldDrop")]
+    public void ACheckReachedTwice_IsCountedOnce(bool whatIf, string expectedAction)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        DropIfExists(cmd, "dbo.AuditCheckTwice");
+        try
+        {
+            RunTableQuenchProc(cmd, TwoColumnCheckJson("INT", "[Qty] <= [MaxQty]"), productName: Product);
+            ClearAudit(cmd);
+
+            RunTableQuenchProc(cmd, TwoColumnCheckJson("BIGINT", "[Qty] < [MaxQty]"), whatIf: whatIf, productName: Product);
+
+            var rows = ReadAudit(cmd).Where(r => r.Type == "constraint" && r.Action == expectedAction && r.Name.Contains("CK_AuditCheckTwice")).ToList();
+            Assert.That(rows, Has.Count.EqualTo(1),
+                "one check, one drop: " + string.Join("; ", ReadAudit(cmd).Select(r => $"{r.Type}/{r.Action}/{r.Name}")));
+        }
+        finally { DropIfExists(cmd, "dbo.AuditCheckTwice"); }
+    }
+
+    private static string TwoColumnCheckJson(string type, string expression) => $$"""
+        {
+            "Schema": "[dbo]",
+            "Name": "[AuditCheckTwice]",
+            "Columns": [
+                { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                { "Name": "[Qty]", "DataType": "{{type}}", "Nullable": false },
+                { "Name": "[MaxQty]", "DataType": "{{type}}", "Nullable": false }
+            ],
+            "CheckConstraints": [
+                { "Name": "[CK_AuditCheckTwice]", "Expression": "{{expression}}" }
+            ]
+        }
+        """;
+
     private static void ClearAudit(IDbCommand cmd)
     {
         cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";

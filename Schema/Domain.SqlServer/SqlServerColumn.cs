@@ -13,6 +13,8 @@ namespace Schema.Domain.SqlServer
         [JsonProperty(Order = 101)]
         public string ComputedExpression { get; set; }
 
+        protected override bool IsDerivedColumn() => !string.IsNullOrWhiteSpace(ComputedExpression);
+
         [JsonProperty(Order = 102)]
         public bool Persisted { get; set; }
 

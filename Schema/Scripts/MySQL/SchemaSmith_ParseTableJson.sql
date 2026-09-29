@@ -390,7 +390,10 @@ BEGIN
              ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
             AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
             AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
-       SET c.IsNullable = CASE WHEN isc.COLUMN_NAME IS NULL OR isc.IS_NULLABLE = 'YES' THEN 1 ELSE 0 END
+       SET c.IsNullable = CASE WHEN isc.COLUMN_NAME IS NULL OR isc.IS_NULLABLE = 'YES'
+                                    -- Only a column that is ALREADY generated has a nullability to keep; a plain column
+                                    -- being converted keeps nothing of its old NOT NULL.
+                                    OR COALESCE(isc.GENERATION_EXPRESSION, '') = '' THEN 1 ELSE 0 END
      WHERE c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
        AND (c.NullableDeclared = 0 OR VERSION() LIKE '%MariaDB%');
 
@@ -415,7 +418,7 @@ BEGIN
                     SchemaSmith_UpperDataType(DataType), ' ',
                     'GENERATED ALWAYS AS (', GeneratedExpression, ') ',
                     COALESCE(UPPER(GeneratedType), 'VIRTUAL'),
-                    CASE WHEN IsNullable = 0 THEN ' NOT NULL' ELSE '' END
+                    CASE WHEN IsNullable = 0 AND VERSION() NOT LIKE '%MariaDB%' THEN ' NOT NULL' ELSE '' END
                 )
             ELSE
                 CONCAT(
