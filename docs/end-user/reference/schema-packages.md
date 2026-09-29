@@ -1738,12 +1738,12 @@ Existing packages need no change. Declaring the same event both ways is reported
 |---|---|---|---|
 | `Name` | string | | Event name. Required. |
 | `Definition` | string | | The body after `DO`. A multi-statement body must be wrapped in `BEGIN … END` exactly as it would be in hand-written DDL. Required. |
-| `ScheduleType` | string | `"EVERY"` | `"EVERY"` for a recurring event or `"AT"` for a one-shot. |
+| `ScheduleType` | string | `"EVERY"` | `"EVERY"` for a recurring event or `"AT"` for a one-shot. Read case-insensitively with surrounding spaces ignored; any other value stops the deploy rather than being guessed, since guessing would mean a one-shot event running on a schedule. |
 | `Interval` | string | `null` | For `EVERY`: the interval as a value and a unit, e.g. `"1 DAY"` or `"30 MINUTE"`. Compared case- and spacing-insensitively. |
 | `ExecuteAt` | string | `null` | For `AT`: when the event runs, once. |
 | `Starts` | string | `null` | Optional start of the recurrence window. **Omit it and the server's own start time is left alone.** MySQL fills in an unspecified `STARTS` with the moment the event was created, so treating that as declared would make every later deploy see a difference and recreate the event — resetting its schedule each time. Set this only if you want a fixed start. |
 | `Ends` | string | `null` | Optional end of the recurrence window. |
-| `Status` | string | `"ENABLE"` | `"ENABLE"`, `"DISABLE"` or `"DISABLE ON SLAVE"`. |
+| `Status` | string | `"ENABLE"` | `"ENABLE"`, `"DISABLE"` or `"DISABLE ON SLAVE"`. Read the same way as `ScheduleType`, and any other value stops the deploy — falling back to `ENABLE` would switch on an event the package meant to leave off. |
 | `Preserve` | bool | `false` | When true the event survives its last run instead of dropping itself. Matches the engine default (`NOT PRESERVE`). |
 | `Comment` | string | `null` | Event comment. |
 

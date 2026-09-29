@@ -126,6 +126,71 @@ public abstract class ScheduledEventSharedTests
         });
     }
 
+    // ---- ScheduleType / Status spelling must not be decided by the database's collation ----
+    //
+    // The two values land in temp-table columns that carried no collation, so they inherited the TARGET
+    // DATABASE's. Under a NO PAD collation (MySQL 8.0's utf8mb4_0900_ai_ci) 'AT ' <> 'AT', so a one-time event
+    // deployed as EVERY 1 DAY; under PAD SPACE (MariaDB's uca1400) it deployed one-time. For Status it was
+    // worse: 'DISABLE ' fell through to ELSE 'ENABLE', so an event authored as OFF deployed ON. The schema
+    // already rejects every one of these spellings, so the deploy was guessing on invalid input -- and guessing
+    // differently per database. These run on both engines; the MySQL leg (NO PAD) is the one that reddens.
+
+    private static string EventJsonWith(string scheduleType, string status = "ENABLE")
+        => "[{ \"Name\": \"" + EventName + "\", \"Definition\": \"SET @ss_noop = 1\","
+           + " \"ScheduleType\": \"" + scheduleType + "\", \"ExecuteAt\": \"2037-06-01 00:00:00\","
+           + " \"Interval\": \"1 DAY\", \"Status\": \"" + status + "\", \"Preserve\": true }]";
+
+    [TestCase("AT ", TestName = "ScheduleType_WithTrailingSpace_DeploysOneTime")]
+    [TestCase(" AT", TestName = "ScheduleType_WithLeadingSpace_DeploysOneTime")]
+    [TestCase("at", TestName = "ScheduleType_Lowercase_DeploysOneTime")]
+    public void ScheduleTypeSpelling_DeploysTheSameOnEveryCollation(string spelling)
+    {
+        Deploy(EventJsonWith(spelling));
+
+        Assert.That(EventField("EVENT_TYPE"), Is.EqualTo("ONE TIME"),
+            $"ScheduleType '{spelling}' must deploy as a one-time event on every database collation; a NO PAD "
+            + "collation compared it unequal to 'AT' and made it recurring");
+    }
+
+    [TestCase("DISABLE ", TestName = "Status_WithTrailingSpace_DeploysDisabled")]
+    [TestCase("disable", TestName = "Status_Lowercase_DeploysDisabled")]
+    public void StatusSpelling_DeploysTheSameOnEveryCollation(string spelling)
+    {
+        Deploy(EventJsonWith("EVERY", spelling));
+
+        Assert.That(EventField("STATUS"), Is.EqualTo("DISABLED"),
+            $"Status '{spelling}' was authored as DISABLE; falling through to ENABLE turns on an event the "
+            + "package switched off");
+    }
+
+    // Anything still outside the vocabulary after trimming and upper-casing is REFUSED. Guessing meant EVERY
+    // and ENABLE -- the two directions that make an event run -- and which way it went depended on whether
+    // the collation happened to be accent- or width-insensitive.
+    [TestCase("àt", "ENABLE", TestName = "ScheduleType_Accented_IsRefused")]
+    [TestCase("ＡＴ", "ENABLE", TestName = "ScheduleType_FullWidth_IsRefused")]
+    [TestCase("ONCE", "ENABLE", TestName = "ScheduleType_Unknown_IsRefused")]
+    [TestCase("EVERY", "OFF", TestName = "Status_Unknown_IsRefused")]
+    public void UnrecognisedValue_IsRefused_RatherThanGuessed(string scheduleType, string status)
+    {
+        Assert.Catch<Exception>(() => Deploy(EventJsonWith(scheduleType, status)),
+            "a value the schema rejects must stop the deploy, not be silently read as EVERY / ENABLE");
+        Assert.That(EventCount(), Is.Zero, "nothing may be created from a refused definition");
+    }
+
+    // Normalising on the way in must not make the NEXT deploy think the event changed -- that would drop and
+    // recreate it every run, resetting its schedule.
+    [Test]
+    public void ANormalisedSpelling_RedeploysAsUnchanged()
+    {
+        Deploy(EventJsonWith("at ", "disable "));
+        Exec($"DELETE FROM SchemaSmith_ChangeAudit WHERE ObjectName LIKE '%{EventName}%'");
+
+        Deploy(EventJsonWith("at ", "disable "));
+
+        Assert.That(AuditCount("created"), Is.Zero, "a normalised spelling must redeploy as unchanged");
+    }
+
+
     [Test]
     public void RedeployingAnUnchangedEvent_DoesNothing()
     {
