@@ -170,6 +170,11 @@ public abstract class ScheduledEventSharedTests
     [TestCase("ＡＴ", "ENABLE", TestName = "ScheduleType_FullWidth_IsRefused")]
     [TestCase("ONCE", "ENABLE", TestName = "ScheduleType_Unknown_IsRefused")]
     [TestCase("EVERY", "OFF", TestName = "Status_Unknown_IsRefused")]
+    // Letters whose upper case is longer in UTF-8 than the letter: a collation-dependent UPPER truncated them away,
+    // so "AT" + U+023F read as AT on MySQL 8.0 and was refused on MariaDB.
+    [TestCase("ATȿ", "ENABLE", TestName = "ScheduleType_WithALetterUpperCaseTruncates_IsRefused")]
+    [TestCase("atɐ", "ENABLE", TestName = "ScheduleType_LowercaseWithALetterUpperCaseTruncates_IsRefused")]
+    [TestCase("EVERY", "DISABLEȿ", TestName = "Status_WithALetterUpperCaseTruncates_IsRefused")]
     public void UnrecognisedValue_IsRefused_RatherThanGuessed(string scheduleType, string status)
     {
         Assert.Catch<Exception>(() => Deploy(EventJsonWith(scheduleType, status)),

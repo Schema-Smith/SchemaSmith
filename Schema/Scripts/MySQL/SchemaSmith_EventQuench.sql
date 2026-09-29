@@ -73,16 +73,18 @@ BEGIN
 
     SET v_count = COALESCE(JSON_LENGTH(p_EventDefinitions), 0);
     WHILE v_idx < v_count DO
-        INSERT INTO _SchemaSmith_Events (Name, Definition, ScheduleType, `Interval`, ExecuteAt, Starts, Ends,
+        -- UPPER runs in utf8mb4_bin so case mapping is the same on every server: MySQL 8.0's default collation
+    -- truncates a letter whose upper case is longer to the input's byte length, so 'AT' + U+023F read as 'AT'.
+    INSERT INTO _SchemaSmith_Events (Name, Definition, ScheduleType, `Interval`, ExecuteAt, Starts, Ends,
                                          Status, Preserve, Comment)
         SELECT SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Name'))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Definition'))),
-               UPPER(COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].ScheduleType')))), ''), 'EVERY')),
+               UPPER(COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].ScheduleType')))) COLLATE utf8mb4_bin, ''), 'EVERY')),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Interval'))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].ExecuteAt'))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Starts'))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Ends'))),
-               UPPER(COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Status')))), ''), 'ENABLE')),
+               UPPER(COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Status')))) COLLATE utf8mb4_bin, ''), 'ENABLE')),
                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Preserve'))), 0),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Comment')));
         SET v_idx = v_idx + 1;
