@@ -55,6 +55,8 @@ Package/
   Templates/TenantWorkspace/Template.json       # the SCHEMA TEMPLATE — SchemaIdentificationScript
   Templates/TenantWorkspace/Tables/...Customers # deployed into EACH tenant schema
   Templates/TenantWorkspace/Tables/...Contacts  # ditto, with an FK to Customers in the same schema
+  Templates/TenantWorkspace/Enum Types/         # PostgreSQL only: customer_tier (bronze, silver, gold)
+  Templates/TenantWorkspace/Sequences/          # PostgreSQL only: invoice_number
 deploy.settings.json                            # SchemaPackagePath: ./Package
 ```
 
@@ -133,6 +135,23 @@ cd ..                                 # back to the lab folder
 
 Six rows: `Customers` and `Contacts` in each of the three tenant schemas — every tenant got the
 identical workspace, declared exactly once in `TenantWorkspace`.
+
+On PostgreSQL the workspace also declares an enum type and a sequence, and each tenant gets its **own**:
+
+```bash
+../lab-sql.sh postgres learn "SELECT n.nspname || '.' || t.typname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'customer_tier' ORDER BY 1"
+# → acme.customer_tier
+# → beta.customer_tier
+# → globex.customer_tier
+../lab-sql.sh postgres learn "SELECT schemaname || '.' || sequencename FROM pg_sequences WHERE sequencename = 'invoice_number' ORDER BY 1"
+# → acme.invoice_number
+# → beta.invoice_number
+# → globex.invoice_number
+```
+
+`customers.tier` is typed by the tenant's own enum, and the table file names it the way you'd write it:
+`"DataType": "customer_tier"`. A bare type name resolves in the table's own schema first, so each tenant's
+column points at its own type, never a neighbour's — and the column's `'bronze'` default re-deploys as a no-op.
 
 ## Step 4: The aha — add a tenant, re-run once
 

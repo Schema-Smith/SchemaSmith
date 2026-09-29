@@ -1,0 +1,5 @@
+{
+  "$schema": "../../../.json-schemas/enumtypes.postgresql.schema",
+  "Name": "customer_tier",
+  "Values": ["bronze", "silver", "gold"]
+}

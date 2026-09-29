@@ -1,0 +1,43 @@
+{
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
+  "Name": "Subscription",
+  "Columns": [
+    {
+      "Name": "SubscriptionID",
+      "DataType": "INTEGER"
+    },
+    {
+      "Name": "PlanCode",
+      "DataType": "VARCHAR(20)"
+    },
+    {
+      "Name": "RetentionDays",
+      "DataType": "INTEGER"
+    },
+    {
+      "Name": "RetentionWeeks",
+      "DataType": "INT",
+      "GenerationExpression": "RetentionDays DIV 7",
+      "Generated": "STORED"
+    },
+    {
+      "Name": "PlanLabel",
+      "DataType": "VARCHAR(40)",
+      "GenerationExpression": "concat(PlanCode, '-', RetentionDays)",
+      "Generated": "VIRTUAL"
+    },
+    {
+      "Name": "IsActive",
+      "DataType": "BOOL",
+      "Default": "1"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "SubscriptionID"
+    }
+  ]
+}
