@@ -86,10 +86,6 @@ public class DataTongs
         // copied across all of them -- so an ABSENT MergeDelete derived Insert/Update/Delete, and
         // deleting the key was not the same as setting it false. The shipped settings file sets it
         // false explicitly, which is why no test and no sample ever exercised the real default.
-        //
-        // The sibling that expresses the same idea already defaults conservatively: ShouldCast:MergeType
-        // is "Insert/Update". A derived default that is MORE destructive than the explicit one it stands
-        // in for is the wrong way round.
         var mergeDelete = config[SettingsKeys.ShouldCast.MergeDelete]?.ToLower() == "true";
 
         // PostgreSQL-specific options
