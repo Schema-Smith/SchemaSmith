@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
+using Microsoft.Data.SqlClient;
 using Schema.DataAccess;
 using Schema.Delivery;
 using Schema.Domain;
@@ -77,7 +78,7 @@ public class DataDeliveryGateVersionTokenIntegrationTests
 
         // Control: reproduces the bug this fix removes — the LITERAL unresolved token reaching the
         // server as text is not valid SQL and errors, rather than evaluating.
-        Assert.Catch(() => GateEvaluator.ShouldApply(command, "{{CompatibilityLevel}} >= 130"),
+        Assert.That(() => GateEvaluator.ShouldApply(command, "{{CompatibilityLevel}} >= 130"), Throws.InstanceOf<SqlException>(),
             "Documents the defect: an unresolved version token in a delivery gate reaches the server as literal text and errors.");
     }
 

@@ -239,14 +239,14 @@ public class TableDataDeliveryTests
                 // metadata helpers (STRING_AGG) both require compat 130+, so it fails to even build/run
                 // here — the reason XML delivery exists. (Graceful skip-with-warning is Slice 2.)
                 var jsonData = @"[{""code"":""B002"",""name"":""x"",""value"":1.0}]";
-                Assert.Catch(() =>
+                Assert.That(() =>
                 {
                     var jsonScript = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, c, SchemaName, _testTableName,
                         jsonData, "[code]", mergeUpdate: true, mergeDelete: false, disableTriggers: false,
                         tokenizeScripts: false, mergeFilter: null);
                     c.CommandText = jsonScript;
                     c.ExecuteNonQuery();
-                }, "JSON delivery must fail at compatibility level 100 — the reason XML delivery exists.");
+                }, Throws.InstanceOf<SqlException>(), "JSON delivery must fail at compatibility level 100 — the reason XML delivery exists.");
             }
         }
         finally
