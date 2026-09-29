@@ -397,6 +397,19 @@ BEGIN
      WHERE c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
        AND (c.NullableDeclared = 0 OR VERSION() LIKE '%MariaDB%');
 
+    -- Below MySQL 8.0.13 every DEFAULT-expression gate recognises an expression by its leading '(', but the column
+    -- script below wraps any default containing '(' -- so a bare function default (curdate(), uuid()) escaped the
+    -- gate and reached the server as DEFAULT (curdate()), a syntax error there. Give it the spelling the gates know.
+    -- A quoted literal is a plain default on every version and is left alone (the script below does not wrap it
+    -- there either). Only below 8.0.13: elsewhere the declared text is compared with the live default, unchanged.
+    IF SchemaSmith_SupportsDefaultExpression() = 0 THEN
+        UPDATE _SchemaSmith_Columns
+           SET DefaultValue = CONCAT('(', TRIM(DefaultValue), ')')
+         WHERE DefaultValue IS NOT NULL AND IsAutoIncrement = 0
+           AND DefaultValue REGEXP '\\(' AND LEFT(TRIM(DefaultValue), 1) NOT IN ('(', '''', '"')
+           AND UPPER(TRIM(DefaultValue)) NOT REGEXP '^(CURRENT_TIMESTAMP|NOW|LOCALTIME|LOCALTIMESTAMP)[[:space:]]*\\([0-9]*\\)$';
+    END IF;
+
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Build column scripts');
 
     -- Build ColumnScript for each column
@@ -437,6 +450,7 @@ BEGIN
                               -- predate expression defaults entirely, and wrapping them turns a clause every
                               -- version accepts into a hard syntax error below 8.0.13.
                               CASE WHEN DefaultValue REGEXP '\\(' AND LEFT(DefaultValue, 1) != '('
+                                    AND NOT (LEFT(TRIM(DefaultValue), 1) IN ('''', '"') AND SchemaSmith_SupportsDefaultExpression() = 0)
                                     AND UPPER(TRIM(DefaultValue)) NOT REGEXP
                                         '^(CURRENT_TIMESTAMP|NOW|LOCALTIME|LOCALTIMESTAMP)[[:space:]]*\\([0-9]*\\)$'
                                    THEN CONCAT('(', DefaultValue, ')')
