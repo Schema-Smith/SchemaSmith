@@ -36,6 +36,9 @@ BEGIN TRY
   EXEC SchemaSmith.DegradeUnsupportedFeatures
 
   EXEC SchemaSmith.MissingTableAndColumnQuench @WhatIf
+  -- Filled by ModifiedTableQuench's CDC headroom check, consumed by CdcQuench once every column exists.
+  CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
+                           NewFilegroup NVARCHAR(256), Reason NVARCHAR(20))
   EXEC SchemaSmith.ModifiedTableQuench @ProductName = @ProductName, @WhatIf = @WhatIf, @DropUnknownIndexes = @DropUnknownIndexes, @DropTablesRemovedFromProduct = @DropTablesRemovedFromProduct, @DropSchemaBoundDependents = @DropSchemaBoundDependents,
                                        @RebuildPolicyMode = @RebuildPolicyMode, @RebuildPolicyThreshold = @RebuildPolicyThreshold, @RebuildPolicyOnOrderMismatch = @RebuildPolicyOnOrderMismatch,
                                        @CdcFilegroup = @CdcFilegroup
@@ -43,6 +46,8 @@ BEGIN TRY
   -- Also after the indexes/constraints pass, and for a closely related reason: SQL Server refuses a
   -- FILESTREAM column unless the table already has a ROWGUIDCOL column covered by a unique CONSTRAINT.
   EXEC SchemaSmith.FileStreamColumnQuench @WhatIf
+  -- After both column-adding passes above: a capture instance records only the columns that exist when it is created.
+  EXEC SchemaSmith.CdcQuench @WhatIf
   -- After the indexes/constraints pass on purpose: enabling change tracking requires a primary key,
   -- which for a table created in this same run does not exist until the line above has run.
   EXEC SchemaSmith.ChangeTrackingQuench @WhatIf

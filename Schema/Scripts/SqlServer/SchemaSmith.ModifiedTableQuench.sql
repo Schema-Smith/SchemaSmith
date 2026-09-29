@@ -1610,8 +1610,10 @@ BEGIN TRY
   -- A declared CdcFilegroup the newest capture instance is not on is a rotation reason too (#417): it can only be
   -- honoured by a new instance, and a new instance is exactly what a column change already creates. The same
   -- ceiling applies, for the same reason.
-  CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
-                           NewFilegroup NVARCHAR(256), Reason NVARCHAR(20))
+  -- TableQuench owns #CdcRotate: the rotation itself runs in SchemaSmith.CdcQuench, after every column exists.
+  IF OBJECT_ID('tempdb..#CdcRotate') IS NULL
+    CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
+                             NewFilegroup NVARCHAR(256), Reason NVARCHAR(20))
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   BEGIN
     DECLARE @v_DefaultFilegroup SYSNAME = (SELECT [name] FROM sys.filegroups WHERE is_default = 1)
@@ -1625,7 +1627,7 @@ BEGIN TRY
            newest.filegroup_name AS NewestFilegroupRaw,
            SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) AS DeclaredFilegroup,
            ColumnChange = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
-                                              OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL(c.[ComputedExpression], '')) = '')
+                                              OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1)
                                             THEN 1 ELSE 0 END)
       INTO #CdcCandidates
       FROM #Tables t WITH (NOLOCK)
@@ -2221,47 +2223,6 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
   
-  RAISERROR('Enable/Disable CDC', 10, 100) WITH NOWAIT
-  IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
-  BEGIN
-    SET @v_SQL = ''
-    SELECT @v_SQL = @v_SQL +
-      CASE WHEN t.EnableCDC = 1 AND st.is_tracked_by_cdc = 0
-           THEN 'RAISERROR(''  Enable CDC on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @role_name = NULL' + ISNULL(', @filegroup_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) + '''', '') + ';' + CHAR(13) + CHAR(10)
-           WHEN t.EnableCDC = 0 AND st.is_tracked_by_cdc = 1
-           THEN 'RAISERROR(''  Disable CDC on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                'EXEC sys.sp_cdc_disable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @capture_instance = N''' + ct.capture_instance + ''';' + CHAR(13) + CHAR(10)
-           ELSE '' END
-      FROM #Tables t WITH (NOLOCK)
-      JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-      LEFT JOIN cdc.change_tables ct WITH (NOLOCK) ON ct.source_object_id = st.[object_id]
-      WHERE (t.EnableCDC = 1 AND st.is_tracked_by_cdc = 0)
-         OR (t.EnableCDC = 0 AND st.is_tracked_by_cdc = 1)
-    IF @v_SQL <> ''
-    BEGIN
-      IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-    END
-  END
-
-  RAISERROR('Rotate CDC Capture Instances For Tables With Column Changes', 10, 100) WITH NOWAIT
-  -- The pre-existing instance keeps the history it already captured and is deliberately NOT dropped:
-  -- only the operator knows when downstream readers have drained it. It does occupy one of the two
-  -- slots, so the guard above will refuse the NEXT column change until it is dropped.
-  IF EXISTS (SELECT 1 FROM #CdcRotate)
-  BEGIN
-    SET @v_SQL = ''
-    SELECT @v_SQL = @v_SQL +
-      'RAISERROR(''  CDC ROTATED on ' + r.[Schema] + '.' + r.[TableName] + ': new capture instance ' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ' now captures ' + CASE WHEN r.Reason = 'filegroup' THEN 'this table on filegroup ' + r.NewFilegroup ELSE 'the new column set' END + '. The previous instance ' + r.OldCaptureInstance + ' STILL HOLDS ITS HISTORY and was NOT dropped -- drain it, then drop it with EXEC sys.sp_cdc_disable_table @capture_instance = N''''' + r.OldCaptureInstance + '''''. Until then the next column change on this table WILL FAIL: SQL Server allows only two capture instances.'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-      'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) + ''', @capture_instance = N''' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ''', @role_name = NULL' + ISNULL(', @filegroup_name = N''' + r.NewFilegroup + '''', '') + ';' + CHAR(13) + CHAR(10)
-      FROM #CdcRotate r WITH (NOLOCK)
-      CROSS APPLY (SELECT SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + '_' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) AS BaseName) b
-    IF @v_SQL <> ''
-    BEGIN
-      IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-    END
-  END
-
   SET NOCOUNT OFF
 END TRY
 BEGIN CATCH

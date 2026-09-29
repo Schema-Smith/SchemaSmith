@@ -1279,7 +1279,7 @@ Custom statistics definitions in the `Statistics` array. SQL Server uses traditi
 
 ## Change Data Capture (SQL Server)
 
-Change Data Capture records inserts, updates, and deletes into a *change table* managed by SQL Server, so downstream readers can consume what happened rather than poll for differences. A table opts in with `"EnableCDC": true`. The tracked column set is fixed at the moment CDC is enabled, which is what makes schema change interesting: a capture instance created against three columns keeps capturing those three, whatever you do to the table afterwards.
+Change Data Capture records inserts, updates, and deletes into a *change table* managed by SQL Server, so downstream readers can consume what happened rather than poll for differences. A table opts in with `"EnableCDC": true`. The tracked column set is fixed at the moment CDC is enabled, which is what makes schema change interesting: a capture instance created against three columns keeps capturing those three, whatever you do to the table afterwards. SchemaSmith enables and rotates capture only after every column of the table exists, so an instance covers the whole declared table -- computed columns included, whose captured values are always NULL -- and adding a computed column is a column change like any other.
 
 > **Before you start:** CDC must be enabled on the *database* first (`EXEC sys.sp_cdc_enable_db`). SchemaSmith does not do that for you -- it changes retention, cleanup jobs, and storage for every table in the database, which is not a decision one table's package should make. Declare `EnableCDC` without it and the table still deploys, but capture is reported as downgraded and named in the deploy log rather than skipped in silence.
 

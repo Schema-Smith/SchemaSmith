@@ -307,7 +307,9 @@ public class ForgeKindlerTests
         //   only while the wrap did not escape. The split has to happen INSIDE the wrap, because LANGUAGE
         //   and STATISTICAL_SEMANTICS are peeled first and would claim the value before a sibling branch
         //   could see it.).
-        Assert.That(sqlServer.Length, Is.EqualTo(42));
+        // +1 = SchemaSmith.CdcQuench (#420 -- CDC enable/rotate moved out of ModifiedTableQuench to run after the
+        //   passes that add computed and FILESTREAM columns; a capture instance records only the columns that exist).
+        Assert.That(sqlServer.Length, Is.EqualTo(43));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
