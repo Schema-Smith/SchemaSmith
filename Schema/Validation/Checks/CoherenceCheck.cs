@@ -31,6 +31,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string IndexColumnCode = "SS-IDX-001";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string RebuildThresholdCode = "SS-TBL-001";
+    private const string IgnoredThresholdCode = "SS-TBL-002";
     private const string RlsWithoutPoliciesCode = "SS-RLS-001";
     private const string PoliciesWithoutRlsCode = "SS-RLS-002";
     private const string ReplicaIdentityIndexMissingCode = "SS-RI-001";
@@ -66,6 +67,13 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         var findings = new List<Finding>();
         findings.AddRange(CheckMinimumVersion(ctx.Product));
+        // A policy is resolved as a WHOLE object from the nearest level that declares one, so an unusable
+        // policy at the product or template tier replaces an inherited one exactly as a table's does.
+        findings.AddRange(CheckRebuildPolicy(ctx.Product.RebuildPolicy, $"Product '{ctx.Product.Name}'",
+            $"Product '{ctx.Product.Name}'"));
+        foreach (var template in ctx.Templates)
+            findings.AddRange(CheckRebuildPolicy(template.RebuildPolicy, $"Template '{template.Name}'",
+                $"Template '{template.Name}'"));
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckScheduledEvents(template));
 
@@ -96,7 +104,7 @@ public sealed class CoherenceCheck : ISchemaCheck
                 findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
 
             findings.AddRange(CheckBackfill(table, location));
-            findings.AddRange(CheckRebuildPolicy(table, location));
+            findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
             findings.AddRange(CheckRowLevelSecurity(table, location));
             findings.AddRange(CheckReplicaIdentity(table, location));
             findings.AddRange(CheckPostgreSqlQuotedIdentifier(table, location));
@@ -217,17 +225,26 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// product, template) is not visible from a package-authoring check, and a table that declares
     /// nothing here is not the level that would be at fault.</para>
     /// </summary>
-    private static IEnumerable<Finding> CheckRebuildPolicy(Table table, string tableLocation)
+    private static IEnumerable<Finding> CheckRebuildPolicy(RebuildPolicy policy, string owner, string location)
     {
-        var policy = table.RebuildPolicy;
         if (policy == null) yield break;
-        if (!string.Equals(policy.Mode, "THRESHOLD", StringComparison.OrdinalIgnoreCase)) yield break;
-        if (policy.Threshold is >= 1) yield break;
+        var isThreshold = string.Equals(policy.Mode, "THRESHOLD", StringComparison.OrdinalIgnoreCase);
 
-        yield return new Finding(Severity.Error, RebuildThresholdCode, Category, tableLocation,
-            $"Table '{table.Name}' sets RebuildPolicy.Mode 'THRESHOLD' but no Threshold of 1 or more. " +
-            "THRESHOLD needs a threshold to compare against, so the policy cannot be evaluated — set a " +
-            "Threshold, or choose Mode 'ALWAYS' or 'NEVER'.");
+        if (isThreshold && policy.Threshold is not >= 1)
+            yield return new Finding(Severity.Error, RebuildThresholdCode, Category, location,
+                $"{owner} sets RebuildPolicy.Mode 'THRESHOLD' but no Threshold of 1 or more. " +
+                "THRESHOLD needs a threshold to compare against, so the policy cannot be evaluated — set a " +
+                "Threshold, or choose Mode 'ALWAYS' or 'NEVER'. A policy declared here also replaces any " +
+                "inherited one, so leaving it unusable blocks rebuilds an outer level asked for.");
+
+        // Mode defaults to NEVER, so a Threshold written without Mode 'THRESHOLD' is not a threshold -- and the
+        // declared policy still replaces an inherited one whole, so {"Threshold":50} alone BLOCKS rebuilds.
+        if (!isThreshold && policy.Threshold != null)
+            yield return new Finding(Severity.Warning, IgnoredThresholdCode, Category, location,
+                $"{owner} sets RebuildPolicy.Threshold {policy.Threshold} but Mode is '{policy.Mode}', so the " +
+                "threshold is ignored. An omitted Mode defaults to NEVER, and because a policy declared here " +
+                "replaces any inherited one whole, it can block rebuilds an outer level asked for. Set Mode " +
+                "'THRESHOLD' to use the threshold, or remove it.");
     }
     /// <summary>
     /// Row-level security and its policies are two halves of one feature, and each half on its own

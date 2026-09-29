@@ -79,7 +79,8 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | `SS-FK-005` | Error | `Columns` and `RelatedColumns` have different entry counts -- the column lists must be the same length. |
 | `SS-IDX-001` | Error | An index's `IndexColumns` entry names a column that doesn't exist on the table. |
 | `SS-COL-001` | Warning | A column sets `BackfillExistingRows` but has no `Default`, so there is no value to apply to rows that already exist and the setting does nothing. |
-| `SS-TBL-001` | Error | A table's `RebuildPolicy` uses `Mode: "THRESHOLD"` without a `Threshold` of 1 or more, so the policy cannot be evaluated. |
+| `SS-TBL-001` | Error | A `RebuildPolicy` — on the product, a template, or a table — uses `Mode: "THRESHOLD"` without a `Threshold` of 1 or more, so the policy cannot be evaluated. Because a policy declared at any level replaces the one it would have inherited, an unusable one also blocks rebuilds an outer level asked for. |
+| `SS-TBL-002` | Warning | A `RebuildPolicy` sets a `Threshold` while its `Mode` is not `"THRESHOLD"`, so the threshold is ignored. An omitted `Mode` defaults to `"NEVER"`, so `{ "Threshold": 50 }` on its own means *never rebuild* — and, replacing the inherited policy, can block rebuilds an outer level asked for. |
 | `SS-RLS-001` | Warning | PostgreSQL — a table sets `RowLevelSecurity` but declares no `Policies`. PostgreSQL returns no rows to anyone except the table owner until a permissive policy exists, so this locks the table rather than restricting it. |
 | `SS-RLS-002` | Warning | PostgreSQL — a table declares `Policies` but does not set `RowLevelSecurity`, so the policies are created and enforced against nothing. |
 | `SS-RI-001` | Error | PostgreSQL — a table sets `ReplicaIdentity` to `INDEX` but declares no `ReplicaIdentityIndex`, so there is no index to carry the identity. |

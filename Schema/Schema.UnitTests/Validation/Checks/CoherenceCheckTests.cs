@@ -395,6 +395,77 @@ public class CoherenceCheckTests
         });
     }
 
+
+    // ---- the same rule at the PRODUCT and TEMPLATE tiers ----
+    //
+    // A policy is resolved as a WHOLE object from the nearest level that declares one
+    // (ProductQuench.ResolveCascadedPolicy), and ModifiedTableQuench rebuilds only when Mode = THRESHOLD AND a
+    // Threshold is present. So a threshold-less THRESHOLD at the product or template tier REPLACES an inherited
+    // ALWAYS and then never fires itself -- yet only the table tier was checked.
+
+    private static Finding[] RunWithPolicies(RebuildPolicy productPolicy, RebuildPolicy templatePolicy)
+    {
+        var template = new Template { Name = "Main", RebuildPolicy = templatePolicy };
+        var product = new Product
+        {
+            Name = "Acme", Platform = Platform.SqlServer, RebuildPolicy = productPolicy,
+            TemplateOrder = new System.Collections.Generic.List<string>()
+        };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    [Test]
+    public void ThresholdModeWithoutAThreshold_AtTheProductTier_IsError()
+    {
+        var finding = RunWithPolicies(new RebuildPolicy { Mode = "THRESHOLD" }, null)
+            .Single(f => f.Code == "SS-TBL-001");
+        Assert.That(finding.Severity, Is.EqualTo(Severity.Error));
+        Assert.That(finding.Location, Does.Contain("Product 'Acme'"), "the finding must say WHICH tier");
+    }
+
+    [Test]
+    public void ThresholdModeWithoutAThreshold_AtTheTemplateTier_IsError()
+    {
+        var finding = RunWithPolicies(null, new RebuildPolicy { Mode = "THRESHOLD" })
+            .Single(f => f.Code == "SS-TBL-001");
+        Assert.That(finding.Location, Does.Contain("Template 'Main'"));
+    }
+
+    [Test]
+    public void ValidPoliciesAtTheUpperTiers_AreClean() =>
+        Assert.That(RunWithPolicies(new RebuildPolicy { Mode = "ALWAYS" },
+                new RebuildPolicy { Mode = "THRESHOLD", Threshold = 50 })
+            .Any(f => f.Code is "SS-TBL-001" or "SS-TBL-002"), Is.False);
+
+    // ---- a Threshold that is ignored (SS-TBL-002) ----
+    //
+    // Mode defaults to NEVER, so {"Threshold":50} with no Mode is NEVER -- and because the declared policy
+    // replaces any inherited one whole, it silently BLOCKS rebuilds an outer level asked for. Warned rather than
+    // errored: with Mode written out explicitly (ALWAYS or NEVER) the Threshold is merely inert.
+    [Test]
+    public void ThresholdWithoutThresholdMode_IsWarned_AtEveryTier()
+    {
+        var table = OrderWith(new RebuildPolicy { Threshold = 50 });
+        var tableFindings = RunOn(table).Where(f => f.Code == "SS-TBL-002").ToArray();
+        var upper = RunWithPolicies(new RebuildPolicy { Threshold = 50 }, new RebuildPolicy { Mode = "ALWAYS", Threshold = 5 })
+            .Where(f => f.Code == "SS-TBL-002").ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tableFindings, Has.Length.EqualTo(1), "table tier");
+            Assert.That(tableFindings[0].Severity, Is.EqualTo(Severity.Warning));
+            Assert.That(tableFindings[0].Message, Does.Contain("NEVER"),
+                "the message must say what the Threshold actually resolved to");
+            Assert.That(upper.Select(f => f.Location),
+                Is.EquivalentTo(new[] { "Product 'Acme'", "Template 'Main'" }), "product and template tiers");
+        });
+    }
+
+    [Test]
+    public void ThresholdUnderThresholdMode_IsNotWarned() =>
+        Assert.That(RunOn(OrderWith(new RebuildPolicy { Mode = "THRESHOLD", Threshold = 5 }))
+            .Any(f => f.Code == "SS-TBL-002"), Is.False);
+
     [Test]
     public void FkLocalColumnMissing_IsError()
     {
