@@ -1605,7 +1605,7 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
         @UpdateFillFactor BIT = {updateFillFactor}
 {ForgeKindler.GetParseTableXmlScript(Platform.SqlServer)}
 {SqlServerCdcRotateTable}
-{SqlServerDegrade}
+{SqlServerPreflight}
 EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {_whatIfOnly}";
                     break;
                 }
@@ -1660,7 +1660,7 @@ EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmit
         switch (_product.Platform.GetBasePlatform())
         {
             case Platform.SqlServer:
-                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @WhatIf = {_whatIfOnly}, @DropTablesRemovedFromProduct = {_dropRemovedTables}, @DropColumnsRemovedFromProduct = {_dropRemovedColumns}, @DropForeignKeysRemovedFromProduct = {_dropRemovedForeignKeys}, @DropCheckConstraintsRemovedFromProduct = {_dropRemovedCheckConstraints}, @DropExcludeConstraintsRemovedFromProduct = {_dropRemovedExcludeConstraints}, @DropStatisticsRemovedFromProduct = {_dropRemovedStatistics}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}, @CdcFilegroup = {TemplateCdcFilegroup}, @CdcSupportsNetChanges = {TemplateCdcSupportsNetChanges}";
+                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @WhatIf = {_whatIfOnly}, @DropTablesRemovedFromProduct = {_dropRemovedTables}, @DropColumnsRemovedFromProduct = {_dropRemovedColumns}, @DropForeignKeysRemovedFromProduct = {_dropRemovedForeignKeys}, @DropCheckConstraintsRemovedFromProduct = {_dropRemovedCheckConstraints}, @DropExcludeConstraintsRemovedFromProduct = {_dropRemovedExcludeConstraints}, @DropStatisticsRemovedFromProduct = {_dropRemovedStatistics}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}";
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"
@@ -1708,9 +1708,20 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
 CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
                          NewFilegroup NVARCHAR(256), NewNetChanges BIT, Reason NVARCHAR(20))";
 
-    // Neutralizes (or, under 'fail', refuses) what the detected version cannot support, before anything is created (#425).
-    private string SqlServerDegrade =>
-        $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.DegradeUnsupportedFeatures";
+    // Runs before anything is created, on every run including a resumed one: neutralizes (or, under 'fail', refuses) what
+    // the detected version cannot support (#425), then resolves the template's CDC defaults and refuses a change the
+    // capture-instance limit would block (#427). A RAISERROR does not end a batch, and this connection surfaces errors as
+    // messages, so a refusal the batch merely reported would still let MissingTableAndColumnQuench create the tables.
+    // The CATCH re-raises and ends the batch.
+    internal string SqlServerPreflight => $@"BEGIN TRY
+  EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.DegradeUnsupportedFeatures
+  EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.CdcPreflight @CdcFilegroup = {TemplateCdcFilegroup}, @CdcSupportsNetChanges = {TemplateCdcSupportsNetChanges}
+END TRY
+BEGIN CATCH
+  DECLARE @v_DegradeRefusal NVARCHAR(4000) = ERROR_MESSAGE()
+  RAISERROR(@v_DegradeRefusal, 16, 1)
+  RETURN
+END CATCH";
 
     /// <summary>
     /// SQL Server's table-level features that run after indexes and constraints: a FILESTREAM column needs its
@@ -2083,7 +2094,7 @@ DECLARE @TableDefinitions VARCHAR(MAX)= '{EscapeSqlLiteral(tableJson)}',
         @UpdateFillFactor BIT = {updateFillFactor}
 {ForgeKindler.GetParseTableJsonScript(Platform.SqlServer)}
 {SqlServerCdcRotateTable}
-{SqlServerDegrade}
+{SqlServerPreflight}
 {quench}");
 
         ClearParameters(command);
@@ -2098,7 +2109,7 @@ DECLARE @TableDefinitions VARCHAR(MAX)= '{EscapeSqlLiteral(tableJson)}',
 DECLARE @v_SQL NVARCHAR(MAX) = ''
 SET NOCOUNT ON
 {fillTables}
-{SqlServerDegrade}
+{SqlServerPreflight}
 {quench}";
 
         // AnsiString with Size -1 is VARCHAR(MAX) -- the type the inlined literal had. Left to infer,

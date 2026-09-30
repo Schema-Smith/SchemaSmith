@@ -128,7 +128,7 @@
     [EnableCDC] BIT NOT NULL,
     [CdcFilegroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [CdcSupportsNetChanges] BIT NULL,
-    [EnableChangeTracking] BIT NOT NULL,
+    [EnableChangeTracking] BIT NULL,
     [TrackColumnsUpdated] BIT NOT NULL,
     [GraphType] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
     [Ledger] NVARCHAR(12) COLLATE DATABASE_DEFAULT NULL,
@@ -458,14 +458,13 @@
         [PartitionColumn] = SchemaSmith.fn_SafeBracketWrap([PartitionColumn]),
         [FileStreamFileGroup] = SchemaSmith.fn_SafeBracketWrap([FileStreamFileGroup]),
         [TextImageFileGroup] = SchemaSmith.fn_SafeBracketWrap([TextImageFileGroup]),
-        -- CDC change-table placement (#417): NULL means unmanaged; ModifiedTableQuench applies the template default.
+        -- CDC change-table placement (#417): NULL means unmanaged; CdcPreflight applies the template default.
         [CdcFilegroup] = SchemaSmith.fn_SafeBracketWrap([CdcFilegroup]),
         [GraphType] = RTRIM(ISNULL([GraphType], 'None')),
         [Ledger] = RTRIM(ISNULL([Ledger], 'Off')),
         [MemoryOptimized] = ISNULL([MemoryOptimized], 0),
         [Durability] = UPPER(RTRIM(ISNULL(NULLIF([Durability], ''), 'SCHEMA_AND_DATA'))),
         [EnableCDC] = ISNULL([EnableCDC], 0),
-        [EnableChangeTracking] = ISNULL([EnableChangeTracking], 0),
         [TrackColumnsUpdated] = ISNULL([TrackColumnsUpdated], 0),
         [OldName] = SchemaSmith.fn_SafeBracketWrap([OldName]),
         [PreventDrop] = ISNULL([PreventDrop], 0)

@@ -33,6 +33,8 @@ public class DeployPathTableFeatureTests
     private readonly ILog _errorLog = Substitute.For<ILog>();
     private readonly ILog _progressLog = Substitute.For<ILog>();
     private readonly IEnvironment _environment = Substitute.For<IEnvironment>();
+    private string _betweenScript;
+    private bool _nextDeployFails;
 
     [Test]
     public void ACdcTable_IsEnabledRotatedAndDisabled_ByARealDeploy()
@@ -129,6 +131,114 @@ public class DeployPathTableFeatureTests
         });
     }
 
+    // Under 'fail' the refusal must come before anything is created. The degrade runs in the ingest batch ahead of
+    // MissingTableAndColumnQuench, and a RAISERROR does not stop a batch, so a refusal the batch ignores still creates
+    // the table and only then reports the failure.
+    [Test]
+    public void CdcDeclaredOnADatabaseWithoutCdc_UnderFail_RefusesBeforeCreatingAnything()
+    {
+        RunScenario("DeployCdcFail", setupDatabase: null, (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+            var logged = _progressLog.ReceivedCalls().Concat(_errorLog.ReceivedCalls())
+                .Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "");
+            Assert.That(logged.Any(m => m.Contains("Change Data Capture requires CDC enabled on the database")), Is.True,
+                "the deploy must refuse by the degrade's own message");
+            cmd.CommandText = "SELECT OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(DBNull.Value), "a refused deploy must not have created the table");
+        }, expectFailure: true, policy: "fail");
+    }
+
+    // A column added by a run that then fails before the table-features step must still reach the capture instance
+    // on the next run. The column work is done by then, so nothing in the next run's column diff says to rotate.
+    [Test]
+    public void AColumnChange_StillRotates_WhenTheRunThatMadeItFailedBeforeCdc()
+    {
+        RunScenario("DeployCdcResume", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+
+            _betweenScript = "RAISERROR('between-scripts failure', 16, 1)";
+            _nextDeployFails = true;
+            deploy(CdcTable(enableCdc: true, extraColumn: true));
+            _betweenScript = null;
+
+            deploy(CdcTable(enableCdc: true, extraColumn: true));
+            Assert.That(NewestInstanceColumns(cmd), Is.EqualTo(new[] { "A", "B", "Id", "Twice" }),
+                "the column the failed run added must be captured once a later run completes");
+        });
+    }
+
+    // #427. At the two-instance limit a new column is refused before it is added: refused any later, the column already
+    // exists, and once the operator follows the message and frees a slot, nothing in the next run's column diff says to
+    // rotate. The recovery the message describes must end with the column captured.
+    [Test]
+    public void ANewColumnAtTheInstanceLimit_IsRefusedBeforeItIsAdded_AndTheRecoveryCapturesIt()
+    {
+        RunScenario("DeployCdcCeil", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+            deploy(CdcTable(enableCdc: true, extraColumn: true));
+            Assert.That(InstanceCount(cmd), Is.EqualTo(2), "precondition: both capture-instance slots are in use");
+
+            _nextDeployFails = true;
+            deploy(CdcTable(enableCdc: true, extraColumn: true, extraColumnC: true));
+            var logged = _progressLog.ReceivedCalls().Concat(_errorLog.ReceivedCalls())
+                .Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "");
+            Assert.That(logged.Any(m => m.Contains("CDC capture-instance limit reached")), Is.True, "refused by the limit's own message");
+            cmd.CommandText = "SELECT COL_LENGTH('dbo.DeployProbe', 'C')";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(DBNull.Value), "a refused deploy must not have added the column");
+
+            ExecuteWithDeadlockRetry(cmd, "EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'DeployProbe', @capture_instance = N'dbo_DeployProbe'");
+            deploy(CdcTable(enableCdc: true, extraColumn: true, extraColumnC: true));
+            Assert.That(NewestInstanceColumns(cmd), Is.EqualTo(new[] { "A", "B", "C", "Id", "Twice" }),
+                "once a slot is free the next deploy must add the column and capture it");
+        });
+    }
+
+    // #426, unset. Earlier versions enabled CDC before a new table's primary key existed, so SQL Server's default gave
+    // a new table net changes OFF and a keyed existing table ON. Unset keeps both.
+    [Test]
+    public void NetChanges_WhenUnset_FollowSqlServersDefault_ForAnExistingKeyedTable()
+    {
+        RunScenario("DeployNetExisting", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: false, extraColumn: false));
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+            Assert.That(NewestInstanceNetChanges(cmd), Is.True, "enabling CDC on an existing keyed table keeps what earlier versions did: ON");
+        });
+    }
+
+    // Net changes can identify rows by a unique index instead of a primary key. SchemaSmith cannot declare that index,
+    // so a rotation that keeps net changes has to keep the index too, or sp_cdc_enable_table fails mid-run.
+    [Test]
+    public void ARotation_KeepsTheUniqueIndexNetChangesUse()
+    {
+        RunScenario("DeployNetUix", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: false, extraColumn: false, primaryKey: false, uniqueIndex: true));
+            ExecuteWithDeadlockRetry(cmd, "EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'DeployProbe', "
+                                          + "@role_name = NULL, @supports_net_changes = 1, @index_name = N'IX_DeployProbe'");
+            deploy(CdcTable(enableCdc: true, extraColumn: true, primaryKey: false, uniqueIndex: true));
+            Assert.That(InstanceCount(cmd), Is.EqualTo(2), "the column change rotates");
+            Assert.That(NewestInstanceNetChanges(cmd), Is.True, "and the new instance keeps net changes on the same index");
+        });
+    }
+
+    // The XML ingest (compatibility level below 130) is a separate batch with its own copy of every preflight step.
+    [Test]
+    public void ACdcTable_OnTheXmlIngestPath_GetsTheTemplateDefaultAndRotates()
+    {
+        RunScenario("DeployCdcXml", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+            Assert.That(NewestInstanceNetChanges(cmd), Is.True, "the template default applies on the XML path too");
+            deploy(CdcTable(enableCdc: true, extraColumn: true));
+            Assert.That(NewestInstanceColumns(cmd), Is.EqualTo(new[] { "A", "B", "Id", "Twice" }));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("forced by Target:CompatEncoding")));
+        }, templateExtra: ", \"CdcSupportsNetChanges\": true", xmlIngest: true);
+    }
+
     [Test]
     public void AChangeTrackingTable_IsTracked_ByARealDeploy()
     {
@@ -146,22 +256,26 @@ public class DeployPathTableFeatureTests
         });
     }
 
-    private static string CdcTable(bool enableCdc, bool extraColumn, bool? netChanges = null, bool primaryKey = true) => $$"""
+    private static string CdcTable(bool enableCdc, bool extraColumn, bool? netChanges = null, bool primaryKey = true,
+                                   bool extraColumnC = false, bool uniqueIndex = false) => $$"""
         { "Schema": "[dbo]", "Name": "[DeployProbe]", "EnableCDC": {{(enableCdc ? "true" : "false")}},
           {{(netChanges is { } nc ? $"\"CdcSupportsNetChanges\": {(nc ? "true" : "false")}," : "")}}
           "Columns": [
             { "Name": "[Id]", "DataType": "INT", "Nullable": false },
             { "Name": "[A]", "DataType": "INT", "Nullable": true },
             {{(extraColumn ? """{ "Name": "[B]", "DataType": "INT", "Nullable": true },""" : "")}}
+            {{(extraColumnC ? """{ "Name": "[C]", "DataType": "INT", "Nullable": true },""" : "")}}
             { "Name": "[Twice]", "DataType": "INT", "Nullable": true, "ComputedExpression": "[A] * 2" }
           ],
           "Indexes": [ {{(primaryKey
               ? """{ "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" }"""
-              : """{ "Name": "[IX_DeployProbe]", "IndexColumns": "[Id]" }""")}} ] }
+              : uniqueIndex
+                  ? """{ "Name": "[IX_DeployProbe]", "IndexColumns": "[Id]", "Unique": true }"""
+                  : """{ "Name": "[IX_DeployProbe]", "IndexColumns": "[Id]" }""")}} ] }
         """;
 
     private void RunScenario(string prefix, string setupDatabase, Action<Action<string>, string, IDbCommand> body,
-                             string templateExtra = "", bool expectFailure = false)
+                             string templateExtra = "", bool expectFailure = false, string policy = "warn", bool xmlIngest = false)
     {
         var db = prefix + "_" + Guid.NewGuid().ToString("N")[..12];
         var tempDir = Path.Join(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
@@ -178,6 +292,7 @@ public class DeployPathTableFeatureTests
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 300;
             var savedPath = config["SchemaPackagePath"];
+            var savedEncoding = config["Target:CompatEncoding"];
 
             try
             {
@@ -185,21 +300,26 @@ public class DeployPathTableFeatureTests
                 cmd.ExecuteNonQuery();
                 conn.ChangeDatabase(db);
                 if (setupDatabase != null) ExecuteWithDeadlockRetry(cmd, setupDatabase);
-                ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
+                ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, policy: policy);
                 config["SchemaPackagePath"] = tempDir;
+                // The encoding is chosen during version detection, which SkipKindlingForge also skips.
+                if (xmlIngest) config["Target:CompatEncoding"] = "legacy";
 
                 body(tableJson =>
                 {
-                    WritePackage(tempDir, db, tableJson, templateExtra);
+                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript);
                     _environment.ClearReceivedCalls();
-                    Program.Main(["SkipKindlingForge"]);
-                    if (expectFailure) _environment.Received().Exit(Arg.Is<int>(code => code != 0));
+                    Program.Main(xmlIngest ? [] : ["SkipKindlingForge"]);
+                    var fails = expectFailure || _nextDeployFails;
+                    _nextDeployFails = false;
+                    if (fails) _environment.Received().Exit(Arg.Is<int>(code => code != 0));
                     else _environment.DidNotReceive().Exit(Arg.Is<int>(code => code != 0));
                 }, db, cmd);
             }
             finally
             {
                 config["SchemaPackagePath"] = savedPath;
+                config["Target:CompatEncoding"] = savedEncoding;
                 try
                 {
                     conn.ChangeDatabase("master");
@@ -271,16 +391,25 @@ public class DeployPathTableFeatureTests
         return names.ToArray();
     }
 
-    private static void WritePackage(string dir, string db, string tableJson, string templateExtra = "")
+    private static void WritePackage(string dir, string db, string tableJson, string templateExtra = "", string betweenScript = null)
     {
         var tables = Path.Join(dir, "Templates", "Main", "Tables");
         Directory.CreateDirectory(tables);
+        var between = Path.Join(dir, "Templates", "Main", "Between");
+        if (Directory.Exists(between)) Directory.Delete(between, true);
+        var folders = "";
+        if (betweenScript != null)
+        {
+            Directory.CreateDirectory(between);
+            File.WriteAllText(Path.Join(between, "Fail.sql"), betweenScript);
+            folders = "{ \"FolderPath\": \"Between\", \"QuenchSlot\": \"BetweenTablesAndKeys\" }";
+        }
         File.WriteAllText(Path.Join(dir, "Product.json"),
             "{ \"Name\": \"DeployPathProbe\", \"ValidationScript\": \"SELECT CAST(1 AS BIT)\", \"TemplateOrder\": [\"Main\"], "
             + "\"ScriptTokens\": {}, \"ScriptFolders\": [], \"Platform\": \"SqlServer\" }");
         File.WriteAllText(Path.Join(dir, "Templates", "Main", "Template.json"),
             "{ \"Name\": \"Main\", \"DatabaseIdentificationScript\": "
-            + $"\"SELECT [name] FROM sys.databases WHERE [name] = '{db}'\", \"ScriptFolders\": []{templateExtra} }}");
+            + $"\"SELECT [name] FROM sys.databases WHERE [name] = '{db}'\", \"ScriptFolders\": [{folders}]{templateExtra} }}");
         File.WriteAllText(Path.Join(tables, "dbo.DeployProbe.json"), tableJson);
     }
 
@@ -289,6 +418,8 @@ public class DeployPathTableFeatureTests
         _progressLog.ClearReceivedCalls();
         _errorLog.ClearReceivedCalls();
         _environment.ClearReceivedCalls();
+        _betweenScript = null;
+        _nextDeployFails = false;
         FactoryContainer.Register(_environment);
         LogFactory.Register("ErrorLog", _errorLog);
         LogFactory.Register("ProgressLog", _progressLog);

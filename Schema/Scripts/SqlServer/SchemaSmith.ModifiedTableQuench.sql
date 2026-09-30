@@ -28,12 +28,7 @@ CREATE PROCEDURE SchemaSmith.ModifiedTableQuench
   -- every pre-existing caller, and every package with no RebuildPolicy anywhere -- can never elect a rebuild.
   @RebuildPolicyMode NVARCHAR(20) = 'NEVER',
   @RebuildPolicyThreshold INT = NULL,
-  @RebuildPolicyOnOrderMismatch BIT = 0,
-  -- Template-level CdcFilegroup (#417): where change tables go for a CDC table that declares none of its
-  -- own. NULL at both tiers means unmanaged -- an existing placement is never touched.
-  @CdcFilegroup NVARCHAR(128) = NULL,
-  -- Template-level CdcSupportsNetChanges (#426): the default for CDC tables that declare none. NULL = unset.
-  @CdcSupportsNetChanges BIT = NULL
+  @RebuildPolicyOnOrderMismatch BIT = 0
 AS
 BEGIN TRY
   DECLARE @v_SQL NVARCHAR(MAX) = '',
@@ -115,19 +110,8 @@ BEGIN TRY
   -- "the database's own default filegroup" (matches the extraction/create-side contract), so an ordinary
   -- table with FileGroup unset -- every existing package -- compares its live default-filegroup placement
   -- against itself and never trips this check.
-  -- CDC change-table placement (#417). The template default fills in only where a CDC table declared none;
-  -- NULL at both tiers stays NULL, which means unmanaged. Resolved here, once, so every later pass reads one
-  -- effective value per table.
-  --
-  -- This is RESOLUTION, not validation, so it stays in this procedure rather than moving into the guarded
-  -- call below: it must run on every deploy that sets a template default, including the ones that skip
-  -- attribute validation entirely.
-  IF @CdcFilegroup IS NOT NULL
-    UPDATE #Tables SET CdcFilegroup = SchemaSmith.fn_SafeBracketWrap(@CdcFilegroup)
-     WHERE EnableCDC = 1 AND CdcFilegroup IS NULL
-  IF @CdcSupportsNetChanges IS NOT NULL
-    UPDATE #Tables SET CdcSupportsNetChanges = @CdcSupportsNetChanges
-     WHERE EnableCDC = 1 AND CdcSupportsNetChanges IS NULL
+  -- The template-level CDC defaults (#417, #426) are already resolved into #Tables: SchemaSmith.CdcPreflight does it
+  -- before any table is created, on every run, a resumed one included.
 
   -- Declared-vs-deployed refusals for the attributes SQL Server cannot ALTER (filegroup / LOB / FILESTREAM
   -- placement, partition scheme and column, GraphType, MemoryOptimized, Durability, Ledger, CdcFilegroup)

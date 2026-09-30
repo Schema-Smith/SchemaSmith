@@ -254,7 +254,7 @@ BEGIN
         SELECT @@SPID, 'Change Tracking (database not enabled)', T.[Schema] + '.' + T.[Name], 'downgraded'
           FROM #Tables T WITH (NOLOCK) WHERE T.EnableChangeTracking = 1
       RAISERROR('  Change Tracking skipped: not enabled on this database (ALTER DATABASE ... SET CHANGE_TRACKING = ON to allow it - downgraded)', 10, 100) WITH NOWAIT
-      UPDATE #Tables SET EnableChangeTracking = 0 WHERE EnableChangeTracking = 1
+      UPDATE #Tables SET EnableChangeTracking = NULL WHERE EnableChangeTracking = 1
     END
   END
 

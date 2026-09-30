@@ -143,7 +143,7 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_en
 -- #426. Net changes from the newest capture instance, emitted only when ON (see the JSON twin).
 DECLARE @v_CdcNetChanges BIT = NULL
 IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
-  EXEC sp_executesql N'SELECT TOP 1 @p_Net = ct.supports_net_changes FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC',
+  EXEC sp_executesql N'SELECT TOP 1 @p_Net = CASE WHEN ct.supports_net_changes = 1 AND EXISTS (SELECT 1 FROM sys.indexes i WHERE i.[object_id] = ct.source_object_id AND i.[name] = ct.index_name AND i.is_primary_key = 1) THEN 1 ELSE 0 END FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC',
     N'@p_ObjId INT, @p_Net BIT OUTPUT', @p_ObjId = @v_ObjectId, @p_Net = @v_CdcNetChanges OUTPUT
 
 -- Memory-optimized (Hekaton) is 2014 (major 12); is_memory_optimized / durability_desc are 2014 columns,

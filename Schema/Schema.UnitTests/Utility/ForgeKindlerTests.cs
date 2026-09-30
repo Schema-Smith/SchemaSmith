@@ -309,7 +309,9 @@ public class ForgeKindlerTests
         //   could see it.).
         // +1 = SchemaSmith.CdcQuench (#420 -- CDC enable/rotate moved out of ModifiedTableQuench to run after the
         //   passes that add computed and FILESTREAM columns; a capture instance records only the columns that exist).
-        Assert.That(sqlServer.Length, Is.EqualTo(43));
+        // +1 = SchemaSmith.CdcPreflight (#427 -- the template CDC defaults and the capture-instance limit, resolved
+        //   before any table or column is created, on every run including a resumed one).
+        Assert.That(sqlServer.Length, Is.EqualTo(44));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns

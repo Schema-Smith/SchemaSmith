@@ -137,8 +137,11 @@ namespace Schema.Domain.SqlServer
         // does not turn that on -- ALTER DATABASE ... SET CHANGE_TRACKING = ON changes retention and
         // cleanup for every table in the database. Declaring it without the database toggle is reported
         // through UnsupportedFeaturePolicy rather than silently skipped.
-        [JsonProperty(Order = 112)]
-        public bool EnableChangeTracking { get; set; }
+        // Unset is unmanaged: only an explicit false turns tracking off, so a table tracked outside the package keeps
+        // its baseline. Extraction writes true and never false.
+        [JsonProperty(Order = 112, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(Description = "Enable SQL Server Change Tracking on this table (needs a primary key, and Change Tracking enabled on the database). false disables it; leaving it out leaves the table's tracking as it is.")]
+        public bool? EnableChangeTracking { get; set; }
 
         // Only meaningful when EnableChangeTracking is true; ignored otherwise. Records WHICH columns
         // changed, not merely that the row did, at the cost of extra tracking storage.

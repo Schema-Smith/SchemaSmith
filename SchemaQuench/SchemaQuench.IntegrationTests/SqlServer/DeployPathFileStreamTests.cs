@@ -30,8 +30,11 @@ public class DeployPathFileStreamTests
     private const string Instance = @"localhost\SQL2016";
     private const string MasterConn = @"Server=localhost\SQL2016;Database=master;Integrated Security=True;Encrypt=False;TrustServerCertificate=True";
 
-    [Test]
-    public void AFileStreamColumn_IsCreated_ByARealDeploy()
+    // WhatIf creates nothing, so a new table and the ROWGUIDCOL constraint it declares both read as missing: the
+    // FILESTREAM preflight must not refuse a preview for that.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AFileStreamColumn_IsCreated_ByARealDeploy_AndPreviewedByWhatIf(bool whatIf)
     {
         var environment = Substitute.For<IEnvironment>();
         var progress = Substitute.For<ILog>();
@@ -58,7 +61,7 @@ public class DeployPathFileStreamTests
         {
             var config = FactoryContainer.Resolve<IConfigurationRoot>();
             var keys = new[] { "SchemaPackagePath", "Target:Server", "Target:Port", "Target:User", "Target:Password",
-                               "Target:ConnectionProperties:Column Encryption Setting" };
+                               "Target:ConnectionProperties:Column Encryption Setting", "WhatIfONLY" };
             var saved = keys.ToDictionary(k => k, k => config[k]);
             try
             {
@@ -71,6 +74,7 @@ public class DeployPathFileStreamTests
                 config["Target:User"] = null;
                 config["Target:Password"] = null;
                 config["Target:ConnectionProperties:Column Encryption Setting"] = "Disabled";
+                config["WhatIfONLY"] = whatIf ? "true" : "false";
 
                 Program.Main([]);
 
@@ -81,6 +85,12 @@ public class DeployPathFileStreamTests
                     Is.False, "the deploy must succeed; errors logged: " + logged);
 
                 conn.ChangeDatabase(db);
+                if (whatIf)
+                {
+                    cmd.CommandText = "SELECT OBJECT_ID('dbo.DeployFs')";
+                    Assert.That(cmd.ExecuteScalar(), Is.EqualTo(DBNull.Value), "WhatIf must not create the table");
+                    return;
+                }
                 cmd.CommandText = "SELECT CONVERT(INT, is_filestream) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.DeployFs') AND name = 'Doc'";
                 var isFileStream = cmd.ExecuteScalar();
                 Assert.That(isFileStream, Is.Not.Null, "the declared FILESTREAM column must exist after a real deploy");

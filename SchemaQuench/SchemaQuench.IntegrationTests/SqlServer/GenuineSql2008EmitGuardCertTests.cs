@@ -175,7 +175,14 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                     {
                         environment.Received().Exit(Arg.Is<int>(code => code != 0));
                         // Fail for the RIGHT reason: the policy's refusal, not a connection or load error.
-                        Assert.That(logged, Does.Contain("2016"), "the abort must be the unsupported-feature refusal; errors logged: " + logged);
+                        Assert.That(logged, Does.Contain("System-versioned temporal (SYSTEM_VERSIONING) requires SQL Server 2016"),
+                            "the abort must be the unsupported-feature refusal; errors logged: " + logged);
+                        using var check = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(MasterConn);
+                        check.Open();
+                        check.ChangeDatabase(db);
+                        using var checkCmd = check.CreateCommand();
+                        checkCmd.CommandText = "SELECT OBJECT_ID('dbo.RealPathTemporal')";
+                        Assert.That(checkCmd.ExecuteScalar(), Is.EqualTo(DBNull.Value), "the refusal must come before the table is created");
                     }
                 }
                 finally

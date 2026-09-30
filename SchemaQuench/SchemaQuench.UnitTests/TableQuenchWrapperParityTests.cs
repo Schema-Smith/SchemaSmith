@@ -33,15 +33,25 @@ public class TableQuenchWrapperParityTests
             .ToList();
         Assert.That(steps, Is.Not.Empty, $"no steps parsed from {engine}/{wrapperFile} -- the pattern no longer matches it");
 
+        // Comment lines are dropped so a remark that names a step cannot stand in for the call.
         var deployPath = string.Join("\n", Directory.GetFiles(Path.Join(root, "SchemaQuench"), "*.cs")
-            .Select(File.ReadAllText));
-        // The C# source quotes PostgreSQL identifiers inside verbatim strings, so a call reads ""SchemaSmith"".""X"".
-        var missing = steps.Where(step => !Regex.IsMatch(deployPath, $@"SchemaSmith""*[._]""*{Regex.Escape(step)}\b")).ToList();
+            .SelectMany(File.ReadAllLines)
+            .Where(line => !line.TrimStart().StartsWith("//")));
+        var missing = steps.Where(step => !Regex.IsMatch(deployPath, CallPattern(engine, Regex.Escape(step)))).ToList();
 
         Assert.That(missing, Is.Empty,
             $"{engine}: the TableQuench wrapper runs {string.Join(", ", missing)}, but SchemaQuench's deploy path never " +
             "does, so a real deploy skips it while every wrapper-based test passes. Call it from DatabaseQuench.");
     }
+
+    // Each engine's own call form, so a same-named step called for a different engine does not count. The C# source
+    // quotes PostgreSQL identifiers inside verbatim strings, so a call there reads ""SchemaSmith"".""X"".
+    private static string CallPattern(string engine, string step) => engine switch
+    {
+        "SqlServer" => $@"EXEC\s+(\[[^\]\r\n]*\]\.)?\[?SchemaSmith\]?\.\[?{step}\b",
+        "PostgreSQL" => $@"CALL\s+(\\?"")+SchemaSmith(\\?"")+\.(\\?"")+{step}\b",
+        _ => $@"CALL\s+SchemaSmith_{step}\b"
+    };
 
     private static string RepoRoot()
     {

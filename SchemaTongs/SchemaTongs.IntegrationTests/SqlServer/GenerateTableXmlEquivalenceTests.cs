@@ -358,6 +358,9 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'XmlEquivC
 IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1) EXEC sys.sp_cdc_enable_db;
 CREATE TABLE dbo.XmlEquivCdcNet (Id INT NOT NULL PRIMARY KEY, Val INT NULL);
 EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'XmlEquivCdcNet', @role_name = NULL, @supports_net_changes = 1;
+CREATE TABLE dbo.XmlEquivCdcNetUix (Id INT NOT NULL, Val INT NULL);
+CREATE UNIQUE INDEX UX_XmlEquivCdcNetUix ON dbo.XmlEquivCdcNetUix (Id);
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'XmlEquivCdcNetUix', @role_name = NULL, @supports_net_changes = 1, @index_name = N'UX_XmlEquivCdcNetUix';
 ";
         cmd.ExecuteNonQuery();
 
@@ -370,6 +373,8 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'XmlEquivC
             Assert.That(jsonModel.CdcSupportsNetChanges, Is.True);
             Assert.That(xmlModel.CdcSupportsNetChanges, Is.True);
             Assert.That(NormalizeMinusExtensions(xmlModel), Is.EqualTo(NormalizeMinusExtensions(jsonModel)));
+            // Net changes on a unique index rather than the primary key is not extracted by either encoding.
+            Assert.That(ModelXmlSerializer.FromIngestXml(GenerateTableXml(cmd, "dbo", "XmlEquivCdcNetUix")), Does.Not.Contain("CdcSupportsNetChanges"));
         });
 
         conn.Close();

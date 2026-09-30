@@ -60,7 +60,8 @@ BEGIN TRY
                                          AND ic2.is_included_column = 0) = 1)
              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
 
-  IF @v_Missing IS NOT NULL
+  -- Not under WhatIf: nothing was created, so a new table and a ROWGUIDCOL constraint this run would add both read as missing.
+  IF @v_Missing IS NOT NULL AND @WhatIf = 0
     RAISERROR('FILESTREAM column(s) declared on table(s) with no usable ROWGUIDCOL: %s. SQL Server requires a NOT NULL UNIQUEIDENTIFIER column with ROWGUIDCOL that is covered by a single-column PRIMARY KEY or UNIQUE CONSTRAINT. A unique INDEX does NOT satisfy this - declare the index entry with "UniqueConstraint": true (or "PrimaryKey": true) rather than "Unique": true. Declare the ROWGUIDCOL column itself as part of its DataType - "DataType": "UNIQUEIDENTIFIER ROWGUIDCOL" - the same way IDENTITY is declared. SchemaSmith does not add the column for you: one it invented would appear in no package and vanish on the next extract-redeploy round trip.', 16, 1, @v_Missing)
 
   -- Bind the table to its declared FILESTREAM filegroup BEFORE the column is added. Verified on a live

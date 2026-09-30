@@ -164,15 +164,29 @@ public class ChangeTrackingDeployTests
     }
 
     [Test]
-    public void RemovingTheDeclaration_DisablesIt()
+    public void DeclaringFalse_DisablesIt()
     {
-        Deploy(Json("CtRemoved", ", \"EnableChangeTracking\": true"));
-        Assert.That(TrackedCount("CtRemoved"), Is.EqualTo(1), "precondition: tracking is on");
+        Deploy(Json("CtOff", ", \"EnableChangeTracking\": true"));
+        Assert.That(TrackedCount("CtOff"), Is.EqualTo(1), "precondition: tracking is on");
 
-        Deploy(Json("CtRemoved", ""));
+        Deploy(Json("CtOff", ", \"EnableChangeTracking\": false"));
 
-        Assert.That(TrackedCount("CtRemoved"), Is.Zero,
-            "convergence is two-way: dropping the declaration has to turn it off, the same way EnableCDC does");
+        Assert.That(TrackedCount("CtOff"), Is.Zero, "an explicit false must turn tracking off");
+    }
+
+    // Unset is unmanaged. Tracking a DBA turned on, or that a package written before the declaration existed never
+    // mentions, must survive a deploy: disabling it discards the baseline every consumer synchronizes from.
+    [Test]
+    public void AnUndeclaredTable_KeepsTrackingTurnedOnOutsideThePackage()
+    {
+        Deploy(Json("CtOutside", ""));
+        Exec("ALTER TABLE [dbo].[CtOutside] ENABLE CHANGE_TRACKING");
+        Assert.That(TrackedCount("CtOutside"), Is.EqualTo(1), "precondition: tracking is on");
+
+        Deploy(Json("CtOutside", ""));
+
+        Assert.That(TrackedCount("CtOutside"), Is.EqualTo(1),
+            "a table that does not declare EnableChangeTracking must keep the tracking it has");
     }
 
     [Test]

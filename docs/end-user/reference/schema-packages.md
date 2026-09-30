@@ -111,7 +111,7 @@ Each template directory under `Templates/` must contain a `Template.json` file. 
 | `VersionStampScript` | string | | No | SQL executed per database after that database's quench completes successfully. |
 | `UpdateFillFactor` | bool | `true` | No | When `true`, the table quench updates index fill factors to match the JSON definitions. OR'd with table-level and index-level `UpdateFillFactor` settings. |
 | `CdcFilegroup` | string | | No | **SQL Server only.** The filegroup CDC change tables go on, for every `EnableCDC` table in this template that does not set its own `CdcFilegroup`. Unset leaves placement alone. See [Where change tables go](#where-change-tables-go). |
-| `CdcSupportsNetChanges` | bool | | No | **SQL Server only.** Whether capture instances support net changes, for every `EnableCDC` table in this template that does not set its own. Unset: off for a new table, unchanged on rotation. See [Net changes](#net-changes). |
+| `CdcSupportsNetChanges` | bool | | No | **SQL Server only.** Whether capture instances support net changes, for every `EnableCDC` table in this template that does not set its own. Unset: off for a new table, SQL Server's default when CDC is turned on for an existing table, unchanged on rotation. See [Net changes](#net-changes). |
 | `IndexOnlyTableQuenches` | bool | `false` | No | When `true`, the table quench only manages indexes, statistics, XML/full-text indexes. Skips table creation, column changes, and foreign key management. A declared table that is not present on the target **fails the deploy** -- see [Template settings intent](#template-settings-intent) below. |
 | `BaselineValidationScript` | string | | No | SQL validation executed per database before quenching that database. |
 | `RequireAtLeastOneTarget` | bool | `true` | No | When `true`, deployment fails if discovery returns no targets -- zero matching databases for a regular template, or zero matching `(database, schema)` pairs for a schema template. Catches misconfigured identification scripts that silently skip an entire template. Replaces the prior `Required` field (renamed in v2.1). |
@@ -533,7 +533,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | `EnableCDC` | bool | `false` | When `true`, the table is enabled for change data capture. Changing a tracked table's columns rotates to a new capture instance rather than discarding history -- see [Change Data Capture (SQL Server)](#change-data-capture-sql-server). |
 | `CdcFilegroup` | string | | The filegroup this table's CDC change table goes on; overrides the template's `CdcFilegroup`. Only meaningful with `EnableCDC` (`--Validate` warns `SS-CDC-001` otherwise). See [Where change tables go](#where-change-tables-go). |
 | `CdcSupportsNetChanges` | bool | | Whether this table's capture instance supports net changes (`@supports_net_changes`); overrides the template's value. `true` needs a primary key. Only meaningful with `EnableCDC` (`--Validate` warns `SS-CDC-001` otherwise). See [Net changes](#net-changes). |
-| `EnableChangeTracking` | bool | `false` | When `true`, the table is enabled for SQL Server change tracking. Requires Change Tracking enabled on the database -- see [Change Tracking (SQL Server)](#change-tracking-sql-server). Unrelated to the full-text index option also spelled `ChangeTracking`. |
+| `EnableChangeTracking` | bool | | When `true`, the table is enabled for SQL Server change tracking; `false` disables it; left out, the table's tracking is left as it is. Requires Change Tracking enabled on the database -- see [Change Tracking (SQL Server)](#change-tracking-sql-server). Unrelated to the full-text index option also spelled `ChangeTracking`. |
 | `TrackColumnsUpdated` | bool | `false` | Only meaningful with `EnableChangeTracking`. When `true`, change tracking records **which columns** changed, not merely that the row did, at the cost of extra tracking storage. |
 | `FileGroup` | string | `null` | Filegroup the table is stored on, as a **name only** -- never a file path, so the package stays portable across environments. **Leave it unset and SchemaSmith does not manage placement at all** — the table is created wherever SQL Server would put it, and an existing table is left exactly where it is, including on a filegroup someone placed it on by hand. SchemaSmith does not create filegroups: if the named one does not exist on the target the deploy fails. Moving an existing table to a different filegroup is a rebuild, so a declared name that differs from where the table already lives also fails -- migrate it manually. Removing the property again does not move anything back; it just stops SchemaSmith checking placement. Create filegroups in a migration script, supplying environment-specific paths through [script tokens](script-tokens.md). |
 | `FileStreamFileGroup` | string | `null` | The table's `FILESTREAM_ON` filegroup, as a **name only**. `null` means the database's default FILESTREAM filegroup. Effectively immutable -- SQL Server refuses to reassign a table that already has one, so a declared name differing from the deployed one fails rather than being ignored. See [FILESTREAM (SQL Server)](#filestream-sql-server). |
@@ -1291,9 +1291,11 @@ SQL Server's answer is to allow **two capture instances per table** so a new one
 2. Creates a second capture instance covering the new column set, named `<schema>_<table>_2` (or the base `<schema>_<table>` if the surviving instance already carries the `_2` suffix).
 3. Leaves the original instance and everything it has captured untouched, and names it in the deploy log along with the command to remove it.
 
+The same rotation happens whenever a tracked table's newest capture instance does not capture exactly the table's current columns, even when the deploy changed none. That catches a column a previous deploy added but never got to capture -- because it stopped partway, say -- and an instance created before its computed columns existed.
+
 > **Action required:** Retiring the old instance is your call, not SchemaSmith's -- only you know when your readers have drained it. Drop it with `EXEC sys.sp_cdc_disable_table @source_schema = N'<schema>', @source_name = N'<table>', @capture_instance = N'<name>'`.
 
-> **Warning:** Because the old instance occupies one of the two slots, a **second** column change before you drop it has nowhere to rotate to. SchemaSmith refuses that deploy **before touching any column**, naming the tables at the limit and the command to clear them, so nothing is left half-applied. Drop the drained instance and re-run.
+> **Warning:** Because the old instance occupies one of the two slots, a **second** column change before you drop it has nowhere to rotate to. SchemaSmith refuses that deploy **before touching any column**, naming the tables at the limit and the command to clear them, so nothing is left half-applied. Drop the drained instance and re-run. If a table's newest instance is missing columns while both slots are in use, the deploy warns instead, naming the table.
 
 Setting `EnableCDC` back to `false` disables capture on the table outright, which drops its capture instances and their history. That is a deliberate opt-out rather than a side effect of a schema change.
 
@@ -1328,12 +1330,12 @@ A capture instance either supports net changes or it doesn't. With net changes o
 { "Schema": "dbo", "Name": "Orders", "EnableCDC": true, "CdcSupportsNetChanges": true }
 ```
 
-- **Unset is off for a new table.** SchemaSmith passes the value explicitly rather than leaving it to SQL Server, whose own default turns net changes on whenever the table has a primary key.
+- **Unset keeps SQL Server's usual result.** Off for a table created in the same deploy; SQL Server's own default, which is on when the table has a primary key, when CDC is turned on for a table that already exists.
 - **A rotation keeps it.** When a column or filegroup change rotates a table that declares no `CdcSupportsNetChanges`, the new instance keeps the value of the one it replaces.
 - **Changing it rotates.** SQL Server fixes net changes when a capture instance is created, so a declared value the newest instance doesn't have gets a new capture instance -- the same rotation, with the same rules, as a filegroup change.
-- **`true` needs a primary key.** Net changes identify rows by key, so a table that sets `true` without declaring a primary key fails the deploy up front, naming the table.
+- **`true` needs a primary key.** Net changes identify rows by key, so a table that sets `true` without declaring a primary key fails the deploy before CDC is enabled, naming the table.
 
-SchemaTongs extracts `CdcSupportsNetChanges` from the newest capture instance, and only when it is on -- so a package whose instances have net changes off gains no new key.
+SchemaTongs extracts `CdcSupportsNetChanges` from the newest capture instance, and only when it is on and the instance uses the primary key -- so a package whose instances have net changes off gains no new key. An instance set up by hand to use a unique index instead keeps that index when SchemaSmith rotates it.
 
 ---
 
@@ -1351,7 +1353,7 @@ The table also needs a **primary key** -- SQL Server refuses to enable change tr
 
 > **Warning:** SQL Server has no in-place alter for this option -- changing it requires disabling and re-enabling change tracking, which **discards the tracking baseline**. Every consumer of that table must then re-synchronize in full, and `CHANGE_TRACKING_MIN_VALID_VERSION` reports the new baseline. SchemaSmith performs the change because you asked for it, and names the table and the consequence in the deploy log so the resynchronization is not a surprise.
 
-Removing `EnableChangeTracking` (or setting it to `false`) disables tracking on the table, which likewise discards its tracking information.
+Setting `EnableChangeTracking` to `false` disables tracking on the table, which likewise discards its tracking information. Leaving it out does not: a table that does not mention it keeps whatever tracking it has, so tracking enabled outside the package survives a deploy.
 
 ### Not the full-text option
 
