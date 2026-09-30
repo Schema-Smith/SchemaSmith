@@ -587,7 +587,8 @@
       "type": "string"
     },
     "EnableChangeTracking": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Enable SQL Server Change Tracking on this table (needs a primary key, and Change Tracking enabled on the database). false disables it; leaving it out leaves the table's tracking as it is."
     },
     "TrackColumnsUpdated": {
       "type": "boolean"
