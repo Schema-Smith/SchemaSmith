@@ -125,8 +125,10 @@ jobs:
             for s in "${TRUSTED_SHAS[@]:1}"; do echo "  - $s"; done
           fi
 
+          # Filter by name server-side: the endpoint pages at 30 by default, and a merge to main produces more
+          # check runs than that, so an unfiltered first page can simply not contain the check being asked for.
           check_result_on() {
-            gh api "repos/${REPO}/commits/$1/check-runs" \
+            gh api -X GET "repos/${REPO}/commits/$1/check-runs" -f check_name="$2" -F per_page=100 \
               --jq "[.check_runs[] | select(.name == \"$2\")] | sort_by(.completed_at) | last | .conclusion"
           }
 
