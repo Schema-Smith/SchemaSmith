@@ -8,7 +8,7 @@ you assemble everything into a team diagnostic runbook.
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`) — see [`../README.md`](../README.md).
-- `schemaquench --version` answers on your PATH. Uses only long-shipped features.
+- `schemaquench --version` answers **2.7.0 or later** on your PATH.
 
 ## Step 1 — create the sandbox database
 

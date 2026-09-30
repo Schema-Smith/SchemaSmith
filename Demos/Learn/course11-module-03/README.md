@@ -13,7 +13,7 @@ Everything runs against `vault_m3`.
 ## Before you start
 
 - The [sandbox](../docker) is up and [`../course11-setup`](../course11-setup) has been run once.
-- The CLI is on your PATH: `schemaquench --version` answers **2.6.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
 
 > SQL Server needs a partition scheme in `vault_m3`. Create it once:
 > ```bash
@@ -107,6 +107,14 @@ schemaquench --ConfigFile:quench.settings.protected.json   # exit 0 -- marks it,
 schemaquench --ConfigFile:quench.settings.removed.json     # exit 0 -- now the removal is clean
 cd ..
 ```
+
+**SQL Server:**
+
+```text
+        Retaining table [dbo].LedgerEntry - removed from product but protected by PreventDrop
+```
+
+**MySQL and MariaDB:**
 
 ```text
     Table LedgerEntry removed from product but PreventDrop is set - skipping drop (protected)

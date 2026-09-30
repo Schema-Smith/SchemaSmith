@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.mysql.schema",
   "Name": "Shop",
   "MinimumVersion": "8.0",
   "TemplateOrder": [

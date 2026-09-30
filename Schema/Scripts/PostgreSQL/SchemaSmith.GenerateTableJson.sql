@@ -32,7 +32,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                CASE WHEN c.data_type = 'ARRAY' THEN REGEXP_REPLACE(c.udt_name, '^_', '') || COALESCE(SUBSTRING(format_type(a.atttypid, a.atttypmod) FROM '\(.*\)'), '') || '[]' ELSE
                                CASE WHEN c.domain_name IS NOT NULL
                                     THEN CASE WHEN c.domain_schema != 'pg_catalog' THEN '"' || c.domain_schema || '".' ELSE '' END || '"' || c.domain_name || '"'
-                                    ELSE CASE WHEN c.udt_schema != 'pg_catalog' THEN c.udt_schema || '.' ELSE '' END || REGEXP_REPLACE(c.udt_name, 'bpchar', 'CHAR', 'i')
+                                    ELSE CASE WHEN c.udt_schema != 'pg_catalog' THEN QUOTE_IDENT(c.udt_schema) || '.' || QUOTE_IDENT(c.udt_name) ELSE REGEXP_REPLACE(c.udt_name, 'bpchar', 'CHAR', 'i') END
                                     END ||
                                "SchemaSmith"."ColumnTypeArguments"(c.domain_name, c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_scale, c.datetime_precision) END AS "DataType",
                                CASE WHEN c.is_nullable = 'YES' THEN TRUE ELSE FALSE END AS "Nullable",

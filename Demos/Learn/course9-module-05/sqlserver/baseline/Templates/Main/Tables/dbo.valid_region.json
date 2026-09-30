@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
   "Name": "[valid_region]",
   "Columns": [
     { "Name": "[RegionCode]", "DataType": "NVARCHAR(6)", "ShouldApplyExpression": "", "OldName": "", "VariantName": "", "Collation": "", "DataMaskFunction": "", "EncryptionType": "NONE", "EncryptionKey": "", "EncryptionAlgorithm": "" },

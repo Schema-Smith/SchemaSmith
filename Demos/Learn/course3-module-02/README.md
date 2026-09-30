@@ -50,7 +50,7 @@ Environment-variable mapping follows the standard convention: prefix `SmithySett
   ```
 
   It creates the twelve `ordersservice_{dev,staging,prod}` databases and reports `PASS` for each.
-- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.4.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later).
 
 ## Run the pipeline
 

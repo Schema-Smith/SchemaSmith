@@ -243,7 +243,8 @@ The extraction engine. Reads a live database into a versioned schema package usi
 | Pure SQL extraction (no SMO / external SDK) | ✓ | ✓ | ✓ | ✓ | SMO removed in v2 |
 | Package initialization (Product.json, Template.json, folders) | ✓ | ✓ | ✓ | ✓ | |
 | Runtime SchemaGenerator for `.json-schemas/` | ✓ | ✓ | ✓ | ✓ | Generated on the fly from C# types |
-| `--WriteSchemasOnly` (no DB connection) | ✓ | ✓ | ✓ | ✓ | |
+| `$schema` reference written into each package file | ✓ | ✓ | ✓ | ✓ | Editors validate with no per-user setup; v2.7.0 |
+| `--WriteSchemasOnly` (no DB connection) | ✓ | ✓ | ✓ | ✓ | Also adds `$schema` to a pre-v2.7.0 package |
 | Orphan detection: `Detect` mode | ✓ | ✓ | ✓ | ✓ | |
 | Orphan detection: `DetectWithCleanupScripts` | ✓ | ✓ | ✓ | ✓ | |
 | Orphan detection: `DetectDeleteAndCleanup` | ✓ | ✓ | ✓ | ✓ | |

@@ -231,6 +231,7 @@ BEGIN
         OrdinalPosition INT NOT NULL DEFAULT 0,
         DataType VARCHAR(100) NOT NULL,
         IsNullable TINYINT DEFAULT 1,
+        NullableDeclared TINYINT DEFAULT 1,
         DefaultValue TEXT DEFAULT NULL,
         -- Independent of DefaultValue: DEFAULT governs INSERT-time initialization, this governs
         -- UPDATE-time refresh. 30 chars comfortably covers 'CURRENT_TIMESTAMP(6)' (the max fractional
@@ -266,7 +267,7 @@ BEGIN
             IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Name'))) IS NOT NULL
                AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables st WHERE st.TableName = SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Name'))))) THEN
                 INSERT INTO _SchemaSmith_Columns (
-                    TableName, ColumnName, OrdinalPosition, DataType, IsNullable, DefaultValue, OnUpdateCurrentTimestamp,
+                    TableName, ColumnName, OrdinalPosition, DataType, IsNullable, NullableDeclared, DefaultValue, OnUpdateCurrentTimestamp,
                     IsAutoIncrement, GeneratedExpression, GeneratedType,
                     CharacterSet, Collation, IsInvisible, IsWithoutSystemVersioning, Srid, Comment, OldName, NewColumn, ShouldApply, ShouldApplyExpression, VariantName
                 )
@@ -275,7 +276,11 @@ BEGIN
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Name')))) AS ColumnName,
                     v_ColInnerIdx + 1 AS OrdinalPosition,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].DataType'))) AS DataType,
-                    COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Nullable'))), 1) AS IsNullable,
+                    -- An omitted Nullable is false, as it is in the model and on every other engine. The deploy used to
+                    -- send the key on every column, so this default never ran for the product; it does now that an
+                    -- omitted Nullable stays omitted, and reading it as nullable would loosen every such column.
+                    COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Nullable'))), 0) AS IsNullable,
+                    JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Nullable')) IS NOT NULL AS NullableDeclared,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Default'))) AS DefaultValue,
                     -- UPPER so a hand-authored lower-case 'current_timestamp(3)' compares equal to the
                     -- canonical form SchemaSmith_ColumnOnUpdateClause extracts from a live target.
@@ -376,6 +381,35 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingColumns;
 
+    -- A generated column's nullability is the engine's unless the package states one, as on SQL Server. Taking
+    -- the live value (nullable for a new column) makes every comparison below agree without touching any of
+    -- them. MariaDB cannot declare it at all -- NOT NULL on a generated column is a syntax error there -- so it
+    -- is always the engine's. Reading an omission as NOT NULL rewrote such a column on every deploy.
+    UPDATE _SchemaSmith_Columns c
+      LEFT JOIN INFORMATION_SCHEMA.COLUMNS isc
+             ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
+            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
+            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+       SET c.IsNullable = CASE WHEN isc.COLUMN_NAME IS NULL OR isc.IS_NULLABLE = 'YES'
+                                    -- Only a column that is ALREADY generated has a nullability to keep; a plain column
+                                    -- being converted keeps nothing of its old NOT NULL.
+                                    OR COALESCE(isc.GENERATION_EXPRESSION, '') = '' THEN 1 ELSE 0 END
+     WHERE c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
+       AND (c.NullableDeclared = 0 OR VERSION() LIKE '%MariaDB%');
+
+    -- Below MySQL 8.0.13 every DEFAULT-expression gate recognises an expression by its leading '(', but the column
+    -- script below wraps any default containing '(' -- so a bare function default (curdate(), uuid()) escaped the
+    -- gate and reached the server as DEFAULT (curdate()), a syntax error there. Give it the spelling the gates know.
+    -- A quoted literal is a plain default on every version and is left alone (the script below does not wrap it
+    -- there either). Only below 8.0.13: elsewhere the declared text is compared with the live default, unchanged.
+    IF SchemaSmith_SupportsDefaultExpression() = 0 THEN
+        UPDATE _SchemaSmith_Columns
+           SET DefaultValue = CONCAT('(', TRIM(DefaultValue), ')')
+         WHERE DefaultValue IS NOT NULL AND IsAutoIncrement = 0
+           AND DefaultValue REGEXP '\\(' AND LEFT(TRIM(DefaultValue), 1) NOT IN ('(', '''', '"')
+           AND UPPER(TRIM(DefaultValue)) NOT REGEXP '^(CURRENT_TIMESTAMP|NOW|LOCALTIME|LOCALTIMESTAMP)[[:space:]]*\\([0-9]*\\)$';
+    END IF;
+
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Build column scripts');
 
     -- Build ColumnScript for each column
@@ -396,7 +430,8 @@ BEGIN
                 CONCAT(
                     SchemaSmith_UpperDataType(DataType), ' ',
                     'GENERATED ALWAYS AS (', GeneratedExpression, ') ',
-                    COALESCE(UPPER(GeneratedType), 'VIRTUAL')
+                    COALESCE(UPPER(GeneratedType), 'VIRTUAL'),
+                    CASE WHEN IsNullable = 0 AND VERSION() NOT LIKE '%MariaDB%' THEN ' NOT NULL' ELSE '' END
                 )
             ELSE
                 CONCAT(
@@ -415,6 +450,7 @@ BEGIN
                               -- predate expression defaults entirely, and wrapping them turns a clause every
                               -- version accepts into a hard syntax error below 8.0.13.
                               CASE WHEN DefaultValue REGEXP '\\(' AND LEFT(DefaultValue, 1) != '('
+                                    AND NOT (LEFT(TRIM(DefaultValue), 1) IN ('''', '"') AND SchemaSmith_SupportsDefaultExpression() = 0)
                                     AND UPPER(TRIM(DefaultValue)) NOT REGEXP
                                         '^(CURRENT_TIMESTAMP|NOW|LOCALTIME|LOCALTIMESTAMP)[[:space:]]*\\([0-9]*\\)$'
                                    THEN CONCAT('(', DefaultValue, ')')

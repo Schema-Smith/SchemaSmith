@@ -14,7 +14,7 @@ Three engine families, three different mechanisms, one posture. All against `vau
 ## Before you start
 
 - The [sandbox](../docker) is up, and [`../course11-setup`](../course11-setup) has been run once.
-- The CLI is on your PATH: `schemaquench --version` answers **2.6.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
 
 > **What setup created, and why that matters.** `course11-setup` created a SQL Server partition
 > function (`pf_vault_year`) and two schemes (`ps_vault_year`, `ps_vault_year_alt`), plus a PostgreSQL
@@ -83,6 +83,36 @@ LedgerEntry declares RANGE(EntryId), deployed RANGE(`EntryYear`)
 Three engines, three mechanisms, one sentence in three dialects: *moving this rewrites the table, so
 name both sides and stop.* Nothing was attempted — check the table and it is exactly where it was.
 
+### The one partition change that *is* applied (MySQL and MariaDB)
+
+RANGE partitioning has a calendar problem: without a `MAXVALUE` catch-all, the table rejects the first
+row of a year it has no partition for (`ERROR 1526: Table has no partition for value 2027`). So one
+change is not a move at all. Append next year's partition to `baseline/`'s list — **above** the
+deployed maximum — and re-quench:
+
+```json
+{ "Name": "p2026", "Values": "2027" }, { "Name": "p2027", "Values": "2028" }
+```
+
+```bash
+cd <engine> && schemaquench --ConfigFile:quench.settings.baseline.json ; echo "exit=$?" ; cd ..
+#       Adding partition p2027 to LedgerEntry
+# exit=0
+```
+
+`ADD PARTITION` above the top boundary creates an empty partition and moves no existing row, so there
+is nothing to refuse. Every other difference still is. Declare `p2023` *below* the others instead and
+it is refused by name, because a boundary inserted below the maximum redistributes rows:
+
+```text
+Declared partitions do not match the deployed table (refused -- partition p2023 differs from the partition
+deployed in that position; moving or renaming a boundary redistributes rows): LedgerEntry declares 5
+partition(s), deployed has 4
+```
+
+The same holds for removing a partition, moving a boundary, reordering the list, or appending onto a
+`MAXVALUE` tail. Keep `p2027` in `baseline/` from here on — it is deployed now, so the model should say so.
+
 ## Step 3: The distinction that trips everyone
 
 Now remove the placement property from `baseline/` entirely — delete `PartitionScheme` and
@@ -120,17 +150,6 @@ a deployed table because the change rewrites the table:
 
 And the irreversible table *types*, which behave identically because the engine has no `ALTER` for
 them at all: memory-optimized durability and inline-index shape, `Ledger`, `GraphType`.
-
-<!-- TRAINING-RELEASE-PIN #415 -- on 2.7.0, delete this note and add the append beat: a partition above
-     the deployed maximum is APPLIED, while removal, a moved boundary, a reorder, an insert below the
-     maximum and an append onto a MAXVALUE tail are all refused. Verified on main 2026-09-10. -->
-> **Known gap on 2.6.0, fixed on `main` and shipping in 2.7.0.** On MySQL and MariaDB, adding a
-> **boundary partition** to the `Partitions` list — next year's `p2027`, say — is neither applied nor
-> refused on 2.6.0; the run reports success and the partition never appears. That matters because RANGE
-> without a `MAXVALUE` catch-all rejects the insert once the calendar reaches it (`ERROR 1526: Table has
-> no partition for value 2027`). Reported from this lab and fixed: on 2.7.0 a partition **above the
-> deployed maximum is applied** with `ADD PARTITION`, which moves no existing row, while every other
-> difference stays refused. Step 2's `Expression` beat is correct on both versions.
 
 ## Cleanup
 

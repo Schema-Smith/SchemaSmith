@@ -21,7 +21,7 @@ points at is itself a table you query, not a literal value.
   PostgreSQL, MySQL, and MariaDB) on each engine and seeds each one's
   `Tenants` table (Dev and Prod list all five tenants — Dev has `005` inactive, Prod has it active; Empty
   gets the table with zero rows).
-- The CLI is on your PATH — `schemaquench --version` answers **2.4.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 Each engine folder ships the same native `Shop` `Package/` — its `Template.json` now carries
 `IdentificationDatabase: "{{ControlDb}}"` alongside the `DatabaseIdentificationScript` — plus three
@@ -44,7 +44,7 @@ schemaquench --ConfigFile:quench.settings.json
 ```
 
 ```
-Version: 2.4.0.0
+Version: 2.7.0.0
   Product Script Tokens:
     ControlDb: FleetRegistry_Dev
 ```
@@ -53,10 +53,7 @@ Four tenants dispatched — `fleet_tenant_005` is absent, because its `FleetRegi
 `Active = 0`:
 
 ```
-[localhost,11433].[fleet_tenant_001] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_002] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_003] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_004] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
+Template 'Main': 4 units - db: DatabaseIdentificationScript; schema: (regular template)
 ```
 
 Each tenant then: `Kindling the forge` → tables quenched → `Successfully Quenched`; the run ends
@@ -101,13 +98,12 @@ schemaquench --ConfigFile:quench.settings.json
 ```
 
 ```
-[localhost,11433].[fleet_tenant_001] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_002] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_003] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
+Template 'Main': 3 units - db: DatabaseIdentificationScript; schema: (regular template)
 ```
 
-`fleet_tenant_004` dropped off — no `TemplateTargets` edit, no settings-file edit, just an `UPDATE`
-against the control plane. (Restore it to `Active = 1` afterward to get back to the four-tenant baseline.)
+**Four units became three** — `fleet_tenant_004` dropped off with no `TemplateTargets` edit and no
+settings-file edit, just an `UPDATE` against the control plane. The count in the rollup is the roster;
+which tenants it resolved to is one entry per target in the deployment summary report. (Restore it to `Active = 1` afterward to get back to the four-tenant baseline.)
 The deactivation statement's shape differs slightly by engine:
 
 | Engine | Statement |

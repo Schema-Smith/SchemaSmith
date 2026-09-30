@@ -1,4 +1,5 @@
 {
+  "$schema": ".json-schemas/products.postgresql.schema",
   "Name": "ReadingPlatform",
   "ValidationScript": "SELECT TRUE",
   "TemplateOrder": [

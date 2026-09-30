@@ -34,7 +34,11 @@ fail=0
 
 # MSYS_NO_PATHCONV keeps Git Bash from rewriting the container's /opt/... path; harmless elsewhere.
 ss_exec() {
-  MSYS_NO_PATHCONV=1 docker exec "$SQLSERVER_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+  # 2017 ships only /opt/mssql-tools; 2019+ ship the 18 path. This script is deliberately
+  # self-contained (no lab-sql.sh), so it resolves the binary itself rather than importing one.
+  sc=/opt/mssql-tools18/bin/sqlcmd
+  docker exec "$SQLSERVER_CONTAINER" sh -c "test -x $sc" >/dev/null 2>&1 || sc=/opt/mssql-tools/bin/sqlcmd
+  MSYS_NO_PATHCONV=1 docker exec "$SQLSERVER_CONTAINER" "$sc" \
     -S localhost -U sa -P 'Learn!Passw0rd' -C -b -h -1 -W -Q "SET NOCOUNT ON; $1" 2>&1
 }
 

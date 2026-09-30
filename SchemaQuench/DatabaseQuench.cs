@@ -150,7 +150,6 @@ public class DatabaseQuench
     /// </summary>
     public bool DropRemovedEvents { get; init; }
 
-    /// <summary>NEVER when no tier declared a policy — the domain object's own default.</summary>
     /// <summary>
     /// MariaDB only. <c>KEEP</c> opts into altering a system-versioned table; the engine then applies the
     /// DDL to the stored history as well, rewriting it to a shape it never had. Anything else (including
@@ -166,6 +165,7 @@ public class DatabaseQuench
     private string TemplateCdcFilegroup =>
         string.IsNullOrWhiteSpace(_template?.CdcFilegroup) ? "NULL" : $"N'{EscapeSqlLiteral(_template.CdcFilegroup.Trim())}'";
 
+    /// <summary>NEVER when no tier declared a policy — the domain object's own default.</summary>
     private string RebuildPolicyMode =>
         EscapeSqlLiteral((CascadedRebuildPolicy?.Mode ?? "NEVER").Trim().ToUpperInvariant());
 
@@ -1856,19 +1856,6 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
     }
 
     /// <summary>
-    /// Converges DECLARED scheduled events (MySQL/MariaDB). Scripted events in the same Events/ folder
-    /// still run through the Objects slot untouched, so this is purely additive for existing packages.
-    /// <para><b>This is the only quench that executes DDL from C# rather than inside the procedure, and
-    /// it is not a style choice.</b> MySQL cannot PREPARE event DDL at all — both CREATE EVENT and DROP
-    /// EVENT fail with 1295, "This command is not supported in the prepared statement protocol yet" —
-    /// so a stored procedure physically cannot create an event there. MariaDB can, but writing to the
-    /// lower common denominator keeps ONE implementation for both engines.</para>
-    /// <para>All the decision-making still lives in SQL: the procedure compares, decides, and returns an
-    /// ORDERED list of statements. This method is a dumb executor. The ownership and audit writes are
-    /// part of that list, so if a CREATE fails execution stops and no ownership row is left claiming an
-    /// event that does not exist.</para>
-    /// </summary>
-    /// <summary>
     /// Whether the scheduled-event step runs at all.
     /// <para><b>An empty declaration still qualifies when by-absence removal is on</b>, and that is the
     /// whole point of this predicate. A product that used to own events and now declares none needs the
@@ -1883,6 +1870,19 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
     internal static bool ShouldQuenchEvents(Platform platform, int declaredEventCount, bool dropRemovedEvents)
         => platform.GetBasePlatform() == Platform.MySQL && (declaredEventCount > 0 || dropRemovedEvents);
 
+    /// <summary>
+    /// Converges DECLARED scheduled events (MySQL/MariaDB). Scripted events in the same Events/ folder
+    /// still run through the Objects slot untouched, so this is purely additive for existing packages.
+    /// <para><b>This is the only quench that executes DDL from C# rather than inside the procedure, and
+    /// it is not a style choice.</b> MySQL cannot PREPARE event DDL at all — both CREATE EVENT and DROP
+    /// EVENT fail with 1295, "This command is not supported in the prepared statement protocol yet" —
+    /// so a stored procedure physically cannot create an event there. MariaDB can, but writing to the
+    /// lower common denominator keeps ONE implementation for both engines.</para>
+    /// <para>All the decision-making still lives in SQL: the procedure compares, decides, and returns an
+    /// ORDERED list of statements. This method is a dumb executor. The ownership and audit writes are
+    /// part of that list, so if a CREATE fails execution stops and no ownership row is left claiming an
+    /// event that does not exist.</para>
+    /// </summary>
     internal void QuenchEvents(IDbCommand tableCommand)
     {
         if (_product.Platform.GetBasePlatform() != Platform.MySQL) return;
@@ -1924,11 +1924,6 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
     }
 
     /// <summary>
-    /// Converges DECLARED enum types (PostgreSQL). Runs BEFORE tables: a column can be of an enum type,
-    /// so the type has to exist first, and a value the package adds has to be there before a column
-    /// default or check references it.
-    /// </summary>
-    /// <summary>
     /// Converges DECLARED domain types (PostgreSQL). Runs before tables: a column can be OF a domain.
     /// <para>Everything but the base type converges in place, without dropping the domain or touching a
     /// dependent column. A base-type change is refused by name inside the procedure — there is no
@@ -1948,6 +1943,11 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
         _debugFileLocation = "";
     }
 
+    /// <summary>
+    /// Converges DECLARED enum types (PostgreSQL). Runs BEFORE tables: a column can be of an enum type,
+    /// so the type has to exist first, and a value the package adds has to be there before a column
+    /// default or check references it.
+    /// </summary>
     internal void QuenchEnumTypes(IDbCommand tableCommand)
     {
         if (_product.Platform != Platform.PostgreSQL) return;

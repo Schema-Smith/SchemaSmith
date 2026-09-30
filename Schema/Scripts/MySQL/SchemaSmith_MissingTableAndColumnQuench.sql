@@ -65,6 +65,18 @@ BEGIN
                     ''
                 ),
                 ') ENGINE=', COALESCE(t.Engine, 'InnoDB'),
+                -- DEFAULT CHARACTER SET / COLLATE -- the table's declared collation, which this option list omitted
+                -- entirely while carrying ENGINE, ROW_FORMAT, the CREATE_OPTIONS four, encryption, AUTO_INCREMENT,
+                -- COMMENT, TABLESPACE and DATA DIRECTORY. Without it a table declaring utf8mb3_general_ci was created
+                -- at the SERVER default, so every string column relying on the table default got the wrong collation --
+                -- silently, and collation decides case sensitivity and sort order, hence comparison and uniqueness.
+                -- Found by deploying Demos/{MySQL,MariaDB}/Sakila, which nothing had ever done.
+                -- The charset is DERIVED from the collation's prefix rather than read from a separate column: that is
+                -- the form the table-collation change pass in ModifiedTableQuench already uses, the table-level
+                -- CharacterSet is not parsed into _SchemaSmith_Tables at all, and deriving it guarantees the two agree.
+                CASE WHEN t.Collation IS NOT NULL AND t.Collation != ''
+                     THEN CONCAT(' DEFAULT CHARACTER SET ', SUBSTRING_INDEX(t.Collation, '_', 1), ' COLLATE ', t.Collation)
+                     ELSE '' END,
                 CASE WHEN t.RowFormat IS NOT NULL AND t.RowFormat != ''
                      THEN CONCAT(' ROW_FORMAT=', t.RowFormat)
                      ELSE '' END,
@@ -171,6 +183,48 @@ BEGIN
     SET SESSION group_concat_max_len = 1000000;
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'BEGIN MissingTableAndColumnQuench');
+
+    -- IDEMPOTENCY REFRESH -- this proc is re-CALLed on retryable contention, and it must survive that.
+    --
+    -- The NewTable / NewColumn flags are computed by ParseTableJson, which is a SEPARATE, EARLIER command.
+    -- So on a retry they still describe the catalog as it was BEFORE the failed attempt ran, and anything
+    -- that attempt already created is still flagged new -- the create loop replays it and the deploy dies
+    -- with "Table 'X' already exists". A transient blip the retry exists to absorb became a failed deploy.
+    -- Reproduced on MariaDB 11.8 with the 5-database fleet in Demos/Learn/course7-module-01: four tables
+    -- created, contention in the add-columns pass, retry, dead on the first CREATE.
+    --
+    -- Re-deriving both flags here is what makes ExecuteNonQueryHandlingMessages' documented contract true
+    -- ("the convergence procs recompute desired-vs-existing every run") rather than working around it.
+    --
+    -- ON A FIRST CALL THIS CHANGES NOTHING -- nothing declared-new exists yet, so the UPDATE matches no
+    -- row. That is what keeps it low-risk: it is inert except on the replay it exists for.
+    --
+    -- ONLY NewTable NEEDS THIS. The COLUMN half was already handled: the post-rename clear further down
+    -- ("clear NewColumn for any column now present under its (possibly renamed) table") re-derives
+    -- NewColumn against the live catalog and its comment names this very failure mode -- "add-columns
+    -- below would try to re-add an existing column (duplicate-column error)". So the replay hazard was
+    -- understood and fixed for columns and simply never applied to tables. Adding a second column clear
+    -- here was redundant, and mutation testing is what showed it: disabling it changed nothing, because
+    -- the existing clear already covered the case.
+    -- THE TABLE_TYPE FILTER IS LOAD-BEARING. Parse builds its existing-tables snapshot with
+    -- TABLE_TYPE IN ('BASE TABLE','SYSTEM VERSIONED'); INFORMATION_SCHEMA.TABLES also lists VIEW (and
+    -- SEQUENCE / SYSTEM VIEW on MariaDB). Without the same filter, "exists" here is wider than the flag
+    -- being cleared, so a package declaring a table where a VIEW of that name exists -- the ordinary
+    -- "replace the view with a real table" migration -- would have NewTable cleared and be skipped, or
+    -- fall into ALTER TABLE ... ADD COLUMN and fail with ER_WRONG_OBJECT. Ask the same question parse asked.
+    --
+    -- The schema is compared against v_IsDbName rather than p_DatabaseName for the measured reason given
+    -- where that local is declared: a bare parameter carries the connection charset and defeats the
+    -- schema-filter pushdown, which cost ~1.8ms per database on the server on every deploy. BINARY stays on
+    -- TABLE_NAME so this agrees with parse on case sensitivity.
+    UPDATE _SchemaSmith_Tables t
+       SET t.NewTable = 0
+     WHERE t.NewTable = 1
+       AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES x
+                    WHERE x.TABLE_SCHEMA = v_IsDbName
+                      AND BINARY x.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                      AND x.TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED'));
+
 
     -- A CustomTableRestore hook restores tables being added in case they were custom-dropped
     -- (recycled) previously; mirrors the SQL Server / PostgreSQL hook.
@@ -491,6 +545,18 @@ BEGIN
                           ''
                       ),
                       ') ENGINE=', COALESCE(t.Engine, 'InnoDB'),
+                      -- DEFAULT CHARACTER SET / COLLATE -- the table's declared collation, which this option list omitted
+                      -- entirely while carrying ENGINE, ROW_FORMAT, the CREATE_OPTIONS four, encryption, AUTO_INCREMENT,
+                      -- COMMENT, TABLESPACE and DATA DIRECTORY. Without it a table declaring utf8mb3_general_ci was created
+                      -- at the SERVER default, so every string column relying on the table default got the wrong collation --
+                      -- silently, and collation decides case sensitivity and sort order, hence comparison and uniqueness.
+                      -- Found by deploying Demos/{MySQL,MariaDB}/Sakila, which nothing had ever done.
+                      -- The charset is DERIVED from the collation's prefix rather than read from a separate column: that is
+                      -- the form the table-collation change pass in ModifiedTableQuench already uses, the table-level
+                      -- CharacterSet is not parsed into _SchemaSmith_Tables at all, and deriving it guarantees the two agree.
+                      CASE WHEN t.Collation IS NOT NULL AND t.Collation != ''
+                           THEN CONCAT(' DEFAULT CHARACTER SET ', SUBSTRING_INDEX(t.Collation, '_', 1), ' COLLATE ', t.Collation)
+                           ELSE '' END,
                       CASE WHEN t.RowFormat IS NOT NULL AND t.RowFormat != ''
                            THEN CONCAT(' ROW_FORMAT=', t.RowFormat)
                            ELSE '' END,

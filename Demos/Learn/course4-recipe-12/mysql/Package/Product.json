@@ -1,5 +1,7 @@
 {
+  "$schema": ".json-schemas/products.mysql.schema",
   "Name": "Sessions",
+  "MinimumVersion": "8.0",
   "ValidationScript": "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'cookbook_r12') THEN 1 ELSE 0 END",
   "TemplateOrder": ["Main"],
   "ScriptFolders": [],

@@ -43,7 +43,7 @@ SchemaTongs connects to the source database, reads every enabled object type, an
 
 ### Schema-only mode
 
-If you just need to regenerate the `.json-schemas/*.schema` validation files for an existing product -- without connecting to a database -- use the `--WriteSchemasOnly` switch. The product path comes from your `SchemaTongs.settings.json` (or an environment variable override), not from the command line:
+If you just need to regenerate the `.json-schemas/*.schema` validation files for an existing product -- without connecting to a database -- use the `--WriteSchemasOnly` switch. It also adds the `$schema` reference to each package file that lacks one, which is how a package extracted before v2.7.0 gains editor validation without being re-extracted. The product path comes from your `SchemaTongs.settings.json` (or an environment variable override), not from the command line:
 
 ```bash
 # Run from the directory that contains SchemaTongs.settings.json with Product:Path already set
@@ -453,8 +453,9 @@ The first extraction is where your schema package is born. When SchemaTongs runs
 4. Generates `Template.json` with a `DatabaseIdentificationScript` targeting the source database.
 5. Creates all standard script folders for the active platform (see [Default Folders](schema-packages.md#default-folders)).
 6. Creates a `.json-schemas/` directory with JSON Schema validation files generated **on the fly** from the live engine types.
+7. Writes a `$schema` reference into each package JSON, pointing at the matching file from step 6, so editors validate the package with no per-user configuration.
 
-On subsequent runs against an existing package, SchemaTongs overwrites object scripts and table definitions with the current database state. It does not modify `Product.json` or `Template.json` -- if you change `Platform`, `Name`, or `TemplateOrder` after the first extraction, those edits stick.
+On subsequent runs against an existing package, SchemaTongs overwrites object scripts and table definitions with the current database state. It does not modify the content of `Product.json` or `Template.json` -- if you change `Platform`, `Name`, or `TemplateOrder` after the first extraction, those edits stick. The one exception is the `$schema` reference from step 7: it is added if absent and otherwise left alone, which means **a reference you deleted on purpose is written again on the next run** -- there is no record distinguishing it from one that was never there.
 
 ### Helper procedures
 
@@ -579,6 +580,38 @@ This is a surgical fix, not a default. Enable it on functions where:
 3. The dependency drop-and-rebuild is acceptably fast.
 
 **The risk that makes this opt-in:** if a computed column is persisted or indexed on a 500-million-row table, dropping that dependency means rebuilding the persisted column or index after the function is updated -- which could take a very long time and impact production availability. For functions that rarely change, the right approach is to leave this flag off and write a migration script that handles the dependencies carefully when the function truly needs to change.
+
+### The preamble runs on every deploy, not only when the function changed
+
+This is the consequence to understand before enabling it, because it is visible in every deployment summary.
+
+The preamble is unconditional: it drops the dependents, then `CREATE OR ALTER` runs, then later steps in the
+quench put the dependents back. That is what buys you a function script that is idempotent like every other
+function script -- one file, no special handling, correct whether the function is new or changed. The
+alternative is a create-only-when-missing guard, which leaves an *existing* function un-updated, so a
+changed body needs a hand-written migration script to get deployed at all. Neither choice is free; this one
+trades a repeated rebuild for not having to notice when a function's body changed.
+
+What that means in practice:
+
+- **A re-deploy of an unchanged database is not a no-op.** The dependent computed column and its indexes are
+  genuinely dropped and recreated every time, so the deployment summary reports them as created on every
+  run. Nothing is wrong; the objects end up exactly as declared. It is the reason a package using this flag
+  will never report a zero-change second deploy.
+- **`--WhatIf` does not show it.** WhatIf does not execute the preamble, so the dependents are never dropped
+  and nothing reads as missing -- a WhatIf run against a converged database reports no change while a real
+  deploy performs the rebuild. Do not use WhatIf to size the work this flag causes; read the function script.
+- **Dropped column ids are never reused, and that ceiling is real.** SQL Server assigns a new `column_id`
+  from `sys.tables.max_column_id_used + 1` on every `ALTER TABLE ... ADD`, and never reclaims the old one.
+  A table whose computed column is re-added on every deploy therefore burns one id per deploy: measured on
+  the shipped AdventureWorks demo, `Sales.Customer` holds **7 columns with `max_column_id_used` at 13** after
+  a handful of deploys. `ALTER TABLE ... ADD` starts failing once the next id would pass the 1,024-column
+  ceiling, however few columns the table actually has -- so a pipeline that deploys many times a day has a
+  finite budget on that table. `SELECT max_column_id_used FROM sys.tables` is how you check, and rebuilding
+  the table is how you reset it.
+
+None of this argues against the flag where it fits the three conditions above. It argues for knowing what
+you will see afterwards, so a rebuild you chose does not read as a defect later.
 
 ---
 

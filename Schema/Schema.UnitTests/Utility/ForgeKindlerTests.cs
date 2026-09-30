@@ -302,7 +302,14 @@ public class ForgeKindlerTests
         //   compiles a procedure's statements whether or not they run and caches the plan per object PER
         //   DATABASE, so those 328 lines were compiled on every first deploy to every database for a feature
         //   set most packages never touch. Behind a guarded CALL they are not compiled on the common path.)
-        Assert.That(sqlServer.Length, Is.EqualTo(41));
+        // +1 = SchemaSmith.fn_SafeBracketWrapFullTextColumn (a full-text column is not always ONE
+        //   identifier -- [Doc] TYPE COLUMN [DocType] is two and a keyword -- and it survived the wrapper
+        //   only while the wrap did not escape. The split has to happen INSIDE the wrap, because LANGUAGE
+        //   and STATISTICAL_SEMANTICS are peeled first and would claim the value before a sibling branch
+        //   could see it.).
+        // +1 = SchemaSmith.CdcQuench (#420 -- CDC enable/rotate moved out of ModifiedTableQuench to run after the
+        //   passes that add computed and FILESTREAM columns; a capture instance records only the columns that exist).
+        Assert.That(sqlServer.Length, Is.EqualTo(43));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -442,7 +449,11 @@ public class ForgeKindlerTests
         //   same object is the server's call via lower_case_table_names, and the ownership comparisons
         //   were each answering it differently from the catalog reads -- which refused a legitimate
         //   deploy naming a table the package had not declared. One function so every site agrees.).
-        Assert.That(mysql.Length, Is.EqualTo(65));
+        // +1 = SchemaSmith_NormalizeDeclaredDefault (the DESIRED-side twin of NormalizeColumnDefault. The
+        //   default comparison folded only the LIVE value, so MariaDB's override turned a live uuid() into
+        //   UUID while the declared uuid() was compared raw -- never equal, re-altering the column on every
+        //   deploy. Both sides now fold through the same pair.).
+        Assert.That(mysql.Length, Is.EqualTo(66));
     }
 
     [Test]

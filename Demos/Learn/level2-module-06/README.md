@@ -21,7 +21,7 @@ Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships the f
 ## Before you start
 
 - The [sandbox](../docker) is up (`docker compose up -d`) and verified (all four engines `PASS`).
-- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.4.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later).
 
 ## Step 1: Look at the metadata
 

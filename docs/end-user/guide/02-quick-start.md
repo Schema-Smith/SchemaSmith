@@ -107,6 +107,7 @@ Look at what appeared in the `my-northwind/` folder. You now have a complete sch
 my-northwind/
   Product.json                     ← Platform, templates, tokens
   .json-schemas/                   ← JSON Schema validation, generated on the fly
+                                     (each file above references its own, so editors just work)
   Templates/
     Northwind/
       Template.json
@@ -133,7 +134,7 @@ That's the cast. A live database, captured in files you can read, review, and ve
 
 ## Step 3: Explore the Package
 
-No GUI editor needed -- the schema package is designed to read clearly in any editor or IDE. Open `my-northwind/` in VS Code, JetBrains Rider, Visual Studio, or whatever your team uses. The `.json-schemas/` folder holds a JSON Schema per file type, generated from the live engine types. Point your editor at them once -- a `json.schemas` mapping in VS Code, or the equivalent in your IDE -- and you get autocomplete, type checking and inline errors while editing. They are also what a CI job validates against; see [Testing and validation](06-testing-and-validation.md).
+No GUI editor needed -- the schema package is designed to read clearly in any editor or IDE. Open `my-northwind/` in VS Code, JetBrains Rider, Visual Studio, or whatever your team uses. The `.json-schemas/` folder holds a JSON Schema per file type, generated from the live engine types, and every package file opens with a `$schema` line pointing at its own -- so autocomplete, type checking and inline errors work as soon as you open a file, with nothing to configure. They are also what a CI job validates against; see [Testing and validation](06-testing-and-validation.md).
 
 Click through `Tables/dbo.Categories.json`. You'll see the column definitions, the primary key, and any indexes. Open a stored procedure in `Procedures/` and you see the full SQL definition ready to diff in a pull request. This is what schema review looks like when the files are designed for it: structured enough for tools, readable enough for humans, diff-friendly enough for code review.
 

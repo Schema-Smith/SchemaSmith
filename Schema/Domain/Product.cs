@@ -16,6 +16,16 @@ namespace Schema.Domain
 {
     public class Product
     {
+        // Declared as a real member for the same reason DynamicBase declares Extensions: every load
+        // path runs MissingMemberHandling.Error, so an editor-facing "$schema" key would otherwise
+        // make the whole package fail to LOAD rather than merely fail validation. Declaring it here
+        // also feeds SchemaGenerator, which reflects over JsonProperty names — so the generated
+        // schema lists "$schema" among its properties and additionalProperties:false stops
+        // rejecting it. One declaration, all three surfaces; they cannot drift apart.
+        [SchemaProperty(Description = "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time.")]
+        [JsonProperty("$schema", Order = 0, NullValueHandling = NullValueHandling.Ignore)]
+        public string SchemaRef { get; set; }
+
         [SchemaProperty(Required = true)]
         [JsonProperty(Order = 1)]
         public string Name { get; set; } = "";

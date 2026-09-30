@@ -220,7 +220,7 @@ BEGIN
              CASE WHEN c.data_type = 'ARRAY' THEN REGEXP_REPLACE(c.udt_name, '^_', '') || COALESCE(SUBSTRING(format_type(a.atttypid, a.atttypmod) FROM '\(.*\)'), '') || '[]' ELSE
              CASE WHEN c.domain_name IS NOT NULL
                   THEN CASE WHEN c.domain_schema != 'pg_catalog' THEN '"' || c.domain_schema || '".' ELSE '' END || '"' || c.domain_name || '"'
-                  ELSE CASE WHEN c.udt_schema != 'pg_catalog' THEN c.udt_schema || '.' ELSE '' END || REGEXP_REPLACE(c.udt_name, 'bpchar', 'CHAR', 'i')
+                  ELSE CASE WHEN c.udt_schema != 'pg_catalog' THEN QUOTE_IDENT(c.udt_schema) || '.' || QUOTE_IDENT(c.udt_name) ELSE REGEXP_REPLACE(c.udt_name, 'bpchar', 'CHAR', 'i') END
                   END ||
              "SchemaSmith"."ColumnTypeArguments"(c.domain_name, c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_scale, c.datetime_precision) END AS "DataType",
              CAST(CASE WHEN c.is_nullable = 'YES' THEN TRUE ELSE FALSE END AS BOOLEAN) AS "Nullable",
@@ -680,7 +680,10 @@ BEGIN
                               WHERE ec."TableSchema" = c."TableSchema"
                                 AND ec."TableName" = c."TableName"
                                 AND ec."CheckName" = c."Name"
-                                AND ec."Expression" = c."Expression")
+                                AND (ec."Expression" = c."Expression"
+                                     -- #242: PostgreSQL rewrites what it stores, so ask what was applied before calling the text a change.
+                                     OR "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'CHECK', c."Name",
+                                          'expression', c."Expression", ec."Expression")))
             AND NOT EXISTS (SELECT 1
                               FROM temp_columns col
                               WHERE col."TableSchema" = ec."TableSchema"
@@ -707,7 +710,10 @@ BEGIN
                           WHERE ec."TableSchema" = c."TableSchema"
                             AND ec."TableName" = c."TableName"
                             AND ec."CheckName" = c."Name"
-                            AND ec."Expression" = c."Expression")
+                            AND (ec."Expression" = c."Expression"
+                                 -- #242: PostgreSQL rewrites what it stores, so ask what was applied before calling the text a change.
+                                 OR "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'CHECK', c."Name",
+                                      'expression', c."Expression", ec."Expression")))
         -- Column-level checks (CK_<table>_<column>) are owned by the column pass below, not the
         -- table-level CheckConstraints array; excluding them here prevents a phantom drop on every run.
         AND NOT EXISTS (SELECT 1
@@ -739,7 +745,10 @@ BEGIN
                               WHERE ec."TableSchema" = c."TableSchema"
                                 AND ec."TableName" = c."TableName"
                                 AND ec."CheckName" = c."Name"
-                                AND ec."Expression" = c."Expression")
+                                AND (ec."Expression" = c."Expression"
+                                     -- #242: PostgreSQL rewrites what it stores, so ask what was applied before calling the text a change.
+                                     OR "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'CHECK', c."Name",
+                                          'expression', c."Expression", ec."Expression")))
             AND NOT EXISTS (SELECT 1
                               FROM temp_columns col
                               WHERE col."TableSchema" = ec."TableSchema"
@@ -1222,7 +1231,10 @@ BEGIN
                         'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '" ADD "' || c."Name" || '" ' || c."DataType" ||
                         CASE WHEN COALESCE(c."Collation", '') != '' THEN ' COLLATE "' || c."Collation" || '"' ELSE '' END ||
                         ' GENERATED ALWAYS AS (' || c."GenerationExpression" || ') STORED' ||
-                        CASE WHEN c."Nullable" THEN '' ELSE ' NOT NULL' END || ';' ||
+                        -- NOT NULL only when the package asked for it. An undeclared column's Nullable is the live
+                        -- value, and re-emitting a NOT NULL an older version applied would fail the re-add -- after
+                        -- the DROP -- whenever the new expression can yield NULL.
+                        CASE WHEN c."Nullable" OR NOT c."NullableDeclared" THEN '' ELSE ' NOT NULL' END || ';' ||
                         -- Re-added column is at default storage/compression; carry over any non-default target so
                         -- a combined expression+storage/compression change fully converges in this single pass.
                         CASE WHEN COALESCE(c."Storage", '') != '' AND COALESCE(c."Storage", '') != 'DEFAULT'

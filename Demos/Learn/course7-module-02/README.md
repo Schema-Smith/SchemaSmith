@@ -17,7 +17,7 @@ All four engines. This builds directly on Module 1 (database-per-tenant fan-out)
 - The [sandbox](../docker) is up and verified (all four engines healthy).
 - The fleet exists — run [`../course7-setup`](../course7-setup) once (creates `fleet_tenant_001`…`005`,
   on each engine). Module 1 recommended first.
-- The CLI is on your PATH — `schemaquench --version` answers **2.4.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships the same native `Shop` `Package/` as
 Module 1 (the catalog `DatabaseIdentificationScript` is retained — that's what the config *overrides*),
@@ -62,12 +62,18 @@ schemaquench --ConfigFile:quench.settings.dev.json
 ```
 
 ```
-[localhost,11433].[fleet_tenant_001] Dispatching work unit (source: db=TemplateTargets:Main:Databases, schema=(regular template))
-[localhost,11433].[fleet_tenant_002] Dispatching work unit (source: db=TemplateTargets:Main:Databases, schema=(regular template))
+[localhost,11433] Template 'Main' Databases sourced from TemplateTargets (2 entries); DatabaseIdentificationScript bypassed.
+Template 'Main': 2 units - db: TemplateTargets:Main:Databases; schema: (regular template)
 ```
 
-`source: db=TemplateTargets:Main:Databases` — every unit came from your config. Tenants `003`, `004`, `005`
+`db: TemplateTargets:Main:Databases` — every unit came from your config. Tenants `003`, `004`, `005`
 get **no work unit this run**; the catalog still lists them, but the config didn't.
+
+The rollup is per template, not per unit, and that matters for exactly the case this module is about:
+when every unit in a template shares a source, you get one line. When they **disagree** — 999 tenants from
+the script and one from an override — the deviating units are still named individually, because a count
+is precisely the wrong way to report the one that is different. Per-target `databaseSource` and
+`schemaSource` are in the deployment summary either way ([Module 6](../course7-module-06)).
 
 ## Step 2: One package, many environments
 

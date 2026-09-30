@@ -1,0 +1,55 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "dbo",
+  "Name": "Subscription",
+  "Columns": [
+    {
+      "Name": "SubscriptionID",
+      "DataType": "INTEGER"
+    },
+    {
+      "Name": "PlanCode",
+      "DataType": "NVARCHAR(20)"
+    },
+    {
+      "Name": "RetentionDays",
+      "DataType": "INTEGER"
+    },
+    {
+      "Name": "RetentionWeeks",
+      "DataType": "INT",
+      "ComputedExpression": "RetentionDays / 7",
+      "Persisted": true
+    },
+    {
+      "Name": "IsActive",
+      "DataType": "BIT",
+      "Default": "1"
+    },
+    {
+      "Name": "CreatedAt",
+      "DataType": "DATETIME2",
+      "Default": "SYSUTCDATETIME()"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PK_Subscription",
+      "PrimaryKey": true,
+      "Unique": true,
+      "Clustered": true,
+      "IndexColumns": "SubscriptionID"
+    },
+    {
+      "Name": "IX_Subscription_ActivePlan",
+      "IndexColumns": "PlanCode",
+      "FilterExpression": "IsActive = 1"
+    }
+  ],
+  "CheckConstraints": [
+    {
+      "Name": "CK_Subscription_Retention",
+      "Expression": "RetentionDays <= 365"
+    }
+  ]
+}

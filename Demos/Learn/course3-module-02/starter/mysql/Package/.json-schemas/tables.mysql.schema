@@ -1,6 +1,10 @@
 {
   "type": "object",
   "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time."
+    },
     "Name": {
       "type": "string"
     },
@@ -40,7 +44,7 @@
           },
           "Generated": {
             "type": "string",
-            "pattern": "STORED|VIRTUAL"
+            "pattern": "^(?:STORED|VIRTUAL)$"
           },
           "CharacterSet": {
             "type": "string"
@@ -99,7 +103,7 @@
           },
           "IndexType": {
             "type": "string",
-            "pattern": "BTREE|HASH|FULLTEXT|SPATIAL"
+            "pattern": "^(?:BTREE|HASH|FULLTEXT|SPATIAL)$"
           },
           "Visible": {
             "type": "boolean"
@@ -204,7 +208,7 @@
             },
             "MergeType": {
               "type": "string",
-              "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+              "pattern": "^(?:[Ii][Nn][Ss][Ee][Rr][Tt]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]/[Dd][Ee][Ll][Ee][Tt][Ee])$"
             },
             "MatchColumns": {
               "type": "string"
@@ -213,12 +217,6 @@
               "type": "string"
             },
             "MergeDisableTriggers": {
-              "type": "boolean"
-            },
-            "MergeDisableRules": {
-              "type": "boolean"
-            },
-            "MergeUpdateDescendents": {
               "type": "boolean"
             },
             "ShouldApplyExpression": {
@@ -231,7 +229,7 @@
             },
             "ContentEncoding": {
               "type": "string",
-              "pattern": "Json|Xml"
+              "pattern": "^(?:Json|Xml)$"
             }
           },
           "additionalProperties": false
@@ -246,7 +244,7 @@
               },
               "MergeType": {
                 "type": "string",
-                "pattern": "Insert|Insert/Update|Insert/Update/Delete"
+                "pattern": "^(?:[Ii][Nn][Ss][Ee][Rr][Tt]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]/[Dd][Ee][Ll][Ee][Tt][Ee])$"
               },
               "MatchColumns": {
                 "type": "string"
@@ -255,12 +253,6 @@
                 "type": "string"
               },
               "MergeDisableTriggers": {
-                "type": "boolean"
-              },
-              "MergeDisableRules": {
-                "type": "boolean"
-              },
-              "MergeUpdateDescendents": {
                 "type": "boolean"
               },
               "ShouldApplyExpression": {
@@ -273,7 +265,7 @@
               },
               "ContentEncoding": {
                 "type": "string",
-                "pattern": "Json|Xml"
+                "pattern": "^(?:Json|Xml)$"
               }
             },
             "additionalProperties": false
@@ -314,7 +306,7 @@
       "properties": {
         "Mode": {
           "type": "string",
-          "pattern": "NEVER|ALWAYS|THRESHOLD",
+          "pattern": "^\\s*(?:[Nn][Ee][Vv][Ee][Rr]|[Aa][Ll][Ww][Aa][Yy][Ss]|[Tt][Hh][Rr][Ee][Ss][Hh][Oo][Ll][Dd])\\s*$",
           "description": "When to rebuild the table instead of altering it in place. NEVER (the default) always alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of pending changes reaches Threshold, which is then required."
         },
         "Threshold": {
@@ -335,7 +327,7 @@
     },
     "RowFormat": {
       "type": "string",
-      "pattern": "Dynamic|Compact|Compressed|Redundant|Fixed"
+      "pattern": "^(?:Dynamic|Compact|Compressed|Redundant|Fixed)$"
     },
     "CharacterSet": {
       "type": "string"
@@ -386,7 +378,7 @@
     },
     "Compression": {
       "type": "string",
-      "pattern": "zlib|lz4|none",
+      "pattern": "^(?:zlib|lz4|none)$",
       "description": "MySQL only. InnoDB transparent page compression for the table's tablespace file. MariaDB spells this PAGE_COMPRESSED instead. MySQL only."
     },
     "KeyBlockSize": {
@@ -400,7 +392,7 @@
       "properties": {
         "Method": {
           "type": "string",
-          "pattern": "RANGE|LIST|HASH|KEY|RANGE COLUMNS|LIST COLUMNS",
+          "pattern": "^(?:RANGE|LIST|HASH|KEY|RANGE COLUMNS|LIST COLUMNS)$",
           "description": "RANGE, LIST, HASH, KEY, RANGE COLUMNS or LIST COLUMNS."
         },
         "Expression": {
@@ -443,7 +435,7 @@
     },
     "Encryption": {
       "type": "string",
-      "pattern": "Y|N",
+      "pattern": "^(?:Y|N)$",
       "description": "MySQL only. InnoDB at-rest tablespace encryption ('Y' or 'N'). MariaDB spells this ENCRYPTED=YES/NO instead. MySQL only."
     },
     "Tablespace": {

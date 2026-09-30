@@ -18,6 +18,12 @@ namespace Schema.Domain
 {
     public class Template
     {
+        // See Product.SchemaRef for why this is a declared member rather than a deserializer
+        // exception: MissingMemberHandling.Error would otherwise reject the whole file.
+        [SchemaProperty(Description = "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time.")]
+        [JsonProperty("$schema", Order = 0, NullValueHandling = NullValueHandling.Ignore)]
+        public string SchemaRef { get; set; }
+
         [SchemaProperty(Required = true)]
         [JsonProperty(Order = 1)]
         public string Name { get; set; } = "";
@@ -645,6 +651,11 @@ namespace Schema.Domain
             DatabaseIdentificationScript = SqlScript.TokenReplace(DatabaseIdentificationScript ?? "", tokens);
             VersionStampScript = SqlScript.TokenReplace(VersionStampScript ?? "", tokens);
             BaselineValidationScript = SqlScript.TokenReplace(BaselineValidationScript ?? "", tokens);
+            // The fourth identification script gets the same treatment as the other three; the reference docs
+            // say all of them can interpolate tokens, and this one ran verbatim. Null stays null -- it is what
+            // "not a schema template" means.
+            if (SchemaIdentificationScript != null)
+                SchemaIdentificationScript = SqlScript.TokenReplace(SchemaIdentificationScript, tokens);
         }
 
         /// <summary>
@@ -787,16 +798,6 @@ namespace Schema.Domain
             }
         }
 
-        /// <summary>
-        /// Loads DECLARATIVE events from the same Events/ folder that has always held scripted ones.
-        /// <para>Only *.json is read here; a *.sql file in that folder is still picked up by the scripted
-        /// Objects slot exactly as before, so no existing package changes behaviour. That is deliberate:
-        /// promoting events to a managed type must not strip a folder users already populate.</para>
-        /// </summary>
-        /// <summary>
-        /// Loads DECLARATIVE enum types from the same Enum Types/ folder that has always held scripted
-        /// ones. Only *.json is read here; a *.sql file there still runs through the Objects slot.
-        /// </summary>
         /// <summary>Loads DECLARATIVE sequences from the Sequences/ folder; *.sql there still runs scripted.</summary>
         private void LoadSequences(Platform platform, bool tolerateComponentLoadErrors)
         {
@@ -856,6 +857,10 @@ namespace Schema.Domain
             }
         }
 
+        /// <summary>
+        /// Loads DECLARATIVE enum types from the same Enum Types/ folder that has always held scripted
+        /// ones. Only *.json is read here; a *.sql file there still runs through the Objects slot.
+        /// </summary>
         private void LoadEnumTypes(Platform platform, bool tolerateComponentLoadErrors)
         {
             if (platform != Platform.PostgreSQL) return;
@@ -885,6 +890,12 @@ namespace Schema.Domain
             }
         }
 
+        /// <summary>
+        /// Loads DECLARATIVE events from the same Events/ folder that has always held scripted ones.
+        /// <para>Only *.json is read here; a *.sql file in that folder is still picked up by the scripted
+        /// Objects slot exactly as before, so no existing package changes behaviour. That is deliberate:
+        /// promoting events to a managed type must not strip a folder users already populate.</para>
+        /// </summary>
         private void LoadEvents(Platform platform, bool tolerateComponentLoadErrors)
         {
             if (platform.GetBasePlatform() != Platform.MySQL) return;

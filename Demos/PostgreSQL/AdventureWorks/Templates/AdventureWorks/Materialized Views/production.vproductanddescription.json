@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/materializedviews.postgresql.schema",
   "Name": "vproductanddescription",
   "Schema": "production",
   "Definition": " SELECT p.productid,\n    p.name,\n    pm.name AS productmodel,\n    pmx.cultureid,\n    pd.description\n   FROM (((production.product p\n     JOIN production.productmodel pm ON ((p.productmodelid = pm.productmodelid)))\n     JOIN production.productmodelproductdescriptionculture pmx ON ((pm.productmodelid = pmx.productmodelid)))\n     JOIN production.productdescription pd ON ((pmx.productdescriptionid = pd.productdescriptionid)));",

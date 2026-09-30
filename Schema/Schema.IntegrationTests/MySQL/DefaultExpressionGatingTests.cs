@@ -94,7 +94,7 @@ public class DefaultExpressionGatingTests
 
     private void DropTestTable() => Exec($"DROP TABLE IF EXISTS `{_testDb}`.`{TableName}`");
 
-    private static string BuildTableJson()
+    private static string BuildTableJson(string defaultValue)
     {
         var table = new MySqlTable
         {
@@ -103,7 +103,7 @@ public class DefaultExpressionGatingTests
             Columns =
             [
                 new MySqlColumn { Name = "`id`", DataType = "INT", Nullable = false, AutoIncrement = true },
-                new MySqlColumn { Name = "`expiry_date`", DataType = "DATE", Nullable = false, Default = ExpressionDefault }
+                new MySqlColumn { Name = "`expiry_date`", DataType = "DATE", Nullable = false, Default = defaultValue }
             ],
             Indexes =
             [
@@ -113,9 +113,11 @@ public class DefaultExpressionGatingTests
         return "[" + JsonConvert.SerializeObject(table) + "]";
     }
 
-    private void Deploy()
+    private void Deploy() => Deploy(ExpressionDefault);
+
+    private void Deploy(string defaultValue)
     {
-        var json = BuildTableJson().Replace("'", "''");
+        var json = BuildTableJson(defaultValue).Replace("'", "''");
         Exec($"CALL SchemaSmith_TableQuench('DefExprGateProduct', '{_testDb}', '{json}', 0, 0, 0)");
     }
 
@@ -137,13 +139,17 @@ public class DefaultExpressionGatingTests
 
     // ---- degrade path (MySQL 5.7 simulated via version override) -----------
 
-    [Test]
-    public void BelowFloor_Warn_DeploysTableSkipsColumnAndRecordsDowngraded()
+    // A bare function default is emitted in the expression form too (wrapped in parentheses), so it has to be
+    // degraded the same way -- the gate once recognised only the parenthesised spelling, and a hand-written
+    // curdate() reached MySQL 5.7 as DEFAULT (curdate()), a syntax error.
+    [TestCase(ExpressionDefault)]
+    [TestCase("curdate()")]
+    public void BelowFloor_Warn_DeploysTableSkipsColumnAndRecordsDowngraded(string defaultValue)
     {
         SetVersionOverride(507);
         SetPolicy("warn");
 
-        Deploy();
+        Deploy(defaultValue);
 
         Assert.Multiple(() =>
         {
@@ -171,14 +177,46 @@ public class DefaultExpressionGatingTests
         });
     }
 
-    [Test]
-    public void BelowFloor_Fail_AbortsNamingTheOffendingColumn()
+    [TestCase(ExpressionDefault)]
+    [TestCase("curdate()")]
+    public void BelowFloor_Fail_AbortsNamingTheOffendingColumn(string defaultValue)
     {
         SetVersionOverride(507);
         SetPolicy("fail");
 
-        Assert.That(Deploy, Throws.Exception.With.Message.Contains("8.0.13"),
+        Assert.That(() => Deploy(defaultValue), Throws.Exception.With.Message.Contains("8.0.13"),
             "Under policy 'fail' a declared expression default below the floor must abort the deploy.");
+    }
+
+    // A quoted literal is a plain default on every version, parenthesis or not. Wrapped like a function it
+    // became DEFAULT ('...'), which MySQL 5.7 rejects.
+    [Test]
+    public void BelowFloor_AQuotedLiteralContainingAParenthesis_DeploysAsALiteral()
+    {
+        SetVersionOverride(507);
+        SetPolicy("fail");
+
+        Assert.That(() => DeployVarchar("'N/A (none)'"), Throws.Nothing);
+        Assert.That(Scalar($@"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                              WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{TableName}'
+                                AND COLUMN_NAME = 'note' AND COLUMN_DEFAULT = 'N/A (none)'"), Is.EqualTo(1));
+    }
+
+    private void DeployVarchar(string defaultValue)
+    {
+        var table = new MySqlTable
+        {
+            Name = $"`{TableName}`",
+            Engine = "InnoDB",
+            Columns =
+            [
+                new MySqlColumn { Name = "`id`", DataType = "INT", Nullable = false, AutoIncrement = true },
+                new MySqlColumn { Name = "`note`", DataType = "VARCHAR(40)", Nullable = true, Default = defaultValue }
+            ],
+            Indexes = [ new Schema.Domain.Index { Name = $"`pk_{TableName}`", PrimaryKey = true, Unique = true, IndexColumns = "`id`" } ]
+        };
+        var json = ("[" + JsonConvert.SerializeObject(table) + "]").Replace("'", "''");
+        Exec($"CALL SchemaSmith_TableQuench('DefExprGateProduct', '{_testDb}', '{json}', 0, 0, 0)");
     }
 
     // ---- supported path (modern binary, no override) -----------------------

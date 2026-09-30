@@ -63,7 +63,10 @@ BEGIN
                        AND NOT (tc."Virtual" AND "SchemaSmith"."ServerVersionNum"() < 18)) ||
                     ')'';' || CHR(10) ||
                     'ALTER TABLE "' || tt."Schema" || '"."' || tt."Name" || '" ' ||
-                    (SELECT STRING_AGG('ADD COLUMN "' || tc."Name" || '" ' || tc."DataType" || ' GENERATED ' || tc."Generated" || ' AS (' || tc."GenerationExpression" || ') ' || CASE WHEN tc."Virtual" THEN 'VIRTUAL' ELSE 'STORED' END, ', ')
+                    -- Nullability belongs in the ADD: leaving it out built every generated column nullable, and a declared
+                    -- NOT NULL then arrived one deploy late as a SET NOT NULL. PostgreSQL 18 accepts it on VIRTUAL too.
+                    (SELECT STRING_AGG('ADD COLUMN "' || tc."Name" || '" ' || tc."DataType" || ' GENERATED ' || tc."Generated" || ' AS (' || tc."GenerationExpression" || ') ' || CASE WHEN tc."Virtual" THEN 'VIRTUAL' ELSE 'STORED' END
+                                       || CASE WHEN tc."Nullable" THEN '' ELSE ' NOT NULL' END, ', ')
                        FROM temp_columns tc
                        WHERE tc."TableSchema" = tt."Schema" AND tc."TableName" = tt."Name"
                          AND tc."Generated" = 'ALWAYS' AND COALESCE(tc."GenerationExpression", '') <> ''

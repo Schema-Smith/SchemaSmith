@@ -20,7 +20,7 @@ Each package is deployed on its own — the orders package never touches the ses
 
 - Three-engine sandbox is up (`Demos/Learn/docker`).
 - **Run course9-setup first** ([`../course9-setup/README.md`](../course9-setup/README.md)) so the `orders`, `catalog`, and `sessions` databases exist. This module deploys into those databases — it does not create them.
-- `schemaquench --version` answers **2.4.0** or later.
+- `schemaquench --version` answers **2.7.0** or later.
 
 ## Steps
 

@@ -168,7 +168,6 @@ SELECT COUNT(*) FROM INFORMATION_SCHEMA.PERIODS
 
     private const string DropTarget = "PeriodDropTarget";
 
-    /// <summary>Package for <see cref="DropTarget"/> that declares a period, or none.</summary>
     /// <summary>Package for <see cref="DropTarget"/>, with its single period or with none.</summary>
     /// <remarks>MariaDB permits at most ONE application-time period per table (error 4154), so the
     /// choice is "the period" or "no periods" -- there is no partial case to test.</remarks>

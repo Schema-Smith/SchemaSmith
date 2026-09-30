@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using Schema.Delivery;
 using Schema.Domain;
+using Schema.Utility;
 using Schema.Domain.MariaDb;
 using Schema.Domain.MySQL;
 using Schema.Domain.PostgreSQL;
@@ -30,13 +31,16 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string IndexColumnCode = "SS-IDX-001";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string RebuildThresholdCode = "SS-TBL-001";
+    private const string IgnoredThresholdCode = "SS-TBL-002";
     private const string RlsWithoutPoliciesCode = "SS-RLS-001";
     private const string PoliciesWithoutRlsCode = "SS-RLS-002";
     private const string ReplicaIdentityIndexMissingCode = "SS-RI-001";
+    private const string QuotedIdentifierCode = "SS-IDENT-001";
     private const string ReplicaIdentityIndexUnknownCode = "SS-RI-002";
     private const string ReplicaIdentityIndexNotUniqueCode = "SS-RI-003";
     private const string ReplicaIdentityIndexIgnoredCode = "SS-RI-004";
     private const string VersioningExclusionInertCode = "SS-SV-001";
+    private const string MinimumVersionUnresolvableCode = "SS-VER-001";
     private const string CdcFilegroupInertCode = "SS-CDC-001";
     private const string CompressionConflictCode = "SS-CO-001";
     private const string CompressionLevelInertCode = "SS-CO-002";
@@ -62,11 +66,22 @@ public sealed class CoherenceCheck : ISchemaCheck
             .ToDictionary(g => g.Key, g => g.ToList());
 
         var findings = new List<Finding>();
+        findings.AddRange(CheckMinimumVersion(ctx.Product));
+        // A policy is resolved as a WHOLE object from the nearest level that declares one, so an unusable
+        // policy at the product or template tier replaces an inherited one exactly as a table's does.
+        findings.AddRange(CheckRebuildPolicy(ctx.Product.RebuildPolicy, $"Product '{ctx.Product.Name}'",
+            $"Product '{ctx.Product.Name}'"));
+        foreach (var template in ctx.Templates)
+            findings.AddRange(CheckRebuildPolicy(template.RebuildPolicy, $"Template '{template.Name}'",
+                $"Template '{template.Name}'"));
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckScheduledEvents(template));
 
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckModeledFolderObjectCoexistence(template));
+
+        foreach (var template in ctx.Templates)
+            findings.AddRange(CheckPostgreSqlQuotedIdentifierOnModeledObjects(template));
 
         foreach (var template in ctx.Templates)
         foreach (var table in template.Tables)
@@ -89,9 +104,10 @@ public sealed class CoherenceCheck : ISchemaCheck
                 findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
 
             findings.AddRange(CheckBackfill(table, location));
-            findings.AddRange(CheckRebuildPolicy(table, location));
+            findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
             findings.AddRange(CheckRowLevelSecurity(table, location));
             findings.AddRange(CheckReplicaIdentity(table, location));
+            findings.AddRange(CheckPostgreSqlQuotedIdentifier(table, location));
             findings.AddRange(CheckSystemVersioningExclusions(table, location));
             findings.AddRange(CheckCdcFilegroup(table, location));
             findings.AddRange(CheckCompressionOptions(table, location));
@@ -134,8 +150,12 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         if (!tablesByKey.TryGetValue((schema, name), out var relatedTables))
         {
-            yield return new Finding(Severity.Error, RelatedTableCode, Category, location,
-                $"RelatedTable '{fk.RelatedTable}' does not resolve to any known table (resolved schema '{schema}').");
+            // A warning, not an error: the deploy creates a foreign key to any table that exists on the target,
+            // declared or not, so an unresolved reference is only a likely mistake. Never silenced -- not even for
+            // a partial deployment such as a SchemaShears patch, where it is expected: DropTablesRemovedFromProduct
+            // false is also a common safety setting on a complete product, and there it would hide a real typo.
+            yield return new Finding(Severity.Warning, RelatedTableCode, Category, location,
+                    $"RelatedTable '{fk.RelatedTable}' does not resolve to any table in the package (resolved schema '{schema}'). The deploy succeeds only if it already exists on the target.");
             yield break;
         }
 
@@ -149,11 +169,47 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
+    /// A declared <c>MinimumVersion</c> the engine cannot resolve aborts the deploy before any object is
+    /// touched. That refusal is correct — the gap was that nothing said so EARLIER, so the author's first
+    /// signal was a failed deployment.
+    /// <para>This calls <see cref="VersionHelper.ParseDeclaredVersion"/>, the same function
+    /// <c>ProductQuench.ValidateMinimumVersion</c> calls. That is deliberate rather than convenient: any
+    /// re-implementation here could disagree with the deploy about what resolves, which is a worse version
+    /// of the bug being fixed.</para>
+    /// <para><c>MinimumVersion</c> carries no <c>[SchemaProperty]</c>, so no pattern reaches the generated
+    /// <c>.json-schema</c> and <c>JsonSchemaCheck</c> cannot cover this. Only SQL Server can reject a
+    /// WELL-FORMED value: a year >= 2000 is looked up in a closed table of release years, so 2013 / 2018 /
+    /// 2020 / 2023 / 2024 are unresolvable while looking entirely plausible. PostgreSQL and the MySQL family
+    /// parse arithmetically and fail only on a non-numeric value.</para>
+    /// </summary>
+    private static IEnumerable<Finding> CheckMinimumVersion(Product product)
+    {
+        // Absent is not invalid -- MinimumVersion is optional, and the deploy returns early on it too.
+        if (string.IsNullOrWhiteSpace(product.MinimumVersion))
+            yield break;
+
+        if (VersionHelper.ParseDeclaredVersion(product.MinimumVersion, product.Platform) != null)
+            yield break;
+
+        yield return new Finding(Severity.Error, MinimumVersionUnresolvableCode, Category,
+            $"Product '{product.Name}'",
+            $"MinimumVersion '{product.MinimumVersion}' is not a valid {product.Platform} version, so the "
+            + "deploy will refuse this package before touching any object."
+            + (product.Platform == Platform.SqlServer
+                ? " On SQL Server a value of 2000 or more is read as a RELEASE YEAR and must be one of "
+                  + "2008, 2012, 2014, 2016, 2017, 2019, 2022 or 2025 — an in-between year such as 2018 or "
+                  + "2020 does not resolve. A major version number (13, 16) also works."
+                : " Use a numeric version such as " + (product.Platform.GetBasePlatform() == Platform.MySQL
+                    ? "'8.0' or '10.6'." : "'12' or '16'.")));
+    }
+
+    /// <summary>
     /// BackfillExistingRows renders as ALTER TABLE ... WITH VALUES, which SQL Server rejects as a SYNTAX
     /// error when the column has no DEFAULT — so the deploy path only emits it alongside one. That guard
     /// keeps the batch runnable but makes the setting a silent no-op, which is the shape worth catching
     /// here: the author asked for existing rows to be populated and nothing would populate them.
     /// </summary>
+
     private static IEnumerable<Finding> CheckBackfill(Table table, string tableLocation)
     {
         foreach (var column in table.Columns.OfType<SqlServerColumn>()
@@ -173,17 +229,27 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// product, template) is not visible from a package-authoring check, and a table that declares
     /// nothing here is not the level that would be at fault.</para>
     /// </summary>
-    private static IEnumerable<Finding> CheckRebuildPolicy(Table table, string tableLocation)
+    private static IEnumerable<Finding> CheckRebuildPolicy(RebuildPolicy policy, string owner, string location)
     {
-        var policy = table.RebuildPolicy;
         if (policy == null) yield break;
-        if (!string.Equals(policy.Mode, "THRESHOLD", StringComparison.OrdinalIgnoreCase)) yield break;
-        if (policy.Threshold is >= 1) yield break;
+        // Spaces only, as the deploy trims on every engine.
+        var isThreshold = string.Equals(policy.Mode?.Trim(' '), "THRESHOLD", StringComparison.OrdinalIgnoreCase);
 
-        yield return new Finding(Severity.Error, RebuildThresholdCode, Category, tableLocation,
-            $"Table '{table.Name}' sets RebuildPolicy.Mode 'THRESHOLD' but no Threshold of 1 or more. " +
-            "THRESHOLD needs a threshold to compare against, so the policy cannot be evaluated — set a " +
-            "Threshold, or choose Mode 'ALWAYS' or 'NEVER'.");
+        if (isThreshold && policy.Threshold is not >= 1)
+            yield return new Finding(Severity.Error, RebuildThresholdCode, Category, location,
+                $"{owner} sets RebuildPolicy.Mode 'THRESHOLD' but no Threshold of 1 or more. " +
+                "THRESHOLD needs a threshold to compare against, so the policy cannot be evaluated — set a " +
+                "Threshold, or choose Mode 'ALWAYS' or 'NEVER'. A policy declared here also replaces any " +
+                "inherited one, so leaving it unusable blocks rebuilds an outer level asked for.");
+
+        // Mode defaults to NEVER, so a Threshold written without Mode 'THRESHOLD' is not a threshold -- and the
+        // declared policy still replaces an inherited one whole, so {"Threshold":50} alone BLOCKS rebuilds.
+        if (!isThreshold && policy.Threshold != null)
+            yield return new Finding(Severity.Warning, IgnoredThresholdCode, Category, location,
+                $"{owner} sets RebuildPolicy.Threshold {policy.Threshold} but Mode is '{policy.Mode}', so the " +
+                "threshold is ignored. An omitted Mode defaults to NEVER, and because a policy declared here " +
+                "replaces any inherited one whole, it can block rebuilds an outer level asked for. Set Mode " +
+                "'THRESHOLD' to use the threshold, or remove it.");
     }
     /// <summary>
     /// Row-level security and its policies are two halves of one feature, and each half on its own
@@ -358,6 +424,131 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
+    /// A <c>"</c> in a PostgreSQL object name is refused, because no stored form of such a name deploys.
+    /// <para>
+    /// The quench re-wraps a stored name as <c>'"' || Name || '"'</c> without escaping, so a bare
+    /// <c>a"b</c> emits <c>"a"b"</c> — invalid DDL — while the escaped form <c>a""b</c> would emit
+    /// correctly but is never what extraction writes, since extraction writes the RAW catalog name. The
+    /// two directions disagree, so no consumer can be correct by construction, and the failure lands at
+    /// deploy time as a syntax error that names nothing useful.
+    /// </para>
+    /// <para>
+    /// Refusing here is deliberately the 2.7.0 answer rather than escaping the ~101 emission sites: it
+    /// states the limit, fails at lint time with something actionable, and cannot break a working package
+    /// because such a package has never deployed. Supporting the name properly is 2.8.0 work — see the
+    /// roadmap entry — and when it lands this check is what gets deleted.
+    /// </para>
+    /// </summary>
+    private static IEnumerable<Finding> CheckPostgreSqlQuotedIdentifier(Table table, string tableLocation)
+    {
+        if (table is not PostgreSqlTable pgTable) return [];
+        return QuotedIdentifierFindings(NamedParts(pgTable), tableLocation);
+    }
+
+    /// <summary>
+    /// The modeled-object populations — materialized views, enum types, sequences, domain types — which
+    /// reach the identical unescaped re-wrap as a table's own names and were outside the check's original
+    /// table-only population.
+    /// <para>Not platform-gated, because these four collections are typed to PostgreSQL-only classes: a
+    /// non-PostgreSQL package cannot populate them at all, so there is no cross-engine false error to
+    /// guard against the way there is for a table.</para>
+    /// </summary>
+    private static IEnumerable<Finding> CheckPostgreSqlQuotedIdentifierOnModeledObjects(Template template) =>
+        QuotedIdentifierFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'");
+
+    private static IEnumerable<Finding> QuotedIdentifierFindings(
+        IEnumerable<(string Kind, string Name)> parts,
+        string location)
+    {
+        foreach (var (kind, name) in parts)
+        {
+            if (string.IsNullOrEmpty(name) || !name.Contains('"')) continue;
+            // "{kind} '{name}'" rather than "{kind} name '{name}'": several kinds already end in the noun
+            // (Table OldName, ReplicaIdentityIndex), and appending "name" to those read as "Table OldName
+            // name 'old'".
+            yield return new Finding(Severity.Error, QuotedIdentifierCode, Category, location,
+                $"{kind} '{name}' contains a double-quote character, which PostgreSQL allows but " +
+                "SchemaSmith cannot deploy: the name is re-wrapped in double quotes without escaping, so " +
+                "every stored form of it produces invalid DDL. Rename the object to remove the quote.");
+        }
+    }
+
+    /// <summary>
+    /// Every name on a table that reaches PostgreSQL DDL as a wrapped identifier.
+    /// <para>Each kind here was read at its emission site in the shipped quench scripts and carries the
+    /// stored value between bare double quotes with no doubling. A name wrapped by <c>QUOTE_IDENT</c>
+    /// escapes correctly and so is deliberately ABSENT — a policy name is the case that looks like an
+    /// omission and is not one. Column <em>lists</em> are also out: they route through
+    /// <c>QuoteColumnList</c>/<c>QuoteIndexColumnList</c>, and <c>SchemaRef</c> is read by no script.</para>
+    /// </summary>
+    private static IEnumerable<(string Kind, string Name)> NamedParts(PostgreSqlTable table)
+    {
+        yield return ("Table", table.Name);
+        // Schema is resolved through IDeliverableTable, uniformly across platforms -- the same route
+        // the duplicate check uses at :285, rather than a property Table itself does not carry.
+        var schema = (table as IDeliverableTable)?.Schema;
+        if (!string.IsNullOrEmpty(schema)) yield return ("Schema", schema);
+        if (!string.IsNullOrEmpty(table.OldName)) yield return ("Table OldName", table.OldName);
+        foreach (var c in table.Columns)
+        {
+            yield return ("Column", c.Name);
+            if (!string.IsNullOrEmpty(c.OldName)) yield return ("Column OldName", c.OldName);
+        }
+        foreach (var i in table.Indexes) yield return ("Index", i.Name);
+        foreach (var f in table.ForeignKeys)
+        {
+            yield return ("Foreign key", f.Name);
+            // The REFERENCED table's schema and name are wrapped at ForeignKeyQuench:18 exactly as the
+            // local ones are, and are NOT covered by checking the related table's own declaration: a
+            // package may reference a table it does not declare, and SS-FK-002 resolves the reference
+            // without ever looking at whether the stored text can be emitted.
+            if (f is PostgreSqlForeignKey { RelatedTableSchema: { Length: > 0 } relatedSchema })
+                yield return ("Foreign key RelatedTableSchema", relatedSchema);
+            if (!string.IsNullOrEmpty(f.RelatedTable)) yield return ("Foreign key RelatedTable", f.RelatedTable);
+        }
+        foreach (var cc in table.CheckConstraints) yield return ("Check constraint", cc.Name);
+        foreach (var ec in table.ExcludeConstraints) yield return ("Exclude constraint", ec.Name);
+        foreach (var st in table.Statistics) yield return ("Statistics", st.Name);
+        // A pointer, not a declaration -- so it is its own kind. When it names a declared index the index
+        // reports separately, which is honest: both the CREATE and the REPLICA IDENTITY clause break.
+        if (!string.IsNullOrEmpty(table.ReplicaIdentityIndex))
+            yield return ("ReplicaIdentityIndex", table.ReplicaIdentityIndex);
+    }
+
+    /// <summary>Every name on a modeled non-table object that reaches PostgreSQL DDL as a wrapped identifier.</summary>
+    private static IEnumerable<(string Kind, string Name)> ModeledObjectNamedParts(Template template)
+    {
+        foreach (var view in template.MaterializedViews)
+        {
+            yield return ("Materialized view", view.Name);
+            if (!string.IsNullOrEmpty(view.Schema)) yield return ("Materialized view schema", view.Schema);
+            // MissingMaterializedViewIndexesQuench:110 wraps an index name on a view exactly as the table
+            // path does, so a view's indexes are part of this population rather than the table one.
+            foreach (var index in view.Indexes) yield return ("Materialized view index", index.Name);
+        }
+
+        foreach (var enumType in template.EnumTypes)
+        {
+            yield return ("Enum type", enumType.Name);
+            if (!string.IsNullOrEmpty(enumType.Schema)) yield return ("Enum type schema", enumType.Schema);
+        }
+
+        foreach (var sequence in template.Sequences)
+        {
+            yield return ("Sequence", sequence.Name);
+            if (!string.IsNullOrEmpty(sequence.Schema)) yield return ("Sequence schema", sequence.Schema);
+        }
+
+        foreach (var domain in template.DomainTypes)
+        {
+            yield return ("Domain type", domain.Name);
+            if (!string.IsNullOrEmpty(domain.Schema)) yield return ("Domain type schema", domain.Schema);
+            foreach (var check in domain.CheckConstraints)
+                yield return ("Domain type check constraint", check.Name);
+        }
+    }
+
+    /// <summary>
     /// PostgreSQL REPLICA IDENTITY coherence — issue #407.
     /// <para>The deploy raises on a declaration it cannot honour, but a mid-deploy failure is a worse
     /// place to learn about a typo than <c>--Validate</c>. These catch the same mistakes statically, and
@@ -411,13 +602,6 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
-    /// MariaDB per-column <c>WITHOUT SYSTEM VERSIONING</c> coherence — issue #408.
-    /// <para>Verified on 11.4: MariaDB <b>accepts the clause on a table that is not system-versioned and
-    /// silently discards it</b> — no error, and <c>EXTRA</c> comes back empty. So the declaration is inert,
-    /// and nothing at deploy time can tell the author, because nothing failed.</para>
-    /// <para>Warning rather than Error: it is legal and deployable, and a table may gain versioning later.</para>
-    /// </summary>
-    /// <summary>
     /// #417: <c>CdcFilegroup</c> only places a CDC change table, so on a table without <c>EnableCDC</c> it does
     /// nothing, and the deploy has no reason to mention it. Table-level only: a template default legitimately
     /// covers a mix of CDC and non-CDC tables.
@@ -431,6 +615,13 @@ public sealed class CoherenceCheck : ISchemaCheck
             "table to place and the setting does nothing — set EnableCDC, or drop CdcFilegroup.");
     }
 
+    /// <summary>
+    /// MariaDB per-column <c>WITHOUT SYSTEM VERSIONING</c> coherence — issue #408.
+    /// <para>Verified on 11.4: MariaDB <b>accepts the clause on a table that is not system-versioned and
+    /// silently discards it</b> — no error, and <c>EXTRA</c> comes back empty. So the declaration is inert,
+    /// and nothing at deploy time can tell the author, because nothing failed.</para>
+    /// <para>Warning rather than Error: it is legal and deployable, and a table may gain versioning later.</para>
+    /// </summary>
     private static IEnumerable<Finding> CheckSystemVersioningExclusions(Table table, string tableLocation)
     {
         if (table is not MariaDbTable mariaTable || mariaTable.IsSystemVersioned) yield break;
@@ -442,15 +633,6 @@ public sealed class CoherenceCheck : ISchemaCheck
                 "the exclusion does nothing — set IsSystemVersioned, or drop WithoutSystemVersioning.");
     }
 
-    /// <summary>
-    /// MySQL/MariaDB compression table options that cannot be combined.
-    /// <para><b>Both engines REFUSE the combination, and neither error names what is wrong.</b> Verified
-    /// live: MySQL 8.0 rejects <c>COMPRESSION</c> alongside <c>ROW_FORMAT=COMPRESSED</c> with 1031
-    /// ("Table storage engine ... doesn't have this option"); MariaDB 11.4 rejects <c>PAGE_COMPRESSED</c>
-    /// with the same row format as errno 140 ("Wrong create options"). Both name the table and neither
-    /// names the option, so without this the author gets an error that could mean almost anything.</para>
-    /// <para>Error rather than Warning: the deploy cannot succeed, so there is nothing to weigh.</para>
-    /// </summary>
     /// <summary>
     /// SQL Server partition placement declared as half a pair, or contradicting a filegroup
     /// (#partitioning, K1).
@@ -498,6 +680,15 @@ public sealed class CoherenceCheck : ISchemaCheck
                 "It lives on one data space — declare one or the other, not both.");
     }
 
+    /// <summary>
+    /// MySQL/MariaDB compression table options that cannot be combined.
+    /// <para><b>Both engines REFUSE the combination, and neither error names what is wrong.</b> Verified
+    /// live: MySQL 8.0 rejects <c>COMPRESSION</c> alongside <c>ROW_FORMAT=COMPRESSED</c> with 1031
+    /// ("Table storage engine ... doesn't have this option"); MariaDB 11.4 rejects <c>PAGE_COMPRESSED</c>
+    /// with the same row format as errno 140 ("Wrong create options"). Both name the table and neither
+    /// names the option, so without this the author gets an error that could mean almost anything.</para>
+    /// <para>Error rather than Warning: the deploy cannot succeed, so there is nothing to weigh.</para>
+    /// </summary>
     private static IEnumerable<Finding> CheckCompressionOptions(Table table, string tableLocation)
     {
         if (table is not MySqlTable mySqlTable) yield break;

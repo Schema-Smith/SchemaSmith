@@ -3,6 +3,7 @@
 using System;
 using System.Data;
 using System.Linq;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -129,7 +130,7 @@ public class VersionCompatTokenIntegrationTests
                 p.ParameterName = "@j";
                 p.Value = template.TableSchema;
                 jsonCmd.Parameters.Add(p);
-                Assert.Catch(() => jsonCmd.ExecuteScalar(),
+                Assert.That(() => jsonCmd.ExecuteScalar(), Throws.InstanceOf<SqlException>(),
                     "OPENJSON must parse-error at compatibility level 100 — the reason the XML twin exists.");
             }
         }

@@ -166,15 +166,58 @@ BEGIN TRY
     SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + T.[Schema] + '.' + T.[Name] + ' Restored'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
                              FROM #Tables T WITH (NOLOCK)
                              WHERE NewTable = 1
-                               AND OBJECT_ID([Schema] + '.' + [Name]) IS NOT NULL
+                               AND OBJECT_ID([Schema] + '.' + [Name], 'U') IS NOT NULL
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
-    UPDATE #Tables
-      SET NewTable = 0
-      WHERE NewTable = 1
-        AND OBJECT_ID([Schema] + '.' + [Name]) IS NOT NULL
   END
+
+  -- IDEMPOTENCY REFRESH -- this proc is re-EXECed on retryable contention, and it must survive that.
+  --
+  -- Re-derive both flags against the live catalog, so a declared object that ALREADY EXISTS is routed to
+  -- the reconcile passes instead of having its creation replayed.
+  --
+  -- WHY THIS IS HERE ON *THIS* ENGINE, stated carefully, because the obvious reason is wrong. On the MySQL
+  -- family the reason is a contention retry: there the quench proc is re-CALLed on its own, while the flags
+  -- were computed by an earlier command, so a replay re-creates whatever the failed attempt already made.
+  -- **SQL Server does not have that exposure.** DatabaseQuench sends the parse FILL half and the quench in
+  -- ONE command text, and the fill TRUNCATEs and re-derives the working set -- ParseTableJsonIntoTempTables
+  -- says so explicitly ("the fill half has to be safe to run twice against the same working set"). So a
+  -- retry here already re-computes the flags, and this UPDATE is not what makes the retry safe.
+  --
+  -- What it DOES fix on this engine is a SIMULTANEOUS TABLE AND COLUMN RENAME, which has nothing to do with
+  -- retries. Declare table a -> b and, inside it, column x -> y. All three of parse's NewColumn exclusions
+  -- miss: y does not exist under a, and b does not exist yet, so x-under-b misses too. NewColumn stays 1.
+  -- Both rename passes above then run, y now genuinely exists, and the add-columns pass emitted
+  -- ALTER TABLE b ADD y -> "Column names in each table must be unique". Placed after both renames, this
+  -- clears the flag and the deploy converges. That is the testable justification, and it needs no
+  -- contention harness.
+  --
+  -- ON A FIRST PASS THIS CHANGES NOTHING: nothing declared-new exists yet, so neither UPDATE matches a row.
+  --
+  -- THE TABLE HALF WAS ALREADY HERE, gated behind IF OBJECT_ID('SchemaSmith.CustomTableRestore') IS NOT NULL
+  -- -- a hook almost no deployment installs. Ungating it changes nothing for hook users: it was the last
+  -- statement inside that block and it is now the first after it, so the order relative to the restore calls
+  -- is unchanged.
+  --
+  -- THE 'U' TYPE FILTER IS LOAD-BEARING, NOT TIDINESS. Parse asks OBJECT_ID(..., 'U'); without the same
+  -- filter here, "exists" is strictly wider than the flag being cleared. OBJECT_ID with no type resolves a
+  -- VIEW, and COLUMNPROPERTY returns a ColumnId for a view's columns (both measured on 2022) -- so a package
+  -- declaring a table where a VIEW of that name exists, the ordinary "replace the view with a real table"
+  -- migration, had both flags cleared and was SILENTLY SKIPPED, reporting success with the table absent.
+  -- Before ungating, that case failed loudly with Msg 2714, which names the object. Losing an accurate error
+  -- for a silent no-op is strictly worse than the bug being fixed.
+  UPDATE #Tables
+    SET NewTable = 0
+    WHERE NewTable = 1
+      AND OBJECT_ID([Schema] + '.' + [Name], 'U') IS NOT NULL
+
+  UPDATE #Columns
+    SET NewColumn = 0
+    WHERE NewColumn = 1
+      AND COLUMNPROPERTY(OBJECT_ID([Schema] + '.' + [TableName], 'U'),
+                         SchemaSmith.fn_StripBracketWrapping([ColumnName]), 'ColumnId') IS NOT NULL
+
 
 
   -- TEXTIMAGE_ON is REJECTED by SQL Server (error 1709) on a table with no large-object column, and that

@@ -235,6 +235,112 @@ public class ObjectChangeAuditIntegrationTests : BaseTableQuenchTests
         cmd.ExecuteNonQuery();
     }
 
+    // A check constraint re-applied because its expression changed, or dropped because a column it reads changed,
+    // was dropped by DDL that wrote no audit row -- so the deployment summary reported the re-create and never the
+    // drop. Only the removed-from-product path audited. PostgreSQL audits all three.
+    [TestCase(false, "dropped")]
+    [TestCase(true, "wouldDrop")]
+    public void AModifiedCheckExpression_AuditsItsDrop(bool whatIf, string expectedAction)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        DropIfExists(cmd, "dbo.AuditCheckMod");
+        try
+        {
+            RunTableQuenchProc(cmd, CheckJson("[Qty] <= 10"), productName: Product);
+            ClearAudit(cmd);
+
+            RunTableQuenchProc(cmd, CheckJson("[Qty] <= 20"), whatIf: whatIf, productName: Product);
+
+            Assert.That(ReadAudit(cmd).Any(r => r.Type == "constraint" && r.Action == expectedAction && r.Name.Contains("CK_AuditCheckMod")),
+                $"expected constraint/{expectedAction} for the re-applied check; got: "
+                + string.Join("; ", ReadAudit(cmd).Select(r => $"{r.Type}/{r.Action}/{r.Name}")));
+        }
+        finally { DropIfExists(cmd, "dbo.AuditCheckMod"); }
+    }
+
+    [Test]
+    public void ACheckDroppedBecauseItsColumnChanged_AuditsTheDrop()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        DropIfExists(cmd, "dbo.AuditCheckMod");
+        try
+        {
+            RunTableQuenchProc(cmd, CheckJson("[Qty] <= 10"), productName: Product);
+            ClearAudit(cmd);
+
+            RunTableQuenchProc(cmd, CheckJson("[Qty] <= 10", qtyType: "BIGINT"), productName: Product);
+
+            Assert.That(ReadAudit(cmd).Any(r => r is { Type: "constraint", Action: "dropped" } && r.Name.Contains("CK_AuditCheckMod")),
+                "expected constraint/dropped for the check dropped ahead of its column's type change; got: "
+                + string.Join("; ", ReadAudit(cmd).Select(r => $"{r.Type}/{r.Action}/{r.Name}")));
+        }
+        finally { DropIfExists(cmd, "dbo.AuditCheckMod"); }
+    }
+
+    private static string CheckJson(string expression, string qtyType = "INT") => $$"""
+        {
+            "Schema": "[dbo]",
+            "Name": "[AuditCheckMod]",
+            "Columns": [
+                { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                { "Name": "[Qty]", "DataType": "{{qtyType}}", "Nullable": false }
+            ],
+            "CheckConstraints": [
+                { "Name": "[CK_AuditCheckMod_Qty]", "Expression": "{{expression}}" }
+            ]
+        }
+        """;
+
+    // The summary is a COUNT, so presence is not enough: a check reading two changing columns is matched once per
+    // column, and must still be counted once -- in a real run and under WhatIf, where a check whose column AND
+    // expression both change also sits in both drop sets.
+    [TestCase(false, "dropped")]
+    [TestCase(true, "wouldDrop")]
+    public void ACheckReachedTwice_IsCountedOnce(bool whatIf, string expectedAction)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        DropIfExists(cmd, "dbo.AuditCheckTwice");
+        try
+        {
+            RunTableQuenchProc(cmd, TwoColumnCheckJson("INT", "[Qty] <= [MaxQty]"), productName: Product);
+            ClearAudit(cmd);
+
+            RunTableQuenchProc(cmd, TwoColumnCheckJson("BIGINT", "[Qty] < [MaxQty]"), whatIf: whatIf, productName: Product);
+
+            var rows = ReadAudit(cmd).Where(r => r.Type == "constraint" && r.Action == expectedAction && r.Name.Contains("CK_AuditCheckTwice")).ToList();
+            Assert.That(rows, Has.Count.EqualTo(1),
+                "one check, one drop: " + string.Join("; ", ReadAudit(cmd).Select(r => $"{r.Type}/{r.Action}/{r.Name}")));
+        }
+        finally { DropIfExists(cmd, "dbo.AuditCheckTwice"); }
+    }
+
+    private static string TwoColumnCheckJson(string type, string expression) => $$"""
+        {
+            "Schema": "[dbo]",
+            "Name": "[AuditCheckTwice]",
+            "Columns": [
+                { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                { "Name": "[Qty]", "DataType": "{{type}}", "Nullable": false },
+                { "Name": "[MaxQty]", "DataType": "{{type}}", "Nullable": false }
+            ],
+            "CheckConstraints": [
+                { "Name": "[CK_AuditCheckTwice]", "Expression": "{{expression}}" }
+            ]
+        }
+        """;
+
     private static void ClearAudit(IDbCommand cmd)
     {
         cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";

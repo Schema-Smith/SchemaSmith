@@ -169,6 +169,124 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
         });
     }
 
+    // Through the model, as the deploy sends it. A generated column's nullability is the engine's unless the
+    // package states it: an omission was read as NOT NULL, which neither CREATE nor MODIFY ever emitted, so the
+    // column was rewritten on every deploy -- a table rewrite when STORED. An explicit false now arrives on MySQL;
+    // MariaDB rejects NOT NULL on a generated column outright, so there the engine always decides.
+    [TestCase(null)]
+    [TestCase(true)]
+    [TestCase(false)]
+    public void AGeneratedColumnsNullability_IsBuiltOnTheFirstDeploy_AndThenLeftAlone(bool? declared)
+    {
+        var table = $"ExprMapNul_{Guid.NewGuid():N}"[..20];
+        WithConnection(table, cmd =>
+        {
+            var nullable = declared.HasValue ? $" \"Nullable\": {declared.Value.ToString().ToLowerInvariant()}," : "";
+            var json = DeployJson.ThroughTheModel($$"""
+                [
+                {
+                    "Name": "{{table}}",
+                    "Columns": [
+                        { "Name": "Id", "DataType": "INT", "Nullable": false },
+                        { "Name": "Tag", "DataType": "VARCHAR(50)", "Nullable": true },
+                        { "Name": "Label", "DataType": "VARCHAR(60)",{{nullable}} "GenerationExpression": "concat(`Tag`, 'x')", "Generated": "STORED" }
+                    ],
+                    "Indexes": [
+                        { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" }
+                    ]
+                }
+                ]
+                """, Platform);
+
+            RunTableQuenchProc(cmd, json);
+            var expectNullable = declared != false || Platform == Platform.MariaDb;
+            Assert.That(LabelIsNullable(cmd, table), Is.EqualTo(expectNullable),
+                "the first deploy must build the generated column with the nullability the package asks for");
+            ClearMessages(cmd);
+
+            for (var pass = 2; pass <= 3; pass++)
+            {
+                RunTableQuenchProc(cmd, json);
+                Assert.That(CountMessages(cmd, "olumn", table), Is.Zero,
+                    $"pass {pass}: column DDL was emitted for an unchanged generated column (Nullable {declared?.ToString() ?? "omitted"})");
+            }
+        });
+    }
+
+    // The deploy used to send "Nullable" on every column, so the parse's default for a missing key never ran for
+    // the product -- and it defaulted to NULLABLE, unlike the model and every other engine. Now that an omission
+    // stays omitted, the default must be the model's: NOT NULL.
+    [Test]
+    public void APlainColumnWithNullableOmitted_IsNotNull()
+    {
+        var table = $"ExprMapPln_{Guid.NewGuid():N}"[..20];
+        WithConnection(table, cmd =>
+        {
+            var json = DeployJson.ThroughTheModel($$"""
+                [
+                {
+                    "Name": "{{table}}",
+                    "Columns": [
+                        { "Name": "Id", "DataType": "INT" },
+                        { "Name": "Tag", "DataType": "VARCHAR(50)" }
+                    ],
+                    "Indexes": [
+                        { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" }
+                    ]
+                }
+                ]
+                """, Platform);
+
+            RunTableQuenchProc(cmd, json);
+
+            cmd.CommandText = $@"SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS
+                                  WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND COLUMN_NAME = 'Tag'";
+            Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("NO"));
+        });
+    }
+
+    // Converting an existing plain NOT NULL column to a generated one, Nullable omitted. Only an already-generated
+    // column has a nullability to keep; carrying the plain column's NOT NULL into the new generated one emitted
+    // "... VIRTUAL NOT NULL", a syntax error on MariaDB, and on MySQL froze a nullability the package never asked for.
+    [Test]
+    public void ConvertingAPlainNotNullColumnToGenerated_DeploysAndLeavesNullabilityToTheEngine()
+    {
+        var table = $"ExprMapCnv_{Guid.NewGuid():N}"[..20];
+        WithConnection(table, cmd =>
+        {
+            cmd.CommandText = $@"DROP TABLE IF EXISTS `{_mainDb}`.`{table}`;
+                                 CREATE TABLE `{_mainDb}`.`{table}` (`Id` INT NOT NULL, `Tag` VARCHAR(50) NULL, `Label` VARCHAR(60) NOT NULL DEFAULT '', PRIMARY KEY (`Id`));";
+            cmd.ExecuteNonQuery();
+            var json = DeployJson.ThroughTheModel($$"""
+                [
+                {
+                    "Name": "{{table}}",
+                    "Columns": [
+                        { "Name": "Id", "DataType": "INT", "Nullable": false },
+                        { "Name": "Tag", "DataType": "VARCHAR(50)", "Nullable": true },
+                        { "Name": "Label", "DataType": "VARCHAR(60)", "GenerationExpression": "concat(`Tag`, 'x')", "Generated": "VIRTUAL" }
+                    ],
+                    "Indexes": [
+                        { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" }
+                    ]
+                }
+                ]
+                """, Platform);
+
+            RunTableQuenchProc(cmd, json);
+
+            Assert.That(LiveGenerationExpression(cmd, table), Is.Not.Empty, "the column must now be generated");
+            Assert.That(LabelIsNullable(cmd, table), Is.True, "an omitted Nullable is the engine's -- nullable -- not the old plain column's");
+        });
+    }
+
+    private bool LabelIsNullable(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS
+                              WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND COLUMN_NAME = 'Label'";
+        return cmd.ExecuteScalar() as string == "YES";
+    }
+
     // The other half: a hand-edited constraint must still be re-applied. A metadata-only compare would go
     // quiet here, which is worse than the churn it removes.
     [Test]

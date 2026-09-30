@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
   "Name": "`Category`",
   "Columns": [
     { "Name": "`CategoryName`", "DataType": "VARCHAR(50)", "Nullable": false }

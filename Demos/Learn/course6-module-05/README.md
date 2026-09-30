@@ -11,7 +11,7 @@ an incident response — the object-level patch that a full-product deploy would
 ## Before you start
 
 - The [sandbox](../docker) is up and verified (all four engines healthy).
-- The CLI is on your PATH — `schemaquench --version` and `schemashears --version` answer **2.4.0** or later.
+- The CLI is on your PATH — `schemaquench --version` and `schemashears --version` answer **2.7.0** or later.
 
 The lab uses two **dedicated** databases per engine — `shop_patch_canary` (where the safe patch lands) and
 `shop_patch_scratch` (the throwaway where we stage the disaster) — so nothing here touches the shared Course 6
@@ -126,13 +126,28 @@ category flips to `false`:
 "DropUnknownIndexes": false,
 "DropForeignKeysRemovedFromProduct": false,
 "DropCheckConstraintsRemovedFromProduct": false,
-"DropExcludeConstraintsRemovedFromProduct": false,
 "DropStatisticsRemovedFromProduct": false
 ```
 
-<!-- TRAINING-RELEASE-PIN #fix-shears-stamp -- on 2.7.0, drop DropExcludeConstraintsRemovedFromProduct from this list
-and say why: SchemaShears now stamps a flag only on engines that accept it (exclude constraints are PostgreSQL-only,
-statistics SQL Server + PostgreSQL). On 2.6.0 the stamp above is what is emitted, and --Validate on the patch fails. -->
+It stamps only the flags your engine accepts: PostgreSQL's patch also carries
+`"DropExcludeConstraintsRemovedFromProduct": false` (exclude constraints exist nowhere else), and MySQL and
+MariaDB have no `DropStatisticsRemovedFromProduct` to stamp.
+
+Lint it before it goes anywhere:
+
+```bash
+schemaquench --Validate --SchemaPackagePath:./patch
+```
+
+```
+WARN [SS-FK-002] Template 'Main' / Table '[OrderItem]' / FK '[FK_OrderItem_Product]': RelatedTable '[Product]' does not resolve to any table in the package (resolved schema 'dbo'). The deploy succeeds only if it already exists on the target.
+WARN [SS-FK-002] Template 'Main' / Table '[OrderItem]' / FK '[FK_OrderItem_SalesOrder]': RelatedTable '[SalesOrder]' does not resolve to any table in the package (resolved schema 'dbo'). The deploy succeeds only if it already exists on the target.
+0 error(s), 2 warning(s)
+```
+
+Exit `0`. `OrderItem`'s foreign keys point at `Product` and `SalesOrder`, which the patch leaves out on
+purpose -- they are already on the target -- so these two warnings are exactly what you expect here. Read them
+anyway: the same warning in a package you meant to be complete is a misspelled `RelatedTable`.
 
 ## Step 3: Deploy the patch safely
 
@@ -161,18 +176,27 @@ tenant fast, with no collateral.
 ## Step 4: The deliberate override
 
 Suppression is a **default**, not a cage. When you genuinely intend to drop, `--AllowDrops:<categories>` leaves
-those categories enabled. Rebuild the patch allowing table drops, and deploy it to a fresh scratch:
+those categories enabled. Rebuild the patch allowing table drops, and deploy it to a fresh scratch. Step 1 left
+`shop_patch_scratch` with three tables gone and `OrderItem` rows pointing at nothing, so rebuild it first — the
+baseline cannot put foreign keys back over orphaned rows:
 
 ```bash
+../lab-sql.sh sqlserver master "DROP DATABASE IF EXISTS shop_patch_scratch; CREATE DATABASE shop_patch_scratch"
+../lab-sql.sh sqlserver shop_patch_scratch --file ../course6-setup/seed/sqlserver/shop.sql
 cd sqlserver     # back into the engine folder
-schemaquench --ConfigFile:quench.settings.baseline.json     # restore the owned fleet first
+schemaquench --ConfigFile:quench.settings.baseline.json     # restore the owned fleet
 schemashears --Source:Package --Manifest:patch-manifest.txt --Output:patch-allowdrops --AllowDrops:Tables
-schemaquench --ConfigFile:quench.settings.allowdrops.json   # SchemaPackagePath: ./patch-allowdrops
+schemaquench --ConfigFile:quench.settings.allowdrops.json   # SchemaPackagePath: ./patch-allowdrops -- exit 2
 ```
 
 Now `patch-allowdrops/Product.json` leaves `DropTablesRemovedFromProduct` alone (the other six stay `false`),
-and the omitted tables drop — because you said so. The stamp protects you by default and gets out of your way
-when you mean it.
+and the deploy drops `Customer`, `Product` and `SalesOrder` — because you said so. Then it fails exactly as
+Step 1 did, exit `2`: the patch still carries `OrderItem`, whose foreign keys point at the tables it just
+dropped. (Every engine stops there; the message differs.)
+
+That is the override doing precisely what you asked, and no more. It takes the safety net away; it does not
+make the drop a good idea. Allow a category only when nothing left in the patch still depends on what it lets
+go — here, that is never, which is exactly why the stamp is the default.
 
 ## Cleanup
 

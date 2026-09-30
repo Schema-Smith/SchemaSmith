@@ -330,6 +330,111 @@ END";
         cmd.ExecuteNonQuery();
     }
 
+    // #420: a capture instance must carry every column of the declared table, computed ones included -- the same
+    // shape sp_cdc_enable_table gives on the finished table. Enabling CDC before the computed columns existed left
+    // them out for good, because a later deploy sees no column change and never rotates.
+    [Test]
+    public void ANewTableWithAComputedColumn_CapturesEveryColumn_AndKeepsDoingSo()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        DropWithEveryCaptureInstance(cmd, "CdcComputed");
+        try
+        {
+            var json = """
+                {
+                    "Schema": "dbo",
+                    "Name": "CdcComputed",
+                    "EnableCDC": true,
+                    "Columns": [
+                        { "Name": "Id",    "DataType": "INT", "Nullable": false },
+                        { "Name": "A",     "DataType": "INT", "Nullable": true },
+                        { "Name": "Twice", "DataType": "INT", "Nullable": true, "ComputedExpression": "[A] * 2" }
+                    ],
+                    "Indexes": [ { "Name": "PK_CdcComputed", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "Id" } ]
+                }
+                """;
+            RunTableQuenchProc(cmd, json);
+            Assert.That(NewestInstanceColumns(cmd, "CdcComputed"), Is.EqualTo(new[] { "A", "Id", "Twice" }), "first deploy");
+
+            RunTableQuenchProc(cmd, json);
+            Assert.That(NewestInstanceColumns(cmd, "CdcComputed"), Is.EqualTo(new[] { "A", "Id", "Twice" }), "redeploy");
+        }
+        finally { DropWithEveryCaptureInstance(cmd, "CdcComputed"); }
+    }
+
+    // The rotation for a column change runs in the same place, so a deploy that ADDS a computed column must rotate to
+    // an instance that includes it.
+    [Test]
+    public void AddingAComputedColumnToACapturedTable_RotatesToAnInstanceThatIncludesIt()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        DropWithEveryCaptureInstance(cmd, "CdcAddComputed");
+        try
+        {
+            cmd.CommandText = @"
+CREATE TABLE dbo.CdcAddComputed (Id INT NOT NULL PRIMARY KEY, A INT NULL)
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcAddComputed', @role_name = NULL";
+            ExecuteWithDeadlockRetry(cmd);
+
+            RunTableQuenchProc(cmd, """
+                {
+                    "Schema": "dbo",
+                    "Name": "CdcAddComputed",
+                    "EnableCDC": true,
+                    "Columns": [
+                        { "Name": "Id",    "DataType": "INT", "Nullable": false },
+                        { "Name": "A",     "DataType": "INT", "Nullable": true },
+                        { "Name": "Twice", "DataType": "INT", "Nullable": true, "ComputedExpression": "[A] * 2" }
+                    ]
+                }
+                """);
+
+            Assert.That(NewestInstanceColumns(cmd, "CdcAddComputed"), Is.EqualTo(new[] { "A", "Id", "Twice" }));
+        }
+        finally { DropWithEveryCaptureInstance(cmd, "CdcAddComputed"); }
+    }
+
+    private static string[] NewestInstanceColumns(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"SELECT cc.column_name FROM cdc.captured_columns cc
+                             WHERE cc.object_id = (SELECT TOP 1 ct.object_id FROM cdc.change_tables ct
+                                                    WHERE ct.source_object_id = OBJECT_ID('dbo.{table}')
+                                                    ORDER BY ct.create_date DESC, ct.object_id DESC)
+                             ORDER BY cc.column_name";
+        using var reader = cmd.ExecuteReader();
+        var names = new System.Collections.Generic.List<string>();
+        while (reader.Read()) names.Add(reader.GetString(0));
+        return names.ToArray();
+    }
+
+    private static void DropWithEveryCaptureInstance(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"
+IF OBJECT_ID('dbo.{table}') IS NOT NULL
+BEGIN
+    DECLARE @ci SYSNAME
+    DECLARE ci_cur CURSOR LOCAL FAST_FORWARD FOR
+        SELECT ct.capture_instance FROM cdc.change_tables ct WHERE ct.source_object_id = OBJECT_ID('dbo.{table}')
+    OPEN ci_cur
+    FETCH NEXT FROM ci_cur INTO @ci
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'{table}', @capture_instance = @ci
+        FETCH NEXT FROM ci_cur INTO @ci
+    END
+    CLOSE ci_cur
+    DEALLOCATE ci_cur
+    DROP TABLE dbo.{table}
+END";
+        cmd.ExecuteNonQuery();
+    }
+
     [Test]
     public void ShouldNotRefreshCDCWhenNoColumnChanges()
     {

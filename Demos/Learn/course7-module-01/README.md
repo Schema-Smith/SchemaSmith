@@ -14,7 +14,7 @@ covered the *schema* axis — many schemas inside one database. Different axis; 
 - The [sandbox](../docker) is up and verified (all four engines healthy).
 - The fleet exists — run [`../course7-setup`](../course7-setup) once (creates `fleet_tenant_001`…`005`,
   **empty**, on each engine).
-- The CLI is on your PATH — `schemaquench --version` answers **2.4.0** or later. New to the CLI?
+- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later. New to the CLI?
   Course 1, Module 1 walks the install.
 
 Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships a `quench.settings.json`
@@ -53,15 +53,19 @@ Five tenants, discovered live. No database name appears anywhere in the package.
 schemaquench --ConfigFile:quench.settings.json
 ```
 
-One work unit per tenant, dispatched together:
+One work unit per tenant, dispatched together — and the log says so in a single line:
 
 ```
-[localhost,11433].[fleet_tenant_001] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_002] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_003] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_004] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
-[localhost,11433].[fleet_tenant_005] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
+Template 'Main': 5 units - db: DatabaseIdentificationScript; schema: (regular template)
 ```
+
+Five units, one line. The count is the fleet, and the two `source` facts say where each axis of every
+target came from: the databases from your `DatabaseIdentificationScript`, the schema from the template
+itself. **The per-target detail is not gone, it moved** — each tenant gets its own entry in the deployment
+summary report, carrying `databaseSource` and `schemaSource`, which is the surface that keeps one row per
+unit. [Module 6](../course7-module-06) reads that report. At five tenants a line each would have been
+fine; at the thousand this feature exists for it was three thousand lines of audit data in a progress
+stream, which is why it lives in the report now.
 
 Confirm the `Shop` schema landed in every tenant:
 

@@ -15,7 +15,9 @@ public class DataDelivery
     [JsonProperty(Order = 1)]
     public string ContentFile { get; set; }
 
-    [SchemaProperty(Pattern = "Insert|Insert/Update|Insert/Update/Delete")]
+    // Product-side read measured: DataDeliveryProcessor compares OrdinalIgnoreCase, so "insert/update"
+    // deploys and the pattern must accept it.
+    [SchemaProperty(Pattern = "Insert|Insert/Update|Insert/Update/Delete", PatternIgnoreCase = true)]
     [JsonProperty(Order = 2)]
     public string MergeType { get; set; }
 
@@ -40,12 +42,20 @@ public class DataDelivery
     public bool MergeDisableTriggers { get; set; }
 
     /// <summary>PostgreSQL-specific: disable rules during merge.</summary>
-    [SchemaProperty]
+    // MergeScriptHelper.BuildMergeScript forwards this to the PostgreSQL arm ALONE, so without the scope
+    // it reads as an effective setting on SQL Server and the MySQL family and silently does nothing.
+    // Measured off-vs-on by SHA-256 of the emitted script: byte-identical on SQL Server (886/886) and
+    // MySQL/MariaDB (341/341), different on PostgreSQL (926/921) as the positive control.
+    [SchemaProperty(Platforms = [Platform.PostgreSQL])]
     [JsonProperty(Order = 6)]
     public bool MergeDisableRules { get; set; }
 
     /// <summary>PostgreSQL-specific: update descendant tables during merge.</summary>
-    [SchemaProperty]
+    // MergeScriptHelper.BuildMergeScript forwards this to the PostgreSQL arm ALONE, so without the scope
+    // it reads as an effective setting on SQL Server and the MySQL family and silently does nothing.
+    // Measured off-vs-on by SHA-256 of the emitted script: byte-identical on SQL Server (886/886) and
+    // MySQL/MariaDB (341/341), different on PostgreSQL (926/921) as the positive control.
+    [SchemaProperty(Platforms = [Platform.PostgreSQL])]
     [JsonProperty(Order = 7)]
     public bool MergeUpdateDescendents { get; set; }
 

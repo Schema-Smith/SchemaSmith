@@ -1,4 +1,5 @@
 {
+  "$schema": "../../.json-schemas/templates.mariadb.schema",
   "Name": "Main",
   "DatabaseIdentificationScript": "SELECT DbName FROM Tenants WHERE Active = 1 ORDER BY DbName",
   "IdentificationDatabase": "{{ControlDb}}",

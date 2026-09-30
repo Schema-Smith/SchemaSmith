@@ -64,7 +64,7 @@ you.*
   lab uses **`ordersservice_dev`** — the first `v1` deploy converges dev to the v1 state regardless of
   what was there before.
 - The CLI is reachable. The commands below assume `schemaquench` is on your PATH
-  (`schemaquench --version` reports `SchemaQuench - Version: 2.4.0.0` or later). If you'd rather not put it on
+  (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later). If you'd rather not put it on
   the PATH, set `SCHEMAQUENCH` to the full path to the executable and substitute `$SCHEMAQUENCH` for
   `schemaquench` in every command below.
 

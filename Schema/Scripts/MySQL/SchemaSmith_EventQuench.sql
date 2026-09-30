@@ -47,12 +47,15 @@ BEGIN
         Id INT AUTO_INCREMENT PRIMARY KEY,
         Name VARCHAR(64) NOT NULL,
         Definition LONGTEXT,
-        ScheduleType VARCHAR(10),
+        -- A FIXED binary collation, not the target database's. Uncollated, these inherited the database
+        -- default, so 'AT ' equalled 'AT' under PAD SPACE and not under NO PAD, and accent- or width-insensitive
+        -- collations matched spellings a binary one would not -- the same package deployed differently per database.
+        ScheduleType VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
         `Interval` VARCHAR(64),
         ExecuteAt VARCHAR(64),
         Starts VARCHAR(64),
         Ends VARCHAR(64),
-        Status VARCHAR(20),
+        Status VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
         Preserve TINYINT,
         Comment TEXT,
         ShouldApply TINYINT DEFAULT 1,
@@ -70,20 +73,45 @@ BEGIN
 
     SET v_count = COALESCE(JSON_LENGTH(p_EventDefinitions), 0);
     WHILE v_idx < v_count DO
-        INSERT INTO _SchemaSmith_Events (Name, Definition, ScheduleType, `Interval`, ExecuteAt, Starts, Ends,
+        -- UPPER runs in utf8mb4_bin so case mapping is the same on every server: MySQL 8.0's default collation
+    -- truncates a letter whose upper case is longer to the input's byte length, so 'AT' + U+023F read as 'AT'.
+    INSERT INTO _SchemaSmith_Events (Name, Definition, ScheduleType, `Interval`, ExecuteAt, Starts, Ends,
                                          Status, Preserve, Comment)
         SELECT SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Name'))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Definition'))),
-               UPPER(COALESCE(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].ScheduleType'))), 'EVERY')),
+               UPPER(COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].ScheduleType')))) COLLATE utf8mb4_bin, ''), 'EVERY')),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Interval'))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].ExecuteAt'))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Starts'))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Ends'))),
-               UPPER(COALESCE(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Status'))), 'ENABLE')),
+               UPPER(COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Status')))) COLLATE utf8mb4_bin, ''), 'ENABLE')),
                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Preserve'))), 0),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Comment')));
         SET v_idx = v_idx + 1;
     END WHILE;
+
+    -- Refuse what is still outside the vocabulary after trimming and upper-casing, rather than guess. The DDL below
+    -- reads "not AT" as EVERY and "not DISABLE..." as ENABLE -- the two directions that make an event RUN -- and
+    -- which way an accented or full-width spelling went depended on whether the database collation happened to be
+    -- accent- or width-insensitive. The package schema already rejects every one of these, so --Validate reports
+    -- the same thing earlier. Compared in utf8mb4_bin (the column's collation), so the answer is identical on every
+    -- database.
+    IF EXISTS (SELECT 1 FROM _SchemaSmith_Events
+                WHERE ScheduleType NOT IN ('EVERY', 'AT')
+                   OR Status NOT IN ('ENABLE', 'DISABLE', 'DISABLE ON SLAVE')) THEN
+        SELECT CONCAT('`', Name, '` ScheduleType=''', ScheduleType, ''' Status=''', Status, '''')
+          INTO @ss_bad_event
+          FROM _SchemaSmith_Events
+         WHERE ScheduleType NOT IN ('EVERY', 'AT')
+            OR Status NOT IN ('ENABLE', 'DISABLE', 'DISABLE ON SLAVE')
+         ORDER BY Id LIMIT 1;
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT(
+            'Event ', @ss_bad_event, ' is not a recognised value: ScheduleType must be EVERY or AT, and Status ',
+            'ENABLE, DISABLE or DISABLE ON SLAVE. Refusing rather than guessing.'));
+        SET @ss_msg = LEFT(CONCAT('Unrecognised event value: ', @ss_bad_event,
+                                  '. Expected ScheduleType EVERY|AT, Status ENABLE|DISABLE|DISABLE ON SLAVE.'), 128);
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+    END IF;
 
     -- Build the CREATE once, so the text that is COMPARED and the text that is EMITTED cannot drift apart.
     -- Rebuilding the string separately in two places is how an object ends up churning forever.

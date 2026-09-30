@@ -1,0 +1,12 @@
+{
+  "$schema": ".json-schemas/products.mariadb.schema",
+  "Name": "Cookbook",
+  "ValidationScript": "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'cookbook_r15') THEN 1 ELSE 0 END",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptTokens": {},
+  "ScriptFolders": [],
+  "AfterBranchNameMask": "",
+  "Platform": "MariaDb"
+}

@@ -9,7 +9,7 @@ You'll work from the same package you kindled in Module 1. Each engine folder ha
 ## Before you start
 
 - The [sandbox](../docker) is up (`docker compose up -d`) and you completed [Module 1](../module-01) (the forge is kindled on `learn`).
-- The CLI is on your PATH (`schemaquench --version`).
+- The CLI is on your PATH (`schemaquench --version` answers **2.7.0 or later**).
 
 ## Step 1: Look at the starter
 

@@ -80,7 +80,13 @@ public class DataTongs
         var disableTriggers = config[SettingsKeys.ShouldCast.DisableTriggers]?.ToLower() == "true";
         var tokenizeScripts = config[SettingsKeys.ShouldCast.TokenizeScripts]?.ToLower() != "false";
         var mergeUpdate = config[SettingsKeys.ShouldCast.MergeUpdate]?.ToLower() != "false";
-        var mergeDelete = config[SettingsKeys.ShouldCast.MergeDelete]?.ToLower() != "false";
+        // OPT-IN, unlike its siblings above, because this is the one flag in the family whose "on" state
+        // DESTROYS DATA: it emits the delete branch, which removes target rows the extracted source does
+        // not contain. Every other ShouldCast flag here defaults on harmlessly, and `!= "false"` was
+        // copied across all of them -- so an ABSENT MergeDelete derived Insert/Update/Delete, and
+        // deleting the key was not the same as setting it false. The shipped settings file sets it
+        // false explicitly, which is why no test and no sample ever exercised the real default.
+        var mergeDelete = config[SettingsKeys.ShouldCast.MergeDelete]?.ToLower() == "true";
 
         // PostgreSQL-specific options
         var disableRules = config[SettingsKeys.ShouldCast.DisableRules]?.ToLower() == "true";
@@ -610,8 +616,8 @@ SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('GEOGRAPHY', 'GEOMETRY')
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + ']'
                        ELSE '[' + c.COLUMN_NAME + ']' END, ',') WITHIN GROUP (ORDER BY c.COLUMN_NAME)
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc WITH (NOLOCK) ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
-  LEFT JOIN sys.computed_columns cc WITH (NOLOCK) ON cc.[name] = c.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
@@ -868,8 +874,8 @@ SELECT CAST((
         cmd.CommandText = $@"
 SELECT c.COLUMN_NAME, c.DATA_TYPE
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc WITH (NOLOCK) ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
-  LEFT JOIN sys.computed_columns cc WITH (NOLOCK) ON cc.[name] = c.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL

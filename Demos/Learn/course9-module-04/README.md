@@ -13,7 +13,7 @@ Module 3 gave each service a clean, organized package and file-less connection c
 ## Prerequisites
 
 - Sandbox up and `course9-setup` run (creates the `orders`, `catalog`, `sessions` databases).
-- `schemaquench --version` **2.4.0** or later on your PATH.
+- `schemaquench --version` **2.7.0** or later on your PATH.
 
 ## The pipeline files
 

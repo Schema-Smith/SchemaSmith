@@ -14,7 +14,7 @@ the setup already applied their end state to `shop_from_scripts` on each engine.
 - The [sandbox](../docker) is up (`docker compose up -d`) and verified (all four engines `PASS`).
 - The Course 5 databases exist — run [`../course5-setup`](../course5-setup) once (creates and seeds
   `shop_from_scripts`, among others).
-- The CLI is on your PATH (`schematongs --version` and `schemaquench --version` answer). New to the
+- The CLI is on your PATH (`schematongs --version` and `schemaquench --version` answer **2.7.0 or later**). New to the
   CLI? Course 1, Module 1 walks the install.
 
 The `sqlserver/`, `postgres/`, `mysql/`, and `mariadb/` folders each ship a `SchemaTongs.settings.json` (the extract

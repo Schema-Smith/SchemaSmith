@@ -1,6 +1,10 @@
 {
   "type": "object",
   "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time."
+    },
     "Name": {
       "type": "string",
       "maxLength": 63

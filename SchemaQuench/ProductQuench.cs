@@ -523,7 +523,11 @@ public class ProductQuench
     internal string ResolveIdentificationDatabase(Template template)
     {
         if (string.IsNullOrWhiteSpace(template.IdentificationDatabase)) return null;
-        var tokens = _product.NonQueryTokens.Concat(template.NonQueryTokens).ToList();
+        // Template FIRST: TokenReplace keeps the first entry for a name, and a token defined in both must resolve
+        // to the template's value here exactly as it does for the template's scripts (Template.Load merges with
+        // "template takes precedence"). Product-first made the enumeration read a different database from the
+        // one the template's own scripts see under the same token.
+        var tokens = template.NonQueryTokens.Concat(_product.NonQueryTokens).ToList();
         return SqlScript.TokenReplace(template.IdentificationDatabase, tokens, _product.Platform);
     }
 

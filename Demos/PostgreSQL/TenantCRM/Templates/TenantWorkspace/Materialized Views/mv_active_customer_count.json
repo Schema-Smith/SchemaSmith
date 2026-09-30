@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/materializedviews.postgresql.schema",
   "Name": "mv_active_customer_count",
   "Definition": "SELECT customer_id, COUNT(*) AS activity_count FROM \"{{SchemaName}}\".activities WHERE activity_time >= now() - INTERVAL '30 days' GROUP BY customer_id",
   "AccessMethod": "heap",

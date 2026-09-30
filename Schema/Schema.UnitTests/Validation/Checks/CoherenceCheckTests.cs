@@ -59,6 +59,80 @@ public class CoherenceCheckTests
         return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
     }
 
+    // ---- Product MinimumVersion the engine cannot resolve (SS-VER-001) ----
+    //
+    // A declared MinimumVersion the deploy cannot parse aborts the run before any object is touched --
+    // correct fail-closed behaviour, but --Validate had nothing to say about it, so the author's first
+    // signal was a refused deployment. MinimumVersion carries no [SchemaProperty], so no pattern reaches
+    // the generated .json-schema and JsonSchemaCheck cannot see it either.
+    //
+    // The check calls the SAME VersionHelper.ParseDeclaredVersion the deploy calls, deliberately: any other
+    // formulation lets the linter and the deploy disagree about what resolves, which is the bug one level up.
+
+    private static Finding[] RunOnProduct(string minimumVersion, Platform platform)
+    {
+        var product = new Product
+        {
+            Name = "Acme",
+            Platform = platform,
+            MinimumVersion = minimumVersion,
+            TemplateOrder = new System.Collections.Generic.List<string>()
+        };
+        return new CoherenceCheck().Run(
+            new ValidationContext(product, new[] { new Template { Name = "T" } }, "pkg")).ToArray();
+    }
+
+    // SQL Server is the only platform where a WELL-FORMED value can fail to resolve: a year >= 2000 is
+    // looked up in a closed table of release years, so an in-between year is unresolvable while looking
+    // entirely plausible to whoever typed it.
+    [TestCase("2013")]
+    [TestCase("2018")]
+    [TestCase("2020")]
+    [TestCase("2023")]
+    [TestCase("2024")]
+    public void UnresolvableSqlServerYear_IsReported(string declared)
+    {
+        var findings = RunOnProduct(declared, Platform.SqlServer);
+        Assert.That(findings.Select(f => f.Code), Does.Contain("SS-VER-001"),
+            $"MinimumVersion '{declared}' is not a SQL Server release year, so ParseDeclaredVersion returns "
+            + "null and the deploy aborts. --Validate must say so first.");
+        Assert.That(findings.Single(f => f.Code == "SS-VER-001").Message, Does.Contain(declared),
+            "the finding must name the offending value -- a message that does not is half a finding");
+    }
+
+    [TestCase("2008")]
+    [TestCase("2016")]
+    [TestCase("2022")]
+    [TestCase("2025")]
+    [TestCase("13")]
+    public void ResolvableSqlServerVersion_IsNotReported(string declared) =>
+        Assert.That(RunOnProduct(declared, Platform.SqlServer).Select(f => f.Code),
+            Does.Not.Contain("SS-VER-001"), $"'{declared}' resolves, so there is nothing to report");
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("   ")]
+    public void AbsentMinimumVersion_IsNotReported(string declared) =>
+        Assert.That(RunOnProduct(declared, Platform.SqlServer).Select(f => f.Code),
+            Does.Not.Contain("SS-VER-001"),
+            "MinimumVersion is optional -- absent is not invalid, and the deploy returns early on it too");
+
+    // The MySQL family and PostgreSQL parse arithmetically, so they resolve any well-formed value and can
+    // only fail on a non-numeric one. Asserted so the check is known to behave per platform rather than
+    // assumed to.
+    [TestCase("8.0", Platform.MySQL)]
+    [TestCase("10.6", Platform.MariaDb)]
+    [TestCase("12", Platform.PostgreSQL)]
+    public void ResolvableOnTheArithmeticPlatforms_IsNotReported(string declared, Platform platform) =>
+        Assert.That(RunOnProduct(declared, platform).Select(f => f.Code), Does.Not.Contain("SS-VER-001"));
+
+    [TestCase("eight", Platform.MySQL)]
+    [TestCase("latest", Platform.PostgreSQL)]
+    [TestCase("ten-six", Platform.MariaDb)]
+    public void NonNumericOnTheArithmeticPlatforms_IsReported(string declared, Platform platform) =>
+        Assert.That(RunOnProduct(declared, platform).Select(f => f.Code), Does.Contain("SS-VER-001"));
+
+
     // ---- Modeled folder objects declared BOTH ways (SS-ENUM-001 / SS-SEQ-001 / SS-DOM-001) ----
     //
     // Enum Types/, Sequences/ and Domain Types/ are additive by design: each holds declared .json and
@@ -306,6 +380,22 @@ public class CoherenceCheckTests
             .Any(f => f.Code == "SS-TBL-001"), Is.False);
     }
 
+    // The deploy trims Mode on every engine, so a padded THRESHOLD is THRESHOLD -- the check must read it the same way.
+    [TestCase(" THRESHOLD")]
+    [TestCase("threshold ")]
+    public void PaddedThresholdMode_WithoutAThreshold_IsSsTbl001(string mode)
+    {
+        Assert.That(RunOn(OrderWith(new RebuildPolicy { Mode = mode })).Select(f => f.Code), Does.Contain("SS-TBL-001"));
+    }
+
+    [TestCase(" THRESHOLD")]
+    [TestCase("threshold ")]
+    public void PaddedThresholdMode_WithAThreshold_IsClean(string mode)
+    {
+        Assert.That(RunOn(OrderWith(new RebuildPolicy { Mode = mode, Threshold = 50 }))
+            .Where(f => f.Code is "SS-TBL-001" or "SS-TBL-002").Select(f => f.Message), Is.Empty);
+    }
+
     [Test]
     public void AlwaysAndNeverWithoutAThreshold_AreClean()
     {
@@ -320,6 +410,77 @@ public class CoherenceCheckTests
             Assert.That(RunOn(OrderWith(null)).Any(f => f.Code == "SS-TBL-001"), Is.False);
         });
     }
+
+
+    // ---- the same rule at the PRODUCT and TEMPLATE tiers ----
+    //
+    // A policy is resolved as a WHOLE object from the nearest level that declares one
+    // (ProductQuench.ResolveCascadedPolicy), and ModifiedTableQuench rebuilds only when Mode = THRESHOLD AND a
+    // Threshold is present. So a threshold-less THRESHOLD at the product or template tier REPLACES an inherited
+    // ALWAYS and then never fires itself -- yet only the table tier was checked.
+
+    private static Finding[] RunWithPolicies(RebuildPolicy productPolicy, RebuildPolicy templatePolicy)
+    {
+        var template = new Template { Name = "Main", RebuildPolicy = templatePolicy };
+        var product = new Product
+        {
+            Name = "Acme", Platform = Platform.SqlServer, RebuildPolicy = productPolicy,
+            TemplateOrder = new System.Collections.Generic.List<string>()
+        };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    [Test]
+    public void ThresholdModeWithoutAThreshold_AtTheProductTier_IsError()
+    {
+        var finding = RunWithPolicies(new RebuildPolicy { Mode = "THRESHOLD" }, null)
+            .Single(f => f.Code == "SS-TBL-001");
+        Assert.That(finding.Severity, Is.EqualTo(Severity.Error));
+        Assert.That(finding.Location, Does.Contain("Product 'Acme'"), "the finding must say WHICH tier");
+    }
+
+    [Test]
+    public void ThresholdModeWithoutAThreshold_AtTheTemplateTier_IsError()
+    {
+        var finding = RunWithPolicies(null, new RebuildPolicy { Mode = "THRESHOLD" })
+            .Single(f => f.Code == "SS-TBL-001");
+        Assert.That(finding.Location, Does.Contain("Template 'Main'"));
+    }
+
+    [Test]
+    public void ValidPoliciesAtTheUpperTiers_AreClean() =>
+        Assert.That(RunWithPolicies(new RebuildPolicy { Mode = "ALWAYS" },
+                new RebuildPolicy { Mode = "THRESHOLD", Threshold = 50 })
+            .Any(f => f.Code is "SS-TBL-001" or "SS-TBL-002"), Is.False);
+
+    // ---- a Threshold that is ignored (SS-TBL-002) ----
+    //
+    // Mode defaults to NEVER, so {"Threshold":50} with no Mode is NEVER -- and because the declared policy
+    // replaces any inherited one whole, it silently BLOCKS rebuilds an outer level asked for. Warned rather than
+    // errored: with Mode written out explicitly (ALWAYS or NEVER) the Threshold is merely inert.
+    [Test]
+    public void ThresholdWithoutThresholdMode_IsWarned_AtEveryTier()
+    {
+        var table = OrderWith(new RebuildPolicy { Threshold = 50 });
+        var tableFindings = RunOn(table).Where(f => f.Code == "SS-TBL-002").ToArray();
+        var upper = RunWithPolicies(new RebuildPolicy { Threshold = 50 }, new RebuildPolicy { Mode = "ALWAYS", Threshold = 5 })
+            .Where(f => f.Code == "SS-TBL-002").ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tableFindings, Has.Length.EqualTo(1), "table tier");
+            Assert.That(tableFindings[0].Severity, Is.EqualTo(Severity.Warning));
+            Assert.That(tableFindings[0].Message, Does.Contain("NEVER"),
+                "the message must say what the Threshold actually resolved to");
+            Assert.That(upper.Select(f => f.Location),
+                Is.EquivalentTo(new[] { "Product 'Acme'", "Template 'Main'" }), "product and template tiers");
+        });
+    }
+
+    [Test]
+    public void ThresholdUnderThresholdMode_IsNotWarned() =>
+        Assert.That(RunOn(OrderWith(new RebuildPolicy { Mode = "THRESHOLD", Threshold = 5 }))
+            .Any(f => f.Code == "SS-TBL-002"), Is.False);
 
     [Test]
     public void FkLocalColumnMissing_IsError()
@@ -392,34 +553,58 @@ public class CoherenceCheckTests
             + string.Join("; ", findings.Select(f => f.Code + " " + f.Message)));
     }
 
-    [Test]
-    public void FkRelatedTableMissing_IsError()
+    private static SqlServerTable OrderReferencingMissingTable() => new()
     {
-        var order = new SqlServerTable
+        Name = "Order",
+        Schema = "dbo",
+        Columns = { new SqlServerColumn { Name = "Id", DataType = "int" }, new SqlServerColumn { Name = "CustomerId", DataType = "int" } },
+        ForeignKeys =
         {
-            Name = "Order",
-            Schema = "dbo",
-            Columns = { new SqlServerColumn { Name = "Id", DataType = "int" }, new SqlServerColumn { Name = "CustomerId", DataType = "int" } },
-            ForeignKeys =
+            new SqlServerForeignKey
             {
-                new SqlServerForeignKey
-                {
-                    Name = "FK_Order_Customer",
-                    Columns = "CustomerId",
-                    RelatedTable = "NoSuchTable",
-                    RelatedTableSchema = "dbo",
-                    RelatedColumns = "Id"
-                }
+                Name = "FK_Order_Customer",
+                Columns = "CustomerId",
+                RelatedTable = "NoSuchTable",
+                RelatedTableSchema = "dbo",
+                RelatedColumns = "Id"
             }
-        };
-        var ctx = Context(TemplateWithTables("Main", order));
+        }
+    };
 
-        var findings = new CoherenceCheck().Run(ctx).ToList();
+    private static Finding[] RunDanglingFk(bool productDropsTables, bool? templateDropsTables)
+    {
+        var product = Product();
+        product.DropTablesRemovedFromProduct = productDropsTables;
+        var template = TemplateWithTables("Main", OrderReferencingMissingTable());
+        template.DropTablesRemovedFromProduct = templateDropsTables;
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    // The deploy creates a foreign key to a table the package does not declare, provided the table exists on the
+    // target -- so an unresolved RelatedTable is a lean, not a certainty that the deploy fails.
+    [Test]
+    public void FkRelatedTableMissing_IsWarning()
+    {
+        var findings = RunDanglingFk(productDropsTables: true, templateDropsTables: null);
 
         Assert.That(findings, Has.Exactly(1).Items);
-        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
         Assert.That(findings[0].Code, Is.EqualTo("SS-FK-002"));
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Warning));
         Assert.That(findings[0].Category, Is.EqualTo("Coherence"));
+    }
+
+    // Never silenced, whatever the drop flags say. A partial deployment (a SchemaShears patch, a bootstrap) expects
+    // references outside itself, but DropTablesRemovedFromProduct false is also a common safety setting on a complete
+    // product, where silence would hide a misspelled RelatedTable until the FK failed at deploy.
+    [TestCase(false, null)]
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    [TestCase(true, true)]
+    public void FkRelatedTableMissing_IsAWarningWhateverTheDropFlagsSay(bool productDropsTables, bool? templateDropsTables)
+    {
+        var findings = RunDanglingFk(productDropsTables, templateDropsTables);
+
+        Assert.That(findings.Select(f => (f.Code, f.Severity)), Is.EqualTo(new[] { ("SS-FK-002", Severity.Warning) }));
     }
 
     [Test]
@@ -1351,6 +1536,266 @@ public class CoherenceCheckTests
         return new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg")).ToList();
     }
 
+    // ---- SS-IDENT-001: a " in a PostgreSQL name is refused, because no stored form of it deploys ----
 
+    private static PostgreSqlTable QTable(string tableName = "invoice", string columnName = "id",
+                                          string tableOldName = null, string columnOldName = null) =>
+        new()
+        {
+            Name = tableName,
+            Schema = "public",
+            OldName = tableOldName,
+            Columns = { new PostgreSqlColumn { Name = columnName, DataType = "integer", OldName = columnOldName } }
+        };
 
+    [TestCase("in\"voice", "id", null, null, TestName = "quote in the table name")]
+    [TestCase("invoice", "a\"b", null, null, TestName = "quote in a column name")]
+    [TestCase("invoice", "id", "ol\"d", null, TestName = "quote in the table OldName")]
+    [TestCase("invoice", "id", null, "ol\"d", TestName = "quote in a column OldName")]
+    public void AQuoteInAPostgreSqlName_IsRefused(string t, string c, string tOld, string cOld)
+    {
+        // Every one of these reaches PostgreSQL DDL as a wrapped identifier, and the wrap does not escape,
+        // so the deploy emits invalid SQL. The OldName cases matter most: there the failure is SILENT --
+        // the rename matches nothing, the new object is created, and the old one is orphaned for a later
+        // drop-by-absence to remove with its rows.
+        var finding = RunPg(QTable(t, c, tOld, cOld)).Single(f => f.Code == "SS-IDENT-001");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Error), "invalid DDL is not a warning");
+            Assert.That(finding.Message, Does.Contain("double-quote"), finding.Message);
+            Assert.That(finding.Message, Does.Contain("Rename"), "the message has to say what to do");
+        });
+    }
+
+    [Test]
+    public void OrdinaryPostgreSqlNames_AreNotRefused()
+    {
+        // The control that matters: 114 shipped Demos/PostgreSQL files carry ordinary quoted-lowercase
+        // names, and a check that fired on those would fail --Validate across the whole demo catalogue.
+        Assert.That(RunPg(QTable()).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
+    }
+
+    [Test]
+    public void AQuoteInANonPostgreSqlName_IsNotRefusedHere()
+    {
+        // SQL Server and the MySQL family escape at their own wrap sites, so this limit is PostgreSQL's
+        // alone -- scoping it by platform is what keeps it from becoming a cross-engine false error.
+        var sql = new SqlServerTable
+        {
+            Name = "in\"voice", Schema = "dbo",
+            Columns = { new SqlServerColumn { Name = "id", DataType = "int" } }
+        };
+        Assert.That(RunFor(sql, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
+    }
+
+    // ---- SS-IDENT-001's POPULATION: one case per name kind that reaches the unescaped re-wrap ----
+    //
+    // A case per kind, deliberately, because the population is a hand-written helper and a kind dropped
+    // from it fails silently -- the check still passes, on a smaller set. Three of the original kinds
+    // (Schema, Index, Foreign key) shipped with no test at all and were only ever exercised by an
+    // out-of-band probe, which is exactly how that happens.
+    //
+    // Every kind below was read at its emission site in the shipped PostgreSQL quench scripts and
+    // confirmed to concatenate the stored value between bare double quotes with no doubling. Names that
+    // go through QUOTE_IDENT are NOT here and must not be added: a policy name (MissingIndexesAnd
+    // ConstraintsQuench:321/375/410) escapes correctly, so refusing a quote in one would be a restriction
+    // the engine does not impose.
+
+    private static System.Collections.Generic.IEnumerable<TestCaseData> QuotedTableNameKinds()
+    {
+        PostgreSqlTable Base() => new()
+        {
+            Name = "invoice",
+            Schema = "public",
+            Columns = { new PostgreSqlColumn { Name = "id", DataType = "integer" } }
+        };
+
+        PostgreSqlTable With(System.Action<PostgreSqlTable> mutate)
+        {
+            var t = Base();
+            mutate(t);
+            return t;
+        }
+
+        yield return new TestCaseData(With(t => t.Name = "in\"voice"), "Table").SetName("table name");
+        yield return new TestCaseData(With(t => t.Schema = "pub\"lic"), "Schema").SetName("schema name");
+        yield return new TestCaseData(With(t => t.OldName = "ol\"d"), "Table OldName").SetName("table OldName");
+        yield return new TestCaseData(With(t => t.Columns[0].Name = "a\"b"), "Column").SetName("column name");
+        yield return new TestCaseData(With(t => t.Columns[0].OldName = "ol\"d"), "Column OldName").SetName("column OldName");
+        yield return new TestCaseData(
+            With(t => t.Indexes.Add(new PostgreSqlIndex { Name = "ix\"1", IndexColumns = "id" })),
+            "Index").SetName("index name");
+        yield return new TestCaseData(
+            With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
+                { Name = "fk\"1", Columns = "id", RelatedTable = "customer", RelatedColumns = "id" })),
+            "Foreign key").SetName("foreign key name");
+
+        // The four table-tier kinds the original population missed.
+        yield return new TestCaseData(
+            With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
+            {
+                Name = "fk_1", Columns = "id", RelatedTable = "cus\"tomer", RelatedColumns = "id"
+            })),
+            "Foreign key RelatedTable").SetName("FK RelatedTable");
+        yield return new TestCaseData(
+            With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
+            {
+                Name = "fk_1", Columns = "id", RelatedTable = "customer", RelatedColumns = "id",
+                RelatedTableSchema = "ot\"her"
+            })),
+            "Foreign key RelatedTableSchema").SetName("FK RelatedTableSchema");
+        yield return new TestCaseData(
+            With(t => t.CheckConstraints.Add(new PostgreSqlCheckConstraint { Name = "ck\"1", Expression = "id > 0" })),
+            "Check constraint").SetName("check constraint name");
+        yield return new TestCaseData(
+            With(t => t.ExcludeConstraints.Add(new ExcludeConstraint { Name = "ex\"1" })),
+            "Exclude constraint").SetName("exclude constraint name");
+        yield return new TestCaseData(
+            With(t => t.Statistics.Add(new Schema.Domain.PostgreSQL.Statistic { Name = "st\"1", StatisticsColumns = "id" })),
+            "Statistics").SetName("statistics name");
+
+        // ReplicaIdentityIndex is a POINTER at an index, and the realistic shape is a quote in the pointer
+        // while the index it names is clean -- which is also the only shape that isolates this kind from
+        // the Index kind above.
+        yield return new TestCaseData(
+            With(t =>
+            {
+                t.Indexes.Add(new PostgreSqlIndex { Name = "uq_invoice", IndexColumns = "id", Unique = true });
+                t.ReplicaIdentity = "INDEX";
+                t.ReplicaIdentityIndex = "uq\"invoice";
+            }),
+            "ReplicaIdentityIndex").SetName("ReplicaIdentityIndex pointer");
+    }
+
+    [TestCaseSource(nameof(QuotedTableNameKinds))]
+    public void EveryTableTierNameKind_WithAQuote_IsRefused(PostgreSqlTable table, string expectedKind)
+    {
+        var findings = RunPg(table).Where(f => f.Code == "SS-IDENT-001").ToList();
+
+        Assert.That(findings.Select(f => f.Message).ToList(),
+            Has.Some.StartsWith($"{expectedKind} '"),
+            $"no SS-IDENT-001 names the '{expectedKind}' kind — the population helper has dropped it");
+        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "invalid DDL is not a warning");
+    }
+
+    private static System.Collections.Generic.IEnumerable<TestCaseData> QuotedModeledObjectKinds()
+    {
+        Template With(System.Action<Template> mutate)
+        {
+            var t = new Template { Name = "Main" };
+            mutate(t);
+            return t;
+        }
+
+        yield return new TestCaseData(
+            With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
+                { Name = "mv\"1", Schema = "public", Definition = "SELECT 1" })),
+            "Materialized view").SetName("materialized view name");
+        yield return new TestCaseData(
+            With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
+                { Name = "mv_1", Schema = "pub\"lic", Definition = "SELECT 1" })),
+            "Materialized view schema").SetName("materialized view schema");
+        yield return new TestCaseData(
+            With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
+            {
+                Name = "mv_1", Schema = "public", Definition = "SELECT 1",
+                Indexes = { new PostgreSqlIndex { Name = "ix\"1", IndexColumns = "id" } }
+            })),
+            "Materialized view index").SetName("materialized view index name");
+        yield return new TestCaseData(
+            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = "st\"atus", Schema = "public" })),
+            "Enum type").SetName("enum type name");
+        yield return new TestCaseData(
+            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = "status", Schema = "pub\"lic" })),
+            "Enum type schema").SetName("enum type schema");
+        yield return new TestCaseData(
+            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = "sq\"1", Schema = "public" })),
+            "Sequence").SetName("sequence name");
+        yield return new TestCaseData(
+            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = "sq_1", Schema = "pub\"lic" })),
+            "Sequence schema").SetName("sequence schema");
+        yield return new TestCaseData(
+            With(t => t.DomainTypes.Add(new PostgreSqlDomainType
+                { Name = "em\"ail", Schema = "public", DataType = "text" })),
+            "Domain type").SetName("domain type name");
+        yield return new TestCaseData(
+            With(t => t.DomainTypes.Add(new PostgreSqlDomainType
+                { Name = "email", Schema = "pub\"lic", DataType = "text" })),
+            "Domain type schema").SetName("domain type schema");
+        yield return new TestCaseData(
+            With(t => t.DomainTypes.Add(new PostgreSqlDomainType
+            {
+                Name = "email", Schema = "public", DataType = "text",
+                CheckConstraints = { new PostgreSqlDomainConstraint { Name = "ck\"1", Expression = "VALUE <> ''" } }
+            })),
+            "Domain type check constraint").SetName("domain type check constraint name");
+    }
+
+    [TestCaseSource(nameof(QuotedModeledObjectKinds))]
+    public void EveryModeledObjectNameKind_WithAQuote_IsRefused(Template template, string expectedKind)
+    {
+        var product = new Product
+        {
+            Name = "Acme",
+            Platform = Platform.PostgreSQL,
+            TemplateOrder = new System.Collections.Generic.List<string>()
+        };
+        var findings = new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg"))
+            .Where(f => f.Code == "SS-IDENT-001").ToList();
+
+        Assert.That(findings.Select(f => f.Message).ToList(),
+            Has.Some.StartsWith($"{expectedKind} '"),
+            $"no SS-IDENT-001 names the '{expectedKind}' kind — the population helper has dropped it");
+        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "invalid DDL is not a warning");
+    }
+
+    [Test]
+    public void ACleanlyNamedModeledObjectPackage_IsNotRefused()
+    {
+        // The control for the widened half. Every shipped PostgreSQL demo carries ordinary lowercase names
+        // for these objects, so a check that fired on them would redden --Validate across the catalogue.
+        var template = new Template { Name = "Main" };
+        template.MaterializedViews.Add(new PostgreSqlMaterializedView
+        {
+            Name = "mv_sales", Schema = "public", Definition = "SELECT 1",
+            Indexes = { new PostgreSqlIndex { Name = "ix_mv_sales", IndexColumns = "id" } }
+        });
+        template.EnumTypes.Add(new PostgreSqlEnumType { Name = "status", Schema = "public" });
+        template.Sequences.Add(new PostgreSqlSequence { Name = "sq_invoice", Schema = "public" });
+        template.DomainTypes.Add(new PostgreSqlDomainType
+        {
+            Name = "email", Schema = "public", DataType = "text",
+            CheckConstraints = { new PostgreSqlDomainConstraint { Name = "ck_email", Expression = "VALUE <> ''" } }
+        });
+
+        var product = new Product
+        {
+            Name = "Acme",
+            Platform = Platform.PostgreSQL,
+            TemplateOrder = new System.Collections.Generic.List<string>()
+        };
+
+        Assert.That(new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg"))
+            .Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
+    }
+
+    [Test]
+    public void APolicyNameWithAQuote_IsNotRefused()
+    {
+        // Not an oversight -- CREATE/ALTER/DROP POLICY all wrap the name with QUOTE_IDENT, which doubles an
+        // embedded quote correctly, so the DDL is valid and there is nothing to refuse. Pinned because the
+        // obvious next move on this check is "add every remaining name", and this is the one that must not
+        // be added.
+        var table = new PostgreSqlTable
+        {
+            Name = "invoice",
+            Schema = "public",
+            Columns = { new PostgreSqlColumn { Name = "id", DataType = "integer" } },
+            RowLevelSecurity = true,
+            Policies = { new PostgreSqlPolicy { Name = "ten\"ant_read", UsingExpression = "true" } }
+        };
+
+        Assert.That(RunPg(table).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
+    }
 }

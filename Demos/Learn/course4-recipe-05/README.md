@@ -16,7 +16,7 @@ all targeting `cookbook_r5`.
 > **Engine note:** on SQL Server 2016 and below this lab deploys a `FOR XML PATH` variant of its snapshot generator instead of `STRING_AGG` (2017+). Same output either way — the version split is the point. No floor is declared; every supported engine runs it.
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup) once — it creates `cookbook_r5`).
-- The CLI is on your PATH (`schemaquench --version` → `2.4.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` → `2.7.0.0` or later).
 
 ## Step 1: Look at the generator
 

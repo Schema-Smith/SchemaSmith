@@ -39,7 +39,7 @@ two-engine feature, not because a third engine was skipped.
 
 - The [sandbox](../docker) is up (`docker compose up -d`) and verified (`./verify-sandbox.sh` /
   `.\verify-sandbox.ps1` — SQL Server and PostgreSQL `PASS`).
-- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.4.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later).
 
 ## Step 1: Look at the two templates
 
@@ -55,6 +55,8 @@ Package/
   Templates/TenantWorkspace/Template.json       # the SCHEMA TEMPLATE — SchemaIdentificationScript
   Templates/TenantWorkspace/Tables/...Customers # deployed into EACH tenant schema
   Templates/TenantWorkspace/Tables/...Contacts  # ditto, with an FK to Customers in the same schema
+  Templates/TenantWorkspace/Enum Types/         # PostgreSQL only: customer_tier (bronze, silver, gold)
+  Templates/TenantWorkspace/Sequences/          # PostgreSQL only: invoice_number
 deploy.settings.json                            # SchemaPackagePath: ./Package
 ```
 
@@ -91,7 +93,7 @@ schemaquench --ConfigFile:deploy.settings.json
 
 ```
 Quenching Template: Shared
-[localhost,11433].[learn] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=(regular template))
+Template 'Shared': 1 unit - db: DatabaseIdentificationScript; schema: (regular template)
 [localhost,11433].[learn]         Adding new table [dbo].[Tenants]
 [localhost,11433].[learn] Successfully Quenched
 ```
@@ -101,9 +103,7 @@ Then `TenantWorkspace` discovers the three active tenants and dispatches **one w
 
 ```
 Quenching Template: TenantWorkspace
-[localhost,11433].[learn] [Schema: acme] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
-[localhost,11433].[learn] [Schema: beta] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
-[localhost,11433].[learn] [Schema: globex] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
+Template 'TenantWorkspace': 3 units - db: DatabaseIdentificationScript; schema: SchemaIdentificationScript
 [localhost,11433].[learn] [Schema: acme]   Creating schema [acme] (CreateIfMissing: true)
 [localhost,11433].[learn] [Schema: beta]   Creating schema [beta] (CreateIfMissing: true)
 [localhost,11433].[learn] [Schema: globex]   Creating schema [globex] (CreateIfMissing: true)
@@ -136,6 +136,23 @@ cd ..                                 # back to the lab folder
 Six rows: `Customers` and `Contacts` in each of the three tenant schemas — every tenant got the
 identical workspace, declared exactly once in `TenantWorkspace`.
 
+On PostgreSQL the workspace also declares an enum type and a sequence, and each tenant gets its **own**:
+
+```bash
+../lab-sql.sh postgres learn "SELECT n.nspname || '.' || t.typname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'customer_tier' ORDER BY 1"
+# → acme.customer_tier
+# → beta.customer_tier
+# → globex.customer_tier
+../lab-sql.sh postgres learn "SELECT schemaname || '.' || sequencename FROM pg_sequences WHERE sequencename = 'invoice_number' ORDER BY 1"
+# → acme.invoice_number
+# → beta.invoice_number
+# → globex.invoice_number
+```
+
+`customers.tier` is typed by the tenant's own enum, and the table file names it the way you'd write it:
+`"DataType": "customer_tier"`. A bare type name resolves in the table's own schema first, so each tenant's
+column points at its own type, never a neighbour's — and the column's `'bronze'` default re-deploys as a no-op.
+
 ## Step 4: The aha — add a tenant, re-run once
 
 This is the heart of the module. Add one tenant row, then run the same command again:
@@ -152,10 +169,7 @@ The discovery query now returns four tenants, so the fan-out dispatches four wor
 the **new** one does any work:
 
 ```
-[localhost,11433].[learn] [Schema: acme] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
-[localhost,11433].[learn] [Schema: beta] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
-[localhost,11433].[learn] [Schema: globex] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
-[localhost,11433].[learn] [Schema: initech] Dispatching work unit (source: db=DatabaseIdentificationScript, schema=SchemaIdentificationScript)
+Template 'TenantWorkspace': 4 units - db: DatabaseIdentificationScript; schema: SchemaIdentificationScript
 [localhost,11433].[learn] [Schema: initech]   Creating schema [initech] (CreateIfMissing: true)
 [localhost,11433].[learn] [Schema: initech]         Adding new table [initech].[Contacts]
 [localhost,11433].[learn] [Schema: initech]         Adding new table [initech].[Customers]

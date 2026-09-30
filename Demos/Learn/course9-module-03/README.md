@@ -13,7 +13,7 @@ Three mechanics in one lab: each service is its own repo in production, tables a
 ## Prerequisites
 
 - Sandbox up and `course9-setup` run (creates the `orders`, `catalog`, `sessions` databases).
-- `schemaquench --version` >= 2.4.0.
+- `schemaquench --version` >= 2.7.0.
 
 > SchemaSmith converges each database to exactly what the package declares, so this module stands alone — you don't need prior modules deployed first.
 

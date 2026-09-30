@@ -1,5 +1,7 @@
 {
+  "$schema": ".json-schemas/products.mysql.schema",
   "Name": "Sessions",
+  "MinimumVersion": "8.0",
   "ValidationScript": "SELECT 1",
   "TemplateOrder": [
     "Main"

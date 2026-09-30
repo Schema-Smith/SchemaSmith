@@ -276,6 +276,20 @@ jobs:
         run: dotnet build SchemaSmith.sln -c Debug
 
       - name: Run SQL Server Integration Tests
+        env:
+          # ONE leg runs the compat-100 / legacy-XML coverage; the rest skip it. Those tests branch on
+          # a COMPATIBILITY LEVEL, not a server version, so all four legs were proving the same thing
+          # four times -- and they are the most expensive tests in the suite because each kindles a
+          # fresh database (48 scripts, ~864 KB of SQL, ~20s a kindle). RealCompat100Database alone is
+          # 108s, 11% of a leg; the three together are ~150s, so three redundant legs cost about 7.5
+          # billed minutes per merge.
+          #
+          # 2019 is the designated leg: it is among the shortest (13m47 against 2017 at 20m12), so the
+          # cost lands where there is the most headroom. Unset locally, which means a developer running
+          # the suite still gets them -- this is a CI-matrix economy, not a coverage reduction. A
+          # genuinely version-specific XML defect is the genuine-binary sweep's job, against real
+          # 2008R2-2016 binaries where the below-cliff path actually matters.
+          SS_COMPAT_LEG: ${{ matrix.ss == '2019' && 'true' || 'skip' }}
         run: |
           dotnet test Schema/Schema.IntegrationTests/Schema.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=SqlServer" --logger trx --results-directory TestResults
           dotnet test SchemaQuench/SchemaQuench.IntegrationTests/SchemaQuench.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=SqlServer" --logger trx --results-directory TestResults

@@ -10,6 +10,8 @@ namespace Schema.Domain.MySQL
         [JsonProperty(Order = 100)]
         public string GenerationExpression { get; set; }
 
+        protected override bool IsDerivedColumn() => !string.IsNullOrWhiteSpace(GenerationExpression);
+
         [JsonProperty(Order = 101)]
         public bool AutoIncrement { get; set; }
 

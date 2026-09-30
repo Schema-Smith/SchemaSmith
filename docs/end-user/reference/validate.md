@@ -74,18 +74,20 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | Code | Severity | Meaning |
 |------|----------|---------|
 | `SS-FK-001` | Error | A foreign key's `Columns` entry names a column that doesn't exist on the local table. |
-| `SS-FK-002` | Error | A foreign key's `RelatedTable` doesn't resolve to any known table in the package. |
+| `SS-FK-002` | Warning | A foreign key's `RelatedTable` doesn't resolve to any table in the package. A warning rather than an error because the deploy creates a foreign key to any table that already exists on the target, declared or not. A partial deployment such as a SchemaShears patch or a bootstrap references tables it does not declare by design, so expect the warning there; it still exits 0. |
 | `SS-FK-004` | Error | A foreign key's `RelatedColumns` entry names a column that doesn't exist on the related table. |
 | `SS-FK-005` | Error | `Columns` and `RelatedColumns` have different entry counts -- the column lists must be the same length. |
 | `SS-IDX-001` | Error | An index's `IndexColumns` entry names a column that doesn't exist on the table. |
 | `SS-COL-001` | Warning | A column sets `BackfillExistingRows` but has no `Default`, so there is no value to apply to rows that already exist and the setting does nothing. |
-| `SS-TBL-001` | Error | A table's `RebuildPolicy` uses `Mode: "THRESHOLD"` without a `Threshold` of 1 or more, so the policy cannot be evaluated. |
+| `SS-TBL-001` | Error | A `RebuildPolicy` — on the product, a template, or a table — uses `Mode: "THRESHOLD"` without a `Threshold` of 1 or more, so the policy cannot be evaluated. Because a policy declared at any level replaces the one it would have inherited, an unusable one also blocks rebuilds an outer level asked for. |
+| `SS-TBL-002` | Warning | A `RebuildPolicy` sets a `Threshold` while its `Mode` is not `"THRESHOLD"`, so the threshold is ignored. An omitted `Mode` defaults to `"NEVER"`, so `{ "Threshold": 50 }` on its own means *never rebuild* — and, replacing the inherited policy, can block rebuilds an outer level asked for. |
 | `SS-RLS-001` | Warning | PostgreSQL — a table sets `RowLevelSecurity` but declares no `Policies`. PostgreSQL returns no rows to anyone except the table owner until a permissive policy exists, so this locks the table rather than restricting it. |
 | `SS-RLS-002` | Warning | PostgreSQL — a table declares `Policies` but does not set `RowLevelSecurity`, so the policies are created and enforced against nothing. |
 | `SS-RI-001` | Error | PostgreSQL — a table sets `ReplicaIdentity` to `INDEX` but declares no `ReplicaIdentityIndex`, so there is no index to carry the identity. |
 | `SS-RI-002` | Error | PostgreSQL — a table's `ReplicaIdentityIndex` names an index the table does not declare, so the deploy would point the replica identity at an index that is never created. |
 | `SS-RI-003` | Error | PostgreSQL — a table's `ReplicaIdentityIndex` names an index that is not unique. PostgreSQL requires a unique, non-partial index over `NOT NULL` columns. |
 | `SS-RI-004` | Warning | PostgreSQL — a table names a `ReplicaIdentityIndex` while its `ReplicaIdentity` is not `INDEX`, so the index name is ignored. |
+| `SS-VER-001` | Error | A product's `MinimumVersion` is not a version the engine can resolve, so the deploy refuses the package before touching any object. On **SQL Server** a value of 2000 or more is read as a *release year* and must be one of 2008, 2012, 2014, 2016, 2017, 2019, 2022 or 2025 — an in-between year such as `2018` or `2020` looks plausible and does not resolve; a major version number (`13`, `16`) works too. PostgreSQL and the MySQL family read the value arithmetically, so only a non-numeric one fails. Reported here because `MinimumVersion` has no pattern in the generated JSON schema, so an editor cannot flag it. |
 | `SS-SV-001` | Warning | MariaDB — a column sets `WithoutSystemVersioning` on a table that does not set `IsSystemVersioned`. MariaDB accepts the clause there and silently discards it, so the exclusion does nothing and nothing at deploy time reports it. |
 | `SS-CDC-001` | Warning | SQL Server — a table sets `CdcFilegroup` but not `EnableCDC`, so there is no change table to place and the setting does nothing. Set `EnableCDC`, or drop `CdcFilegroup`. |
 | `SS-CO-001` | Error | MySQL/MariaDB — a table sets `Compression` (MySQL) or `PageCompressed` (MariaDB) together with `RowFormat: "COMPRESSED"`. Both engines refuse that combination (MySQL error 1031, MariaDB errno 140) and neither error names the option. |
@@ -93,6 +95,7 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | `SS-EVT-001` | Error | MySQL/MariaDB — a scheduled event is declared as JSON *and* scripted as a `.sql` file in the same `Events` folder. The scripted form drops and recreates the event on every deploy, undoing what the declared form converged. |
 | `SS-ENUM-001` | Error | PostgreSQL — an enum type is declared as JSON *and* scripted as a `.sql` file in the same `Enum Types` folder. The scripted form is a guarded `CREATE TYPE`, so once the type exists the script silently does nothing while the declared form is what converges. |
 | `SS-SEQ-001` | Error | PostgreSQL — a sequence is declared as JSON *and* scripted as a `.sql` file in the same `Sequences` folder. Two authoring paths for one object leave it ambiguous which one is in charge. |
+| `SS-IDENT-001` | Error | PostgreSQL — an object name contains a `"`. PostgreSQL permits it, but SchemaSmith re-wraps a stored name in double quotes without escaping, so **every** stored form of such a name emits invalid DDL: a bare `a"b` becomes `"a"b"`, and the escaped `a""b` is never what extraction writes. Rename the object. Covers a table's own name and schema, its columns, indexes, foreign keys (including the table they reference), check and exclude constraints, statistics and replica-identity index, plus materialized views and their indexes, enum types, sequences, and domain types and their check constraints. A policy name is *not* covered — it is wrapped with `QUOTE_IDENT`, which escapes correctly. |
 | `SS-DOM-001` | Error | PostgreSQL — a domain type is declared as JSON *and* scripted as a `.sql` file in the same `Domain Types` folder. There is no `CREATE OR REPLACE DOMAIN`, so the scripted form is a guarded `CREATE DOMAIN` and silently does nothing once the domain exists. |
 | `SS-PART-001` | Error | SQL Server — a table or index declares `PartitionScheme` without `PartitionColumn`, or the reverse. The `ON` clause needs both: the scheme, and the column its partition function is applied to. |
 | `SS-XTP-001` | Error | SQL Server — a table sets `MemoryOptimized` and also declares a placement property (`FileGroup`, `TextImageFileGroup`, `FileStreamFileGroup`, or `PartitionScheme`). A memory-optimized table lives in the `MEMORY_OPTIMIZED_DATA` filegroup and cannot be placed on a regular or FILESTREAM filegroup, nor partitioned. One finding per offending property. |
@@ -168,7 +171,7 @@ Warnings only: neither changes the exit code.
 Findings print as one line each, errors first, then warnings, followed by a summary count:
 
 ```
-ERROR [SS-FK-002] Template 'Main' / Table 'Orders' / FK 'FK_Orders_Customer': RelatedTable 'Customer' does not resolve to any known table (resolved schema 'dbo').
+ERROR [SS-FK-001] Template 'Main' / Table 'Orders' / FK 'FK_Orders_Customer': Local column 'CustomerID' referenced in Columns does not exist on table 'Orders'.
 WARN [SS-TOK-003] ScriptTokens entry 'LegacyFlag' (defined in Product.json) is never referenced anywhere in the package.
 1 error(s), 1 warning(s)
 ```

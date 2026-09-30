@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Paths below are repo-relative; this anchors the script so it runs from anywhere.
 cd "$(dirname "$0")/.." || exit 1
-# Modern-band SQL Server sweep. CI runs exactly ONE SQL Server leg (2019), which is neither the floor
-# nor the latest, so 2017, 2022 and 2025 are covered nowhere. This points the real integration suite at
-# each of them in turn, using containers -- the bands where a Linux image exists.
+# Modern-band SQL Server sweep. Points the real integration suite at each modern SQL Server band in
+# turn, using containers -- the bands where a Linux image exists.
+#
+# The rationale INVERTED in v2.7.0 and this header used to still claim the old one: CI then ran a
+# single SQL Server leg, so 2017/2022/2025 were covered nowhere. CI now pins all four (see :42 below
+# and continuous-integration.yml), so this sweep is a local pre-PR check against what CI will run,
+# not the only place those bands are tested at all.
 #
 # DELIBERATELY SEPARATE FROM run-genuine-sweep.sh, and not folded into it:
 #   run-genuine-sweep.sh is the PRE-PR gate. It takes minutes and must keep taking minutes, because the
@@ -40,8 +44,8 @@ PASSWORD='SchemaSmith!Band2026'
 # engines -- keep both in sync when CI's legs move, and never by REMOVING a band here.
 #
 # It did not always. 2019 used to be excluded here because it was the ONLY SQL Server leg CI ran, so
-# this sweep existed to cover what CI did not. v2.7.0 gave SQL Server a full matrix (2017, 2019, 2022,
-# 2025 and a floating latest) and that inverted the rationale without anyone updating this list, which
+# this sweep existed to cover what CI did not. v2.7.0 gave SQL Server a full matrix (2017, 2019, 2022
+# and 2025, every one of them pinned) and that inverted the rationale without anyone updating this list, which
 # left 2019 and latest as CI legs NO local sweep certified -- exactly the hole the floor sweep exists
 # to close for MySQL and PostgreSQL. Release prep should fail here rather than on merge.
 #

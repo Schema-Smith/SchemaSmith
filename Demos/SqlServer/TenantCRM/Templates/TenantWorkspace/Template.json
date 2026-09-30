@@ -1,4 +1,5 @@
 {
+  "$schema": "../../.json-schemas/templates.sqlserver.schema",
   "Name": "TenantWorkspace",
   "DatabaseIdentificationScript": "SELECT [name] FROM master.sys.databases WHERE [name] = '{{TenantCRMDb}}'",
   "SchemaIdentificationScript": "SELECT [Name] FROM dbo.Tenants WHERE [Status] = N'Active' ORDER BY [Name]",

@@ -1,6 +1,10 @@
 {
   "type": "object",
   "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time."
+    },
     "Name": {
       "type": "string",
       "maxLength": 64
@@ -10,7 +14,7 @@
     },
     "ScheduleType": {
       "type": "string",
-      "pattern": "EVERY|AT"
+      "pattern": "^(?:EVERY|AT)$"
     },
     "Interval": {
       "type": "string",
@@ -34,7 +38,7 @@
     },
     "Status": {
       "type": "string",
-      "pattern": "ENABLE|DISABLE|DISABLE ON SLAVE"
+      "pattern": "^(?:ENABLE|DISABLE|DISABLE ON SLAVE)$"
     },
     "Preserve": {
       "type": "boolean"

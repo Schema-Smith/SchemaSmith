@@ -38,7 +38,7 @@ BEGIN TRY
     IF @v_SchemaBare = '' OR @v_NameBare = ''
         RAISERROR('BootstrapTableQuench: XML must contain non-blank Schema and Name.', 16, 1);
 
-    DECLARE @v_QualifiedName NVARCHAR(1000) = '[' + @v_SchemaBare + '].[' + @v_NameBare + ']';
+    DECLARE @v_QualifiedName NVARCHAR(1000) = QUOTENAME(@v_SchemaBare) + '.' + QUOTENAME(@v_NameBare);
     DECLARE @v_FullKey NVARCHAR(1000) = @v_SchemaBare + '.' + @v_NameBare;
 
     -- Step 1: TABLE-level declarative rename (OldName), run BEFORE CREATE TABLE IF NOT EXISTS below --
@@ -46,7 +46,7 @@ BEGIN TRY
     -- row of its history.
     IF @v_OldNameBare <> ''
     BEGIN
-        DECLARE @v_OldQualifiedName NVARCHAR(1000) = '[' + @v_SchemaBare + '].[' + @v_OldNameBare + ']';
+        DECLARE @v_OldQualifiedName NVARCHAR(1000) = QUOTENAME(@v_SchemaBare) + '.' + QUOTENAME(@v_OldNameBare);
         IF OBJECT_ID(@v_OldQualifiedName, 'U') IS NOT NULL AND OBJECT_ID(@v_QualifiedName, 'U') IS NOT NULL
             RAISERROR('BootstrapTableQuench: both the OldName table and the current table already exist; resolve manually before bootstrap can rename.', 16, 1);
 
@@ -226,7 +226,7 @@ BEGIN TRY
 
             RAISERROR('  Rebuilding PRIMARY KEY on %s: the deployed key does not match its declaration', 10, 100, @v_QualifiedName) WITH NOWAIT;
             BEGIN TRANSACTION;
-            SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' DROP CONSTRAINT [' + @v_PkName + N']';
+            SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' DROP CONSTRAINT ' + QUOTENAME(@v_PkName);
             EXEC(@v_SQL);
             SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' ADD CONSTRAINT ' + @v_DeclPkName +
                          N' PRIMARY KEY ' + CASE WHEN @v_DeclPkClustered = 1 THEN N'CLUSTERED' ELSE N'NONCLUSTERED' END +

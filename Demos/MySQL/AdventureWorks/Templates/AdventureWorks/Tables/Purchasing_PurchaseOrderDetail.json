@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
   "Name": "`Purchasing_PurchaseOrderDetail`",
   "Columns": [
     {

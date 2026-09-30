@@ -16,7 +16,7 @@ The `diag_` prefix keeps this course's databases clear of Course 6's `shop_tenan
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`) — see [`../README.md`](../README.md).
-- `schemaquench --version` answers **2.4.0** or later on your PATH. New to the CLI? Install it in
+- `schemaquench --version` answers **2.7.0** or later on your PATH. New to the CLI? Install it in
   [Course 1, Module 1](https://learn.schemasmith.com/01-install-connect/).
 
 ## Step 1 — create the baseline database

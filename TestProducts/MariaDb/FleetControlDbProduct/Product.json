@@ -1,4 +1,5 @@
 {
+    "$schema": ".json-schemas/products.mariadb.schema",
     "Name": "FleetControlDbProduct",
     "TemplateOrder": [
         "FleetControlDb",

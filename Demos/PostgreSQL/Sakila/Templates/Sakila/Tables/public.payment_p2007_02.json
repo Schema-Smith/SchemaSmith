@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
   "Name": "payment_p2007_02",
   "Columns": [
     {

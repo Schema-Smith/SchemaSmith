@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
   "Schema": "public",
   "Name": "customer",
   "Extensions": { "BusinessDomain": "Identity", "DataOwner": "identity-team", "Description": "Registered customers", "RetentionPolicy": "7y" },

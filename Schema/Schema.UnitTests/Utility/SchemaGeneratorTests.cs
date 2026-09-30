@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Linq;
@@ -158,8 +159,19 @@ public class SchemaGeneratorTests
     [Test]
     public void ShouldApplyPatternConstraint()
     {
+        // Asserts what the pattern ACCEPTS, not its text. The literal form was what let 21 declarations
+        // ship unanchored: a text assertion passes just as happily over a pattern that also accepts
+        // "XNO ACTIONY", which is the defect (Rule 32 -- assert the outcome, not the mechanism).
         var schema = SchemaGenerator.GenerateSchema(typeof(PatternClass));
-        Assert.That(schema["properties"]?["Action"]?["pattern"]?.ToString(), Is.EqualTo("NO ACTION|CASCADE"));
+        var pattern = schema["properties"]?["Action"]?["pattern"]?.ToString();
+        Assert.Multiple(() =>
+        {
+            Assert.That(pattern, Is.Not.Null);
+            Assert.That(Regex.IsMatch("NO ACTION", pattern!), Is.True);
+            Assert.That(Regex.IsMatch("CASCADE", pattern!), Is.True);
+            Assert.That(Regex.IsMatch("XNO ACTIONY", pattern!), Is.False,
+                "an unanchored pattern accepts a value wrapped in anything, which no consumer wants");
+        });
     }
 
     [Test]
@@ -248,7 +260,15 @@ public class SchemaGeneratorTests
         var dataDelivery = schema["properties"]?["DataDelivery"]?["oneOf"]?[0];
         var mergeType = dataDelivery?["properties"]?["MergeType"];
         Assert.That(mergeType?["type"]?.ToString(), Is.EqualTo("string"));
-        Assert.That(mergeType?["pattern"]?.ToString(), Is.EqualTo("Insert|Insert/Update|Insert/Update/Delete"));
+        var mergePattern = mergeType?["pattern"]?.ToString();
+        Assert.Multiple(() =>
+        {
+            Assert.That(mergePattern, Is.Not.Null);
+            Assert.That(Regex.IsMatch("Insert/Update", mergePattern!), Is.True);
+            Assert.That(Regex.IsMatch("insert/update", mergePattern!), Is.True,
+                "the product compares OrdinalIgnoreCase, so the schema must not reject what deploys");
+            Assert.That(Regex.IsMatch("XInsertY", mergePattern!), Is.False, "and it must be anchored");
+        });
 
         var fkItems = schema["properties"]?["ForeignKeys"]?["items"];
         Assert.That(fkItems?["properties"]?["DeleteAction"]?["pattern"]?.ToString(), Is.EqualTo("^(NO ACTION|RESTRICT|CASCADE|SET NULL|SET DEFAULT)?$"));
@@ -260,8 +280,18 @@ public class SchemaGeneratorTests
         var schema = SchemaGenerator.GenerateSchema(typeof(StringEnumClass));
         var prop = schema["properties"]?["Version"];
         Assert.That(prop?["type"]?.ToString(), Is.EqualTo("string"));
-        Assert.That(prop?["pattern"]?.ToString(), Does.Contain("ValueA"));
-        Assert.That(prop?["pattern"]?.ToString(), Does.Contain("ValueB"));
+        // Asserted by MATCHING, not by substring. The pattern is anchored and case-folded, so it no
+        // longer literally contains "ValueA" -- and a substring assertion would have passed just as
+        // happily on the old unanchored form that accepted "XValueAY".
+        var pattern = prop?["pattern"]?.ToString();
+        Assert.Multiple(() =>
+        {
+            Assert.That(Regex.IsMatch("ValueA", pattern!), Is.True);
+            Assert.That(Regex.IsMatch("ValueB", pattern!), Is.True);
+            Assert.That(Regex.IsMatch("valuea", pattern!), Is.True, "the converter reads case-insensitively");
+            Assert.That(Regex.IsMatch("XValueAY", pattern!), Is.False, "anchored: a substring is not a value");
+            Assert.That(Regex.IsMatch("Nonsense", pattern!), Is.False);
+        });
     }
 
     [Test]
@@ -270,7 +300,12 @@ public class SchemaGeneratorTests
         var schema = SchemaGenerator.GenerateSchema(typeof(NullableEnumClass));
         var prop = schema["properties"]?["Version"];
         Assert.That(prop?["type"]?.ToString(), Is.EqualTo("string"));
-        Assert.That(prop?["pattern"]?.ToString(), Does.Contain("ValueA"));
+        var pattern = prop?["pattern"]?.ToString();
+        Assert.Multiple(() =>
+        {
+            Assert.That(Regex.IsMatch("ValueA", pattern!), Is.True);
+            Assert.That(Regex.IsMatch("XValueAY", pattern!), Is.False);
+        });
     }
 
     [Test]
@@ -659,8 +694,11 @@ public class SchemaGeneratorTests
         Assert.That(oneOf, Is.Not.Null, "DataDelivery schema should accept single object OR array");
         Assert.That(oneOf![0]?["type"]?.ToString(), Is.EqualTo("object"));
         Assert.That(oneOf![1]?["type"]?.ToString(), Is.EqualTo("array"));
-        Assert.That(oneOf![0]?["properties"]?["MergeType"]?["pattern"]?.ToString(),
-            Is.EqualTo("Insert|Insert/Update|Insert/Update/Delete"));
+        var oneOfMergePattern = oneOf![0]?["properties"]?["MergeType"]?["pattern"]?.ToString();
+        Assert.That(oneOfMergePattern, Is.Not.Null);
+        Assert.That(Regex.IsMatch("Insert/Update", oneOfMergePattern!), Is.True);
+        Assert.That(Regex.IsMatch("XInsertY", oneOfMergePattern!), Is.False,
+            "the oneOf branch carries the same anchored pattern as the bare-object branch");
     }
 
     [Test]
@@ -795,7 +833,13 @@ public class SchemaGeneratorTests
         var schema = SchemaGenerator.GenerateSchema(typeof(Schema.Domain.TemplateFolder));
         var slot = schema["properties"]?["QuenchSlot"];
         Assert.That(slot?["type"]?.ToString(), Is.EqualTo("string"));
-        Assert.That(slot?["pattern"]?.ToString(), Does.Contain("Objects"));
+        var slotPattern = slot?["pattern"]?.ToString();
+        Assert.Multiple(() =>
+        {
+            Assert.That(Regex.IsMatch("Objects", slotPattern!), Is.True);
+            Assert.That(Regex.IsMatch("objects", slotPattern!), Is.True);
+            Assert.That(Regex.IsMatch("XObjectsY", slotPattern!), Is.False);
+        });
     }
 
     [Test]
@@ -1043,8 +1087,18 @@ public class SchemaGeneratorTests
             Assert.That(value?["type"]?.ToString(), Is.EqualTo("string"),
                 "a property-level StringEnumConverter round-trips as a string, so the schema must say "
                 + "string -- emitting integer makes --Validate reject a value the deploy accepts");
-            Assert.That(value?["pattern"]?.ToString(), Is.EqualTo("Alpha|Beta"),
-                "and the allowed names must be pinned, or any string would pass");
+            // Matching, not a pinned literal: the pattern is anchored and case-folded so it agrees
+            // with the product in BOTH directions -- the converter reads case-insensitively, and an
+            // unanchored pattern accepted "XAlphaY" for every consumer that lacks our loader (Ajv in
+            // CI, editors). A pinned literal could not express either property.
+            var pattern = value?["pattern"]?.ToString();
+            Assert.That(Regex.IsMatch("Alpha", pattern!), Is.True);
+            Assert.That(Regex.IsMatch("Beta", pattern!), Is.True);
+            Assert.That(Regex.IsMatch("alpha", pattern!), Is.True,
+                "the deploy accepts this casing, so the linter must not reject it");
+            Assert.That(Regex.IsMatch("XAlphaY", pattern!), Is.False,
+                "the allowed names must be pinned, or any string containing one would pass");
+            Assert.That(Regex.IsMatch("Gamma", pattern!), Is.False);
         });
     }
 

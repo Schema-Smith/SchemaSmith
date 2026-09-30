@@ -60,7 +60,7 @@ the data never moves. Everything else — columns, keys, the recyclebin — is i
   It creates the twelve `ordersservice_{dev,staging,prod}` databases and reports `PASS` for each. This
   lab uses **all three** — dev, staging, and prod.
 - The CLI is reachable. The commands below assume `schemaquench` is on your PATH
-  (`schemaquench --version` reports `SchemaQuench - Version: 2.4.0.0` or later). If you'd rather not put it on
+  (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later). If you'd rather not put it on
   the PATH, set `SCHEMAQUENCH` to the full path to the executable and substitute `$SCHEMAQUENCH` for
   `schemaquench` in every command below.
 

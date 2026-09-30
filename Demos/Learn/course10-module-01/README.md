@@ -26,7 +26,7 @@ because SQL Server feature support tracks the server binary, not the database's 
   standing and every target database exists (`learn` on PostgreSQL 12 / MySQL 5.7 / MariaDB 10.2,
   and `learn_2008` at compatibility level 100 on the SQL Server instance). This module deploys
   into those databases — it does not create them. See that lab's ports-and-tiers table.
-- `schemaquench --version` answers **2.4.0** or later. All four engine floors and the
+- `schemaquench --version` answers **2.7.0** or later. All four engine floors and the
   `UnsupportedFeaturePolicy` knob shipped in 2.4.0.
 
 ## Steps

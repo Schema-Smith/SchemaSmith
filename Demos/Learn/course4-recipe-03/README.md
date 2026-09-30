@@ -10,7 +10,7 @@ Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships the f
 ## Before you start
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup) once — it creates `cookbook_r3`).
-- The CLI is on your PATH (`schemaquench --version` → `2.4.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` → `2.7.0.0` or later).
 
 ## Step 1: Seed the server's state
 
@@ -21,6 +21,12 @@ schema package.
 ```bash
 # SQL Server
 ../lab-sql.sh sqlserver cookbook_r3 --file sqlserver/seed-server.sql
+
+# PostgreSQL
+../lab-sql.sh postgres cookbook_r3 --file postgres/seed-server.sql
+
+# MySQL
+../lab-sql.sh mysql cookbook_r3 --file mysql/seed-server.sql
 
 # MariaDB
 ../lab-sql.sh mariadb cookbook_r3 --file mariadb/seed-server.sql

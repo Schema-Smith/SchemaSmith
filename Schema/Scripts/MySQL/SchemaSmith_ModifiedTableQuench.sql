@@ -840,9 +840,7 @@ BEGIN
           OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
           OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
               AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                  CASE WHEN c.DefaultValue LIKE '''%'''
-                       THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                       ELSE c.DefaultValue END)
+                  SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
               AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                   c.DefaultValue, isc.DATA_TYPE) = 0)
           OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
@@ -1057,16 +1055,18 @@ BEGIN
     -- =======================
     -- STEP 2.9: DROP FOREIGN KEYS THAT BLOCK A COLUMN-LEVEL COLLATION CHANGE
     -- =======================
-    -- Twin of the drop that guards the table-level CONVERT TO CHARACTER SET further down, hoisted here
-    -- because it has to happen BEFORE Step 3 emits its per-column MODIFY COLUMN. The engine refuses to
-    -- change a column a foreign key depends on ("Cannot change column ...: used in a foreign key
-    -- constraint"), and a declared COLUMN collation that differs from the live one is exactly such a
-    -- change -- the ordinary case when a package moves between servers with different defaults. The
-    -- table-level block cannot cover it: it keys off ist.TABLE_COLLATION, which a column-only change
-    -- leaves untouched. Both directions are collected, same as the table-level twin: the FK declared ON
-    -- the column and the FK POINTING AT it, since MySQL requires the two sides' collations to match.
-    -- Restoration is the foreign-key phase's job, which runs after -- the same division of labour the
-    -- drop-column and table-collation paths already rely on. WhatIf only logs, mirroring that twin.
+    -- THE ONLY collation-driven FK teardown left, and it is the one that is genuinely needed. It has to
+    -- happen BEFORE Step 3 emits its per-column MODIFY COLUMN: the engine refuses to change a column a
+    -- foreign key depends on ("Cannot change column ...: used in a foreign key constraint"), and a declared
+    -- COLUMN collation that differs from the live one is exactly such a change -- the ordinary case when a
+    -- package moves between servers with different defaults.
+    -- It once had a table-level twin, which was removed with CONVERT TO CHARACTER SET (2026-09-26): that
+    -- statement rewrote every character column, so it needed the same protection for a change that was only
+    -- ever about the table's DEFAULT. DEFAULT CHARACTER SET touches no column and blocks on nothing, so the
+    -- table-level pass needs no teardown at all. This one survives because it guards a real column change.
+    -- Both directions are collected -- the FK declared ON the column and the FK POINTING AT it -- since
+    -- MySQL requires the two sides' collations to match. Restoration is the foreign-key phase's job, which
+    -- runs after: the same division of labour the drop-column path relies on. WhatIf only logs.
     IF p_WhatIf = 0 THEN
         BEGIN
             DECLARE v_ColCollFkDone INT DEFAULT FALSE;
@@ -1179,9 +1179,7 @@ BEGIN
               -- since GenerateTableJson wraps string/enum defaults in quotes for DDL but INFORMATION_SCHEMA stores raw values)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
                   AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      CASE WHEN c.DefaultValue LIKE '''%'''
-                           THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                           ELSE c.DefaultValue END)
+                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
@@ -1259,9 +1257,7 @@ BEGIN
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
                   AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      CASE WHEN c.DefaultValue LIKE '''%'''
-                           THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                           ELSE c.DefaultValue END)
+                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
@@ -1352,9 +1348,7 @@ BEGIN
               -- since GenerateTableJson wraps string/enum defaults in quotes for DDL but INFORMATION_SCHEMA stores raw values)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
                   AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      CASE WHEN c.DefaultValue LIKE '''%'''
-                           THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                           ELSE c.DefaultValue END)
+                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
@@ -1435,9 +1429,7 @@ BEGIN
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
                   AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      CASE WHEN c.DefaultValue LIKE '''%'''
-                           THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                           ELSE c.DefaultValue END)
+                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
@@ -1516,9 +1508,7 @@ BEGIN
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
                   AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      CASE WHEN c.DefaultValue LIKE '''%'''
-                           THEN REPLACE(SUBSTRING(c.DefaultValue, 2, CHAR_LENGTH(c.DefaultValue) - 2), '''''', '''')
-                           ELSE c.DefaultValue END)
+                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
@@ -2137,7 +2127,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table collation');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
-                      ' CONVERT TO CHARACTER SET ',
+                      ' DEFAULT CHARACTER SET ',
                       SUBSTRING_INDEX(t.Collation, '_', 1),
                       ' COLLATE ', t.Collation)
         FROM _SchemaSmith_Tables t
@@ -2153,7 +2143,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DECLARE v_CollationSql TEXT;
             DECLARE cur_CollationChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
-                              ' CONVERT TO CHARACTER SET ',
+                              ' DEFAULT CHARACTER SET ',
                               SUBSTRING_INDEX(t.Collation, '_', 1),
                               ' COLLATE ', t.Collation) AS AlterCollationStatement
                 FROM _SchemaSmith_Tables t
@@ -2166,67 +2156,18 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
             DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_CollationDone = TRUE;
 
-            -- CONVERT TO CHARACTER SET rewrites every character column on the table, and the engine refuses
-            -- outright while a foreign key references any of them ("Cannot change column ... used in a
-            -- foreign key constraint") -- a hard deploy failure, not churn. Drop the dependents first; the
-            -- foreign-key phase that runs after this reconciles declared FKs and puts them back, which is
-            -- the same division of labour the drop-column path above relies on.
-            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CollationFKsToDrop;
-            CREATE TEMPORARY TABLE _SchemaSmith_CollationFKsToDrop (
-                TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-                ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-                PRIMARY KEY (TableName, ConstraintName)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-            -- FKs declared ON a converting table.
-            INSERT IGNORE INTO _SchemaSmith_CollationFKsToDrop (TableName, ConstraintName)
-            SELECT DISTINCT CONVERT(kcu.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
-                            CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
-              FROM _SchemaSmith_Tables t
-              INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                  ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                  AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
-              INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON kcu.TABLE_SCHEMA = v_IsDbName
-                  AND CONVERT(kcu.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
-                  AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
-             WHERE t.NewTable = 0 AND t.Collation IS NOT NULL AND ist.TABLE_COLLATION != t.Collation;
-
-            -- And FKs POINTING AT one: the referencing column must keep a matching collation, so the engine
-            -- rejects the convert from that side too. Separate INSERT for the optimizer bug noted above.
-            INSERT IGNORE INTO _SchemaSmith_CollationFKsToDrop (TableName, ConstraintName)
-            SELECT DISTINCT CONVERT(kcu.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
-                            CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
-              FROM _SchemaSmith_Tables t
-              INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                  ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                  AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
-              INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON kcu.TABLE_SCHEMA = v_IsDbName
-                  AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
-             WHERE t.NewTable = 0 AND t.Collation IS NOT NULL AND ist.TABLE_COLLATION != t.Collation;
-
-            BEGIN
-                DECLARE v_ColFkDone INT DEFAULT FALSE;
-                DECLARE v_ColFkSql TEXT;
-                DECLARE cur_ColFks CURSOR FOR
-                    SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci,
-                                  '`.`', TableName, '` DROP FOREIGN KEY `', ConstraintName, '`')
-                      FROM _SchemaSmith_CollationFKsToDrop;
-                DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_ColFkDone = TRUE;
-
-                OPEN cur_ColFks;
-                collation_fk_loop: LOOP
-                    FETCH cur_ColFks INTO v_ColFkSql;
-                    IF v_ColFkDone THEN LEAVE collation_fk_loop; END IF;
-                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-                    VALUES (CONNECTION_ID(), CONCAT('  Drop FK for collation change: ', v_ColFkSql));
-                    SET @exec_sql = v_ColFkSql;
-                    PREPARE stmt FROM @exec_sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-                END LOOP;
-                CLOSE cur_ColFks;
-            END;
-
+            -- No foreign-key teardown here, deliberately. DEFAULT CHARACTER SET sets the table's default for
+            -- FUTURE columns and touches no existing column, so nothing a foreign key depends on changes and
+            -- the engine has nothing to refuse. The previous statement was CONVERT TO CHARACTER SET, which
+            -- rewrites EVERY character column and re-encodes its data -- so it destroyed declared per-column
+            -- collations, and the engine rejected it outright while any FK referenced one of those columns,
+            -- which is why ~60 lines of drop-and-let-the-FK-phase-restore used to sit here. On an adopted table
+            -- with a character-column FK it could not converge at all: the deploy FAILED with errno 150,
+            -- "Referencing column and referenced column ... are incompatible", because the convert moved one
+            -- side's charset and not the other's.
+            -- The accepted trade-off (Paul, 2026-09-26): an adopted table's EXISTING columns keep their old
+            -- collation, so a table SchemaSmith created and one it adopted can differ. A column is converged
+            -- only where the package declares a collation for it -- which is what the comparison already does.
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table collation');
             SET v_CollationDone = FALSE;
             OPEN cur_CollationChanges;

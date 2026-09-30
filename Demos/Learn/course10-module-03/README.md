@@ -25,6 +25,8 @@ facts that live outside the database.
 | **A — auto-converge** | detectable (compat level) | `{{CompatibilityLevel}} >= 160` / `< 160` + `VariantName` | the applied variant prints ` (variant: …)` in the log |
 | **B — state gate** | not detectable (approval state) | `EXISTS (… RolloutControl … status='Ready')` | the construct is **present** when Ready, **absent** when Pending |
 
+> **Engine floor:** this lab deploys into the `learn_2022` tier, which is a database at **compatibility level 160** — a level only **SQL Server 2022+** offers. On an older engine [`course10-setup`](../course10-setup/README.md) cannot provision that tier and the lab stops with *"No database targets discovered"*. The sandbox default is 2022, so this only applies if you have pointed `MSSQL_IMAGE` at an older release. The other engines in this lab are unaffected.
+
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`).
@@ -32,7 +34,7 @@ facts that live outside the database.
   `learn_2022` (compat 160), `learn_2016` (compat 130), and `learn_2008` (compat 100) on the SQL
   Server instance at `localhost,11433`. This module deploys into those databases — it does not
   create them.
-- `schemaquench --version` answers **2.4.0** or later (for the `{{CompatibilityLevel}}` token).
+- `schemaquench --version` answers **2.7.0** or later (for the `{{CompatibilityLevel}}` token).
 
 ## Step 0 — stand up the control table (run this first)
 

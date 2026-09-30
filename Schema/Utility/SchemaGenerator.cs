@@ -140,6 +140,36 @@ public static class SchemaGenerator
         return schema;
     }
 
+
+    /// <summary>
+    /// The regex for a string-converted enum, ANCHORED and CASE-FOLDED so the schema accepts exactly what
+    /// the product accepts -- no more, no less.
+    /// <para>
+    /// Both halves are corrections, and they fail in opposite directions. UNANCHORED, JSON Schema's
+    /// `pattern` is a substring match, so <c>XPrimaryY</c> satisfied <c>Primary|Secondary|Both</c>. Our own
+    /// loader rejects that value (SS-LOAD-001), which is why it was invisible here -- but these schema files
+    /// are also consumed by Ajv in CI and by editors, and NEITHER has our loader. For them the bad value
+    /// passed lint and surfaced at deploy time instead.
+    /// </para>
+    /// <para>
+    /// CASE-FOLDED because <c>StringEnumConverter</c> reads case-insensitively, so the product accepts
+    /// <c>primary</c> and <c>PRIMARY</c> while the old pattern rejected both -- the linter contradicting the
+    /// product, which is the same defect this method's enum handling was already fixed for once. ECMA-262,
+    /// the flavour JSON Schema mandates, has no inline <c>(?i)</c> flag, so the folding has to be spelled out
+    /// per character. The result is unreadable and that is fine: it is a generated artifact, and being wrong
+    /// in a file people skim costs more than being ugly in one they do not.
+    /// </para>
+    /// </summary>
+    private static string EnumPattern(Type type) =>
+        "^(?:" + string.Join("|", Enum.GetNames(type).Select(CaseInsensitiveLiteral)) + ")$";
+
+    /// <summary>Spells a literal as per-character classes, the only way to express case-insensitivity in
+    /// ECMA-262 without an inline flag. Non-letters pass through escaped.</summary>
+    private static string CaseInsensitiveLiteral(string name) =>
+        string.Concat(name.Select(c =>
+            char.IsLetter(c) ? $"[{char.ToUpperInvariant(c)}{char.ToLowerInvariant(c)}]"
+                             : System.Text.RegularExpressions.Regex.Escape(c.ToString())));
+
     private static JObject MapType(Type type, Func<Type, Type> elementTypeResolver, Platform? platform, Type propertyConverter = null)
     {
         type = Nullable.GetUnderlyingType(type) ?? type;
@@ -159,8 +189,7 @@ public static class SchemaGenerator
             if (type.GetCustomAttribute<JsonConverterAttribute>()?.ConverterType == typeof(Newtonsoft.Json.Converters.StringEnumConverter)
                 || propertyConverter == typeof(Newtonsoft.Json.Converters.StringEnumConverter))
             {
-                var values = string.Join("|", Enum.GetNames(type));
-                return new JObject { ["type"] = "string", ["pattern"] = values };
+                return new JObject { ["type"] = "string", ["pattern"] = EnumPattern(type) };
             }
             return new JObject { ["type"] = "integer" };
         }
@@ -180,11 +209,51 @@ public static class SchemaGenerator
         return BuildObjectSchema(type, elementTypeResolver, platform);
     }
 
+    /// <summary>
+    /// Anchors a hand-declared <see cref="SchemaPropertyAttribute.Pattern"/>, and case-folds it when the
+    /// property says the product reads it case-insensitively.
+    /// <para>
+    /// The enum path was fixed for exactly this in the same release; this is the other emitter, and it had
+    /// the identical defect in both directions. A JSON Schema pattern is a PARTIAL match, so the declared
+    /// <c>NEVER|ALWAYS|THRESHOLD</c> accepted <c>XNEVERY</c> — and <c>Y|N</c> accepted any string
+    /// containing a Y or an N. Anchoring here rather than in 21 declarations is the point: it makes the
+    /// omission unrepresentable instead of relying on the next author remembering.
+    /// </para>
+    /// <para>
+    /// An already-anchored declaration is passed through untouched, so the four that were written
+    /// correctly (including the optional-empty <c>^(…)?$</c> forms, which double-anchoring would break)
+    /// keep their exact semantics.
+    /// </para>
+    /// </summary>
+    private static string DeclaredPattern(string pattern, bool ignoreCase, bool allowPadding = false)
+    {
+        var pad = allowPadding ? @"\s*" : "";
+        var alreadyAnchored = pattern.StartsWith('^') && pattern.EndsWith('$');
+        if (!ignoreCase)
+            return alreadyAnchored ? pattern : $"^{pad}(?:{pattern}){pad}$";
+
+        // Only meaningful on a plain literal alternation, which is what every case-folded declaration is.
+        // Folding a pattern with metacharacters would corrupt it, so refuse rather than guess.
+        var core = alreadyAnchored ? pattern[1..^1] : pattern;
+        if (core.Any(c => "[](){}*+?.\\^$".Contains(c)))
+            throw new InvalidOperationException(
+                $"PatternIgnoreCase is only valid on a plain literal alternation; '{pattern}' has regex "
+                + "metacharacters. Fold it by hand or drop the flag.");
+
+        return $"^{pad}(?:" + string.Join("|", core.Split('|').Select(CaseInsensitiveLiteral)) + $"){pad}$";
+    }
+
+    /// <summary>Test seam for the anchoring guard: the emission rule without reflecting over a
+    /// whole generated schema to recover one property's pattern.</summary>
+    internal static string DeclaredPatternForTest(string pattern, bool ignoreCase, bool allowPadding = false) =>
+        DeclaredPattern(pattern, ignoreCase, allowPadding);
+
     private static void ApplyConstraints(PropertyInfo prop, JObject propSchema)
     {
         var attr = prop.GetCustomAttribute<SchemaPropertyAttribute>();
         if (attr == null) return;
-        if (!string.IsNullOrEmpty(attr.Pattern)) propSchema["pattern"] = attr.Pattern;
+        if (!string.IsNullOrEmpty(attr.Pattern))
+            propSchema["pattern"] = DeclaredPattern(attr.Pattern, attr.PatternIgnoreCase, attr.PatternAllowPadding);
         if (!double.IsNaN(attr.Minimum)) propSchema["minimum"] = attr.Minimum;
         if (!double.IsNaN(attr.Maximum)) propSchema["maximum"] = attr.Maximum;
         if (attr.MaxLength >= 0) propSchema["maxLength"] = attr.MaxLength;

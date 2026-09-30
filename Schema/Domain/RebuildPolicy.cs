@@ -13,7 +13,8 @@ namespace Schema.Domain
     /// </summary>
     public class RebuildPolicy
     {
-        [SchemaProperty(Pattern = "NEVER|ALWAYS|THRESHOLD",
+        // Product-side read measured: DatabaseQuench upper-cases before comparing, so "never" deploys.
+        [SchemaProperty(Pattern = "NEVER|ALWAYS|THRESHOLD", PatternIgnoreCase = true, PatternAllowPadding = true,
             Description = "When to rebuild the table instead of altering it in place. NEVER (the default) always " +
                           "alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of " +
                           "pending changes reaches Threshold, which is then required.")]

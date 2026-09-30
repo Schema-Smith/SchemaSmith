@@ -9,20 +9,11 @@ nothing else.
 The table in this lab is created **outside the package**, by a script standing in for the vendor. The
 package never declares its columns — only the indexes you want on it.
 
-<!-- TRAINING-RELEASE-PIN #416 -- on 2.7.0, delete this note and drop the per-engine caveat from the
-     Step 2 command; PostgreSQL then needs no version qualifier. Certified on main 2026-09-10. -->
-> **PostgreSQL needs SchemaSmith 2.7.0 or later; the other three run on 2.6.0.** `IndexOnlyTableQuenches`
-> was broken on PostgreSQL through 2.6.0 — two faults, one behind the other, both reported from this lab.
-> The first failed at `42883 … procedure SchemaSmith.IndexOnlyQuench(…) does not exist`; fixing it revealed
-> a second that created the indexes and then failed at `42703: column "ReplicaIdentity" does not exist`.
-> Both are fixed. On 2.6.0 the `postgres/` folder here will not deploy — run the other three, or build the
-> CLI from `main`.
-
 ## Before you start
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup)
   once — it creates `cookbook_r13`).
-- The CLI is on your PATH: `schemaquench --version` answers **2.6.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
 
 ## Step 1: Let the "vendor" create its table
 
@@ -31,7 +22,7 @@ This is the part you do not control. Run it once per engine:
 ```bash
 for e in sqlserver postgres mysql mariadb; do
   ../lab-sql.sh $e cookbook_r13 "$(cat vendor-schema/create-vendor-table.$e.sql)"
-done   # postgres needs 2.7.0+
+done
 ```
 
 `vendor_order` now exists with four columns — `order_id`, `customer_ref`, `placed_at`, `status` — and a
@@ -63,7 +54,7 @@ Deploy:
 
 ```bash
 cd <engine> && schemaquench --ConfigFile:deploy.settings.json ; cd ..
-# exit 0 on SQL Server, MySQL and MariaDB -- and on PostgreSQL from 2.7.0
+# exit 0 on all four engines
 ```
 
 Watch the log line, because it changes shape to tell you which mode you are in:

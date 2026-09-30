@@ -260,9 +260,9 @@ BEGIN
   -- this procedure would mean maintaining FK construction against a second source of truth.
   DECLARE @v_DropInboundFkSql NVARCHAR(MAX)
   SELECT @v_DropInboundFkSql = STUFF((SELECT @v_CrLf + CAST(
-             'RAISERROR(''  Dropping inbound foreign key [' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '].[' + fk.[name] + ']'', 10, 100) WITH NOWAIT;' + @v_CrLf +
-             'ALTER TABLE [' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '] DROP CONSTRAINT [' + fk.[name] + '];' + @v_CrLf +
-             'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''[' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '].[' + fk.[name] + ']'', ''dropped'');'
+             'RAISERROR(''  Dropping inbound foreign key ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''', 10, 100) WITH NOWAIT;' + @v_CrLf +
+             'ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + ' DROP CONSTRAINT ' + QUOTENAME(fk.[name]) + ';' + @v_CrLf +
+             'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''', ''dropped'');'
              AS NVARCHAR(MAX))
            FROM sys.foreign_keys fk
            WHERE fk.referenced_object_id = @v_ObjectId
@@ -317,7 +317,7 @@ BEGIN
     -- printed, not executed, under WhatIf). Same source, same ObjectName shape as ModifiedTableQuench,
     -- so a preview's manifest lists the inbound keys a real run would take out.
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-      SELECT @@SPID, 'foreignKey', '[' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '].[' + fk.[name] + ']', 'wouldDrop'
+      SELECT @@SPID, 'foreignKey', '' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + '', 'wouldDrop'
         FROM sys.foreign_keys fk
         WHERE fk.referenced_object_id = @v_ObjectId
     RETURN

@@ -40,7 +40,7 @@ CREATE PROCEDURE SchemaSmith.GenerateTableXml
 AS
 SET NOCOUNT ON
 DECLARE @v_DatabaseCollation NVARCHAR(200) = CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS NVARCHAR(200))
-DECLARE @v_ObjectId INT = OBJECT_ID(@p_Schema + '.' + @p_Table)
+DECLARE @v_ObjectId INT = OBJECT_ID(QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table))
 DECLARE @v_IsTemporal BIT = 0
 -- History table identity/retention (#depth-gap) -- see JSON twin for the emit-only-when-nonstandard
 -- rationale. Populated by the same version-gated dynamic block as @v_IsTemporal below (0/NULL pre-2016).
@@ -64,7 +64,7 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 13
   EXEC sp_executesql N'
     INSERT INTO #ColMeta ([column_id], GeneratedAlwaysType, MaskingFunction, EncryptionType, EncryptionKey, EncryptionAlgorithm)
     SELECT sc.column_id, sc.generated_always_type, mc.masking_function, sc.encryption_type_desc,
-           (SELECT ''['' + cek.[name] + '']'' FROM sys.column_encryption_keys cek WHERE cek.column_encryption_key_id = sc.column_encryption_key_id),
+           (SELECT QUOTENAME(cek.[name]) FROM sys.column_encryption_keys cek WHERE cek.column_encryption_key_id = sc.column_encryption_key_id),
            sc.encryption_algorithm_name
       FROM sys.columns sc
       LEFT JOIN sys.masked_columns mc ON mc.[object_id] = sc.[object_id] AND mc.column_id = sc.column_id
@@ -138,7 +138,7 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
 -- catalog's "default filegroup") and the default itself both extract no key, so existing packages are unchanged.
 DECLARE @v_CdcFilegroup NVARCHAR(260) = NULL
 IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
-  EXEC sp_executesql N'SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN ''['' + fg.[name] + '']'' END FROM (SELECT TOP 1 ct.filegroup_name FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest JOIN sys.filegroups fg ON fg.[name] = newest.filegroup_name',
+  EXEC sp_executesql N'SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN QUOTENAME(fg.[name]) END FROM (SELECT TOP 1 ct.filegroup_name FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest JOIN sys.filegroups fg ON fg.[name] = newest.filegroup_name',
     N'@p_ObjId INT, @p_Fg NVARCHAR(260) OUTPUT', @p_ObjId = @v_ObjectId, @p_Fg = @v_CdcFilegroup OUTPUT
 
 -- Memory-optimized (Hekaton) is 2014 (major 12); is_memory_optimized / durability_desc are 2014 columns,
@@ -175,8 +175,8 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 12
   EXEC sp_executesql N'INSERT INTO #HashIndexMeta ([index_id], [bucket_count]) SELECT index_id, bucket_count FROM sys.hash_indexes WHERE [object_id] = @p_ObjId',
     N'@p_ObjId INT', @p_ObjId = @v_ObjectId
 ;WITH XMLNAMESPACES ('http://james.newtonking.com/projects/json' AS json)
-SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
-       '[' + TABLE_NAME + ']' AS [Name],
+SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
+       QUOTENAME(TABLE_NAME) AS [Name],
        -- Mirrors the JSON proc's per-partition aggregation (see GenerateTableJson.sql): sys.partitions
        -- is one row per partition, and a scalar read raised Msg 512 on a partitioned table. A shared
        -- value round-trips; non-uniform compression across partitions emits the 'MIXED' sentinel.
@@ -191,7 +191,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        -- Filegroup placement (#filegroups) -- see JSON twin (GenerateTableJson.sql) for the
        -- emit-only-when-non-default rationale. Filegroups predate every supported SQL Server version, so
        -- (unlike temporal above) this needs no version gate and no staged dynamic-SQL variable.
-       (SELECT '[' + fg.[name] + ']'
+       (SELECT QUOTENAME(fg.[name])
           FROM sys.indexes tfg
           JOIN sys.filegroups fg ON fg.data_space_id = tfg.data_space_id
          WHERE tfg.[object_id] = st.[object_id]
@@ -206,13 +206,13 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        --
        -- sys.data_spaces.type = 'PS' and sys.index_columns.partition_ordinal both predate the supported
        -- floor, so no version gate. partition_ordinal = 1 because SQL Server partitions on ONE column.
-       (SELECT '[' + ds.[name] + ']'
+       (SELECT QUOTENAME(ds.[name])
           FROM sys.indexes tps
           JOIN sys.data_spaces ds ON ds.data_space_id = tps.data_space_id
          WHERE tps.[object_id] = st.[object_id]
            AND tps.index_id IN (0, 1)
            AND ds.[type] = 'PS') AS [PartitionScheme],
-       (SELECT '[' + pc.[name] + ']'
+       (SELECT QUOTENAME(pc.[name])
           FROM sys.indexes tps
           JOIN sys.data_spaces ds ON ds.data_space_id = tps.data_space_id
           JOIN sys.index_columns pic ON pic.[object_id] = tps.[object_id]
@@ -247,8 +247,8 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
        -- 2016+, so it is read into @v_IsTemporal via the version-gated dynamic pre-stage above (0 below 2016).
        CASE WHEN @v_IsTemporal = 1 THEN 'true' END AS [IsTemporal],
        -- History table identity/retention -- populated by the version-gated dynamic block above (NULL pre-2016).
-       CASE WHEN @v_HistTableSchema IS NOT NULL THEN '[' + @v_HistTableSchema + ']' END AS [HistoryTableSchema],
-       CASE WHEN @v_HistTableName IS NOT NULL THEN '[' + @v_HistTableName + ']' END AS [HistoryTableName],
+       CASE WHEN @v_HistTableSchema IS NOT NULL THEN QUOTENAME(@v_HistTableSchema) END AS [HistoryTableSchema],
+       CASE WHEN @v_HistTableName IS NOT NULL THEN QUOTENAME(@v_HistTableName) END AS [HistoryTableName],
        @v_HistRetentionText AS [HistoryRetentionPeriod],
        -- Sticky drop-protection marker (only when set true). Read from the PreventDrop extended property. #270
        CASE WHEN (SELECT CONVERT(NVARCHAR(50), [value])
@@ -256,10 +256,10 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
             THEN 'true' END AS [PreventDrop],
        '' AS [OldName],
        (SELECT 'true' AS [@json:Array],
-                       '[' + c.COLUMN_NAME + ']' AS [Name],
+                       QUOTENAME(c.COLUMN_NAME) AS [Name],
                        UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
                                                CASE WHEN sc.xml_collection_id <> 0
-                                                    THEN (SELECT '[' + SCHEMA_NAME(xc.[schema_id]) + '].[' + xc.[name] + ']' FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
+                                                    THEN (SELECT QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                     END,
                                                sc.is_rowguidcol) +
                                           CASE WHEN ic.column_id IS NOT NULL
@@ -309,7 +309,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                   ORDER BY c.COLUMN_NAME
                   FOR XML PATH('Columns'), TYPE),
        (SELECT 'true' AS [@json:Array],
-               '[' + [Name] + ']' AS [Name],
+               QUOTENAME([Name]) AS [Name],
                -- Same per-partition aggregation as the table-level [CompressionType] above.
                (SELECT CASE COUNT(DISTINCT p.data_compression_desc)
                           WHEN 0 THEN NULL
@@ -324,7 +324,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                -- the XML tier also serves.
                (SELECT him.[bucket_count] FROM #HashIndexMeta him WHERE him.[index_id] = si.index_id) AS [BucketCount],
                -- Same emit-only-when-non-default rule as the table-level [FileGroup] above -- see JSON twin.
-               (SELECT '[' + fg.[name] + ']'
+               (SELECT QUOTENAME(fg.[name])
                   FROM sys.filegroups fg
                  WHERE fg.data_space_id = si.data_space_id
                    AND fg.is_default = 0) AS [FileGroup],
@@ -332,11 +332,11 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                -- the table's. An index is not required to be aligned -- a nonclustered index on a
                -- partitioned table may sit on one filegroup, and an index on an ordinary heap may itself be
                -- partitioned -- so inferring either from the other would lose a real design.
-               (SELECT '[' + ds.[name] + ']'
+               (SELECT QUOTENAME(ds.[name])
                   FROM sys.data_spaces ds
                  WHERE ds.data_space_id = si.data_space_id
                    AND ds.[type] = 'PS') AS [PartitionScheme],
-               (SELECT '[' + pc.[name] + ']'
+               (SELECT QUOTENAME(pc.[name])
                   FROM sys.data_spaces ds
                   JOIN sys.index_columns pic ON pic.[object_id] = si.[object_id]
                                                           AND pic.index_id = si.index_id
@@ -353,11 +353,11 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
                CASE WHEN fill_factor = 100 THEN 0 ELSE fill_factor END AS [FillFactor],
                CASE WHEN ignore_dup_key = 1 THEN 'true' ELSE 'false' END AS [IgnoreDuplicateKey],
                CASE WHEN is_padded = 1 THEN 'true' ELSE 'false' END AS [PadIndex],
-               STUFF((SELECT ',' + '[' + COL_NAME(ic.[object_id], ic.column_id) + ']' + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
+               STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                   FROM sys.index_columns ic
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0
                   ORDER BY key_ordinal FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS [IndexColumns],
-               STUFF((SELECT ',' + '[' + COL_NAME(ic.[object_id], ic.column_id) + ']'
+               STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id))
                   FROM sys.index_columns ic
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1
                   ORDER BY index_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS [IncludeColumns],
@@ -382,10 +382,10 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
           ORDER BY [Name]
           FOR XML PATH('Indexes'), TYPE),
        (SELECT 'true' AS [@json:Array],
-               '[' + i.[name] COLLATE DATABASE_DEFAULT + ']' AS [Name],
-               '[' + COL_NAME(i.[Object_id], ic.column_id) + ']' AS [Column],
+               QUOTENAME(i.[name] COLLATE DATABASE_DEFAULT) AS [Name],
+               QUOTENAME(COL_NAME(i.[Object_id], ic.column_id)) AS [Column],
                CASE WHEN i.using_xml_index_id IS NULL THEN 'true' ELSE 'false' END AS [IsPrimary],
-               (SELECT '[' + [Name] COLLATE DATABASE_DEFAULT + ']' FROM sys.xml_indexes i2 WHERE i2.[object_id] = i.[object_id] AND i2.index_id = i.using_xml_index_id AND i.using_xml_index_id IS NOT NULL) AS [PrimaryIndex],
+               (SELECT QUOTENAME([Name] COLLATE DATABASE_DEFAULT) FROM sys.xml_indexes i2 WHERE i2.[object_id] = i.[object_id] AND i2.index_id = i.using_xml_index_id AND i.using_xml_index_id IS NOT NULL) AS [PrimaryIndex],
                i.secondary_type_desc COLLATE DATABASE_DEFAULT AS [SecondaryIndexType],
                (SELECT ep.[Name] AS [@n], CONVERT(NVARCHAR(MAX), ep.[Value]) AS [*]
                   FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) ep
@@ -397,14 +397,14 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
           ORDER BY i.[Name]
           FOR XML PATH('XmlIndexes'), TYPE),
 	   (SELECT 'true' AS [@json:Array],
-               '[' + [Name] + ']' AS [Name],
-               STUFF((SELECT ',' + '[' + COL_NAME(fc.[parent_object_id], fc.parent_column_id) + ']'
+               QUOTENAME([Name]) AS [Name],
+               STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[parent_object_id], fc.parent_column_id))
                             FROM sys.foreign_key_columns fc
                             WHERE fk.[object_id] = fc.[constraint_object_id]
                             ORDER BY fc.constraint_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS [Columns],
-               '[' + OBJECT_SCHEMA_NAME(referenced_object_id) + ']' AS RelatedTableSchema,
-               '[' + OBJECT_NAME(referenced_object_id) + ']' AS RelatedTable,
-               STUFF((SELECT ',' + '[' + COL_NAME(fc.[referenced_object_id], fc.referenced_column_id) + ']'
+               QUOTENAME(OBJECT_SCHEMA_NAME(referenced_object_id)) AS RelatedTableSchema,
+               QUOTENAME(OBJECT_NAME(referenced_object_id)) AS RelatedTable,
+               STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[referenced_object_id], fc.referenced_column_id))
                             FROM sys.foreign_key_columns fc
                             WHERE fk.[object_id] = fc.[constraint_object_id]
                             ORDER BY fc.constraint_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS [RelatedColumns],
@@ -419,8 +419,8 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
           ORDER BY [Name]
           FOR XML PATH('ForeignKeys'), TYPE),
        (SELECT 'true' AS [@json:Array],
-               '[' + [Name] + ']' AS [Name],
-               STUFF((SELECT ',' + '[' + COL_NAME(sc.[object_id], sc.column_id) + ']'
+               QUOTENAME([Name]) AS [Name],
+               STUFF((SELECT ',' + QUOTENAME(COL_NAME(sc.[object_id], sc.column_id))
                   FROM sys.stats_columns sc
                   WHERE s.[object_id] = sc.[object_id] AND s.stats_id = sc.stats_id
                   ORDER BY sc.stats_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS [Columns],
@@ -439,7 +439,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
           ORDER BY [Name]
           FOR XML PATH('Statistics'), TYPE),
        (SELECT 'true' AS [@json:Array],
-               '[' + [Name] + ']' AS [Name],
+               QUOTENAME([Name]) AS [Name],
                SchemaSmith.fn_StripParenWrapping([definition]) AS [Expression],
                (SELECT ep.[Name] AS [@n], CONVERT(NVARCHAR(MAX), ep.[Value]) AS [*]
                   FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', cc.[Name]) ep
@@ -450,13 +450,13 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
             AND parent_column_id = 0
           ORDER BY [Name]
           FOR XML PATH('CheckConstraints'), TYPE),
-       (SELECT FullTextCatalog = '[' + (SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id) + ']',
-               KeyIndex = '[' + (SELECT i.[Name] FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id]) + ']',
+       (SELECT FullTextCatalog = QUOTENAME((SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
+               KeyIndex = QUOTENAME((SELECT i.[Name] FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
                ChangeTracking = change_tracking_state_desc,
-               [StopList] = '[' + (SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id) + ']',
-               STUFF((SELECT ',' + '[' + COL_NAME(fc.[object_id], fc.column_id) + ']' +
+               [StopList] = QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)),
+               STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)) +
                                        CASE WHEN fc.type_column_id IS NOT NULL
-                                            THEN ' TYPE COLUMN [' + COL_NAME(fc.[object_id], fc.type_column_id) + ']'
+                                            THEN ' TYPE COLUMN ' + QUOTENAME(COL_NAME(fc.[object_id], fc.type_column_id)) + ''
                                             ELSE '' END +
                                        -- Full-text LANGUAGE churn: same emit-only-when-non-default rule and
                                        -- byte-identical contract as the JSON twin (GenerateTableJson.sql). Kept
@@ -483,7 +483,7 @@ SELECT '[' + TABLE_SCHEMA + ']' AS [Schema],
           WHERE ep.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)
           FOR XML PATH('p'), ROOT('ExtendedProperties'), TYPE) AS [Extensions]
   FROM INFORMATION_SCHEMA.TABLES t
-  JOIN sys.tables st ON st.[object_id] = OBJECT_ID(@p_Schema + '.' + @p_Table)
+  JOIN sys.tables st ON st.[object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table))
   LEFT JOIN sys.change_tracking_tables ctt ON ctt.[object_id] = st.[object_id]
   WHERE TABLE_NAME = @p_Table
     AND TABLE_SCHEMA = @p_Schema

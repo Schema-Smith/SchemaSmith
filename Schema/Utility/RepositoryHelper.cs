@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Schema.Domain;
@@ -330,7 +331,10 @@ public static class RepositoryHelper
     /// (e.g. CheckExpression, GenerationExpression). Reuses the canonical platform→subclass mapping
     /// in <see cref="PlatformDeserializer"/> rather than duplicating it.
     /// </summary>
-    private static Func<Type, Type> PlatformElementResolver(Platform platform) => t =>
+    // internal, like GetTypeForSchemaFile: the generated-schema tests have to drive the real resolver.
+    // A stub one returns null element types and NullReferences inside the generator, which reads as a
+    // product bug rather than a wrong test.
+    internal static Func<Type, Type> PlatformElementResolver(Platform platform) => t =>
         t == typeof(Column) ? PlatformDeserializer.GetColumnType(platform)
         : t == typeof(Schema.Domain.Index) ? PlatformDeserializer.GetIndexType(platform)
         : t == typeof(ForeignKey) ? PlatformDeserializer.GetForeignKeyType(platform)
@@ -393,6 +397,284 @@ public static class RepositoryHelper
         if (platform == Platform.PostgreSQL)
             files.Add($"sequences.{platformName}.schema");
         return files.ToArray();
+    }
+
+    /// <summary>
+    /// Maps a package object-type folder to the schema kind that validates what is inside it.
+    /// Returns null for a folder no generated schema covers, which is not an error: script folders
+    /// and anything a user adds alongside them simply get no <c>$schema</c>.
+    /// </summary>
+    private static string SchemaKindForFolder(string folderName) => folderName switch
+    {
+        "Tables" => "tables",
+        "Indexed Views" => "indexedviews",
+        "Materialized Views" => "materializedviews",
+        "Events" => "events",
+        "Domain Types" => "domaintypes",
+        "Enum Types" => "enumtypes",
+        "Sequences" => "sequences",
+        _ => null
+    };
+
+    /// <summary>
+    /// The <c>$schema</c> value for one package JSON file: the relative path from that file to the
+    /// package's generated schema for its kind.
+    /// </summary>
+    /// <remarks>
+    /// Always forward slashes. <see cref="Path.GetRelativePath"/> emits the platform separator, and a
+    /// Windows-authored package carrying <c>..\.json-schemas\tables.sqlserver.schema</c> resolves in
+    /// no editor on any OS — including on Windows, where VS Code wants a URI-style path. Getting this
+    /// wrong is silent: the key is present, looks right in a diff, and simply never validates.
+    /// </remarks>
+    public static string BuildSchemaRef(string productPath, string jsonFilePath, string schemaKind, Platform platform)
+    {
+        var schemaFile = Path.Join(productPath, ".json-schemas",
+            $"{schemaKind}.{platform.ToCanonicalString().ToLower()}.schema");
+        var fromDirectory = Path.GetDirectoryName(Path.GetFullPath(jsonFilePath)) ?? productPath;
+        return Path.GetRelativePath(fromDirectory, Path.GetFullPath(schemaFile)).Replace('\\', '/');
+    }
+
+    /// <summary>
+    /// Adds the <c>$schema</c> reference to ONE package file. Returns true if the file changed.
+    /// </summary>
+    /// <remarks>
+    /// For the two package-level files, <c>Product.json</c> and <c>Template.json</c>, which are
+    /// written during init -- before <c>.json-schemas</c> exists -- and are not rewritten by a later
+    /// extraction. Neither carries variants, so stamping them does not touch the byte-for-byte
+    /// promise that applies to object files.
+    /// </remarks>
+    public static bool StampSchemaRef(string productPath, string jsonFilePath, string schemaKind,
+        Platform platform, Action<string> warn = null)
+    {
+        var file = FileWrapper.GetFromFactory();
+        var schemaFile = Path.Join(productPath, ".json-schemas",
+            $"{schemaKind}.{platform.ToCanonicalString().ToLower()}.schema");
+        if (!file.Exists(jsonFilePath) || !file.Exists(schemaFile)) return false;
+
+        try
+        {
+            var original = file.ReadAllText(jsonFilePath);
+            var updated = WithSchemaRef(original, BuildSchemaRef(productPath, jsonFilePath, schemaKind, platform));
+            if (updated == null || updated == original) return false;
+            file.WriteAllText(jsonFilePath, PreservingBom(file, jsonFilePath, updated));
+            return true;
+        }
+        // Narrow, not blanket: a malformed file (JsonException) or one that cannot be read or rewritten
+        // (IOException / UnauthorizedAccessException) must not abort the package, but a NullReference or
+        // an InvalidOperation here is a defect in this method and should surface rather than be logged
+        // as if the user's file were at fault.
+        catch (JsonException ex) { return WarnNotStamped(ex); }
+        catch (IOException ex) { return WarnNotStamped(ex); }
+        catch (UnauthorizedAccessException ex) { return WarnNotStamped(ex); }
+
+        bool WarnNotStamped(Exception ex)
+        {
+            (warn ?? (m => LogFactory.GetLogger(nameof(RepositoryHelper)).Warn(m)))(
+                $"'{jsonFilePath}' could not be stamped with a $schema reference ({ex.Message}). "
+                + "The file is unchanged; deploy behavior is unaffected.");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Writes a <c>$schema</c> reference into every JSON file in the package that a generated schema
+    /// covers, so editors and third-party validators pick the schema up with no per-user setup.
+    /// Idempotent: a file already carrying the right reference is left untouched.
+    /// </summary>
+    /// <remarks>
+    /// No-ops when the package has no <c>.json-schemas</c> folder — a reference to a file that was
+    /// never generated would validate nothing and show the user a broken path.
+    /// <para>
+    /// Edits the file as TEXT rather than deserializing and re-serializing. A typed round-trip would
+    /// rewrite all 3,000-plus shipped package files through the current serializer, and every setting
+    /// that has shifted since a file was authored (DefaultValueHandling dropping a now-default value,
+    /// property order, an <c>Extensions</c> fragment's inner formatting) would land as an unreviewable
+    /// diff wrapped around the one line being added.
+    /// </para>
+    /// </remarks>
+    public static int StampSchemaRefs(string productPath, Platform platform, Action<string> warn = null)
+    {
+        var file = FileWrapper.GetFromFactory();
+        var directory = DirectoryWrapper.GetFromFactory();
+        if (!directory.Exists(Path.Join(productPath, ".json-schemas"))) return 0;
+        warn ??= message => LogFactory.GetLogger(nameof(RepositoryHelper)).Warn(message);
+
+        var stamped = 0;
+        foreach (var (jsonFile, kind) in EnumerateSchemaCoveredFiles(productPath, directory))
+        {
+            // Per FILE, not per folder. A package can hold some of its schemas and not others, and a
+            // reference to the one that is missing is worse than no reference: editors report it as a
+            // broken schema rather than silently skipping, and nothing in the deploy path would ever
+            // surface it.
+            if (!file.Exists(Path.Join(productPath, ".json-schemas",
+                    $"{kind}.{platform.ToCanonicalString().ToLower()}.schema")))
+                continue;
+
+            var reference = BuildSchemaRef(productPath, jsonFile, kind, platform);
+            try
+            {
+                var original = file.ReadAllText(jsonFile);
+                var updated = WithSchemaRef(original, reference);
+                if (updated == null || updated == original) continue;
+                file.WriteAllText(jsonFile, PreservingBom(file, jsonFile, updated));
+                stamped++;
+            }
+            // One unparseable or unwritable file must not abort the package: the rest are still correct,
+            // and the name is what the user needs in order to go look at it. Narrowed to the three that
+            // the file actually causes -- a defect in this loop should still surface as a crash.
+            catch (JsonException ex) { WarnNotStamped(jsonFile, ex); }
+            catch (IOException ex) { WarnNotStamped(jsonFile, ex); }
+            catch (UnauthorizedAccessException ex) { WarnNotStamped(jsonFile, ex); }
+        }
+        return stamped;
+
+        void WarnNotStamped(string path, Exception ex) =>
+            warn($"'{path}' could not be stamped with a $schema reference ({ex.Message}). "
+                 + "The file is unchanged; deploy behavior is unaffected.");
+    }
+
+    private static IEnumerable<(string Path, string Kind)> EnumerateSchemaCoveredFiles(string productPath, IDirectory directory)
+    {
+        var productFile = Path.Join(productPath, "Product.json");
+        if (FileWrapper.GetFromFactory().Exists(productFile))
+            yield return (productFile, "products");
+
+        var templatesRoot = Path.Join(productPath, "Templates");
+        if (!directory.Exists(templatesRoot)) yield break;
+
+        foreach (var templateDirectory in directory.GetDirectories(templatesRoot, "*", SearchOption.TopDirectoryOnly))
+        {
+            var templateFile = Path.Join(templateDirectory, "Template.json");
+            if (FileWrapper.GetFromFactory().Exists(templateFile))
+                yield return (templateFile, "templates");
+
+            foreach (var objectDirectory in directory.GetDirectories(templateDirectory, "*", SearchOption.TopDirectoryOnly))
+            {
+                var kind = SchemaKindForFolder(Path.GetFileName(objectDirectory));
+                if (kind == null) continue;
+
+                // Recursive: tables are commonly foldered (Tables/Core, Tables/Reference) and the
+                // schema still covers them at any depth.
+                foreach (var jsonFile in directory.GetFiles(objectDirectory, "*.json", SearchOption.AllDirectories))
+                    yield return (jsonFile, kind);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Re-attaches a UTF-8 BOM the round-trip would otherwise drop. <c>ReadAllText</c> consumes a BOM and
+    /// <c>WriteAllText</c> does not re-emit one, so stamping a BOM'd file silently rewrote it without —
+    /// contradicting this path's promise that the output is byte-identical but for the reference. Prepending
+    /// U+FEFF is enough: UTF-8 encodes it back to the same three bytes, and the next read strips it again.
+    /// </summary>
+    private static string PreservingBom(IFile file, string path, string updated)
+    {
+        byte[] head;
+        try
+        {
+            head = file.ReadAllBytes(path);
+        }
+        catch (IOException) { return updated; }
+        catch (UnauthorizedAccessException) { return updated; }
+
+        var hadBom = head is { Length: >= 3 } && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF;
+        return hadBom ? "﻿" + updated : updated;
+    }
+
+    /// <summary>
+    /// The span of the ROOT object's <c>$schema</c> VALUE in the raw text, or null if the root has no
+    /// such property. Scans at brace depth so a <c>$schema</c> nested inside <c>Extensions</c> — legal,
+    /// author-supplied, and quite possibly earlier in the file — is never mistaken for the root's own.
+    /// </summary>
+    private static (int Start, int Length)? RootSchemaValueSpan(string json)
+    {
+        var depth = 0;
+        var i = 0;
+        while (i < json.Length)
+        {
+            var c = json[i];
+            if (c == '"')
+            {
+                var end = EndOfJsonString(json, i);
+                // A key sits at depth 1 only when it belongs to the root object itself.
+                if (depth == 1 && string.CompareOrdinal(json, i, "\"$schema\"", 0, 9) == 0 && end == i + 9)
+                {
+                    var j = end;
+                    while (j < json.Length && char.IsWhiteSpace(json[j])) j++;
+                    if (j < json.Length && json[j] == ':')
+                    {
+                        j++;
+                        while (j < json.Length && char.IsWhiteSpace(json[j])) j++;
+                        if (j < json.Length && json[j] == '"') return (j, EndOfJsonString(json, j) - j);
+                        if (string.CompareOrdinal(json, j, "null", 0, 4) == 0) return (j, 4);
+                        return null;
+                    }
+                }
+                i = end;
+                continue;
+            }
+
+            if (c is '{' or '[') depth++;
+            else if (c is '}' or ']') depth--;
+            i++;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Index one past the closing quote of the JSON string starting at <paramref name="start"/>,
+    /// honouring backslash escapes so an embedded <c>\"</c> does not end it early.
+    /// </summary>
+    private static int EndOfJsonString(string s, int start)
+    {
+        var i = start + 1;
+        while (i < s.Length)
+        {
+            if (s[i] == '\\') { i += 2; continue; }
+            if (s[i] == '"') return i + 1;
+            i++;
+        }
+        return s.Length;
+    }
+
+    /// <summary>
+    /// Returns <paramref name="json"/> with <c>$schema</c> present as its first property, or null if
+    /// the text is not a JSON object this can safely edit.
+    /// </summary>
+    private static string WithSchemaRef(string json, string reference)
+    {
+        // Parse purely as a guard. The result is thrown away and the edit is textual, but a file that
+        // does not parse is a file this must not rewrite.
+        if (JToken.Parse(json) is not JObject parsed) return null;
+
+        var encoded = JsonConvert.ToString(reference);
+        if (parsed["$schema"] is not null)
+        {
+            var current = parsed["$schema"].Type == JTokenType.String ? parsed["$schema"].Value<string>() : null;
+            if (current == reference) return json;
+
+            // Locate the ROOT object's own "$schema" by scanning at brace depth, NOT with a whole-file
+            // regex. Extensions is arbitrary author-supplied JSON, so a nested "$schema" is legal and may
+            // appear first in the text -- a first-match replace overwrote the author's value, left the
+            // root reference stale, and still reported success.
+            var span = RootSchemaValueSpan(json);
+            // Decline rather than edit the wrong key: the parse says a root reference exists, so failing
+            // to find it in the text means this method does not understand the file.
+            if (span is null) return null;
+            return string.Concat(json.AsSpan(0, span.Value.Start), encoded,
+                                 json.AsSpan(span.Value.Start + span.Value.Length));
+        }
+
+        // Insert as the first property, matching the indentation the next line already uses so the
+        // result is byte-identical to the original but for the added line.
+        var opening = new Regex("^(\\s*\\{)(\\r?\\n)([ \\t]*)");
+        var match = opening.Match(json);
+        if (!match.Success) return null;
+        var indent = match.Groups[3].Value;
+        var newline = match.Groups[2].Value;
+        return opening.Replace(json,
+            $"{match.Groups[1].Value}{newline}{indent}\"$schema\": {encoded},{newline}{indent}", 1);
     }
 
     internal static string GetValidationScript(string templateName, Platform platform) => platform.GetBasePlatform() switch

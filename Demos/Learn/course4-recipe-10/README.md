@@ -8,12 +8,14 @@ tables the model flagged. This is the SQL-Server-only replication setup demo (#2
 cross-database `EXEC` from an After Script only works because SQL Server can address a second
 database on the same connection; PostgreSQL and MySQL/MariaDB can't, so this recipe doesn't port.
 
+> **Engine floor:** on your own server this lab needs **SQL Server 2017+** — its `replicate [ALWAYS]` After Script builds the subscriber's DDL with `STRING_AGG` (2017+) over `OPENJSON` (2016+). `Product.json` declares `MinimumVersion: 2017`, so pre-flight refuses a lower server by name instead of failing part-way through the script. There is no other engine to fall back to here: the cross-database `EXEC` the whole recipe is built on is SQL Server only. The Docker sandbox is already above the floor.
+
 ## Before you start
 
 - The [sandbox](../docker) is up and verified.
 - The two databases exist — run [`./setup-dbs.sh`](./setup-dbs.sh) once. It creates `Shop_Primary`
   (the publisher) and `Shop_Replica` (the subscriber), both empty. `--reset` drops and recreates both.
-- The CLI is on your PATH — `schemaquench --version` answers **2.4.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 `sqlserver/Package/Product.json` carries two templates, in order:
 

@@ -1,0 +1,12 @@
+{
+  "$schema": ".json-schemas/products.postgresql.schema",
+  "Name": "Cookbook",
+  "ValidationScript": "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_database WHERE datname = 'cookbook_r15') THEN 1 ELSE 0 END",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptTokens": {},
+  "ScriptFolders": [],
+  "AfterBranchNameMask": "",
+  "Platform": "PostgreSQL"
+}

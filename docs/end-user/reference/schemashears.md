@@ -156,7 +156,7 @@ By default, SchemaShears suppresses all recognized drop categories. The emitted 
 }
 ```
 
-That is the PostgreSQL form. `DropExcludeConstraintsRemovedFromProduct` is written only for PostgreSQL products and `DropStatisticsRemovedFromProduct` only for SQL Server and PostgreSQL products, because those are the only engines that accept them -- stamping either one elsewhere would make the patch fail `--Validate`, and those engines have no such objects to drop anyway.
+That is the PostgreSQL form. `DropExcludeConstraintsRemovedFromProduct` is written only for PostgreSQL products and `DropStatisticsRemovedFromProduct` only for SQL Server and PostgreSQL products, because those are the only engines that accept them -- stamping either one elsewhere would make the patch fail `--Validate`, and those engines have no such objects to drop anyway. `--Validate` on the patch exits 0; a foreign key into a table the patch omits is reported as an `SS-FK-002` warning, which here is expected -- the table is already on the target.
 
 This is the correct posture for a patch: deploy what's in scope, leave everything else alone.
 

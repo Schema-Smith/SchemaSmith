@@ -359,6 +359,9 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_StripBracketWrapping.sql"),
                 new("SchemaSmith.fn_NormalizeDataType.sql"),
                 new("SchemaSmith.fn_SafeBracketWrap.sql"),
+                // Full-text columns are not always ONE identifier ([Doc] TYPE COLUMN [DocType]), so the
+                // split has to happen inside the wrap. Must follow fn_SafeBracketWrap, which it calls.
+                new("SchemaSmith.fn_SafeBracketWrapFullTextColumn.sql"),
                 new("SchemaSmith.fn_SplitList.sql"),
                 new("SchemaSmith.fn_ServerMajorVersion.sql"),
                 new("SchemaSmith.fn_NormalizeTemporalRetentionPeriod.sql"),
@@ -383,6 +386,7 @@ public static class ForgeKindler
                 // primary key, which a table created in the same run does not have until that pass.
                 new("SchemaSmith.ChangeTrackingQuench.sql"),
                 new("SchemaSmith.FileStreamColumnQuench.sql"),
+                new("SchemaSmith.CdcQuench.sql"),
                 new("SchemaSmith.ForeignKeyQuench.sql"),
                 new("SchemaSmith.TableQuench.sql", ReplaceParseJson: true),
                 new("SchemaSmith.IndexOnlyQuench.sql"),
@@ -525,6 +529,9 @@ public static class ForgeKindler
                 new("SchemaSmith_UpperDataType.sql"),
                 new("SchemaSmith_StripIntDisplayWidth.sql"),
                 new("SchemaSmith_NormalizeColumnDefault.sql"),
+                // The DESIRED-side twin of the line above, so both sides of the default comparison fold
+                // the same way. Must follow it: it calls it.
+                new("SchemaSmith_NormalizeDeclaredDefault.sql"),
                 new("SchemaSmith_NumericDefaultsEqual.sql"),
                 new("SchemaSmith_ColumnOnUpdateClause.sql"),
                 new("SchemaSmith_IndexIsVisible.sql"),
@@ -589,16 +596,6 @@ public static class ForgeKindler
     internal static string[] GetKindlingScriptNames(Platform platform)
         => GetKindlingScripts(platform).Select(s => s.FileName).ToArray();
 
-    /// <summary>
-    /// Read the current kindle stamp, or null if the marker table doesn't exist yet (fresh install)
-    /// or holds no row. Uses a guard so a missing table returns null rather than raising an error.
-    ///
-    /// PostgreSQL note: the original CASE WHEN to_regclass(...) ELSE (SELECT ... FROM KindleStamp) END
-    /// approach fails at PARSE TIME on a fresh database — PG validates all table references in the
-    /// query text regardless of which CASE branch will execute. We avoid the static table reference
-    /// by querying pg_class/pg_namespace instead, and only issuing the second SELECT when the table
-    /// is confirmed to exist.
-    /// </summary>
     /// <summary>
     /// Does the kindle-stamp store exist at all? Distinguishes "never kindled here" (a hard error on a
     /// read-only target) from "kindled, but currency unknown" (a warning). ReadStamp collapses both to
@@ -698,6 +695,16 @@ public static class ForgeKindler
     private static string Abbreviate(string stamp) =>
         string.IsNullOrEmpty(stamp) ? "(none)" : (stamp.Length <= 12 ? stamp : stamp[..12] + "…");
 
+    /// <summary>
+    /// Read the current kindle stamp, or null if the marker table doesn't exist yet (fresh install)
+    /// or holds no row. Uses a guard so a missing table returns null rather than raising an error.
+    ///
+    /// PostgreSQL note: the original CASE WHEN to_regclass(...) ELSE (SELECT ... FROM KindleStamp) END
+    /// approach fails at PARSE TIME on a fresh database — PG validates all table references in the
+    /// query text regardless of which CASE branch will execute. We avoid the static table reference
+    /// by querying pg_class/pg_namespace instead, and only issuing the second SELECT when the table
+    /// is confirmed to exist.
+    /// </summary>
     internal static string ReadStamp(IDbCommand command, Platform platform)
     {
         if (platform == Platform.PostgreSQL)

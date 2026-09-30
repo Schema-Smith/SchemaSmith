@@ -13,7 +13,7 @@ Everything runs against `vault_m2`.
 ## Before you start
 
 - The [sandbox](../docker) is up and [`../course11-setup`](../course11-setup) has been run once.
-- The CLI is on your PATH: `schemaquench --version` answers **2.6.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
 - You have run [Course 8, Module 2](../course8-module-02) — its Beat 3 is the CDC rebuild refusal, and
   this module builds on it rather than repeating it.
 
@@ -107,10 +107,14 @@ Check it:
 
 ## Part 3 — and where it still will not
 
-Make the view **encrypted** and try the same widening with the setting still on.
+Make the view **encrypted** and try the same widening with the setting still on. Part 2 already widened
+`Actor` to `NVARCHAR(128)`, so start again from the baseline first -- otherwise there is no widening left
+to attempt, and `encrypt-view` (which declares the baseline's `NVARCHAR(64)`) is refused as a narrowing.
 
 ```bash
+../lab-sql.sh sqlserver vault_m2 "DROP VIEW IF EXISTS dbo.vw_AuditActors; DROP TABLE IF EXISTS dbo.AuditTrail"
 cd sqlserver
+schemaquench --ConfigFile:quench.settings.baseline.json       # exit 0 -- back to NVARCHAR(64)
 schemaquench --ConfigFile:quench.settings.encrypt-view.json   # exit 0 -- the view is now WITH ENCRYPTION
 schemaquench --ConfigFile:quench.settings.encrypted.json      # exit 2
 cd ..

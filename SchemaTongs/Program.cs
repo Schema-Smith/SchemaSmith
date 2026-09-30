@@ -72,6 +72,14 @@ public static class Program
         Console.WriteLine(created == 0 && updated == 0
             ? $"Done. {unchanged} schema file(s) already current."
             : $"Done. {created} created, {updated} updated, {unchanged} already current.");
+
+        // Generating the schemas is only half of what makes an editor validate: without a $schema
+        // reference in each package file, the .json-schemas folder sits there and nothing reads it.
+        var stamped = RepositoryHelper.StampSchemaRefs(productPath, product.Platform,
+            warning => Console.WriteLine($"WARNING: {warning}"));
+        Console.WriteLine(stamped == 0
+            ? "All package files already reference their schema."
+            : $"Added a $schema reference to {stamped} package file(s).");
     }
 
     internal static Platform ResolvePlatform()

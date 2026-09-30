@@ -68,6 +68,213 @@ public class SqlServerScriptGuardTests
         }
     }
 
+    /// <summary>
+    /// The C# sources that BUILD SQL Server catalog queries as string literals. The sibling guard below
+    /// scans these because the resource-based one structurally cannot: it enumerates manifest resources
+    /// filtered to <c>.EndsWith(".sql")</c>, and a query assembled in C# is neither. v2.7.0 dropped the
+    /// NOLOCK hint from every <c>.sql</c> script and stated the property as a fact, while 33 catalog
+    /// reads in these three files kept it and the green guard said nothing.
+    /// </summary>
+    private static IEnumerable<(string Name, string Source)> CatalogBuildingCSharpSources()
+    {
+        // Walk up from the test binary to the repo root, then take the three product files by path.
+        var dir = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
+        while (dir != null && !File.Exists(Path.Join(dir.FullName, "SchemaSmith.sln"))) dir = dir.Parent;
+        Assert.That(dir, Is.Not.Null, "could not locate the repository root from the test directory");
+
+        foreach (var rel in new[]
+                 {
+                     Path.Join("Schema", "Utility", "MergeScriptHelper.cs"),
+                     Path.Join("DataTongs", "DataTongs.cs"),
+                     Path.Join("SchemaTongs", "SchemaTongs.cs"),
+                 })
+        {
+            var full = Path.Join(dir!.FullName, rel);
+            Assert.That(File.Exists(full), $"expected to scan '{rel}' but it is not there -- if it moved, "
+                                           + "move this list with it rather than letting the guard go quiet");
+            yield return (rel, File.ReadAllText(full));
+        }
+    }
+
+    /// <summary>
+    /// Every hand-declared <c>[SchemaProperty(Pattern = …)]</c> must reach the generated schema anchored.
+    /// A JSON Schema pattern is a PARTIAL match, so an unanchored alternation is wrong in the permissive
+    /// direction for every consumer that lacks SchemaSmith's own loader — Ajv in CI, and every editor the
+    /// <c>$schema</c> feature was just built to serve. 21 of 25 declarations shipped unanchored; the
+    /// generator now anchors centrally and this holds it there.
+    /// </summary>
+    [Test]
+    public void EveryDeclaredSchemaPropertyPattern_ReachesTheSchemaAnchored()
+    {
+        var offenders = new List<string>();
+        var checked_ = 0;
+        foreach (var type in SchemaAsm.GetTypes().Where(t => t is { IsClass: true, IsAbstract: false }))
+        {
+            foreach (var prop in type.GetProperties())
+            {
+                var attr = prop.GetCustomAttribute<Schema.Domain.SchemaPropertyAttribute>();
+                if (attr == null || string.IsNullOrEmpty(attr.Pattern)) continue;
+                checked_++;
+
+                var emitted = Schema.Utility.SchemaGenerator.DeclaredPatternForTest(
+                    attr.Pattern, attr.PatternIgnoreCase);
+                if (!emitted.StartsWith('^') || !emitted.EndsWith('$'))
+                    offenders.Add($"{type.Name}.{prop.Name}: {emitted}");
+            }
+        }
+
+        Assert.That(checked_, Is.GreaterThan(15), "no declared patterns were found, so this proves nothing");
+        Assert.That(offenders, Is.Empty,
+            "A declared pattern reaches the generated schema unanchored. JSON Schema patterns are partial "
+            + "matches, so 'NEVER|ALWAYS' accepts 'XNEVERY' and 'Y|N' accepts any string containing a Y or "
+            + "an N -- permissive exactly where the schema is the only check a third-party editor has. "
+            + "Offenders:\n  " + string.Join("\n  ", offenders));
+    }
+
+    [Test]
+    public void CaseInsensitivelyReadProperties_EmitAPatternThatAcceptsTheCasingsTheProductDoes()
+    {
+        // The two whose product-side reads were actually measured. MergeType compares OrdinalIgnoreCase
+        // and RebuildPolicy.Mode upper-cases first, so both deploy from lower case while a case-sensitive
+        // pattern failed --Validate on them: the linter contradicting the product.
+        var mergeType = Schema.Utility.SchemaGenerator.DeclaredPatternForTest(
+            "Insert|Insert/Update|Insert/Update/Delete", true);
+        var mode = Schema.Utility.SchemaGenerator.DeclaredPatternForTest("NEVER|ALWAYS|THRESHOLD", true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Regex.IsMatch("insert/update", mergeType), Is.True, "the product accepts it, so must the schema");
+            Assert.That(Regex.IsMatch("Insert/Update", mergeType), Is.True);
+            Assert.That(Regex.IsMatch("XInsertY", mergeType), Is.False, "and it must still be anchored");
+            Assert.That(Regex.IsMatch("never", mode), Is.True, "the product upper-cases before comparing");
+            Assert.That(Regex.IsMatch("XNEVERY", mode), Is.False);
+        });
+    }
+
+    /// <summary>
+    /// No member carries back-to-back <c>&lt;summary&gt;</c> blocks.
+    /// <para>
+    /// A doc comment separated from its member by an inserted member is silently adopted by the new one,
+    /// so that member ends up with two summaries — the first describing something else — and the original
+    /// with none. It compiles, it never throws, and the only symptom is a reader being told the wrong
+    /// thing. Twelve sites existed when this was written: eleven from methods reordered away from their
+    /// docs, and one from a fix that inserted three helpers anchored on a signature, which put them
+    /// between that signature and its own comment.
+    /// </para>
+    /// <para>
+    /// The guard is the deliverable, not the twelve edits: this catches the mistake at the moment it is
+    /// made rather than at a downstream consumer's re-pack, which is how the twelfth was actually found.
+    /// </para>
+    /// </summary>
+    [Test]
+    // WHAT THIS GUARD DOES NOT CATCH, stated so nobody reads a green run as "doc comments are attributed
+    // correctly". It sees only the DOUBLED shape: two summary blocks with nothing between them. The
+    // accident that prompted it was the OTHER shape -- a member inserted between an existing summary and
+    // the member it belonged to, leaving ONE summary sitting above the wrong member. There is exactly one
+    // summary there, so nothing here can see it; deciding a summary describes the member below it is a
+    // reading, not a pattern match. The doubled shape is the half that IS mechanical, and it is the half
+    // that shows up when the insertion lands just after a doc comment instead of just before one.
+    public void NoMemberCarriesBackToBackSummaryBlocks()
+    {
+        var dir = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
+        while (dir != null && !File.Exists(Path.Join(dir.FullName, "SchemaSmith.sln"))) dir = dir.Parent;
+        Assert.That(dir, Is.Not.Null, "could not locate the repository root");
+
+        var offenders = new List<string>();
+        var scanned = 0;
+        foreach (var project in new[] { "Schema", "SchemaQuench", "SchemaTongs", "DataTongs", "SchemaShears" })
+        {
+            var root = new DirectoryInfo(Path.Join(dir!.FullName, project));
+            if (!root.Exists) continue;
+            foreach (var cs in root.GetFiles("*.cs", SearchOption.AllDirectories))
+            {
+                if (cs.FullName.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                 || cs.FullName.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+                    continue;
+                scanned++;
+                var lines = File.ReadAllLines(cs.FullName);
+                for (var i = 0; i < lines.Length; i++)
+                {
+                    if (!lines[i].Contains("</summary>", StringComparison.Ordinal)) continue;
+                    var j = i + 1;
+                    while (j < lines.Length && lines[j].Trim().Length == 0) j++;
+                    if (j < lines.Length && lines[j].Contains("<summary>", StringComparison.Ordinal))
+                        // The path relative to the repository root, not the bare file name: several projects
+                        // carry same-named files (two Statistic.cs, two SqlServerTable-adjacent partials), so
+                        // a bare name leaves the reader grepping for which one.
+                        offenders.Add($"{Path.GetRelativePath(dir!.FullName, cs.FullName)}:{i + 1}");
+                }
+            }
+        }
+
+        Assert.That(scanned, Is.GreaterThan(100), "almost no sources were scanned, so this proves nothing");
+        Assert.That(offenders, Is.Empty,
+            "A member carries two <summary> blocks, so the first one describes a different member and that "
+            + "member has none. This does not throw and does not fail a build -- the only symptom is a "
+            + "reader being told the wrong thing about the code in front of them. Offenders:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    [Test]
+    public void PaddingToleranceFollowsTheProduct_PerProperty_NotBlanket()
+    {
+        // Anchoring the patterns created one fresh instance of the defect it closed: RebuildPolicy.Mode is
+        // read as (… ?? "NEVER").Trim().ToUpperInvariant(), so " NEVER " DEPLOYS, and an anchored pattern
+        // rejected it. MergeType is read with a bare Equals(…, OrdinalIgnoreCase) and does NOT trim, so
+        // " Insert " is genuinely invalid there. Both directions are pinned here because the tempting fix --
+        // \s* on every pattern -- would make the linter accept what MergeType rejects, which is the same
+        // error pointing the other way.
+        var mode = Schema.Utility.SchemaGenerator.DeclaredPatternForTest(
+            "NEVER|ALWAYS|THRESHOLD", true, allowPadding: true);
+        var mergeType = Schema.Utility.SchemaGenerator.DeclaredPatternForTest(
+            "Insert|Insert/Update|Insert/Update/Delete", true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Regex.IsMatch(" NEVER ", mode), Is.True,
+                "the product trims Mode before comparing, so padding deploys and the schema must accept it");
+            Assert.That(Regex.IsMatch("never", mode), Is.True, "and case still folds");
+            Assert.That(Regex.IsMatch(" XNEVERY ", mode), Is.False, "padding tolerance is not a licence to unanchor");
+            Assert.That(Regex.IsMatch(" Insert ", mergeType), Is.False,
+                "MergeType does NOT trim, so padded values are correctly still rejected -- tolerance is "
+                + "per-property and measured, never blanket");
+        });
+    }
+
+    [Test]
+    public void NoCatalogReadBuiltInCSharpCarriesTheNolockHint()
+    {
+        // Same property as the script guard, different surface. Reads of the USER'S OWN data tables are
+        // deliberately not matched: DataTongs extracts row data WITH (NOLOCK) on purpose, to avoid
+        // blocking a production OLTP workload while it reads. That is a different decision from reading
+        // the catalog dirty, and inverting it would change locking behaviour against live tables.
+        var catalogRead = new Regex(
+            @"(?:\bsys\.|\bINFORMATION_SCHEMA\.)\s*\[?\w+\]?\s+(?:AS\s+)?\w*\s*WITH\s*\(\s*NOLOCK",
+            RegexOptions.IgnoreCase);
+
+        var offenders = new List<string>();
+        var scanned = 0;
+        foreach (var (name, source) in CatalogBuildingCSharpSources())
+        {
+            scanned++;
+            foreach (Match m in catalogRead.Matches(source))
+                offenders.Add($"{name}: {Regex.Replace(m.Value, @"\s+", " ")}");
+        }
+
+        // Guards the premise, exactly as the sibling test does: a regex that matched nothing because
+        // nothing was scanned would pass while proving nothing at all.
+        Assert.That(scanned, Is.EqualTo(3), "the C# sources were not all scanned, so this proves nothing");
+
+        Assert.That(offenders, Is.Empty,
+            "A system-catalog read built in C# carries WITH (NOLOCK). This is the same hazard the script "
+            + "guard covers and it is NOT covered by that guard, which only sees embedded .sql resources. "
+            + "The sharpest case is MergeScriptHelper.GetKeyColumnsSqlServer: it picks a MERGE's KEY "
+            + "COLUMNS from sys.indexes/sys.index_columns/sys.columns, so a dirty read that skips a row "
+            + "produces a MERGE keyed on the wrong columns -- no error, wrong rows updated or deleted. "
+            + "Reads of the user's own data tables are intentional and are not matched. Offenders:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
     [Test]
     public void NoCatalogReadCarriesTheNolockHint()
     {

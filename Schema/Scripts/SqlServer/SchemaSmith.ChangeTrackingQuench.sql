@@ -7,9 +7,9 @@
 -- Its own procedure because of WHERE it has to run, not merely for tidiness: enabling change tracking
 -- requires a primary key on the table ("Change tracking requires a primary key on the table"), and for a
 -- table SchemaSmith is creating in this same run the primary key does not exist until
--- SchemaSmith.MissingIndexesAndConstraintsQuench has run. Sitting alongside the EnableCDC pass in
--- ModifiedTableQuench -- the obvious home, since both are table-level toggles -- fails every new table.
--- CDC has no such prerequisite, so mirroring its placement is exactly the trap here.
+-- SchemaSmith.MissingIndexesAndConstraintsQuench has run. Inside ModifiedTableQuench it would fail every new
+-- table. (CDC turned out to have an ordering prerequisite of its own -- computed columns -- and now runs later
+-- too, in SchemaSmith.CdcQuench.)
 --
 -- TableQuench therefore calls this AFTER MissingIndexesAndConstraintsQuench.
 IF OBJECT_ID('SchemaSmith.ChangeTrackingQuench', 'P') IS NOT NULL DROP PROCEDURE SchemaSmith.ChangeTrackingQuench

@@ -13,7 +13,7 @@ Everything runs against `cookbook_r14`.
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup)
   once — it creates `cookbook_r14`).
-- The CLI is on your PATH: `schemaquench --version` and `schematongs --version` answer **2.6.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` and `schematongs --version` answer **2.7.0 or later**.
 
 ## Step 1: Look at the layout, then deploy it
 

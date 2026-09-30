@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
   "Name": "app_session",
   "Columns": [
     { "Name": "session_id", "DataType": "bigint", "Nullable": false, "AutoIncrement": true },

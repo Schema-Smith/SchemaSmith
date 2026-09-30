@@ -1,4 +1,5 @@
 {
+    "$schema": ".json-schemas/products.postgresql.schema",
     "Name": "InvalidServer",
     "ValidationScript": "SELECT CAST(0 AS BIT)",
     "TemplateOrder": [],

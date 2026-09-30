@@ -74,6 +74,47 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         }
         """;
 
+    private static string TableCheckJson(Ctx ctx, string expression) => $$"""
+        {
+            "Schema": "public",
+            "Name": "{{ctx.Table}}",
+            "Columns": [
+                { "Name": "tag", "DataType": "text", "Nullable": true }
+            ],
+            "CheckConstraints": [
+                { "Name": "ck_tag", "Expression": "{{expression}}" }
+            ]
+        }
+        """;
+
+    // GenerationExpression with no Generated -- what the reference's PostgreSQL column section tells you to write.
+    private static string GeneratedWithoutGeneratedJson(Ctx ctx, string expression) => $$"""
+        {
+            "Schema": "public",
+            "Name": "{{ctx.Table}}",
+            "Columns": [
+                { "Name": "tag", "DataType": "text", "Nullable": false },
+                { "Name": "label", "DataType": "text", "Nullable": true, "GenerationExpression": "{{expression}}" }
+            ]
+        }
+        """;
+
+    private static bool LabelIsGenerated(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"SELECT COALESCE((SELECT a.attgenerated = 's' FROM pg_attribute a
+                                               WHERE a.attrelid = to_regclass('""public"".""{table}""')
+                                                 AND a.attname = 'label' AND NOT a.attisdropped), FALSE)";
+        return (bool)cmd.ExecuteScalar()!;
+    }
+
+    private static bool LabelIsNotNull(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"SELECT COALESCE((SELECT a.attnotnull FROM pg_attribute a
+                                               WHERE a.attrelid = to_regclass('""public"".""{table}""')
+                                                 AND a.attname = 'label' AND NOT a.attisdropped), FALSE)";
+        return (bool)cmd.ExecuteScalar()!;
+    }
+
     private static long ConstraintOid(IDbCommand cmd, string table)
     {
         cmd.CommandText = $@"SELECT COALESCE((SELECT con.oid::bigint FROM pg_catalog.pg_constraint con
@@ -131,6 +172,177 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         finally { ctx.Drop(); ctx.Dispose(); }
     }
 
+    // An explicit NOT NULL arrives with the column, on the first deploy -- it was added nullable and narrowed a
+    // deploy later, which also fails outright on a table whose rows make the expression NULL.
+    [Test]
+    public void AGeneratedColumnDeclaredNotNull_IsBuiltNotNull_OnTheFirstDeploy()
+    {
+        var ctx = NewTable(@"""tag"" text NOT NULL");
+        try
+        {
+            var json = DeployJson.ThroughTheModel($$"""
+                {
+                    "Schema": "public",
+                    "Name": "{{ctx.Table}}",
+                    "Columns": [
+                        { "Name": "tag", "DataType": "text", "Nullable": false },
+                        { "Name": "label", "DataType": "text", "Nullable": false, "Generated": "ALWAYS", "GenerationExpression": "upper(tag) || 'x'" }
+                    ]
+                }
+                """, Platform.PostgreSQL);
+            RunTableQuenchProc(ctx.Cmd, json);
+            Assert.That(LabelIsNotNull(ctx.Cmd, ctx.Table), Is.True, "the first deploy must build the declared NOT NULL");
+            var firstOid = TableOid(ctx.Cmd, ctx.Table);
+            var firstAttNum = GeneratedColumnAttNum(ctx.Cmd, ctx.Table);
+
+            RunTableQuenchProc(ctx.Cmd, json);
+            Assert.That(GeneratedColumnAttNum(ctx.Cmd, ctx.Table), Is.EqualTo(firstAttNum));
+            Assert.That(TableOid(ctx.Cmd, ctx.Table), Is.EqualTo(firstOid));
+            Assert.That(LabelIsNotNull(ctx.Cmd, ctx.Table), Is.True);
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
+    // A generated column an older version narrowed to NOT NULL, Nullable omitted, whose expression changes to one that
+    // yields NULL for an existing row. Below PostgreSQL 17 an expression change is DROP + re-ADD; re-emitting the old
+    // NOT NULL on the re-add failed AFTER the drop, leaving the table without the column. Only a declared NOT NULL is
+    // re-emitted now. PostgreSQL 17+ changes the expression in place, so this path does not exist there.
+    [Test]
+    public void AnExpressionChange_BelowPostgreSql17_NeverDropsAColumnItCannotReAdd()
+    {
+        var ctx = NewTable(@"""tag"" text NULL, ""label"" text GENERATED ALWAYS AS (upper(""tag"")) STORED NOT NULL");
+        try
+        {
+            ctx.Cmd.CommandText = "SELECT current_setting('server_version_num')::int";
+            if (Convert.ToInt32(ctx.Cmd.ExecuteScalar()) >= 170000)
+                Assert.Ignore("PostgreSQL 17+ changes a generated expression in place; the drop + re-add path is below 17.");
+            ctx.Cmd.CommandText = $@"INSERT INTO ""public"".""{ctx.Table}"" (tag) VALUES ('a');";
+            ctx.Cmd.ExecuteNonQuery();
+
+            var json = DeployJson.ThroughTheModel($$"""
+                {
+                    "Schema": "public",
+                    "Name": "{{ctx.Table}}",
+                    "Columns": [
+                        { "Name": "tag", "DataType": "text", "Nullable": true },
+                        { "Name": "label", "DataType": "text", "GenerationExpression": "nullif(upper(tag), 'A')" }
+                    ]
+                }
+                """, Platform.PostgreSQL);
+
+            RunTableQuenchProc(ctx.Cmd, json);
+
+            Assert.That(GeneratedColumnAttNum(ctx.Cmd, ctx.Table), Is.Not.Zero, "the column must exist after the deploy");
+            Assert.That(LabelIsNotNull(ctx.Cmd, ctx.Table), Is.False);
+            ctx.Cmd.CommandText = $@"SELECT COUNT(*) FROM ""public"".""{ctx.Table}"" WHERE label IS NULL";
+            Assert.That(Convert.ToInt32(ctx.Cmd.ExecuteScalar()), Is.EqualTo(1), "the row whose new expression is NULL survives");
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
+    // The same rewrite through the table-level CheckConstraints array, which was compared by text alone: only the
+    // column-level CheckExpression path consulted the mapping, so this churned on every deploy.
+    [Test]
+    public void ATableLevelCheckWhoseLiteralTheEngineCasts_IsNotReCreatedOnEveryDeploy()
+    {
+        var ctx = NewTable(@"""tag"" text NULL");
+        try
+        {
+            var json = TableCheckJson(ctx, "starts_with(tag, 'a')");
+            RunTableQuenchProc(ctx.Cmd, json);
+            var firstOid = ConstraintOid(ctx.Cmd, ctx.Table);
+            Assert.That(firstOid, Is.Not.Zero, "setup: the constraint must exist after the first deploy");
+            Assert.That(LiveCheckDefinition(ctx.Cmd, ctx.Table), Does.Contain("::text"),
+                "precondition: this only tests something if the engine really did rewrite the literal");
+
+            for (var pass = 2; pass <= 3; pass++)
+            {
+                RunTableQuenchProc(ctx.Cmd, json);
+                Assert.That(ConstraintOid(ctx.Cmd, ctx.Table), Is.EqualTo(firstOid),
+                    $"pass {pass}: the table-level check was dropped and re-created for an unchanged declaration");
+            }
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
+    // The WhatIf twin of the table-level drop pass must reach the same answer as the live pass: an unchanged check
+    // the engine rewrote is not something a dry run would drop.
+    [Test]
+    public void AWhatIfRun_DoesNotReportAnUnchangedTableLevelCheck()
+    {
+        var ctx = NewTable(@"""tag"" text NULL");
+        try
+        {
+            var json = TableCheckJson(ctx, "starts_with(tag, 'a')");
+            RunTableQuenchProc(ctx.Cmd, json);
+            ctx.Cmd.CommandText = @"DELETE FROM ""SchemaSmith"".""ChangeAudit"" WHERE ""SessionId"" = pg_backend_pid()";
+            ctx.Cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(ctx.Cmd, json, whatIf: true);
+
+            ctx.Cmd.CommandText = @"SELECT COUNT(*) FROM ""SchemaSmith"".""ChangeAudit""
+                                     WHERE ""SessionId"" = pg_backend_pid() AND ""ActionType"" = 'wouldDrop'";
+            Assert.That(Convert.ToInt32(ctx.Cmd.ExecuteScalar()), Is.Zero);
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
+    // Quiet on churn must not mean blind to drift, on the table-level path too.
+    [Test]
+    public void AnOutOfBandEditToATableLevelCheck_IsStillReApplied()
+    {
+        var ctx = NewTable(@"""tag"" text NULL");
+        try
+        {
+            var json = TableCheckJson(ctx, "starts_with(tag, 'a')");
+            RunTableQuenchProc(ctx.Cmd, json);
+            ctx.Cmd.CommandText = $@"ALTER TABLE ""public"".""{ctx.Table}"" DROP CONSTRAINT ck_tag;
+                                     ALTER TABLE ""public"".""{ctx.Table}"" ADD CONSTRAINT ck_tag CHECK (starts_with(tag, 'z'));";
+            ctx.Cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(ctx.Cmd, json);
+
+            Assert.That(LiveCheckDefinition(ctx.Cmd, ctx.Table), Does.Contain("'a'").And.Not.Contain("'z'"),
+                "a hand-edited table-level check must be put back to the declaration");
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
+    // A GenerationExpression is only ever a generated column on PostgreSQL, so omitting Generated must not change
+    // what is built. It did: the create paths built a PLAIN column while the comparison treated it as generated,
+    // and the next deploy failed with 55000 "... is not a stored generated column". Both create paths are covered
+    // -- a new table, and a new column on an existing one.
+    [TestCase(true)]
+    [TestCase(false)]
+    public void AGeneratedColumnDeclaredWithoutGenerated_IsBuiltGenerated_AndStaysPut(bool tableExistsFirst)
+    {
+        var ctx = NewTable(@"""tag"" text NOT NULL");
+        try
+        {
+            if (!tableExistsFirst)
+            {
+                ctx.Cmd.CommandText = $@"DROP TABLE ""public"".""{ctx.Table}""";
+                ctx.Cmd.ExecuteNonQuery();
+            }
+            var json = GeneratedWithoutGeneratedJson(ctx, "upper(tag) || 'x'");
+            RunTableQuenchProc(ctx.Cmd, json);
+            Assert.That(LabelIsGenerated(ctx.Cmd, ctx.Table), Is.True,
+                "a column declared with a GenerationExpression must be built as a generated column");
+            var firstOid = TableOid(ctx.Cmd, ctx.Table);
+            var firstAttNum = GeneratedColumnAttNum(ctx.Cmd, ctx.Table);
+
+            for (var pass = 2; pass <= 3; pass++)
+            {
+                RunTableQuenchProc(ctx.Cmd, json);
+                Assert.That(GeneratedColumnAttNum(ctx.Cmd, ctx.Table), Is.EqualTo(firstAttNum),
+                    $"pass {pass}: the generated column was re-created for an unchanged declaration");
+                Assert.That(TableOid(ctx.Cmd, ctx.Table), Is.EqualTo(firstOid),
+                    $"pass {pass}: the table was rebuilt for an unchanged declaration");
+            }
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
     // Churns at the FLOOR (PostgreSQL 12) but not on 17, which is why an earlier pass of this work wrongly
     // concluded generated columns were already idempotent here -- the modern container cannot see it. The floor
     // sweep caught it. Runs on every supported version; only the floor legs exercise the difference.
@@ -151,6 +363,11 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
             var firstAttNum = GeneratedColumnAttNum(ctx.Cmd, ctx.Table);
             var firstOid = TableOid(ctx.Cmd, ctx.Table);
             Assert.That(firstAttNum, Is.Not.Zero, "setup: the generated column must exist after the first deploy");
+            // Declared nullable, or omitted -- which leaves nullability to the engine, and a generated column is
+            // nullable unless asked otherwise. Pinned because a SET NOT NULL changes neither the attnum nor the table
+            // oid below, so a narrowing deploy would otherwise pass as idempotent.
+            Assert.That(LabelIsNotNull(ctx.Cmd, ctx.Table), Is.False,
+                "a generated column the package did not declare NOT NULL must not be narrowed");
             ctx.Cmd.CommandText = $@"SELECT generation_expression FROM information_schema.columns
                                       WHERE table_schema = 'public' AND table_name = '{ctx.Table}' AND column_name = 'label'";
             Assert.That(ctx.Cmd.ExecuteScalar() as string, Does.Contain("::text"),
@@ -163,6 +380,9 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
                     $"pass {pass}: the generated column was re-created for an unchanged declaration");
                 Assert.That(TableOid(ctx.Cmd, ctx.Table), Is.EqualTo(firstOid),
                     $"pass {pass}: the table was rebuilt for an unchanged generated-column declaration");
+                // The narrowing this guards against happened on a LATER pass, as SET NOT NULL -- invisible to both
+                // checks above -- so it is asserted on every pass, not only the first.
+                Assert.That(LabelIsNotNull(ctx.Cmd, ctx.Table), Is.False, $"pass {pass}: the column was narrowed to NOT NULL");
             }
         }
         finally { ctx.Drop(); ctx.Dispose(); }

@@ -231,9 +231,37 @@ public class TemplateTargetsHappyPathTests
         }
     }
 
+    // ---- cross-leg redundancy gate -------------------------------------------------------------
+    //
+    // These three tests are about a COMPATIBILITY LEVEL and an ENCODING, not about a server version:
+    // they force the legacy XML path and prove it deploys a schema identical to the modern JSON path.
+    // The code under test branches on detected compat level, which is identical on 2017, 2019, 2022 and
+    // 2025 -- so running them on all four SQL Server legs tests the same thing four times.
+    //
+    // They are also the most expensive tests in the suite, because each one kindles a FRESH database:
+    // 48 scripts, ~864 KB of SQL, roughly 20 seconds per kindle. Measured on a CI-shaped run,
+    // RealCompat100Database alone is 108s -- 11% of the entire SQL Server leg -- and the three together
+    // are ~150s per leg, so three redundant legs cost about 7.5 billed minutes every merge.
+    //
+    // So CI designates ONE leg to run them (SS_COMPAT_LEG in continuous-integration.yml) and the others
+    // skip. The variable is UNSET locally, which means a developer running the suite gets them -- the
+    // skip is a CI-matrix economy, never a reduction in what a local gate covers.
+    //
+    // What this deliberately does NOT cover: a genuinely version-specific XML defect. That is the
+    // genuine-binary sweep's job, and it runs against real 2008R2/2012/2014/2016 binaries where the
+    // below-cliff path actually matters -- which is stronger evidence than re-running compat 100 on
+    // four modern engines.
+    private static void SkipUnlessDesignatedCompatLeg()
+    {
+        var designated = Environment.GetEnvironmentVariable("SS_COMPAT_LEG");
+        if (!string.IsNullOrWhiteSpace(designated) && designated != "true")
+            Assert.Ignore($"Compat/XML coverage runs on the designated CI leg only (SS_COMPAT_LEG={designated}).");
+    }
+
     [Test]
     public void DeployWithLegacyCompatEncoding_KindlesXmlHelpersAndAppliesSchema()
     {
+        SkipUnlessDesignatedCompatLeg();
         // B3: Target:CompatEncoding=legacy forces the XML model-ingest encoding on a modern-compat DB (the CI
         // backbone tier — exercises the XML kindle + XML-ingest apply path without needing the supported floor
         // lowered). Deploy the Shared template into a TRANSIENT DB (so the legacy re-kindle never touches the
@@ -287,6 +315,7 @@ public class TemplateTargetsHappyPathTests
     [Test]
     public void LegacyVsModernCompatEncoding_ProduceIdenticalSchema()
     {
+        SkipUnlessDesignatedCompatLeg();
         // The kindle+apply equivalence gate: deploy the SAME product under the XML (legacy) and JSON (modern)
         // model-ingest encodings to two transient DBs and assert the materialized user schema is identical.
         // Proves the XML ingest apply path converges the same schema as the JSON path end-to-end through
@@ -345,6 +374,7 @@ public class TemplateTargetsHappyPathTests
     [Test]
     public void RealCompat100Database_AutoSelectsXmlAndDeploys_MatchingModern()
     {
+        SkipUnlessDesignatedCompatLeg();
         // F2 floor proof: a REAL compat-100 database (NOT the Target:CompatEncoding override) now clears
         // pre-flight (the floor is compat 100, F1) and the ingest encoding auto-selects XML from the detected
         // compat, deploying a schema identical to a modern (compat-default, JSON) deploy of the same product.

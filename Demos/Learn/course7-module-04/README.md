@@ -11,7 +11,7 @@ This is the capstone. Do Modules 1–3 first — you're now *operating* the flee
 
 - The [sandbox](../docker) is up and verified (all four engines healthy).
 - The fleet exists — run [`../course7-setup`](../course7-setup) once (creates `fleet_tenant_001`…`005`).
-- The CLI is on your PATH — `schemaquench --version` answers **2.4.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 Each engine folder ships the same native `Shop` `Package/` as Modules 1–3, plus two settings files and two
 drift helpers. The roster is **discovery-driven** — the template's `DatabaseIdentificationScript` finds

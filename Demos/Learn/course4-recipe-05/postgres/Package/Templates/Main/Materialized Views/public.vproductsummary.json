@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../.json-schemas/materializedviews.postgresql.schema",
   "Name": "vproductsummary",
   "Schema": "public",
   "Definition": "SELECT name, count(*) AS productcount, sum(price) AS totalprice FROM public.product GROUP BY name",

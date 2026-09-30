@@ -227,7 +227,7 @@ BEGIN TRY
                                                                                       '[ValidTo] DATETIME2(7) GENERATED ALWAYS AS ROW END NOT NULL DEFAULT ''9999-12-31 23:59:59.9999999'', ' +
                                                                                       'PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo);' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' +
-                                       ISNULL(T.[HistoryTableSchema], T.[Schema]) + '.[' + ISNULL(SchemaSmith.fn_StripBracketWrapping(T.[HistoryTableName]), SchemaSmith.fn_StripBracketWrapping(T.[Name]) + '_Hist') + ']' +
+                                       ISNULL(T.[HistoryTableSchema], T.[Schema]) + '.' + QUOTENAME(ISNULL(SchemaSmith.fn_StripBracketWrapping(T.[HistoryTableName]), SchemaSmith.fn_StripBracketWrapping(T.[Name]) + '_Hist')) +
                                        CASE WHEN RTRIM(ISNULL(T.[HistoryRetentionPeriod], '')) <> '' THEN ', HISTORY_RETENTION_PERIOD = ' + T.[HistoryRetentionPeriod] ELSE '' END +
                                        '));' AS NVARCHAR(MAX))
                            FROM #Tables T WITH (NOLOCK)
@@ -248,7 +248,7 @@ BEGIN TRY
   RAISERROR('Reconcile history table for already-versioned temporal tables', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
                                   'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' +
-                                       ISNULL(T.[HistoryTableSchema], T.[Schema]) + '.[' + ISNULL(SchemaSmith.fn_StripBracketWrapping(T.[HistoryTableName]), SchemaSmith.fn_StripBracketWrapping(T.[Name]) + '_Hist') + ']' +
+                                       ISNULL(T.[HistoryTableSchema], T.[Schema]) + '.' + QUOTENAME(ISNULL(SchemaSmith.fn_StripBracketWrapping(T.[HistoryTableName]), SchemaSmith.fn_StripBracketWrapping(T.[Name]) + '_Hist')) +
                                        '));' AS NVARCHAR(MAX))
                            FROM #Tables T WITH (NOLOCK)
                            WHERE T.IsTemporal = 1
@@ -391,7 +391,7 @@ BEGIN TRY
 
   RAISERROR('Add Missing Check Constraints', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding check constraint ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName] + CASE WHEN RTRIM(ISNULL(cc.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(cc.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + cc.[Schema] + '.' + cc.[TableName] + ' ADD CONSTRAINT [' + SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName]) + '] CHECK (' + cc.[Expression] + ');' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + cc.[Schema] + '.' + cc.[TableName] + ' ADD CONSTRAINT ' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName])) + ' CHECK (' + cc.[Expression] + ');' + CHAR(13) + CHAR(10) +
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', ''' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName] + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #CheckConstraints cc WITH (NOLOCK)
                            WHERE NOT EXISTS (SELECT *

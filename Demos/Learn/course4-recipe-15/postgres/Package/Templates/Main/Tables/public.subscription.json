@@ -1,0 +1,53 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "subscription",
+  "Columns": [
+    {
+      "Name": "subscription_id",
+      "DataType": "integer"
+    },
+    {
+      "Name": "plan_code",
+      "DataType": "CHARACTER VARYING(20)"
+    },
+    {
+      "Name": "retention_days",
+      "DataType": "integer"
+    },
+    {
+      "Name": "retention_weeks",
+      "DataType": "integer",
+      "GenerationExpression": "retention_days / 7"
+    },
+    {
+      "Name": "is_active",
+      "DataType": "boolean",
+      "Default": "true"
+    },
+    {
+      "Name": "created_at",
+      "DataType": "TIMESTAMP WITH TIME ZONE",
+      "Default": "now()"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "subscription_pkey",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "subscription_id"
+    },
+    {
+      "Name": "ix_subscription_active_plan",
+      "IndexColumns": "plan_code",
+      "FilterExpression": "is_active"
+    }
+  ],
+  "CheckConstraints": [
+    {
+      "Name": "ck_subscription_plan",
+      "Expression": "starts_with(plan_code, 'P')"
+    }
+  ]
+}

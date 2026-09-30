@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using Schema.Domain;
+using Schema.Utility;
 
 namespace SchemaQuench;
 
@@ -36,34 +37,6 @@ namespace SchemaQuench;
 /// </summary>
 public static class SchemaDiscovery
 {
-    // SQL Server hard-rejects: built-in dbo/sys/INFORMATION_SCHEMA/guest plus the
-    // db_* fixed database roles (which double as schemas in SQL Server).
-    private static readonly HashSet<string> SqlServerReserved = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "dbo",
-        "sys",
-        "INFORMATION_SCHEMA",
-        "guest",
-        "db_owner",
-        "db_accessadmin",
-        "db_securityadmin",
-        "db_ddladmin",
-        "db_backupoperator",
-        "db_datareader",
-        "db_datawriter",
-        "db_denydatareader",
-        "db_denydatawriter"
-    };
-
-    // PostgreSQL fixed-name reserved set; pg_temp_* and pg_toast_temp_* are wildcard-handled below.
-    private static readonly HashSet<string> PostgreSqlReservedFixed = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "public",
-        "pg_catalog",
-        "pg_toast",
-        "information_schema"
-    };
-
     /// <summary>
     /// Runs <paramref name="template"/>'s <c>SchemaIdentificationScript</c> against
     /// <paramref name="command"/>, validates each returned name against the platform's
@@ -90,7 +63,6 @@ public static class SchemaDiscovery
 
         command.CommandText = template.SchemaIdentificationScript;
         var results = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using var reader = command.ExecuteReader();
         if (reader.FieldCount != 1)
         {
@@ -102,80 +74,19 @@ public static class SchemaDiscovery
         while (reader.Read())
         {
             var raw = reader[0];
-            if (raw == null || raw == DBNull.Value) continue;
-            var name = raw.ToString();
-            if (string.IsNullOrWhiteSpace(name)) continue;
-            ValidateNotReserved(name, platform, template.Name);
-            ValidateCharacters(name, template.Name);
-            // I7: duplicates are almost always a SchemaIdentificationScript bug — fail loud
-            // rather than silently deduping, which would mask the underlying script error.
-            if (!seen.Add(name))
-            {
-                throw new InvalidOperationException(
-                    $"SchemaIdentificationScript for template '{template.Name}' returned duplicate schema name '{name}'. " +
-                    "Each iteration target must appear exactly once in the result set — " +
-                    "fix the discovery query to project distinct schema names (e.g. add SELECT DISTINCT or remove the join causing the fan-out).");
-            }
-            results.Add(name);
+            if (raw != null && raw != DBNull.Value) results.Add(raw.ToString());
         }
 
+        // ONE rule: SchemaDiscoveryRules (Schema/) is what anything else reading this script's output calls too, so
+        // the deploy and a consumer cannot disagree about which names are acceptable. It skips null/blank entries
+        // and reports the FIRST violation in order, which is what reading row by row and throwing did.
+        var violation = SchemaDiscoveryRules.Validate(results, platform);
+        if (violation != null)
+            throw new InvalidOperationException(
+                $"SchemaIdentificationScript for template '{template.Name}' returned {violation.Detail}");
+
+        results.RemoveAll(string.IsNullOrWhiteSpace);
         return results;
     }
 
-    // I6: schema names containing these characters would corrupt the engine's bracket /
-    // quote-escaping ([ ]), the JSON payload (" '), or the {{Token}} substitution layer
-    // ({ }). The set is deliberately narrow — letters (including non-ASCII), digits,
-    // underscores, hyphens, dots, and spaces are all valid delimited-identifier characters
-    // on SQL Server and PostgreSQL and are passed through unchanged.
-    private static readonly char[] DisallowedSchemaNameChars = { ']', '[', '"', '\'', '{', '}' };
-
-    private static void ValidateCharacters(string name, string templateName)
-    {
-        foreach (var ch in name)
-        {
-            if (ch < ' ')
-                throw new InvalidOperationException(
-                    $"SchemaIdentificationScript for template '{templateName}' returned schema name '{name}' " +
-                    $"containing control character (U+{(int)ch:X4}). " +
-                    "Schema names cannot contain control characters — clean the discovery query's result.");
-        }
-
-        foreach (var bad in DisallowedSchemaNameChars)
-        {
-            if (name.IndexOf(bad) >= 0)
-                throw new InvalidOperationException(
-                    $"SchemaIdentificationScript for template '{templateName}' returned schema name '{name}' " +
-                    $"containing disallowed character '{bad}'. " +
-                    "Schema names cannot contain brackets, quotes, or braces — these characters would corrupt " +
-                    "SchemaSmith's SQL quoting, JSON serialization, or token substitution. " +
-                    "Rename the schema (or fix the discovery query) to use only letters, digits, underscores, hyphens, dots, or spaces.");
-        }
-    }
-
-    private static void ValidateNotReserved(string name, Platform platform, string templateName)
-    {
-        if (IsReserved(name, platform))
-        {
-            throw new InvalidOperationException(
-                $"SchemaIdentificationScript for template '{templateName}' returned reserved schema name '{name}'. " +
-                "Platform-owned namespaces (dbo/sys/public/pg_catalog/etc.) cannot be iteration targets — " +
-                "put shared content in a regular template that runs earlier in TemplateOrder. " +
-                "(The same name remains valid as a RelatedTableSchema literal or as an explicit reference in free-form SQL.)");
-        }
-    }
-
-    private static bool IsReserved(string name, Platform platform) => platform switch
-    {
-        Platform.SqlServer => SqlServerReserved.Contains(name),
-        Platform.PostgreSQL => IsPostgreSqlReserved(name),
-        _ => false
-    };
-
-    private static bool IsPostgreSqlReserved(string name)
-    {
-        if (PostgreSqlReservedFixed.Contains(name)) return true;
-        if (name.StartsWith("pg_temp_", StringComparison.OrdinalIgnoreCase)) return true;
-        if (name.StartsWith("pg_toast_temp_", StringComparison.OrdinalIgnoreCase)) return true;
-        return false;
-    }
 }

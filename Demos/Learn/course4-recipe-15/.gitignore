@@ -1,0 +1,4 @@
+# Deployment summaries the lab steps write with --report:
+rerun.*
+norecord.*
+compat.*

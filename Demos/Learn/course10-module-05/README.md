@@ -20,13 +20,15 @@ from SchemaSmith's own capability floor. Yours can sit higher than the tool's â€
 what turns "we don't support PG12 anymore" from tribal knowledge into a refusal nobody can deploy
 past by accident.
 
+> **Engine floor:** this lab deploys into the `learn_2022` tier, which is a database at **compatibility level 160** â€” a level only **SQL Server 2022+** offers. On an older engine [`course10-setup`](../course10-setup/README.md) cannot provision that tier and the lab stops with *"No database targets discovered"*. The sandbox default is 2022, so this only applies if you have pointed `MSSQL_IMAGE` at an older release. The other engines in this lab are unaffected.
+
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`).
 - **Run [`course10-setup`](../course10-setup/README.md) first** so the mixed fleet is standing:
   PostgreSQL 16 (`15432`) and the PostgreSQL 12 floor (`15433`), plus the SQL Server tiers on
   `localhost,11433`. This module deploys into those; it does not create them.
-- `schemaquench --version` and `schematongs --version` both answer **2.4.0** or later.
+- `schemaquench --version` and `schematongs --version` both answer **2.7.0** or later.
 
 ---
 

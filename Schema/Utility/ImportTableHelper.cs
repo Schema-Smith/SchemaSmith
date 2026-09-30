@@ -274,10 +274,19 @@ public static class ImportTableHelper
         // one, so the next property cannot repeat it.
         CopyAuthoredOnlyProperties(original, current);
 
-        ((dynamic)current).ShouldApplyExpression = ((dynamic)original).ShouldApplyExpression ?? "";
-        ((dynamic)current).VariantName = ((dynamic)original).VariantName ?? "";
+        // Only a value the file actually carried is carried forward. Coalescing an absent one to "" wrote an empty
+        // key the file never had, so the first re-extraction of an unchanged database rewrote every table file.
+        CarryForward(original, current, "ShouldApplyExpression");
+        CarryForward(original, current, "VariantName");
         if (copyOldName)
-            ((dynamic)current).OldName = ((dynamic)original).OldName ?? "";
+            CarryForward(original, current, "OldName");
+    }
+
+    private static void CarryForward(DynamicBase original, DynamicBase current, string propertyName)
+    {
+        var property = original.GetType().GetProperty(propertyName);
+        var value = property?.GetValue(original);
+        if (value != null) current.GetType().GetProperty(propertyName)?.SetValue(current, value);
     }
 
     /// <summary>

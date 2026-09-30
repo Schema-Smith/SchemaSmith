@@ -15,7 +15,21 @@
            elem ->> 'Name' AS "Name",
            COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(elem ->> 'VariantName', '') AS "VariantName",
-           COALESCE(elem ->> 'OldName', '') AS "OldName",
+           -- An editor that quotes identifiers stores OldName WITH the quotes -- "users", not users.
+           -- PostgreSQL takes an authored name verbatim, so the rename match downstream found nothing,
+           -- NO rename happened, the new name was created empty and the old object survived
+           -- unreferenced -- and a later deploy with a Drop...RemovedFromProduct flag then dropped it
+           -- WITH ITS DATA. Strip one wrapping pair here, once, so the match and the emitted DDL agree.
+           -- SQL Server and MySQL already unwrap at their rename sites (fn_StripBracketWrapping /
+           -- SchemaSmith_StripBacktickWrapping); PostgreSQL was the engine that did not.
+           -- Collapse "" to " ONLY when a wrapper was stripped. Inside a quoted PostgreSQL
+           -- identifier "" denotes one ", so the escaped form "a""b" names the column the catalog
+           -- stores as a"b -- and stripping the wrapper alone left a""b, which matches nothing and
+           -- silently skips the rename exactly as the unwrapped case did. Outside a wrapper the
+           -- doubling is literal, so it is deliberately NOT collapsed there.
+           CASE WHEN (elem ->> 'OldName') LIKE '"%"' AND LENGTH(elem ->> 'OldName') > 1
+                THEN REPLACE(SUBSTRING((elem ->> 'OldName'), 2, LENGTH(elem ->> 'OldName') - 2), '""', '"')
+                ELSE COALESCE(elem ->> 'OldName', '') END AS "OldName",
            COALESCE((elem ->> 'RowLevelSecurity')::BOOLEAN, false) AS "RowLevelSecurity",
            COALESCE((elem ->> 'ForceRowLevelSecurity')::BOOLEAN, false) AS "ForceRowLevelSecurity",
            COALESCE(elem ->> 'AccessMethod', '') AS "AccessMethod",
@@ -65,19 +79,98 @@
            celem ->> 'Name' AS "Name",
            COALESCE(celem ->> 'DataType', '') AS "DataType",
            COALESCE((celem ->> 'Nullable')::BOOLEAN, false) AS "Nullable",
+           (celem ->> 'Nullable') IS NOT NULL AS "NullableDeclared",
            COALESCE(celem ->> 'Default', '') AS "Default",
            COALESCE(celem ->> 'Collation', '') AS "Collation",
-           COALESCE(celem ->> 'Generated', 'NEVER') AS "Generated",
+           -- An expression is only ever a generated column on PostgreSQL, so an omitted Generated beside one means
+           -- ALWAYS. Reading it as NEVER built a plain column that every later comparison then read as generated.
+           CASE WHEN NULLIF(celem ->> 'Generated', '') IS NOT NULL THEN celem ->> 'Generated'
+                WHEN NULLIF(celem ->> 'GenerationExpression', '') IS NOT NULL THEN 'ALWAYS'
+                ELSE 'NEVER' END AS "Generated",
            COALESCE(celem ->> 'GenerationExpression', '') AS "GenerationExpression",
            COALESCE((celem ->> 'Virtual')::BOOLEAN, false) AS "Virtual",
            COALESCE(celem ->> 'Storage', '') AS "Storage",
            COALESCE(celem ->> 'Compression', '') AS "Compression",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName",
-           COALESCE(celem ->> 'OldName', '') AS "OldName",
+           -- An editor that quotes identifiers stores OldName WITH the quotes -- "users", not users.
+           -- PostgreSQL takes an authored name verbatim, so the rename match downstream found nothing,
+           -- NO rename happened, the new name was created empty and the old object survived
+           -- unreferenced -- and a later deploy with a Drop...RemovedFromProduct flag then dropped it
+           -- WITH ITS DATA. Strip one wrapping pair here, once, so the match and the emitted DDL agree.
+           -- SQL Server and MySQL already unwrap at their rename sites (fn_StripBracketWrapping /
+           -- SchemaSmith_StripBacktickWrapping); PostgreSQL was the engine that did not.
+           -- Collapse "" to " ONLY when a wrapper was stripped. Inside a quoted PostgreSQL
+           -- identifier "" denotes one ", so the escaped form "a""b" names the column the catalog
+           -- stores as a"b -- and stripping the wrapper alone left a""b, which matches nothing and
+           -- silently skips the rename exactly as the unwrapped case did. Outside a wrapper the
+           -- doubling is literal, so it is deliberately NOT collapsed there.
+           CASE WHEN (celem ->> 'OldName') LIKE '"%"' AND LENGTH(celem ->> 'OldName') > 1
+                THEN REPLACE(SUBSTRING((celem ->> 'OldName'), 2, LENGTH(celem ->> 'OldName') - 2), '""', '"')
+                ELSE COALESCE(celem ->> 'OldName', '') END AS "OldName",
            COALESCE(celem ->> 'CheckExpression', '') AS "CheckExpression"
       FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
       CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Columns')::JSON) AS celem(value);
+
+    -- A generated column's nullability is the engine's unless the package states one, as on SQL Server. Taking the
+    -- live value (nullable for a new column) makes every comparison downstream agree without touching any of them;
+    -- reading an omission as NOT NULL narrowed the column a deploy late, and failed outright on rows whose
+    -- expression is NULL.
+    UPDATE temp_columns tc
+       SET "Nullable" = COALESCE((SELECT NOT a.attnotnull
+                                    FROM pg_attribute a
+                                   WHERE a.attrelid = to_regclass('"' || tc."TableSchema" || '"."' || tc."TableName" || '"')
+                                     AND a.attname = tc."Name" AND a.attnum > 0 AND NOT a.attisdropped), TRUE)
+     WHERE NOT tc."NullableDeclared"
+       AND tc."Generated" = 'ALWAYS' AND COALESCE(tc."GenerationExpression", '') <> '';
+
+    -- A column typed by an enum, domain or composite type is compared against the catalog's own spelling of it --
+    -- schema-qualified, identifiers quoted where they need it, and a domain always quoted -- so any other spelling
+    -- re-altered the column on every deploy, and a bare name did not resolve at all outside the search path (a
+    -- schema-template tenant table typed by its own tenant's enum failed with 42704). Resolve each user-defined type
+    -- name once, here, and spell it as the catalog does, so the DDL finds it and every comparison agrees:
+    --   * a qualified name as written, quoted or not;
+    --   * a bare name first to the type the live column already has, if that is a candidate -- re-resolving an
+    --     existing column to a different same-named type would change its type -- then the table's own schema,
+    --     then public.
+    -- Only real enums, domains and standalone composites qualify: every table and view also has a row type
+    -- (typtype 'c'), and the SQL-standard type spellings (serial, character, ...) are not catalog names, so a
+    -- table named like one must never capture a column declared with it. Arrays and typmods are left alone.
+    UPDATE temp_columns tc
+       SET "DataType" = r."Rendered"
+      FROM (SELECT c."_RowId",
+                   (SELECT CASE WHEN ty.typtype = 'd' THEN '"' || ns.nspname || '"."' || ty.typname || '"'
+                                ELSE QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(ty.typname) END
+                      FROM pg_type ty
+                      JOIN pg_namespace ns ON ns.oid = ty.typnamespace
+                      LEFT JOIN pg_class rc ON rc.oid = ty.typrelid
+                     WHERE (ty.typtype IN ('e', 'd') OR (ty.typtype = 'c' AND rc.relkind = 'c'))
+                       AND ty.typname = COALESCE(m[3], LOWER(m[4]))
+                       AND ns.nspname = ANY (CASE WHEN m[1] IS NOT NULL OR m[2] IS NOT NULL
+                                                  THEN ARRAY[COALESCE(m[1], LOWER(m[2]))]
+                                                  ELSE ARRAY[live.nspname, c."TableSchema", 'public'] END)
+                       AND NOT EXISTS (SELECT 1 FROM pg_type bt JOIN pg_namespace bn ON bn.oid = bt.typnamespace
+                                        WHERE bn.nspname = 'pg_catalog' AND bt.typname = ty.typname)
+                       AND LOWER(ty.typname) NOT IN ('int', 'integer', 'bigint', 'smallint', 'boolean', 'bool',
+                                                     'real', 'float', 'double', 'decimal', 'dec', 'numeric',
+                                                     'serial', 'bigserial', 'smallserial', 'serial2', 'serial4',
+                                                     'serial8', 'character', 'char', 'varchar', 'nchar',
+                                                     'national', 'time', 'timestamp', 'interval')
+                     ORDER BY ns.nspname = live.nspname DESC NULLS LAST, ns.nspname = c."TableSchema" DESC
+                     LIMIT 1) AS "Rendered"
+              FROM temp_columns c
+              CROSS JOIN LATERAL REGEXP_MATCH(TRIM(c."DataType"),
+                   '^(?:(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\.)?(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))$') AS m
+              LEFT JOIN LATERAL (SELECT lns.nspname
+                                   FROM pg_attribute la
+                                   JOIN pg_type lt ON lt.oid = la.atttypid
+                                   JOIN pg_namespace lns ON lns.oid = lt.typnamespace
+                                  WHERE la.attrelid = TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"))
+                                    AND la.attname = c."Name" AND NOT la.attisdropped
+                                    AND lt.typname = COALESCE(m[3], LOWER(m[4]))) AS live ON TRUE
+             WHERE COALESCE(c."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%') r
+     WHERE tc."_RowId" = r."_RowId"
+       AND r."Rendered" IS NOT NULL;
 
     -- PostgreSQL names an array type _element in the catalog, and that is what extraction used to emit, so
     -- packages in the wild carry both spellings: "_text" and "text[]". They mean the same column. Fold the

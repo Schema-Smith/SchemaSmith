@@ -367,6 +367,81 @@ public abstract class ConfigureDataDeliverySharedTests
     }
 
     [Test]
+    public void ConfigureDataDelivery_AbsentMergeDelete_DoesNotDeriveTheDeleteBranch()
+    {
+        // The delete branch removes target rows the extracted source does not contain, so an ABSENT
+        // MergeDelete must not switch it on. It used to: every ShouldCast flag was read with
+        // `!= "false"`, which makes a missing key true, and MergeDelete is the one member of that
+        // family where defaulting on destroys data. Nothing caught it because the shipped settings file
+        // and every test set the key explicitly -- so the real default was never exercised.
+        EnsureDbConnection();
+        using var command = _connection.CreateCommand();
+
+        var tableName = $"nodel_{Guid.NewGuid():N}".Substring(0, 20);
+        command.CommandText = $@"
+            CREATE TABLE `{_testDb}`.`{tableName}` (
+                id INT PRIMARY KEY,
+                name VARCHAR(50) NOT NULL
+            )";
+        command.ExecuteNonQuery();
+        command.CommandText = $"INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, 'Test')";
+        command.ExecuteNonQuery();
+
+        try
+        {
+            var templateRoot = CreateTemplateStructure();
+            var tablesDir = Path.Join(templateRoot, "Tables");
+            var tableDataDir = Path.Join(templateRoot, "TableData");
+            var tablePath = Path.Join(tablesDir, $"{tableName}.json");
+
+            File.WriteAllText(tablePath, $$"""
+                {
+                  "Name": "{{tableName}}",
+                  "Columns": [
+                    { "Name": "id", "DataType": "int" },
+                    { "Name": "name", "DataType": "varchar" }
+                  ]
+                }
+                """);
+
+            lock (FactoryContainer.SharedLockObject)
+            {
+                FactoryContainer.Unregister<IMergeScriptHelper>();
+                ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+                using (var configScope = IsolatedConfigScope.Create())
+                {
+                    var config = configScope.Config;
+                    config["Source:Server"] = config[$"{ConfigPrefix}:Server"] ?? "127.0.0.1";
+                    config["Source:Port"] = config[$"{ConfigPrefix}:Port"];
+                    config["Source:User"] = config[$"{ConfigPrefix}:User"];
+                    config["Source:Password"] = config[$"{ConfigPrefix}:Password"];
+                    config["Source:Database"] = _testDb;
+                    config["Tables:0:Name"] = tableName;
+                    config["ShouldCast:OutputContentFiles"] = "true";
+                    config["ShouldCast:OutputScripts"] = "false";
+                    config["ShouldCast:ConfigureDataDelivery"] = "true";
+                    // ShouldCast:MergeDelete is DELIBERATELY not set -- that is the whole point.
+                    config["ContentPath"] = tableDataDir;
+
+                    _dataTongs.CastData();
+                }
+            }
+
+            var updatedJson = File.ReadAllText(tablePath);
+            Assert.That(updatedJson, Does.Not.Contain("Insert/Update/Delete"),
+                "an absent MergeDelete must not derive a delete branch -- deleting the key is not a "
+                + "request to delete target rows");
+            Assert.That(updatedJson, Does.Contain("\"MergeType\": \"Insert/Update\""),
+                "MergeUpdate still defaults on, so the derived type is Insert/Update");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    [Test]
     [NonParallelizable]
     public void ConfigureDataDelivery_ReconcilesMatchingVariantName_PreservesSiblingAndGates()
     {

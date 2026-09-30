@@ -21,7 +21,7 @@ only because that is how lab bundles ship.
 ## Prerequisites
 
 - The three-engine sandbox is up (`Demos/Learn/docker`) — see [`../README.md`](../README.md).
-- `schemaquench --version` answers **2.4.0** or later on your PATH. New to the
+- `schemaquench --version` answers **2.7.0** or later on your PATH. New to the
   CLI? Install it in [Course 1, Module 1](https://learn.schemasmith.com/01-install-connect/).
 
 ## Step 1 — create the service databases

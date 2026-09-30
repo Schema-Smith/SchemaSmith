@@ -1,4 +1,5 @@
 {
+    "$schema": ".json-schemas/products.mysql.schema",
     "Name": "ValidProduct",
     "ValidationScript": "SELECT EXISTS(SELECT * FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{{MainDB}}')",
     "TemplateOrder": [
