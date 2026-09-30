@@ -165,6 +165,10 @@ public class DatabaseQuench
     private string TemplateCdcFilegroup =>
         string.IsNullOrWhiteSpace(_template?.CdcFilegroup) ? "NULL" : $"N'{EscapeSqlLiteral(_template.CdcFilegroup.Trim())}'";
 
+    // #426. NULL keeps the unset contract (off for a new table, unchanged on rotation).
+    private string TemplateCdcSupportsNetChanges =>
+        _template?.CdcSupportsNetChanges is { } v ? (v ? "1" : "0") : "NULL";
+
     /// <summary>NEVER when no tier declared a policy — the domain object's own default.</summary>
     private string RebuildPolicyMode =>
         EscapeSqlLiteral((CascadedRebuildPolicy?.Mode ?? "NEVER").Trim().ToUpperInvariant());
@@ -1656,7 +1660,7 @@ EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmit
         switch (_product.Platform.GetBasePlatform())
         {
             case Platform.SqlServer:
-                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @WhatIf = {_whatIfOnly}, @DropTablesRemovedFromProduct = {_dropRemovedTables}, @DropColumnsRemovedFromProduct = {_dropRemovedColumns}, @DropForeignKeysRemovedFromProduct = {_dropRemovedForeignKeys}, @DropCheckConstraintsRemovedFromProduct = {_dropRemovedCheckConstraints}, @DropExcludeConstraintsRemovedFromProduct = {_dropRemovedExcludeConstraints}, @DropStatisticsRemovedFromProduct = {_dropRemovedStatistics}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}, @CdcFilegroup = {TemplateCdcFilegroup}";
+                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @WhatIf = {_whatIfOnly}, @DropTablesRemovedFromProduct = {_dropRemovedTables}, @DropColumnsRemovedFromProduct = {_dropRemovedColumns}, @DropForeignKeysRemovedFromProduct = {_dropRemovedForeignKeys}, @DropCheckConstraintsRemovedFromProduct = {_dropRemovedCheckConstraints}, @DropExcludeConstraintsRemovedFromProduct = {_dropRemovedExcludeConstraints}, @DropStatisticsRemovedFromProduct = {_dropRemovedStatistics}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}, @CdcFilegroup = {TemplateCdcFilegroup}, @CdcSupportsNetChanges = {TemplateCdcSupportsNetChanges}";
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"
@@ -1702,7 +1706,7 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
     // them later, once every column exists (#420). A temp table created inside a procedure dies when it returns.
     private const string SqlServerCdcRotateTable = @"IF OBJECT_ID('tempdb..#CdcRotate') IS NOT NULL DROP TABLE #CdcRotate
 CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
-                         NewFilegroup NVARCHAR(256), Reason NVARCHAR(20))";
+                         NewFilegroup NVARCHAR(256), NewNetChanges BIT, Reason NVARCHAR(20))";
 
     // Neutralizes (or, under 'fail', refuses) what the detected version cannot support, before anything is created (#425).
     private string SqlServerDegrade =>

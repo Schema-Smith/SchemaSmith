@@ -110,6 +110,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckPostgreSqlQuotedIdentifier(table, location));
             findings.AddRange(CheckSystemVersioningExclusions(table, location));
             findings.AddRange(CheckCdcFilegroup(table, location));
+            findings.AddRange(CheckCdcSupportsNetChanges(table, location));
             findings.AddRange(CheckCompressionOptions(table, location));
             findings.AddRange(CheckPartitionPlacement(table, location));
             findings.AddRange(CheckMyPartitioning(table, location));
@@ -613,6 +614,19 @@ public sealed class CoherenceCheck : ISchemaCheck
         yield return new Finding(Severity.Warning, CdcFilegroupInertCode, Category, tableLocation,
             $"Table '{table.Name}' sets CdcFilegroup '{ssTable.CdcFilegroup}' but not EnableCDC, so there is no change " +
             "table to place and the setting does nothing — set EnableCDC, or drop CdcFilegroup.");
+    }
+
+    /// <summary>
+    /// #426: <c>CdcSupportsNetChanges</c> shapes a capture instance, so without <c>EnableCDC</c> there is none to shape.
+    /// Either value is inert. Table-level only, for the same reason as <c>CdcFilegroup</c>.
+    /// </summary>
+    private static IEnumerable<Finding> CheckCdcSupportsNetChanges(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable ssTable || ssTable.EnableCDC || ssTable.CdcSupportsNetChanges is not { } netChanges) yield break;
+
+        yield return new Finding(Severity.Warning, CdcFilegroupInertCode, Category, tableLocation,
+            $"Table '{table.Name}' sets CdcSupportsNetChanges {(netChanges ? "true" : "false")} but not EnableCDC, so there " +
+            "is no capture instance to shape and the setting does nothing — set EnableCDC, or drop CdcSupportsNetChanges.");
     }
 
     /// <summary>

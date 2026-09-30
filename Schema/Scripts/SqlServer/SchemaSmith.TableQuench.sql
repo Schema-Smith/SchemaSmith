@@ -24,7 +24,9 @@ CREATE PROCEDURE SchemaSmith.TableQuench
     -- the AfterTablesObjects slot. SchemaTongs places them there automatically on extraction.
     @DropSchemaBoundDependents BIT = 0,
     -- Template-level CdcFilegroup (#417): the default for tables that declare none. NULL = unmanaged.
-    @CdcFilegroup NVARCHAR(128) = NULL
+    @CdcFilegroup NVARCHAR(128) = NULL,
+    -- Template-level CdcSupportsNetChanges (#426): the default for CDC tables that declare none. NULL = unset.
+    @CdcSupportsNetChanges BIT = NULL
 AS
 BEGIN TRY
     SET NOCOUNT ON
@@ -38,10 +40,10 @@ BEGIN TRY
   EXEC SchemaSmith.MissingTableAndColumnQuench @WhatIf
   -- Filled by ModifiedTableQuench's CDC headroom check, consumed by CdcQuench once every column exists.
   CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
-                           NewFilegroup NVARCHAR(256), Reason NVARCHAR(20))
+                           NewFilegroup NVARCHAR(256), NewNetChanges BIT, Reason NVARCHAR(20))
   EXEC SchemaSmith.ModifiedTableQuench @ProductName = @ProductName, @WhatIf = @WhatIf, @DropUnknownIndexes = @DropUnknownIndexes, @DropTablesRemovedFromProduct = @DropTablesRemovedFromProduct, @DropSchemaBoundDependents = @DropSchemaBoundDependents,
                                        @RebuildPolicyMode = @RebuildPolicyMode, @RebuildPolicyThreshold = @RebuildPolicyThreshold, @RebuildPolicyOnOrderMismatch = @RebuildPolicyOnOrderMismatch,
-                                       @CdcFilegroup = @CdcFilegroup
+                                       @CdcFilegroup = @CdcFilegroup, @CdcSupportsNetChanges = @CdcSupportsNetChanges
   EXEC SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName, @WhatIf
   -- Also after the indexes/constraints pass, and for a closely related reason: SQL Server refuses a
   -- FILESTREAM column unless the table already has a ROWGUIDCOL column covered by a unique CONSTRAINT.

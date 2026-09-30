@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using log4net;
 using Microsoft.Extensions.Configuration;
@@ -56,6 +57,65 @@ public class DeployPathTableFeatureTests
         });
     }
 
+    // #426. SQL Server defaults @supports_net_changes to ON once the table has a primary key, and since the #420 move a
+    // new table's key exists when CDC is enabled -- so leaving it to the engine flipped every new table to ON. Unset keeps
+    // the pre-2.7 result, OFF; declaring it rotates, because an instance cannot change it in place.
+    [Test]
+    public void NetChanges_AreOffWhenUnset_AndADeclarationRotatesToThem()
+    {
+        RunScenario("DeployNet", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+            Assert.That(NewestInstanceNetChanges(cmd), Is.False, "an unset CdcSupportsNetChanges must not get SQL Server's ON default");
+
+            deploy(CdcTable(enableCdc: true, extraColumn: false, netChanges: true));
+            Assert.That(InstanceCount(cmd), Is.EqualTo(2), "a declared value the instance lacks rotates to a new instance");
+            Assert.That(NewestInstanceNetChanges(cmd), Is.True, "and the new instance has it");
+        });
+    }
+
+    [Test]
+    public void ARotation_KeepsTheInstancesNetChanges_WhenUnset()
+    {
+        RunScenario("DeployNetKeep", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            // OFF on a table WITH a primary key -- the one case where "keep" and SQL Server's own default (ON once a key
+            // exists) disagree. Starting from ON would pass whether or not the rotation carried the value.
+            deploy(CdcTable(enableCdc: true, extraColumn: false, netChanges: false));
+            Assert.That(NewestInstanceNetChanges(cmd), Is.False);
+
+            // The declaration goes away and a column is added: the column rotates, and unset keeps what the table had.
+            deploy(CdcTable(enableCdc: true, extraColumn: true));
+            Assert.That(InstanceCount(cmd), Is.EqualTo(2));
+            Assert.That(NewestInstanceNetChanges(cmd), Is.False, "a rotation must keep net changes it was not told to change, as it keeps its filegroup");
+        });
+    }
+
+    [Test]
+    public void ATemplateDefault_SetsNetChanges_ForATableThatDeclaresNone()
+    {
+        RunScenario("DeployNetTpl", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+            Assert.That(NewestInstanceNetChanges(cmd), Is.True, "the template's CdcSupportsNetChanges applies to a table that declares none");
+        }, templateExtra: ", \"CdcSupportsNetChanges\": true");
+    }
+
+    [Test]
+    public void NetChangesWithoutAPrimaryKey_IsRefusedByName()
+    {
+        RunScenario("DeployNetNoPk", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false, netChanges: true, primaryKey: false));
+            // Refused by our own message, before sp_cdc_enable_table could fail on it mid-run. A failure is logged to the
+            // error log, so the text is looked for across both logs rather than assuming which one carries it.
+            var logged = _progressLog.ReceivedCalls().Concat(_errorLog.ReceivedCalls())
+                .Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "");
+            Assert.That(logged.Any(m => m.Contains("sets CdcSupportsNetChanges true") && m.Contains("declares no primary key")), Is.True,
+                "the deploy must refuse by name, not fail inside sp_cdc_enable_table");
+        }, expectFailure: true);
+    }
+
     [Test]
     public void CdcDeclaredOnADatabaseWithoutCdc_IsRecordedAsDowngraded_ByARealDeploy()
     {
@@ -86,18 +146,22 @@ public class DeployPathTableFeatureTests
         });
     }
 
-    private static string CdcTable(bool enableCdc, bool extraColumn) => $$"""
+    private static string CdcTable(bool enableCdc, bool extraColumn, bool? netChanges = null, bool primaryKey = true) => $$"""
         { "Schema": "[dbo]", "Name": "[DeployProbe]", "EnableCDC": {{(enableCdc ? "true" : "false")}},
+          {{(netChanges is { } nc ? $"\"CdcSupportsNetChanges\": {(nc ? "true" : "false")}," : "")}}
           "Columns": [
             { "Name": "[Id]", "DataType": "INT", "Nullable": false },
             { "Name": "[A]", "DataType": "INT", "Nullable": true },
             {{(extraColumn ? """{ "Name": "[B]", "DataType": "INT", "Nullable": true },""" : "")}}
             { "Name": "[Twice]", "DataType": "INT", "Nullable": true, "ComputedExpression": "[A] * 2" }
           ],
-          "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }
+          "Indexes": [ {{(primaryKey
+              ? """{ "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" }"""
+              : """{ "Name": "[IX_DeployProbe]", "IndexColumns": "[Id]" }""")}} ] }
         """;
 
-    private void RunScenario(string prefix, string setupDatabase, Action<Action<string>, string, IDbCommand> body)
+    private void RunScenario(string prefix, string setupDatabase, Action<Action<string>, string, IDbCommand> body,
+                             string templateExtra = "", bool expectFailure = false)
     {
         var db = prefix + "_" + Guid.NewGuid().ToString("N")[..12];
         var tempDir = Path.Join(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
@@ -126,10 +190,11 @@ public class DeployPathTableFeatureTests
 
                 body(tableJson =>
                 {
-                    WritePackage(tempDir, db, tableJson);
+                    WritePackage(tempDir, db, tableJson, templateExtra);
                     _environment.ClearReceivedCalls();
                     Program.Main(["SkipKindlingForge"]);
-                    _environment.DidNotReceive().Exit(Arg.Is<int>(code => code != 0));
+                    if (expectFailure) _environment.Received().Exit(Arg.Is<int>(code => code != 0));
+                    else _environment.DidNotReceive().Exit(Arg.Is<int>(code => code != 0));
                 }, db, cmd);
             }
             finally
@@ -180,6 +245,13 @@ public class DeployPathTableFeatureTests
         return Convert.ToBoolean(cmd.ExecuteScalar());
     }
 
+    private static bool NewestInstanceNetChanges(IDbCommand cmd)
+    {
+        cmd.CommandText = @"SELECT TOP 1 supports_net_changes FROM cdc.change_tables
+                            WHERE source_object_id = OBJECT_ID('dbo.DeployProbe') ORDER BY create_date DESC, [object_id] DESC";
+        return Convert.ToBoolean(cmd.ExecuteScalar());
+    }
+
     private static int InstanceCount(IDbCommand cmd)
     {
         cmd.CommandText = "SELECT COUNT(*) FROM cdc.change_tables WHERE source_object_id = OBJECT_ID('dbo.DeployProbe')";
@@ -199,7 +271,7 @@ public class DeployPathTableFeatureTests
         return names.ToArray();
     }
 
-    private static void WritePackage(string dir, string db, string tableJson)
+    private static void WritePackage(string dir, string db, string tableJson, string templateExtra = "")
     {
         var tables = Path.Join(dir, "Templates", "Main", "Tables");
         Directory.CreateDirectory(tables);
@@ -208,7 +280,7 @@ public class DeployPathTableFeatureTests
             + "\"ScriptTokens\": {}, \"ScriptFolders\": [], \"Platform\": \"SqlServer\" }");
         File.WriteAllText(Path.Join(dir, "Templates", "Main", "Template.json"),
             "{ \"Name\": \"Main\", \"DatabaseIdentificationScript\": "
-            + $"\"SELECT [name] FROM sys.databases WHERE [name] = '{db}'\", \"ScriptFolders\": [] }}");
+            + $"\"SELECT [name] FROM sys.databases WHERE [name] = '{db}'\", \"ScriptFolders\": []{templateExtra} }}");
         File.WriteAllText(Path.Join(tables, "dbo.DeployProbe.json"), tableJson);
     }
 

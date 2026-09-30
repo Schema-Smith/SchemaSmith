@@ -1528,6 +1528,35 @@ public class CoherenceCheckTests
         Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-CDC-001"), Is.Empty);
     }
 
+    // #426: the same for CdcSupportsNetChanges -- it shapes a capture instance, so without EnableCDC there is none.
+    // Either value is inert: false is not "off", it is a setting with nothing to apply to.
+    [TestCase(true)]
+    [TestCase(false)]
+    public void CdcSupportsNetChangesWithoutEnableCdc_IsAnInertWarning(bool netChanges)
+    {
+        var table = new SqlServerTable { Schema = "dbo", Name = "Orders", CdcSupportsNetChanges = netChanges };
+        table.Columns.Add(new SqlServerColumn { Name = "Id", DataType = "INT" });
+
+        var finding = RunFor(table, Platform.SqlServer).Single(f => f.Code == "SS-CDC-001");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Warning));
+            Assert.That(finding.Message, Does.Contain("Orders").And.Contain("CdcSupportsNetChanges").And.Contain("EnableCDC"));
+        });
+    }
+
+    [TestCase(true, true)]
+    [TestCase(true, false)]
+    [TestCase(false, null)]
+    public void CdcSupportsNetChanges_IsSilent_WhenThereIsACaptureInstanceToShape(bool enableCdc, bool? netChanges)
+    {
+        var table = new SqlServerTable { Schema = "dbo", Name = "Orders", EnableCDC = enableCdc, CdcSupportsNetChanges = netChanges };
+        table.Columns.Add(new SqlServerColumn { Name = "Id", DataType = "INT" });
+
+        Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-CDC-001"), Is.Empty);
+    }
+
     private static System.Collections.Generic.List<Finding> RunFor(Table table, Platform platform)
     {
         var template = new Template { Name = "Main" };

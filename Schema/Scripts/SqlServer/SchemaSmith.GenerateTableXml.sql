@@ -140,6 +140,11 @@ DECLARE @v_CdcFilegroup NVARCHAR(260) = NULL
 IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   EXEC sp_executesql N'SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN QUOTENAME(fg.[name]) END FROM (SELECT TOP 1 ct.filegroup_name FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest JOIN sys.filegroups fg ON fg.[name] = newest.filegroup_name',
     N'@p_ObjId INT, @p_Fg NVARCHAR(260) OUTPUT', @p_ObjId = @v_ObjectId, @p_Fg = @v_CdcFilegroup OUTPUT
+-- #426. Net changes from the newest capture instance, emitted only when ON (see the JSON twin).
+DECLARE @v_CdcNetChanges BIT = NULL
+IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
+  EXEC sp_executesql N'SELECT TOP 1 @p_Net = ct.supports_net_changes FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC',
+    N'@p_ObjId INT, @p_Net BIT OUTPUT', @p_ObjId = @v_ObjectId, @p_Net = @v_CdcNetChanges OUTPUT
 
 -- Memory-optimized (Hekaton) is 2014 (major 12); is_memory_optimized / durability_desc are 2014 columns,
 -- staged behind the >= 12 guard (like @v_GraphType/@v_Ledger) and simply 0/NULL below it, where a
@@ -234,6 +239,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
         WHERE lds.data_space_id = st.lob_data_space_id) AS [TextImageFileGroup],
        CASE WHEN st.is_tracked_by_cdc = 1 THEN 'true' ELSE 'false' END AS [EnableCDC],
        @v_CdcFilegroup AS [CdcFilegroup],
+       CASE WHEN @v_CdcNetChanges = 1 THEN 'true' END AS [CdcSupportsNetChanges],
        @v_GraphType AS [GraphType],
        @v_Ledger AS [Ledger],
        -- Memory-optimized round-trip (#J1/#8): emit only when true, matching the JSON twin. Read into

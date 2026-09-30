@@ -139,6 +139,23 @@ BEGIN
     RAISERROR('Table %s declares CdcFilegroup %s (on the table or as the template default), but this database has no filegroup by that name. Create it (ALTER DATABASE ... ADD FILEGROUP, then ADD FILE ... TO FILEGROUP), or correct CdcFilegroup.', 16, 1, @v_CdcFgTable, @v_CdcFgName)
   END
 
+  -- Net changes need a unique key to identify a row: sp_cdc_enable_table refuses @supports_net_changes = 1 on a table
+  -- with no primary key (SchemaSmith passes no @index_name). The key is read from the DECLARED indexes, because a new
+  -- table's primary key is not created until after this runs. Refuse up front rather than fail mid-run (#426).
+  IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK)
+              WHERE t.EnableCDC = 1 AND t.CdcSupportsNetChanges = 1
+                AND NOT EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
+                                 WHERE i.[Schema] = t.[Schema] AND i.[TableName] = t.[Name] AND i.[PrimaryKey] = 1))
+  BEGIN
+    DECLARE @v_NetChangesTable NVARCHAR(1010)
+    SELECT TOP 1 @v_NetChangesTable = t.[Schema] + '.' + t.[Name]
+      FROM #Tables t WITH (NOLOCK)
+     WHERE t.EnableCDC = 1 AND t.CdcSupportsNetChanges = 1
+       AND NOT EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
+                        WHERE i.[Schema] = t.[Schema] AND i.[TableName] = t.[Name] AND i.[PrimaryKey] = 1)
+    RAISERROR('Table %s sets CdcSupportsNetChanges true (on the table or as the template default), but declares no primary key. CDC net changes need one to identify a row. Declare a primary key, or set CdcSupportsNetChanges false.', 16, 1, @v_NetChangesTable)
+  END
+
   -- Partition placement (#partitioning, K1) -- ADOPT AND VERIFY, the other half of the create-side apply.
   -- Every disagreement below describes a statement that REWRITES EVERY ROW of the table, and a state-based
   -- diff cannot derive the SPLIT/MERGE intent behind a boundary change from two layouts -- it can only see

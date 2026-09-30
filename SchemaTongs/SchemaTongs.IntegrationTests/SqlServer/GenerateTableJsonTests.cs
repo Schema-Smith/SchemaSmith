@@ -827,6 +827,36 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcOnDefa
         conn.Close();
     }
 
+    // #426: net changes round-trip from the newest capture instance, and only when ON -- OFF is what an unset value
+    // deploys, so an existing CDC package re-extracts unchanged.
+    [Test]
+    public void ShouldExtractCdcSupportsNetChanges_OnlyWhenOn()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1) EXEC sys.sp_cdc_enable_db;
+CREATE TABLE dbo.CdcNetOnTest (Id INT NOT NULL PRIMARY KEY, Val INT NULL);
+CREATE TABLE dbo.CdcNetOffTest (Id INT NOT NULL PRIMARY KEY, Val INT NULL);
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNetOnTest', @role_name = NULL, @supports_net_changes = 1;
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNetOffTest', @role_name = NULL, @supports_net_changes = 0;
+";
+        cmd.ExecuteNonQuery();
+
+        var on = GenerateTable(cmd, "dbo", "CdcNetOnTest");
+        var offJson = GenerateTableJson(cmd, "dbo", "CdcNetOffTest");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(on.CdcSupportsNetChanges, Is.True);
+            Assert.That(offJson, Does.Contain("EnableCDC"));
+            Assert.That(offJson, Does.Not.Contain("CdcSupportsNetChanges"), "an instance with net changes off must not gain a key");
+        });
+
+        conn.Close();
+    }
+
     [Test]
     public void ShouldOmitFileGroupWhenDefault()
     {

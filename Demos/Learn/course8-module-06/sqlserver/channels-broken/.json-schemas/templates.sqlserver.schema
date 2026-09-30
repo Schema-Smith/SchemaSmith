@@ -129,6 +129,10 @@
       "maxLength": 128,
       "description": "Default filegroup for CDC change tables of EnableCDC tables that declare no CdcFilegroup of their own. A table on a different filegroup gets a new capture instance there; the old one keeps its history. Unset leaves existing placement alone. SQL Server only."
     },
+    "CdcSupportsNetChanges": {
+      "type": "boolean",
+      "description": "Default for whether CDC capture instances support net changes (@supports_net_changes), for EnableCDC tables that declare no CdcSupportsNetChanges of their own. Unset: off for a new table, unchanged on rotation. A table whose newest capture instance differs gets a new capture instance. SQL Server only."
+    },
     "ServerToQuench": {
       "type": "string",
       "pattern": "^(?:[Pp][Rr][Ii][Mm][Aa][Rr][Yy]|[Ss][Ee][Cc][Oo][Nn][Dd][Aa][Rr][Yy]|[Bb][Oo][Tt][Hh])$"

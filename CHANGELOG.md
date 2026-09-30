@@ -4,6 +4,18 @@ All notable changes to SchemaSmith Community Edition are documented here.
 
 For full release details and download links, see [GitHub Releases](https://github.com/Schema-Smith/SchemaSmith/releases).
 
+## [v2.7.1]
+
+### Added
+
+- **CDC net changes can be declared (SQL Server) (#426).** `CdcSupportsNetChanges` on a table, or on `Template.json` as the default for every `EnableCDC` table in it, is passed to `sp_cdc_enable_table` as `@supports_net_changes`. With net changes on, SQL Server adds an index to the change table and generates `cdc.fn_cdc_get_net_changes_<instance>`; off, readers use `fn_cdc_get_all_changes` only. **Unset keeps what earlier versions produced:** off for a new table, and a rotation keeps the value of the instance it replaces. SchemaSmith now passes the value explicitly, because SQL Server's own default turns net changes on whenever the table has a primary key -- which, with CDC now enabled after the key exists, would have silently changed every new CDC table. A declared value the newest capture instance does not have rotates to a new instance, like a `CdcFilegroup` change; `true` on a table with no primary key fails the deploy up front, naming it; SchemaTongs extracts it when on; and `--Validate`'s `SS-CDC-001` now also warns when it is set without `EnableCDC`.
+
+### Fixed
+
+- **`EnableCDC` did nothing in a SchemaQuench deploy (SQL Server) (#423).** v2.7.0 moved CDC enable, disable and rotation into a new step so a capture instance would include computed columns (#420), but only the SQL wrapper `SchemaSmith.TableQuench` called that step, and SchemaQuench's deploy path does not use that wrapper. A real deploy enabled, rotated and disabled nothing, and reported success. SchemaQuench now runs the step itself, after every column exists.
+- **Table-level Change Tracking and FILESTREAM columns were never applied by a SchemaQuench deploy (SQL Server) (#424).** Both shipped in v2.6.0 as steps only that same wrapper called, so `EnableChangeTracking`, `TrackColumnsUpdated` and a declared `FileStream` column deployed as nothing, with no error. SchemaQuench now runs both, after indexes and constraints.
+- **Below a feature's minimum SQL Server version, the degrade was silent and `UnsupportedFeaturePolicy: fail` did not abort (#425).** Since v2.4.0 the step that neutralizes an unsupported feature and reports it -- or, under `fail`, refuses the deploy -- ran only from the wrapper. A real deploy still never emitted the unsupported DDL, but recorded no downgrade in the summary, logged nothing, and ignored `fail`. The same step is what reports `EnableCDC` on a database where CDC is off, so that report (#401) never reached a real deploy either. SchemaQuench now runs it before any table is created.
+
 ## [v2.7.0](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.0) — 2026-09-30
 
 ### Breaking Changes
