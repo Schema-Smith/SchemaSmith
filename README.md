@@ -229,6 +229,8 @@ SchemaSmith Community Edition is licensed under [SSCL v2.0](LICENSE). Use it fre
 
 For SBOM and license-scanning tools, SSCL v2.0 is declared as the SPDX custom identifier `LicenseRef-SSCL-2.0` (SSCL is not on the SPDX License List).
 
+Questions from a security, procurement, or legal review — source-available status, what counts as redistribution, patents, warranty, governing law — are answered in the [License FAQ](LICENSE-FAQ.md).
+
 ## Contributors
 
 External contributors:
