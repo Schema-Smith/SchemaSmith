@@ -169,6 +169,44 @@ public class DeployPathTableFeatureTests
         });
     }
 
+    // The same, through --ResumeQuench. A resume skips the completed ModifiedTables step, which is where a column change
+    // used to be turned into a rotation, and starts a new session, so nothing it decided survives.
+    [Test]
+    public void AColumnChange_StillRotates_WhenTheFailedRunIsResumed()
+    {
+        var checkpointDir = Path.Join(Path.GetTempPath(), $"DeployCdcResumeCkpt_{Guid.NewGuid():N}");
+        RunScenario("DeployCdcResumeCk", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            var savedDir = config["CheckpointDirectory"];
+            config["CheckpointDirectory"] = checkpointDir;
+            try
+            {
+                _environment.CommandLine.Returns("--SkipKindlingForge");
+                _betweenScript = "RAISERROR('between-scripts failure', 16, 1)";
+                _nextDeployFails = true;
+                deploy(CdcTable(enableCdc: true, extraColumn: true));
+                _betweenScript = null;
+                Assert.That(Directory.Exists(checkpointDir) && Directory.EnumerateFileSystemEntries(checkpointDir).Any(), Is.True,
+                    "precondition: the failed run left a checkpoint to resume from");
+
+                _environment.CommandLine.Returns("--SkipKindlingForge --ResumeQuench");
+                deploy(CdcTable(enableCdc: true, extraColumn: true));
+            }
+            finally
+            {
+                config["CheckpointDirectory"] = savedDir;
+                _environment.CommandLine.Returns("");
+                try { if (Directory.Exists(checkpointDir)) Directory.Delete(checkpointDir, true); }
+                catch (IOException) { /* a held handle must not fail the test */ }
+            }
+            Assert.That(NewestInstanceColumns(cmd), Is.EqualTo(new[] { "A", "B", "Id", "Twice" }),
+                "the column the failed run added must be captured once the resumed run completes");
+        });
+    }
+
     // #427. At the two-instance limit a new column is refused before it is added: refused any later, the column already
     // exists, and once the operator follows the message and frees a slot, nothing in the next run's column diff says to
     // rotate. The recovery the message describes must end with the column captured.
