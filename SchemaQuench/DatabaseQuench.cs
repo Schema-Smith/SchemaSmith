@@ -791,6 +791,10 @@ public class DatabaseQuench
                     RunTiming?.Record(LogPrefix, _databaseName, "IndexesAndConstraints", indexesAndConstraintsSw.ElapsedMilliseconds, 0);
                 }
 
+                // Step: SQL Server table features. Not in index-only mode: those templates do not own the tables.
+                if (_product.Platform.GetBasePlatform() == Platform.SqlServer && !_template.IndexOnlyTableQuenches && _updateTables)
+                    _checkpointing.Track(DbScope, "TableFeatures", () => QuenchSqlServerTableFeatures(effectiveTableCmd));
+
                 // #242: record what each expression-bearing object was applied with, AFTER the create passes
                 // above, so an object created on this run is recorded on this run rather than churning once more.
                 // SQL Server only for now; the other engines join as their surfaces are wired.
@@ -1596,6 +1600,8 @@ public class DatabaseQuench
 DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
         @UpdateFillFactor BIT = {updateFillFactor}
 {ForgeKindler.GetParseTableXmlScript(Platform.SqlServer)}
+{SqlServerCdcRotateTable}
+{SqlServerDegrade}
 EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {_whatIfOnly}";
                     break;
                 }
@@ -1692,6 +1698,33 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
     // #242. The mapping is an optimisation over a working comparison: failing to record must never fail a deploy
     // whose changes are already applied, so this logs and carries on. A missing row costs one more comparison
     // next run, which is exactly today's behaviour.
+    // Owned by the session, not by ModifiedTableQuench: that procedure decides the CDC rotations, and CdcQuench applies
+    // them later, once every column exists (#420). A temp table created inside a procedure dies when it returns.
+    private const string SqlServerCdcRotateTable = @"IF OBJECT_ID('tempdb..#CdcRotate') IS NOT NULL DROP TABLE #CdcRotate
+CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
+                         NewFilegroup NVARCHAR(256), Reason NVARCHAR(20))";
+
+    // Neutralizes (or, under 'fail', refuses) what the detected version cannot support, before anything is created (#425).
+    private string SqlServerDegrade =>
+        $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.DegradeUnsupportedFeatures";
+
+    /// <summary>
+    /// SQL Server's table-level features that run after indexes and constraints: a FILESTREAM column needs its
+    /// ROWGUIDCOL constraint, CDC must see every column (computed and FILESTREAM included), and Change Tracking
+    /// needs the primary key. Same order as the <c>SchemaSmith.TableQuench</c> wrapper (#423, #424).
+    /// </summary>
+    internal void QuenchSqlServerTableFeatures(IDbCommand tableCommand)
+    {
+        SafeProgressLog("  Quenching FILESTREAM columns, CDC and Change Tracking");
+        var db = Identifier.EscapeDelimited(_databaseName, _product.Platform);
+        tableCommand.CommandText = $@"EXEC [{db}].SchemaSmith.FileStreamColumnQuench @WhatIf = {_whatIfOnly}
+EXEC [{db}].SchemaSmith.CdcQuench @WhatIf = {_whatIfOnly}
+EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Table Features"), tableCommand.CommandText);
+        ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
+        _debugFileLocation = "";
+    }
+
     private void RecordExpressionMap(IDbCommand tableCommand)
     {
         try
@@ -2045,10 +2078,12 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
 DECLARE @TableDefinitions VARCHAR(MAX)= '{EscapeSqlLiteral(tableJson)}',
         @UpdateFillFactor BIT = {updateFillFactor}
 {ForgeKindler.GetParseTableJsonScript(Platform.SqlServer)}
+{SqlServerCdcRotateTable}
+{SqlServerDegrade}
 {quench}");
 
         ClearParameters(command);
-        command.CommandText = createTables;
+        command.CommandText = createTables + Environment.NewLine + SqlServerCdcRotateTable;
         // Retried like every other step: these reads and creates now contend with concurrent DDL for
         // real locks, where the dirty read they replaced waited for nothing.
         ExecuteNonQueryHandlingMessages(command, retryOnDeadlock: true);
@@ -2059,6 +2094,7 @@ DECLARE @TableDefinitions VARCHAR(MAX)= '{EscapeSqlLiteral(tableJson)}',
 DECLARE @v_SQL NVARCHAR(MAX) = ''
 SET NOCOUNT ON
 {fillTables}
+{SqlServerDegrade}
 {quench}";
 
         // AnsiString with Size -1 is VARCHAR(MAX) -- the type the inlined literal had. Left to infer,
