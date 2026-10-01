@@ -2,7 +2,7 @@
 
 *Terraform for SQL Server, Postgres, MySQL, and MariaDB databases*
 
-> **SchemaSmith v2.7.0 released.** Redeploying an unchanged package now does nothing on every engine — expressions the engine rewrites are no longer mistaken for changes; names containing brackets, backticks and quotes round-trip; packages carry a `$schema` reference so editors validate them with no setup; and `ShouldCast:MergeDelete` no longer defaults to deleting data. 4 breaking changes, 5 additions and 80 fixes. [Read the v2.7.0 announcement](https://github.com/Schema-Smith/SchemaSmith/discussions/422) · [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.0)
+> **SchemaSmith v2.7.1 released.** SQL Server table features now actually apply in a SchemaQuench deploy (CDC, Change Tracking, FILESTREAM columns, and the `UnsupportedFeaturePolicy` degrade/`fail` check), and CDC net changes can be declared. [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) · [CHANGELOG](https://github.com/Schema-Smith/SchemaSmith/blob/main/CHANGELOG.md)
 
 ![Build](https://github.com/Schema-Smith/SchemaSmith/actions/workflows/continuous-integration.yml/badge.svg)
 [![Latest Release](https://img.shields.io/github/v/release/Schema-Smith/SchemaSmith)](https://github.com/Schema-Smith/SchemaSmith/releases/latest)
