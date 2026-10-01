@@ -3,9 +3,15 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.IO;
+using System.Linq;
+using log4net;
+using Microsoft.Extensions.Configuration;
+using NSubstitute;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
+using Schema.Isolators;
 using Schema.Utility;
 
 namespace SchemaQuench.IntegrationTests.SqlServer
@@ -112,6 +118,99 @@ namespace SchemaQuench.IntegrationTests.SqlServer
         {
             cmd.CommandText = sql;
             return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+
+        // The tests below call the SQL wrapper; these go through SchemaQuench's own deploy path, which is the only
+        // thing a user runs. The degrade step was reachable from the wrapper and never from the product (#425).
+        [TestCase("warn")]
+        [TestCase("fail")]
+        public void ARealDeploy_OnGenuine2008_DegradesATemporalTable_PerPolicy(string policy)
+        {
+            var environment = Substitute.For<IEnvironment>();
+            var progress = Substitute.For<ILog>();
+            var errors = Substitute.For<ILog>();
+            string db;
+            using (var conn = KindleScratch2008("RealPath" + policy, policy)) db = conn.Database;
+            var dir = Path.Join(Path.GetTempPath(), $"RealPath2008_{Guid.NewGuid():N}");
+            WriteTemporalPackage(dir, db);
+
+            lock (FactoryContainer.SharedLockObject)
+            {
+                var config = FactoryContainer.Resolve<IConfigurationRoot>();
+                var keys = new[] { "SchemaPackagePath", "Target:Server", "Target:Port", "Target:User", "Target:Password",
+                                   "Target:ConnectionProperties:Column Encryption Setting", "Target:UnsupportedFeaturePolicy" };
+                var saved = keys.ToDictionary(k => k, k => config[k]);
+                try
+                {
+                    FactoryContainer.Register(environment);
+                    LogFactory.Register("ErrorLog", errors);
+                    LogFactory.Register("ProgressLog", progress);
+                    config["SchemaPackagePath"] = dir;
+                    config["Target:Server"] = "127.0.0.1";
+                    config["Target:Port"] = "14330";
+                    config["Target:User"] = "sa";
+                    config["Target:Password"] = "SchemaSmith!Old2026";
+                    // SQL Server 2008 R2 cannot describe parameter encryption, which the setting makes every
+                    // parameterized command ask for.
+                    config["Target:ConnectionProperties:Column Encryption Setting"] = "Disabled";
+                    config["Target:UnsupportedFeaturePolicy"] = policy;
+
+                    // No SkipKindlingForge: that test affordance also skips version detection, which is what picks
+                    // the XML ingest path a compatibility-level-100 database needs. This is the path a user runs.
+                    Program.Main([]);
+                    var logged = string.Join(" | ", errors.ReceivedCalls().Concat(progress.ReceivedCalls())
+                        .Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "")
+                        .Where(m => m.Contains("FAIL", StringComparison.OrdinalIgnoreCase)
+                                    || m.Contains("error", StringComparison.OrdinalIgnoreCase)
+                                    || m.Contains("2016")));
+
+                    if (policy == "warn")
+                    {
+                        Assert.That(environment.ReceivedCalls().Any(c => c.GetMethodInfo().Name == "Exit"
+                                                                         && (int)c.GetArguments()[0] != 0), Is.False,
+                            "a warn-policy deploy below the floor must succeed; errors logged: " + logged);
+                        progress.Received().Info(Arg.Is<string>(m => m.Contains("Temporal tracking skipped")));
+                    }
+                    else
+                    {
+                        environment.Received().Exit(Arg.Is<int>(code => code != 0));
+                        // Fail for the RIGHT reason: the policy's refusal, not a connection or load error.
+                        Assert.That(logged, Does.Contain("System-versioned temporal (SYSTEM_VERSIONING) requires SQL Server 2016"),
+                            "the abort must be the unsupported-feature refusal; errors logged: " + logged);
+                        using var check = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(MasterConn);
+                        check.Open();
+                        check.ChangeDatabase(db);
+                        using var checkCmd = check.CreateCommand();
+                        checkCmd.CommandText = "SELECT OBJECT_ID('dbo.RealPathTemporal')";
+                        Assert.That(checkCmd.ExecuteScalar(), Is.EqualTo(DBNull.Value), "the refusal must come before the table is created");
+                    }
+                }
+                finally
+                {
+                    foreach (var kv in saved) config[kv.Key] = kv.Value;
+                    LogFactory.Clear();
+                    FactoryContainer.Unregister<IEnvironment>();
+                    try { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+                    catch (IOException) { /* a held log handle must not fail the test */ }
+                }
+            }
+        }
+
+        private static void WriteTemporalPackage(string dir, string db)
+        {
+            var tables = Path.Join(dir, "Templates", "Main", "Tables");
+            Directory.CreateDirectory(tables);
+            File.WriteAllText(Path.Join(dir, "Product.json"),
+                "{ \"Name\": \"RealPath2008\", \"ValidationScript\": \"SELECT CAST(1 AS BIT)\", \"TemplateOrder\": [\"Main\"], "
+                + "\"ScriptTokens\": {}, \"ScriptFolders\": [], \"Platform\": \"SqlServer\" }");
+            File.WriteAllText(Path.Join(dir, "Templates", "Main", "Template.json"),
+                "{ \"Name\": \"Main\", \"DatabaseIdentificationScript\": "
+                + $"\"SELECT [name] FROM sys.databases WHERE [name] = '{db}'\", \"ScriptFolders\": [] }}");
+            File.WriteAllText(Path.Join(tables, "dbo.RealPathTemporal.json"),
+                "{ \"Schema\": \"[dbo]\", \"Name\": \"[RealPathTemporal]\", \"IsTemporal\": true, \"Columns\": ["
+                + "{ \"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false }, "
+                + "{ \"Name\": \"[Val]\", \"DataType\": \"NVARCHAR(50)\", \"Nullable\": false } ], "
+                + "\"Indexes\": [ { \"Name\": \"[PK_RealPathTemporal]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\" } ] }");
         }
 
         [OneTimeTearDown]

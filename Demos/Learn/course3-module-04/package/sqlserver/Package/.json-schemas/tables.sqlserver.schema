@@ -570,7 +570,8 @@
       "type": "string"
     },
     "EnableChangeTracking": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Enable SQL Server Change Tracking on this table (needs a primary key, and Change Tracking enabled on the database). false disables it; leaving it out leaves the table's tracking as it is."
     },
     "TrackColumnsUpdated": {
       "type": "boolean"
@@ -611,6 +612,10 @@
       "type": "string",
       "maxLength": 128,
       "description": "Filegroup for this table's CDC change table; overrides the template's CdcFilegroup. Only meaningful with EnableCDC. A change creates a new capture instance on the new filegroup and leaves the old one, with its history, for you to drain and drop."
+    },
+    "CdcSupportsNetChanges": {
+      "type": "boolean",
+      "description": "Whether this table's CDC capture instance supports net changes (sp_cdc_enable_table @supports_net_changes); overrides the template's CdcSupportsNetChanges. Only meaningful with EnableCDC, and true needs a primary key. Unset: off for a new table, unchanged on rotation. A change creates a new capture instance; the old one keeps its history."
     },
     "Extensions": {}
   },

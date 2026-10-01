@@ -28,10 +28,7 @@ CREATE PROCEDURE SchemaSmith.ModifiedTableQuench
   -- every pre-existing caller, and every package with no RebuildPolicy anywhere -- can never elect a rebuild.
   @RebuildPolicyMode NVARCHAR(20) = 'NEVER',
   @RebuildPolicyThreshold INT = NULL,
-  @RebuildPolicyOnOrderMismatch BIT = 0,
-  -- Template-level CdcFilegroup (#417): where change tables go for a CDC table that declares none of its
-  -- own. NULL at both tiers means unmanaged -- an existing placement is never touched.
-  @CdcFilegroup NVARCHAR(128) = NULL
+  @RebuildPolicyOnOrderMismatch BIT = 0
 AS
 BEGIN TRY
   DECLARE @v_SQL NVARCHAR(MAX) = '',
@@ -113,16 +110,8 @@ BEGIN TRY
   -- "the database's own default filegroup" (matches the extraction/create-side contract), so an ordinary
   -- table with FileGroup unset -- every existing package -- compares its live default-filegroup placement
   -- against itself and never trips this check.
-  -- CDC change-table placement (#417). The template default fills in only where a CDC table declared none;
-  -- NULL at both tiers stays NULL, which means unmanaged. Resolved here, once, so every later pass reads one
-  -- effective value per table.
-  --
-  -- This is RESOLUTION, not validation, so it stays in this procedure rather than moving into the guarded
-  -- call below: it must run on every deploy that sets a template default, including the ones that skip
-  -- attribute validation entirely.
-  IF @CdcFilegroup IS NOT NULL
-    UPDATE #Tables SET CdcFilegroup = SchemaSmith.fn_SafeBracketWrap(@CdcFilegroup)
-     WHERE EnableCDC = 1 AND CdcFilegroup IS NULL
+  -- The template-level CDC defaults (#417, #426) are already resolved into #Tables: SchemaSmith.CdcPreflight does it
+  -- before any table is created, on every run, a resumed one included.
 
   -- Declared-vs-deployed refusals for the attributes SQL Server cannot ALTER (filegroup / LOB / FILESTREAM
   -- placement, partition scheme and column, GraphType, MemoryOptimized, Durability, Ledger, CdcFilegroup)
@@ -154,7 +143,8 @@ BEGIN TRY
                  OR RTRIM(ISNULL(t.[Ledger], 'Off')) <> 'Off'
                  OR UPPER(RTRIM(ISNULL(t.[Durability], 'SCHEMA_AND_DATA'))) <> 'SCHEMA_AND_DATA'
                  OR ISNULL(t.[MemoryOptimized], 0) = 1
-                 OR t.[CdcFilegroup] IS NOT NULL)
+                 OR t.[CdcFilegroup] IS NOT NULL
+                 OR (t.[EnableCDC] = 1 AND t.[CdcSupportsNetChanges] = 1))
     SET @v_NeedsAttributeValidation = 1
 
   -- Deployed side. Version-composed because the catalog columns arrive in different releases and naming one
@@ -1609,11 +1599,12 @@ BEGIN TRY
   -- only two per table -- so refuse up front rather than failing partway through the column work.
   -- A declared CdcFilegroup the newest capture instance is not on is a rotation reason too (#417): it can only be
   -- honoured by a new instance, and a new instance is exactly what a column change already creates. The same
-  -- ceiling applies, for the same reason.
+  -- ceiling applies, for the same reason. So is a declared CdcSupportsNetChanges the newest instance does not have (#426):
+  -- SQL Server fixes it per capture instance and cannot alter it in place.
   -- TableQuench owns #CdcRotate: the rotation itself runs in SchemaSmith.CdcQuench, after every column exists.
   IF OBJECT_ID('tempdb..#CdcRotate') IS NULL
     CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
-                             NewFilegroup NVARCHAR(256), Reason NVARCHAR(20))
+                             NewFilegroup NVARCHAR(256), NewNetChanges BIT, Reason NVARCHAR(20))
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   BEGIN
     DECLARE @v_DefaultFilegroup SYSNAME = (SELECT [name] FROM sys.filegroups WHERE is_default = 1)
@@ -1626,37 +1617,45 @@ BEGIN TRY
            ISNULL(newest.filegroup_name, @v_DefaultFilegroup) AS NewestFilegroup,
            newest.filegroup_name AS NewestFilegroupRaw,
            SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) AS DeclaredFilegroup,
+           newest.supports_net_changes AS NewestNetChanges,
+           t.CdcSupportsNetChanges AS DeclaredNetChanges,
            ColumnChange = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
                                               OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1)
                                             THEN 1 ELSE 0 END)
       INTO #CdcCandidates
       FROM #Tables t WITH (NOLOCK)
       JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name
+      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name, ct.supports_net_changes
                      FROM cdc.change_tables ct WITH (NOLOCK)
                     WHERE ct.source_object_id = st.[object_id]
                     ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
       WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
 
     -- Unset means unmanaged: only a DECLARED filegroup can mismatch.
-    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, Reason)
+    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, NewNetChanges, Reason)
       SELECT [Schema], [Name], NewestInstance,
              -- A rotation keeps the filegroup it is not told to change: the declared one, else where the old
              -- instance already is. Omitting it (the pre-#417 behaviour) moved a DBA-placed instance to the default.
              COALESCE(DeclaredFilegroup, NewestFilegroupRaw),
-             CASE WHEN ColumnChange = 1 THEN 'column' ELSE 'filegroup' END
+             -- The same for net changes: the declared value, else the old instance's own (#426).
+             COALESCE(DeclaredNetChanges, NewestNetChanges),
+             CASE WHEN ColumnChange = 1 THEN 'column'
+                  WHEN DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup THEN 'filegroup'
+                  ELSE 'netchanges' END
         FROM #CdcCandidates
        WHERE Instances = 1
-         AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup))
+         AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup)
+              OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges))
 
     DECLARE @v_CdcAtCeiling NVARCHAR(MAX) =
       STUFF((SELECT ', ' + [Schema] + '.' + [Name]
                FROM #CdcCandidates
               WHERE Instances >= 2
-                AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup))
+                AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup)
+                     OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges))
                FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_CdcAtCeiling IS NOT NULL
-      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column or CdcFilegroup change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
+      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column, CdcFilegroup or CdcSupportsNetChanges change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
   END
 
   RAISERROR('Swap Columns Requiring Data-Preserving Replacement', 10, 100) WITH NOWAIT

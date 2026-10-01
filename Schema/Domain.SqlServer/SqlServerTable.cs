@@ -124,14 +124,24 @@ namespace Schema.Domain.SqlServer
             Description = "Filegroup for this table's CDC change table; overrides the template's CdcFilegroup. Only meaningful with EnableCDC. A change creates a new capture instance on the new filegroup and leaves the old one, with its history, for you to drain and drop.")]
         public string CdcFilegroup { get; set; }
 
+        // #426. Passed to sp_cdc_enable_table as @supports_net_changes; overrides the template default. Null keeps the
+        // pre-2.7 result: off for a new table, and a rotation keeps the current instance's value. Fixed per instance,
+        // so a change rotates, like CdcFilegroup.
+        [JsonProperty(Order = 124, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(Description = "Whether this table's CDC capture instance supports net changes (sp_cdc_enable_table @supports_net_changes); overrides the template's CdcSupportsNetChanges. Only meaningful with EnableCDC, and true needs a primary key. Unset: off for a new table, unchanged on rotation. A change creates a new capture instance; the old one keeps its history.")]
+        public bool? CdcSupportsNetChanges { get; set; }
+
         // Table-level Change Tracking (#change-tracking). Distinct from the FullTextIndex option spelled
         // WITH CHANGE_TRACKING = AUTO|MANUAL|OFF, which is unrelated and already implemented.
         // Requires Change Tracking enabled on the DATABASE (sys.change_tracking_databases). SchemaSmith
         // does not turn that on -- ALTER DATABASE ... SET CHANGE_TRACKING = ON changes retention and
         // cleanup for every table in the database. Declaring it without the database toggle is reported
         // through UnsupportedFeaturePolicy rather than silently skipped.
-        [JsonProperty(Order = 112)]
-        public bool EnableChangeTracking { get; set; }
+        // Unset is unmanaged: only an explicit false turns tracking off, so a table tracked outside the package keeps
+        // its baseline. Extraction writes true and never false.
+        [JsonProperty(Order = 112, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(Description = "Enable SQL Server Change Tracking on this table (needs a primary key, and Change Tracking enabled on the database). false disables it; leaving it out leaves the table's tracking as it is.")]
+        public bool? EnableChangeTracking { get; set; }
 
         // Only meaningful when EnableChangeTracking is true; ignored otherwise. Records WHICH columns
         // changed, not merely that the row did, at the cost of extra tracking storage.

@@ -175,6 +175,13 @@ namespace Schema.Domain
             Description = "Default filegroup for CDC change tables of EnableCDC tables that declare no CdcFilegroup of their own. A table on a different filegroup gets a new capture instance there; the old one keeps its history. Unset leaves existing placement alone.")]
         public string CdcFilegroup { get; set; }
 
+        // #426. Default @supports_net_changes for every EnableCDC table in this template that declares none. Null keeps
+        // the pre-2.7 result: off for a new table, unchanged on rotation.
+        [JsonProperty(Order = 27, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(Platforms = [Platform.SqlServer],
+            Description = "Default for whether CDC capture instances support net changes (@supports_net_changes), for EnableCDC tables that declare no CdcSupportsNetChanges of their own. Unset: off for a new table, unchanged on rotation. A table whose newest capture instance differs gets a new capture instance.")]
+        public bool? CdcSupportsNetChanges { get; set; }
+
         [JsonProperty(Order = 18)]
         public bool? DropColumnsRemovedFromProduct { get; set; }
 
