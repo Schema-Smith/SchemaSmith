@@ -7,7 +7,7 @@
   <ItemGroup>
     <!-- Core dependencies -->
     <PackageVersion Include="log4net" Version="3.4.0" />
-    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.0" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.1" />
     <!-- App-local ICU bundled with self-contained Linux publish output of CLI tools.
          Version is centralized via $(IcuVersion) in Directory.Build.props. -->
     <PackageVersion Include="Microsoft.ICU.ICU4C.Runtime" Version="$(IcuVersion)" />
