@@ -143,10 +143,13 @@ the quiet case Course 8 keeps warning you about, and the reason the trigger is o
 ### The refusal (SQL Server)
 
 A rebuild replaces the table with a copy, so any state the *database* holds about that table — and
-that your package does not describe — would be discarded. SchemaSmith refuses instead. Enable Change
-Data Capture and re-run the same reorder:
+that your package does not describe — would be discarded. SchemaSmith refuses instead. To see it, put `Customer` back in its baseline
+order, enable Change Data Capture, and ask for the same reorder. Start over first: the reorder above
+already happened, so re-running it as-is has nothing left to rebuild and exits 0.
 
 ```bash
+bash setup-databases.sh --reset          # Windows: .\setup-databases.ps1 -Reset
+cd sqlserver && schemaquench --ConfigFile:quench.settings.baseline.json ; cd ..
 ../lab-sql.sh sqlserver diag_structure "EXEC sys.sp_cdc_enable_db"
 ../lab-sql.sh sqlserver diag_structure "EXEC sys.sp_cdc_enable_table @source_schema='dbo', @source_name='Customer', @role_name=NULL"
 cd sqlserver && schemaquench --ConfigFile:quench.settings.beat3-reorder.json ; cd ..
