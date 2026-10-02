@@ -721,7 +721,7 @@ Every engine rewrites an expression when it stores it. SQL Server turns `Retenti
 `([RetentionDays]<=(365))`; PostgreSQL turns `starts_with(tag, 'a')` into `starts_with(tag, 'a'::text)`; MySQL
 turns a generated column's `concat(Tag, 'x')` into `concat(Tag,'x')`. Comparing what you wrote against what the catalog
 reports therefore never matches for anything non-trivial -- so a check constraint, computed column or generated
-column could be dropped and re-created on **every** deploy, at exit 0, with nothing in the log to say why.
+column could be re-applied on **every** deploy, at exit 0, with nothing in the log to say why.
 
 SchemaSmith answers the question from what it applied instead of from the text. A table it owns,
 `SchemaSmith.ExpressionMap` (`SchemaSmith_ExpressionMap` on MySQL and MariaDB), records for each expression: the
@@ -1063,7 +1063,7 @@ Set `PreventDrop: true` in `SchemaQuench.settings.json` (or the `SmithySettings_
 
 **It doesn't drop -- it doesn't explode.** A protected run still completes normally (exit code `0`). SchemaQuench applies every additive and modifying change as usual, skips the drops, logs each one it withheld, and records them in the deployment summary under a `preventDrop` manifest -- so you get a precise list of what was *not* removed (`objectType` + `objectName`) without the run failing. Read the manifest to see whether a package genuinely intends those removals; if it does, deploy that package to an unprotected environment, or clear protection deliberately.
 
-**Transient drops are untouched.** Protection suppresses only removal *by absence*. An object that is still declared but has to be dropped and recreated to apply a change -- dropping an index to alter the column it covers and putting it back, modifying a constraint, recreating a computed or generated column whose expression changed -- reconciles exactly as it always does. Those drops are part of applying your declared schema, not removing something you left out, so protected mode never blocks them.
+**Transient drops are untouched.** Protection suppresses only removal *by absence*. An object that is still declared but has to be dropped and recreated to apply a change -- dropping an index to alter the column it covers and putting it back, modifying a constraint, recreating a computed column whose expression changed (SQL Server) or a generated column whose expression changed (PostgreSQL before 17) -- reconciles exactly as it always does. Those drops are part of applying your declared schema, not removing something you left out, so protected mode never blocks them.
 
 **How it relates to the other controls.** Three layers, narrowest-winning intent:
 
