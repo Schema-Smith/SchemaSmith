@@ -167,7 +167,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `outcome` | `Success`, `Failed`, or `Skipped`. |
 | `durationMs` | Milliseconds spent on this target. |
 | `slots[]` | Per-slot timing for this target: `slot`, `durationMs`, `scriptsRun`. |
-| `databaseSource` / `schemaSource` | Where each axis of this target came from — the discovery script, or a `TemplateTargets` override naming the template and key. This is the run's source-disclosure audit trail: it answers "was this tenant selected by the script, or overridden in config?" per target. Empty on a run with no source information recorded. |
+| `databaseSource` / `schemaSource` | Where each axis of this target came from — the discovery script, or a `TemplateTargets` override naming the template and key. This is the run's source-disclosure audit trail: it answers "was this tenant selected by the script, or overridden in config?" per target. A regular template has no schema axis, so its targets carry `schemaSource: "(regular template)"` -- which is every target on MySQL and MariaDB, where schema templates do not apply. Empty on a run with no source information recorded. |
 
 ### `migrationScripts[]`
 
