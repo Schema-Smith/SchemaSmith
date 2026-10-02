@@ -426,7 +426,7 @@ The switch can also be enabled via configuration:
 
 ### What it does
 
-For every table that produces output, DataTongs opens `Tables/<schema>.<table>.json` inside the template and writes (or overwrites) a `DataDelivery` block with:
+For every table that produces output, DataTongs finds the table's JSON file in the template's `Tables/` folder -- `<table>.json` first, then `<schema>.<table>.json`, then either name matched case-insensitively -- and writes (or overwrites) a `DataDelivery` block with:
 
 | Property | Value |
 |---|---|
