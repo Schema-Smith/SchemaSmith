@@ -237,7 +237,7 @@ Connect to the database with whatever SQL client you prefer and look at the Ship
 SELECT TOP 1 [CompanyName], [Phone], [Email] FROM [dbo].[Shippers];
 ```
 
-The `Email` column is there, right where you declared it. The file is the truth, the database matches, and your next commit records the change for posterity.
+The `Email` column is there, just as you declared it. The file is the truth, the database matches, and your next commit records the change for posterity.
 
 ## The Cycle Is Complete
 
