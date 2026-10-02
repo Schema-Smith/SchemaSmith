@@ -199,7 +199,7 @@ String array. Replaces the result of the named template's `DatabaseIdentificatio
 
 String array. Replaces the result of the named template's `SchemaIdentificationScript` for this run. Same shape, same recommended placeholder: `"SELECT 'CONFIG-DRIVEN' AS SchemaName WHERE 1=0"`. When both axes are overridden on a schema template, the cross-product becomes the work-unit set: two databases × two schemas = four iterations.
 
-> **MySQL and MariaDB:** The schema axis does not apply -- MySQL and MariaDB have no schema-inside-database concept. `TemplateTargets.<template>.Schemas` is rejected on MySQL and MariaDB templates by the same validation that rejects `SchemaIdentificationScript`. Use the database axis instead; multi-tenant on MySQL and MariaDB is database-per-tenant.
+> **MySQL and MariaDB:** The schema axis does not apply -- MySQL and MariaDB have no schema-inside-database concept. `TemplateTargets.<template>.Schemas` is rejected on MySQL and MariaDB templates: it requires a `SchemaIdentificationScript`, and on these engines that key is only a deprecated alias, migrated to `DatabaseIdentificationScript` at load. Use the database axis instead; multi-tenant on MySQL and MariaDB is database-per-tenant.
 
 ### CreateIfMissing
 
