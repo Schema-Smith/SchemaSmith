@@ -756,8 +756,8 @@ bodies (PostgreSQL); check constraints and generated columns (MySQL, MariaDB). I
 are covered by `IndexOnlyTableQuenches` too, which compares indexes separately from the full table quench.
 
 Some surfaces never had this problem and are unchanged: SQL Server indexed view bodies and literal column
-defaults, PostgreSQL column defaults and exclude constraints, and MySQL/MariaDB check constraints all already
-compared equal after the engine's own rewrite.
+defaults, and PostgreSQL column defaults and exclude constraints, all already compared equal after the
+engine's own rewrite.
 
 ---
 
