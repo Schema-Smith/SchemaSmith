@@ -771,7 +771,7 @@ The table quench is broken into modular stored procedures, each handling a speci
 | **ModifiedTableQuench** | Alters existing columns to match the schema package definitions. Handles data type, nullability, default constraint, and computed/generated column changes. Drops removed tables when `DropTablesRemovedFromProduct` is enabled. |
 | **MissingIndexesAndConstraintsQuench** | Creates indexes, check constraints, default constraints, and (where supported) statistics that exist in the schema package but are missing from the database. |
 | **ForeignKeyQuench** | Creates, modifies, and drops foreign keys to match the schema package. Runs late in the sequence so all referenced tables and columns exist. |
-| **IndexOnlyQuench** | Alternative to the full sequence. Manages indexes only -- doesn't create tables, add columns, or manage foreign keys. Used when `IndexOnlyTableQuenches` is enabled on a template. |
+| **IndexOnlyQuench** | Alternative to the full sequence. Manages indexes (and, on SQL Server and PostgreSQL, statistics) only -- doesn't create tables, add columns, or manage foreign keys. Used when `IndexOnlyTableQuenches` is enabled on a template. |
 | **IndexedViewQuench** | Deploys indexed views with diff-based change detection (SQL Server). |
 | **MaterializedViewQuench** | Deploys PostgreSQL materialized views, including their indexes. |
 
@@ -1063,7 +1063,7 @@ Set `PreventDrop: true` in `SchemaQuench.settings.json` (or the `SmithySettings_
 
 **It doesn't drop -- it doesn't explode.** A protected run still completes normally (exit code `0`). SchemaQuench applies every additive and modifying change as usual, skips the drops, logs each one it withheld, and records them in the deployment summary under a `preventDrop` manifest -- so you get a precise list of what was *not* removed (`objectType` + `objectName`) without the run failing. Read the manifest to see whether a package genuinely intends those removals; if it does, deploy that package to an unprotected environment, or clear protection deliberately.
 
-**Transient drops are untouched.** Protection suppresses only removal *by absence*. An object that is still declared but has to be dropped and recreated to apply a change -- dropping an index to alter the column it covers and putting it back, modifying a constraint, recreating a computed column whose expression changed -- reconciles exactly as it always does. Those drops are part of applying your declared schema, not removing something you left out, so protected mode never blocks them.
+**Transient drops are untouched.** Protection suppresses only removal *by absence*. An object that is still declared but has to be dropped and recreated to apply a change -- dropping an index to alter the column it covers and putting it back, modifying a constraint, recreating a computed or generated column whose expression changed -- reconciles exactly as it always does. Those drops are part of applying your declared schema, not removing something you left out, so protected mode never blocks them.
 
 **How it relates to the other controls.** Three layers, narrowest-winning intent:
 
