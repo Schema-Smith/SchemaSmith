@@ -76,7 +76,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
       "outcome": "Success",         // Success | Failed | Skipped
       "durationMs": 14820,
       "databaseSource": "DatabaseIdentificationScript",
-      "schemaSource": "TemplateTargets:TenantSchema:Schemas",
+      "schemaSource": "TemplateTargets:Tenant:Schemas",
       "slots": [
         { "slot": "ModifiedTables", "durationMs": 9120, "scriptsRun": 3 },
         { "slot": "ObjectScripts",  "durationMs": 4110, "scriptsRun": 12 }
