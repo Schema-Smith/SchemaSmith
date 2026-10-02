@@ -298,8 +298,8 @@ These settings compose into three practical patterns:
 
 | Scenario | MergeUpdate | MergeDelete | Effect |
 |----------|-------------|-------------|--------|
-| **Full sync** (default) | `true` | `true` | Insert missing, update changed, delete removed. Target matches source exactly. |
-| **Add and update, no deletes** | `true` | `false` | Insert missing, update changed, leave extra rows alone. Good when targets have environment-specific additions. |
+| **Full sync** | `true` | `true` | Insert missing, update changed, delete removed. Target matches source exactly. |
+| **Add and update, no deletes** (default) | `true` | `false` | Insert missing, update changed, leave extra rows alone. Good when targets have environment-specific additions. |
 | **Seed only** | `false` | `false` | Insert missing rows only. Existing rows untouched, nothing deleted. Good for seed data without overwriting local customizations. |
 
 The demo products use insert+update with no deletes (`MergeDelete: false`) and `DisableTriggers: true`. They deliver data for every table, so if delete were enabled, any rows a user added while experimenting would be removed on the next deployment.
