@@ -73,8 +73,8 @@ public class CdcDatabaseToggleTests
         try
         {
             _connection.ChangeDatabase("master");
-            Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec($"DROP DATABASE IF EXISTS [{_db}]");
+            // One batch, so a CDC or Change Tracking cleanup task cannot take the single-user slot before the DROP.
+            Exec($"IF DB_ID('{_db}') IS NOT NULL BEGIN ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_db}]; END");
         }
         finally
         {
