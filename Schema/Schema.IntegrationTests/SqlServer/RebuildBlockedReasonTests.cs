@@ -81,8 +81,9 @@ public class RebuildBlockedReasonTests
                 // reported 0 failures and the RUN still exited non-zero, because an NUnit TearDown failure
                 // fails the run without ever being counted as a failed test -- which is exactly why this is
                 // worth retrying rather than leaving as a rare confusing red.
-                ExecWithDeadlockRetry($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-                ExecWithDeadlockRetry($"DROP DATABASE IF EXISTS [{_db}]");
+                // One batch: between two separate calls a CDC or Change Tracking cleanup task can take the
+                // single-user slot, and the DROP then fails with "currently in use".
+                ExecWithDeadlockRetry($"IF DB_ID('{_db}') IS NOT NULL BEGIN ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_db}]; END");
             }
             finally
             {
@@ -116,7 +117,8 @@ public class RebuildBlockedReasonTests
                 Exec(sql);
                 return;
             }
-            catch (DbException e) when (e.Message.ContainsIgnoringCase("deadlock victim"))
+            catch (DbException e) when (e.Message.ContainsIgnoringCase("deadlock victim") ||
+                                        e.Message.ContainsIgnoringCase("because it is currently in use"))
             {
                 Thread.Sleep(1000);
             }
