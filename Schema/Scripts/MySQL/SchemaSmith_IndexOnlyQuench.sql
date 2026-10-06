@@ -323,6 +323,47 @@ BEGIN
     END IF;
 
     -- =========================================================================
+    -- Case-only spelling: a declared index the server holds under a spelling that differs only in case is the
+    -- same index (the engine compares index names case-insensitively). Converge it to the package's spelling so
+    -- extraction round-trips. MySQL renames it, which is metadata only. MariaDB has it dropped and re-created by
+    -- STEP 2 instead: a case-only RENAME INDEX corrupts InnoDB's index dictionary on the versions MDEV-34951
+    -- affects (10.6.0-.25, 10.11.0-.16, 11.4.0-.10), and drop/re-create also keeps its full declared definition.
+    -- =========================================================================
+    IF VERSION() NOT LIKE '%MariaDB%' THEN
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCaseRenames;
+        CREATE TEMPORARY TABLE _SchemaSmith_IndexCaseRenames (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT)
+            ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        INSERT INTO _SchemaSmith_IndexCaseRenames (LogMsg, Stmt)
+        SELECT CONCAT('  Rename index (spelling): ', SchemaSmith_StripBacktickWrapping(i.TableName), '.', snap.IndexName,
+                      ' -> ', SchemaSmith_StripBacktickWrapping(i.IndexName)),
+               CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
+                      SchemaSmith_StripBacktickWrapping(i.TableName), '` RENAME INDEX `', snap.IndexName, '` TO `',
+                      SchemaSmith_StripBacktickWrapping(i.IndexName), '`')
+          FROM _SchemaSmith_Indexes i
+          JOIN _SchemaSmith_IdxDetectSnap snap
+            ON snap.TableKey = i.TableKey
+           AND snap.IndexKey = i.IndexKey
+         WHERE i.IsPrimaryKey = 0
+           AND BINARY snap.IndexName <> BINARY SchemaSmith_StripBacktickWrapping(i.IndexName);
+
+        IF p_WhatIf = 1 THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), Stmt FROM _SchemaSmith_IndexCaseRenames ORDER BY RowId;
+        ELSE
+            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames);
+            WHILE @ss_id IS NOT NULL DO
+                SELECT LogMsg, Stmt INTO @ss_log, @exec_sql FROM _SchemaSmith_IndexCaseRenames WHERE RowId = @ss_id;
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+                SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames WHERE RowId > @ss_id);
+            END WHILE;
+        END IF;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCaseRenames;
+    END IF;
+
+    -- =========================================================================
     -- STEP 2: Detect modified indexes (same name, different definition)
     -- =========================================================================
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifiedIndexes;
@@ -358,8 +399,10 @@ BEGIN
       AND NOT (SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1 AND SchemaSmith_SupportsFunctionalIndex() = 0)
       -- Check if definition differs (columns, uniqueness, or index type)
       AND (
-          -- Columns differ
-          BINARY SchemaSmith_NormalizeIndexColumns(i.IndexColumns) != BINARY snap.NormColumns
+          -- Spelled differently only in case, on MariaDB (see the case-only spelling step above)
+          (VERSION() LIKE '%MariaDB%' AND BINARY snap.IndexName <> BINARY SchemaSmith_StripBacktickWrapping(i.IndexName))
+          -- Or columns differ
+          OR BINARY SchemaSmith_NormalizeIndexColumns(i.IndexColumns) != BINARY snap.NormColumns
           -- Or uniqueness differs
           OR i.IsUnique != (snap.NonUnique = 0)
           -- Or index type differs (BTREE vs HASH)

@@ -89,14 +89,23 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         CleanUp(cmd, product, table);
         Exec(cmd, $"CREATE TABLE `{table}` (`id` INT NOT NULL PRIMARY KEY, `v` INT NULL, KEY `IX_CaseOnly_V` (`v`))");
 
+        var isMariaDb = Scalar(cmd, "SELECT VERSION() LIKE '%MariaDB%'") == "1";
         try
         {
             for (var deploy = 1; deploy <= 2; deploy++)
             {
+                Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
                 Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
                     $"deploy {deploy}: an index spelled differently only in case is the same index, not a duplicate to create");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT CAST(INDEX_NAME AS BINARY)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(table)} AND INDEX_NAME <> 'PRIMARY'"),
                     Is.EqualTo("ix_caseonly_v"), $"deploy {deploy}: exactly one secondary index, with the package's spelling");
+
+                // MA-086: a case-only RENAME INDEX corrupts InnoDB's index dictionary on MariaDB versions hit by
+                // MDEV-34951, so MariaDB must converge by drop and re-create. MySQL renames, which proves this read
+                // can see the rename when one is emitted.
+                var renamesLogged = Scalar(cmd, "SELECT COUNT(*) FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%Rename index (spelling)%'");
+                Assert.That(renamesLogged, Is.EqualTo(!isMariaDb && deploy == 1 ? "1" : "0"),
+                    $"deploy {deploy}: a case-only rename is emitted only by MySQL, and only once");
             }
         }
         finally

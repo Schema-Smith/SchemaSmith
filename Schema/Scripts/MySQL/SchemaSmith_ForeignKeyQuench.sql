@@ -105,10 +105,11 @@ BEGIN
     -- Find FKs that exist but have different definition. Same predicates as before, now against the
     -- snapshots. The column join stays a LEFT JOIN so a constraint with no KEY_COLUMN_USAGE rows
     -- yields NULL and the comparison stays NULL (not flagged) -- the correlated-subquery behaviour.
+    -- ConstraintName is the server's spelling: it is what the drop names, and it can differ from the package's.
     INSERT INTO _SchemaSmith_ModifiedFKs (TableName, ConstraintName)
     SELECT
         SchemaSmith_StripBacktickWrapping(f.TableName) AS TableName,
-        SchemaSmith_StripBacktickWrapping(f.KeyName) AS ConstraintName
+        e.ConstraintName AS ConstraintName
     FROM _SchemaSmith_ForeignKeys f
     JOIN _SchemaSmith_ExistingFKs e
         ON e.TableKey = f.TableKey
@@ -116,8 +117,12 @@ BEGIN
     LEFT JOIN _SchemaSmith_ExistingFKCols c
         ON BINARY c.ConstraintName = BINARY e.ConstraintName
     WHERE (
-        -- Different referenced table
-        e.ReferencedTableKey != f.RelatedTableKey
+        -- Spelled differently only in case: the same constraint to the engine, so it is dropped and re-created under
+        -- the package's spelling. MySQL and MariaDB both refuse that as one ALTER (the new name is a duplicate until
+        -- the drop commits), so the drop and the create are separate statements here, as for any modified FK.
+        BINARY e.ConstraintName != BINARY SchemaSmith_StripBacktickWrapping(f.KeyName)
+        -- Or different referenced table
+        OR e.ReferencedTableKey != f.RelatedTableKey
         -- Or different delete action
         OR BINARY e.DeleteRule != BINARY COALESCE(f.DeleteAction, 'NO ACTION')
         -- Or different update action
