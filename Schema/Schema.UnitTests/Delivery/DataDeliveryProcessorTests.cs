@@ -739,7 +739,7 @@ public class DataDeliveryProcessorTests
     }
 
     [Test]
-    public void ValidateDeleteCascade_MySql_UsesBinaryCaseSensitiveComparison()
+    public void ValidateDeleteCascade_MySql_MatchesTheTableTheWayTheServerFoldsNames()
     {
         var mockReader = Substitute.For<IDataReader>();
         mockReader.Read().Returns(false);
@@ -748,7 +748,9 @@ public class DataDeliveryProcessorTests
         DataDeliveryProcessor.ValidateDeleteCascade(_mockCommand, "MySQL", "testdb",
             new List<(string, string)> { ("testdb", "Users") });
 
-        Assert.That(_mockCommand.CommandText, Does.Contain("BINARY"));
+        // Exact (binary) on a case-sensitive server, folded when lower_case_table_names >= 1.
+        Assert.That(_mockCommand.CommandText, Does.Contain("COLLATE utf8mb4_bin"));
+        Assert.That(_mockCommand.CommandText, Does.Contain("@@lower_case_table_names"));
         Assert.That(_mockCommand.CommandText, Does.Contain("REFERENCED_TABLE_NAME"));
     }
 

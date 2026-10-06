@@ -533,8 +533,8 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE,
        CASE WHEN c.GENERATION_EXPRESSION != '' THEN 1 ELSE 0 END AS IsComputed,
        c.CHARACTER_SET_NAME
   FROM INFORMATION_SCHEMA.COLUMNS c
-  WHERE BINARY c.TABLE_SCHEMA = BINARY @db
-    AND BINARY c.TABLE_NAME = BINARY @table
+  WHERE {MySqlNameMatch.Folded("c.TABLE_SCHEMA", "@db")}
+    AND {MySqlNameMatch.Folded("c.TABLE_NAME", "@table")}
     AND (c.GENERATION_EXPRESSION IS NULL OR c.GENERATION_EXPRESSION = ''){BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
   ORDER BY c.ORDINAL_POSITION
 ";
@@ -693,8 +693,8 @@ JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
   AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
   AND tc.TABLE_NAME = kcu.TABLE_NAME
 WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
-  AND BINARY tc.TABLE_SCHEMA = BINARY @db
-  AND BINARY tc.TABLE_NAME = BINARY @table;
+  AND {MySqlNameMatch.Folded("tc.TABLE_SCHEMA", "@db")}
+  AND {MySqlNameMatch.Folded("tc.TABLE_NAME", "@table")};
 ";
         return cmd.ExecuteScalar()?.ToString() ?? "";
     }
@@ -1839,8 +1839,8 @@ SELECT
     c.EXTRA,
     c.GENERATION_EXPRESSION
 FROM INFORMATION_SCHEMA.COLUMNS c
-WHERE BINARY c.TABLE_SCHEMA = BINARY @db
-  AND BINARY c.TABLE_NAME = BINARY @table
+WHERE {MySqlNameMatch.Folded("c.TABLE_SCHEMA", "@db")}
+  AND {MySqlNameMatch.Folded("c.TABLE_NAME", "@table")}
 ORDER BY c.ORDINAL_POSITION;
 ";
         var columns = new List<MySqlColumnInfo>();

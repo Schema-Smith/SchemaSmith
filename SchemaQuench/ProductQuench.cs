@@ -708,12 +708,33 @@ public class ProductQuench
     /// differently: <see cref="QuenchTemplate"/> logs + exits; <see cref="PreviewTargets"/>
     /// logs + continues so remaining templates are still reported.
     /// </summary>
+    private bool? _serverFoldsDatabaseNames;
+
+    // MySQL and MariaDB with lower_case_table_names >= 1 report database names in lowercase, so Target.Databases
+    // has to match them case-insensitively there. Read once, from the primary server, which is the only one these
+    // engines deploy to.
+    private bool ServerFoldsDatabaseNames()
+    {
+        if (_serverFoldsDatabaseNames.HasValue) return _serverFoldsDatabaseNames.Value;
+        if (_product.Platform.GetBasePlatform() != Platform.MySQL)
+        {
+            _serverFoldsDatabaseNames = false;
+            return false;
+        }
+
+        using var command = GetCommand(_primaryServer);
+        command.CommandText = "SELECT @@lower_case_table_names";
+        var value = command.ExecuteScalar();
+        _serverFoldsDatabaseNames = value is not null and not DBNull && Convert.ToInt32(value) != 0;
+        return _serverFoldsDatabaseNames.Value;
+    }
+
     private List<WorkUnit> ApplyPerTemplateTargetFilter(Template template, List<WorkUnit> units)
     {
         if (units.Count == 0 || (_targetDatabases.Count == 0 && _targetSchemas.Count == 0))
             return units;
 
-        var perTemplateFilter = new WorkUnitFilter([], _targetDatabases, _targetSchemas);
+        var perTemplateFilter = new WorkUnitFilter([], _targetDatabases, _targetSchemas, ServerFoldsDatabaseNames());
         var filtered = perTemplateFilter.Apply(units, _progressLog.Warn);
         _progressLog.Info($"[Target] Resolved {filtered.Count} work unit(s) after filtering {units.Count} discovered unit(s) for template '{template.Name}'.");
         return filtered;

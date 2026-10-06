@@ -495,8 +495,8 @@ public class DataDeliveryProcessor : IDataDelivery
     private static string BuildMySqlCascadeQuery(string databaseName, string tableName) => $@"
 SELECT rc.CONSTRAINT_NAME, rc.TABLE_NAME, rc.DELETE_RULE
 FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
-WHERE BINARY rc.UNIQUE_CONSTRAINT_SCHEMA = BINARY '{databaseName.Replace("'", "''")}'
-  AND BINARY rc.REFERENCED_TABLE_NAME = BINARY '{tableName.Replace("'", "''")}'
+WHERE {MySqlNameMatch.Folded("rc.UNIQUE_CONSTRAINT_SCHEMA", $"'{databaseName.Replace("'", "''")}'")}
+  AND {MySqlNameMatch.Folded("rc.REFERENCED_TABLE_NAME", $"'{tableName.Replace("'", "''")}'")}
   AND rc.DELETE_RULE = 'CASCADE';
 ";
 

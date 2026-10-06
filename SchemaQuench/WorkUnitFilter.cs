@@ -29,13 +29,18 @@ internal sealed class WorkUnitFilter
     private readonly IReadOnlyList<string> _templates;
     private readonly IReadOnlyList<string> _databases;
     private readonly IReadOnlyList<string> _schemas;
+    private readonly StringComparer _databaseComparer;
 
+    /// <param name="databaseNamesFold">True when the server folds database names (MySQL/MariaDB with
+    /// lower_case_table_names >= 1): it reports them in lowercase, so a configured <c>TestMain</c> must match a
+    /// discovered <c>testmain</c>.</param>
     public WorkUnitFilter(IReadOnlyList<string> templates, IReadOnlyList<string> databases, IReadOnlyList<string> schemas,
         bool databaseNamesFold = false)
     {
         _templates = templates ?? [];
         _databases = databases ?? [];
         _schemas = schemas ?? [];
+        _databaseComparer = databaseNamesFold ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
     }
 
     /// <summary>
@@ -52,14 +57,12 @@ internal sealed class WorkUnitFilter
         WarnIfSchemaFilterUnusable(discovered, warn);
 
         // Template-name matching is case-insensitive across the validator + filter trio.
-        // Database / schema name comparisons are LEFT case-sensitive because engine-defined
-        // casing rules differ across SQL Server (CI default), MySQL (lower-case-folded on Linux,
-        // server-config-dependent on Windows), and PostgreSQL (case-sensitive when unquoted,
-        // lowercased when bareword) — unifying those at this layer would mask real engine
-        // differences rather than smooth them out.
+        // Database names follow the server: case-insensitive only when it folds them. Schema names
+        // stay case-sensitive -- engine-defined casing rules differ across SQL Server and PostgreSQL,
+        // and unifying them at this layer would mask real engine differences.
         var filtered = discovered
             .Where(u => _templates.Count == 0 || _templates.Contains(u.TemplateName, StringComparer.OrdinalIgnoreCase))
-            .Where(u => _databases.Count == 0 || _databases.Contains(u.DatabaseName))
+            .Where(u => _databases.Count == 0 || _databases.Contains(u.DatabaseName, _databaseComparer))
             .Where(u => _schemas.Count == 0 || string.IsNullOrEmpty(u.SchemaName) || _schemas.Contains(u.SchemaName))
             .ToList();
 
@@ -82,13 +85,11 @@ internal sealed class WorkUnitFilter
             .ToList();
 
         var details = new List<string>();
-        // Templates use OrdinalIgnoreCase across the validator + filter trio. Databases and
-        // Schemas keep default ordinal comparison — engine-defined casing rules differ across
-        // SQL Server / MySQL / PostgreSQL, so unifying at this layer would mask real engine
-        // differences rather than smooth them out.
+        // Templates use OrdinalIgnoreCase across the validator + filter trio; databases follow the server
+        // (see Apply); schemas keep ordinal comparison.
         AppendUnknownDetail(details, "Target.Templates", _templates, discoveredTemplates,
             StringComparer.OrdinalIgnoreCase);
-        AppendUnknownDetail(details, "Target.Databases", _databases, discoveredDatabases);
+        AppendUnknownDetail(details, "Target.Databases", _databases, discoveredDatabases, _databaseComparer);
         // Schema-name validation only fires when at least one schema-template unit was
         // discovered. Otherwise Target.Schemas is a no-op (regular-template units bypass it)
         // and we surface that via the warning path in WarnIfSchemaFilterUnusable instead.

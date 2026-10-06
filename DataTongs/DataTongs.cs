@@ -577,6 +577,8 @@ public class DataTongs
         return cmd.ExecuteScalar() as bool? ?? false;
     }
 
+    private static string Literal(string value) => $"'{value.Replace("'", "''")}'";
+
     private static bool TableExistsMySql(IDbCommand cmd, string databaseName, string tableName)
     {
         databaseName = databaseName.Trim().Trim('`');
@@ -584,8 +586,8 @@ public class DataTongs
         cmd.CommandText = $@"
 SELECT EXISTS (
     SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-    WHERE BINARY TABLE_SCHEMA = BINARY '{databaseName.Replace("'", "''")}'
-      AND BINARY TABLE_NAME = BINARY '{tableName.Replace("'", "''")}'
+    WHERE {MySqlNameMatch.Folded("TABLE_SCHEMA", Literal(databaseName))}
+      AND {MySqlNameMatch.Folded("TABLE_NAME", Literal(tableName))}
       AND TABLE_TYPE = 'BASE TABLE'
 );";
         var result = cmd.ExecuteScalar();
@@ -675,8 +677,8 @@ SELECT GROUP_CONCAT(
     END
     ORDER BY c.ORDINAL_POSITION SEPARATOR ',')
   FROM INFORMATION_SCHEMA.COLUMNS c
-  WHERE BINARY c.TABLE_SCHEMA = BINARY '{databaseName.Replace("'", "''")}'
-    AND BINARY c.TABLE_NAME = BINARY '{tableName.Replace("'", "''")}'
+  WHERE {MySqlNameMatch.Folded("c.TABLE_SCHEMA", Literal(databaseName))}
+    AND {MySqlNameMatch.Folded("c.TABLE_NAME", Literal(tableName))}
     AND (c.GENERATION_EXPRESSION IS NULL OR c.GENERATION_EXPRESSION = '')
 ";
         return cmd.ExecuteScalar()?.ToString();
@@ -897,8 +899,8 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE
         cmd.CommandText = $@"
 SELECT c.COLUMN_NAME, c.DATA_TYPE
 FROM INFORMATION_SCHEMA.COLUMNS c
-WHERE BINARY c.TABLE_SCHEMA = BINARY '{databaseName.Replace("'", "''")}'
-  AND BINARY c.TABLE_NAME = BINARY '{tableName.Replace("'", "''")}'
+WHERE {MySqlNameMatch.Folded("c.TABLE_SCHEMA", Literal(databaseName))}
+  AND {MySqlNameMatch.Folded("c.TABLE_NAME", Literal(tableName))}
   AND (c.GENERATION_EXPRESSION IS NULL OR c.GENERATION_EXPRESSION = '')
 ORDER BY c.ORDINAL_POSITION;";
 
