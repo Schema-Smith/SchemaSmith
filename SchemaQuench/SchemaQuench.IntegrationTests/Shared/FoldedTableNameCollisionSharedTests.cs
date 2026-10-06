@@ -86,12 +86,60 @@ public abstract class FoldedTableNameCollisionSharedTests
         }
     }
 
-    private void BuildPackage(string dest)
+    // A server that folds names reports the database in lowercase, while Target.Databases holds the configured
+    // spelling; the filter must still select it rather than reject the run as naming an unknown database.
+    [Test]
+    public void TargetDatabases_NamingTheConfiguredDatabase_SelectsItOnEveryServer()
+    {
+        var tempDir = Path.Join(Path.GetTempPath(), $"FoldTarget_{Guid.NewGuid():N}");
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            _progressLog.ClearReceivedCalls();
+            _errorLog.ClearReceivedCalls();
+            _environment.ClearReceivedCalls();
+            FactoryContainer.Register(FixtureConfig);
+            FactoryContainer.Register(_environment);
+            LogFactory.Register("ErrorLog", _errorLog);
+            LogFactory.Register("ProgressLog", _progressLog);
+
+            BuildPackage(tempDir, Declared);
+
+            using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(BaseConnectionString + "Database=information_schema;");
+            conn.Open();
+            conn.ChangeDatabase(MainDb);
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 300;
+            var config = FactoryContainer.Resolve<Microsoft.Extensions.Configuration.IConfigurationRoot>();
+
+            try
+            {
+                Drop(cmd);
+                config["SchemaPackagePath"] = tempDir;
+                config["Target:Databases:0"] = MainDb;
+                Program.Main(["SkipKindlingForge"]);
+
+                _environment.DidNotReceive().Exit(2);
+                Assert.That(TableCount(cmd), Is.EqualTo(1), "the database Target.Databases names must be deployed to");
+            }
+            finally
+            {
+                TemplateTargetsTestSupport.ClearTargetFilters(config);
+                Drop(cmd);
+                config["SchemaPackagePath"] = string.Empty;
+                Directory.Delete(tempDir, true);
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+            }
+        }
+    }
+
+    private void BuildPackage(string dest, params string[] names)
     {
         CopyDirectory(TestHelper.GetTestProductPath(ProductPlatformFolder, "DropProtection"), dest);
         var tables = Path.Join(dest, "Templates", "Main", "Tables");
         foreach (var file in Directory.GetFiles(tables)) File.Delete(file);
-        foreach (var name in new[] { Declared, Sibling })
+        foreach (var name in names.Length == 0 ? new[] { Declared, Sibling } : names)
             File.WriteAllText(Path.Join(tables, $"{name}_{(name == Declared ? "upper" : "lower")}.json"), $$"""
                 {
                     "Name": "`{{name}}`",

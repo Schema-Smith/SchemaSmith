@@ -916,8 +916,10 @@ public abstract class TableDataDeliverySharedTests
         }
     }
 
-    [Test]
-    public void DeliverTableData_ViaQuench_FailsFastOnReplaceCascade()
+    // A mixed-case parent must still be found where the server folds table names and reports them in lowercase.
+    [TestCase("_test_rparent_")]
+    [TestCase("_Test_RParent_")]
+    public void DeliverTableData_ViaQuench_FailsFastOnReplaceCascade(string parentPrefix)
     {
         if (!SupportsDataDelivery)
             Assert.Ignore("Data delivery requires MySQL 8.0; skipped below the floor.");
@@ -926,7 +928,7 @@ public abstract class TableDataDeliverySharedTests
         lock (FactoryContainer.SharedLockObject)
         {
             using var command = _connection.CreateCommand();
-            var parentTable = $"_test_rparent_{Guid.NewGuid():N}".Substring(0, 30);
+            var parentTable = $"{parentPrefix}{Guid.NewGuid():N}".Substring(0, 30);
             var childTable = $"_test_rchild_{Guid.NewGuid():N}".Substring(0, 30);
             var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
             var checkpointDir = Path.Combine(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");

@@ -5,6 +5,7 @@ using Schema.Domain;
 using System;
 
 using NUnit.Framework;
+using Schema.IntegrationTests;
 
 namespace SchemaQuench.IntegrationTests.Shared;
 
@@ -86,8 +87,8 @@ public abstract class TableQuench_ModifyConstraintSharedTests : BaseTableQuenchT
             WHERE TABLE_SCHEMA = '{TestSchema}'
               AND TABLE_NAME = 'ModifyFKRefTbl'
               AND CONSTRAINT_NAME = 'FK_ModifyFKRefTbl_Ref'";
-        // A server that folds names (lower_case_table_names >= 1) reports them in lowercase.
-        Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("ModifyFKRefTblRefNew").IgnoreCase);
+        var referenced = cmd.ExecuteScalar()?.ToString();
+        Assert.That(referenced, CatalogName.Matches(conn, "ModifyFKRefTblRefNew"));
 
         conn.Close();
     }

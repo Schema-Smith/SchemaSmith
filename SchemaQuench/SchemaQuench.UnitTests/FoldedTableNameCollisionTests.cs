@@ -39,4 +39,13 @@ public class FoldedTableNameCollisionTests
 
         Assert.That(collisions, Is.Empty);
     }
+
+    [Test]
+    public void APartlyGatedPair_StillCollides()
+    {
+        // The ungated table always applies, so wherever the gated one applies too they land on one table.
+        var collisions = FoldedTableNameCollisions.Find(TemplateWith(("Orders", "1 = 1"), ("orders", null)));
+
+        Assert.That(collisions, Is.EqualTo(new[] { "Orders, orders" }));
+    }
 }
