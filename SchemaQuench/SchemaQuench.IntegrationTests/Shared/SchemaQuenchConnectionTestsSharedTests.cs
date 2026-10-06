@@ -6,6 +6,7 @@ using System;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
+using Schema.IntegrationTests;
 
 namespace SchemaQuench.IntegrationTests.Shared;
 
@@ -104,8 +105,7 @@ public abstract class SchemaQuenchConnectionTestsSharedTests
         var result = command.ExecuteScalar();
 
         Assert.That(result, Is.Not.Null);
-        // A server that folds names (lower_case_table_names >= 1) reports them in lowercase.
-        Assert.That(result.ToString(), Is.EqualTo(MainDb).IgnoreCase);
+        Assert.That(result.ToString(), CatalogName.Matches(_connection, MainDb));
     }
 
     [Test]

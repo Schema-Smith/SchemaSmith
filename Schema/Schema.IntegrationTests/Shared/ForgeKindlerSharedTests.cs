@@ -54,8 +54,7 @@ public abstract class ForgeKindlerSharedTests
             AND TABLE_NAME = 'SchemaSmith_CompletedMigrationScripts'";
         var result = command.ExecuteScalar();
         Assert.That(result, Is.Not.Null);
-        // A server that folds names (lower_case_table_names >= 1) reports them in lowercase.
-        Assert.That(result.ToString(), Is.EqualTo("SchemaSmith_CompletedMigrationScripts").IgnoreCase);
+        Assert.That(result.ToString(), CatalogName.Matches(_connection, "SchemaSmith_CompletedMigrationScripts"));
     }
 
     [Test]

@@ -8,6 +8,7 @@ using System.IO;
 using NUnit.Framework;
 using Schema.Domain;
 using Schema.Utility;
+using Schema.IntegrationTests;
 
 namespace SchemaQuench.IntegrationTests.Shared;
 
@@ -52,8 +53,7 @@ public abstract class DatabaseQuenchTestsSharedTests
             AND TABLE_NAME = 'SchemaSmith_CompletedMigrationScripts'";
         var result = command.ExecuteScalar();
         Assert.That(result, Is.Not.Null);
-        // A server that folds names (lower_case_table_names >= 1) reports them in lowercase.
-        Assert.That(result.ToString(), Is.EqualTo("SchemaSmith_CompletedMigrationScripts").IgnoreCase);
+        Assert.That(result.ToString(), CatalogName.Matches(_connection, "SchemaSmith_CompletedMigrationScripts"));
     }
 
     [Test]
@@ -92,8 +92,7 @@ public abstract class DatabaseQuenchTestsSharedTests
         using var reader = command.ExecuteReader();
 
         Assert.That(reader.Read(), Is.True);
-        // A server that folds names (lower_case_table_names >= 1) reports them in lowercase.
-        Assert.That(reader.GetString(0), Is.EqualTo(MainDb).IgnoreCase);
+        Assert.That(reader.GetString(0), Is.EqualTo(MainDb));
     }
 
     [Test]
@@ -131,8 +130,7 @@ public abstract class DatabaseQuenchTestsSharedTests
 
         command.CommandText = "SELECT DATABASE()";
         var db1 = command.ExecuteScalar()?.ToString();
-        // A server that folds names (lower_case_table_names >= 1) reports them in lowercase.
-        Assert.That(db1, Is.EqualTo(secondaryDb).IgnoreCase);
+        Assert.That(db1, CatalogName.Matches(_connection, secondaryDb));
 
         // Switch to main database
         command.CommandText = $"USE `{mainDb}`";
@@ -140,7 +138,7 @@ public abstract class DatabaseQuenchTestsSharedTests
 
         command.CommandText = "SELECT DATABASE()";
         var db2 = command.ExecuteScalar()?.ToString();
-        Assert.That(db2, Is.EqualTo(mainDb).IgnoreCase);
+        Assert.That(db2, CatalogName.Matches(_connection, mainDb));
     }
 
     [Test]

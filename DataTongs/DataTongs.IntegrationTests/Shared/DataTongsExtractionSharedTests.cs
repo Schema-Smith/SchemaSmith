@@ -145,6 +145,34 @@ INSERT IGNORE INTO `{MainDb}`.`legacy_types` (`id`, `blob_data`, `longblob_data`
     }
 
     [Test]
+    public void AMixedCaseTable_ExtractsItsColumnsAndRows_UnderItsDeclaredSpelling()
+    {
+        // On a server that folds names the catalog holds this table (and the test database) in lowercase, while the
+        // caller passes the declared spelling; the extraction must still find both.
+        using var command = _connection.CreateCommand();
+        var tableName = $"MixedCaseExtract_{Guid.NewGuid():N}"[..28];
+
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (Id INT PRIMARY KEY, DisplayName VARCHAR(50))";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, 'first')";
+            command.ExecuteNonQuery();
+
+            var columns = _dataTongs.GetSelectColumns(command, _testDb, tableName);
+            Assert.That(columns, Does.Contain("Id").And.Contain("DisplayName"), "the column list must not come back empty");
+
+            var json = _dataTongs.GetTableDataJson(command, columns, _testDb, tableName, "`Id`", null);
+            Assert.That(json, Does.Contain("first"), "the row must be extracted");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    [Test]
     public void GetSelectColumns_ExcludesGeneratedColumns()
     {
         // Create a table with a generated column to test exclusion
