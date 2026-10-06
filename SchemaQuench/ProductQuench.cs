@@ -708,25 +708,44 @@ public class ProductQuench
     /// differently: <see cref="QuenchTemplate"/> logs + exits; <see cref="PreviewTargets"/>
     /// logs + continues so remaining templates are still reported.
     /// </summary>
-    private bool? _serverFoldsDatabaseNames;
-
-    // MySQL and MariaDB with lower_case_table_names >= 1 report database names in lowercase, so Target.Databases
-    // has to match them case-insensitively there. Read once, from the primary server, which is the only one these
-    // engines deploy to.
-    private bool ServerFoldsDatabaseNames()
+    private bool RefuseFoldedTableNameCollisions(Template template)
     {
-        if (_serverFoldsDatabaseNames.HasValue) return _serverFoldsDatabaseNames.Value;
+        if (_product.Platform.GetBasePlatform() != Platform.MySQL) return false;
+        var collisions = FoldedTableNameCollisions.Find(template);
+        if (collisions.Count == 0 || !ServerFoldsNames()) return false;
+
+        var message = $"Template '{template.Name}' declares tables whose names differ only in case ({string.Join("; ", collisions)}). " +
+                      "The target server folds table names (lower_case_table_names >= 1), so each pair would be one table. " +
+                      "Rename one of each pair, or deploy to a server with lower_case_table_names = 0.";
+        _progressLog.Error(message);
+        _errorLog.Error(message);
+        _updateFailed = true;
+        _anyFailure = true;
+        EmitFailureRollup();
+        WriteDeploymentSummary(RunOutcome.Aborted, 2);
+        LogBackup.BackupLogsAndExit("SchemaQuench", 2);
+        return true;
+    }
+
+    private bool? _serverFoldsNames;
+
+    // MySQL and MariaDB with lower_case_table_names >= 1 store database and table names in lowercase: Target.Databases
+    // has to match case-insensitively there, and two tables differing only in case are one table. Read once, from the
+    // primary server, which is the only one these engines deploy to.
+    private bool ServerFoldsNames()
+    {
+        if (_serverFoldsNames.HasValue) return _serverFoldsNames.Value;
         if (_product.Platform.GetBasePlatform() != Platform.MySQL)
         {
-            _serverFoldsDatabaseNames = false;
+            _serverFoldsNames = false;
             return false;
         }
 
         using var command = GetCommand(_primaryServer);
         command.CommandText = "SELECT @@lower_case_table_names";
         var value = command.ExecuteScalar();
-        _serverFoldsDatabaseNames = value is not null and not DBNull && Convert.ToInt32(value) != 0;
-        return _serverFoldsDatabaseNames.Value;
+        _serverFoldsNames = value is not null and not DBNull && Convert.ToInt32(value) != 0;
+        return _serverFoldsNames.Value;
     }
 
     private List<WorkUnit> ApplyPerTemplateTargetFilter(Template template, List<WorkUnit> units)
@@ -734,7 +753,7 @@ public class ProductQuench
         if (units.Count == 0 || (_targetDatabases.Count == 0 && _targetSchemas.Count == 0))
             return units;
 
-        var perTemplateFilter = new WorkUnitFilter([], _targetDatabases, _targetSchemas, ServerFoldsDatabaseNames());
+        var perTemplateFilter = new WorkUnitFilter([], _targetDatabases, _targetSchemas, ServerFoldsNames());
         var filtered = perTemplateFilter.Apply(units, _progressLog.Warn);
         _progressLog.Info($"[Target] Resolved {filtered.Count} work unit(s) after filtering {units.Count} discovered unit(s) for template '{template.Name}'.");
         return filtered;
@@ -1235,6 +1254,8 @@ public class ProductQuench
             LogScriptTokens("Template Script Tokens:", template.LoggableTokens);
 
         _updateFailed = false;
+
+        if (RefuseFoldedTableNameCollisions(template)) return;
 
         // Slice-3 fan-out: enumerate the flat work-unit list across all eligible servers, then
         // dispatch to a single MaxThreads-bounded pool. SQL Server's per-server ServerToQuench

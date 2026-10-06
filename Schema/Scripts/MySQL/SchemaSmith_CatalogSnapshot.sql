@@ -105,19 +105,30 @@ END //
 
 DROP PROCEDURE IF EXISTS SchemaSmith_MarkColumnRenames//
 
+-- Column renames also cover a column the server holds under a spelling that differs from the package's only in
+-- case: the engine treats it as the same column, so it is renamed to the package's spelling rather than left
+-- alone, and extraction then round-trips the package. LiveName is the catalog's spelling of the column to rename.
 CREATE PROCEDURE SchemaSmith_MarkColumnRenames(IN p_DatabaseName VARCHAR(128))
 SQL SECURITY DEFINER
 BEGIN
     CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColRenameReady;
-    CREATE TEMPORARY TABLE _SchemaSmith_ColRenameReady (RowId INT NOT NULL PRIMARY KEY) ENGINE=InnoDB;
+    CREATE TEMPORARY TABLE _SchemaSmith_ColRenameReady (
+        RowId INT NOT NULL PRIMARY KEY,
+        LiveName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-    INSERT INTO _SchemaSmith_ColRenameReady (RowId)
-    SELECT c.RowId FROM _SchemaSmith_Columns c
-     WHERE c.OldName IS NOT NULL
-       AND EXISTS (SELECT 1 FROM _SchemaSmith_CatColumns isc WHERE isc.TableKey = c.TableKey AND isc.ColumnKey = c.OldNameKey);
+    INSERT IGNORE INTO _SchemaSmith_ColRenameReady (RowId, LiveName)
+    SELECT c.RowId, isc.COLUMN_NAME FROM _SchemaSmith_Columns c
+      JOIN _SchemaSmith_CatColumns isc ON isc.TableKey = c.TableKey AND isc.ColumnKey = c.OldNameKey
+     WHERE c.OldName IS NOT NULL;
 
     DELETE r FROM _SchemaSmith_ColRenameReady r
       JOIN _SchemaSmith_Columns c ON c.RowId = r.RowId
       JOIN _SchemaSmith_CatColumns isc ON isc.TableKey = c.TableKey AND isc.ColumnKey = c.ColumnKey;
+
+    INSERT IGNORE INTO _SchemaSmith_ColRenameReady (RowId, LiveName)
+    SELECT c.RowId, isc.COLUMN_NAME FROM _SchemaSmith_Columns c
+      JOIN _SchemaSmith_CatColumns isc ON isc.TableKey = c.TableKey AND isc.ColumnKey = c.ColumnKey
+     WHERE BINARY isc.COLUMN_NAME <> BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName);
 END //

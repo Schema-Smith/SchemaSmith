@@ -508,10 +508,10 @@ BEGIN
         -- Descriptive (version-agnostic) preview: the executed DDL is RENAME COLUMN or, below MySQL 8.0 /
         -- MariaDB 10.5.2, CHANGE COLUMN preserving the current definition (see the real-path block below).
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Rename column `', SchemaSmith_StripBacktickWrapping(c.OldName),
+        SELECT CONNECTION_ID(), CONCAT('  Rename column `', r.LiveName,
                       '` to `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` on `', c.TableName, '`')
         FROM _SchemaSmith_Columns c
-        WHERE c.RowId IN (SELECT RowId FROM _SchemaSmith_ColRenameReady);
+        JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId;
 
         IF @has_custom_restore = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Attempt custom table restore for tables being added');
@@ -723,9 +723,9 @@ BEGIN
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
                       GROUP_CONCAT(
                           IF(SchemaSmith_SupportsRenameColumn() = 1,
-                             CONCAT('RENAME COLUMN `', SchemaSmith_StripBacktickWrapping(c.OldName),
+                             CONCAT('RENAME COLUMN `', r.LiveName,
                                     '` TO `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`'),
-                             CONCAT('CHANGE COLUMN `', SchemaSmith_StripBacktickWrapping(c.OldName),
+                             CONCAT('CHANGE COLUMN `', r.LiveName,
                                     '` `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` ',
                                     CONVERT(isc.COLUMN_TYPE USING utf8mb4) COLLATE utf8mb4_unicode_ci,
                                     IF(isc.CHARACTER_SET_NAME IS NOT NULL,
@@ -740,17 +740,17 @@ BEGIN
                                        CONCAT(' COMMENT ', QUOTE(CONVERT(isc.COLUMN_COMMENT USING utf8mb4) COLLATE utf8mb4_unicode_ci)), '')))
                           ORDER BY c.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
+        JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId
         JOIN _SchemaSmith_CatColumns isc
             ON isc.TableKey = c.TableKey
-           AND isc.ColumnKey = c.OldNameKey
-        WHERE c.RowId IN (SELECT RowId FROM _SchemaSmith_ColRenameReady)
+           AND BINARY isc.COLUMN_NAME = BINARY r.LiveName
         GROUP BY c.TableName;
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Rename column `', SchemaSmith_StripBacktickWrapping(c.OldName),
+        SELECT CONNECTION_ID(), CONCAT('  Rename column `', r.LiveName,
                       '` to `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` on `', c.TableName, '`')
         FROM _SchemaSmith_Columns c
-        WHERE c.RowId IN (SELECT RowId FROM _SchemaSmith_ColRenameReady);
+        JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId;
 
         SET @v_colrename_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColRenameStmts);
         WHILE @v_colrename_id IS NOT NULL DO
