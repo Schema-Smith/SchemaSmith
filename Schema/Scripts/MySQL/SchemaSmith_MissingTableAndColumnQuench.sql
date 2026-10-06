@@ -26,12 +26,10 @@ BEGIN
     DECLARE v_Sql TEXT;
     DECLARE v_StatusTableName VARCHAR(128);
     DECLARE v_StatusVariant VARCHAR(128);
-    -- The catalog is utf8mb3. Comparing a bare catalog column against a value in the SAME charset lets
-    -- MariaDB push the schema filter down (EXPLAIN: "Scanned 1 database" rather than "Scanned all
-    -- databases"); wrapping the column in CONVERT(... USING utf8mb4) defeated it and cost ~1.8ms per
-    -- database ON THE SERVER, on every deploy. A bare parameter does NOT work -- it carries the
-    -- connection charset -- so the declared local is load-bearing, not decoration.
-    DECLARE v_IsDbName VARCHAR(128) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT p_DatabaseName;
+    -- Catalog reads go through the keyed snapshots in SchemaSmith_CatalogSnapshot; the one direct read (ROUTINES)
+    -- uses the same case-insensitive schema prefilter followed by the exact key compare.
+    DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_DatabaseName);
 
     -- Cursor for CREATE TABLE statements (non-generated columns only, ordered by OrdinalPosition).
     -- Still cursor-driven in create_tables_loop below: each new table is a distinct standalone
@@ -212,24 +210,19 @@ BEGIN
     -- being cleared, so a package declaring a table where a VIEW of that name exists -- the ordinary
     -- "replace the view with a real table" migration -- would have NewTable cleared and be skipped, or
     -- fall into ALTER TABLE ... ADD COLUMN and fail with ER_WRONG_OBJECT. Ask the same question parse asked.
-    --
-    -- The schema is compared against v_IsDbName rather than p_DatabaseName for the measured reason given
-    -- where that local is declared: a bare parameter carries the connection charset and defeats the
-    -- schema-filter pushdown, which cost ~1.8ms per database on the server on every deploy. BINARY stays on
-    -- TABLE_NAME so this agrees with parse on case sensitivity.
+    CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
     UPDATE _SchemaSmith_Tables t
        SET t.NewTable = 0
      WHERE t.NewTable = 1
-       AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES x
-                    WHERE x.TABLE_SCHEMA = v_IsDbName
-                      AND BINARY x.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+       AND EXISTS (SELECT 1 FROM _SchemaSmith_CatTables x
+                    WHERE x.TableKey = t.TableKey
                       AND x.TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED'));
 
 
     -- A CustomTableRestore hook restores tables being added in case they were custom-dropped
     -- (recycled) previously; mirrors the SQL Server / PostgreSQL hook.
     SET @has_custom_restore = (SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES
-                               WHERE CONVERT(ROUTINE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                               WHERE ROUTINE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ROUTINE_SCHEMA) = v_DbKey
                                  AND ROUTINE_NAME = 'SchemaSmith_CustomTableRestore'
                                  AND ROUTINE_TYPE = 'PROCEDURE');
 
@@ -501,6 +494,8 @@ BEGIN
 
     IF p_WhatIf = 1 THEN
         -- WhatIf mode: output the actual SQL that would be executed
+        CALL SchemaSmith_MarkTableRenames(p_DatabaseName);
+        CALL SchemaSmith_MarkColumnRenames(p_DatabaseName);
 
         -- Declarative renames would run here (before add-columns). Log the statements only.
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -508,10 +503,7 @@ BEGIN
                       SchemaSmith_StripBacktickWrapping(t.OldName), '` TO `',
                       CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_StripBacktickWrapping(t.TableName), '`')
         FROM _SchemaSmith_Tables t
-        WHERE t.OldName IS NOT NULL
-          AND t.NewTable = 0
-          AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES ist WHERE BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.OldName))
-          AND NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES ist WHERE BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName));
+        WHERE t.RowId IN (SELECT RowId FROM _SchemaSmith_TableRenameReady);
 
         -- Descriptive (version-agnostic) preview: the executed DDL is RENAME COLUMN or, below MySQL 8.0 /
         -- MariaDB 10.5.2, CHANGE COLUMN preserving the current definition (see the real-path block below).
@@ -519,9 +511,7 @@ BEGIN
         SELECT CONNECTION_ID(), CONCAT('  Rename column `', SchemaSmith_StripBacktickWrapping(c.OldName),
                       '` to `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` on `', c.TableName, '`')
         FROM _SchemaSmith_Columns c
-        WHERE c.OldName IS NOT NULL
-          AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS isc WHERE BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName) AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.OldName))
-          AND NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS isc WHERE BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName) AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName));
+        WHERE c.RowId IN (SELECT RowId FROM _SchemaSmith_ColRenameReady);
 
         IF @has_custom_restore = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Attempt custom table restore for tables being added');
@@ -634,6 +624,7 @@ BEGIN
         -- one row per column, matching the per-column statement the ELSE branch would issue
         -- one-at-a-time before it folds them into a single ALTER per table).
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add missing columns to existing tables');
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' ADD COLUMN ',
@@ -643,9 +634,8 @@ BEGIN
                            ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        LEFT JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
+        LEFT JOIN _SchemaSmith_CatTables ist
+            ON ist.TableKey = c.TableKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 1
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
@@ -676,9 +666,9 @@ BEGIN
         -- Table + column renames execute here, ahead of add-columns, so a carried column (unchanged
         -- across the rename) or a newly-added column targets the post-rename table name — parity with
         -- SQL Server / PostgreSQL, which rename before adding columns. ProductOwnership is reconciled
-        -- old->new later by ModifiedTableQuench (which has the product name). BINARY comparisons avoid
-        -- collation clashes between INFORMATION_SCHEMA (utf8mb3), SchemaSmith functions
-        -- (utf8mb4_unicode_ci), and connection params (utf8mb4_0900_ai_ci).
+        -- old->new later by ModifiedTableQuench (which has the product name). Names compare through their keys
+        -- (see SchemaSmith_CatalogSnapshot).
+        CALL SchemaSmith_MarkTableRenames(p_DatabaseName);
 
         -- Table renames: fold all old->new pairs into one multi-target RENAME TABLE, then drain.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_TableRenameStmts;
@@ -691,35 +681,13 @@ BEGIN
                                  CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_StripBacktickWrapping(t.TableName), '`')
                           ORDER BY t.TableName SEPARATOR ', '))
         FROM _SchemaSmith_Tables t
-        WHERE t.OldName IS NOT NULL
-          AND t.NewTable = 0
-          AND EXISTS (
-              SELECT 1 FROM INFORMATION_SCHEMA.TABLES ist
-              WHERE BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.OldName)
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM INFORMATION_SCHEMA.TABLES ist
-              WHERE BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
-          )
+        WHERE t.RowId IN (SELECT RowId FROM _SchemaSmith_TableRenameReady)
         HAVING COUNT(*) > 0;
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Rename table `', SchemaSmith_StripBacktickWrapping(t.OldName), '` to `', SchemaSmith_StripBacktickWrapping(t.TableName), '`')
         FROM _SchemaSmith_Tables t
-        WHERE t.OldName IS NOT NULL
-          AND t.NewTable = 0
-          AND EXISTS (
-              SELECT 1 FROM INFORMATION_SCHEMA.TABLES ist
-              WHERE BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.OldName)
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM INFORMATION_SCHEMA.TABLES ist
-              WHERE BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
-          );
+        WHERE t.RowId IN (SELECT RowId FROM _SchemaSmith_TableRenameReady);
 
         SET @v_tablerename_id := (SELECT MIN(RowId) FROM _SchemaSmith_TableRenameStmts);
         WHILE @v_tablerename_id IS NOT NULL DO
@@ -750,6 +718,7 @@ BEGIN
         -- which isolates that predicate and reddens if it's removed. ON UPDATE CURRENT_TIMESTAMP[(n)] is
         -- omitted here too, for the same reason: it is unconditionally dropped by this CHANGE COLUMN and
         -- restored by ModifiedTableQuench's ON UPDATE compare against the new column name in the same deploy.
+        CALL SchemaSmith_MarkColumnRenames(p_DatabaseName);
         INSERT INTO _SchemaSmith_ColRenameStmts (Stmt)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
                       GROUP_CONCAT(
@@ -771,36 +740,17 @@ BEGIN
                                        CONCAT(' COMMENT ', QUOTE(CONVERT(isc.COLUMN_COMMENT USING utf8mb4) COLLATE utf8mb4_unicode_ci)), '')))
                           ORDER BY c.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
-        JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-           AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-           AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.OldName)
-        WHERE c.OldName IS NOT NULL
-          AND NOT EXISTS (
-              SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS isc2
-              WHERE BINARY isc2.TABLE_SCHEMA = BINARY p_DatabaseName
-                AND BINARY isc2.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-                AND BINARY isc2.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
-          )
+        JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = c.TableKey
+           AND isc.ColumnKey = c.OldNameKey
+        WHERE c.RowId IN (SELECT RowId FROM _SchemaSmith_ColRenameReady)
         GROUP BY c.TableName;
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Rename column `', SchemaSmith_StripBacktickWrapping(c.OldName),
                       '` to `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` on `', c.TableName, '`')
         FROM _SchemaSmith_Columns c
-        WHERE c.OldName IS NOT NULL
-          AND EXISTS (
-              SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS isc
-              WHERE BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-                AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-                AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.OldName)
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS isc
-              WHERE BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-                AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-                AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
-          );
+        WHERE c.RowId IN (SELECT RowId FROM _SchemaSmith_ColRenameReady);
 
         SET @v_colrename_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColRenameStmts);
         WHILE @v_colrename_id IS NOT NULL DO
@@ -816,13 +766,12 @@ BEGIN
         -- table: parse flagged carried/renamed columns as new because it checked under the
         -- post-rename table name, which did not exist yet. Without this, add-columns below would try
         -- to re-add an existing column (duplicate-column error). Mirrors the CustomTableRestore fixup.
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         UPDATE _SchemaSmith_Columns c
         SET c.NewColumn = 0
         WHERE c.NewColumn = 1
-          AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS ic
-                      WHERE ic.TABLE_SCHEMA = v_IsDbName
-                        AND CONVERT(ic.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4)
-                        AND CONVERT(ic.COLUMN_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4));
+          AND EXISTS (SELECT 1 FROM _SchemaSmith_CatColumns ic
+                      WHERE ic.TableKey = c.TableKey AND ic.ColumnKey = c.ColumnKey);
 
         -- CustomTableRestore hook: attempt to restore tables being added in case they were
         -- custom-dropped (recycled) previously, then mark any that now exist as not-new so the
@@ -851,23 +800,21 @@ BEGIN
             END WHILE;
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RestoreStmts;
 
+            CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
             UPDATE _SchemaSmith_Tables t
             SET t.NewTable = 0
             WHERE t.NewTable = 1
-              AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES ist
-                          WHERE ist.TABLE_SCHEMA = v_IsDbName
-                            AND CONVERT(ist.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4));
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_CatTables ist WHERE ist.TableKey = t.TableKey);
 
             -- NewColumn was set at parse time, before the restore brought the table back, so the
             -- restored table's columns are still flagged as new. Clear the flag for any column that
             -- now exists so the add-columns step does not try to re-add it (duplicate column error).
+            CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
             UPDATE _SchemaSmith_Columns c
             SET c.NewColumn = 0
             WHERE c.NewColumn = 1
-              AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS ic
-                          WHERE ic.TABLE_SCHEMA = v_IsDbName
-                            AND CONVERT(ic.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4)
-                            AND CONVERT(ic.COLUMN_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4));
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_CatColumns ic
+                          WHERE ic.TableKey = c.TableKey AND ic.ColumnKey = c.ColumnKey);
         END IF;
 
         -- Step 1: Create new tables (with non-generated columns only)
@@ -898,6 +845,7 @@ BEGIN
 
         -- Step 2: Add non-generated columns to existing tables
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add missing columns to existing tables');
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Add column: ',
                       CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
@@ -908,9 +856,8 @@ BEGIN
                       CASE WHEN COALESCE(c.VariantName, '') <> '' THEN CONCAT(' (variant: ', c.VariantName, ')') ELSE '' END)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        LEFT JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
+        LEFT JOIN _SchemaSmith_CatTables ist
+            ON ist.TableKey = c.TableKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 1
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
@@ -936,9 +883,8 @@ BEGIN
                           ORDER BY c.OrdinalPosition SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        LEFT JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
+        LEFT JOIN _SchemaSmith_CatTables ist
+            ON ist.TableKey = c.TableKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 1
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')

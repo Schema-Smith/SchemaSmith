@@ -570,6 +570,7 @@ public static class ForgeKindler
                 // reason as its sibling immediately above.
                 new("SchemaSmith_TableDataDirectory.sql"),
                 new("SchemaSmith_GenerateTableJson.sql"),
+                new("SchemaSmith_CatalogSnapshot.sql"),
                 new("SchemaSmith_ParseTableJson.sql"),
                 new("SchemaSmith_MissingTableAndColumnQuench.sql"),
                 new("SchemaSmith_ModifiedTableQuench.sql"),

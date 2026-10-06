@@ -68,6 +68,10 @@ BEGIN
     CREATE TEMPORARY TABLE _SchemaSmith_Tables (
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        -- Name keys (SchemaSmith_IdentifierKey of the unwrapped name), filled once after the parse. Every comparison
+        -- with the catalog goes through these; DDL keeps the declared spelling in TableName.
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        OldNameKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Engine VARCHAR(50) DEFAULT 'InnoDB',
         Collation VARCHAR(100) DEFAULT NULL,
         OldName VARCHAR(128) DEFAULT NULL,
@@ -124,7 +128,8 @@ BEGIN
         -- ModifiedTableQuench STEP 7.5 -- which reads this same flag -- so this is not a NewTable = 1
         -- value. (It said it was: that was true when written and stopped being true when 7.5 shipped.)
         IsSystemVersioned TINYINT DEFAULT 0,
-        KEY ix_tables_name (TableName)
+        KEY ix_tables_name (TableName),
+        KEY ix_tables_key (TableKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     -- First, insert all tables from JSON with NewTable = 0 (assume existing)
@@ -186,33 +191,37 @@ BEGIN
         SET v_TblIdx = v_TblIdx + 1;
     END WHILE;
 
+    UPDATE _SchemaSmith_Tables
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           OldNameKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(OldName));
+
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Identify new tables');
 
     -- Snapshot existing tables into a temp table to avoid MySQL optimizer issues
     -- with correlated NOT EXISTS subqueries against INFORMATION_SCHEMA.
     -- The optimizer can cache/materialize INFORMATION_SCHEMA results incorrectly
     -- when used in correlated subqueries (both in JSON_TABLE and UPDATE contexts).
+    CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTables;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingTables (
-        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-    INSERT INTO _SchemaSmith_ExistingTables (TableName)
-    SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-    WHERE BINARY TABLE_SCHEMA = BINARY p_DatabaseName
+    INSERT IGNORE INTO _SchemaSmith_ExistingTables (TableKey)
+    SELECT TableKey FROM _SchemaSmith_CatTables
     -- MariaDB reports a system-versioned table as 'SYSTEM VERSIONED', not 'BASE TABLE'. This list is
     -- what sets NewTable = 1, so filtering on 'BASE TABLE' alone made such a table look new and the
     -- deploy issued a CREATE for a table that already exists. Managing the versioning attribute is a
     -- separate feature; being able to see the table at all is not.
-    AND TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED');
+    WHERE TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED');
 
     -- Now set NewTable = 1 for tables not found in snapshot
     UPDATE _SchemaSmith_Tables t
     SET t.NewTable = 1
     WHERE NOT EXISTS (
         SELECT 1 FROM _SchemaSmith_ExistingTables et
-        WHERE BINARY et.TableName = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
-        OR (t.OldName IS NOT NULL AND BINARY et.TableName = BINARY SchemaSmith_StripBacktickWrapping(t.OldName))
+        WHERE et.TableKey = t.TableKey
+        OR (t.OldName IS NOT NULL AND et.TableKey = t.OldNameKey)
     );
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTables;
@@ -228,6 +237,11 @@ BEGIN
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        -- Name keys, filled once after the parse: the table's through SchemaSmith_IdentifierKey, the column's and
+        -- OldName's through SchemaSmith_NameKeyCI, because the engine compares column names case-insensitively.
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        ColumnKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        OldNameKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         OrdinalPosition INT NOT NULL DEFAULT 0,
         DataType VARCHAR(100) NOT NULL,
         IsNullable TINYINT DEFAULT 1,
@@ -255,7 +269,8 @@ BEGIN
         ShouldApply TINYINT DEFAULT 1,
         ShouldApplyExpression VARCHAR(4000) DEFAULT NULL,
         VariantName VARCHAR(128) DEFAULT NULL,
-        KEY ix_columns_table_name (TableName, ColumnName)
+        KEY ix_columns_table_name (TableName, ColumnName),
+        KEY ix_columns_key (TableKey, ColumnKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     SET v_ColOuterCnt = JSON_LENGTH(p_TableDefinitions);
@@ -306,6 +321,11 @@ BEGIN
         SET v_ColOuterIdx = v_ColOuterIdx + 1;
     END WHILE;
 
+    UPDATE _SchemaSmith_Columns
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           ColumnKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(ColumnName)),
+           OldNameKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(OldName));
+
     -- =========================================================================
     -- DATA-TYPE SYNONYM NORMALIZATION (Rule 20 parity with PostgreSQL)
     -- =========================================================================
@@ -355,41 +375,29 @@ BEGIN
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Identify new columns');
 
-    -- Snapshot existing columns into a temp table (same optimizer workaround as tables)
-    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingColumns;
-    CREATE TEMPORARY TABLE _SchemaSmith_ExistingColumns (
-        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-        ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-        PRIMARY KEY (TableName, ColumnName)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-    INSERT INTO _SchemaSmith_ExistingColumns (TableName, ColumnName)
-    SELECT TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE BINARY TABLE_SCHEMA = BINARY p_DatabaseName;
+    -- Snapshot existing columns (same optimizer workaround as tables)
+    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
 
     -- Now set NewColumn = 1 for columns not found in snapshot
     UPDATE _SchemaSmith_Columns c
     SET c.NewColumn = 1
     WHERE NOT EXISTS (
-        SELECT 1 FROM _SchemaSmith_ExistingColumns ec
-        WHERE BINARY ec.TableName = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
+        SELECT 1 FROM _SchemaSmith_CatColumns ec
+        WHERE ec.TableKey = c.TableKey
         AND (
-            BINARY ec.ColumnName = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
-            OR (c.OldName IS NOT NULL AND BINARY ec.ColumnName = BINARY SchemaSmith_StripBacktickWrapping(c.OldName))
+            ec.ColumnKey = c.ColumnKey
+            OR (c.OldName IS NOT NULL AND ec.ColumnKey = c.OldNameKey)
         )
     );
-
-    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingColumns;
 
     -- A generated column's nullability is the engine's unless the package states one, as on SQL Server. Taking
     -- the live value (nullable for a new column) makes every comparison below agree without touching any of
     -- them. MariaDB cannot declare it at all -- NOT NULL on a generated column is a syntax error there -- so it
     -- is always the engine's. Reading an omission as NOT NULL rewrote such a column on every deploy.
     UPDATE _SchemaSmith_Columns c
-      LEFT JOIN INFORMATION_SCHEMA.COLUMNS isc
-             ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+      LEFT JOIN _SchemaSmith_CatColumns isc
+             ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
        SET c.IsNullable = CASE WHEN isc.COLUMN_NAME IS NULL OR isc.IS_NULLABLE = 'YES'
                                     -- Only a column that is ALREADY generated has a nullability to keep; a plain column
                                     -- being converted keeps nothing of its old NOT NULL.

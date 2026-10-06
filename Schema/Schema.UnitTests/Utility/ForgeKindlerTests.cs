@@ -469,7 +469,9 @@ public class ForgeKindlerTests
         //   deploy. Both sides now fold through the same pair.).
         // +1 = SchemaSmith_NameKeyCI (the case-insensitive name key for columns, indexes and constraints, which the
         //   engine compares case-insensitively on every lower_case_table_names setting).
-        Assert.That(mysql.Length, Is.EqualTo(67));
+        // +1 = SchemaSmith_CatalogSnapshot (keyed TABLES/COLUMNS snapshots, so catalog reads compare names through
+        //   their keys without a key function on every row of a catalog join).
+        Assert.That(mysql.Length, Is.EqualTo(68));
     }
 
     [Test]
