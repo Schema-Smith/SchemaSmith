@@ -61,7 +61,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         }
     }
 
-    // Below the RENAME COLUMN floor (MySQL 8.0 / MariaDB 10.5.2) the rename restates the column with CHANGE COLUMN,
+    // Below the RENAME COLUMN floor (MySQL 8.0 / MariaDB 10.6) the rename restates the column with CHANGE COLUMN,
     // whose generated-column form differs by engine.
     [Test]
     public void RenamedGeneratedColumns_KeepComputing_ForACaseOnlySpellingAndAnOldName()
@@ -105,6 +105,62 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             CleanUp(cmd, product, table);
         }
     }
+
+    // The referenced side: a foreign key also depends on the parent's index over the referenced columns.
+    [Test]
+    public void ACaseOnlySpellingOfAReferencedUniqueIndex_Deploys_AndKeepsTheKey()
+    {
+        const string parent = "FkRefParent";
+        const string child = "FkRefChild";
+        const string product = "Case Only FK Referenced Index";
+        var json = $$"""
+            [{
+                "Name": "{{parent}}",
+                "Columns": [ { "Name": "id", "DataType": "INT", "Nullable": false }, { "Name": "code", "DataType": "INT", "Nullable": false } ],
+                "Indexes": [
+                    { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" },
+                    { "Name": "ux_fkref_code", "Unique": true, "IndexColumns": "code" }
+                ]
+            },
+            {
+                "Name": "{{child}}",
+                "Columns": [ { "Name": "id", "DataType": "INT", "Nullable": false }, { "Name": "parent_code", "DataType": "INT", "Nullable": true } ],
+                "Indexes": [
+                    { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" },
+                    { "Name": "ix_fkref_code", "IndexColumns": "parent_code" }
+                ],
+                "ForeignKeys": [ { "Name": "fk_fkref_code", "Columns": "parent_code", "RelatedTable": "{{parent}}", "RelatedColumns": "code" } ]
+            }]
+            """;
+
+        using var conn = Open(out var cmd);
+        CleanUp(cmd, product, child, parent);
+        Exec(cmd, $"CREATE TABLE `{parent}` (`id` INT NOT NULL PRIMARY KEY, `code` INT NOT NULL, UNIQUE KEY `UX_FkRef_Code` (`code`))");
+        Exec(cmd, $"CREATE TABLE `{child}` (`id` INT NOT NULL PRIMARY KEY, `parent_code` INT NULL, KEY `ix_fkref_code` (`parent_code`), " +
+                  $"CONSTRAINT `fk_fkref_code` FOREIGN KEY (`parent_code`) REFERENCES `{parent}` (`code`))");
+        Exec(cmd, $"INSERT INTO `{parent}` VALUES (1, 100)");
+        Exec(cmd, $"INSERT INTO `{child}` VALUES (1, 100)");
+
+        try
+        {
+            for (var deploy = 1; deploy <= 2; deploy++)
+            {
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
+                    $"deploy {deploy}: re-spelling the index a foreign key references must not abort the deploy");
+                Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
+                    Is.EqualTo("fk_fkref_code"), $"deploy {deploy}: the foreign key must survive");
+                Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT CAST(INDEX_NAME AS BINARY)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(parent)} AND INDEX_NAME <> 'PRIMARY'"),
+                    Is.EqualTo(IsMariaDb(cmd) ? "UX_FkRef_Code" : "ux_fkref_code"), $"deploy {deploy}: one unique index on the parent");
+                Assert.That(Scalar(cmd, $"SELECT COUNT(*) FROM `{child}`"), Is.EqualTo("1"), $"deploy {deploy}: the rows must survive");
+            }
+        }
+        finally
+        {
+            CleanUp(cmd, product, child, parent);
+        }
+    }
+
+    private static bool IsMariaDb(IDbCommand cmd) => Scalar(cmd, "SELECT VERSION() LIKE '%MariaDB%'") == "1";
 
     private static void ClearStatusMessages(IDbCommand cmd) =>
         Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
@@ -306,8 +362,9 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
                     $"deploy {deploy}: re-spelling the index a foreign key depends on must not abort the deploy");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
                     Is.EqualTo("fk_fkback_parent"), $"deploy {deploy}: the foreign key must survive");
-                Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT LOWER(INDEX_NAME)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(child)} AND INDEX_NAME <> 'PRIMARY'"),
-                    Is.EqualTo("ix_fkback_parent"), $"deploy {deploy}: exactly one index backs the key");
+                // MySQL renames in place; MariaDB cannot drop the index the key needs, so it keeps the live spelling.
+                Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT CAST(INDEX_NAME AS BINARY)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(child)} AND INDEX_NAME <> 'PRIMARY'"),
+                    Is.EqualTo(IsMariaDb(cmd) ? "IX_FkBack_Parent" : "ix_fkback_parent"), $"deploy {deploy}: exactly one index backs the key");
                 Assert.That(Scalar(cmd, $"SELECT COUNT(*) FROM `{child}`"), Is.EqualTo("1"), $"deploy {deploy}: the rows must survive");
             }
         }

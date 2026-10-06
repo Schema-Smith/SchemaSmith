@@ -61,7 +61,7 @@ BEGIN
         ShouldApply TINYINT DEFAULT 1,
         Changed TINYINT DEFAULT 0,
         DdlScript LONGTEXT
-    );
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_EventStatements;
     -- Seq is assigned explicitly rather than auto-incremented, because the statements are inserted in
@@ -69,7 +69,7 @@ BEGIN
     CREATE TEMPORARY TABLE _SchemaSmith_EventStatements (
         Seq INT NOT NULL PRIMARY KEY,
         Statement LONGTEXT
-    );
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     SET v_count = COALESCE(JSON_LENGTH(p_EventDefinitions), 0);
     WHILE v_idx < v_count DO
@@ -203,7 +203,7 @@ BEGIN
     -- pair is what makes the drop path work on every supported MySQL and MariaDB.
     IF p_DropEventsRemovedFromProduct = 1 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_EventsToDrop;
-        CREATE TEMPORARY TABLE _SchemaSmith_EventsToDrop (Id INT AUTO_INCREMENT PRIMARY KEY, Name VARCHAR(64) NOT NULL);
+        CREATE TEMPORARY TABLE _SchemaSmith_EventsToDrop (Id INT AUTO_INCREMENT PRIMARY KEY, Name VARCHAR(64) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_EventsToDrop (Name)
             SELECT po.ObjectName
               FROM SchemaSmith_ProductOwnership po

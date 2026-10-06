@@ -518,7 +518,7 @@ MySQL and MariaDB decide whether two names are the same object from the server s
 | `1` | Stored in lowercase; any spelling finds the table | Windows |
 | `2` | Stored as declared, compared case-insensitively | macOS |
 
-Column, index, CHECK and foreign-key names are case-insensitive on every setting. When the server holds one of them under a spelling that differs from your package only in case, SchemaSmith keeps the object and its data and converges it to your package's spelling. MySQL renames the index; MariaDB drops and re-creates it instead, because a case-only index rename corrupts the index dictionary on some MariaDB versions. An index that a foreign key depends on keeps its existing spelling on MariaDB, because the engine will not drop it.
+Column, index, CHECK and foreign-key names are case-insensitive on every setting. When the server holds one of them under a spelling that differs from your package only in case, SchemaSmith keeps the object and its data and converges it to your package's spelling. MySQL renames the index; MariaDB drops and re-creates it instead, because a case-only index rename corrupts the index dictionary on some MariaDB versions. On MariaDB, an index that starts with a foreign key's column keeps its existing spelling, because the engine will not drop an index a foreign key depends on.
 
 A server on setting `1` or `2` has two consequences worth knowing:
 
