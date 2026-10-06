@@ -3308,28 +3308,31 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
     -- MariaDB converges a case-only index spelling by drop and re-create, which the engine refuses (1553) for an
     -- index a foreign key depends on. Mark every index that leads with a foreign key's leading column, on either
-    -- side of the key, so that step leaves its spelling alone rather than abort the deploy over a cosmetic difference.
-    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
-    CREATE TEMPORARY TABLE _SchemaSmith_FkLeadColumns (
-        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
-        ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
-        PRIMARY KEY (TableKey, ColumnKey)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
-    SELECT SchemaSmith_IdentifierKey(k.TABLE_NAME), SchemaSmith_NameKeyCI(k.COLUMN_NAME)
-      FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
-     WHERE k.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.TABLE_SCHEMA) = v_DbKey
-       AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
-    INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
-    SELECT SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_NAME), SchemaSmith_NameKeyCI(k.REFERENCED_COLUMN_NAME)
-      FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
-     WHERE k.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_SCHEMA) = v_DbKey
-       AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
-    UPDATE _SchemaSmith_IdxDetectSnap snap
-      JOIN _SchemaSmith_FkLeadColumns f
-        ON f.TableKey = snap.TableKey AND f.ColumnKey = SchemaSmith_NameKeyCI(snap.LeadColumn)
-       SET snap.FkBacked = 1;
-    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
+    -- side of the key, so that step leaves its spelling alone rather than abort the deploy over a cosmetic
+    -- difference. MySQL renames instead, so it skips the catalog read.
+    IF VERSION() LIKE '%MariaDB%' THEN
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
+        CREATE TEMPORARY TABLE _SchemaSmith_FkLeadColumns (
+            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            PRIMARY KEY (TableKey, ColumnKey)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
+        SELECT SchemaSmith_IdentifierKey(k.TABLE_NAME), SchemaSmith_NameKeyCI(k.COLUMN_NAME)
+          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+         WHERE k.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.TABLE_SCHEMA) = v_DbKey
+           AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
+        INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
+        SELECT SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_NAME), SchemaSmith_NameKeyCI(k.REFERENCED_COLUMN_NAME)
+          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+         WHERE k.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_SCHEMA) = v_DbKey
+           AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
+        UPDATE _SchemaSmith_IdxDetectSnap snap
+          JOIN _SchemaSmith_FkLeadColumns f
+            ON f.TableKey = snap.TableKey AND f.ColumnKey = SchemaSmith_NameKeyCI(snap.LeadColumn)
+           SET snap.FkBacked = 1;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
+    END IF;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectNames;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxDetectNames (

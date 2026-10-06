@@ -8,6 +8,8 @@ using Schema.IntegrationTests;
 using Schema.Isolators;
 using Schema.Utility;
 using System;
+using System.Collections.Generic;
+using System.Data.Common;
 using System.IO;
 
 namespace SchemaQuench.IntegrationTests.Shared;
@@ -185,7 +187,7 @@ public abstract class Latin1CharsetDeployTestsSharedTests
                     cmd.CommandText = $"DROP DATABASE IF EXISTS `{latin1Db}`;";
                     cmd.ExecuteNonQuery();
                 }
-                catch { /* best-effort cleanup */ }
+                catch (DbException) { /* best-effort cleanup */ }
             }
         }
     }
@@ -207,7 +209,10 @@ public abstract class Latin1CharsetDeployTestsSharedTests
                "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "番号" },
                             { "Name": "索引_住所", "IndexColumns": "住所" },
                             { "Name": "索引_親", "IndexColumns": "親番号" } ],
-               "ForeignKeys": [ { "Name": "外部_親", "Columns": "親番号", "RelatedTable": "親表", "RelatedColumns": "番号" } ] }]
+               "ForeignKeys": [ { "Name": "外部_親", "Columns": "親番号", "RelatedTable": "親表", "RelatedColumns": "番号" } ] },
+             { "Name": "条件表", "ShouldApplyExpression": "'名前' <> '住所'",
+               "Columns": [ { "Name": "番号", "DataType": "INT", "Nullable": false } ],
+               "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "番号" } ] }]
             """;
 
         lock (FactoryContainer.SharedLockObject)
@@ -226,13 +231,13 @@ public abstract class Latin1CharsetDeployTestsSharedTests
 
                 for (var deploy = 1; deploy <= 2; deploy++)
                 {
-                    cmd.CommandText = $"CALL SchemaSmith_TableQuench('Latin1Decl', '{latin1Db}', '{json}', 0, 0, 0)";
+                    cmd.CommandText = $"CALL SchemaSmith_TableQuench('Latin1Decl', '{latin1Db}', '{json.Replace("'", "''")}', 0, 0, 0)";
                     var current = deploy;
                     Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(), $"deploy {current}");
                     Assert.Multiple(() =>
                     {
                         Assert.That(CatalogList(cmd, $"SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '{latin1Db}' AND TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME NOT LIKE 'SchemaSmith%'"),
-                            Is.EqualTo("名前表,親表"), $"deploy {current}: tables");
+                            Is.EqualTo("名前表,条件表,親表"), $"deploy {current}: tables, including one whose ShouldApplyExpression compares non-Latin literals");
                         Assert.That(CatalogList(cmd, $"SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '{latin1Db}' AND TABLE_NAME = '名前表'"),
                             Is.EqualTo("住所,番号,親番号"), $"deploy {current}: columns");
                         Assert.That(CatalogList(cmd, $"SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = '{latin1Db}' AND TABLE_NAME = '名前表'"),
@@ -250,15 +255,78 @@ public abstract class Latin1CharsetDeployTestsSharedTests
                     cmd.CommandText = $"DROP DATABASE IF EXISTS `{latin1Db}`;";
                     cmd.ExecuteNonQuery();
                 }
-                catch { /* best-effort cleanup */ }
+                catch (DbException) { /* best-effort cleanup */ }
             }
         }
+    }
+
+    // Events take the same path: their names, comments and bodies pass through the event procedure's working tables.
+    [Test]
+    public void Deploy_ToLatin1Database_ANonLatinEvent_IsCreatedAsSpelled_AndThenLeftAlone()
+    {
+        var latin1Db = "TestLatin1Event_" + Guid.NewGuid().ToString("N")[..12];
+        var serverConnectionString = BaseConnectionString + "Database=information_schema;";
+        const string json = """
+            [{ "Name": "夜間_集計", "Definition": "SET @ss_noop = '集計'", "ScheduleType": "EVERY", "Interval": "1 DAY",
+               "Status": "DISABLE", "Preserve": false, "Comment": "毎晩の集計" }]
+            """;
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(serverConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 300;
+
+            try
+            {
+                cmd.CommandText = $"CREATE DATABASE `{latin1Db}` CHARACTER SET latin1 COLLATE latin1_swedish_ci;";
+                cmd.ExecuteNonQuery();
+                conn.ChangeDatabase(latin1Db);
+                ForgeKindler.KindleTheForge(cmd, Platform);
+
+                Assert.That(DeployEvents(cmd, latin1Db, json), Has.Some.StartsWith("CREATE EVENT"), "the first deploy creates the event");
+                cmd.CommandText = $"SELECT CONCAT(EVENT_NAME, '|', EVENT_COMMENT) FROM information_schema.EVENTS WHERE EVENT_SCHEMA = '{latin1Db}'";
+                Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("夜間_集計|毎晩の集計"), "the event keeps its name and comment");
+                cmd.CommandText = "SELECT ObjectName FROM SchemaSmith_ProductOwnership WHERE ObjectType = 'EVENT'";
+                Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("夜間_集計"), "ownership records the event as spelled");
+                // A recreate would reset the event's schedule, so an unchanged event must not be dropped.
+                Assert.That(DeployEvents(cmd, latin1Db, json), Has.None.Contains("DROP EVENT").And.None.Contains("CREATE EVENT"),
+                    "a redeploy finds the event unchanged");
+            }
+            finally
+            {
+                try
+                {
+                    conn.ChangeDatabase("information_schema");
+                    cmd.CommandText = $"DROP DATABASE IF EXISTS `{latin1Db}`;";
+                    cmd.ExecuteNonQuery();
+                }
+                catch (DbException) { /* best-effort cleanup */ }
+            }
+        }
+    }
+
+    // As SchemaQuench does: the procedure returns the statements, and the caller runs them (events cannot be prepared).
+    private static List<string> DeployEvents(System.Data.IDbCommand cmd, string db, string json)
+    {
+        var statements = new List<string>();
+        cmd.CommandText = $"CALL SchemaSmith_EventQuench('Latin1Event', '{db}', '{json.Replace("'", "''")}', 0, 0, 'Main')";
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read())
+                if (!reader.IsDBNull(0)) statements.Add(reader.GetString(0));
+        foreach (var statement in statements)
+        {
+            cmd.CommandText = statement;
+            cmd.ExecuteNonQuery();
+        }
+        return statements;
     }
 
     private static string CatalogList(System.Data.IDbCommand cmd, string sql)
     {
         cmd.CommandText = sql;
-        var names = new System.Collections.Generic.List<string>();
+        var names = new List<string>();
         using (var reader = cmd.ExecuteReader())
             while (reader.Read())
                 names.Add(reader.GetString(0));

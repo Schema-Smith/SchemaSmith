@@ -908,7 +908,7 @@ BEGIN
     CREATE TEMPORARY TABLE _SchemaSmith_ShouldApplyEval (
         EvalId INT AUTO_INCREMENT PRIMARY KEY,
         EvalSql TEXT NOT NULL
-    ) ENGINE=InnoDB;
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     -- Tables: UPDATE ... SET ShouldApply = 0 WHERE NOT (expression)
     -- Scoped by RowId so each generated UPDATE targets exactly the source row whose expression

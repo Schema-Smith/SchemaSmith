@@ -87,12 +87,13 @@ public abstract class DatabaseQuenchTestsSharedTests
     {
         using var command = _connection.CreateCommand();
 
-        // This is similar to what Template.SchemaIdentificationScript does
-        command.CommandText = $"SELECT '{MainDb}' AS DatabaseName";
+        var isConfiguredDatabase = CatalogName.Matches(_connection, MainDb);
+        // The shape the shipped templates' DatabaseIdentificationScript uses.
+        command.CommandText = $"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{MainDb}'";
         using var reader = command.ExecuteReader();
 
-        Assert.That(reader.Read(), Is.True);
-        Assert.That(reader.GetString(0), Is.EqualTo(MainDb));
+        Assert.That(reader.Read(), Is.True, "the configured database must be found by name");
+        Assert.That(reader.GetString(0), isConfiguredDatabase);
     }
 
     [Test]
