@@ -7,16 +7,16 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_TablePeriodsJson//
 
 CREATE FUNCTION SchemaSmith_TablePeriodsJson(
-    p_Schema VARCHAR(64),
-    p_Table VARCHAR(64)
-) RETURNS LONGTEXT
+    p_Schema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Table VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+) RETURNS LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 READS SQL DATA
 BEGIN
     -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).
     DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
     DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Schema);
     DECLARE v_TableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Table);
-    DECLARE v_Json LONGTEXT DEFAULT '[]';
+    DECLARE v_Json LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT '[]';
 
     -- MariaDb variant override of the shared MySQL '[]' stub. See the MySQL base definition for why the
     -- read is isolated in a function at all.

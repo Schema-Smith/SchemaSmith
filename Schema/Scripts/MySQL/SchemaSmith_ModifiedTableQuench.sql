@@ -13,8 +13,8 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_ModifiedTableQuench//
 
 CREATE PROCEDURE SchemaSmith_ModifiedTableQuench(
-    IN p_ProductName VARCHAR(100),
-    IN p_DatabaseName VARCHAR(128),
+    IN p_ProductName VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_WhatIf TINYINT,
     IN p_DropTablesRemovedFromProduct TINYINT,
     IN p_DropColumnsRemovedFromProduct TINYINT,
@@ -43,8 +43,8 @@ BEGIN
     -- 8. ProductOwnership updates
     -- 9. Drop tables removed from product (if enabled)
 
-    DECLARE v_ConflictingTable VARCHAR(128);
-    DECLARE v_ConflictingOwner VARCHAR(100);
+    DECLARE v_ConflictingTable VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_ConflictingOwner VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     -- TABLES and COLUMNS are read through the keyed snapshots in SchemaSmith_CatalogSnapshot. Other catalog views are
     -- read directly: v_DbCi is a case-insensitive utf8mb4 prefilter the catalog can serve without a full scan (and
     -- that never clashes with the catalog's own collation), and the key compare against v_DbKey then decides exactly.
@@ -490,9 +490,9 @@ BEGIN
 
         BEGIN
             DECLARE v_TtsDone INT DEFAULT FALSE;
-            DECLARE v_TtsTableName VARCHAR(128);
-            DECLARE v_TtsDeclared VARCHAR(64);
-            DECLARE v_TtsDeployed VARCHAR(64);
+            DECLARE v_TtsTableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DECLARE v_TtsDeclared VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DECLARE v_TtsDeployed VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_TablespaceCandidates CURSOR FOR
                 SELECT t.TableName, t.Tablespace
                 FROM _SchemaSmith_Tables t
@@ -576,9 +576,9 @@ BEGIN
 
         BEGIN
             DECLARE v_TddDone INT DEFAULT FALSE;
-            DECLARE v_TddTableName VARCHAR(128);
-            DECLARE v_TddDeclared VARCHAR(512);
-            DECLARE v_TddDeployed VARCHAR(512);
+            DECLARE v_TddTableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DECLARE v_TddDeclared VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DECLARE v_TddDeployed VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_DataDirectoryCandidates CURSOR FOR
                 SELECT t.TableName, t.DataDirectory
                 FROM _SchemaSmith_Tables t
@@ -1072,7 +1072,7 @@ BEGIN
     IF p_WhatIf = 0 THEN
         BEGIN
             DECLARE v_ColCollFkDone INT DEFAULT FALSE;
-            DECLARE v_ColCollFkSql TEXT;
+            DECLARE v_ColCollFkSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_ColCollFks CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci,
                               '`.`', TableName, '` DROP FOREIGN KEY `', ConstraintName, '`')
@@ -2102,7 +2102,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     ELSE
         BEGIN
             DECLARE v_EngineDone INT DEFAULT FALSE;
-            DECLARE v_EngineSql TEXT;
+            DECLARE v_EngineSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_EngineChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ENGINE = ', t.Engine) AS AlterEngineStatement
                 FROM _SchemaSmith_Tables t
@@ -2154,7 +2154,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     ELSE
         BEGIN
             DECLARE v_CollationDone INT DEFAULT FALSE;
-            DECLARE v_CollationSql TEXT;
+            DECLARE v_CollationSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_CollationChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                               ' DEFAULT CHARACTER SET ',
@@ -2225,7 +2225,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     ELSE
         BEGIN
             DECLARE v_CommentDone INT DEFAULT FALSE;
-            DECLARE v_CommentSql TEXT;
+            DECLARE v_CommentSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_CommentChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                               ' COMMENT=''', REPLACE(COALESCE(t.Comment, ''), '''', ''''''), '''') AS AlterCommentStatement
@@ -2278,7 +2278,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     ELSE
         BEGIN
             DECLARE v_RowFormatDone INT DEFAULT FALSE;
-            DECLARE v_RowFormatSql TEXT;
+            DECLARE v_RowFormatSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_RowFormatChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ROW_FORMAT=', t.RowFormat) AS AlterRowFormatStatement
                 FROM _SchemaSmith_Tables t
@@ -2373,7 +2373,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     ELSE
         BEGIN
             DECLARE v_EncryptionDone INT DEFAULT FALSE;
-            DECLARE v_EncryptionSql TEXT;
+            DECLARE v_EncryptionSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_EncryptionChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                               CASE WHEN VERSION() NOT LIKE '%MariaDB%'
@@ -2451,7 +2451,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     ELSE
         BEGIN
             DECLARE v_AutoIncDone INT DEFAULT FALSE;
-            DECLARE v_AutoIncSql TEXT;
+            DECLARE v_AutoIncSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_AutoIncChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' AUTO_INCREMENT=', t.AutoIncrementValue) AS AlterAutoIncStatement
                 FROM _SchemaSmith_Tables t
@@ -2632,7 +2632,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     ELSE
         BEGIN
             DECLARE v_AddVersioningDone INT DEFAULT FALSE;
-            DECLARE v_AddVersioningSql TEXT;
+            DECLARE v_AddVersioningSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_AddVersioning CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ADD SYSTEM VERSIONING') AS AlterAddVersioningStatement
                 FROM _SchemaSmith_Tables t
@@ -2687,7 +2687,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     IF SchemaSmith_SupportsSystemVersioning() = 1 AND UPPER(COALESCE(@ss_system_versioning_alter_history, '')) = 'KEEP' AND p_WhatIf = 0 THEN
         BEGIN
             DECLARE v_ExclDone INT DEFAULT FALSE;
-            DECLARE v_ExclSql TEXT;
+            DECLARE v_ExclSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_Excl CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                               ' MODIFY COLUMN ', c.ColumnScript)
@@ -3235,6 +3235,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         IndexComment VARCHAR(1024),
         TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        LeadColumn VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
+        FkBacked TINYINT NOT NULL DEFAULT 0,
         PRIMARY KEY (TableName, IndexName),
         KEY ix_idxsnap_key (TableKey, IndexKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -3251,7 +3253,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- only executes at 8.0.13+ and never on 5.7/MariaDB; see GenerateTableJson.sql for the full
     -- explanation) or the compare below never converges.
     IF SchemaSmith_SupportsFunctionalIndex() = 1 THEN
-        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment)
+        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment, LeadColumn)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4),
                CONVERT(s.INDEX_NAME USING utf8mb4),
                MAX(s.NON_UNIQUE),
@@ -3271,12 +3273,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
-               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
+               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4),
+               CONVERT(MAX(CASE WHEN s.SEQ_IN_INDEX = 1 THEN s.COLUMN_NAME END) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
          WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
          GROUP BY s.TABLE_NAME, s.INDEX_NAME;
     ELSE
-        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment)
+        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment, LeadColumn)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4),
                CONVERT(s.INDEX_NAME USING utf8mb4),
                MAX(s.NON_UNIQUE),
@@ -3288,7 +3291,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
-               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
+               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4),
+               CONVERT(MAX(CASE WHEN s.SEQ_IN_INDEX = 1 THEN s.COLUMN_NAME END) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
          WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
          GROUP BY s.TABLE_NAME, s.INDEX_NAME;
@@ -3301,6 +3305,31 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     UPDATE _SchemaSmith_IdxDetectSnap
        SET TableKey = SchemaSmith_IdentifierKey(TableName),
            IndexKey = SchemaSmith_NameKeyCI(IndexName);
+
+    -- MariaDB converges a case-only index spelling by drop and re-create, which the engine refuses (1553) for an
+    -- index a foreign key depends on. Mark every index that leads with a foreign key's leading column, on either
+    -- side of the key, so that step leaves its spelling alone rather than abort the deploy over a cosmetic difference.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
+    CREATE TEMPORARY TABLE _SchemaSmith_FkLeadColumns (
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableKey, ColumnKey)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
+    SELECT SchemaSmith_IdentifierKey(k.TABLE_NAME), SchemaSmith_NameKeyCI(k.COLUMN_NAME)
+      FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+     WHERE k.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.TABLE_SCHEMA) = v_DbKey
+       AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
+    INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
+    SELECT SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_NAME), SchemaSmith_NameKeyCI(k.REFERENCED_COLUMN_NAME)
+      FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+     WHERE k.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_SCHEMA) = v_DbKey
+       AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
+    UPDATE _SchemaSmith_IdxDetectSnap snap
+      JOIN _SchemaSmith_FkLeadColumns f
+        ON f.TableKey = snap.TableKey AND f.ColumnKey = SchemaSmith_NameKeyCI(snap.LeadColumn)
+       SET snap.FkBacked = 1;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectNames;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxDetectNames (
@@ -3499,7 +3528,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
       -- Check if definition differs
       AND (
           -- Spelled differently only in case, on MariaDB (see the case-only spelling step above)
-          (VERSION() LIKE '%MariaDB%' AND BINARY snap.IndexName <> BINARY SchemaSmith_StripBacktickWrapping(i.IndexName))
+          (VERSION() LIKE '%MariaDB%' AND snap.FkBacked = 0 AND BINARY snap.IndexName <> BINARY SchemaSmith_StripBacktickWrapping(i.IndexName))
           -- Or columns differ
           OR BINARY SchemaSmith_NormalizeIndexColumns(i.IndexColumns) != BINARY snap.NormColumns
           -- Or uniqueness differs

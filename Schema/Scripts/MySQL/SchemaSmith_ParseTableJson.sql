@@ -7,8 +7,8 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_ParseTableJson//
 
 CREATE PROCEDURE SchemaSmith_ParseTableJson(
-    IN p_DatabaseName VARCHAR(128),
-    IN p_TableDefinitions LONGTEXT
+    IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_TableDefinitions LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 SQL SECURITY DEFINER
 BEGIN

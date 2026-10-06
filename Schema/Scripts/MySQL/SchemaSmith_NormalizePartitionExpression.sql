@@ -7,7 +7,7 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_NormalizePartitionExpression//
 
 CREATE FUNCTION SchemaSmith_NormalizePartitionExpression(
-    p_Expression TEXT
+    p_Expression TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ) RETURNS TEXT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC
 NO SQL

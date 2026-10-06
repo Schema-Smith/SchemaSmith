@@ -142,4 +142,127 @@ public abstract class Latin1CharsetDeployTestsSharedTests
         cmd.CommandText = $"SELECT COUNT(*) FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '{db}' AND CONSTRAINT_NAME = '{checkName}'";
         return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
     }
+
+    // Every catalog name in the target database passes through the name-key functions, including tables the package
+    // does not manage. Their parameters must hold any identifier, whatever the database's default character set: a
+    // latin1 parameter rejects a non-Latin name in strict mode (aborting the deploy) and turns it into '??' otherwise,
+    // where two different names then compare equal.
+    [Test]
+    public void Deploy_ToLatin1DatabaseHoldingANonLatinTableName_Succeeds()
+    {
+        var latin1Db = "TestLatin1Names_" + Guid.NewGuid().ToString("N")[..12];
+        var serverConnectionString = BaseConnectionString + "Database=information_schema;";
+        const string json = """
+            [{ "Name": "AsciiTable", "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false } ],
+               "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" } ] }]
+            """;
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(serverConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 300;
+
+            try
+            {
+                cmd.CommandText = $"CREATE DATABASE `{latin1Db}` CHARACTER SET latin1 COLLATE latin1_swedish_ci;";
+                cmd.ExecuteNonQuery();
+                conn.ChangeDatabase(latin1Db);
+                ForgeKindler.KindleTheForge(cmd, Platform);
+                cmd.CommandText = "CREATE TABLE `名前表` (`住所` INT)";
+                cmd.ExecuteNonQuery();
+
+                cmd.CommandText = $"CALL SchemaSmith_TableQuench('Latin1Names', '{latin1Db}', '{json}', 0, 0, 0)";
+                Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(), "an unmanaged non-Latin table name must not abort the deploy");
+                Assert.That(TableExists(cmd, latin1Db, "AsciiTable"), Is.True, "the declared table must deploy");
+            }
+            finally
+            {
+                try
+                {
+                    conn.ChangeDatabase("information_schema");
+                    cmd.CommandText = $"DROP DATABASE IF EXISTS `{latin1Db}`;";
+                    cmd.ExecuteNonQuery();
+                }
+                catch { /* best-effort cleanup */ }
+            }
+        }
+    }
+
+    // Names the package declares travel through the routines' parameters and local variables; on a latin1 database
+    // those took the database's character set and the server rejected any non-Latin name before deploying anything.
+    [Test]
+    public void Deploy_ToLatin1Database_NonLatinDeclaredNames_DeployAsSpelled_AndRedeployCleanly()
+    {
+        var latin1Db = "TestLatin1Decl_" + Guid.NewGuid().ToString("N")[..12];
+        var serverConnectionString = BaseConnectionString + "Database=information_schema;";
+        const string json = """
+            [{ "Name": "親表", "Columns": [ { "Name": "番号", "DataType": "INT", "Nullable": false } ],
+               "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "番号" } ] },
+             { "Name": "名前表",
+               "Columns": [ { "Name": "番号", "DataType": "INT", "Nullable": false },
+                            { "Name": "親番号", "DataType": "INT", "Nullable": true },
+                            { "Name": "住所", "DataType": "VARCHAR(40)", "Nullable": true } ],
+               "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "番号" },
+                            { "Name": "索引_住所", "IndexColumns": "住所" },
+                            { "Name": "索引_親", "IndexColumns": "親番号" } ],
+               "ForeignKeys": [ { "Name": "外部_親", "Columns": "親番号", "RelatedTable": "親表", "RelatedColumns": "番号" } ] }]
+            """;
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(serverConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 300;
+
+            try
+            {
+                cmd.CommandText = $"CREATE DATABASE `{latin1Db}` CHARACTER SET latin1 COLLATE latin1_swedish_ci;";
+                cmd.ExecuteNonQuery();
+                conn.ChangeDatabase(latin1Db);
+                ForgeKindler.KindleTheForge(cmd, Platform);
+
+                for (var deploy = 1; deploy <= 2; deploy++)
+                {
+                    cmd.CommandText = $"CALL SchemaSmith_TableQuench('Latin1Decl', '{latin1Db}', '{json}', 0, 0, 0)";
+                    var current = deploy;
+                    Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(), $"deploy {current}");
+                    Assert.Multiple(() =>
+                    {
+                        Assert.That(CatalogList(cmd, $"SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '{latin1Db}' AND TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME NOT LIKE 'SchemaSmith%'"),
+                            Is.EqualTo("名前表,親表"), $"deploy {current}: tables");
+                        Assert.That(CatalogList(cmd, $"SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '{latin1Db}' AND TABLE_NAME = '名前表'"),
+                            Is.EqualTo("住所,番号,親番号"), $"deploy {current}: columns");
+                        Assert.That(CatalogList(cmd, $"SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = '{latin1Db}' AND TABLE_NAME = '名前表'"),
+                            Is.EqualTo("PRIMARY,索引_住所,索引_親"), $"deploy {current}: indexes");
+                        Assert.That(CatalogList(cmd, $"SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = '{latin1Db}' AND TABLE_NAME = '名前表' AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
+                            Is.EqualTo("外部_親"), $"deploy {current}: foreign key");
+                    });
+                }
+            }
+            finally
+            {
+                try
+                {
+                    conn.ChangeDatabase("information_schema");
+                    cmd.CommandText = $"DROP DATABASE IF EXISTS `{latin1Db}`;";
+                    cmd.ExecuteNonQuery();
+                }
+                catch { /* best-effort cleanup */ }
+            }
+        }
+    }
+
+    private static string CatalogList(System.Data.IDbCommand cmd, string sql)
+    {
+        cmd.CommandText = sql;
+        var names = new System.Collections.Generic.List<string>();
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read())
+                names.Add(reader.GetString(0));
+        names.Sort(StringComparer.Ordinal);
+        return string.Join(",", names);
+    }
 }

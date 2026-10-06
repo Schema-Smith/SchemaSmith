@@ -7,10 +7,10 @@ DROP FUNCTION IF EXISTS `SchemaSmith_BuildIndexRenameClause`;
 DELIMITER //
 
 CREATE FUNCTION `SchemaSmith_BuildIndexRenameClause`(
-    p_DatabaseName VARCHAR(128),
-    p_TableName VARCHAR(128),
-    p_OldIndexName VARCHAR(128),
-    p_NewIndexName VARCHAR(128)
+    p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_TableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_OldIndexName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_NewIndexName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 RETURNS TEXT CHARSET utf8mb4
 READS SQL DATA
@@ -26,8 +26,8 @@ BEGIN
   -- caller, so re-scoping here would be redundant. Kept in the signature to avoid touching all
   -- four call sites for a parameter that costs nothing to leave unused.
   DECLARE v_NonUnique TINYINT;
-  DECLARE v_NormColumns TEXT;
-  DECLARE v_ErrMsg VARCHAR(255);
+  DECLARE v_NormColumns TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_ErrMsg VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
   IF SchemaSmith_SupportsRenameIndex() = 1 THEN
     RETURN CONCAT('RENAME INDEX `', p_OldIndexName, '` TO `', p_NewIndexName, '`');

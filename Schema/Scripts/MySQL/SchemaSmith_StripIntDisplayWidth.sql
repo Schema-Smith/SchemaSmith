@@ -7,7 +7,7 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_StripIntDisplayWidth//
 
 CREATE FUNCTION SchemaSmith_StripIntDisplayWidth(
-    p_DataType TEXT
+    p_DataType TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ) RETURNS TEXT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC
 NO SQL
@@ -27,8 +27,8 @@ BEGIN
     -- DECIMAL(p,s), VARCHAR(n), CHAR(n), BIT(n), ENUM(...)/SET(...) all keep their parenthesized content.
     DECLARE v_Paren INT;
     DECLARE v_Close INT;
-    DECLARE v_Keyword TEXT;
-    DECLARE v_Inside TEXT;
+    DECLARE v_Keyword TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_Inside TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
     IF p_DataType IS NULL THEN
         RETURN NULL;

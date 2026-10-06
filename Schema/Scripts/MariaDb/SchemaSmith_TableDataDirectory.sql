@@ -7,9 +7,9 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_TableDataDirectory//
 
 CREATE PROCEDURE SchemaSmith_TableDataDirectory(
-    IN p_Schema VARCHAR(64),
-    IN p_Table VARCHAR(64),
-    OUT p_DataDirectory VARCHAR(512)
+    IN p_Schema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_Table VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    OUT p_DataDirectory VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 SQL SECURITY DEFINER
 BEGIN
@@ -25,16 +25,16 @@ BEGIN
     -- takes the value up to the next SPACE, but "DATA DIRECTORY" itself contains a space before the '=', so
     -- reusing it would misparse the key. A safe read (no dynamic SQL needed at all -- CREATE_OPTIONS exists
     -- on every supported MariaDB version, no kindle-floor trap here) parses the key directly instead.
-    DECLARE v_options TEXT;
+    DECLARE v_options TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_pos INT;
-    DECLARE v_val VARCHAR(512);
+    DECLARE v_val VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     -- The needle includes the opening quote so LOCATE lands exactly at the value's first character --
     -- no separate "skip past the quote" step needed.
     -- Single-quoted literal (with the embedded quote doubled), NOT a double-quoted one: under
     -- sql_mode=ANSI_QUOTES a double-quoted token is parsed as an IDENTIFIER, so `"DATA DIRECTORY='"`
     -- would fail to CREATE this PROCEDURE at kindle time on any server/session running that mode. Every
     -- other script in this tree uses the single-quote-with-doubling idiom for exactly this portability.
-    DECLARE v_needle VARCHAR(20) DEFAULT 'DATA DIRECTORY=''';
+    DECLARE v_needle VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'DATA DIRECTORY=''';
     -- A non-aggregate `SELECT ... INTO` with zero matching rows raises SQLSTATE 02000 (NOT FOUND) inside a
     -- stored routine -- the same trap the MySQL base definition's dynamic-SQL read handles locally (see
     -- that script). Scoped to this procedure's own body, so it can never escape to a caller's handler: a

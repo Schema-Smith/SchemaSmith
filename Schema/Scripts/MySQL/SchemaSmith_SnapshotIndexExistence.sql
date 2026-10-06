@@ -7,7 +7,7 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_SnapshotIndexExistence//
 
 CREATE PROCEDURE SchemaSmith_SnapshotIndexExistence(
-    IN p_Schema VARCHAR(64)
+    IN p_Schema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 BEGIN
     -- Case-insensitive schema prefilter, then the exact key compare; TableKey/IndexKey carry the name keys.

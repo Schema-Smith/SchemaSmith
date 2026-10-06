@@ -7,7 +7,7 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_SnapshotIndexVisibility//
 
 CREATE PROCEDURE SchemaSmith_SnapshotIndexVisibility(
-    IN p_Schema VARCHAR(64)
+    IN p_Schema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 BEGIN
     -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).

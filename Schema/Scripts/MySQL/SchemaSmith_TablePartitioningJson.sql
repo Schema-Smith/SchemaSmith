@@ -7,9 +7,9 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_TablePartitioningJson//
 
 CREATE FUNCTION SchemaSmith_TablePartitioningJson(
-    p_Schema VARCHAR(64),
-    p_Table VARCHAR(64)
-) RETURNS LONGTEXT
+    p_Schema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Table VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+) RETURNS LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 READS SQL DATA
 BEGIN
     -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).
@@ -29,10 +29,10 @@ BEGIN
     -- Unlike its Periods sibling this is ONE shared definition with no MariaDb override:
     -- INFORMATION_SCHEMA.PARTITIONS exists on every supported version of both engines, and all four
     -- servers above were probed returning the same columns with the same meanings.
-    DECLARE v_Method VARCHAR(20) DEFAULT NULL;
-    DECLARE v_Expression LONGTEXT DEFAULT NULL;
+    DECLARE v_Method VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
+    DECLARE v_Expression LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
     DECLARE v_Count INT DEFAULT 0;
-    DECLARE v_Partitions LONGTEXT DEFAULT NULL;
+    DECLARE v_Partitions LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
 
     SELECT p.PARTITION_METHOD, p.PARTITION_EXPRESSION
       INTO v_Method, v_Expression

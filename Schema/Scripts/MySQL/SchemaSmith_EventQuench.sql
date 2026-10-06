@@ -7,12 +7,12 @@ DROP PROCEDURE IF EXISTS `SchemaSmith_EventQuench`;
 DELIMITER //
 
 CREATE PROCEDURE `SchemaSmith_EventQuench`(
-    IN p_ProductName VARCHAR(50),
-    IN p_DatabaseName VARCHAR(200),
-    IN p_EventDefinitions LONGTEXT,
+    IN p_ProductName VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_DatabaseName VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_EventDefinitions LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_WhatIf TINYINT,
     IN p_DropEventsRemovedFromProduct TINYINT,
-    IN p_TemplateName VARCHAR(256)
+    IN p_TemplateName VARCHAR(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 BEGIN
     -- Converges declared scheduled events, and RETURNS THE STATEMENTS TO RUN rather than running them.

@@ -7,9 +7,9 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_IndexIsVisible//
 
 CREATE FUNCTION SchemaSmith_IndexIsVisible(
-    p_Schema VARCHAR(64),
-    p_Table VARCHAR(64),
-    p_Index VARCHAR(64)
+    p_Schema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Table VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Index VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ) RETURNS TINYINT
 READS SQL DATA
 BEGIN

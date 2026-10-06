@@ -12,12 +12,12 @@ DROP FUNCTION IF EXISTS `SchemaSmith_StripLeadingSelect`;
 
 DELIMITER //
 
-CREATE FUNCTION `SchemaSmith_StripLeadingSelect`(p_text VARCHAR(4000))
+CREATE FUNCTION `SchemaSmith_StripLeadingSelect`(p_text VARCHAR(4000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
 RETURNS VARCHAR(4000) CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC
 NO SQL
 BEGIN
-    DECLARE v_rest VARCHAR(4000);
+    DECLARE v_rest VARCHAR(4000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     IF p_text IS NULL THEN
         RETURN p_text;
     END IF;

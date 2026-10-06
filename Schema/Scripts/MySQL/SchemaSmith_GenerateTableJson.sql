@@ -10,18 +10,18 @@ DROP PROCEDURE IF EXISTS `SchemaSmith_GenerateTableJSON`;
 DELIMITER //
 
 CREATE PROCEDURE `SchemaSmith_GenerateTableJSON`(
-    IN p_Schema VARCHAR(200),
-    IN p_Table VARCHAR(200)
+    IN p_Schema VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_Table VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 BEGIN
-    DECLARE v_json LONGTEXT;
-    DECLARE v_columns LONGTEXT;
-    DECLARE v_indexes LONGTEXT;
-    DECLARE v_foreign_keys LONGTEXT;
-    DECLARE v_check_constraints LONGTEXT;
-    DECLARE v_fulltext_indexes LONGTEXT;
-    DECLARE v_tablespace VARCHAR(64);
-    DECLARE v_datadirectory VARCHAR(512);
+    DECLARE v_json LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_columns LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_indexes LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_foreign_keys LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_check_constraints LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_fulltext_indexes LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_tablespace VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_datadirectory VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
     -- Set session variables for proper GROUP_CONCAT handling
     SET SESSION group_concat_max_len = 1000000;

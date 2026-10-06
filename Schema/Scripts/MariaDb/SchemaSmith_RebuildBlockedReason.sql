@@ -7,9 +7,9 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_RebuildBlockedReason//
 
 CREATE FUNCTION SchemaSmith_RebuildBlockedReason(
-    p_Schema VARCHAR(64),
-    p_Table VARCHAR(64)
-) RETURNS VARCHAR(255)
+    p_Schema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Table VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+) RETURNS VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 READS SQL DATA
 BEGIN
     -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).

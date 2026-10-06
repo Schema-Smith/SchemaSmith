@@ -6,7 +6,7 @@ DELIMITER //
 
 DROP FUNCTION IF EXISTS SchemaSmith_IndexInvisibleClause//
 
-CREATE FUNCTION SchemaSmith_IndexInvisibleClause() RETURNS VARCHAR(20)
+CREATE FUNCTION SchemaSmith_IndexInvisibleClause() RETURNS VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC NO SQL
 BEGIN
     -- MariaDb variant override of the shared MySQL function. MariaDB has no INVISIBLE keyword;

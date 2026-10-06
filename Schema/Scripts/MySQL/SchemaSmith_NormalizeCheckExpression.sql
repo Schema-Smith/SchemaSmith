@@ -7,7 +7,7 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_NormalizeCheckExpression//
 
 CREATE FUNCTION SchemaSmith_NormalizeCheckExpression(
-    p_Expression TEXT
+    p_Expression TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ) RETURNS TEXT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC
 NO SQL
@@ -26,11 +26,11 @@ BEGIN
     -- This mirrors how PostgreSQL normalizes via pg_get_constraintdef and SQL Server via
     -- fn_StripParenWrapping.
 
-    DECLARE v_Result TEXT;
+    DECLARE v_Result TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_Depth INT;
     DECLARE v_Pos INT;
     DECLARE v_Len INT;
-    DECLARE v_Char CHAR(1);
+    DECLARE v_Char CHAR(1) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_Enclosed INT;
 
     IF p_Expression IS NULL THEN
