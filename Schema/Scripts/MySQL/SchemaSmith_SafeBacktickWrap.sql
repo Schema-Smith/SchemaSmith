@@ -9,7 +9,7 @@ DROP FUNCTION IF EXISTS `SchemaSmith_SafeBacktickWrap`;
 
 DELIMITER //
 
-CREATE FUNCTION `SchemaSmith_SafeBacktickWrap`(identifier VARCHAR(255))
+CREATE FUNCTION `SchemaSmith_SafeBacktickWrap`(identifier VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
 RETURNS VARCHAR(260) CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC
 NO SQL

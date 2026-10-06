@@ -7,8 +7,8 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_IndexOnlyQuench//
 
 CREATE PROCEDURE SchemaSmith_IndexOnlyQuench(
-    IN p_ProductName VARCHAR(100),
-    IN p_DatabaseName VARCHAR(128),
+    IN p_ProductName VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_WhatIf TINYINT,
     IN p_DropUnknownIndexes TINYINT,
     IN p_DropIndexesRemovedFromProduct TINYINT
@@ -136,6 +136,8 @@ BEGIN
         IndexComment VARCHAR(1024),
         TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        LeadColumn VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
+        FkBacked TINYINT NOT NULL DEFAULT 0,
         PRIMARY KEY (TableName, IndexName),
         KEY ix_idxsnap_key (TableKey, IndexKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -152,7 +154,7 @@ BEGIN
     -- only executes at 8.0.13+ and never on 5.7/MariaDB; see GenerateTableJson.sql for the full
     -- explanation) or the compare below never converges.
     IF SchemaSmith_SupportsFunctionalIndex() = 1 THEN
-        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment)
+        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment, LeadColumn)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4),
                CONVERT(s.INDEX_NAME USING utf8mb4),
                MAX(s.NON_UNIQUE),
@@ -172,12 +174,13 @@ BEGIN
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
-               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
+               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4),
+               CONVERT(MAX(CASE WHEN s.SEQ_IN_INDEX = 1 THEN s.COLUMN_NAME END) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
          WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
          GROUP BY s.TABLE_NAME, s.INDEX_NAME;
     ELSE
-        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment)
+        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment, LeadColumn)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4),
                CONVERT(s.INDEX_NAME USING utf8mb4),
                MAX(s.NON_UNIQUE),
@@ -189,7 +192,8 @@ BEGIN
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
-               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
+               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4),
+               CONVERT(MAX(CASE WHEN s.SEQ_IN_INDEX = 1 THEN s.COLUMN_NAME END) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
          WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
          GROUP BY s.TABLE_NAME, s.INDEX_NAME;
@@ -201,6 +205,31 @@ BEGIN
     UPDATE _SchemaSmith_IdxDetectSnap
        SET TableKey = SchemaSmith_IdentifierKey(TableName),
            IndexKey = SchemaSmith_NameKeyCI(IndexName);
+
+    -- MariaDB converges a case-only index spelling by drop and re-create, which the engine refuses (1553) for an
+    -- index a foreign key depends on. Mark every index that leads with a foreign key's leading column, on either
+    -- side of the key, so that step leaves its spelling alone rather than abort the deploy over a cosmetic difference.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
+    CREATE TEMPORARY TABLE _SchemaSmith_FkLeadColumns (
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableKey, ColumnKey)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
+    SELECT SchemaSmith_IdentifierKey(k.TABLE_NAME), SchemaSmith_NameKeyCI(k.COLUMN_NAME)
+      FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+     WHERE k.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.TABLE_SCHEMA) = v_DbKey
+       AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
+    INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
+    SELECT SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_NAME), SchemaSmith_NameKeyCI(k.REFERENCED_COLUMN_NAME)
+      FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+     WHERE k.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_SCHEMA) = v_DbKey
+       AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
+    UPDATE _SchemaSmith_IdxDetectSnap snap
+      JOIN _SchemaSmith_FkLeadColumns f
+        ON f.TableKey = snap.TableKey AND f.ColumnKey = SchemaSmith_NameKeyCI(snap.LeadColumn)
+       SET snap.FkBacked = 1;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectNames;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxDetectNames (
@@ -400,7 +429,7 @@ BEGIN
       -- Check if definition differs (columns, uniqueness, or index type)
       AND (
           -- Spelled differently only in case, on MariaDB (see the case-only spelling step above)
-          (VERSION() LIKE '%MariaDB%' AND BINARY snap.IndexName <> BINARY SchemaSmith_StripBacktickWrapping(i.IndexName))
+          (VERSION() LIKE '%MariaDB%' AND snap.FkBacked = 0 AND BINARY snap.IndexName <> BINARY SchemaSmith_StripBacktickWrapping(i.IndexName))
           -- Or columns differ
           OR BINARY SchemaSmith_NormalizeIndexColumns(i.IndexColumns) != BINARY snap.NormColumns
           -- Or uniqueness differs

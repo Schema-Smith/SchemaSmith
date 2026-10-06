@@ -7,7 +7,7 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_NormalizeColumnDefault//
 
 CREATE FUNCTION SchemaSmith_NormalizeColumnDefault(
-    p_Default TEXT
+    p_Default TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ) RETURNS TEXT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC
 NO SQL

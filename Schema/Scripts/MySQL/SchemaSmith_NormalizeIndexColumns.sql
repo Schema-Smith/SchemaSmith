@@ -7,7 +7,7 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_NormalizeIndexColumns//
 
 CREATE FUNCTION SchemaSmith_NormalizeIndexColumns(
-    p_IndexColumns TEXT
+    p_IndexColumns TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ) RETURNS TEXT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
 NOT DETERMINISTIC
 READS SQL DATA
@@ -32,20 +32,20 @@ BEGIN
     -- deploy idempotent (without this, a declared DESC index would be seen as modified and rebuilt every run).
     -- The 'downgraded' visibility is recorded by the index-apply procs. NOT DETERMINISTIC: reads the version.
 
-    DECLARE v_Result TEXT DEFAULT '';
-    DECLARE v_Column TEXT;
+    DECLARE v_Result TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT '';
+    DECLARE v_Column TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_Pos INT DEFAULT 1;
     DECLARE v_Len INT;
     DECLARE v_Comma INT;
-    DECLARE v_Trimmed TEXT;
+    DECLARE v_Trimmed TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_IsDesc INT DEFAULT 0;
-    DECLARE v_ColName TEXT;
-    DECLARE v_Prefix TEXT DEFAULT '';
+    DECLARE v_ColName TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_Prefix TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT '';
     DECLARE v_ParenPos INT DEFAULT 0;
     DECLARE v_SupportsDesc TINYINT DEFAULT SchemaSmith_SupportsDescendingIndex();
     DECLARE v_Depth INT DEFAULT 0;
     DECLARE v_Scan INT;
-    DECLARE v_Char CHAR(1);
+    DECLARE v_Char CHAR(1) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_InBacktick TINYINT DEFAULT 0;
 
     IF p_IndexColumns IS NULL OR TRIM(p_IndexColumns) = '' THEN

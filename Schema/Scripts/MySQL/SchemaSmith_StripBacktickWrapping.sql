@@ -23,12 +23,12 @@ DROP FUNCTION IF EXISTS `SchemaSmith_StripBacktickWrapping`;
 
 DELIMITER //
 
-CREATE FUNCTION `SchemaSmith_StripBacktickWrapping`(identifier VARCHAR(260))
+CREATE FUNCTION `SchemaSmith_StripBacktickWrapping`(identifier VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
 RETURNS VARCHAR(255) CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC
 NO SQL
 BEGIN
-    DECLARE trimmed VARCHAR(260);
+    DECLARE trimmed VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
     IF identifier IS NULL THEN
         RETURN NULL;

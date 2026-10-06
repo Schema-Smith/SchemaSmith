@@ -700,14 +700,6 @@ public class ProductQuench
         return true;
     }
 
-    /// <summary>
-    /// Applies the <c>Target.Databases</c> / <c>Target.Schemas</c> per-template filter to
-    /// <paramref name="units"/>. Returns the filtered list unchanged when the filter is empty
-    /// or the input is empty. Throws <see cref="InvalidOperationException"/> on rejection
-    /// (unknown filter value or zero-result intersection) — callers handle the exception
-    /// differently: <see cref="QuenchTemplate"/> logs + exits; <see cref="PreviewTargets"/>
-    /// logs + continues so remaining templates are still reported.
-    /// </summary>
     private bool RefuseFoldedTableNameCollisions(Template template)
     {
         if (_product.Platform.GetBasePlatform() != Platform.MySQL) return false;
@@ -748,6 +740,14 @@ public class ProductQuench
         return _serverFoldsNames.Value;
     }
 
+    /// <summary>
+    /// Applies the <c>Target.Databases</c> / <c>Target.Schemas</c> per-template filter to
+    /// <paramref name="units"/>. Returns the filtered list unchanged when the filter is empty
+    /// or the input is empty. Throws <see cref="InvalidOperationException"/> on rejection
+    /// (unknown filter value or zero-result intersection) — callers handle the exception
+    /// differently: <see cref="QuenchTemplate"/> logs + exits; <see cref="PreviewTargets"/>
+    /// logs + continues so remaining templates are still reported.
+    /// </summary>
     private List<WorkUnit> ApplyPerTemplateTargetFilter(Template template, List<WorkUnit> units)
     {
         if (units.Count == 0 || (_targetDatabases.Count == 0 && _targetSchemas.Count == 0))

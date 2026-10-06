@@ -82,40 +82,40 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_RebuildTable//
 
 CREATE PROCEDURE SchemaSmith_RebuildTable(
-    IN p_Schema VARCHAR(64),
-    IN p_Table VARCHAR(64),
+    IN p_Schema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_Table VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_WhatIf TINYINT
 )
 SQL SECURITY DEFINER
 BEGIN
-    DECLARE v_SchemaRaw VARCHAR(64);
-    DECLARE v_TableRaw VARCHAR(64);
-    DECLARE v_Qualified VARCHAR(200);
-    DECLARE v_ShadowRaw VARCHAR(64);
-    DECLARE v_OldRaw VARCHAR(64);
-    DECLARE v_ShadowQualified VARCHAR(200);
-    DECLARE v_OldQualified VARCHAR(200);
-    DECLARE v_BlockedReason VARCHAR(255);
+    DECLARE v_SchemaRaw VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_TableRaw VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_Qualified VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_ShadowRaw VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_OldRaw VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_ShadowQualified VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_OldQualified VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_BlockedReason VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_WorkingSetMissing TINYINT DEFAULT 0;
     DECLARE v_Probe INT DEFAULT 0;
     DECLARE v_Count INT DEFAULT 0;
-    DECLARE v_ShadowColumnList LONGTEXT;
-    DECLARE v_CopyColumnList LONGTEXT;
-    DECLARE v_LiveCollation VARCHAR(100);
-    DECLARE v_Collation VARCHAR(100);
-    DECLARE v_Engine VARCHAR(50);
-    DECLARE v_AutoIncrementKeyClause VARCHAR(500);
-    DECLARE v_PrimaryKeyClause TEXT;
+    DECLARE v_ShadowColumnList LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_CopyColumnList LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_LiveCollation VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_Collation VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_Engine VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_AutoIncrementKeyClause VARCHAR(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_PrimaryKeyClause TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_CapturedAutoIncrement BIGINT UNSIGNED DEFAULT NULL;
     DECLARE v_AutoIncrementInCopy TINYINT DEFAULT 0;
     DECLARE v_StatsExpirySwapped TINYINT DEFAULT 0;
-    DECLARE v_CreateShadowSql LONGTEXT;
-    DECLARE v_CopySql LONGTEXT;
-    DECLARE v_ZeroIdOnSql LONGTEXT;
-    DECLARE v_ZeroIdOffSql LONGTEXT;
-    DECLARE v_ReseedSql LONGTEXT;
-    DECLARE v_SwapSql LONGTEXT;
-    DECLARE v_DropOldSql LONGTEXT;
+    DECLARE v_CreateShadowSql LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_CopySql LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_ZeroIdOnSql LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_ZeroIdOffSql LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_ReseedSql LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_SwapSql LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_DropOldSql LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_RowsBefore BIGINT DEFAULT 0;
     DECLARE v_RowsAfter BIGINT DEFAULT -1;
     DECLARE v_RowsFinal BIGINT DEFAULT -1;

@@ -21,13 +21,13 @@ DROP FUNCTION IF EXISTS `SchemaSmith_QuoteIdentifier`;
 
 DELIMITER //
 
-CREATE FUNCTION `SchemaSmith_QuoteIdentifier`(identifier VARCHAR(255))
+CREATE FUNCTION `SchemaSmith_QuoteIdentifier`(identifier VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
 RETURNS VARCHAR(260) CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC
 NO SQL
 BEGIN
-    DECLARE trimmed VARCHAR(255);
-    DECLARE unquoted VARCHAR(255);
+    DECLARE trimmed VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE unquoted VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
     IF identifier IS NULL THEN
         RETURN NULL;

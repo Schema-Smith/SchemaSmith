@@ -11,7 +11,7 @@ RETURNS INT
 NOT DETERMINISTIC
 NO SQL
 BEGIN
-  DECLARE v_raw VARCHAR(64);
+  DECLARE v_raw VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
   -- Override (test affordance) wins; otherwise parse VERSION() to major*100+minor.
   IF @schemasmith_version_override IS NOT NULL THEN
     RETURN @schemasmith_version_override;

@@ -15,8 +15,8 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_MissingIndexesAndConstraintsQuench//
 
 CREATE PROCEDURE SchemaSmith_MissingIndexesAndConstraintsQuench(
-    IN p_ProductName VARCHAR(100),
-    IN p_DatabaseName VARCHAR(128),
+    IN p_ProductName VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_WhatIf TINYINT,
     IN p_DropCheckConstraintsRemovedFromProduct TINYINT
 )

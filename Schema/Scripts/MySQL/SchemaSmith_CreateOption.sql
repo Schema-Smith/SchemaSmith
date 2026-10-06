@@ -6,7 +6,7 @@ DROP FUNCTION IF EXISTS `SchemaSmith_CreateOption`;
 
 DELIMITER //
 
-CREATE FUNCTION `SchemaSmith_CreateOption`(p_Options TEXT, p_Key VARCHAR(64))
+CREATE FUNCTION `SchemaSmith_CreateOption`(p_Options TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Key VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
 -- CHARACTER SET DECLARED, and it is load-bearing rather than tidiness. Without it the return takes the
 -- DATABASE's default charset and collation, while a string literal it is compared against carries the
 -- collation_connection captured when the calling routine was created -- the SERVER default. Against a
@@ -40,9 +40,9 @@ BEGIN
   --
   -- Returns NULL when the option is absent, which is what an unset option looks like -- CREATE_OPTIONS
   -- is an empty string for a table that declares none.
-  DECLARE v_norm TEXT;
+  DECLARE v_norm TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
   DECLARE v_pos INT;
-  DECLARE v_val VARCHAR(256);
+  DECLARE v_val VARCHAR(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
   IF p_Options IS NULL OR p_Options = '' THEN
     RETURN NULL;

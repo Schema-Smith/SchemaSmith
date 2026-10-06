@@ -7,7 +7,7 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_MissingTableAndColumnQuench//
 
 CREATE PROCEDURE SchemaSmith_MissingTableAndColumnQuench(
-    IN p_DatabaseName VARCHAR(128),
+    IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_WhatIf TINYINT
 )
 SQL SECURITY DEFINER
@@ -23,9 +23,9 @@ BEGIN
     --     then by OrdinalPosition
 
     DECLARE v_Done INT DEFAULT FALSE;
-    DECLARE v_Sql TEXT;
-    DECLARE v_StatusTableName VARCHAR(128);
-    DECLARE v_StatusVariant VARCHAR(128);
+    DECLARE v_Sql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_StatusTableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_StatusVariant VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     -- Catalog reads go through the keyed snapshots in SchemaSmith_CatalogSnapshot; the one direct read (ROUTINES)
     -- uses the same case-insensitive schema prefilter followed by the exact key compare.
     DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
@@ -734,7 +734,9 @@ BEGIN
                                     IF(CONVERT(isc.EXTRA USING utf8mb4) LIKE '%GENERATED%',
                                        CONCAT(' GENERATED ALWAYS AS (', CONVERT(isc.GENERATION_EXPRESSION USING utf8mb4) COLLATE utf8mb4_unicode_ci, ') ',
                                               IF(CONVERT(isc.EXTRA USING utf8mb4) LIKE '%STORED%', 'STORED', 'VIRTUAL')), ''),
-                                    IF(CONVERT(isc.IS_NULLABLE USING utf8mb4) = 'NO', ' NOT NULL', ' NULL'),
+                                    -- MariaDB rejects NULL / NOT NULL on a generated column (1064).
+                                    IF(VERSION() LIKE '%MariaDB%' AND CONVERT(isc.EXTRA USING utf8mb4) LIKE '%GENERATED%', '',
+                                       IF(CONVERT(isc.IS_NULLABLE USING utf8mb4) = 'NO', ' NOT NULL', ' NULL')),
                                     IF(CONVERT(isc.EXTRA USING utf8mb4) LIKE '%auto_increment%', ' AUTO_INCREMENT', ''),
                                     IF(COALESCE(CONVERT(isc.COLUMN_COMMENT USING utf8mb4), '') <> '',
                                        CONCAT(' COMMENT ', QUOTE(CONVERT(isc.COLUMN_COMMENT USING utf8mb4) COLLATE utf8mb4_unicode_ci)), '')))

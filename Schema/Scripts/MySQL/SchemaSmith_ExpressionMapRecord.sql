@@ -7,7 +7,7 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_ExpressionMapRecord//
 
 CREATE PROCEDURE SchemaSmith_ExpressionMapRecord(
-    IN p_DatabaseName VARCHAR(64),
+    IN p_DatabaseName VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_WhatIf TINYINT(1)
 )
 proc: BEGIN

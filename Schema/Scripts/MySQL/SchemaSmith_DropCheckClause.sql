@@ -6,7 +6,7 @@ DELIMITER //
 
 DROP FUNCTION IF EXISTS SchemaSmith_DropCheckClause//
 
-CREATE FUNCTION SchemaSmith_DropCheckClause() RETURNS VARCHAR(20)
+CREATE FUNCTION SchemaSmith_DropCheckClause() RETURNS VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC NO SQL
 BEGIN
     -- Returns the ALTER TABLE clause used to drop a named CHECK constraint.

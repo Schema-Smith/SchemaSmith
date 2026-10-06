@@ -7,7 +7,7 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_SetSystemVersioningAlterHistory//
 
 CREATE PROCEDURE SchemaSmith_SetSystemVersioningAlterHistory(
-    IN p_Mode VARCHAR(10)
+    IN p_Mode VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 SQL SECURITY DEFINER
 BEGIN

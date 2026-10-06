@@ -7,9 +7,9 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_TablePeriodsJson//
 
 CREATE FUNCTION SchemaSmith_TablePeriodsJson(
-    p_Schema VARCHAR(64),
-    p_Table VARCHAR(64)
-) RETURNS LONGTEXT
+    p_Schema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Table VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+) RETURNS LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 READS SQL DATA
 BEGIN
     -- The table's application-time periods as a JSON array, or '[]' when it has none.

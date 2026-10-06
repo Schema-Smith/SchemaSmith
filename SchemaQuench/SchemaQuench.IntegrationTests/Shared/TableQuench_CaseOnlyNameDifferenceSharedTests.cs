@@ -44,17 +44,73 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
 
         try
         {
+            ClearStatusMessages(cmd);
             RunTableQuenchProc(cmd, json, productName: product);
             AssertColumnSurvived(cmd, table, "after the first deploy");
+            Assert.That(MessagesLike(cmd, "%Rename column%"), Is.EqualTo(1), "the first deploy renames the column once");
 
+            ClearStatusMessages(cmd);
             RunTableQuenchProc(cmd, json, productName: product);
             AssertColumnSurvived(cmd, table, "after a redeploy");
+            Assert.That(MessagesLike(cmd, "%Rename column%") + MessagesLike(cmd, "%Drop column%"), Is.EqualTo(0),
+                "a redeploy must leave the converged column alone");
         }
         finally
         {
             CleanUp(cmd, product, table);
         }
     }
+
+    // Below the RENAME COLUMN floor (MySQL 8.0 / MariaDB 10.5.2) the rename restates the column with CHANGE COLUMN,
+    // whose generated-column form differs by engine.
+    [Test]
+    public void RenamedGeneratedColumns_KeepComputing_ForACaseOnlySpellingAndAnOldName()
+    {
+        const string table = "CaseOnlyGen";
+        const string product = "Case Only Generated";
+        var json = $$"""
+            [{
+                "Name": "{{table}}",
+                "Columns": [
+                    { "Name": "id", "DataType": "INT", "Nullable": false },
+                    { "Name": "a", "DataType": "INT", "Nullable": true },
+                    { "Name": "plusone", "DataType": "INT", "Nullable": true, "GenerationExpression": "`a` + 1", "Generated": "VIRTUAL" },
+                    { "Name": "twice", "DataType": "INT", "Nullable": true, "GenerationExpression": "`a` * 2", "Generated": "STORED" },
+                    { "Name": "triple", "OldName": "Thrice", "DataType": "INT", "Nullable": true, "GenerationExpression": "`a` * 3", "Generated": "VIRTUAL" }
+                ],
+                "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" } ]
+            }]
+            """;
+
+        using var conn = Open(out var cmd);
+        CleanUp(cmd, product, table);
+        Exec(cmd, $"CREATE TABLE `{table}` (`id` INT NOT NULL PRIMARY KEY, `a` INT NULL, " +
+                  "`PlusOne` INT AS (`a` + 1) VIRTUAL, `Twice` INT AS (`a` * 2) STORED, `Thrice` INT AS (`a` * 3) VIRTUAL)");
+        Exec(cmd, $"INSERT INTO `{table}` (`id`, `a`) VALUES (1, 10), (2, 20)");
+
+        try
+        {
+            for (var deploy = 1; deploy <= 2; deploy++)
+            {
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
+                    $"deploy {deploy}: re-spelling a generated column must not abort the deploy");
+                Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CONCAT(id, ':', plusone, ':', twice, ':', triple) ORDER BY id) FROM `{table}`"),
+                    Is.EqualTo("1:11:20:30,2:21:40:60"), $"deploy {deploy}: every generated column must keep computing");
+                Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(COLUMN_NAME AS BINARY) ORDER BY ORDINAL_POSITION) FROM INFORMATION_SCHEMA.COLUMNS WHERE {TableIs(table)}"),
+                    Is.EqualTo("id,a,plusone,twice,triple"), $"deploy {deploy}: the columns take the package's spelling");
+            }
+        }
+        finally
+        {
+            CleanUp(cmd, product, table);
+        }
+    }
+
+    private static void ClearStatusMessages(IDbCommand cmd) =>
+        Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
+
+    private static int MessagesLike(IDbCommand cmd, string pattern) =>
+        int.Parse(Scalar(cmd, $"SELECT COUNT(*) FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '{pattern}'"));
 
     private void AssertColumnSurvived(IDbCommand cmd, string table, string when)
     {
@@ -94,7 +150,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         {
             for (var deploy = 1; deploy <= 2; deploy++)
             {
-                Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
+                ClearStatusMessages(cmd);
                 Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
                     $"deploy {deploy}: an index spelled differently only in case is the same index, not a duplicate to create");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT CAST(INDEX_NAME AS BINARY)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(table)} AND INDEX_NAME <> 'PRIMARY'"),
@@ -103,9 +159,10 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
                 // MA-086: a case-only RENAME INDEX corrupts InnoDB's index dictionary on MariaDB versions hit by
                 // MDEV-34951, so MariaDB must converge by drop and re-create. MySQL renames, which proves this read
                 // can see the rename when one is emitted.
-                var renamesLogged = Scalar(cmd, "SELECT COUNT(*) FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%Rename index (spelling)%'");
-                Assert.That(renamesLogged, Is.EqualTo(!isMariaDb && deploy == 1 ? "1" : "0"),
+                Assert.That(MessagesLike(cmd, "%Rename index (spelling)%"), Is.EqualTo(!isMariaDb && deploy == 1 ? 1 : 0),
                     $"deploy {deploy}: a case-only rename is emitted only by MySQL, and only once");
+                Assert.That(MessagesLike(cmd, "%Drop and recreate index%"), Is.EqualTo(isMariaDb && deploy == 1 ? 1 : 0),
+                    $"deploy {deploy}: MariaDB converges by drop and re-create, once");
             }
         }
         finally
@@ -190,10 +247,68 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         {
             for (var deploy = 1; deploy <= 2; deploy++)
             {
+                ClearStatusMessages(cmd);
                 Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
                     $"deploy {deploy}: a foreign key spelled differently only in case is the same constraint, not a duplicate to create");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
                     Is.EqualTo("fk_caseonly_parent"), $"deploy {deploy}: exactly one foreign key, with the package's spelling");
+                Assert.That(MessagesLike(cmd, "%Drop modified FK%"), Is.EqualTo(deploy == 1 ? 1 : 0),
+                    $"deploy {deploy}: the key is re-created once, then left alone");
+            }
+        }
+        finally
+        {
+            CleanUp(cmd, product, child, parent);
+        }
+    }
+
+    // The engine refuses to drop the only index a foreign key can use (1553), so a converge that drops the index first
+    // aborts the deploy.
+    [Test]
+    public void ACaseOnlySpellingOfTheIndexBackingAForeignKey_Deploys_AndKeepsTheKey()
+    {
+        const string parent = "FkBackParent";
+        const string child = "FkBackChild";
+        const string product = "Case Only FK Backing Index";
+        var json = $$"""
+            [{
+                "Name": "{{parent}}",
+                "Columns": [ { "Name": "id", "DataType": "INT", "Nullable": false } ],
+                "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" } ]
+            },
+            {
+                "Name": "{{child}}",
+                "Columns": [
+                    { "Name": "id", "DataType": "INT", "Nullable": false },
+                    { "Name": "parent_id", "DataType": "INT", "Nullable": true }
+                ],
+                "Indexes": [
+                    { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" },
+                    { "Name": "ix_fkback_parent", "IndexColumns": "parent_id" }
+                ],
+                "ForeignKeys": [ { "Name": "fk_fkback_parent", "Columns": "parent_id", "RelatedTable": "{{parent}}", "RelatedColumns": "id" } ]
+            }]
+            """;
+
+        using var conn = Open(out var cmd);
+        CleanUp(cmd, product, child, parent);
+        Exec(cmd, $"CREATE TABLE `{parent}` (`id` INT NOT NULL PRIMARY KEY)");
+        Exec(cmd, $"CREATE TABLE `{child}` (`id` INT NOT NULL PRIMARY KEY, `parent_id` INT NULL, KEY `IX_FkBack_Parent` (`parent_id`), " +
+                  $"CONSTRAINT `fk_fkback_parent` FOREIGN KEY (`parent_id`) REFERENCES `{parent}` (`id`))");
+        Exec(cmd, $"INSERT INTO `{parent}` VALUES (1)");
+        Exec(cmd, $"INSERT INTO `{child}` VALUES (1, 1)");
+
+        try
+        {
+            for (var deploy = 1; deploy <= 2; deploy++)
+            {
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
+                    $"deploy {deploy}: re-spelling the index a foreign key depends on must not abort the deploy");
+                Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
+                    Is.EqualTo("fk_fkback_parent"), $"deploy {deploy}: the foreign key must survive");
+                Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT LOWER(INDEX_NAME)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(child)} AND INDEX_NAME <> 'PRIMARY'"),
+                    Is.EqualTo("ix_fkback_parent"), $"deploy {deploy}: exactly one index backs the key");
+                Assert.That(Scalar(cmd, $"SELECT COUNT(*) FROM `{child}`"), Is.EqualTo("1"), $"deploy {deploy}: the rows must survive");
             }
         }
         finally
@@ -246,11 +361,12 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             {
                 Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product), $"deploy {deploy}");
 
-                var owned = Scalar(cmd, $"SELECT GROUP_CONCAT(CONCAT(ObjectType, ':', LOWER(ObjectName)) ORDER BY ObjectType, LOWER(ObjectName) SEPARATOR ' | ') " +
+                // Ownership records the package's spelling on every setting, so the expectation is exact.
+                var owned = Scalar(cmd, $"SELECT GROUP_CONCAT(CONCAT(ObjectType, ':', ObjectName) ORDER BY ObjectType, LOWER(ObjectName) SEPARATOR ' | ') " +
                                         $"FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}'");
-                var expected = (checks == "" ? "" : "CHECK CONSTRAINT:ownmixchild.ck_ownmix_v | ") +
-                               "FOREIGN KEY:ownmixchild.fk_ownmix_parent | INDEX:ownmixchild.ix_ownmix_parentid | INDEX:ownmixchild.primary | " +
-                               "INDEX:ownmixparent.primary | TABLE:ownmixchild | TABLE:ownmixparent";
+                var expected = (checks == "" ? "" : "CHECK CONSTRAINT:OwnMixChild.CK_OwnMix_V | ") +
+                               "FOREIGN KEY:OwnMixChild.FK_OwnMix_Parent | INDEX:OwnMixChild.IX_OwnMix_ParentId | INDEX:OwnMixChild.PRIMARY | " +
+                               "INDEX:OwnMixParent.PRIMARY | TABLE:OwnMixChild | TABLE:OwnMixParent";
                 Assert.That(owned, Is.EqualTo(expected), $"deploy {deploy}: every declared object must be recorded as owned");
             }
         }

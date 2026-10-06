@@ -7,7 +7,7 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_UpperDataType//
 
 CREATE FUNCTION SchemaSmith_UpperDataType(
-    p_DataType TEXT
+    p_DataType TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ) RETURNS TEXT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC
 NO SQL
@@ -19,7 +19,7 @@ BEGIN
     -- comparison was case-insensitive). Every other type has no case-sensitive content
     -- inside its parens (numeric args), so it takes the plain UPPER path.
     DECLARE v_Paren INT;
-    DECLARE v_Keyword TEXT;
+    DECLARE v_Keyword TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
     IF p_DataType IS NULL THEN
         RETURN NULL;

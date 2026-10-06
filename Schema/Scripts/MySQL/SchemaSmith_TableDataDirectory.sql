@@ -7,9 +7,9 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_TableDataDirectory//
 
 CREATE PROCEDURE SchemaSmith_TableDataDirectory(
-    IN p_Schema VARCHAR(64),
-    IN p_Table VARCHAR(64),
-    OUT p_DataDirectory VARCHAR(512)
+    IN p_Schema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_Table VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    OUT p_DataDirectory VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 SQL SECURITY DEFINER
 BEGIN
@@ -62,7 +62,7 @@ BEGIN
       BEGIN
         -- Computed OUTSIDE the dynamic-SQL string (plain SQL, using the routine's own IN params) so the
         -- string stays a single simple SELECT -- the suffix-stripping below runs after EXECUTE returns.
-        DECLARE v_suffix VARCHAR(600);
+        DECLARE v_suffix VARCHAR(600) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
         DECLARE CONTINUE HANDLER FOR NOT FOUND SET @ss_tdd_out = NULL;
 
         -- Session variables, not routine params, inside the dynamic SQL string: a prepared statement

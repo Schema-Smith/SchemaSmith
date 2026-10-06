@@ -5,9 +5,9 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_NumericDefaultsEqual//
 
 CREATE FUNCTION SchemaSmith_NumericDefaultsEqual(
-    p_Live TEXT,
-    p_Declared TEXT,
-    p_DataType VARCHAR(64)
+    p_Live TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Declared TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_DataType VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ) RETURNS TINYINT
 DETERMINISTIC
 BEGIN

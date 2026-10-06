@@ -25,7 +25,7 @@ DROP FUNCTION IF EXISTS `SchemaSmith_IdentifierKey`;
 
 DELIMITER //
 
-CREATE FUNCTION `SchemaSmith_IdentifierKey`(identifier VARCHAR(260))
+CREATE FUNCTION `SchemaSmith_IdentifierKey`(identifier VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
 RETURNS VARCHAR(260) CHARSET utf8mb4 COLLATE utf8mb4_bin
 -- NOT DETERMINISTIC for the same reason SchemaSmith_ServerVersionNum is: the answer depends on a
 -- server variable, not on the argument alone, so declaring otherwise would license the optimizer to

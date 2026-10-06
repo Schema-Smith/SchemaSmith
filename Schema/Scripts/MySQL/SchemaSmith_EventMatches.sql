@@ -7,10 +7,10 @@ DROP FUNCTION IF EXISTS `SchemaSmith_EventMatches`;
 DELIMITER //
 
 CREATE FUNCTION `SchemaSmith_EventMatches`(
-    p_Schema VARCHAR(200), p_Name VARCHAR(64),
-    p_ScheduleType VARCHAR(10), p_Interval VARCHAR(64), p_ExecuteAt VARCHAR(64),
-    p_Starts VARCHAR(64), p_Ends VARCHAR(64), p_Status VARCHAR(20),
-    p_Preserve TINYINT, p_Comment TEXT, p_Definition LONGTEXT
+    p_Schema VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_ScheduleType VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Interval VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_ExecuteAt VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Starts VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Ends VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Status VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Preserve TINYINT, p_Comment TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Definition LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 RETURNS TINYINT
 NOT DETERMINISTIC
@@ -32,15 +32,15 @@ BEGIN
   --   interval      catalog INTERVAL_VALUE + INTERVAL_FIELD, separate vs one string, "1 DAY"
   --   EVENT_TYPE    catalog 'RECURRING' / 'ONE TIME'                  vs DDL EVERY / AT
   -- Comparing either side raw would report a difference on every deploy and rebuild the event forever.
-  DECLARE v_type VARCHAR(20);
-  DECLARE v_interval VARCHAR(64);
-  DECLARE v_at VARCHAR(64);
-  DECLARE v_starts VARCHAR(64);
-  DECLARE v_ends VARCHAR(64);
-  DECLARE v_status VARCHAR(20);
+  DECLARE v_type VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_interval VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_at VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_starts VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_ends VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_status VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
   DECLARE v_preserve TINYINT;
-  DECLARE v_comment TEXT;
-  DECLARE v_def LONGTEXT;
+  DECLARE v_comment TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_def LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
   SELECT CASE WHEN EVENT_TYPE = 'ONE TIME' THEN 'AT' ELSE 'EVERY' END,
          CASE WHEN INTERVAL_VALUE IS NULL THEN NULL

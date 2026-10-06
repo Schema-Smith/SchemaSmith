@@ -18,7 +18,7 @@ DELIMITER //
 
 DROP PROCEDURE IF EXISTS SchemaSmith_SnapshotCatalogTables//
 
-CREATE PROCEDURE SchemaSmith_SnapshotCatalogTables(IN p_DatabaseName VARCHAR(128))
+CREATE PROCEDURE SchemaSmith_SnapshotCatalogTables(IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
 SQL SECURITY DEFINER
 BEGIN
     DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
@@ -40,12 +40,14 @@ BEGIN
     INSERT INTO _SchemaSmith_CatTables (TableKey, TABLE_NAME, TABLE_TYPE, ENGINE, ROW_FORMAT, TABLE_COLLATION, CREATE_OPTIONS, TABLE_COMMENT)
     SELECT SchemaSmith_IdentifierKey(TABLE_NAME), TABLE_NAME, TABLE_TYPE, ENGINE, ROW_FORMAT, TABLE_COLLATION, CREATE_OPTIONS, TABLE_COMMENT
       FROM INFORMATION_SCHEMA.TABLES
-     WHERE TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(TABLE_SCHEMA) = v_DbKey;
+     -- MariaDB 11.2+ also lists the session's own temporary tables here.
+     WHERE TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(TABLE_SCHEMA) = v_DbKey
+       AND TABLE_TYPE <> 'TEMPORARY';
 END //
 
 DROP PROCEDURE IF EXISTS SchemaSmith_SnapshotCatalogColumns//
 
-CREATE PROCEDURE SchemaSmith_SnapshotCatalogColumns(IN p_DatabaseName VARCHAR(128))
+CREATE PROCEDURE SchemaSmith_SnapshotCatalogColumns(IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
 SQL SECURITY DEFINER
 BEGIN
     DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
@@ -86,7 +88,7 @@ END //
 
 DROP PROCEDURE IF EXISTS SchemaSmith_MarkTableRenames//
 
-CREATE PROCEDURE SchemaSmith_MarkTableRenames(IN p_DatabaseName VARCHAR(128))
+CREATE PROCEDURE SchemaSmith_MarkTableRenames(IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
 SQL SECURITY DEFINER
 BEGIN
     CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
@@ -108,7 +110,7 @@ DROP PROCEDURE IF EXISTS SchemaSmith_MarkColumnRenames//
 -- Column renames also cover a column the server holds under a spelling that differs from the package's only in
 -- case: the engine treats it as the same column, so it is renamed to the package's spelling rather than left
 -- alone, and extraction then round-trips the package. LiveName is the catalog's spelling of the column to rename.
-CREATE PROCEDURE SchemaSmith_MarkColumnRenames(IN p_DatabaseName VARCHAR(128))
+CREATE PROCEDURE SchemaSmith_MarkColumnRenames(IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
 SQL SECURITY DEFINER
 BEGIN
     CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);

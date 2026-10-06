@@ -7,9 +7,9 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_TableTablespace//
 
 CREATE PROCEDURE SchemaSmith_TableTablespace(
-    IN p_Schema VARCHAR(64),
-    IN p_Table VARCHAR(64),
-    OUT p_Tablespace VARCHAR(64)
+    IN p_Schema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_Table VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    OUT p_Tablespace VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 SQL SECURITY DEFINER
 BEGIN

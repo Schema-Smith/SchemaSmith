@@ -25,81 +25,81 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_BootstrapTableQuench//
 
 CREATE PROCEDURE SchemaSmith_BootstrapTableQuench(
-    IN p_TableDefinitions LONGTEXT
+    IN p_TableDefinitions LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 SQL SECURITY INVOKER
 BEGIN
-    DECLARE v_TableName VARCHAR(128);
-    DECLARE v_Db VARCHAR(128);
+    DECLARE v_TableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_Db VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     -- Name keys, computed once. The catalog may spell the database and table differently from the package and
     -- from DATABASE() when lower_case_table_names >= 1, so every catalog read compares keys, never spellings.
     DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
     DECLARE v_TableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
     DECLARE v_OldTableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
     DECLARE v_StatusTableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-    DECLARE v_Sql LONGTEXT;
-    DECLARE v_ColumnList LONGTEXT;
-    DECLARE v_PkClause LONGTEXT;
+    DECLARE v_Sql LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_ColumnList LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_PkClause LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_ColumnCount INT;
     DECLARE v_IdxCount INT;
     DECLARE v_Idx INT;
-    DECLARE v_ColumnName VARCHAR(128);
-    DECLARE v_DataType VARCHAR(200);
+    DECLARE v_ColumnName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_DataType VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_Nullable TINYINT;
-    DECLARE v_Default LONGTEXT;
+    DECLARE v_Default LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AutoIncrement TINYINT;
     DECLARE v_ColumnPrimaryKey TINYINT;
     DECLARE v_IndexPrimaryKey TINYINT;
-    DECLARE v_IndexColumns LONGTEXT;
+    DECLARE v_IndexColumns LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_HasPkColumn INT;
     DECLARE v_AcCnt INT;
     DECLARE v_AcIdx INT;
-    DECLARE v_AcClauses LONGTEXT;
-    DECLARE v_AcColName VARCHAR(128);
-    DECLARE v_AcDataType VARCHAR(200);
+    DECLARE v_AcClauses LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_AcColName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_AcDataType VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AcNullable TINYINT;
-    DECLARE v_AcDefault LONGTEXT;
+    DECLARE v_AcDefault LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AcAutoIncrement TINYINT;
-    DECLARE v_Collation VARCHAR(64);
-    DECLARE v_AcCollation VARCHAR(64);
-    DECLARE v_LiveCollation VARCHAR(64);
-    DECLARE v_CollateClauses LONGTEXT;
+    DECLARE v_Collation VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_AcCollation VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_LiveCollation VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_CollateClauses LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_ColExists INT;
     DECLARE v_HasStatusTable INT DEFAULT 0;
-    DECLARE v_ClashDetail LONGTEXT;
+    DECLARE v_ClashDetail LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AiCnt INT;
     DECLARE v_AiIdx INT;
-    DECLARE v_AiClauses LONGTEXT;
-    DECLARE v_AiIndexName VARCHAR(128);
+    DECLARE v_AiClauses LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_AiIndexName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AiUnique TINYINT;
     DECLARE v_AiPrimaryKey TINYINT;
-    DECLARE v_AiIndexColumns LONGTEXT;
+    DECLARE v_AiIndexColumns LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_IdxExists INT;
     DECLARE v_ShapeUnique INT;
-    DECLARE v_ShapeKeys LONGTEXT;
-    DECLARE v_DeclKeys LONGTEXT;
+    DECLARE v_ShapeKeys LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_DeclKeys LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_ShapeParts INT;
     DECLARE v_ShapeExprParts INT;
-    DECLARE v_GroupCols LONGTEXT;
-    DECLARE v_GroupPart VARCHAR(256);
+    DECLARE v_GroupCols LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_GroupPart VARCHAR(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_GroupIdx INT;
     DECLARE v_SupportsDescIndex TINYINT;
     -- MESSAGE_TEXT is a VARCHAR(128) condition item in the server's own charset; a utf8mb4
     -- variable is refused by MariaDB with "Data too long for condition item" whatever its length.
     DECLARE v_SignalMsg VARCHAR(128) CHARACTER SET utf8mb3;
-    DECLARE v_OldTableName VARCHAR(128);
+    DECLARE v_OldTableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_TableRenameOldExists INT;
     DECLARE v_TableRenameNewExists INT;
     DECLARE v_ServerVersionNum INT;
     DECLARE v_SupportsRenameColumn TINYINT;
     DECLARE v_RenIdx INT;
-    DECLARE v_RenNewName VARCHAR(128);
-    DECLARE v_RenOldName VARCHAR(128);
+    DECLARE v_RenNewName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_RenOldName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_RenOldExists INT;
     DECLARE v_RenNewExists INT;
-    DECLARE v_RenDataType VARCHAR(200);
+    DECLARE v_RenDataType VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_RenNullable TINYINT;
-    DECLARE v_RenDefault LONGTEXT;
+    DECLARE v_RenDefault LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
     SET SESSION group_concat_max_len = 1000000;
 
