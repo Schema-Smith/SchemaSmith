@@ -508,6 +508,23 @@ SchemaSmith detects each target's platform and emits the right native form autom
 
 > **MariaDB 11.4+ default collation — a note for your own SQL.** This one is not about the DDL SchemaSmith generates; it's about comparison SQL *you* write in migration scripts, After Scripts, or `ValidationScript`. MariaDB 11.4 changed the default collation for `utf8mb4` to `utf8mb4_uca1400_ai_ci`. When you compare a string produced at runtime (for example a value derived from `JSON_TABLE`, which takes that new default) against a table column stored under a different collation, MariaDB raises `Illegal mix of collations` rather than coercing. If you hit this on MariaDB 11.4+, add an explicit `COLLATE` to one side of the comparison (e.g. `WHERE t.name = j.name COLLATE utf8mb4_general_ci`) so both operands share a collation. (Distinct from a `latin1` *target database* charset, which SchemaSmith handles internally.)
 
+### Name case on MySQL
+
+MySQL and MariaDB decide whether two names are the same object from the server setting `lower_case_table_names`. SchemaSmith asks the server and follows its answer, so one package deploys the same way whichever setting the target runs.
+
+| Setting | Database and table names | Usual default on |
+|---------|--------------------------|------------------|
+| `0` | Case-sensitive: `Orders` and `orders` are two tables | Linux |
+| `1` | Stored in lowercase; any spelling finds the table | Windows |
+| `2` | Stored as declared, compared case-insensitively | macOS |
+
+Column, index, CHECK and foreign-key names are case-insensitive on every setting. When the server holds one of them under a spelling that differs from your package only in case, SchemaSmith keeps the object and its data and converges it to your package's spelling. MySQL renames the index; MariaDB drops and re-creates it instead, because a case-only index rename corrupts the index dictionary on some MariaDB versions.
+
+A server on setting `1` or `2` has two consequences worth knowing:
+
+- **Extraction:** SchemaTongs run against a server on setting `1` writes lowercase table names, because the server holds no other spelling. Setting `2` keeps the declared spelling.
+- **Case-colliding tables:** a template that declares two tables whose names differ only in case is refused (exit code `2`) on a server on setting `1` or `2`, before any database is touched -- the server would hold one table for both. Variants gated by `ShouldApplyExpression` are not a collision. [`--Validate`](validate.md) reports such a pair as `SS-DUP-001` whatever the target.
+
 ---
 
 ## Quench Slots

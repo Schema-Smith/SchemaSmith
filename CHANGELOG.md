@@ -4,6 +4,14 @@ All notable changes to SchemaSmith Community Edition are documented here.
 
 For full release details and download links, see [GitHub Releases](https://github.com/Schema-Smith/SchemaSmith/releases).
 
+## [Unreleased]
+
+### Fixed
+
+- **SchemaSmith now works on MySQL and MariaDB servers that fold table names (`lower_case_table_names` 1 or 2, the Windows and macOS defaults) — #433.** Such a server stores database and table names in lowercase while SchemaSmith compared them with the configured spelling, so kindling stopped with a duplicate-column error and no tool could run. Every comparison now asks the server whether two names are the same object, so deploys, data delivery, DataTongs extraction, the CASCADE guard and `Target.Databases` behave the same on every setting. Extraction from a server with `lower_case_table_names = 1` writes lowercase table names, because the server holds no other spelling. A package declaring two tables whose names differ only in case is refused (exit 2) on a folding server, where they would be one table; `--Validate` already reports such a pair as `SS-DUP-001`. The v2.7.0 notes said folding servers were unaffected by the case-sensitive table fixes; in fact they could not be deployed to at all.
+- **A column spelled differently from the package only in case was dropped, with its data (MySQL, MariaDB) — #433.** A live `CustomerName` and a declared `customername` are the same column to the engine, but drop-by-absence compared them case-sensitively, dropped the live column and did not add it back. The deploy exited 0. The column and its rows now stay, and the column is renamed to the package's spelling.
+- **A foreign key spelled differently from the package only in case failed the deploy (MySQL, MariaDB) — #433.** The existing key looked missing, and creating it failed with "Duplicate foreign key constraint name" (MariaDB: errno 121). It is now recognised and converged to the package's spelling. Indexes spelled differently only in case, which deployed but kept the live spelling, converge the same way: MySQL renames the index, and MariaDB drops and re-creates it, avoiding the index-dictionary corruption MDEV-34951 causes on some versions.
+
 ## [v2.7.1](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) — 2026-10-01
 
 ### Added
