@@ -164,7 +164,8 @@ public abstract class HelperFunctionsSharedTests
         var result = command.ExecuteScalar();
 
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.ToString(), Is.EqualTo("SchemaSmith_ProductOwnership"));
+        // A server that folds table names (lower_case_table_names >= 1) reports it in lowercase.
+        Assert.That(result.ToString(), Is.EqualTo("SchemaSmith_ProductOwnership").IgnoreCase);
     }
 
     [Test]

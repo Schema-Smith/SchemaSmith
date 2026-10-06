@@ -3,11 +3,13 @@
 -- Redistribution outside of SchemaSmith product usage is prohibited.
 
 -- Keyed snapshots of the target database's TABLES and COLUMNS rows. A caller refreshes one immediately before the
--- statement that reads it, so the read is as current as a direct catalog read.
+-- statement that reads it, so the read is as current as a direct catalog read. Only static columns are copied: a
+-- cached statistic such as TABLES.AUTO_INCREMENT would make every deploy populate MySQL 8's statistics cache for the
+-- whole schema.
 --
 -- Why a snapshot rather than a direct join: the catalog may spell a table differently from the package (and, on
 -- MariaDB with lower_case_table_names=2, differently between TABLES and COLUMNS), so names must be compared through
--- their keys. A key function on every catalog row of a join is several times slower than today's BINARY form on
+-- their keys. A key function on every catalog row of a join is several times slower than a plain BINARY compare on
 -- MySQL; one schema-filtered read into an indexed temp table, then a key-to-key join, is faster than either on every
 -- engine. The schema filter keeps a case-insensitive utf8mb4 prefilter that the catalog can serve without a full
 -- scan, and the key compare then decides exactly.
@@ -29,15 +31,14 @@ BEGIN
         TABLE_TYPE VARCHAR(64) DEFAULT NULL,
         ENGINE VARCHAR(64) DEFAULT NULL,
         ROW_FORMAT VARCHAR(20) DEFAULT NULL,
-        AUTO_INCREMENT BIGINT UNSIGNED DEFAULT NULL,
         TABLE_COLLATION VARCHAR(64) DEFAULT NULL,
         CREATE_OPTIONS VARCHAR(2048) DEFAULT NULL,
         TABLE_COMMENT TEXT DEFAULT NULL,
         KEY ix_cattables_key (TableKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-    INSERT INTO _SchemaSmith_CatTables (TableKey, TABLE_NAME, TABLE_TYPE, ENGINE, ROW_FORMAT, AUTO_INCREMENT, TABLE_COLLATION, CREATE_OPTIONS, TABLE_COMMENT)
-    SELECT SchemaSmith_IdentifierKey(TABLE_NAME), TABLE_NAME, TABLE_TYPE, ENGINE, ROW_FORMAT, AUTO_INCREMENT, TABLE_COLLATION, CREATE_OPTIONS, TABLE_COMMENT
+    INSERT INTO _SchemaSmith_CatTables (TableKey, TABLE_NAME, TABLE_TYPE, ENGINE, ROW_FORMAT, TABLE_COLLATION, CREATE_OPTIONS, TABLE_COMMENT)
+    SELECT SchemaSmith_IdentifierKey(TABLE_NAME), TABLE_NAME, TABLE_TYPE, ENGINE, ROW_FORMAT, TABLE_COLLATION, CREATE_OPTIONS, TABLE_COMMENT
       FROM INFORMATION_SCHEMA.TABLES
      WHERE TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(TABLE_SCHEMA) = v_DbKey;
 END //

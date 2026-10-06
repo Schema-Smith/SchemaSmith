@@ -601,6 +601,9 @@ BEGIN
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        -- Name keys, filled once after the parse (see _SchemaSmith_Columns).
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         IsPrimaryKey TINYINT DEFAULT 0,
         IsUnique TINYINT DEFAULT 0,
         IndexType VARCHAR(20) DEFAULT 'BTREE',
@@ -612,7 +615,8 @@ BEGIN
         ShouldApply TINYINT DEFAULT 1,
         ShouldApplyExpression VARCHAR(4000) DEFAULT NULL,
         VariantName VARCHAR(128) DEFAULT NULL,
-        KEY ix_indexes_table_name (TableName, IndexName)
+        KEY ix_indexes_table_name (TableName, IndexName),
+        KEY ix_indexes_key (TableKey, IndexKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     SET v_IxOuterCnt = JSON_LENGTH(p_TableDefinitions);
@@ -643,6 +647,10 @@ BEGIN
         END WHILE;
         SET v_IxOuterIdx = v_IxOuterIdx + 1;
     END WHILE;
+
+    UPDATE _SchemaSmith_Indexes
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           IndexKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(IndexName));
 
     -- MySQL: AUTO_INCREMENT column must be indexed. When it's not the first column
     -- in a composite PK, we need a separate KEY clause in the CREATE TABLE statement.
