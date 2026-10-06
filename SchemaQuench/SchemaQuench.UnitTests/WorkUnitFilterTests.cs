@@ -281,4 +281,28 @@ public class WorkUnitFilterTests
         var ex = Assert.Throws<InvalidOperationException>(() => filter.Apply(new List<WorkUnit>(), warn: _ => { }));
         Assert.That(ex!.Message, Does.Contain("zero work units"));
     }
+
+    [Test]
+    public void DatabaseFilter_OnAServerThatFoldsNames_MatchesTheCatalogSpelling()
+    {
+        // A MySQL/MariaDB server with lower_case_table_names >= 1 reports TestMain as testmain, so the configured
+        // spelling must still select it there.
+        var discovered = new List<WorkUnit> { new("primary", "testmain", "Main", ""), new("primary", "other", "Main", "") };
+        var filter = new WorkUnitFilter([], ["TestMain"], [], databaseNamesFold: true);
+
+        var result = filter.Apply(discovered, warn: _ => { });
+
+        Assert.That(result.Select(u => u.DatabaseName), Is.EqualTo(new[] { "testmain" }));
+    }
+
+    [Test]
+    public void DatabaseFilter_OnACaseSensitiveServer_SelectsOnlyTheExactSpelling()
+    {
+        var discovered = new List<WorkUnit> { new("primary", "TestMain", "Main", ""), new("primary", "testmain", "Main", "") };
+        var filter = new WorkUnitFilter([], ["testmain"], [], databaseNamesFold: false);
+
+        var result = filter.Apply(discovered, warn: _ => { });
+
+        Assert.That(result.Select(u => u.DatabaseName), Is.EqualTo(new[] { "testmain" }));
+    }
 }

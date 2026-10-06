@@ -30,7 +30,8 @@ internal sealed class WorkUnitFilter
     private readonly IReadOnlyList<string> _databases;
     private readonly IReadOnlyList<string> _schemas;
 
-    public WorkUnitFilter(IReadOnlyList<string> templates, IReadOnlyList<string> databases, IReadOnlyList<string> schemas)
+    public WorkUnitFilter(IReadOnlyList<string> templates, IReadOnlyList<string> databases, IReadOnlyList<string> schemas,
+        bool databaseNamesFold = false)
     {
         _templates = templates ?? [];
         _databases = databases ?? [];
