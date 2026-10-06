@@ -191,6 +191,18 @@ public class ForgeKindlerTests
     }
 
     [Test]
+    public void GetKindlingScriptNames_MySQL_NameKeysPrecedeBootstrap()
+    {
+        // Bootstrap compares package names with catalog names through the name keys, and a function a procedure
+        // calls must exist when the procedure is created on MySQL.
+        var scripts = ForgeKindler.GetKindlingScriptNames(Platform.MySQL).ToList();
+        var bootstrapIdx = scripts.IndexOf("SchemaSmith_BootstrapTableQuench.sql");
+
+        Assert.That(scripts.IndexOf("SchemaSmith_IdentifierKey.sql"), Is.InRange(0, bootstrapIdx - 1));
+        Assert.That(scripts.IndexOf("SchemaSmith_NameKeyCI.sql"), Is.InRange(0, bootstrapIdx - 1));
+    }
+
+    [Test]
     public void GetKindlingScriptNames_MySQL_RebuildTableFollowsItsGuardAndPrecedesTheQuench()
     {
         // MySQL twin of the SQL Server and PostgreSQL ordering guards. SchemaSmith_RebuildTable calls
@@ -455,7 +467,9 @@ public class ForgeKindlerTests
         //   default comparison folded only the LIVE value, so MariaDB's override turned a live uuid() into
         //   UUID while the declared uuid() was compared raw -- never equal, re-altering the column on every
         //   deploy. Both sides now fold through the same pair.).
-        Assert.That(mysql.Length, Is.EqualTo(66));
+        // +1 = SchemaSmith_NameKeyCI (the case-insensitive name key for columns, indexes and constraints, which the
+        //   engine compares case-insensitively on every lower_case_table_names setting).
+        Assert.That(mysql.Length, Is.EqualTo(67));
     }
 
     [Test]

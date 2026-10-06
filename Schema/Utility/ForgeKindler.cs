@@ -474,6 +474,12 @@ public static class ForgeKindler
                 // these helpers to shred its table definition.
                 new("SchemaSmith_JsonScalarInt.sql"),
                 new("SchemaSmith_JsonScalarStr.sql"),
+                // Name keys: every comparison of a name from the package with a name from the catalog goes
+                // through one of these, Bootstrap's included. IdentifierKey for database, table and view names
+                // (folded only when lower_case_table_names >= 1); NameKeyCI for everything the engine treats
+                // case-insensitively on every setting.
+                new("SchemaSmith_IdentifierKey.sql"),
+                new("SchemaSmith_NameKeyCI.sql"),
                 new("SchemaSmith_BootstrapTableQuench.sql"),
                 new("Kindling_KindleStamp_Table.sql", ReplaceTableDef: true),
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
@@ -485,10 +491,6 @@ public static class ForgeKindler
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith_QuoteIdentifier.sql"),
                 new("SchemaSmith_StripBacktickWrapping.sql"),
-                // Identifier-case policy in one place: whether two object names name the same object
-                // depends on the server's lower_case_table_names, and every ownership comparison has to
-                // ask the same question the same way.
-                new("SchemaSmith_IdentifierKey.sql"),
                 new("SchemaSmith_SafeBacktickWrap.sql"),
                 new("SchemaSmith_StripLeadingSelect.sql"),
                 new("SchemaSmith_ServerVersionNum.sql"),

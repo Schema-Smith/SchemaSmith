@@ -197,6 +197,43 @@ public abstract class HelperFunctionsSharedTests
 
     #endregion
 
+    #region Name key Tests
+
+    // Columns, indexes and constraints compare case-insensitively on every lower_case_table_names setting, so their key
+    // folds unconditionally. The binary collation makes the comparison at each call site the key's, not the column's.
+    [TestCase("CustomerName", "customername")]
+    [TestCase("customername", "customername")]
+    [TestCase("IX_Orders_Date", "ix_orders_date")]
+    public void NameKeyCI_FoldsOnEveryServer(string name, string expected)
+    {
+        Assert.That(Scalar($"SELECT SchemaSmith_NameKeyCI('{name}')"), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void NameKeyCI_AndIdentifierKey_ReturnABinaryCollation()
+    {
+        Assert.That(Scalar("SELECT COLLATION(SchemaSmith_NameKeyCI('x'))"), Is.EqualTo("utf8mb4_bin"));
+        Assert.That(Scalar("SELECT COLLATION(SchemaSmith_IdentifierKey('x'))"), Is.EqualTo("utf8mb4_bin"));
+    }
+
+    // Database, table and view names are folded by the server only when lower_case_table_names >= 1; on 0 two
+    // spellings are two objects.
+    [Test]
+    public void IdentifierKey_FoldsOnlyWhenTheServerFoldsTableNames()
+    {
+        var expected = Scalar("SELECT @@lower_case_table_names") == "0" ? "MixedCase" : "mixedcase";
+        Assert.That(Scalar("SELECT SchemaSmith_IdentifierKey('MixedCase')"), Is.EqualTo(expected));
+    }
+
+    private string Scalar(string sql)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = sql;
+        return command.ExecuteScalar()?.ToString();
+    }
+
+    #endregion
+
     #region Roundtrip Tests
 
     [Test]
