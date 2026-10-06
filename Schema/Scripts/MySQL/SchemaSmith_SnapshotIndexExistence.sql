@@ -10,6 +10,10 @@ CREATE PROCEDURE SchemaSmith_SnapshotIndexExistence(
     IN p_Schema VARCHAR(64)
 )
 BEGIN
+    -- Case-insensitive schema prefilter, then the exact key compare; TableKey/IndexKey carry the name keys.
+    DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Schema);
+
     -- (Re)build _SchemaSmith_IdxExist -- one row per index in the schema (TableName, IndexName, IndexType)
     -- -- in a SINGLE pass over STATISTICS. IndexOnlyQuench's create/ownership passes checked index
     -- existence per declared index against live INFORMATION_SCHEMA, which re-materialises server-wide
@@ -24,12 +28,16 @@ BEGIN
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         IndexType VARCHAR(32),
-        PRIMARY KEY (TableName, IndexName)
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        IndexKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableName, IndexName),
+        KEY ix_key (TableKey, IndexKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    INSERT INTO _SchemaSmith_IdxExist (TableName, IndexName, IndexType)
-    SELECT CONVERT(s.TABLE_NAME USING utf8mb4), CONVERT(s.INDEX_NAME USING utf8mb4), CONVERT(MAX(s.INDEX_TYPE) USING utf8mb4)
+    INSERT INTO _SchemaSmith_IdxExist (TableName, IndexName, IndexType, TableKey, IndexKey)
+    SELECT CONVERT(s.TABLE_NAME USING utf8mb4), CONVERT(s.INDEX_NAME USING utf8mb4), CONVERT(MAX(s.INDEX_TYPE) USING utf8mb4),
+           SchemaSmith_IdentifierKey(s.TABLE_NAME), SchemaSmith_NameKeyCI(s.INDEX_NAME)
     FROM INFORMATION_SCHEMA.STATISTICS s
-    WHERE BINARY s.TABLE_SCHEMA = BINARY p_Schema
+    WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
     GROUP BY s.TABLE_NAME, s.INDEX_NAME;
 END //
 

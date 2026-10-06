@@ -13,6 +13,11 @@ CREATE FUNCTION SchemaSmith_IndexIsVisible(
 ) RETURNS TINYINT
 READS SQL DATA
 BEGIN
+    -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).
+    DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Schema);
+    DECLARE v_TableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Table);
+    DECLARE v_IndexKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_NameKeyCI(p_Index);
     -- Returns 1 if the named index is visible to the optimizer, 0 if invisible.
     --
     -- WHY this exists: MySQL exposes index visibility via INFORMATION_SCHEMA.STATISTICS.IS_VISIBLE
@@ -34,9 +39,9 @@ BEGIN
     RETURN (
         SELECT CASE WHEN MAX(s.IS_VISIBLE) = 'YES' THEN 1 ELSE 0 END
         FROM INFORMATION_SCHEMA.STATISTICS s
-        WHERE BINARY s.TABLE_SCHEMA = BINARY p_Schema
-          AND BINARY s.TABLE_NAME = BINARY p_Table
-          AND BINARY s.INDEX_NAME = BINARY p_Index
+        WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
+          AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = v_TableKey
+          AND SchemaSmith_NameKeyCI(s.INDEX_NAME) = v_IndexKey
     );
 END //
 

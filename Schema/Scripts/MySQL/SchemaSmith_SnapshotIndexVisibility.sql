@@ -10,6 +10,9 @@ CREATE PROCEDURE SchemaSmith_SnapshotIndexVisibility(
     IN p_Schema VARCHAR(64)
 )
 BEGIN
+    -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).
+    DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Schema);
     -- Snapshot each index's optimizer visibility for one schema into _SchemaSmith_ExistingIndexVisibility
     -- (one row per index; IsVisible = 1 visible, 0 invisible), in a SINGLE pass over STATISTICS.
     --
@@ -41,7 +44,7 @@ BEGIN
                CONVERT(s.INDEX_NAME USING utf8mb4),
                CASE WHEN MAX(s.IS_VISIBLE) = 'YES' THEN 1 ELSE 0 END
         FROM INFORMATION_SCHEMA.STATISTICS s
-        WHERE BINARY s.TABLE_SCHEMA = BINARY p_Schema
+        WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
         GROUP BY s.TABLE_NAME, s.INDEX_NAME;
     END IF;
 END //

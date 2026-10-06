@@ -42,8 +42,8 @@ BEGIN
   SELECT snap.NonUnique, snap.NormColumns
     INTO v_NonUnique, v_NormColumns
     FROM _SchemaSmith_IdxDetectSnap snap
-   WHERE BINARY snap.TableName = BINARY p_TableName
-     AND BINARY snap.IndexName = BINARY p_OldIndexName;
+   WHERE snap.TableKey = SchemaSmith_IdentifierKey(p_TableName)
+     AND snap.IndexKey = SchemaSmith_NameKeyCI(p_OldIndexName);
 
   -- A missing snapshot row would otherwise concatenate NULL into a malformed ALTER TABLE
   -- (`ADD INDEX `x` ()` or worse); fail loudly instead of emitting broken DDL.

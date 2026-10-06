@@ -120,6 +120,13 @@ BEGIN
     DECLARE v_RowsAfter BIGINT DEFAULT -1;
     DECLARE v_RowsFinal BIGINT DEFAULT -1;
     DECLARE v_FkId INT;
+    -- Name keys for the catalog compares: the catalog may spell the schema and table differently from the caller
+    -- (lower_case_table_names), and the shadow and old names this procedure constructs are folded the same way.
+    DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+    DECLARE v_TableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+    DECLARE v_ShadowKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+    DECLARE v_OldKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
     -- The shadow CREATE folds every declared column into one statement, so a wide table needs the same
     -- raised GROUP_CONCAT ceiling the sibling quench procedures set. Truncation here would silently build
@@ -131,6 +138,9 @@ BEGIN
     -- normalize once: the raw name for catalog lookups and RENAME targets, the backticked form for DDL.
     SET v_SchemaRaw = SchemaSmith_StripBacktickWrapping(TRIM(COALESCE(p_Schema, '')));
     SET v_TableRaw = SchemaSmith_StripBacktickWrapping(TRIM(COALESCE(p_Table, '')));
+    SET v_DbCi = v_SchemaRaw;
+    SET v_DbKey = SchemaSmith_IdentifierKey(v_SchemaRaw);
+    SET v_TableKey = SchemaSmith_IdentifierKey(v_TableRaw);
     SET v_Qualified = CONCAT(SchemaSmith_SafeBacktickWrap(v_SchemaRaw), '.', SchemaSmith_SafeBacktickWrap(v_TableRaw));
 
     -- ================================================================================================
@@ -202,8 +212,8 @@ BEGIN
     -- SYSTEM VERSIONED table is already refused above with the reason that actually explains it.
     SELECT COUNT(*) INTO v_Count
       FROM INFORMATION_SCHEMA.TABLES ist
-     WHERE BINARY ist.TABLE_SCHEMA = BINARY v_SchemaRaw
-       AND BINARY ist.TABLE_NAME = BINARY v_TableRaw
+     WHERE ist.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ist.TABLE_SCHEMA) = v_DbKey
+       AND SchemaSmith_IdentifierKey(ist.TABLE_NAME) = v_TableKey
        AND ist.TABLE_TYPE = 'BASE TABLE';
 
     IF v_Count = 0 THEN
@@ -216,7 +226,7 @@ BEGIN
 
     SELECT COUNT(*) INTO v_Count
       FROM _SchemaSmith_Tables t
-     WHERE BINARY SchemaSmith_StripBacktickWrapping(t.TableName) = BINARY v_TableRaw;
+     WHERE t.TableKey = v_TableKey;
 
     IF v_Count = 0 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -231,12 +241,12 @@ BEGIN
     -- act on the wrong table while the source still holds rows. Refuse rather than pick one.
     SELECT COUNT(*) INTO v_Count
       FROM _SchemaSmith_Tables t
-     WHERE BINARY SchemaSmith_StripBacktickWrapping(t.TableName) = BINARY v_TableRaw
+     WHERE t.TableKey = v_TableKey
        AND t.OldName IS NOT NULL
        AND EXISTS (SELECT 1
                      FROM INFORMATION_SCHEMA.TABLES o
-                    WHERE BINARY o.TABLE_SCHEMA = BINARY v_SchemaRaw
-                      AND BINARY o.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.OldName)
+                    WHERE o.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(o.TABLE_SCHEMA) = v_DbKey
+                      AND SchemaSmith_IdentifierKey(o.TABLE_NAME) = t.OldNameKey
                       AND o.TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED'));
 
     IF v_Count > 0 THEN
@@ -253,18 +263,18 @@ BEGIN
     -- it is refused outright rather than guessed at.
     SELECT COUNT(*) INTO v_Count
       FROM _SchemaSmith_Columns c
-     WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY v_TableRaw
+     WHERE c.TableKey = v_TableKey
        AND c.OldName IS NOT NULL
        AND EXISTS (SELECT 1
                      FROM INFORMATION_SCHEMA.COLUMNS o
-                    WHERE BINARY o.TABLE_SCHEMA = BINARY v_SchemaRaw
-                      AND BINARY o.TABLE_NAME = BINARY v_TableRaw
-                      AND BINARY o.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.OldName))
+                    WHERE o.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(o.TABLE_SCHEMA) = v_DbKey
+                      AND SchemaSmith_IdentifierKey(o.TABLE_NAME) = v_TableKey
+                      AND SchemaSmith_NameKeyCI(o.COLUMN_NAME) = c.OldNameKey)
        AND NOT EXISTS (SELECT 1
                          FROM INFORMATION_SCHEMA.COLUMNS n
-                        WHERE BINARY n.TABLE_SCHEMA = BINARY v_SchemaRaw
-                          AND BINARY n.TABLE_NAME = BINARY v_TableRaw
-                          AND BINARY n.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName));
+                        WHERE n.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(n.TABLE_SCHEMA) = v_DbKey
+                          AND SchemaSmith_IdentifierKey(n.TABLE_NAME) = v_TableKey
+                          AND SchemaSmith_NameKeyCI(n.COLUMN_NAME) = c.ColumnKey);
 
     IF v_Count > 0 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -284,7 +294,7 @@ BEGIN
     IF SchemaSmith_SupportsDefaultExpression() = 0 THEN
         SELECT COUNT(*) INTO v_Count
           FROM _SchemaSmith_Columns c
-         WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY v_TableRaw
+         WHERE c.TableKey = v_TableKey
            AND c.IsAutoIncrement = 0
            AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
            AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%';
@@ -294,7 +304,7 @@ BEGIN
             SELECT CONNECTION_ID(), CONCAT('  Table rebuild refused (DEFAULT expression requires MySQL 8.0.13): ',
                    v_Qualified, '.', SchemaSmith_StripBacktickWrapping(c.ColumnName))
               FROM _SchemaSmith_Columns c
-             WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY v_TableRaw
+             WHERE c.TableKey = v_TableKey
                AND c.IsAutoIncrement = 0
                AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
                AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%';
@@ -315,13 +325,15 @@ BEGIN
     -- ================================================================================================
     SET v_ShadowRaw = CONCAT(LEFT(v_TableRaw, 45), '_SchemaSmithRebuild');
     SET v_OldRaw = CONCAT(LEFT(v_TableRaw, 45), '_SchemaSmithOld');
+    SET v_ShadowKey = SchemaSmith_IdentifierKey(v_ShadowRaw);
+    SET v_OldKey = SchemaSmith_IdentifierKey(v_OldRaw);
     SET v_ShadowQualified = CONCAT(SchemaSmith_SafeBacktickWrap(v_SchemaRaw), '.', SchemaSmith_SafeBacktickWrap(v_ShadowRaw));
     SET v_OldQualified = CONCAT(SchemaSmith_SafeBacktickWrap(v_SchemaRaw), '.', SchemaSmith_SafeBacktickWrap(v_OldRaw));
 
     SELECT COUNT(*) INTO v_Count
       FROM INFORMATION_SCHEMA.TABLES ist
-     WHERE BINARY ist.TABLE_SCHEMA = BINARY v_SchemaRaw
-       AND (BINARY ist.TABLE_NAME = BINARY v_ShadowRaw OR BINARY ist.TABLE_NAME = BINARY v_OldRaw);
+     WHERE ist.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ist.TABLE_SCHEMA) = v_DbKey
+       AND SchemaSmith_IdentifierKey(ist.TABLE_NAME) IN (v_ShadowKey, v_OldKey);
 
     IF v_Count > 0 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -390,8 +402,8 @@ BEGIN
     SELECT MAX(ist.AUTO_INCREMENT), MAX(ist.TABLE_COLLATION)
       INTO v_CapturedAutoIncrement, v_LiveCollation
       FROM INFORMATION_SCHEMA.TABLES ist
-     WHERE BINARY ist.TABLE_SCHEMA = BINARY v_SchemaRaw
-       AND BINARY ist.TABLE_NAME = BINARY v_TableRaw;
+     WHERE ist.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ist.TABLE_SCHEMA) = v_DbKey
+       AND SchemaSmith_IdentifierKey(ist.TABLE_NAME) = v_TableKey;
 
     IF v_StatsExpirySwapped = 1 AND @ss_rebuild_stats_expiry IS NOT NULL THEN
         BEGIN
@@ -414,13 +426,13 @@ BEGIN
     -- the-data branch there precisely because its sequences do NOT advance on an explicit insert.)
     SELECT COUNT(*) INTO v_Count
       FROM _SchemaSmith_Columns c
-     WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY v_TableRaw
+     WHERE c.TableKey = v_TableKey
        AND c.IsAutoIncrement = 1
        AND EXISTS (SELECT 1
                      FROM INFORMATION_SCHEMA.COLUMNS isc
-                    WHERE BINARY isc.TABLE_SCHEMA = BINARY v_SchemaRaw
-                      AND BINARY isc.TABLE_NAME = BINARY v_TableRaw
-                      AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName));
+                    WHERE isc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(isc.TABLE_SCHEMA) = v_DbKey
+                      AND SchemaSmith_IdentifierKey(isc.TABLE_NAME) = v_TableKey
+                      AND SchemaSmith_NameKeyCI(isc.COLUMN_NAME) = c.ColumnKey);
 
     SET v_AutoIncrementInCopy = CASE WHEN v_Count > 0 THEN 1 ELSE 0 END;
 
@@ -462,7 +474,7 @@ BEGIN
     SELECT GROUP_CONCAT(c.ColumnScript ORDER BY c.OrdinalPosition, c.RowId SEPARATOR ', ')
       INTO v_ShadowColumnList
       FROM _SchemaSmith_Columns c
-     WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY v_TableRaw;
+     WHERE c.TableKey = v_TableKey;
 
     IF v_ShadowColumnList IS NULL OR TRIM(v_ShadowColumnList) = '' THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -475,13 +487,13 @@ BEGIN
     SELECT GROUP_CONCAT(c.ColumnName ORDER BY c.OrdinalPosition, c.RowId SEPARATOR ', ')
       INTO v_CopyColumnList
       FROM _SchemaSmith_Columns c
-     WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY v_TableRaw
+     WHERE c.TableKey = v_TableKey
        AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
        AND EXISTS (SELECT 1
                      FROM INFORMATION_SCHEMA.COLUMNS isc
-                    WHERE BINARY isc.TABLE_SCHEMA = BINARY v_SchemaRaw
-                      AND BINARY isc.TABLE_NAME = BINARY v_TableRaw
-                      AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName));
+                    WHERE isc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(isc.TABLE_SCHEMA) = v_DbKey
+                      AND SchemaSmith_IdentifierKey(isc.TABLE_NAME) = v_TableKey
+                      AND SchemaSmith_NameKeyCI(isc.COLUMN_NAME) = c.ColumnKey);
 
     -- Nothing to copy AND rows to lose. Every live column is being removed, so the rows would survive only
     -- as empty shells -- and manufacturing those is a guess about intent, not a data-preserving rebuild.
@@ -526,7 +538,7 @@ BEGIN
            COALESCE(MAX(t.AutoIncrementKeyClause), '')
       INTO v_Collation, v_Engine, v_AutoIncrementKeyClause
       FROM _SchemaSmith_Tables t
-     WHERE BINARY SchemaSmith_StripBacktickWrapping(t.TableName) = BINARY v_TableRaw;
+     WHERE t.TableKey = v_TableKey;
 
     -- THE PRIMARY KEY IS THE ONE INDEX THIS PROCEDURE EMITS, AND ONLY BECAUSE THE ENGINE FORCES IT.
     -- MySQL and MariaDB reject a CREATE TABLE whose AUTO_INCREMENT column is not part of a key (error
@@ -546,7 +558,7 @@ BEGIN
     SELECT CONCAT(', PRIMARY KEY (', MAX(i.IndexColumns), ')')
       INTO v_PrimaryKeyClause
       FROM _SchemaSmith_Indexes i
-     WHERE BINARY SchemaSmith_StripBacktickWrapping(i.TableName) = BINARY v_TableRaw
+     WHERE i.TableKey = v_TableKey
        AND i.IsPrimaryKey = 1;
 
     SET v_CreateShadowSql = CONCAT('CREATE TABLE ', v_ShadowQualified, ' (', v_ShadowColumnList,
@@ -616,13 +628,13 @@ BEGIN
     INSERT INTO _SchemaSmith_RebuildInboundFks (ChildSchema, ChildTable, AlterTable, ConstraintName)
     SELECT DISTINCT kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.TABLE_NAME, kcu.CONSTRAINT_NAME
       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-     WHERE BINARY kcu.REFERENCED_TABLE_SCHEMA = BINARY v_SchemaRaw
-       AND BINARY kcu.REFERENCED_TABLE_NAME = BINARY v_TableRaw;
+     WHERE kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
+       AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = v_TableKey;
 
     UPDATE _SchemaSmith_RebuildInboundFks
        SET AlterTable = v_OldRaw
-     WHERE BINARY ChildSchema = BINARY v_SchemaRaw
-       AND BINARY ChildTable = BINARY v_TableRaw;
+     WHERE SchemaSmith_IdentifierKey(ChildSchema) = v_DbKey
+       AND SchemaSmith_IdentifierKey(ChildTable) = v_TableKey;
 
     UPDATE _SchemaSmith_RebuildInboundFks
        SET Stmt = CONCAT('ALTER TABLE ', SchemaSmith_SafeBacktickWrap(ChildSchema), '.',

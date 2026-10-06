@@ -12,6 +12,10 @@ CREATE FUNCTION SchemaSmith_RebuildBlockedReason(
 ) RETURNS VARCHAR(255)
 READS SQL DATA
 BEGIN
+    -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).
+    DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Schema);
+    DECLARE v_TableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Table);
     -- MariaDb variant override of the shared MySQL function (which returns NULL unconditionally -- MySQL has
     -- none of these concepts). MariaDB does: a system-versioned table carries row history, and an
     -- application-time period carries a temporal contract, and neither survives a shadow-copy-and-swap
@@ -25,8 +29,8 @@ BEGIN
     -- never appears below 10.3, where system versioning arrived.
     SELECT COUNT(*) INTO v_Count
     FROM INFORMATION_SCHEMA.TABLES t
-    WHERE BINARY t.TABLE_SCHEMA = BINARY p_Schema
-      AND BINARY t.TABLE_NAME = BINARY p_Table
+    WHERE t.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(t.TABLE_SCHEMA) = v_DbKey
+      AND SchemaSmith_IdentifierKey(t.TABLE_NAME) = v_TableKey
       AND t.TABLE_TYPE = 'SYSTEM VERSIONED';
 
     IF v_Count > 0 THEN
@@ -50,7 +54,7 @@ BEGIN
     --
     -- SYSTEM_TIME is excluded so the reason names the state accurately: the system-versioning check above
     -- already owns that case and returns first.
-    SET v_Count = 0 /*M!110400 + (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PERIODS pd WHERE BINARY pd.TABLE_SCHEMA = BINARY p_Schema AND BINARY pd.TABLE_NAME = BINARY p_Table AND pd.PERIOD <> 'SYSTEM_TIME') */;
+    SET v_Count = 0 /*M!110400 + (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PERIODS pd WHERE pd.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(pd.TABLE_SCHEMA) = v_DbKey AND SchemaSmith_IdentifierKey(pd.TABLE_NAME) = v_TableKey AND pd.PERIOD <> 'SYSTEM_TIME') */;
 
     IF v_Count > 0 THEN
         RETURN 'an application-time period is defined';
@@ -66,8 +70,8 @@ BEGIN
     -- floor on both engines (verified on MySQL 5.7 and MariaDB 10.2), so it is read statically.
     SELECT COUNT(*) INTO v_Count
     FROM INFORMATION_SCHEMA.PARTITIONS pt
-    WHERE BINARY pt.TABLE_SCHEMA = BINARY p_Schema
-      AND BINARY pt.TABLE_NAME = BINARY p_Table
+    WHERE pt.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(pt.TABLE_SCHEMA) = v_DbKey
+      AND SchemaSmith_IdentifierKey(pt.TABLE_NAME) = v_TableKey
       AND pt.PARTITION_NAME IS NOT NULL;
 
     IF v_Count > 0 THEN

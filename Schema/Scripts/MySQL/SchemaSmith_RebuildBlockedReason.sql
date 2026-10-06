@@ -12,6 +12,10 @@ CREATE FUNCTION SchemaSmith_RebuildBlockedReason(
 ) RETURNS VARCHAR(255)
 READS SQL DATA
 BEGIN
+    -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).
+    DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Schema);
+    DECLARE v_TableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Table);
     -- Answers "why can this table NOT be rebuilt?" -- a short reason naming the blocking state, or NULL when
     -- a rebuild (shadow-copy-and-swap) is safe.
     --
@@ -37,8 +41,8 @@ BEGIN
     -- floor on both engines (verified on MySQL 5.7 and MariaDB 10.2), so it is read statically.
     SELECT COUNT(*) INTO v_Count
     FROM INFORMATION_SCHEMA.PARTITIONS pt
-    WHERE BINARY pt.TABLE_SCHEMA = BINARY p_Schema
-      AND BINARY pt.TABLE_NAME = BINARY p_Table
+    WHERE pt.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(pt.TABLE_SCHEMA) = v_DbKey
+      AND SchemaSmith_IdentifierKey(pt.TABLE_NAME) = v_TableKey
       AND pt.PARTITION_NAME IS NOT NULL;
 
     IF v_Count > 0 THEN

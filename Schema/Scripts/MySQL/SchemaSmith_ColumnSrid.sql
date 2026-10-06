@@ -13,6 +13,11 @@ CREATE FUNCTION SchemaSmith_ColumnSrid(
 ) RETURNS INT
 READS SQL DATA
 BEGIN
+    -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).
+    DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Schema);
+    DECLARE v_TableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Table);
+    DECLARE v_ColumnKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_NameKeyCI(p_Column);
     -- Returns the column's live SRID restriction (INFORMATION_SCHEMA.COLUMNS.SRS_ID), or NULL when the
     -- column carries none.
     --
@@ -34,9 +39,9 @@ BEGIN
     RETURN (
         SELECT c.SRS_ID
         FROM INFORMATION_SCHEMA.COLUMNS c
-        WHERE BINARY c.TABLE_SCHEMA = BINARY p_Schema
-          AND BINARY c.TABLE_NAME = BINARY p_Table
-          AND BINARY c.COLUMN_NAME = BINARY p_Column
+        WHERE c.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(c.TABLE_SCHEMA) = v_DbKey
+          AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = v_TableKey
+          AND SchemaSmith_NameKeyCI(c.COLUMN_NAME) = v_ColumnKey
     );
 END //
 

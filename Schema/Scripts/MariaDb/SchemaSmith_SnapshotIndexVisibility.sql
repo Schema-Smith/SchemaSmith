@@ -10,6 +10,9 @@ CREATE PROCEDURE SchemaSmith_SnapshotIndexVisibility(
     IN p_Schema VARCHAR(64)
 )
 BEGIN
+    -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).
+    DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Schema);
     -- MariaDb variant override of the shared MySQL procedure. MariaDB has no IS_VISIBLE column on
     -- INFORMATION_SCHEMA.STATISTICS; it exposes the inverted IGNORED column ('NO' = visible,
     -- 'YES' = ignored/invisible). This override mirrors SchemaSmith_IndexIsVisible's divergence, so the
@@ -33,7 +36,7 @@ BEGIN
                CONVERT(s.INDEX_NAME USING utf8mb4),
                CASE WHEN MAX(s.IGNORED) = 'NO' THEN 1 ELSE 0 END
         FROM INFORMATION_SCHEMA.STATISTICS s
-        WHERE BINARY s.TABLE_SCHEMA = BINARY p_Schema
+        WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
         GROUP BY s.TABLE_NAME, s.INDEX_NAME;
     END IF;
 END //

@@ -669,6 +669,10 @@ BEGIN
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         KeyName VARCHAR(128) NOT NULL,
+        -- Name keys, filled once after the parse (see _SchemaSmith_Columns).
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        KeyNameKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        RelatedTableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Columns TEXT NOT NULL,
         RelatedTableSchema VARCHAR(128) DEFAULT NULL,
         RelatedTable VARCHAR(128) NOT NULL,
@@ -718,6 +722,9 @@ BEGIN
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        -- Name keys, filled once after the parse (see _SchemaSmith_Columns).
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Expression TEXT NOT NULL,
         ShouldApply TINYINT DEFAULT 1,
         ShouldApplyExpression VARCHAR(4000) DEFAULT NULL,
@@ -776,6 +783,9 @@ BEGIN
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) NOT NULL,
         IndexName VARCHAR(128) NOT NULL,
+        -- Name keys, filled once after the parse (see _SchemaSmith_Columns).
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Columns TEXT NOT NULL,
         Parser VARCHAR(128) DEFAULT NULL,
         -- Was VARCHAR(255) -- narrower than MySQL's actual 1024-char index-comment ceiling (the same
@@ -989,6 +999,17 @@ BEGIN
     ALTER TABLE _SchemaSmith_ForeignKeys DROP KEY ix_fks_table_name, ADD UNIQUE KEY uq_fks_table_name (TableName, KeyName);
     ALTER TABLE _SchemaSmith_CheckConstraints DROP KEY ix_checks_table_name, ADD UNIQUE KEY uq_checks_table_name (TableName, ConstraintName);
     ALTER TABLE _SchemaSmith_FullTextIndexes DROP KEY ix_ft_table_name, ADD UNIQUE KEY uq_ft_table_name (TableName, IndexName);
+
+    UPDATE _SchemaSmith_ForeignKeys
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           KeyNameKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(KeyName)),
+           RelatedTableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(RelatedTable));
+    UPDATE _SchemaSmith_CheckConstraints
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           ConstraintKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(ConstraintName));
+    UPDATE _SchemaSmith_FullTextIndexes
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           IndexKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(IndexName));
 
     -- Delete objects belonging to tables that should not apply
     DELETE cc FROM _SchemaSmith_CheckConstraints cc

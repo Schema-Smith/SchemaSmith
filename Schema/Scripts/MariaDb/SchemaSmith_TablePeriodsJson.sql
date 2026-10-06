@@ -12,6 +12,10 @@ CREATE FUNCTION SchemaSmith_TablePeriodsJson(
 ) RETURNS LONGTEXT
 READS SQL DATA
 BEGIN
+    -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).
+    DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Schema);
+    DECLARE v_TableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Table);
     DECLARE v_Json LONGTEXT DEFAULT '[]';
 
     -- MariaDb variant override of the shared MySQL '[]' stub. See the MySQL base definition for why the
@@ -43,8 +47,8 @@ BEGIN
                                'EndColumn', pd.END_COLUMN_NAME)
                    ORDER BY pd.PERIOD SEPARATOR ','), ']')
         FROM INFORMATION_SCHEMA.PERIODS pd
-        WHERE BINARY pd.TABLE_SCHEMA = BINARY p_Schema
-          AND BINARY pd.TABLE_NAME = BINARY p_Table
+        WHERE pd.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(pd.TABLE_SCHEMA) = v_DbKey
+          AND SchemaSmith_IdentifierKey(pd.TABLE_NAME) = v_TableKey
           AND pd.PERIOD <> 'SYSTEM_TIME'
     ), '[]');
     */

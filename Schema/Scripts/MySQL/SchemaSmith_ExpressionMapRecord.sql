@@ -64,6 +64,10 @@ proc: BEGIN
     -- around a static reference would not save it. The table is named only inside a string that is PREPAREd,
     -- which is the same shape SchemaSmith_MissingIndexesAndConstraintsQuench uses for the same reason.
     IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
+        -- Names compare through their keys; the schema goes in through user variables (a case-insensitive prefilter,
+        -- then the exact key), so the catalog's own spelling never has to match the configured one.
+        SET @v_emDbCi = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci;
+        SET @v_emDbKey = SchemaSmith_IdentifierKey(p_DatabaseName);
         SET @v_emSql = CONCAT('INSERT INTO SchemaSmith_ExpressionMap
             (ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot, AuthoredText, CanonicalText,
              PlatformName, EngineVersion, CompatLevel, UpdatedUtc)
@@ -77,13 +81,13 @@ proc: BEGIN
                ''MySQL'', VERSION(), NULL, UTC_TIMESTAMP(3)
           FROM _SchemaSmith_CheckConstraints c
           JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            ON BINARY tc.TABLE_SCHEMA = BINARY ''', p_DatabaseName, '''
-           AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-           AND BINARY tc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
+            ON tc.TABLE_SCHEMA = @v_emDbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = @v_emDbKey
+           AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = c.TableKey
+           AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = c.ConstraintKey
            AND tc.CONSTRAINT_TYPE = ''CHECK''
           JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
-            ON BINARY cc.CONSTRAINT_SCHEMA = BINARY ''', p_DatabaseName, '''
-           AND BINARY cc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
+            ON cc.CONSTRAINT_SCHEMA = @v_emDbCi AND SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = @v_emDbKey
+           AND SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) = c.ConstraintKey
          WHERE IFNULL(TRIM(c.Expression), '''') != ''''
             ON DUPLICATE KEY UPDATE
                AuthoredText = VALUES(AuthoredText),
@@ -97,6 +101,7 @@ proc: BEGIN
 
     -- Generated columns. Compared with a bare TRIM today, so any expression the engine reformats re-applies
     -- on every deploy -- and this surface had no idempotency coverage at all.
+    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
     INSERT INTO SchemaSmith_ExpressionMap
         (ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot, AuthoredText, CanonicalText,
          PlatformName, EngineVersion, CompatLevel, UpdatedUtc)
@@ -109,10 +114,9 @@ proc: BEGIN
            IFNULL(isc.GENERATION_EXPRESSION, ''),
            'MySQL', VERSION(), NULL, UTC_TIMESTAMP(3)
       FROM _SchemaSmith_Columns c
-      JOIN INFORMATION_SCHEMA.COLUMNS isc
-        ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-       AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-       AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+      JOIN _SchemaSmith_CatColumns isc
+        ON isc.TableKey = c.TableKey
+       AND isc.ColumnKey = c.ColumnKey
      WHERE IFNULL(TRIM(c.GeneratedExpression), '') != ''
         ON DUPLICATE KEY UPDATE
            AuthoredText = VALUES(AuthoredText),

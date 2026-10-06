@@ -15,6 +15,11 @@ CREATE PROCEDURE SchemaSmith_IndexOnlyQuench(
 )
 SQL SECURITY DEFINER
 BEGIN
+    -- Names compare through their keys (SchemaSmith_IdentifierKey for tables, SchemaSmith_NameKeyCI for indexes). Catalog
+    -- reads use a case-insensitive schema prefilter and then the exact key compare; correlated subqueries compare stored
+    -- key columns, never a key function of their outer row (see ModifiedTableQuench).
+    DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_DatabaseName);
     -- This procedure handles index-only quenching.
     -- It creates, modifies, and drops indexes but does NOT touch:
     -- - Table structure (columns, data types)
@@ -37,6 +42,8 @@ BEGIN
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) NOT NULL,
         IndexName VARCHAR(128) NOT NULL,
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Columns TEXT NOT NULL,
         Parser VARCHAR(128) DEFAULT NULL,
         -- Widened from VARCHAR(255) to match MySQL's actual 1024-char index-comment ceiling and stay
@@ -45,6 +52,10 @@ BEGIN
         VariantName VARCHAR(128) DEFAULT NULL,
         KEY ix_ft_table_name (TableName, IndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    UPDATE _SchemaSmith_FullTextIndexes
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           IndexKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(IndexName))
+     WHERE TableKey IS NULL;
 
     -- =========================================================================
     -- STEP 0.5: Degrade descending index key parts below MySQL 8.0 / MariaDB 10.8
@@ -123,7 +134,10 @@ BEGIN
         -- MySQL's index comment ceiling is 1024 characters; MAX() alongside the other per-index
         -- aggregates below since INDEX_COMMENT is constant across a composite index's key parts.
         IndexComment VARCHAR(1024),
-        PRIMARY KEY (TableName, IndexName)
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        PRIMARY KEY (TableName, IndexName),
+        KEY ix_idxsnap_key (TableKey, IndexKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     -- A functional/expression key part (MySQL 8.0.13+) has NULL COLUMN_NAME and reports its text via
     -- EXPRESSION instead; that column does not exist below the floor or on MariaDB, so the branch that
@@ -160,7 +174,7 @@ BEGIN
                ),
                CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
-         WHERE BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
+         WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
          GROUP BY s.TABLE_NAME, s.INDEX_NAME;
     ELSE
         INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment)
@@ -177,21 +191,28 @@ BEGIN
                ),
                CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
-         WHERE BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
+         WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
          GROUP BY s.TABLE_NAME, s.INDEX_NAME;
     END IF;
 
     -- Names-only copy: STEP 1 references the snapshot twice in one statement (main join + the
     -- "new index name doesn't exist" NOT EXISTS), which MySQL/MariaDB forbid for a TEMPORARY table
     -- (ER_CANT_REOPEN_TABLE 1137). The second reference reads this copy.
+    UPDATE _SchemaSmith_IdxDetectSnap
+       SET TableKey = SchemaSmith_IdentifierKey(TableName),
+           IndexKey = SchemaSmith_NameKeyCI(IndexName);
+
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectNames;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxDetectNames (
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-        PRIMARY KEY (TableName, IndexName)
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        IndexKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableName, IndexName),
+        KEY ix_idxnames_key (TableKey, IndexKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    INSERT INTO _SchemaSmith_IdxDetectNames (TableName, IndexName)
-    SELECT TableName, IndexName FROM _SchemaSmith_IdxDetectSnap;
+    INSERT INTO _SchemaSmith_IdxDetectNames (TableName, IndexName, TableKey, IndexKey)
+    SELECT TableName, IndexName, TableKey, IndexKey FROM _SchemaSmith_IdxDetectSnap;
 
     -- Per-engine index-visibility snapshot (MySQL IS_VISIBLE / MariaDb IGNORED), one scan, for STEP 2's
     -- modified-index visibility comparison -- replaces the per-candidate SchemaSmith_IndexIsVisible() call.
@@ -205,6 +226,9 @@ BEGIN
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         OldIndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         NewIndexName VARCHAR(128) NOT NULL,
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        OldIndexKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        NewIndexKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, OldIndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -213,25 +237,26 @@ BEGIN
     -- 1. The new index name doesn't exist
     -- 2. The old index exists and is owned by the product
     -- 3. The column list matches exactly
-    INSERT INTO _SchemaSmith_IndexRenames (TableName, OldIndexName, NewIndexName)
+    INSERT INTO _SchemaSmith_IndexRenames (TableName, OldIndexName, NewIndexName, TableKey, OldIndexKey, NewIndexKey)
     SELECT
         SchemaSmith_StripBacktickWrapping(i.TableName) AS TableName,
         snap.IndexName COLLATE utf8mb4_unicode_ci AS OldIndexName,
-        SchemaSmith_StripBacktickWrapping(i.IndexName) AS NewIndexName
+        SchemaSmith_StripBacktickWrapping(i.IndexName) AS NewIndexName,
+        i.TableKey, snap.IndexKey, i.IndexKey
     FROM _SchemaSmith_Indexes i
     JOIN _SchemaSmith_IdxDetectSnap snap
-        ON BINARY snap.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
+        ON snap.TableKey = i.TableKey
     JOIN SchemaSmith_ProductOwnership po
         ON BINARY po.ProductName = BINARY p_ProductName
         AND BINARY po.ObjectSchema = BINARY p_DatabaseName
         AND po.ObjectType = 'INDEX'
-        AND BINARY po.ObjectName = BINARY CONCAT(snap.TableName, '.', snap.IndexName)
+        AND CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(snap.TableKey, '.', snap.IndexKey)
     WHERE i.IsPrimaryKey = 0
       -- New index name doesn't exist
       AND NOT EXISTS (
           SELECT 1 FROM _SchemaSmith_IdxDetectNames s2
-          WHERE BINARY s2.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-            AND BINARY s2.IndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+          WHERE s2.TableKey = i.TableKey
+            AND s2.IndexKey = i.IndexKey
       )
       -- Old index exists with same columns (compare normalized column list)
       AND BINARY SchemaSmith_NormalizeIndexColumns(i.IndexColumns) = BINARY snap.NormColumns
@@ -274,7 +299,7 @@ BEGIN
         -- Update ProductOwnership with new names (set-based; mirrors the per-row UPDATE this loop replaced).
         UPDATE SchemaSmith_ProductOwnership po
         INNER JOIN _SchemaSmith_IndexRenames r
-            ON BINARY po.ObjectName = BINARY CONCAT(r.TableName, '.', r.OldIndexName)
+            ON CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(r.TableKey, '.', r.OldIndexKey)
         SET po.ObjectName = CONCAT(r.TableName, '.', r.NewIndexName)
         WHERE BINARY po.ProductName = BINARY p_ProductName
           AND BINARY po.ObjectSchema = BINARY p_DatabaseName
@@ -291,10 +316,10 @@ BEGIN
     IF p_WhatIf = 0 THEN
         DELETE snap FROM _SchemaSmith_IdxDetectSnap snap
             JOIN _SchemaSmith_IndexRenames r
-              ON BINARY r.TableName = BINARY snap.TableName AND BINARY r.OldIndexName = BINARY snap.IndexName;
+              ON r.TableKey = snap.TableKey AND r.OldIndexKey = snap.IndexKey;
         DELETE nm FROM _SchemaSmith_IdxDetectNames nm
             JOIN _SchemaSmith_IndexRenames r
-              ON BINARY r.TableName = BINARY nm.TableName AND BINARY r.OldIndexName = BINARY nm.IndexName;
+              ON r.TableKey = nm.TableKey AND r.OldIndexKey = nm.IndexKey;
     END IF;
 
     -- =========================================================================
@@ -314,8 +339,8 @@ BEGIN
         SchemaSmith_StripBacktickWrapping(i.IndexName) AS IndexName
     FROM _SchemaSmith_Indexes i
     JOIN _SchemaSmith_IdxDetectSnap snap
-        ON BINARY snap.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-        AND BINARY snap.IndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+        ON snap.TableKey = i.TableKey
+        AND snap.IndexKey = i.IndexKey
     LEFT JOIN _SchemaSmith_ExistingIndexVisibility viz
         ON BINARY viz.TableName = BINARY snap.TableName
         AND BINARY viz.IndexName = BINARY snap.IndexName
@@ -323,8 +348,8 @@ BEGIN
       -- Skip indexes that were just renamed
       AND NOT EXISTS (
           SELECT 1 FROM _SchemaSmith_IndexRenames r
-          WHERE BINARY r.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-            AND BINARY r.NewIndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+          WHERE r.TableKey = i.TableKey
+            AND r.NewIndexKey = i.IndexKey
       )
       -- A declared functional/expression index this target cannot legally CREATE (below the floor / see
       -- the STEP 0.6 degrade guard above) is left untouched rather than flagged modified-and-dropped:
@@ -411,7 +436,7 @@ BEGIN
         INSERT INTO _SchemaSmith_WouldDropIdxCat (TableName, IndexName)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4), CONVERT(s.INDEX_NAME USING utf8mb4)
         FROM INFORMATION_SCHEMA.STATISTICS s
-        WHERE BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
+        WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
           AND s.SEQ_IN_INDEX = 1;
 
         -- Defined-index snapshot (table.index pairs from the current definition). Mirrors STEP 3's _SchemaSmith_DefinedIndexes.
@@ -517,7 +542,7 @@ BEGIN
         INSERT INTO _SchemaSmith_IdxOnlyIdx (TableName, IndexName, NonUnique)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4), CONVERT(s.INDEX_NAME USING utf8mb4), s.NON_UNIQUE
         FROM INFORMATION_SCHEMA.STATISTICS s
-        WHERE BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
+        WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
           AND s.SEQ_IN_INDEX = 1;
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyKCU;
@@ -530,8 +555,8 @@ BEGIN
         INSERT INTO _SchemaSmith_IdxOnlyKCU (TableName, ConstraintName, ReferencedTableName)
         SELECT CONVERT(kcu.TABLE_NAME USING utf8mb4), CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4), CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4)
         FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-        WHERE BINARY kcu.REFERENCED_TABLE_SCHEMA = BINARY p_DatabaseName
-          AND BINARY kcu.TABLE_SCHEMA = BINARY p_DatabaseName
+        WHERE kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
+          AND kcu.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA) = v_DbKey
           AND kcu.REFERENCED_TABLE_NAME IS NOT NULL;
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyTC;
@@ -543,7 +568,7 @@ BEGIN
         INSERT INTO _SchemaSmith_IdxOnlyTC (TableName, ConstraintName)
         SELECT CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4)
         FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-        WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
+        WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
           AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexesToDrop;
@@ -768,13 +793,13 @@ BEGIN
         WHERE i.IsPrimaryKey = 0
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE BINARY r.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-                AND BINARY r.NewIndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+              WHERE r.TableKey = i.TableKey
+                AND r.NewIndexKey = i.IndexKey
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IdxExist s
-              WHERE BINARY s.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-                AND BINARY s.IndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+              WHERE s.TableKey = i.TableKey
+                AND s.IndexKey = i.IndexKey
           )
           -- A declared functional index below the floor (see the STEP 0.6 degrade guard above) is
           -- never created -- it is a hard syntax error, not a clause that can be suppressed.
@@ -788,13 +813,13 @@ BEGIN
         WHERE i.IsPrimaryKey = 0
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE BINARY r.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-                AND BINARY r.NewIndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+              WHERE r.TableKey = i.TableKey
+                AND r.NewIndexKey = i.IndexKey
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IdxExist s
-              WHERE BINARY s.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-                AND BINARY s.IndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+              WHERE s.TableKey = i.TableKey
+                AND s.IndexKey = i.IndexKey
           )
           AND NOT (SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1 AND SchemaSmith_SupportsFunctionalIndex() = 0);
 
@@ -824,13 +849,13 @@ BEGIN
         WHERE i.IsPrimaryKey = 0
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE BINARY r.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-                AND BINARY r.NewIndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+              WHERE r.TableKey = i.TableKey
+                AND r.NewIndexKey = i.IndexKey
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IdxExist s
-              WHERE BINARY s.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-                AND BINARY s.IndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+              WHERE s.TableKey = i.TableKey
+                AND s.IndexKey = i.IndexKey
           )
           AND NOT (SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1 AND SchemaSmith_SupportsFunctionalIndex() = 0)
         GROUP BY i.TableName;
@@ -859,8 +884,8 @@ BEGIN
         FROM _SchemaSmith_Indexes i
         WHERE EXISTS (
             SELECT 1 FROM _SchemaSmith_IdxExist s
-            WHERE BINARY s.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-              AND BINARY s.IndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+            WHERE s.TableKey = i.TableKey
+              AND s.IndexKey = i.IndexKey
         );
     END IF;
 
@@ -880,25 +905,24 @@ BEGIN
             PRIMARY KEY (TableName, IndexName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+        CALL SchemaSmith_SnapshotIndexExistence(p_DatabaseName);
         INSERT INTO _SchemaSmith_FTIndexesToDrop (TableName, IndexName)
         SELECT
-            CONVERT(s.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
-            CONVERT(s.INDEX_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
-        FROM INFORMATION_SCHEMA.STATISTICS s
-        WHERE BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
-          AND s.INDEX_TYPE = 'FULLTEXT'
-          AND s.SEQ_IN_INDEX = 1
+            s.TableName COLLATE utf8mb4_unicode_ci,
+            s.IndexName COLLATE utf8mb4_unicode_ci
+        FROM _SchemaSmith_IdxExist s
+        WHERE s.IndexType = 'FULLTEXT'
           AND EXISTS (
               SELECT 1 FROM SchemaSmith_ProductOwnership po
               WHERE BINARY po.ProductName = BINARY p_ProductName
                 AND BINARY po.ObjectSchema = BINARY p_DatabaseName
                 AND po.ObjectType = 'INDEX'
-                AND BINARY po.ObjectName = BINARY CONCAT(CONVERT(s.TABLE_NAME USING utf8mb4), '.', CONVERT(s.INDEX_NAME USING utf8mb4))
+                AND CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(s.TableKey, '.', s.IndexKey)
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_FullTextIndexes ft
-              WHERE BINARY SchemaSmith_StripBacktickWrapping(ft.TableName) = BINARY s.TABLE_NAME
-                AND BINARY SchemaSmith_StripBacktickWrapping(ft.IndexName) = BINARY s.INDEX_NAME
+              WHERE ft.TableKey = s.TableKey
+                AND ft.IndexKey = s.IndexKey
           );
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -962,8 +986,8 @@ BEGIN
         FROM _SchemaSmith_FullTextIndexes ft
         WHERE NOT EXISTS (
             SELECT 1 FROM _SchemaSmith_IdxExist s
-            WHERE BINARY s.TableName = BINARY SchemaSmith_StripBacktickWrapping(ft.TableName)
-              AND BINARY s.IndexName = BINARY SchemaSmith_StripBacktickWrapping(ft.IndexName)
+            WHERE s.TableKey = ft.TableKey
+              AND s.IndexKey = ft.IndexKey
               AND s.IndexType = 'FULLTEXT'
         );
 
@@ -974,8 +998,8 @@ BEGIN
         FROM _SchemaSmith_FullTextIndexes ft
         WHERE NOT EXISTS (
             SELECT 1 FROM _SchemaSmith_IdxExist s
-            WHERE BINARY s.TableName = BINARY SchemaSmith_StripBacktickWrapping(ft.TableName)
-              AND BINARY s.IndexName = BINARY SchemaSmith_StripBacktickWrapping(ft.IndexName)
+            WHERE s.TableKey = ft.TableKey
+              AND s.IndexKey = ft.IndexKey
               AND s.IndexType = 'FULLTEXT'
         );
     ELSE
@@ -986,8 +1010,8 @@ BEGIN
         FROM _SchemaSmith_FullTextIndexes ft
         WHERE NOT EXISTS (
             SELECT 1 FROM _SchemaSmith_IdxExist s
-            WHERE BINARY s.TableName = BINARY SchemaSmith_StripBacktickWrapping(ft.TableName)
-              AND BINARY s.IndexName = BINARY SchemaSmith_StripBacktickWrapping(ft.IndexName)
+            WHERE s.TableKey = ft.TableKey
+              AND s.IndexKey = ft.IndexKey
               AND s.IndexType = 'FULLTEXT'
         );
 
@@ -1011,8 +1035,8 @@ BEGIN
         FROM _SchemaSmith_FullTextIndexes ft
         WHERE NOT EXISTS (
             SELECT 1 FROM _SchemaSmith_IdxExist s
-            WHERE BINARY s.TableName = BINARY SchemaSmith_StripBacktickWrapping(ft.TableName)
-              AND BINARY s.IndexName = BINARY SchemaSmith_StripBacktickWrapping(ft.IndexName)
+            WHERE s.TableKey = ft.TableKey
+              AND s.IndexKey = ft.IndexKey
               AND s.IndexType = 'FULLTEXT'
         )
         ORDER BY ft.RowId;
@@ -1038,8 +1062,8 @@ BEGIN
         FROM _SchemaSmith_FullTextIndexes ft
         WHERE EXISTS (
             SELECT 1 FROM _SchemaSmith_IdxExist s
-            WHERE BINARY s.TableName = BINARY SchemaSmith_StripBacktickWrapping(ft.TableName)
-              AND BINARY s.IndexName = BINARY SchemaSmith_StripBacktickWrapping(ft.IndexName)
+            WHERE s.TableKey = ft.TableKey
+              AND s.IndexKey = ft.IndexKey
         );
     END IF;
 

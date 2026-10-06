@@ -12,6 +12,10 @@ CREATE FUNCTION SchemaSmith_TablePartitioningJson(
 ) RETURNS LONGTEXT
 READS SQL DATA
 BEGIN
+    -- Name keys: the catalog may spell the schema and table differently from the caller (lower_case_table_names).
+    DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Schema);
+    DECLARE v_TableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_Table);
     -- The table's partitioning as a JSON object (#partitioning, K3), or 'null' when it has none.
     --
     -- Before this, extraction said nothing about partitioning at all: a partitioned table extracted
@@ -33,8 +37,8 @@ BEGIN
     SELECT p.PARTITION_METHOD, p.PARTITION_EXPRESSION
       INTO v_Method, v_Expression
       FROM INFORMATION_SCHEMA.PARTITIONS p
-     WHERE BINARY p.TABLE_SCHEMA = BINARY p_Schema
-       AND BINARY p.TABLE_NAME = BINARY p_Table
+     WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
+       AND SchemaSmith_IdentifierKey(p.TABLE_NAME) = v_TableKey
        AND p.PARTITION_NAME IS NOT NULL
      ORDER BY p.PARTITION_ORDINAL_POSITION
      LIMIT 1;
@@ -45,8 +49,8 @@ BEGIN
 
     SELECT COUNT(*) INTO v_Count
       FROM INFORMATION_SCHEMA.PARTITIONS p
-     WHERE BINARY p.TABLE_SCHEMA = BINARY p_Schema
-       AND BINARY p.TABLE_NAME = BINARY p_Table
+     WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
+       AND SchemaSmith_IdentifierKey(p.TABLE_NAME) = v_TableKey
        AND p.PARTITION_NAME IS NOT NULL;
 
     -- HASH and KEY have no per-partition boundary -- the engine assigns rows by hashing -- so they carry a
@@ -67,8 +71,8 @@ BEGIN
                ORDER BY p.PARTITION_ORDINAL_POSITION SEPARATOR ',')
       INTO v_Partitions
       FROM INFORMATION_SCHEMA.PARTITIONS p
-     WHERE BINARY p.TABLE_SCHEMA = BINARY p_Schema
-       AND BINARY p.TABLE_NAME = BINARY p_Table
+     WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
+       AND SchemaSmith_IdentifierKey(p.TABLE_NAME) = v_TableKey
        AND p.PARTITION_NAME IS NOT NULL;
 
     RETURN CONCAT('{"Method":', JSON_QUOTE(v_Method),

@@ -21,12 +21,12 @@ BEGIN
     -- avoiding the add-drop-readd cycle for circular FK dependencies.
 
     DECLARE v_Done INT DEFAULT FALSE;
-    -- The catalog is utf8mb3. Comparing a bare catalog column against a value in the SAME charset lets
-    -- MariaDB push the schema filter down (EXPLAIN: "Scanned 1 database" rather than "Scanned all
-    -- databases"); wrapping the column in CONVERT(... USING utf8mb4) defeated it and cost ~1.8ms per
-    -- database ON THE SERVER, on every deploy. A bare parameter does NOT work -- it carries the
-    -- connection charset -- so the declared local is load-bearing, not decoration.
-    DECLARE v_IsDbName VARCHAR(128) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT p_DatabaseName;
+    -- Names compare through their keys: tables through SchemaSmith_IdentifierKey, constraints and columns
+    -- case-insensitively, as the engine does. v_DbCi is a case-insensitive utf8mb4 schema prefilter the catalog can
+    -- serve without a full scan; the key compare against v_DbKey then decides exactly. Catalog reads land in keyed
+    -- snapshots, so no correlated subquery calls a key function on its outer row (see ModifiedTableQuench).
+    DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_DatabaseName);
 
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_Done = TRUE;
 
@@ -56,20 +56,23 @@ BEGIN
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingFKCols;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingFKCols (
         ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         FkColumns TEXT,
         RefColumns TEXT,
-        PRIMARY KEY (ConstraintName)
+        PRIMARY KEY (ConstraintName),
+        KEY ix_key (ConstraintKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     -- One pass over KEY_COLUMN_USAGE, aggregated per constraint. GROUP_CONCAT ordering and the
     -- default ',' separator match the correlated subqueries this replaces, so composite FKs compare
     -- byte-for-byte as before.
-    INSERT INTO _SchemaSmith_ExistingFKCols (ConstraintName, FkColumns, RefColumns)
+    INSERT INTO _SchemaSmith_ExistingFKCols (ConstraintName, ConstraintKey, FkColumns, RefColumns)
     SELECT kcu.CONSTRAINT_NAME,
+           SchemaSmith_NameKeyCI(kcu.CONSTRAINT_NAME),
            GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION),
            GROUP_CONCAT(kcu.REFERENCED_COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION)
       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-     WHERE BINARY kcu.CONSTRAINT_SCHEMA = BINARY p_DatabaseName
+     WHERE kcu.CONSTRAINT_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.CONSTRAINT_SCHEMA) = v_DbKey
        AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
      GROUP BY kcu.CONSTRAINT_NAME;
 
@@ -80,16 +83,23 @@ BEGIN
         ReferencedTable VARCHAR(128),
         DeleteRule VARCHAR(64),
         UpdateRule VARCHAR(64),
-        PRIMARY KEY (TableName, ConstraintName)
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        ReferencedTableKey VARCHAR(260) COLLATE utf8mb4_bin,
+        PRIMARY KEY (TableName, ConstraintName),
+        KEY ix_key (TableKey, ConstraintKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-    INSERT INTO _SchemaSmith_ExistingFKs (TableName, ConstraintName, ReferencedTable, DeleteRule, UpdateRule)
-    SELECT tc.TABLE_NAME, tc.CONSTRAINT_NAME, rc.REFERENCED_TABLE_NAME, rc.DELETE_RULE, rc.UPDATE_RULE
+    INSERT INTO _SchemaSmith_ExistingFKs (TableName, ConstraintName, ReferencedTable, DeleteRule, UpdateRule,
+                                          TableKey, ConstraintKey, ReferencedTableKey)
+    SELECT tc.TABLE_NAME, tc.CONSTRAINT_NAME, rc.REFERENCED_TABLE_NAME, rc.DELETE_RULE, rc.UPDATE_RULE,
+           SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME),
+           SchemaSmith_IdentifierKey(rc.REFERENCED_TABLE_NAME)
       FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
       JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
-        ON BINARY rc.CONSTRAINT_SCHEMA = BINARY p_DatabaseName
+        ON rc.CONSTRAINT_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(rc.CONSTRAINT_SCHEMA) = v_DbKey
        AND BINARY rc.CONSTRAINT_NAME = BINARY tc.CONSTRAINT_NAME
-     WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
+     WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
        AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
 
     -- Find FKs that exist but have different definition. Same predicates as before, now against the
@@ -101,22 +111,23 @@ BEGIN
         SchemaSmith_StripBacktickWrapping(f.KeyName) AS ConstraintName
     FROM _SchemaSmith_ForeignKeys f
     JOIN _SchemaSmith_ExistingFKs e
-        ON BINARY e.TableName = BINARY SchemaSmith_StripBacktickWrapping(f.TableName)
-        AND BINARY e.ConstraintName = BINARY SchemaSmith_StripBacktickWrapping(f.KeyName)
+        ON e.TableKey = f.TableKey
+        AND e.ConstraintKey = f.KeyNameKey
     LEFT JOIN _SchemaSmith_ExistingFKCols c
         ON BINARY c.ConstraintName = BINARY e.ConstraintName
     WHERE (
         -- Different referenced table
-        BINARY e.ReferencedTable != BINARY SchemaSmith_StripBacktickWrapping(f.RelatedTable)
+        e.ReferencedTableKey != f.RelatedTableKey
         -- Or different delete action
         OR BINARY e.DeleteRule != BINARY COALESCE(f.DeleteAction, 'NO ACTION')
         -- Or different update action
         OR BINARY e.UpdateRule != BINARY COALESCE(f.UpdateAction, 'NO ACTION')
         -- Or different columns (aggregate comparison handles composite FKs;
         -- REPLACE strips backticks from comma-separated column lists like `Col1`,`Col2`)
-        OR BINARY c.FkColumns != BINARY REPLACE(f.Columns, '`', '')
+        -- (column names compare case-insensitively, as the engine does)
+        OR BINARY LOWER(c.FkColumns) != BINARY LOWER(REPLACE(f.Columns, '`', ''))
         -- Or different referenced columns
-        OR BINARY c.RefColumns != BINARY REPLACE(f.RelatedColumns, '`', '')
+        OR BINARY LOWER(c.RefColumns) != BINARY LOWER(REPLACE(f.RelatedColumns, '`', ''))
     );
 
     -- Drop modified FKs
@@ -153,9 +164,9 @@ BEGIN
                       GROUP_CONCAT(CONCAT('DROP INDEX `', m.ConstraintName, '`') ORDER BY m.ConstraintName SEPARATOR ', '))
         FROM _SchemaSmith_ModifiedFKs m
         JOIN INFORMATION_SCHEMA.STATISTICS s
-            ON BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY s.TABLE_NAME = BINARY m.TableName
-            AND BINARY s.INDEX_NAME = BINARY m.ConstraintName
+            ON s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
+            AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(m.TableName)
+            AND SchemaSmith_NameKeyCI(s.INDEX_NAME) = SchemaSmith_NameKeyCI(m.ConstraintName)
             AND s.SEQ_IN_INDEX = 1
         GROUP BY m.TableName;
 
@@ -173,6 +184,19 @@ BEGIN
     -- =========================================================================
     -- STEP 2: Create missing foreign keys
     -- =========================================================================
+    -- FK existence after the modified-FK drops above, so a dropped FK is seen as missing and recreated.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkExist;
+    CREATE TEMPORARY TABLE _SchemaSmith_FkExist (
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableKey, ConstraintKey)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    INSERT IGNORE INTO _SchemaSmith_FkExist (TableKey, ConstraintKey)
+    SELECT SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME)
+      FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+     WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
+       AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
+
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing foreign keys');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -190,11 +214,9 @@ BEGIN
                       ' ON UPDATE ', f.UpdateAction)
         FROM _SchemaSmith_ForeignKeys f
         WHERE NOT EXISTS (
-            SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
-              AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.TableName)
-              AND BINARY tc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.KeyName)
-              AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+            SELECT 1 FROM _SchemaSmith_FkExist fe
+            WHERE fe.TableKey = f.TableKey
+              AND fe.ConstraintKey = f.KeyNameKey
         );
 
         -- #363: WhatIf twin of the ELSE-branch 'foreignKey'/'created' audit; same source/predicate, wouldCreate.
@@ -202,11 +224,9 @@ BEGIN
         SELECT CONNECTION_ID(), 'foreignKey', CONCAT(SchemaSmith_StripBacktickWrapping(f.TableName), '.', SchemaSmith_StripBacktickWrapping(f.KeyName)), 'wouldCreate'
         FROM _SchemaSmith_ForeignKeys f
         WHERE NOT EXISTS (
-            SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
-              AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.TableName)
-              AND BINARY tc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.KeyName)
-              AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+            SELECT 1 FROM _SchemaSmith_FkExist fe
+            WHERE fe.TableKey = f.TableKey
+              AND fe.ConstraintKey = f.KeyNameKey
         );
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing foreign keys');
@@ -215,11 +235,9 @@ BEGIN
             CASE WHEN COALESCE(f.VariantName, '') <> '' THEN CONCAT(' (variant: ', f.VariantName, ')') ELSE '' END)
         FROM _SchemaSmith_ForeignKeys f
         WHERE NOT EXISTS (
-            SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
-              AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.TableName)
-              AND BINARY tc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.KeyName)
-              AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+            SELECT 1 FROM _SchemaSmith_FkExist fe
+            WHERE fe.TableKey = f.TableKey
+              AND fe.ConstraintKey = f.KeyNameKey
         );
 
         -- Fold each table's missing-FK creates into one multi-clause ALTER, materialize, execute.
@@ -231,11 +249,9 @@ BEGIN
         SELECT CONNECTION_ID(), 'foreignKey', CONCAT(SchemaSmith_StripBacktickWrapping(f.TableName), '.', SchemaSmith_StripBacktickWrapping(f.KeyName)), 'created'
         FROM _SchemaSmith_ForeignKeys f
         WHERE NOT EXISTS (
-            SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
-              AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.TableName)
-              AND BINARY tc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.KeyName)
-              AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+            SELECT 1 FROM _SchemaSmith_FkExist fe
+            WHERE fe.TableKey = f.TableKey
+              AND fe.ConstraintKey = f.KeyNameKey
         );
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKCreateStmts;
@@ -258,11 +274,9 @@ BEGIN
                           ORDER BY f.KeyName SEPARATOR ', '))
         FROM _SchemaSmith_ForeignKeys f
         WHERE NOT EXISTS (
-            SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
-              AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.TableName)
-              AND BINARY tc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.KeyName)
-              AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+            SELECT 1 FROM _SchemaSmith_FkExist fe
+            WHERE fe.TableKey = f.TableKey
+              AND fe.ConstraintKey = f.KeyNameKey
         )
         GROUP BY f.TableName;
 
@@ -280,6 +294,19 @@ BEGIN
     -- =========================================================================
     -- STEP 3: Update ProductOwnership for managed foreign keys
     -- =========================================================================
+    -- Rebuilt to the post-create state for the ownership and by-absence passes below.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkExist;
+    CREATE TEMPORARY TABLE _SchemaSmith_FkExist (
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableKey, ConstraintKey)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    INSERT IGNORE INTO _SchemaSmith_FkExist (TableKey, ConstraintKey)
+    SELECT SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME)
+      FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+     WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
+       AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
+
     IF p_WhatIf = 0 THEN
         -- Track foreign keys
         INSERT IGNORE INTO SchemaSmith_ProductOwnership (ProductName, TemplateName, ObjectSchema, ObjectType, ObjectName)
@@ -287,11 +314,9 @@ BEGIN
                CONCAT(SchemaSmith_StripBacktickWrapping(f.TableName), '.', SchemaSmith_StripBacktickWrapping(f.KeyName))
         FROM _SchemaSmith_ForeignKeys f
         WHERE EXISTS (
-            SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
-              AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.TableName)
-              AND BINARY tc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(f.KeyName)
-              AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+            SELECT 1 FROM _SchemaSmith_FkExist fe
+            WHERE fe.TableKey = f.TableKey
+              AND fe.ConstraintKey = f.KeyNameKey
         );
     END IF;
 
@@ -323,21 +348,19 @@ BEGIN
           -- Not in current definition
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_ForeignKeys f
-              WHERE CONVERT(SchemaSmith_StripBacktickWrapping(f.TableName) USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-                AND CONVERT(SchemaSmith_StripBacktickWrapping(f.KeyName) USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
+              WHERE f.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
+                AND f.KeyNameKey = CONVERT(LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1)) USING utf8mb4) COLLATE utf8mb4_bin
           )
           -- Verify FK actually exists
           AND EXISTS (
-              SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-              WHERE tc.TABLE_SCHEMA = v_IsDbName
-                AND CONVERT(tc.TABLE_NAME USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-                AND CONVERT(tc.CONSTRAINT_NAME USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
-                AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+              SELECT 1 FROM _SchemaSmith_FkExist fe
+              WHERE fe.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
+                AND fe.ConstraintKey = CONVERT(LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1)) USING utf8mb4) COLLATE utf8mb4_bin
           )
           -- Per-table tightening: a table may set DropForeignKeysRemovedFromProduct:false to protect its own FKs.
           AND COALESCE((SELECT t.DropForeignKeysRemovedFromProduct
                           FROM _SchemaSmith_Tables t
-                          WHERE CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
+                          WHERE t.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
                           LIMIT 1), 1) = 1;
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -372,21 +395,19 @@ BEGIN
           -- Not in current definition
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_ForeignKeys f
-              WHERE CONVERT(SchemaSmith_StripBacktickWrapping(f.TableName) USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-                AND CONVERT(SchemaSmith_StripBacktickWrapping(f.KeyName) USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
+              WHERE f.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
+                AND f.KeyNameKey = CONVERT(LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1)) USING utf8mb4) COLLATE utf8mb4_bin
           )
           -- Verify FK actually exists
           AND EXISTS (
-              SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-              WHERE tc.TABLE_SCHEMA = v_IsDbName
-                AND CONVERT(tc.TABLE_NAME USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-                AND CONVERT(tc.CONSTRAINT_NAME USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
-                AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+              SELECT 1 FROM _SchemaSmith_FkExist fe
+              WHERE fe.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
+                AND fe.ConstraintKey = CONVERT(LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1)) USING utf8mb4) COLLATE utf8mb4_bin
           )
           -- Per-table tightening: a table may set DropForeignKeysRemovedFromProduct:false to protect its own FKs.
           AND COALESCE((SELECT t.DropForeignKeysRemovedFromProduct
                           FROM _SchemaSmith_Tables t
-                          WHERE CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
+                          WHERE t.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
                           LIMIT 1), 1) = 1;
 
         IF p_WhatIf = 1 THEN
@@ -422,9 +443,9 @@ BEGIN
                           GROUP_CONCAT(CONCAT('DROP INDEX `', d.ConstraintName, '`') ORDER BY d.ConstraintName SEPARATOR ', '))
             FROM _SchemaSmith_FKsToDrop d
             JOIN INFORMATION_SCHEMA.STATISTICS s
-                ON BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
-                AND BINARY s.TABLE_NAME = BINARY d.TableName
-                AND BINARY s.INDEX_NAME = BINARY d.ConstraintName
+                ON s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
+                AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(d.TableName)
+                AND SchemaSmith_NameKeyCI(s.INDEX_NAME) = SchemaSmith_NameKeyCI(d.ConstraintName)
                 AND s.SEQ_IN_INDEX = 1
             GROUP BY d.TableName;
 
@@ -459,6 +480,7 @@ BEGIN
 
     -- Cleanup temporary tables
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifiedFKs;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkExist;
 
 END//
 
