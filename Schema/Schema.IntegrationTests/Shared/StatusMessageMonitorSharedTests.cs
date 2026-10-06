@@ -198,6 +198,7 @@ public abstract class StatusMessageMonitorSharedTests
             AND TABLE_NAME = 'SchemaSmith_StatusMessages'";
         var result = cmd.ExecuteScalar();
         Assert.That(result, Is.Not.Null);
-        Assert.That(result!.ToString(), Is.EqualTo("SchemaSmith_StatusMessages"));
+        // A server that folds names (lower_case_table_names >= 1) reports them in lowercase.
+        Assert.That(result!.ToString(), Is.EqualTo("SchemaSmith_StatusMessages").IgnoreCase);
     }
 }

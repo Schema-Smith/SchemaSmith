@@ -52,7 +52,8 @@ public abstract class DatabaseQuenchTestsSharedTests
             AND TABLE_NAME = 'SchemaSmith_CompletedMigrationScripts'";
         var result = command.ExecuteScalar();
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.ToString(), Is.EqualTo("SchemaSmith_CompletedMigrationScripts"));
+        // A server that folds names (lower_case_table_names >= 1) reports them in lowercase.
+        Assert.That(result.ToString(), Is.EqualTo("SchemaSmith_CompletedMigrationScripts").IgnoreCase);
     }
 
     [Test]
@@ -91,7 +92,8 @@ public abstract class DatabaseQuenchTestsSharedTests
         using var reader = command.ExecuteReader();
 
         Assert.That(reader.Read(), Is.True);
-        Assert.That(reader.GetString(0), Is.EqualTo(MainDb));
+        // A server that folds names (lower_case_table_names >= 1) reports them in lowercase.
+        Assert.That(reader.GetString(0), Is.EqualTo(MainDb).IgnoreCase);
     }
 
     [Test]
@@ -129,7 +131,8 @@ public abstract class DatabaseQuenchTestsSharedTests
 
         command.CommandText = "SELECT DATABASE()";
         var db1 = command.ExecuteScalar()?.ToString();
-        Assert.That(db1, Is.EqualTo(secondaryDb));
+        // A server that folds names (lower_case_table_names >= 1) reports them in lowercase.
+        Assert.That(db1, Is.EqualTo(secondaryDb).IgnoreCase);
 
         // Switch to main database
         command.CommandText = $"USE `{mainDb}`";
@@ -137,7 +140,7 @@ public abstract class DatabaseQuenchTestsSharedTests
 
         command.CommandText = "SELECT DATABASE()";
         var db2 = command.ExecuteScalar()?.ToString();
-        Assert.That(db2, Is.EqualTo(mainDb));
+        Assert.That(db2, Is.EqualTo(mainDb).IgnoreCase);
     }
 
     [Test]

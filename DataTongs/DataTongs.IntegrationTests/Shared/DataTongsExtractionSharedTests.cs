@@ -102,16 +102,17 @@ INSERT IGNORE INTO `{MainDb}`.`legacy_types` (`id`, `blob_data`, `longblob_data`
     }
 
     [Test]
-    public void TableExists_CaseSensitive_ReturnsFalse()
+    public void TableExists_DifferentCase_FollowsTheServersNameFolding()
     {
         using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT @@lower_case_table_names";
+        var serverFoldsNames = Convert.ToInt32(command.ExecuteScalar()) != 0;
 
-        // Test database has 'actor' table, not 'ACTOR' (case-sensitive with BINARY)
+        // The test database has 'actor'. 'ACTOR' names a different table on a case-sensitive server and the same
+        // table on one that folds names (lower_case_table_names >= 1).
         var exists = _dataTongs.TableExists(command, _testDb, "ACTOR");
 
-        // MySQL on Windows may be case-insensitive, but our BINARY comparison should be case-sensitive
-        // This test verifies our BINARY comparison is working
-        Assert.That(exists, Is.False);
+        Assert.That(exists, Is.EqualTo(serverFoldsNames));
     }
 
     [Test]

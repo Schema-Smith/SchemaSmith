@@ -86,7 +86,8 @@ public abstract class TableQuench_ModifyConstraintSharedTests : BaseTableQuenchT
             WHERE TABLE_SCHEMA = '{TestSchema}'
               AND TABLE_NAME = 'ModifyFKRefTbl'
               AND CONSTRAINT_NAME = 'FK_ModifyFKRefTbl_Ref'";
-        Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("ModifyFKRefTblRefNew"));
+        // A server that folds names (lower_case_table_names >= 1) reports them in lowercase.
+        Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("ModifyFKRefTblRefNew").IgnoreCase);
 
         conn.Close();
     }

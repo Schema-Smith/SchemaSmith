@@ -89,8 +89,8 @@ public class ProductUpdateTests
             RunSchemaQuench();
 
             _progressLog.DidNotReceive().Error(Arg.Any<string>());
-            _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("Successfully Quenched")));
-            _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains(_secondaryDb) && s.Contains("Successfully Quenched")));
+            _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("Successfully Quenched")));
+            _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains(_secondaryDb, StringComparison.OrdinalIgnoreCase) && s.Contains("Successfully Quenched")));
             _progressLog.Received(1).Info("Completed quench of ValidProduct");
 
             _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching After Product Scripts to")));
@@ -169,39 +169,39 @@ public class ProductUpdateTests
                 _environment.DidNotReceive().Exit(3);
 
                 // Should complete successfully
-                _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("Successfully Quenched")));
-                _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains(_secondaryDb) && s.Contains("Successfully Quenched")));
+                _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("Successfully Quenched")));
+                _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains(_secondaryDb, StringComparison.OrdinalIgnoreCase) && s.Contains("Successfully Quenched")));
                 _progressLog.Received(1).Info("Completed quench of ValidProduct");
 
                 // WhatIf log messages for Main template database quench
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("[WhatIf] Object scripts without unresolved tokens:")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("[WhatIf] Object scripts without query tokens:")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("[WhatIf] Before database scripts:")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("[WhatIf] Object scripts (after tables):")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("[WhatIf] Between table and keys scripts:")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("[WhatIf] After table scripts:")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("[WhatIf] Object scripts (final pass):")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("[WhatIf] Table data delivery:")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("[WhatIf] After database scripts:")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("[WhatIf] Would stamp version")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] Object scripts without unresolved tokens:")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] Object scripts without query tokens:")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] Before database scripts:")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] Object scripts (after tables):")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] Between table and keys scripts:")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] After table scripts:")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] Object scripts (final pass):")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] Table data delivery:")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] After database scripts:")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] Would stamp version")));
 
                 // WhatIf log messages for Secondary template database quench
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_secondaryDb) && s.Contains("[WhatIf] Object scripts without unresolved tokens:")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_secondaryDb) && s.Contains("[WhatIf] Before database scripts:")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_secondaryDb) && s.Contains("[WhatIf] After database scripts:")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_secondaryDb) && s.Contains("[WhatIf] Would stamp version")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_secondaryDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] Object scripts without unresolved tokens:")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_secondaryDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] Before database scripts:")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_secondaryDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] After database scripts:")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_secondaryDb, StringComparison.OrdinalIgnoreCase) && s.Contains("[WhatIf] Would stamp version")));
 
                 // WhatIf "Would APPLY" messages for object scripts
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("Would APPLY:") && s.Contains("MyFunction.sql")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("Would APPLY:") && s.Contains("MyView.sql")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("Would APPLY:") && s.Contains("MyProcedure.sql")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("Would APPLY:") && s.Contains("MyFunction.sql")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("Would APPLY:") && s.Contains("MyView.sql")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("Would APPLY:") && s.Contains("MyProcedure.sql")));
 
                 // Before migration scripts: MigrationScript0 was previously quenched, MigrationScript1 [ALWAYS] should be Would APPLY
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("Would SKIP (previously quenched):") && s.Contains("MigrationScript0.sql")));
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("Would APPLY:") && s.Contains("MigrationScript1 [ALWAYS].sql")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("Would SKIP (previously quenched):") && s.Contains("MigrationScript0.sql")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("Would APPLY:") && s.Contains("MigrationScript1 [ALWAYS].sql")));
 
                 // Table data delivery WhatIf for Main (TestTable has ContentFile and MergeType)
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb) && s.Contains("Would DELIVER:") && s.Contains("TestTable")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(_mainDb, StringComparison.OrdinalIgnoreCase) && s.Contains("Would DELIVER:") && s.Contains("TestTable")));
 
                 // After Product scripts should show "Would Quench"
                 _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Would Quench") && s.Contains("Job 1.sql")));
