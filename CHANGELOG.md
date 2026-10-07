@@ -10,6 +10,10 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 - **The MySQL floor is now 5.7.22 on the 5.7 line and 8.0.23 on the 8.0 line.** MySQL 5.7.0-5.7.21 and 8.0.0-8.0.22 are refused before anything runs, naming the detected version. On 5.7.0-5.7.21 DataTongs extracted nothing and still exited 0, and on early 8.0 patches deploys failed or churned on features those patches lack (functional indexes, enforced CHECK constraints, invisible indexes). Upgrade within the line to continue.
 
+### Added
+
+- **`--Validate` reports a foreign-key name used on two tables (`SS-FK-006`).** MySQL names foreign keys per database and SQL Server per schema, so the second one fails the deploy: an error. MariaDB names them per table from 12.1, so there it is a warning, unless the product's `MinimumVersion` is 12.1 or later.
+
 ### Fixed
 
 - **SchemaSmith now works on MySQL and MariaDB servers that fold table names (`lower_case_table_names` 1 or 2, the Windows and macOS defaults) — #433.** Such a server stores database and table names in lowercase while SchemaSmith compared them with the configured spelling, so kindling stopped with a duplicate-column error and no tool could run. Every comparison now asks the server whether two names are the same object, so deploys, data delivery, DataTongs extraction, SchemaTongs procedure and function extraction, the CASCADE guard and `Target.Databases` behave the same on every setting. Extraction from a server with `lower_case_table_names = 1` writes lowercase table names, because the server holds no other spelling. A package declaring two tables whose names differ only in case is refused (exit 2) on a folding server, where they would be one table; `--Validate` already reports such a pair as `SS-DUP-001`. The v2.7.0 notes said folding servers were unaffected by the case-sensitive table fixes; in fact they could not be deployed to at all.
