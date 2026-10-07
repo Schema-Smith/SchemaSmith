@@ -481,7 +481,9 @@ public class ForgeKindlerTests
         //   RENAME COLUMN / RENAME INDEX at 10.5.2).
         // +1 = SchemaSmith_RefuseUnsupportedIndexes (MA-014 -- a long unique key below MariaDB 10.4 has no degrade, so it
         //   is refused before anything is created).
-        Assert.That(mysql.Length, Is.EqualTo(70));
+        // +1 = SchemaSmith_CheckTableJoin (MA-009 -- the MariaDB-only table predicate for CHECK_CONSTRAINTS joins, as a
+        //   string because MySQL's CHECK_CONSTRAINTS has no TABLE_NAME).
+        Assert.That(mysql.Length, Is.EqualTo(71));
     }
 
     [Test]

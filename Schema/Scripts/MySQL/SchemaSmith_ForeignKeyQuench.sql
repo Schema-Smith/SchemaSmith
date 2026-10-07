@@ -55,26 +55,29 @@ BEGIN
     -- Hoisting the metadata into temp tables turns ~360 scans into 3.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingFKCols;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingFKCols (
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         FkColumns TEXT,
         RefColumns TEXT,
-        PRIMARY KEY (ConstraintName),
+        PRIMARY KEY (TableName, ConstraintName),
         KEY ix_key (ConstraintKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     -- One pass over KEY_COLUMN_USAGE, aggregated per constraint. GROUP_CONCAT ordering and the
     -- default ',' separator match the correlated subqueries this replaces, so composite FKs compare
-    -- byte-for-byte as before.
-    INSERT INTO _SchemaSmith_ExistingFKCols (ConstraintName, ConstraintKey, FkColumns, RefColumns)
-    SELECT kcu.CONSTRAINT_NAME,
+    -- byte-for-byte as before. Grouped per TABLE as well as name: from MariaDB 12.1 foreign-key names are
+    -- unique per table (unnamed ones are all "1"), and grouping by name alone merged their column lists.
+    INSERT INTO _SchemaSmith_ExistingFKCols (TableName, ConstraintName, ConstraintKey, FkColumns, RefColumns)
+    SELECT kcu.TABLE_NAME,
+           kcu.CONSTRAINT_NAME,
            SchemaSmith_NameKeyCI(kcu.CONSTRAINT_NAME),
            GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION),
            GROUP_CONCAT(kcu.REFERENCED_COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION)
       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
      WHERE kcu.CONSTRAINT_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.CONSTRAINT_SCHEMA) = v_DbKey
        AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
-     GROUP BY kcu.CONSTRAINT_NAME;
+     GROUP BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingFKs;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingFKs (
@@ -99,6 +102,7 @@ BEGIN
       JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
         ON rc.CONSTRAINT_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(rc.CONSTRAINT_SCHEMA) = v_DbKey
        AND BINARY rc.CONSTRAINT_NAME = BINARY tc.CONSTRAINT_NAME
+       AND BINARY rc.TABLE_NAME = BINARY tc.TABLE_NAME
      WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
        AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
 
@@ -115,7 +119,8 @@ BEGIN
         ON e.TableKey = f.TableKey
         AND e.ConstraintKey = f.KeyNameKey
     LEFT JOIN _SchemaSmith_ExistingFKCols c
-        ON BINARY c.ConstraintName = BINARY e.ConstraintName
+        ON BINARY c.TableName = BINARY e.TableName
+        AND BINARY c.ConstraintName = BINARY e.ConstraintName
     WHERE (
         -- Spelled differently only in case: the same constraint to the engine, so it is dropped and re-created under
         -- the package's spelling. MySQL and MariaDB both refuse that as one ALTER (the new name is a duplicate until

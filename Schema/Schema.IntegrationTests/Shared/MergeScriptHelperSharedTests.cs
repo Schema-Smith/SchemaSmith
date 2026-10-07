@@ -613,6 +613,45 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         }
     }
 
+    // MariaDB names its JSON column check after the column, and CHECK names are per table there. A text column in
+    // another table whose own check carries that same name was read as JSON, so its plain-text values went through
+    // the JSON path (MA-c1).
+    [Test]
+    public void BuildMergeScript_TextColumnSharingACheckNameWithAnotherTablesJsonColumn_StaysText()
+    {
+        using var command = _connection.CreateCommand();
+        var suffix = Guid.NewGuid().ToString("N")[..12];
+        var textTable = $"_test_ckt_{suffix}";
+        var jsonTable = $"_test_ckj_{suffix}";
+
+        try
+        {
+            command.CommandText = $@"
+                CREATE TABLE `{_testDb}`.`{jsonTable}` (id INT PRIMARY KEY, payload JSON);
+                CREATE TABLE `{_testDb}`.`{textTable}` (id INT PRIMARY KEY, payload TEXT,
+                    CONSTRAINT payload CHECK (CHAR_LENGTH(payload) > 0))";
+            command.ExecuteNonQuery();
+
+            var script = BuildMergeScript(command, _testDb, textTable,
+                @"[{""id"":1,""payload"":""plain text, not JSON""}]", "`id`", true, false, false, false, null!);
+
+            Assert.That(script, Does.Not.Contain("JSON_EXTRACT(VALUES(`payload`)"));
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+            command.CommandText = $"SELECT payload FROM `{_testDb}`.`{textTable}` WHERE id = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("plain text, not JSON"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{textTable}`, `{_testDb}`.`{jsonTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void BuildMergeScript_YearColumn_RoundTrip()
     {
