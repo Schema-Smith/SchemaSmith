@@ -760,6 +760,12 @@ public class DatabaseQuench
                     WhatIfLogTemplateScripts(command, "Before", _iteration.BeforeScripts, DatabaseScriptSlot.Before);
                 }
 
+                if (_product.Platform.GetBasePlatform() == Platform.SqlServer && DeferDatabaseToggles
+                    && !_template.IndexOnlyTableQuenches && _updateTables)
+                {
+                    QuenchDeferredDatabaseToggles(effectiveTableCmd);
+                }
+
                 // Step: Modified tables
                 if (!_template.IndexOnlyTableQuenches && _updateTables)
                 {
@@ -1713,8 +1719,26 @@ CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldC
     // capture-instance limit would block (#427). A RAISERROR does not end a batch, and this connection surfaces errors as
     // messages, so a refusal the batch merely reported would still let MissingTableAndColumnQuench create the tables.
     // The CATCH re-raises and ends the batch.
+    // A Before script can enable CDC or Change Tracking on the database, and the Before slot runs after this preflight,
+    // so with Before scripts present those two are judged after that slot instead (#432).
+    internal bool DeferDatabaseToggles => _iteration.BeforeScripts is { Count: > 0 };
+
+    internal void QuenchDeferredDatabaseToggles(IDbCommand tableCommand)
+    {
+        ClearParameters(tableCommand);
+        tableCommand.CommandText = $@"BEGIN TRY
+  EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.DegradeDatabaseToggles
+END TRY
+BEGIN CATCH
+  DECLARE @v_DegradeRefusal NVARCHAR(4000) = ERROR_MESSAGE()
+  RAISERROR(@v_DegradeRefusal, 16, 1)
+  RETURN
+END CATCH";
+        ExecuteNonQueryHandlingMessages(tableCommand);
+    }
+
     internal string SqlServerPreflight => $@"BEGIN TRY
-  EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.DegradeUnsupportedFeatures
+  EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.DegradeUnsupportedFeatures @DeferDatabaseToggles = {(DeferDatabaseToggles ? 1 : 0)}
   EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.CdcPreflight @CdcFilegroup = {TemplateCdcFilegroup}, @CdcSupportsNetChanges = {TemplateCdcSupportsNetChanges}
 END TRY
 BEGIN CATCH

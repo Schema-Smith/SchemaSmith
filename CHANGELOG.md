@@ -4,6 +4,12 @@ All notable changes to SchemaSmith Community Edition are documented here.
 
 For full release details and download links, see [GitHub Releases](https://github.com/Schema-Smith/SchemaSmith/releases).
 
+## [Unreleased]
+
+### Fixed
+
+- **CDC or Change Tracking enabled by a `Before` script was recorded as downgraded on the first deploy, so no tables were tracked (SQL Server) — #432.** The database-level check ran before the `Before` slot, so a new or restored database read as not enabled and the deploy exited 0 with nothing captured; the second deploy tracked everything. When the template has `Before` scripts, the check now runs after them. Without any, it still runs up front, so `UnsupportedFeaturePolicy=fail` refuses before anything is created.
+
 ## [v2.7.1](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) — 2026-10-01
 
 ### Added
