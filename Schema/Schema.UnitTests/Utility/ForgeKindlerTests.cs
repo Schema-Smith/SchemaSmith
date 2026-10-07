@@ -325,7 +325,9 @@ public class ForgeKindlerTests
         //   before any table or column is created, on every run including a resumed one).
         // +1 = SchemaSmith.DegradeDatabaseToggles (#432 -- the CDC and Change Tracking degrade, split out so it can be
         //   judged after the Before slot, which can enable either one).
-        Assert.That(sqlServer.Length, Is.EqualTo(45));
+        // +1 = SchemaSmith.fn_EnterpriseFeaturesUnavailable (SS-053 -- compression and columnstore are Enterprise-only
+        //   below SQL Server 2016 SP1, so the index and table degrades ask the edition as well as the version).
+        Assert.That(sqlServer.Length, Is.EqualTo(46));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns

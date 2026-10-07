@@ -368,6 +368,7 @@ public static class ForgeKindler
                 // Must follow fn_ServerMajorVersion: its CREATE is version-gated at kindle time and calls it.
                 new("SchemaSmith.fn_RebuildBlockedReason.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
+                new("SchemaSmith.fn_EnterpriseFeaturesUnavailable.sql"),
                 new("SchemaSmith.DegradeUnsupportedColumnStore.sql"),
                 new("SchemaSmith.DegradeDatabaseToggles.sql"),
                 new("SchemaSmith.DegradeUnsupportedFeatures.sql"),

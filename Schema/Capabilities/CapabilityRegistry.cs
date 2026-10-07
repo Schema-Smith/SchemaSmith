@@ -68,6 +68,13 @@ namespace Schema.Capabilities
                 11, "SQL Server 2012", null, DegradeKind.Skip, "columnstore index (SQL Server 2012/2014)"));
             rows.Add(new("columnstore-clustered", "Clustered columnstore index", Platform.SqlServer,
                 12, "SQL Server 2014", null, DegradeKind.Skip, "columnstore index (SQL Server 2012/2014)"));
+            // Past their introduction, two shapes still wait for 2016: a nonclustered columnstore makes its table
+            // read-only on 2012/2014, and 2014 refuses a clustered one beside rowstore indexes. Only creation is
+            // skipped; an index already on the table is left alone.
+            rows.Add(new("columnstore-nonclustered-writable", "Writable nonclustered columnstore index", Platform.SqlServer,
+                13, "SQL Server 2016", null, DegradeKind.Skip, "nonclustered columnstore index (writable from SQL Server 2016)"));
+            rows.Add(new("columnstore-clustered-with-rowstore", "Clustered columnstore beside rowstore indexes", Platform.SqlServer,
+                13, "SQL Server 2016", null, DegradeKind.Skip, "clustered columnstore beside rowstore indexes (SQL Server 2016)"));
 
             // ---- PostgreSQL (major gated via ServerVersionNum; all skipped) ---------------------------------
             rows.Add(new("nulls-not-distinct", "Unique index NULLS NOT DISTINCT", Platform.PostgreSQL,
@@ -201,6 +208,20 @@ namespace Schema.Capabilities
 
             // Reduced rather than Skip: without FILESTREAM the column still deploys as a plain
             // VARBINARY(MAX), so the user keeps the column and loses only its storage location.
+            // Gated on the server's edition: before SQL Server 2016 SP1, compression and columnstore were
+            // Enterprise-only, and Standard, Web and Express refuse them (7738, 35315). Compression is Reduced
+            // (the table or index deploys uncompressed); columnstore is Skipped.
+            rows.Add(new("data-compression-edition", "Data compression on Standard, Web or Express", Platform.SqlServer,
+                0, "any supported version (needs Enterprise or Developer edition below SQL Server 2016 SP1)",
+                null, DegradeKind.Reduced,
+                "data compression (Enterprise edition below SQL Server 2016 SP1)",
+                "Enterprise or Developer edition below SQL Server 2016 SP1"));
+            rows.Add(new("columnstore-edition", "Columnstore on Standard, Web or Express", Platform.SqlServer,
+                0, "any supported version (needs Enterprise or Developer edition below SQL Server 2016 SP1)",
+                null, DegradeKind.Skip,
+                "columnstore index (Enterprise edition below SQL Server 2016 SP1)",
+                "Enterprise or Developer edition below SQL Server 2016 SP1"));
+
             rows.Add(new("filestream-column", "FILESTREAM columns", Platform.SqlServer,
                 0, "any supported version (needs FILESTREAM on the server and a filegroup on the database)",
                 null, DegradeKind.Reduced,

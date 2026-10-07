@@ -191,6 +191,30 @@ BEGIN
   -- Shared with the --IndexOnly path, which calls this proc directly (it has only #Indexes).
   EXEC SchemaSmith.DegradeUnsupportedColumnStore
 
+  -- Table compression where the edition lacks it (SS-053): below SQL Server 2016 SP1, Standard, Web and Express refuse
+  -- DATA_COMPRESSION with 7738. The table is created uncompressed; index compression is handled with the indexes above.
+  IF SchemaSmith.fn_EnterpriseFeaturesUnavailable() = 1
+     AND EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE RTRIM(ISNULL([CompressionType], 'NONE')) IN ('ROW', 'PAGE'))
+  BEGIN
+    IF @v_policy = 'fail'
+    BEGIN
+      SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK)
+                            WHERE RTRIM(ISNULL(T.[CompressionType], 'NONE')) IN ('ROW', 'PAGE')
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      SET @v_msg = 'Data compression requires Enterprise or Developer edition below SQL Server 2016 SP1; table(s): ' +
+                   LEFT(@v_list, 1800) + '.'
+      RAISERROR(@v_msg, 16, 1)
+    END
+    ELSE
+    BEGIN
+      INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT @@SPID, 'data compression (Enterprise edition below SQL Server 2016 SP1)', T.[Schema] + '.' + T.[Name], 'downgraded'
+          FROM #Tables T WITH (NOLOCK) WHERE RTRIM(ISNULL(T.[CompressionType], 'NONE')) IN ('ROW', 'PAGE')
+      RAISERROR('  Table compression skipped (Enterprise edition below SQL Server 2016 SP1 - downgraded)', 10, 100) WITH NOWAIT
+      UPDATE #Tables SET [CompressionType] = 'NONE' WHERE RTRIM(ISNULL([CompressionType], 'NONE')) IN ('ROW', 'PAGE')
+    END
+  END
+
   -- Change Data Capture and table Change Tracking -- gated by DATABASE-scoped toggles, which a template's Before
   -- script can turn on. When the template has Before scripts the caller defers these two to just after that slot
   -- (#432); otherwise they are judged here, so a 'fail' still refuses before anything is created.
