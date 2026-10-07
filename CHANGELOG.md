@@ -23,6 +23,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **A failure writing a local file was reported as a lost server connection.** A missing checkpoint folder, a file in use or a full disk on the machine running SchemaQuench produced "Lost connection to <server> ... check the server/container logs and available memory". These now report the file error itself.
 - **An event comment or body changed only in case or accent was not applied, and a tablespace spelled differently only in case was accepted (MySQL, MariaDB).** Both compared without regard to case on most databases. A scheduled event's comment and body are now compared exactly, so the change is applied; a declared `Tablespace` differing only in case is refused like any other move, since MySQL tablespace names are case-sensitive.
 - **A `MinimumVersion` with a pre-release suffix, such as PostgreSQL `18beta1`, was refused as unreadable.** It now reads as its leading number (18).
+- **SchemaTongs could not extract any SQL Server 2008 R2 database.** It read `sys.sequences`, which arrived in SQL Server 2012, and exited 3 with half a package on disk. Sequences are now extracted from 2012 on, and a 2008 R2 extraction completes.
 
 ## [v2.7.1](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) — 2026-10-01
 
