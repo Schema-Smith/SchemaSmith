@@ -34,5 +34,25 @@ public class MySqlSessionSettingsTests
     }
 
     [Test]
+    public void WithTimeZone_PinsTheOffsetAroundTheScript_AndRestoresTheSessionZone()
+    {
+        var wrapped = MySqlSessionSettings.WithTimeZone("INSERT INTO t VALUES (1);", "+00:00");
+        Assert.That(wrapped, Is.EqualTo(
+            "SET @ss_saved_time_zone = @@SESSION.time_zone;\n" +
+            "SET SESSION time_zone = '+00:00';\n" +
+            "INSERT INTO t VALUES (1);\n" +
+            "SET SESSION time_zone = @ss_saved_time_zone;\n"));
+    }
+
+    // The value is spliced into SQL, so anything that is not a plain offset is refused rather than quoted.
+    [TestCase("UTC")]
+    [TestCase("+0:00")]
+    [TestCase("+15:00")]
+    [TestCase("+00:00'; DROP TABLE x; --")]
+    [TestCase(null)]
+    public void WithTimeZone_RefusesAnythingButAnOffset(string zone) =>
+        Assert.Throws<System.ArgumentException>(() => MySqlSessionSettings.WithTimeZone("SELECT 1;", zone));
+
+    [Test]
     public void ParseNeutral_OfNull_IsEmpty() => Assert.That(MySqlSessionSettings.ParseNeutral(null), Is.Empty);
 }

@@ -99,6 +99,23 @@ public class DataDeliveryConfiguratorImplTests
     }
 
     [Test]
+    public void Configure_ExtractionTimeZone_IsRecorded_AndAbsentRemovesIt()
+    {
+        _file.ReadAllText(TableJsonPath).Returns("""
+            { "Name": "TestTable", "Columns": [], "DataDelivery": { "ContentFile": "x", "TimeZone": "+05:00" } }
+            """);
+        var context = MakeContext();
+        context.TimeZone = "+00:00";
+        DataDeliveryConfiguratorImpl.GetFromFactory().Configure(context);
+        _file.Received(1).WriteAllText(TableJsonPath, Arg.Is<string>(s => s.Contains("\"TimeZone\": \"+00:00\"")));
+
+        _file.ClearReceivedCalls();
+        context.TimeZone = null;
+        DataDeliveryConfiguratorImpl.GetFromFactory().Configure(context);
+        _file.Received(1).WriteAllText(TableJsonPath, Arg.Is<string>(s => !s.Contains("TimeZone")));
+    }
+
+    [Test]
     public void Configure_JsonContentEncoding_DoesNotStampIt()
     {
         // JSON is the default encoding, so no redundant "ContentEncoding": "Json" is written.

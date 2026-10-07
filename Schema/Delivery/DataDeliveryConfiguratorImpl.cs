@@ -99,6 +99,9 @@ public class DataDeliveryConfiguratorImpl : IDataDeliveryConfigurator
         var contentEncoding = string.Equals(context.ContentEncoding, "Xml", StringComparison.OrdinalIgnoreCase) ? "Xml" : null;
         changed |= SetIfDifferent(delivery, "ContentEncoding", contentEncoding);
 
+        // The zone the data was extracted in (MySQL family); absent means the target session's zone.
+        changed |= SetIfDifferent(delivery, "TimeZone", string.IsNullOrWhiteSpace(context.TimeZone) ? null : context.TimeZone);
+
         changed |= SetBoolIfDifferent(delivery, "MergeDisableTriggers", context.DisableTriggers);
 
         if (context.Platform?.Equals("PostgreSQL", StringComparison.OrdinalIgnoreCase) == true)

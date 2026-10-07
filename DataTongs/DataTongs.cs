@@ -265,6 +265,11 @@ public class DataTongs
             ? TargetVersionDetector.Detect(cmd, _platform).ServerComparable
             : 0;
 
+        // A MySQL or MariaDB TIMESTAMP is rendered in the session's time zone. Extract at +00:00 and record it, so the
+        // delivery reads the values back in the same zone wherever it runs.
+        var extractionTimeZone = _platform.GetBasePlatform() == Platform.MySQL ? "+00:00" : null;
+        using var timeZone = extractionTimeZone != null ? MySqlSessionSettings.UseTimeZone(cmd, extractionTimeZone) : null;
+
         var tablesProcessed = 0;
         var errors = 0;
 
@@ -388,6 +393,7 @@ public class DataTongs
                         KeyColumns = keyColumns,
                         DefaultMergeType = mergeDelete ? "Insert/Update/Delete" : mergeUpdate ? "Insert/Update" : "Insert",
                         ContentEncoding = extractAsXml ? "Xml" : "Json",
+                        TimeZone = extractionTimeZone,
                         DisableTriggers = disableTriggers,
                         DisableRules = disableRules,
                         UpdateDescendents = updateDescendents,
@@ -442,6 +448,9 @@ public class DataTongs
                     keyColumns, mergeUpdate, mergeDelete, disableTriggers, tokenizeScripts, table.Filter,
                     disableRules, updateDescendents, destSchemaOverride, pgServerVersionNum, mySqlServerVersionNum,
                     extractAsXml ? "Xml" : "Json", contentFileToken);
+
+                if (extractionTimeZone != null)
+                    mergeSQL = MySqlSessionSettings.WithTimeZone(mergeSQL, extractionTimeZone);
 
                 var scriptFilePath = Path.Combine(scriptPath, $"Populate {encodedDisplayName}.sql");
                 _progressLog.Info($"    Writing merge script to : {scriptFilePath}");

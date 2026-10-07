@@ -438,6 +438,7 @@ For every table that produces output, DataTongs finds the table's JSON file in t
 | `MergeDisableRules` | **PostgreSQL.** Mirrors `ShouldCast:DisableRules`. |
 | `MergeUpdateDescendents` | **PostgreSQL.** Mirrors `ShouldCast:UpdateDescendents` (default `true`). |
 | `ContentEncoding` | `Xml` when extracting with `--DeliveryEncoding=Xml`, on any source engine (omitted for the default JSON). See [Delivery encoding](#delivery-encoding-xml-for-legacy-sql-server). |
+| `TimeZone` | **MySQL, MariaDB.** `+00:00`: DataTongs extracts `TIMESTAMP` values in that zone, and delivery reads them back in it, so they arrive unchanged whatever zone either server runs in. Generated merge scripts set the same zone around their data and restore the session's zone after. |
 
 Tables whose JSON file doesn't exist in the template are skipped with a warning. No file is created from scratch -- this tool configures existing tables, it doesn't scaffold new ones (use SchemaTongs for that).
 

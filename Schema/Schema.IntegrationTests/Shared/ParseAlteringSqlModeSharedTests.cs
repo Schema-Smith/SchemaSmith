@@ -147,7 +147,34 @@ public abstract class ParseAlteringSqlModeSharedTests
         });
     }
 
-    private void Deliver(string tableName, string json)
+    // A TIMESTAMP is written and read in the session's time zone. Data extracted at +00:00 and delivered on a +05:00
+    // session landed five hours early. A delivery that records its extraction zone now runs in it; one that records
+    // none still runs in the session's zone, so data written for that zone is unaffected.
+    [Test]
+    public void Delivery_RecordedTimeZone_LandsTimestampsUnshifted_AndUnmarkedDataKeepsTheSessionZone()
+    {
+        ForgeKindler.KindleTheForge(Command(), Platform, forceReKindle: true);
+        Exec("CREATE TABLE tz_marked (id INT NOT NULL PRIMARY KEY, ts TIMESTAMP NULL)");
+        Exec("CREATE TABLE tz_unmarked (id INT NOT NULL PRIMARY KEY, ts TIMESTAMP NULL)");
+        const string data = """[{"id": 1, "ts": "2026-01-01 12:00:00"}]""";
+        Exec("SET SESSION time_zone = '+05:00'");
+
+        Deliver("tz_marked", data, timeZone: "+00:00", valueColumn: "ts");
+        Deliver("tz_unmarked", data, valueColumn: "ts");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Scalar("SELECT @@SESSION.time_zone"), Is.EqualTo("+05:00"), "the session's zone is restored");
+            Exec("SET SESSION time_zone = '+00:00'");
+            Assert.That(Scalar("SELECT DATE_FORMAT(ts, '%Y-%m-%d %H:%i') FROM tz_marked"), Is.EqualTo("2026-01-01 12:00"));
+            Exec("SET SESSION time_zone = '+05:00'");
+            Assert.That(Scalar("SELECT DATE_FORMAT(ts, '%Y-%m-%d %H:%i') FROM tz_unmarked"), Is.EqualTo("2026-01-01 12:00"),
+                "unmarked data is read in the session's zone, as before");
+        });
+        Exec("SET SESSION time_zone = DEFAULT");
+    }
+
+    private void Deliver(string tableName, string json, string timeZone = null, string valueColumn = "val")
     {
         var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -161,11 +188,11 @@ public abstract class ParseAlteringSqlModeSharedTests
                 DeliverableColumns = new List<IDeliverableColumn>
                 {
                     new Column { Name = "id", Nullable = false },
-                    new Column { Name = "val", Nullable = true }
+                    new Column { Name = valueColumn, Nullable = true }
                 },
                 DataDeliveries = new List<DataDelivery>
                 {
-                    new() { MergeType = "Insert/Update", ContentFile = "data.tabledata", MatchColumns = "id" }
+                    new() { MergeType = "Insert/Update", ContentFile = "data.tabledata", MatchColumns = "id", TimeZone = timeZone }
                 }
             };
             DataDeliveryProcessor.GetFromFactory().DeliverTables(new DataDeliveryContext

@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
+using System.Linq;
 using DataTongs.IntegrationTests.Support;
 using Schema.DataAccess;
 using Schema.Delivery;
@@ -364,6 +365,117 @@ public abstract class ConfigureDataDeliverySharedTests
             Assert.That(updatedTable.DataDelivery[0].ContentFile, Is.EqualTo("TableData/actor.tabledata"));
             Assert.That(updatedTable.DataDelivery[0].MergeType, Is.EqualTo("Insert/Update"));
         });
+    }
+
+    // A TIMESTAMP is rendered in the extraction session's time zone and read back in the delivery session's, so the
+    // two must agree. Extraction runs at +00:00 and records it on the delivery it configures.
+    [Test]
+    public void ConfigureDataDelivery_RecordsTheExtractionTimeZone()
+    {
+        EnsureDbConnection();
+        using var command = _connection.CreateCommand();
+
+        var tableName = $"tz_{Guid.NewGuid():N}".Substring(0, 20);
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, ts TIMESTAMP NULL)";
+        command.ExecuteNonQuery();
+        command.CommandText = $"SET SESSION time_zone = '+00:00'; INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, '2026-01-01 12:00:00'); SET SESSION time_zone = DEFAULT";
+        command.ExecuteNonQuery();
+
+        try
+        {
+            var templateRoot = CreateTemplateStructure();
+            var tablesDir = Path.Join(templateRoot, "Tables");
+            var tableDataDir = Path.Join(templateRoot, "TableData");
+            var tablePath = Path.Join(tablesDir, $"{tableName}.json");
+            File.WriteAllText(tablePath, $$"""{ "Name": "{{tableName}}", "Columns": [ { "Name": "id", "DataType": "int" }, { "Name": "ts", "DataType": "timestamp" } ] }""");
+
+            lock (FactoryContainer.SharedLockObject)
+            {
+                FactoryContainer.Unregister<IMergeScriptHelper>();
+                ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+                using var configScope = IsolatedConfigScope.Create();
+                var config = configScope.Config;
+                config["Source:Server"] = config[$"{ConfigPrefix}:Server"] ?? "127.0.0.1";
+                config["Source:Port"] = config[$"{ConfigPrefix}:Port"];
+                config["Source:User"] = config[$"{ConfigPrefix}:User"];
+                config["Source:Password"] = config[$"{ConfigPrefix}:Password"];
+                config["Source:Database"] = _testDb;
+                config["Tables:0:Name"] = tableName;
+                config["ShouldCast:OutputContentFiles"] = "true";
+                config["ShouldCast:OutputScripts"] = "false";
+                config["ShouldCast:ConfigureDataDelivery"] = "true";
+                config["ContentPath"] = tableDataDir;
+                _dataTongs.CastData();
+            }
+
+            var contents = string.Join("", Directory.GetFiles(tableDataDir).Select(File.ReadAllText));
+            Assert.Multiple(() =>
+            {
+                Assert.That(File.ReadAllText(tablePath), Does.Contain("\"TimeZone\": \"+00:00\""));
+                Assert.That(contents, Does.Contain("2026-01-01T12:00:00"), "the value as written at +00:00");
+            });
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // The generated merge script carries the same zone, so running it on a session in another zone lands the
+    // TIMESTAMP values unchanged and gives the session its own zone back.
+    [Test]
+    public void GeneratedScript_PinsTheExtractionTimeZone_AndRestoresTheSessionZone()
+    {
+        EnsureDbConnection();
+        using var command = _connection.CreateCommand();
+
+        var tableName = $"tzs_{Guid.NewGuid():N}".Substring(0, 20);
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, ts TIMESTAMP NULL)";
+        command.ExecuteNonQuery();
+        command.CommandText = $"SET SESSION time_zone = '+00:00'; INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, '2026-01-01 12:00:00')";
+        command.ExecuteNonQuery();
+
+        try
+        {
+            var scriptDir = Path.Join(_testOutputDir, "Scripts");
+            Directory.CreateDirectory(scriptDir);
+            lock (FactoryContainer.SharedLockObject)
+            {
+                FactoryContainer.Unregister<IMergeScriptHelper>();
+                ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+                using var configScope = IsolatedConfigScope.Create();
+                var config = configScope.Config;
+                config["Source:Server"] = config[$"{ConfigPrefix}:Server"] ?? "127.0.0.1";
+                config["Source:Port"] = config[$"{ConfigPrefix}:Port"];
+                config["Source:User"] = config[$"{ConfigPrefix}:User"];
+                config["Source:Password"] = config[$"{ConfigPrefix}:Password"];
+                config["Source:Database"] = _testDb;
+                config["Tables:0:Name"] = tableName;
+                config["ShouldCast:OutputContentFiles"] = "false";
+                config["ShouldCast:OutputScripts"] = "true";
+                config["ShouldCast:TokenizeScripts"] = "false";
+                config["ShouldCast:ConfigureDataDelivery"] = "false";
+                config["ScriptPath"] = scriptDir;
+                _dataTongs.CastData();
+            }
+            var script = File.ReadAllText(Directory.GetFiles(scriptDir, "*.sql").Single());
+
+            command.CommandText = $"DELETE FROM `{_testDb}`.`{tableName}`; SET SESSION time_zone = '+05:00'";
+            command.ExecuteNonQuery();
+            command.CommandText = $"USE `{_testDb}`; {script}";
+            command.ExecuteNonQuery();
+
+            command.CommandText = "SELECT @@SESSION.time_zone";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("+05:00"), "the script gives the session its zone back");
+            command.CommandText = $"SET SESSION time_zone = '+00:00'; SELECT DATE_FORMAT(ts, '%Y-%m-%d %H:%i') FROM `{_testDb}`.`{tableName}`";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("2026-01-01 12:00"));
+        }
+        finally
+        {
+            command.CommandText = $"SET SESSION time_zone = DEFAULT; DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
     }
 
     [Test]

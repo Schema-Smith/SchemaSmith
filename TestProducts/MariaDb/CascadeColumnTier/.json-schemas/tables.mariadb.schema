@@ -234,6 +234,11 @@
             "ContentEncoding": {
               "type": "string",
               "pattern": "^(?:Json|Xml)$"
+            },
+            "TimeZone": {
+              "type": "string",
+              "pattern": "^[+-](0[0-9]|1[0-4]):[0-5][0-9]$",
+              "description": "The session time zone (an offset such as +00:00) the ContentFile's TIMESTAMP values were extracted in. Delivery uses the same zone so the values arrive unchanged. DataTongs sets it; leave it unset for data written in the target server's own zone. MySQL and MariaDB only."
             }
           },
           "additionalProperties": false
@@ -270,6 +275,11 @@
               "ContentEncoding": {
                 "type": "string",
                 "pattern": "^(?:Json|Xml)$"
+              },
+              "TimeZone": {
+                "type": "string",
+                "pattern": "^[+-](0[0-9]|1[0-4]):[0-5][0-9]$",
+                "description": "The session time zone (an offset such as +00:00) the ContentFile's TIMESTAMP values were extracted in. Delivery uses the same zone so the values arrive unchanged. DataTongs sets it; leave it unset for data written in the target server's own zone. MySQL and MariaDB only."
               }
             },
             "additionalProperties": false
