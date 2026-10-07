@@ -188,6 +188,9 @@ BEGIN
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'BEGIN MissingTableAndColumnQuench');
 
+    -- Declarations no degrade can rescue are refused before anything is created.
+    CALL SchemaSmith_RefuseUnsupportedIndexes();
+
     -- IDEMPOTENCY REFRESH -- this proc is re-CALLed on retryable contention, and it must survive that.
     --
     -- The NewTable / NewColumn flags are computed by ParseTableJson, which is a SEPARATE, EARLIER command.

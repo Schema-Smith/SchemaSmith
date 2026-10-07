@@ -479,7 +479,9 @@ public class ForgeKindlerTests
         //   their keys without a key function on every row of a catalog join).
         // +1 = SchemaSmith_ServerVersionPatchNum (major*10000+minor*100+patch, for gates that turn on a patch: MariaDB's
         //   RENAME COLUMN / RENAME INDEX at 10.5.2).
-        Assert.That(mysql.Length, Is.EqualTo(69));
+        // +1 = SchemaSmith_RefuseUnsupportedIndexes (MA-014 -- a long unique key below MariaDB 10.4 has no degrade, so it
+        //   is refused before anything is created).
+        Assert.That(mysql.Length, Is.EqualTo(70));
     }
 
     [Test]
