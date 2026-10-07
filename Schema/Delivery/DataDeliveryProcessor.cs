@@ -340,11 +340,11 @@ public class DataDeliveryProcessor : IDataDelivery
                 {
                     try
                     {
-                        context.ExecuteScript?.Invoke(table.Name, mergeScript);
+                        ExecuteDelivery(context, delivery, table.Name, mergeScript);
                     }
                     catch (Exception ex)
                     {
-                        pendingArtifacts[artifactKey] = mergeScript;
+                        pendingArtifacts[artifactKey] = WithDeliveryTimeZone(context, delivery, mergeScript);
                         logError($"    Error in pass 2 for {tableKey}: {ex.Message}");
                         permanentFailures.Add(tableKey);
                     }
@@ -415,11 +415,11 @@ public class DataDeliveryProcessor : IDataDelivery
 
                 try
                 {
-                    context.ExecuteScript?.Invoke(table.Name, mergeScript);
+                    ExecuteDelivery(context, delivery, table.Name, mergeScript);
                 }
                 catch
                 {
-                    pendingArtifacts[artifactKey] = mergeScript;   // defer; flushed only if it never recovers
+                    pendingArtifacts[artifactKey] = WithDeliveryTimeZone(context, delivery, mergeScript);   // defer; flushed only if it never recovers
                     throw;
                 }
 
@@ -440,11 +440,11 @@ public class DataDeliveryProcessor : IDataDelivery
 
                 try
                 {
-                    context.ExecuteScript?.Invoke(table.Name, mergeScript);
+                    ExecuteDelivery(context, delivery, table.Name, mergeScript);
                 }
                 catch
                 {
-                    pendingArtifacts[artifactKey] = mergeScript;   // defer; flushed only if it never recovers
+                    pendingArtifacts[artifactKey] = WithDeliveryTimeZone(context, delivery, mergeScript);   // defer; flushed only if it never recovers
                     throw;
                 }
                 pendingArtifacts.Remove(artifactKey);   // delivery succeeded — clear any earlier deferred artifact
@@ -454,6 +454,22 @@ public class DataDeliveryProcessor : IDataDelivery
 
         delivered.Add(tableKey);
     }
+
+    // A delivery that records the zone its data was extracted in runs in that zone, so its TIMESTAMP values arrive as
+    // they were read. MySQL family only: the other engines' zone-aware types carry their offset in the value.
+    private static bool PinsTimeZone(DataDeliveryContext context, DataDelivery delivery) =>
+        !string.IsNullOrEmpty(delivery.TimeZone) && string.Equals(context.Platform, "MySQL", StringComparison.OrdinalIgnoreCase);
+
+    private static void ExecuteDelivery(DataDeliveryContext context, DataDelivery delivery, string tableName, string script)
+    {
+        using var zone = PinsTimeZone(context, delivery) && context.Command != null
+            ? MySqlSessionSettings.UseTimeZone(context.Command, delivery.TimeZone)
+            : null;
+        context.ExecuteScript?.Invoke(tableName, script);
+    }
+
+    private static string WithDeliveryTimeZone(DataDeliveryContext context, DataDelivery delivery, string script) =>
+        PinsTimeZone(context, delivery) ? MySqlSessionSettings.WithTimeZone(script, delivery.TimeZone) : script;
 
     internal static string BuildDeferredMergeScript(DataDeliveryContext context, string schemaOrDb,
         IDeliverableTable table, DataDelivery delivery, string tableData, string keyColumns, List<string> deferredColumns)

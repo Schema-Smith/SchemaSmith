@@ -506,6 +506,7 @@ Every table definition file declares exactly one table. The shared properties be
 | `CheckConstraints` | array | `[]` | No | Table-level check constraint definitions. See [Check Constraints](#check-constraints). |
 | `ShouldApplyExpression` | string | | No | SQL expression evaluated at quench time. If it returns false (or `0`), the entire table is skipped on this database. Tokens are resolved before evaluation. See [Conditional Application](#conditional-application). |
 | `VariantName` | string | | No | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
+| `TimeZone` | string | | **MySQL, MariaDB.** The session time zone, as an offset such as `+00:00`, that the `ContentFile`'s `TIMESTAMP` values were extracted in. Delivery runs in the same zone, so the values arrive unchanged wherever the target server's zone is. DataTongs sets it to `+00:00`. Without it, delivery reads the values in the target session's zone, which is right for data written in that zone. |
 | `OldName` | string | `""` | No | Previous table name. When set, the table is renamed during quench. Clear after the rename has been deployed everywhere. |
 | `DataDelivery` | object | `null` | No | Declarative data delivery configuration for this table. See [DataDelivery](#datadelivery). |
 | `Extensions` | object | `null` | No | Open metadata bag. See [Custom Properties](custom-properties.md). |

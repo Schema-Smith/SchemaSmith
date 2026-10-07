@@ -51,6 +51,53 @@ public static class MySqlSessionSettings
         return new SqlModeScope(command, original, neutral);
     }
 
+    // An offset only: named zones need the server's time zone tables, which are often not loaded.
+    private static readonly System.Text.RegularExpressions.Regex OffsetZone = new(@"^[+-](0[0-9]|1[0-4]):[0-5][0-9]$");
+
+    /// <summary>Switches the session's time zone to <paramref name="offset"/> until the returned scope is disposed.</summary>
+    public static IDisposable UseTimeZone(IDbCommand command, string offset)
+    {
+        RequireOffset(offset);
+        command.CommandText = "SELECT @@SESSION.time_zone";
+        var original = command.ExecuteScalar()?.ToString() ?? "SYSTEM";
+        if (original == offset) return null;
+        command.CommandText = $"SET SESSION time_zone = '{offset}'";
+        command.ExecuteNonQuery();
+        return new RestoreOnDispose(() =>
+        {
+            if (command.Connection?.State != ConnectionState.Open) return;
+            command.CommandText = $"SET SESSION time_zone = '{original.Replace("'", "''")}'";
+            command.ExecuteNonQuery();
+        });
+    }
+
+    /// <summary>The same pin as text, for a script run later by hand or by a deploy.</summary>
+    public static string WithTimeZone(string script, string offset)
+    {
+        RequireOffset(offset);
+        return "SET @ss_saved_time_zone = @@SESSION.time_zone;\n" +
+               $"SET SESSION time_zone = '{offset}';\n" +
+               script.TrimEnd() + "\n" +
+               "SET SESSION time_zone = @ss_saved_time_zone;\n";
+    }
+
+    private static void RequireOffset(string offset)
+    {
+        if (offset == null || !OffsetZone.IsMatch(offset))
+            throw new ArgumentException($"TimeZone '{offset}' is not an offset such as +00:00.", nameof(offset));
+    }
+
+    private sealed class RestoreOnDispose(Action restore) : IDisposable
+    {
+        private Action _restore = restore;
+
+        public void Dispose()
+        {
+            _restore?.Invoke();
+            _restore = null;
+        }
+    }
+
     private static void SetSqlMode(IDbCommand command, string mode)
     {
         // Mode names are plain identifiers read back from the server, so they need no escaping.
