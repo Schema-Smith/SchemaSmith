@@ -65,6 +65,7 @@ public class CapabilityDocumentationTests
         ["SqlServer/cdc-database-toggle"] = "**Change Data Capture**",
         ["SqlServer/change-tracking-database-toggle"] = "**Change Tracking**",
         ["SqlServer/filestream-column"] = "**FILESTREAM**",
+        ["SqlServer/fulltext-statistical-semantics"] = "**Full-text statistical semantics**",
 
         // ---- PostgreSQL ----
         ["PostgreSQL/nulls-not-distinct"] = "**`NULLS NOT DISTINCT`**",
