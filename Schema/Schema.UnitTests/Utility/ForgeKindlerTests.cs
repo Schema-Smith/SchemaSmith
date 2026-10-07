@@ -581,6 +581,18 @@ public class ForgeKindlerTests
         });
     }
 
+    // A routine keeps the sql_mode it was created under, so routines kindled under another mode are not current.
+    [Test]
+    public void ComputeKindleStamp_MySql_VariesBySqlMode()
+    {
+        var strict = ForgeKindler.ComputeKindleStamp(Platform.MySQL, sqlMode: "STRICT_TRANS_TABLES");
+        Assert.Multiple(() =>
+        {
+            Assert.That(strict, Is.Not.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.MySQL, sqlMode: "")));
+            Assert.That(strict, Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.MySQL, sqlMode: "STRICT_TRANS_TABLES")));
+        });
+    }
+
     [Test]
     public void GetKindlingScriptNames_MariaDb_MatchesMySql()
     {

@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Isolators;
 using Schema.Utility;
@@ -175,6 +176,13 @@ public class DataDeliveryProcessor : IDataDelivery
 
         tablesToDeliver = tablesToDeliver.Where(t => appliedByTable[t].Count > 0).ToList();
         if (tablesToDeliver.Count == 0) return;
+
+        // Merge scripts are generated for the default reading of SQL text (backslash escapes in the payload, backtick
+        // identifiers). A key-0 AUTO_INCREMENT row in a data file is a real row, so it keeps 0 instead of taking a new id
+        // on every delivery. Set after the gates above, which are the user's SQL and run under the server's mode.
+        using var sqlMode = platform.Equals("MySQL", StringComparison.OrdinalIgnoreCase) && !context.WhatIf && context.Command != null
+            ? MySqlSessionSettings.UseParseNeutralSqlMode(context.Command, "NO_AUTO_VALUE_ON_ZERO")
+            : null;
 
         var deliverySet = DataDeliveryHelper.BuildDeliveryTableSet(tablesToDeliver, platform);
 

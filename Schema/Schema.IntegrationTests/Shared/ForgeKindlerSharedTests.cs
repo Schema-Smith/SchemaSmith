@@ -329,8 +329,11 @@ public abstract class ForgeKindlerSharedTests
 
             ForgeKindler.KindleTheForge(command, Platform); // absent stamp => kindles
 
+            // The stamp covers the content and the parse-neutral sql_mode the procedures were created under.
+            command.CommandText = "SELECT @@SESSION.sql_mode";
+            var sqlMode = MySqlSessionSettings.ParseNeutral(command.ExecuteScalar()?.ToString());
             Assert.That(ForgeKindler.ReadStamp(command, Platform),
-                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform)),
+                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform, sqlMode: sqlMode)),
                 "A fresh kindle must write the current content stamp.");
         }
         finally
