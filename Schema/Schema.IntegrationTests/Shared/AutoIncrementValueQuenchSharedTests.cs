@@ -233,6 +233,43 @@ public abstract class AutoIncrementValueQuenchSharedTests
         }
     }
 
+    // Extraction read AUTO_INCREMENT from the statistics cache, so a table that had grown since the cache was filled
+    // extracted its old seed (or none).
+    [Test]
+    public void Extraction_ReadsAutoIncrementPastTheStatisticsCache()
+    {
+        using var cmd = _connection.CreateCommand();
+        var hasStatsCache = HasStatsCache(cmd);
+        try
+        {
+            cmd.CommandText = $"CREATE TABLE `{_testDb}`.`ai_extract_test` (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(20))";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"INSERT INTO `{_testDb}`.`ai_extract_test` (name) VALUES ('a'), ('b')";
+            cmd.ExecuteNonQuery();
+            var cachedRead = $"SELECT AUTO_INCREMENT FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = 'ai_extract_test'";
+            cmd.CommandText = cachedRead;
+            cmd.ExecuteScalar();
+            cmd.CommandText = $"INSERT INTO `{_testDb}`.`ai_extract_test` (id, name) VALUES (40, 'c')";
+            cmd.ExecuteNonQuery();
+            if (hasStatsCache)
+            {
+                cmd.CommandText = cachedRead;
+                Assert.That(Convert.ToUInt64(cmd.ExecuteScalar()), Is.EqualTo(3UL),
+                    "premise: the cache still holds the earlier value, or this test proves nothing");
+            }
+
+            cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_testDb}', 'ai_extract_test')";
+            var json = cmd.ExecuteScalar()?.ToString() ?? "";
+
+            Assert.That(json, Does.Contain("\"AutoIncrementValue\": 41"));
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`ai_extract_test`";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     private static bool HasStatsCache(IDbCommand cmd)
     {
         cmd.CommandText = "SHOW VARIABLES LIKE 'information_schema_stats_expiry'";

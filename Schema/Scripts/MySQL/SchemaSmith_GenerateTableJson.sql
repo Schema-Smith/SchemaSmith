@@ -41,6 +41,9 @@ BEGIN
     -- JSON_OBJECT emits `false` in place of the value -- so a table/column/index comment and a
     -- generated column's expression all extracted as `false` at the floor while 8.0 was correct.
     -- The CASE form evaluates identically on both. Verified live against 5.7 and 8.0.
+    -- AUTO_INCREMENT comes from the statistics cache on MySQL 8+, which can be a day stale, so the seed read here
+    -- would lag the table.
+    CALL SchemaSmith_BypassStatisticsCache();
     -- Get table metadata
     SELECT JSON_OBJECT(
         'Name', SchemaSmith_QuoteIdentifier(t.TABLE_NAME),
@@ -110,6 +113,7 @@ BEGIN
       -- BASE TABLE alone silently omitted such a table from the extracted package -- no error, no warning,
       -- and the deploy-side twin of this filter was fixed separately. MySQL never reports this type.
       AND t.TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED');
+    CALL SchemaSmith_RestoreStatisticsCache();
 
     -- Get columns
     SELECT CONCAT('[', GROUP_CONCAT(
