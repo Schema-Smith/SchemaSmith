@@ -615,7 +615,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
 
     // MariaDB names its JSON column check after the column, and CHECK names are per table there. A text column in
     // another table whose own check carries that same name was read as JSON, so its plain-text values went through
-    // the JSON path (MA-c1).
+    // the JSON path.
     [Test]
     public void BuildMergeScript_TextColumnSharingACheckNameWithAnotherTablesJsonColumn_StaysText()
     {

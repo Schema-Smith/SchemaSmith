@@ -739,7 +739,7 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
-            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
             if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
             if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
@@ -793,7 +793,7 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
-            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
             if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
             if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
@@ -855,7 +855,7 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
-            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
             if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
             if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
@@ -1179,7 +1179,7 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
-            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
             if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
             if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             // Data delivery detects the server version (TargetVersionDetector) and probes JSON_ARRAYAGG support,
@@ -1298,7 +1298,7 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
-            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
             if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
             if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
@@ -1361,7 +1361,7 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
-            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
             if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
             if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
@@ -1428,7 +1428,7 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
-            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
             if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
             if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             // Data delivery detects the server version and probes JSON_ARRAYAGG support, both via SELECT VERSION().

@@ -280,7 +280,7 @@ public static class TokenHelper
     }
 
     // Variable concatenation rather than STRING_AGG (2017), and a plain DROP TABLE rather than DROP TABLE IF EXISTS
-    // (2016): this runs before every query token, on every supported version (SS-123). Not FOR XML PATH, whose .value()
+    // (2016): this runs before every query token, on every supported version. Not FOR XML PATH, whose .value()
     // fails under QUOTED_IDENTIFIER OFF. The order of the drops does not matter, and the WHERE keeps only tables that exist.
     private const string DropTempTablesSqlServer = """
 DECLARE @v_sql NVARCHAR(MAX) = N''

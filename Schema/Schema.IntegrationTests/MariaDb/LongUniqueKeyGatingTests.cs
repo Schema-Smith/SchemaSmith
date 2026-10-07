@@ -11,7 +11,7 @@ namespace Schema.IntegrationTests.MariaDb;
 /// <summary>
 /// A long unique key -- UNIQUE over a column too wide for a B-tree key, which MariaDB 10.4+ enforces through a hidden
 /// hash and extracts as IndexType HASH -- cannot be deployed to MariaDB 10.2 or 10.3: InnoDB there turns USING HASH into
-/// a B-tree and refuses the key length (1071 / 1170, MA-014). There is no safe degrade, because dropping the key drops
+/// a B-tree and refuses the key length (1071 / 1170). There is no safe degrade, because dropping the key drops
 /// the uniqueness, so the deploy is refused by name under either policy, before anything is created. MEMORY tables have
 /// real hash indexes on every version and are not affected. 10.2/10.3 are simulated with the version override on the
 /// modern container; the floor sweep's MariaDB 10.2 leg runs the same tests against the real engine.

@@ -12,7 +12,7 @@ namespace Schema.IntegrationTests.MariaDb;
 
 /// <summary>
 /// MariaDB accounts that authenticate with ed25519 (10.1.22+) or PARSEC (11.6+). The connector supports neither until
-/// their plugins are installed, so a user on such an account could not connect at all (MA-c33). Each test creates a
+/// their plugins are installed, so a user on such an account could not connect at all. Each test creates a
 /// throwaway account, connects through SchemaSmith's own connection factory, and drops the account.
 /// </summary>
 [Category("MariaDb")]

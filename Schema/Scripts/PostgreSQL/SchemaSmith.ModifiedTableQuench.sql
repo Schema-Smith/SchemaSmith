@@ -1266,7 +1266,7 @@ BEGIN
     -- unlike PG13+ in-place DROP EXPRESSION). Runs before the "Alter Modified Columns" pass, which excludes
     -- these columns (the re-add carries the full target definition — type/collation/nullability/default).
     IF "SchemaSmith"."ServerVersionNum"() < 13 THEN
-      -- The lost values go on the record (PG-110): 'fail' refuses before anything is dropped, 'warn' records a
+      -- The lost values go on the record: 'fail' refuses before anything is dropped, 'warn' records a
       -- downgrade row per column, and the drop-and-re-add below runs.
       IF EXISTS (SELECT 1 FROM temp_columns c
                    JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema" AND ec."TableName" = c."TableName" AND ec."ColumnName" = c."Name"

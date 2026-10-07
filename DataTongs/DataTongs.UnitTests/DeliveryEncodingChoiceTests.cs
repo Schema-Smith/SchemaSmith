@@ -7,7 +7,7 @@ using Schema.Utility;
 
 namespace DataTongs.UnitTests;
 
-// SS-025: the Json extraction needs FOR JSON (2016) and STRING_AGG (2017), so on an older SQL Server source it failed
+// The Json extraction needs FOR JSON (2016) and STRING_AGG (2017), so on an older SQL Server source it failed
 // with a syntax error. With no DeliveryEncoding set, such a source now extracts as Xml; an explicit DeliveryEncoding wins.
 // Source:CompatEncoding plays no part: it shapes how scripts are built, never what the package contains.
 [TestFixture]

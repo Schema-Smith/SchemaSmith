@@ -17,8 +17,8 @@ namespace SchemaTongs.IntegrationTests.GenuineOldBinary;
 
 /// <summary>
 /// A full extraction, every object type on, from whatever SQL Server the SmithySettings_SqlServer__* variables name.
-/// On SQL Server 2008 R2 it used to stop at the sequence step (sys.sequences is 2012) and exit 3 with half a package
-/// (SS-113), so the synonym step after it never ran.
+/// On SQL Server 2008 R2 it used to stop at the sequence step (sys.sequences is 2012) and exit 3 with half a package,
+/// so the synonym step after it never ran.
 /// <para>[Explicit]: its value is on the local old binaries, which CI does not have. Run per instance:
 ///   SmithySettings_SqlServer__Server=127.0.0.1 SmithySettings_SqlServer__Port=14330 SmithySettings_SqlServer__User=sa
 ///   SmithySettings_SqlServer__Password='SchemaSmith!Old2026' SmithySettings_SqlServer__ConnectionProperties__TrustServerCertificate=true

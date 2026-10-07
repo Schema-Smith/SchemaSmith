@@ -325,9 +325,9 @@ public class ForgeKindlerTests
         //   before any table or column is created, on every run including a resumed one).
         // +1 = SchemaSmith.DegradeDatabaseToggles (#432 -- the CDC and Change Tracking degrade, split out so it can be
         //   judged after the Before slot, which can enable either one).
-        // +1 = SchemaSmith.fn_EnterpriseFeaturesUnavailable (SS-053 -- compression and columnstore are Enterprise-only
+        // +1 = SchemaSmith.fn_EnterpriseFeaturesUnavailable (compression and columnstore are Enterprise-only
         //   below SQL Server 2016 SP1, so the index and table degrades ask the edition as well as the version).
-        // +1 = SchemaSmith.DegradeUnsupportedFullText (SS-054 -- STATISTICAL_SEMANTICS without a registered semantic
+        // +1 = SchemaSmith.DegradeUnsupportedFullText (STATISTICAL_SEMANTICS without a registered semantic
         //   database; called after the full-text parse on both the table and --IndexOnly paths).
         Assert.That(sqlServer.Length, Is.EqualTo(47));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
@@ -479,9 +479,9 @@ public class ForgeKindlerTests
         //   their keys without a key function on every row of a catalog join).
         // +1 = SchemaSmith_ServerVersionPatchNum (major*10000+minor*100+patch, for gates that turn on a patch: MariaDB's
         //   RENAME COLUMN / RENAME INDEX at 10.5.2).
-        // +1 = SchemaSmith_RefuseUnsupportedIndexes (MA-014 -- a long unique key below MariaDB 10.4 has no degrade, so it
+        // +1 = SchemaSmith_RefuseUnsupportedIndexes (a long unique key below MariaDB 10.4 has no degrade, so it
         //   is refused before anything is created).
-        // +1 = SchemaSmith_CheckTableJoin (MA-009 -- the MariaDB-only table predicate for CHECK_CONSTRAINTS joins, as a
+        // +1 = SchemaSmith_CheckTableJoin (the MariaDB-only table predicate for CHECK_CONSTRAINTS joins, as a
         //   string because MySQL's CHECK_CONSTRAINTS has no TABLE_NAME).
         Assert.That(mysql.Length, Is.EqualTo(71));
     }

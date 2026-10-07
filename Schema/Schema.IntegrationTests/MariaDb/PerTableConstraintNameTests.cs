@@ -13,7 +13,7 @@ namespace Schema.IntegrationTests.MariaDb;
 /// MariaDB names CHECK constraints per TABLE on every version, and from 12.1 foreign keys too (unnamed ones are all
 /// "1"). Matching constraints by schema and name alone crosses tables: extraction wrote another table's check onto this
 /// one, a redeploy dropped and re-created a check that had not changed, and two same-named foreign keys were merged
-/// (MA-009, MA-c1, MA-c14). Every match now keys on the table too. The CHECK cases run on every version; the foreign-key
+///. Every match now keys on the table too. The CHECK cases run on every version; the foreign-key
 /// cases need 12.1, so they run on the 12.3 and 13 legs.
 /// </summary>
 [Category("MariaDb")]

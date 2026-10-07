@@ -12,7 +12,7 @@ BEGIN
   -- unsupported-feature policy. Reads the caller's _SchemaSmith_Indexes and _SchemaSmith_Tables; called first by
   -- MissingTableAndColumnQuench and IndexOnlyQuench.
   --
-  -- A long unique key (MA-014): MariaDB 10.4+ enforces UNIQUE over a column too wide for a B-tree key through a hidden
+  -- A long unique key: MariaDB 10.4+ enforces UNIQUE over a column too wide for a B-tree key through a hidden
   -- hash, and extracts it as IndexType HASH. On 10.2 and 10.3 InnoDB turns USING HASH into a B-tree and refuses the key
   -- length (1071 / 1170). Dropping the key would drop the uniqueness, so there is no degrade. MEMORY tables have real
   -- hash indexes on every version and are excluded.

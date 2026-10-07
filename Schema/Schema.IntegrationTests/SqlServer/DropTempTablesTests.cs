@@ -11,7 +11,7 @@ namespace Schema.IntegrationTests.SqlServer;
 /// <summary>
 /// The temp-table sweep that runs before every query token resolves. It must drop the session's temp tables, and it
 /// must run on every supported version: it used STRING_AGG (2017) and DROP TABLE IF EXISTS (2016), so a query token
-/// failed on SQL Server 2008 R2 through 2016 (SS-123).
+/// failed on SQL Server 2008 R2 through 2016.
 /// </summary>
 [Category("SqlServer")]
 [Category("Integration")]

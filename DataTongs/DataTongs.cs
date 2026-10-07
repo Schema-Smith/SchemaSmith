@@ -27,7 +27,7 @@ public class DataTongs
         _platform = platform;
     }
 
-    // SS-025: the Json extraction uses FOR JSON (2016) and STRING_AGG (2017), neither of which depends on the
+    // The Json extraction uses FOR JSON (2016) and STRING_AGG (2017), neither of which depends on the
     // compatibility level. An explicit DeliveryEncoding wins; unset, a SQL Server source below 2017 extracts Xml. Other
     // engines extract Json unless asked for Xml.
     private const int JsonExtractionSqlServerMajor = 14;
