@@ -180,6 +180,19 @@ public class TablespaceQuenchTests
             "the table must still be in its original tablespace after the refused redeploy");
     }
 
+    // MySQL tablespace names are case-sensitive (CREATE TABLE ... TABLESPACE in a different case fails with 3510), so a
+    // declaration differing only in case names a different tablespace and must be refused like any other.
+    [Test]
+    public void RedeployingToATablespaceSpelledDifferentlyInCase_IsRefused()
+    {
+        Deploy($", \"Tablespace\": \"{Tablespace1}\"");
+
+        Assert.That(() => Deploy($", \"Tablespace\": \"{Tablespace1.ToUpperInvariant()}\""),
+            Throws.Exception.With.Message.Contains("tablespace"));
+
+        Assert.That(DeployedTablespace(), Is.EqualTo(Tablespace1));
+    }
+
     [Test]
     public void RedeployingToADifferentTablespace_IsRefusedUnderWhatIfToo()
     {

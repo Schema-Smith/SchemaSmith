@@ -226,6 +226,30 @@ public abstract class ScheduledEventSharedTests
         });
     }
 
+    // The interval and status are keywords, so their case is not a change. A comment and a body are the user's text:
+    // a change only in case or accent is a real change, and must be applied whatever the database's collation.
+    [TestCase("nightly cleanup", "Nightly cleanup", TestName = "ACommentChangedOnlyInCase_Converges")]
+    [TestCase("resume", "résumé", TestName = "ACommentChangedOnlyInAccent_Converges")]
+    public void ACommentChangedOnlyInCaseOrAccent_Converges(string before, string after)
+    {
+        Deploy(EventJson(comment: before));
+        Assert.That(EventField("EVENT_COMMENT"), Is.EqualTo(before), "precondition");
+
+        Deploy(EventJson(comment: after));
+
+        Assert.That(EventField("EVENT_COMMENT"), Is.EqualTo(after));
+    }
+
+    [Test]
+    public void ABodyChangedOnlyInCaseInsideALiteral_Converges()
+    {
+        Deploy(EventJson(body: "SET @ss_noop = 'active'"));
+
+        Deploy(EventJson(body: "SET @ss_noop = 'Active'"));
+
+        Assert.That(EventField("EVENT_DEFINITION"), Does.Contain("'Active'"));
+    }
+
     [Test]
     public void IntervalCasingAndSpacing_IsNotAChange()
     {
