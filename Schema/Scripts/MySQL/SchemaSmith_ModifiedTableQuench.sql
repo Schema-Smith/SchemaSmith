@@ -513,7 +513,8 @@ BEGIN
                 SET v_TtsDeployed = NULL;
                 CALL SchemaSmith_TableTablespace(p_DatabaseName, SchemaSmith_StripBacktickWrapping(v_TtsTableName), v_TtsDeployed);
 
-                IF COALESCE(v_TtsDeployed, '') <> v_TtsDeclared THEN
+                -- Tablespace names are case-sensitive, so one spelled differently in case is a different tablespace.
+                IF BINARY COALESCE(v_TtsDeployed, '') <> BINARY v_TtsDeclared THEN
                     -- Log every offending table (not just the one named in the SIGNAL below), same shape
                     -- as the partitioning guard above.
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(),
