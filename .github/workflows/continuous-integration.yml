@@ -427,7 +427,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mysql: ${{ github.event_name == 'pull_request' && fromJSON('["26","5.7"]') || fromJSON('["26","8.4","8.0","5.7"]') }}
+        mysql: ${{ github.event_name == 'pull_request' && fromJSON('["26","5.7"]') || fromJSON('["26","9.7","8.4","8.0","5.7"]') }}
     permissions:
       contents: read
       checks: write
@@ -515,7 +515,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mariadb: ${{ github.event_name == 'pull_request' && fromJSON('["13","10.2"]') || fromJSON('["13","11.8","11.4","10.6","10.2"]') }}
+        mariadb: ${{ github.event_name == 'pull_request' && fromJSON('["13","10.2"]') || fromJSON('["13","12.3","11.8","11.4","10.6","10.2"]') }}
     permissions:
       contents: read
       checks: write
