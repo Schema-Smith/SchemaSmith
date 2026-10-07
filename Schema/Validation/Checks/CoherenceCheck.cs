@@ -28,6 +28,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string RelatedTableCode = "SS-FK-002";
     private const string RelatedColumnCode = "SS-FK-004";
     private const string CardinalityCode = "SS-FK-005";
+    private const string ForeignKeyNameReusedCode = "SS-FK-006";
     private const string IndexColumnCode = "SS-IDX-001";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string RebuildThresholdCode = "SS-TBL-001";
@@ -78,6 +79,9 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckScheduledEvents(template));
 
         foreach (var template in ctx.Templates)
+            findings.AddRange(CheckForeignKeyNameReuse(template, ctx.Product));
+
+        foreach (var template in ctx.Templates)
             findings.AddRange(CheckModeledFolderObjectCoexistence(template));
 
         foreach (var template in ctx.Templates)
@@ -118,6 +122,47 @@ public sealed class CoherenceCheck : ISchemaCheck
         }
 
         return findings;
+    }
+
+    // MariaDB names foreign keys per table from 12.1 and per database before it.
+    private const int MariaDbPerTableForeignKeyNames = 1201;
+
+    /// <summary>
+    /// The same foreign-key name on two tables in one template. Where the engine names foreign keys per database
+    /// (MySQL) or per schema (SQL Server) the second one fails the deploy. MariaDB names them per table from 12.1,
+    /// so there the reuse fails only on an older server: a warning, unless MinimumVersion already excludes those.
+    /// PostgreSQL names them per table on every version.
+    /// </summary>
+    private static IEnumerable<Finding> CheckForeignKeyNameReuse(Template template, Product product)
+    {
+        if (product.Platform == Platform.PostgreSQL) yield break;
+        var severity = Severity.Error;
+        if (product.Platform == Platform.MariaDb)
+        {
+            if (VersionHelper.ParseDeclaredVersion(product.MinimumVersion, product.Platform) >= MariaDbPerTableForeignKeyNames)
+                yield break;
+            severity = Severity.Warning;
+        }
+
+        var scopeBySchema = product.Platform == Platform.SqlServer;
+        var reused = template.Tables
+            .SelectMany(t => t.ForeignKeys.Select(fk => (Table: t, Fk: fk)))
+            .Where(x => !string.IsNullOrWhiteSpace(x.Fk.Name))
+            .GroupBy(x => (Schema: scopeBySchema ? NormalizedSchema(x.Table) : "", Name: IdentityKey(x.Fk.Name)))
+            .Where(g => g.Select(x => TableKey(x.Table)).Distinct().Count() > 1);
+
+        foreach (var group in reused)
+        {
+            var name = NormalizeIdentifier(group.First().Fk.Name);
+            var tables = string.Join(", ", group.Select(x => $"'{x.Table.Name}'").Distinct());
+            yield return new Finding(severity, ForeignKeyNameReusedCode, Category, $"Template '{template.Name}'",
+                product.Platform == Platform.MariaDb
+                    ? $"Foreign key '{name}' is declared on tables {tables}. MariaDB names foreign keys per database " +
+                      "before 12.1, so the deploy fails on an older server. Rename one, or set the product's " +
+                      "MinimumVersion to 12.1 or later."
+                    : $"Foreign key '{name}' is declared on tables {tables}. {product.Platform} names foreign keys per " +
+                      (scopeBySchema ? "schema" : "database") + ", so the second one fails the deploy. Rename one.");
+        }
     }
 
     private static IEnumerable<Finding> CheckForeignKey(

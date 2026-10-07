@@ -6,6 +6,10 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ## [Unreleased]
 
+### Added
+
+- **`--Validate` reports a foreign-key name used on two tables (`SS-FK-006`).** MySQL names foreign keys per database and SQL Server per schema, so the second one fails the deploy: an error. MariaDB names them per table from 12.1, so there it is a warning, unless the product's `MinimumVersion` is 12.1 or later.
+
 ### Fixed
 
 - **CDC or Change Tracking enabled by a `Before` script was recorded as downgraded on the first deploy, so no tables were tracked (SQL Server) — #432.** The database-level check ran before the `Before` slot, so a new or restored database read as not enabled and the deploy exited 0 with nothing captured; the second deploy tracked everything. When the template has `Before` scripts, the check now runs after them. Without any, it still runs up front, so `UnsupportedFeaturePolicy=fail` refuses before anything is created.
