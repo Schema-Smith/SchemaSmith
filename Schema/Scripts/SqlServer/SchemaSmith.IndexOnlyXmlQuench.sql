@@ -219,6 +219,8 @@ BEGIN TRY
     RAISERROR(@v_FTDupMsg, 16, 1);
   END
 
+  EXEC SchemaSmith.DegradeUnsupportedFullText
+
   -- Handle index compression changes
   RAISERROR('Fixup Index Compression', 10, 100) WITH NOWAIT
   -- A columnstore index reports COLUMNSTORE (or COLUMNSTORE_ARCHIVE); a declaration that names neither means COLUMNSTORE.
