@@ -12,6 +12,7 @@
          Version is centralized via $(IcuVersion) in Directory.Build.props. -->
     <PackageVersion Include="Microsoft.ICU.ICU4C.Runtime" Version="$(IcuVersion)" />
     <PackageVersion Include="MySqlConnector" Version="2.6.2" />
+    <PackageVersion Include="MySqlConnector.Authentication.Ed25519" Version="2.6.0" />
     <!-- Newtonsoft.Json 13.0.4 — latest stable; 13.0.5 is beta only -->
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
     <!-- NJsonSchema (MIT) — used by the Validate JSON-schema lint check, which lives in
