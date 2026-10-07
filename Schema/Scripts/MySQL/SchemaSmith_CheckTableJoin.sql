@@ -13,7 +13,7 @@ NO SQL
 BEGIN
   -- The predicate that pairs a CHECK_CONSTRAINTS row (alias cc) with its TABLE_CONSTRAINTS row (alias tc) by table,
   -- spliced into the dynamic SQL that joins them. MariaDB names CHECK constraints per table, so schema and name alone
-  -- match every table's same-named check (MA-009, MA-c14). MySQL names them per database and its CHECK_CONSTRAINTS has
+  -- match every table's same-named check. MySQL names them per database and its CHECK_CONSTRAINTS has
   -- no TABLE_NAME, which is also why this is a string for dynamic SQL: naming the column in a static query would fail
   -- on MySQL.
   RETURN IF(VERSION() LIKE '%MariaDB%', ' AND cc.TABLE_NAME = tc.TABLE_NAME', '');

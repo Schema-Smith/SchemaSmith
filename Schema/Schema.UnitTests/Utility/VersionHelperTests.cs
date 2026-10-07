@@ -25,7 +25,7 @@ namespace Schema.UnitTests.Utility
         [TestCase("8", Platform.MySQL, 800)]
         [TestCase("10.6", Platform.MariaDb, 1006)]
         [TestCase("11.4", Platform.MariaDb, 1104)]
-        [TestCase("18beta1", Platform.PostgreSQL, 18)]   // a pre-release of 18 is 18, not an unreadable gate (PG-116)
+        [TestCase("18beta1", Platform.PostgreSQL, 18)]   // a pre-release of 18 is 18, not an unreadable gate
         [TestCase("19devel", Platform.PostgreSQL, 19)]
         public void ParseDeclaredVersion_NormalizesToComparable(string version, Platform platform, int expected)
         {
@@ -113,7 +113,7 @@ namespace Schema.UnitTests.Utility
             Assert.That(VersionHelper.DisplayVersion(info), Is.EqualTo(expected));
         }
 
-        // The MySQL family's patch, which the major*100+minor comparable cannot see (MY-001, MA-053).
+        // The MySQL family's patch, which the major*100+minor comparable cannot see.
         [TestCase("8.0.23", Platform.MySQL, 80023)]
         [TestCase("8.0.23-log", Platform.MySQL, 80023)]
         [TestCase("5.7.21", Platform.MySQL, 50721)]
@@ -134,7 +134,7 @@ namespace Schema.UnitTests.Utility
         }
 
         // P1: the MySQL floor is 5.7.22 on the 5.7 line and 8.0.23 on the 8.0 line. Below them DataTongs extracts
-        // nothing (5.7.21, MY-009) and the 8.0 feature gates fire on patches that lack the feature (MY-001).
+        // nothing (5.7.21) and the 8.0 feature gates fire on patches that lack the feature.
         [TestCase("5.6.51", true)]
         [TestCase("5.7.21", true)]
         [TestCase("5.7.22", false)]

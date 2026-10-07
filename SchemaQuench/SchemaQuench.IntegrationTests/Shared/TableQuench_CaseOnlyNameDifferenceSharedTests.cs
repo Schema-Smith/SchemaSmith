@@ -212,7 +212,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT CAST(INDEX_NAME AS BINARY)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(table)} AND INDEX_NAME <> 'PRIMARY'"),
                     Is.EqualTo("ix_caseonly_v"), $"deploy {deploy}: exactly one secondary index, with the package's spelling");
 
-                // MA-086: a case-only RENAME INDEX corrupts InnoDB's index dictionary on MariaDB versions hit by
+                // A case-only RENAME INDEX corrupts InnoDB's index dictionary on MariaDB versions hit by
                 // MDEV-34951, so MariaDB must converge by drop and re-create. MySQL renames, which proves this read
                 // can see the rename when one is emitted.
                 Assert.That(MessagesLike(cmd, "%Rename index (spelling)%"), Is.EqualTo(!isMariaDb && deploy == 1 ? 1 : 0),

@@ -192,7 +192,7 @@ BEGIN
   EXEC SchemaSmith.DegradeUnsupportedColumnStore
   EXEC SchemaSmith.DegradeUnsupportedFullText
 
-  -- Table compression where the edition lacks it (SS-053): below SQL Server 2016 SP1, Standard, Web and Express refuse
+  -- Table compression where the edition lacks it: below SQL Server 2016 SP1, Standard, Web and Express refuse
   -- DATA_COMPRESSION with 7738. The table is created uncompressed; index compression is handled with the indexes above.
   IF SchemaSmith.fn_EnterpriseFeaturesUnavailable() = 1
      AND EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE RTRIM(ISNULL([CompressionType], 'NONE')) IN ('ROW', 'PAGE'))

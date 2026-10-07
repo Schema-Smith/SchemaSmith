@@ -383,7 +383,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
 
         // A NONCLUSTERED columnstore exists from 2012, but on 2012 and 2014 it makes its table read-only, so creating it
         // would change what the application can do. It is skipped there and created from 2016 (major 13). This replaces
-        // a test that asserted creation at major 11, which pinned the read-only outcome (SS-052, D1 §7).
+        // a test that asserted creation at major 11, which pinned the read-only outcome.
         private const string NcciReadOnlyObjectType = "nonclustered columnstore index (writable from SQL Server 2016)";
 
         [TestCase(11)]
@@ -505,7 +505,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
         }
 
         // ---------------------------------------------------------------------------------------------------
-        // Full-text STATISTICAL_SEMANTICS (SS-054) needs a registered semantic language statistics database; without
+        // Full-text STATISTICAL_SEMANTICS needs a registered semantic language statistics database; without
         // one SQL Server refuses the whole full-text index (41209). The demo container has full-text and no semantic
         // database, so this is the real refusal, not a simulation.
         // ---------------------------------------------------------------------------------------------------
@@ -599,7 +599,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
         }
 
         // ---------------------------------------------------------------------------------------------------
-        // Edition (SS-053). Below 2016 SP1 (13.0.4001), compression and columnstore need Enterprise or Developer
+        // Edition. Below 2016 SP1 (13.0.4001), compression and columnstore need Enterprise or Developer
         // edition: Express 2008 R2-2014 refuse them with 7738 and 35315. The demo container is Developer, so the
         // edition is simulated through the CONTEXT_INFO override fn_ServerMajorVersion reads, extended with an
         // 'SSED' marker that SchemaSmith.fn_EnterpriseFeaturesUnavailable reads.

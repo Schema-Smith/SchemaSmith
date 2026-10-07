@@ -361,7 +361,7 @@ CREATE TABLE ""{Schema}"".""{tableName}"" (""Id"" INT NOT NULL, ""Code"" INT NUL
     // method on every supported version; only changing an EXISTING table's method (ALTER TABLE ... SET ACCESS METHOD)
     // needs 15. Below 15 that change degrades: warn keeps the table where it is and records a downgrade, fail aborts.
     // The earlier tests declared an access method that does not exist ("columnar") on a new table and asserted the
-    // downgrade, which pinned PG-058: a new table silently lost its declared method below 15. These use a real second
+    // downgrade, which pinned the defect: a new table silently lost its declared method below 15. These use a real second
     // access method built on the heap handler, which every supported version has.
     private const string SecondAccessMethod = "ss_heap2";
 
@@ -494,7 +494,7 @@ CREATE TABLE ""{Schema}"".""{tableName}"" (""Id"" INT NOT NULL, ""Code"" INT NUL
     }
 
     // Turning a generated column into a plain one keeps its values from PostgreSQL 13 (ALTER COLUMN ... DROP EXPRESSION).
-    // Below 13 the column is dropped and re-added, so its values are lost (PG-110). That path was unregistered and
+    // Below 13 the column is dropped and re-added, so its values are lost. That path was unregistered and
     // left no downgrade row; warn now records one per column, and fail refuses.
     private const string UngenerateObjectType = "un-generated column, values not kept (PG13)";
 

@@ -150,7 +150,7 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
 
     // Two schemas with a same-named table: one declares a table-level check under the name the column form generates,
     // the other the column check itself. The column-check record was deduped on table and constraint name without the
-    // schema, so the table-level row hid the other schema's column check and it compared raw on every deploy (PG-081).
+    // schema, so the table-level row hid the other schema's column check and it compared raw on every deploy.
     [Test]
     public void TheSameCheckNameInTwoSchemas_IsRecordedForBoth()
     {
