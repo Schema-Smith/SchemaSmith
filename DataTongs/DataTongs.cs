@@ -27,6 +27,28 @@ public class DataTongs
         _platform = platform;
     }
 
+    // SS-025: the Json extraction uses FOR JSON (2016) and STRING_AGG (2017), neither of which depends on the
+    // compatibility level. An explicit DeliveryEncoding wins; unset, a SQL Server source below 2017 extracts Xml. Other
+    // engines extract Json unless asked for Xml.
+    private const int JsonExtractionSqlServerMajor = 14;
+
+    internal static bool ChooseXmlDeliveryEncoding(string deliveryEncoding, Platform platform, TargetVersionInfo sqlServerSource)
+    {
+        if (!string.IsNullOrWhiteSpace(deliveryEncoding))
+        {
+            var xml = deliveryEncoding.Trim().Equals("Xml", StringComparison.OrdinalIgnoreCase);
+            if (!xml && platform.GetBasePlatform() == Platform.SqlServer && sqlServerSource is { } source && source.ServerComparable < JsonExtractionSqlServerMajor)
+                throw new InvalidOperationException(
+                    $"DeliveryEncoding is Json, but the source is SQL Server {source.RawVersion}, and the Json extraction " +
+                    "needs SQL Server 2017 or later. Set DeliveryEncoding to Xml, or leave it unset to choose automatically.");
+            return xml;
+        }
+
+        return platform.GetBasePlatform() == Platform.SqlServer
+               && sqlServerSource != null
+               && sqlServerSource.ServerComparable < JsonExtractionSqlServerMajor;
+    }
+
     private IDbConnection GetConnection(string targetDb)
     {
         var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
@@ -106,9 +128,10 @@ public class DataTongs
         // to any downstream consumer that wants XML rather than JSON. SQL Server extracts XML natively;
         // every other engine extracts its normal JSON and converts it to the identical delivery XML shape
         // in C# (MergeScriptHelper.JsonPayloadToXml), so the file is the same dialect on every engine.
+        // Resolved once the source is open (ChooseXmlDeliveryEncoding): unset, a SQL Server source that cannot produce
+        // the Json extraction gets Xml automatically.
         var deliveryEncoding = CommandLineParser.ValueOfSwitch("DeliveryEncoding", null)
-            ?? config[SettingsKeys.ShouldCast.DeliveryEncoding] ?? "Json";
-        var extractAsXml = deliveryEncoding.Trim().Equals("Xml", StringComparison.OrdinalIgnoreCase);
+            ?? config[SettingsKeys.ShouldCast.DeliveryEncoding];
         var templatePath = CommandLineParser.ValueOfSwitch("TemplatePath", null)
             ?? config[SettingsKeys.TemplatePath];
         var sourceSchemaSetting = config[SettingsKeys.Source.Schema] ?? "";
@@ -217,6 +240,14 @@ public class DataTongs
 
         using var sourceConnection = GetConnection(sourceDb);
         var cmd = sourceConnection.CreateCommand();
+
+        var sqlServerSource = _platform.GetBasePlatform() == Platform.SqlServer
+            ? TargetVersionDetector.TryDetect(cmd, _platform, sourceDb)
+            : null;
+        var extractAsXml = ChooseXmlDeliveryEncoding(deliveryEncoding, _platform, sqlServerSource);
+        if (extractAsXml && string.IsNullOrWhiteSpace(deliveryEncoding) && sqlServerSource != null)
+            _progressLog.Info($"  Delivery data is extracted as Xml: the source is SQL Server {sqlServerSource.RawVersion}, " +
+                              "and the Json extraction needs SQL Server 2017. Set DeliveryEncoding to choose.");
 
         // PostgreSQL MERGE is a v15 feature; below 15 the generated merge script must use INSERT ... ON
         // CONFLICT. DataTongs generates against the source it is extracting from, so the source version

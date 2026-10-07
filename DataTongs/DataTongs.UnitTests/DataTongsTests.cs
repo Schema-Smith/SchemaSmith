@@ -739,6 +739,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
             if (callCount == 1) return (object)true; // TableExists
             return null; // GetKeyColumns returns null
@@ -790,6 +793,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
             return callCount switch
             {
@@ -849,6 +855,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
             return callCount switch
             {
@@ -1170,6 +1179,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             // Data delivery detects the server version (TargetVersionDetector) and probes JSON_ARRAYAGG support,
             // both via SELECT VERSION() — return a modern MySQL version so the JSON_ARRAYAGG path is taken.
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
@@ -1286,6 +1298,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
             return callCount switch
             {
@@ -1346,6 +1361,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
             if (callCount == 1) return (object)true; // TableExists
             throw new Exception("Simulated database error");
@@ -1410,6 +1428,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (SS-025 encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             // Data delivery detects the server version and probes JSON_ARRAYAGG support, both via SELECT VERSION().
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
             callCount++;

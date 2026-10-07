@@ -135,7 +135,9 @@ public class MergeScriptTokenWiringTests
             "        [Id]"                     // GetInsertColumns
         });
         _command.ExecuteScalar().Returns(_ =>
-            _command.CommandText?.Contains("compatibility_level", StringComparison.OrdinalIgnoreCase) == true
+            _command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true ? "16.0.1000.6"
+            : _command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true ? 160
+            : _command.CommandText?.Contains("compatibility_level", StringComparison.OrdinalIgnoreCase) == true
                 ? 0
                 : sequence.Count > 0 ? sequence.Dequeue() : null);
     }
