@@ -101,6 +101,17 @@ public abstract class AutoIncrementValueQuenchSharedTests
         // even after an explicit ALTER TABLE ... AUTO_INCREMENT=N. Use SHOW TABLE STATUS
         // which reads the storage-level value reliably.
         using var cmd = _connection.CreateCommand();
+        // MySQL 8 serves SHOW TABLE STATUS from its statistics cache. With lower_case_table_names=2 and a mixed-case
+        // database, a dropped table's entry outlives it and ANALYZE refreshes a different (lowercase) entry, so read
+        // past the cache wherever the server has one.
+        cmd.CommandText = "SHOW VARIABLES LIKE 'information_schema_stats_expiry'";
+        bool hasStatsCache;
+        using (var probe = cmd.ExecuteReader()) hasStatsCache = probe.Read();
+        if (hasStatsCache)
+        {
+            cmd.CommandText = "SET SESSION information_schema_stats_expiry = 0";
+            cmd.ExecuteNonQuery();
+        }
         cmd.CommandText = $"SHOW TABLE STATUS FROM `{_testDb}` LIKE 'ai_quench_test'";
         using var reader = cmd.ExecuteReader();
         if (!reader.Read()) return null;

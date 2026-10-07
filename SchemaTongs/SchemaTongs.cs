@@ -2949,7 +2949,7 @@ SELECT 'Functions' AS Folder,
        '\n' || '  SQL SECURITY ' || SECURITY_TYPE ||
        '\n' || ROUTINE_DEFINITION || ' //\nDELIMITER ;' AS Code
   FROM INFORMATION_SCHEMA.ROUTINES r
-  WHERE ROUTINE_SCHEMA = '{EscapeSql(targetSchema)}'
+  WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
     AND ROUTINE_TYPE = 'FUNCTION'
     AND ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
 ";
@@ -2992,7 +2992,7 @@ SELECT 'Procedures' AS Folder,
        '\n' || '  SQL SECURITY ' || SECURITY_TYPE ||
        '\n' || ROUTINE_DEFINITION || ' //\nDELIMITER ;' AS Code
   FROM INFORMATION_SCHEMA.ROUTINES r
-  WHERE ROUTINE_SCHEMA = '{EscapeSql(targetSchema)}'
+  WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
     AND ROUTINE_TYPE = 'PROCEDURE'
     AND ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
 ";

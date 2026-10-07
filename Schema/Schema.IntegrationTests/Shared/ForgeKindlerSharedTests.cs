@@ -66,7 +66,7 @@ public abstract class ForgeKindlerSharedTests
         command.CommandText = $@"
             SELECT ROUTINE_NAME
             FROM INFORMATION_SCHEMA.ROUTINES
-            WHERE ROUTINE_SCHEMA = '{MainDb}'
+            WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{MainDb}'")}
             AND ROUTINE_NAME = 'SchemaSmith_GenerateTableJSON'
             AND ROUTINE_TYPE = 'PROCEDURE'";
         var result = command.ExecuteScalar();
@@ -358,7 +358,7 @@ public abstract class ForgeKindlerSharedTests
         using var command = _connection.CreateCommand();
         ForgeKindler.KindleTheForge(command, Platform, forceReKindle: true);
         command.CommandText = "SELECT COUNT(*) FROM information_schema.routines " +
-                              "WHERE routine_schema = DATABASE() AND routine_name = 'SchemaSmith_TableQuench'";
+                              $"WHERE {MySqlNameMatch.FoldedRoutineSchema("routine_schema", "DATABASE()")} AND routine_name = 'SchemaSmith_TableQuench'";
         Assert.That(System.Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(1),
             "ForceReKindle must leave the helper procs present.");
     }
