@@ -148,6 +148,46 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         return Convert.ToInt64(cmd.ExecuteScalar());
     }
 
+    // Two schemas with a same-named table: one declares a table-level check under the name the column form generates,
+    // the other the column check itself. The column-check record was deduped on table and constraint name without the
+    // schema, so the table-level row hid the other schema's column check and it compared raw on every deploy (PG-081).
+    [Test]
+    public void TheSameCheckNameInTwoSchemas_IsRecordedForBoth()
+    {
+        var table = $"ExprMap2_{Guid.NewGuid():N}"[..16];
+        const string otherSchema = "ss_exprmap_s2";
+        using var conn = (NpgsqlConnection)DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            cmd.CommandText = $@"CREATE SCHEMA IF NOT EXISTS ""{otherSchema}"";";
+            cmd.ExecuteNonQuery();
+            var tableLevel = $$"""
+                { "Schema": "public", "Name": "{{table}}",
+                  "Columns": [ { "Name": "tag", "DataType": "text", "Nullable": true } ],
+                  "CheckConstraints": [ { "Name": "CK_{{table}}_tag", "Expression": "starts_with(\"tag\", 'a')" } ] }
+                """;
+            var columnLevel = $$"""
+                { "Schema": "{{otherSchema}}", "Name": "{{table}}",
+                  "Columns": [ { "Name": "tag", "DataType": "text", "Nullable": true, "CheckExpression": "starts_with(\"tag\", 'a')" } ] }
+                """;
+            RunTableQuenchProc(cmd, "[" + tableLevel + "," + columnLevel + "]");
+
+            cmd.CommandText = $@"SELECT COUNT(DISTINCT ""ObjectSchema"") FROM ""SchemaSmith"".""ExpressionMap""
+                                 WHERE ""ObjectTable"" = '{table}' AND ""ObjectKind"" = 'CHECK';";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(2));
+        }
+        finally
+        {
+            cmd.CommandText = $@"DROP TABLE IF EXISTS ""public"".""{table}""; DROP TABLE IF EXISTS ""{otherSchema}"".""{table}"";
+                                 DELETE FROM ""SchemaSmith"".""ExpressionMap"" WHERE ""ObjectTable"" = '{table}';";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     // The design's measured case: PostgreSQL adds ::text to the literal, and no paren handling reconciles a cast.
     [Test]
     public void ACheckWhoseLiteralTheEngineCasts_IsNotReCreatedOnEveryDeploy()

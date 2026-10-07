@@ -362,6 +362,8 @@ BEGIN
         JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
           ON tc.CONSTRAINT_SCHEMA = rc.CONSTRAINT_SCHEMA
           AND tc.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+          -- Foreign-key names are unique per table from MariaDB 12.1, so the name alone matches other tables' keys.
+          AND tc.TABLE_NAME = rc.TABLE_NAME
         WHERE tc.TABLE_SCHEMA = p_Schema
           AND tc.TABLE_NAME = p_Table
           AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
@@ -373,7 +375,7 @@ BEGIN
     IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
         SET @v_ccSchema = p_Schema;
         SET @v_ccTable = p_Table;
-        SET @v_ccSql = 'SELECT CONCAT(''['', IFNULL(GROUP_CONCAT(
+        SET @v_ccSql = CONCAT('SELECT CONCAT(''['', IFNULL(GROUP_CONCAT(
     JSON_OBJECT(
         ''Name'', cc.CONSTRAINT_NAME,
         ''Expression'', REPLACE(REGEXP_REPLACE(cc.CHECK_CLAUSE, ''_utf8mb4|_utf8mb3|_utf8|_latin1|_binary'', ''''), ''\\\\'''''', '''''''')
@@ -383,10 +385,10 @@ BEGIN
 FROM INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
 JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
   ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
-  AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+  AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME', SchemaSmith_CheckTableJoin(), '
 WHERE tc.TABLE_SCHEMA = @v_ccSchema
   AND tc.TABLE_NAME = @v_ccTable
-  AND tc.CONSTRAINT_TYPE = ''CHECK''';
+  AND tc.CONSTRAINT_TYPE = ''CHECK''');
         PREPARE stmt FROM @v_ccSql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;

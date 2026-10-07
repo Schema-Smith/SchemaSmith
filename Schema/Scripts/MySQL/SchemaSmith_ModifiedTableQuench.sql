@@ -1892,7 +1892,7 @@ BEGIN
         -- constraints to drop, so _SchemaSmith_CKsToDrop simply stays unpopulated by this step.
         IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
             SET @v_ckDbName = p_DatabaseName;
-            SET @v_ckSql = 'INSERT IGNORE INTO _SchemaSmith_CKsToDrop (TableName, ConstraintName)
+            SET @v_ckSql = CONCAT('INSERT IGNORE INTO _SchemaSmith_CKsToDrop (TableName, ConstraintName)
 SELECT DISTINCT
     CONVERT(tc.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
     CONVERT(cc.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
@@ -1905,7 +1905,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     ON CONVERT(tc.CONSTRAINT_SCHEMA USING utf8mb4) = CONVERT(cc.CONSTRAINT_SCHEMA USING utf8mb4)
     AND CONVERT(tc.CONSTRAINT_NAME USING utf8mb4) = CONVERT(cc.CONSTRAINT_NAME USING utf8mb4)
     AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = ctd.TableKey
-    AND tc.CONSTRAINT_TYPE = ''CHECK''';
+    AND tc.CONSTRAINT_TYPE = ''CHECK''', SchemaSmith_CheckTableJoin());
             PREPARE stmt FROM @v_ckSql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;

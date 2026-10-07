@@ -87,7 +87,7 @@ proc: BEGIN
            AND tc.CONSTRAINT_TYPE = ''CHECK''
           JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
             ON cc.CONSTRAINT_SCHEMA = @v_emDbCi AND SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = @v_emDbKey
-           AND SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) = c.ConstraintKey
+           AND SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) = c.ConstraintKey', SchemaSmith_CheckTableJoin(), '
          WHERE IFNULL(TRIM(c.Expression), '''') != ''''
             ON DUPLICATE KEY UPDATE
                AuthoredText = VALUES(AuthoredText),

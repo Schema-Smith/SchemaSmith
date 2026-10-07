@@ -301,7 +301,7 @@ BEGIN
     SET @v_mcDbCi = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci;
     SET @v_mcDbKey = SchemaSmith_IdentifierKey(p_DatabaseName);
     IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
-        SET @v_mcSql1 = 'INSERT IGNORE INTO _SchemaSmith_ModifiedChecks (TableName, ConstraintName)
+        SET @v_mcSql1 = CONCAT('INSERT IGNORE INTO _SchemaSmith_ModifiedChecks (TableName, ConstraintName)
 SELECT
     SchemaSmith_StripBacktickWrapping(c.TableName) AS TableName,
     SchemaSmith_StripBacktickWrapping(c.ConstraintName) AS ConstraintName
@@ -313,12 +313,12 @@ JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     AND tc.CONSTRAINT_TYPE = ''CHECK''
 JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
     ON cc.CONSTRAINT_SCHEMA = @v_mcDbCi AND SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = @v_mcDbKey
-    AND SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) = c.ConstraintKey
+    AND SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) = c.ConstraintKey', SchemaSmith_CheckTableJoin(), '
 WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))
     != BINARY SchemaSmith_NormalizeCheckExpression(c.Expression)
   AND SchemaSmith_ExpressionMapUnchanged(@v_mcDbName, SchemaSmith_StripBacktickWrapping(c.TableName),
         ''CHECK'', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ''expression'',
-        c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0';
+        c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0');
         PREPARE stmt FROM @v_mcSql1;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
