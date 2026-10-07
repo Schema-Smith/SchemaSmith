@@ -369,6 +369,7 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_RebuildBlockedReason.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.DegradeUnsupportedColumnStore.sql"),
+                new("SchemaSmith.DegradeDatabaseToggles.sql"),
                 new("SchemaSmith.DegradeUnsupportedFeatures.sql"),
                 new("SchemaSmith.PrintWithNoWait.sql"),
                 new("SchemaSmith.CdcPreflight.sql"),

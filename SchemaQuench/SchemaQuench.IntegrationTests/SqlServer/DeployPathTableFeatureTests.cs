@@ -34,6 +34,7 @@ public class DeployPathTableFeatureTests
     private readonly ILog _progressLog = Substitute.For<ILog>();
     private readonly IEnvironment _environment = Substitute.For<IEnvironment>();
     private string _betweenScript;
+    private string _beforeScript;
     private bool _nextDeployFails;
 
     [Test]
@@ -149,6 +150,69 @@ public class DeployPathTableFeatureTests
         }, expectFailure: true, policy: "fail");
     }
 
+    // #432: a Before script is where a package turns CDC on for a new or restored database, and the degrade used to
+    // judge the database before that slot ran -- so the first deploy recorded the tables as downgraded and tracked none.
+    [TestCase("warn")]
+    [TestCase("fail")]
+    public void CdcEnabledByABeforeScript_TracksTheTable_OnTheFirstDeploy(string policy)
+    {
+        RunScenario("DeployCdcBefore", setupDatabase: null, (deploy, db, cmd) =>
+        {
+            _beforeScript = "IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1) EXEC sys.sp_cdc_enable_db";
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+            Assert.That(IsTrackedByCdc(cmd), Is.True, "the first deploy must track the table once the Before script has enabled CDC");
+            _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("CDC skipped")));
+        }, policy: policy);
+    }
+
+    [TestCase("warn")]
+    [TestCase("fail")]
+    public void ChangeTrackingEnabledByABeforeScript_TracksTheTable_OnTheFirstDeploy(string policy)
+    {
+        RunScenario("DeployCtBefore", setupDatabase: null, (deploy, db, cmd) =>
+        {
+            _beforeScript = "IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_databases WHERE database_id = DB_ID()) "
+                            + "ALTER DATABASE CURRENT SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 1 DAYS)";
+            deploy("""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]", "EnableChangeTracking": true,
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }
+                """);
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.change_tracking_tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1),
+                "the first deploy must track the table once the Before script has enabled Change Tracking");
+            _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("Change Tracking skipped")));
+        }, policy: policy);
+    }
+
+    // Deferring the judgement past the Before slot must not lose it: a Before script that leaves CDC off still
+    // degrades under 'warn' and still refuses under 'fail'.
+    [Test]
+    public void CdcStillOffAfterABeforeScript_IsRecordedAsDowngraded()
+    {
+        RunScenario("DeployCdcBeforeOff", setupDatabase: null, (deploy, db, cmd) =>
+        {
+            _beforeScript = "SELECT 1";
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+            Assert.That(IsTrackedByCdc(cmd), Is.False);
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database")));
+        });
+    }
+
+    [Test]
+    public void CdcStillOffAfterABeforeScript_UnderFail_IsRefused()
+    {
+        RunScenario("DeployCdcBeforeFail", setupDatabase: null, (deploy, db, cmd) =>
+        {
+            _beforeScript = "SELECT 1";
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+            var logged = _progressLog.ReceivedCalls().Concat(_errorLog.ReceivedCalls())
+                .Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "");
+            Assert.That(logged.Any(m => m.Contains("Change Data Capture requires CDC enabled on the database")), Is.True,
+                "the deploy must refuse by the degrade's own message");
+        }, expectFailure: true, policy: "fail");
+    }
+
     // A column added by a run that then fails before the table-features step must still reach the capture instance
     // on the next run. The column work is done by then, so nothing in the next run's column diff says to rotate.
     [Test]
@@ -198,6 +262,9 @@ public class DeployPathTableFeatureTests
             finally
             {
                 config["CheckpointDirectory"] = savedDir;
+                // Program.Main registers a checkpoint manager for that folder and nothing unregisters it, so the next test
+                // in this process would write checkpoints into the folder deleted below.
+                FactoryContainer.Unregister<Schema.Checkpointing.ICheckpointing>();
                 _environment.CommandLine.Returns("");
                 try { if (Directory.Exists(checkpointDir)) Directory.Delete(checkpointDir, true); }
                 catch (IOException) { /* a held handle must not fail the test */ }
@@ -345,7 +412,7 @@ public class DeployPathTableFeatureTests
 
                 body(tableJson =>
                 {
-                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript);
+                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript);
                     _environment.ClearReceivedCalls();
                     Program.Main(xmlIngest ? [] : ["SkipKindlingForge"]);
                     var fails = expectFailure || _nextDeployFails;
@@ -429,7 +496,8 @@ public class DeployPathTableFeatureTests
         return names.ToArray();
     }
 
-    private static void WritePackage(string dir, string db, string tableJson, string templateExtra = "", string betweenScript = null)
+    private static void WritePackage(string dir, string db, string tableJson, string templateExtra = "", string betweenScript = null,
+                                     string beforeScript = null)
     {
         var tables = Path.Join(dir, "Templates", "Main", "Tables");
         Directory.CreateDirectory(tables);
@@ -441,6 +509,14 @@ public class DeployPathTableFeatureTests
             Directory.CreateDirectory(between);
             File.WriteAllText(Path.Join(between, "Fail.sql"), betweenScript);
             folders = "{ \"FolderPath\": \"Between\", \"QuenchSlot\": \"BetweenTablesAndKeys\" }";
+        }
+        var before = Path.Join(dir, "Templates", "Main", "Before");
+        if (Directory.Exists(before)) Directory.Delete(before, true);
+        if (beforeScript != null)
+        {
+            Directory.CreateDirectory(before);
+            File.WriteAllText(Path.Join(before, "Prepare.sql"), beforeScript);
+            folders += (folders.Length > 0 ? ", " : "") + "{ \"FolderPath\": \"Before\", \"QuenchSlot\": \"Before\" }";
         }
         File.WriteAllText(Path.Join(dir, "Product.json"),
             "{ \"Name\": \"DeployPathProbe\", \"ValidationScript\": \"SELECT CAST(1 AS BIT)\", \"TemplateOrder\": [\"Main\"], "
@@ -457,6 +533,7 @@ public class DeployPathTableFeatureTests
         _errorLog.ClearReceivedCalls();
         _environment.ClearReceivedCalls();
         _betweenScript = null;
+        _beforeScript = null;
         _nextDeployFails = false;
         FactoryContainer.Register(_environment);
         LogFactory.Register("ErrorLog", _errorLog);
