@@ -357,82 +357,264 @@ CREATE TABLE ""{Schema}"".""{tableName}"" (""Id"" INT NOT NULL, ""Code"" INT NUL
         conn.Close();
     }
 
-    // Table-level access method (ALTER TABLE ... SET ACCESS METHOD) is a PG15 feature. Below the floor the
-    // emit is suppressed (so no hard 42601 on SET ACCESS METHOD, and the fixup pass ignores the difference so
-    // it does not churn); warn (default) records a downgrade manifest row naming the table.
-    [Test]
-    public void AccessMethod_BelowPg15_WarnPolicy_DeploysWithoutError_AndRecordsDowngrade()
+    // Table access method. CREATE TABLE ... USING has worked since PostgreSQL 12, so a NEW table gets its declared access
+    // method on every supported version; only changing an EXISTING table's method (ALTER TABLE ... SET ACCESS METHOD)
+    // needs 15. Below 15 that change degrades: warn keeps the table where it is and records a downgrade, fail aborts.
+    // The earlier tests declared an access method that does not exist ("columnar") on a new table and asserted the
+    // downgrade, which pinned PG-058: a new table silently lost its declared method below 15. These use a real second
+    // access method built on the heap handler, which every supported version has.
+    private const string SecondAccessMethod = "ss_heap2";
+
+    private static void EnsureSecondAccessMethod(IDbCommand cmd)
     {
-        var uniqueId = Guid.NewGuid().ToString("N")[..8];
-        var tableName = $"WarnAm_{uniqueId}";
-
-        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
-        conn.Open();
-        conn.ChangeDatabase(_mainDb);
-        using var cmd = conn.CreateCommand();
-        cmd.CommandTimeout = 300;
-        cmd.CommandText = "SET schemasmith.version_override = '14';";
+        cmd.CommandText = $"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_am WHERE amname = '{SecondAccessMethod}') THEN " +
+                          $"CREATE ACCESS METHOD {SecondAccessMethod} TYPE TABLE HANDLER heap_tableam_handler; END IF; END $$;";
         cmd.ExecuteNonQuery();
+    }
 
-        var json = $$"""
+    private static string AccessMethodTableJson(string tableName) => $$"""
 [{
     "Schema": "{{Schema}}",
     "Name": "{{tableName}}",
-    "AccessMethod": "columnar",
+    "AccessMethod": "{{SecondAccessMethod}}",
     "Columns": [
         { "Name": "Id", "DataType": "INT", "Nullable": false }
     ]
 }]
 """;
-        Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: $"AMW_{uniqueId}"),
-            "a non-default access method must degrade (emit suppressed) below PG15, not error on SET ACCESS METHOD");
 
+    private static string LiveAccessMethod(IDbCommand cmd, string tableName)
+    {
+        cmd.CommandText = $@"SELECT am.amname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                             JOIN pg_am am ON am.oid = c.relam WHERE n.nspname = '{Schema}' AND c.relname = '{tableName}';";
+        return cmd.ExecuteScalar()?.ToString();
+    }
+
+    private static int AccessMethodDowngrades(IDbCommand cmd, string tableName)
+    {
         cmd.CommandText = $@"SELECT COUNT(*) FROM ""SchemaSmith"".""ChangeAudit""
                              WHERE ""ActionType"" = 'downgraded'
                                AND ""ObjectName"" = '{Schema}.{tableName}'
                                AND ""ObjectType"" = 'table access method (PG15)';";
-        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1),
-            "a downgrade manifest row must record the table that lost its access method");
-
-        cmd.CommandText = $@"RESET schemasmith.version_override; DROP TABLE ""{Schema}"".""{tableName}"";";
-        cmd.ExecuteNonQuery();
-        conn.Close();
+        return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
-    // fail (opt-in): a below-15 target declaring a non-default access method aborts the quench with a clear
-    // "requires PostgreSQL 15" message rather than silently degrading.
+    private IDbCommand OpenBelowPg15(IDbConnection conn, string policy)
+    {
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        EnsureSecondAccessMethod(cmd);
+        cmd.CommandText = $"SET schemasmith.version_override = '14'; SET schemasmith.unsupported_policy = '{policy}';";
+        cmd.ExecuteNonQuery();
+        return cmd;
+    }
+
+    private static void ResetAndDrop(IDbCommand cmd, string tableName)
+    {
+        cmd.CommandText = $@"RESET schemasmith.version_override; RESET schemasmith.unsupported_policy;
+                             DROP TABLE IF EXISTS ""{Schema}"".""{tableName}"";";
+        cmd.ExecuteNonQuery();
+    }
+
     [Test]
-    public void AccessMethod_BelowPg15_FailPolicy_AbortsWithRequiresPg15()
+    public void AccessMethod_NewTable_IsCreatedWithIt_EvenBelowPg15()
+    {
+        var uniqueId = Guid.NewGuid().ToString("N")[..8];
+        var tableName = $"NewAm_{uniqueId}";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        using var cmd = OpenBelowPg15(conn, "warn");
+        try
+        {
+            RunTableQuenchProc(cmd, AccessMethodTableJson(tableName), productName: $"AMN_{uniqueId}");
+
+            Assert.That(LiveAccessMethod(cmd, tableName), Is.EqualTo(SecondAccessMethod));
+            Assert.That(AccessMethodDowngrades(cmd, tableName), Is.Zero, "nothing was lost, so nothing is downgraded");
+        }
+        finally { ResetAndDrop(cmd, tableName); }
+    }
+
+    [Test]
+    public void AccessMethod_ExistingTable_BelowPg15_WarnPolicy_StaysWhereItIs_AndRecordsDowngrade()
+    {
+        var uniqueId = Guid.NewGuid().ToString("N")[..8];
+        var tableName = $"WarnAm_{uniqueId}";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        using var cmd = OpenBelowPg15(conn, "warn");
+        try
+        {
+            cmd.CommandText = $@"CREATE TABLE ""{Schema}"".""{tableName}"" (""Id"" INT NOT NULL) USING heap;";
+            cmd.ExecuteNonQuery();
+
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, AccessMethodTableJson(tableName), productName: $"AMW_{uniqueId}"),
+                "changing an existing table's access method must degrade below PG15, not error on SET ACCESS METHOD");
+
+            Assert.That(LiveAccessMethod(cmd, tableName), Is.EqualTo("heap"));
+            Assert.That(AccessMethodDowngrades(cmd, tableName), Is.EqualTo(1));
+        }
+        finally { ResetAndDrop(cmd, tableName); }
+    }
+
+    [Test]
+    public void AccessMethod_ExistingTable_AlreadyOnIt_BelowPg15_RecordsNothing()
+    {
+        var uniqueId = Guid.NewGuid().ToString("N")[..8];
+        var tableName = $"SameAm_{uniqueId}";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        using var cmd = OpenBelowPg15(conn, "warn");
+        try
+        {
+            cmd.CommandText = $@"CREATE TABLE ""{Schema}"".""{tableName}"" (""Id"" INT NOT NULL) USING {SecondAccessMethod};";
+            cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(cmd, AccessMethodTableJson(tableName), productName: $"AMS_{uniqueId}");
+
+            Assert.That(AccessMethodDowngrades(cmd, tableName), Is.Zero);
+        }
+        finally { ResetAndDrop(cmd, tableName); }
+    }
+
+    [Test]
+    public void AccessMethod_ExistingTable_BelowPg15_FailPolicy_AbortsWithRequiresPg15()
     {
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
         var tableName = $"FailAm_{uniqueId}";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        using var cmd = OpenBelowPg15(conn, "fail");
+        try
+        {
+            cmd.CommandText = $@"CREATE TABLE ""{Schema}"".""{tableName}"" (""Id"" INT NOT NULL) USING heap;";
+            cmd.ExecuteNonQuery();
 
+            var ex = Assert.Catch(() => RunTableQuenchProc(cmd, AccessMethodTableJson(tableName), productName: $"AMF_{uniqueId}"));
+            Assert.That(ex!.Message, Does.Contain("requires PostgreSQL 15"));
+        }
+        finally { ResetAndDrop(cmd, tableName); }
+    }
+
+    // Turning a generated column into a plain one keeps its values from PostgreSQL 13 (ALTER COLUMN ... DROP EXPRESSION).
+    // Below 13 the column is dropped and re-added, so its values are lost (PG-110). That path was unregistered and
+    // left no downgrade row; warn now records one per column, and fail refuses.
+    private const string UngenerateObjectType = "un-generated column, values not kept (PG13)";
+
+    private static string PlainColumnTableJson(string tableName) => $$"""
+[{
+    "Schema": "{{Schema}}",
+    "Name": "{{tableName}}",
+    "Columns": [
+        { "Name": "Id", "DataType": "INT", "Nullable": false },
+        { "Name": "Doubled", "DataType": "INT", "Nullable": true }
+    ]
+}]
+""";
+
+    private void CreateGeneratedTable(IDbCommand cmd, string tableName)
+    {
+        cmd.CommandText = $@"CREATE TABLE ""{Schema}"".""{tableName}"" (""Id"" INT NOT NULL, ""Doubled"" INT GENERATED ALWAYS AS (""Id"" * 2) STORED);
+                             INSERT INTO ""{Schema}"".""{tableName}"" (""Id"") VALUES (21);";
+        cmd.ExecuteNonQuery();
+    }
+
+    [Test]
+    public void Ungenerate_BelowPg13_WarnPolicy_RecordsThatTheValuesWereNotKept()
+    {
+        var tableName = $"Ungen_{Guid.NewGuid().ToString("N")[..8]}";
         using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
         conn.Open();
         conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
-        cmd.CommandText = "SET schemasmith.version_override = '14'; SET schemasmith.unsupported_policy = 'fail';";
-        cmd.ExecuteNonQuery();
+        try
+        {
+            CreateGeneratedTable(cmd, tableName);
+            cmd.CommandText = "SET schemasmith.version_override = '12';";
+            cmd.ExecuteNonQuery();
 
-        var json = $$"""
-[{
-    "Schema": "{{Schema}}",
-    "Name": "{{tableName}}",
-    "AccessMethod": "columnar",
-    "Columns": [
-        { "Name": "Id", "DataType": "INT", "Nullable": false }
-    ]
-}]
-""";
-        var ex = Assert.Catch(() => RunTableQuenchProc(cmd, json, productName: $"AMF_{uniqueId}"));
-        Assert.That(ex!.Message, Does.Contain("requires PostgreSQL 15"),
-            "the fail policy must abort naming the required version");
+            RunTableQuenchProc(cmd, PlainColumnTableJson(tableName), productName: tableName);
 
-        cmd.CommandText = $@"RESET schemasmith.version_override; RESET schemasmith.unsupported_policy;
-                             DROP TABLE IF EXISTS ""{Schema}"".""{tableName}"";";
-        cmd.ExecuteNonQuery();
-        conn.Close();
+            cmd.CommandText = $@"SELECT is_generated FROM information_schema.columns
+                                 WHERE table_schema = '{Schema}' AND table_name = '{tableName}' AND column_name = 'Doubled';";
+            var generated = cmd.ExecuteScalar()?.ToString();
+            cmd.CommandText = $@"SELECT COUNT(*) FROM ""SchemaSmith"".""ChangeAudit"" WHERE ""ActionType"" = 'downgraded'
+                                   AND ""ObjectType"" = '{UngenerateObjectType}' AND ""ObjectName"" = '{Schema}.{tableName}.Doubled';";
+            var downgrades = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Multiple(() =>
+            {
+                Assert.That(generated, Is.EqualTo("NEVER"), "the column must be plain");
+                Assert.That(downgrades, Is.EqualTo(1), "the lost values must be on the record");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $@"RESET schemasmith.version_override; DROP TABLE IF EXISTS ""{Schema}"".""{tableName}"";";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    [Test]
+    public void Ungenerate_BelowPg13_FailPolicy_Aborts_AndTheColumnKeepsItsValues()
+    {
+        var tableName = $"UngenF_{Guid.NewGuid().ToString("N")[..8]}";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            CreateGeneratedTable(cmd, tableName);
+            cmd.CommandText = "SET schemasmith.version_override = '12'; SET schemasmith.unsupported_policy = 'fail';";
+            cmd.ExecuteNonQuery();
+
+            var ex = Assert.Catch(() => RunTableQuenchProc(cmd, PlainColumnTableJson(tableName), productName: tableName));
+            Assert.That(ex!.Message, Does.Contain("PostgreSQL 13"));
+
+            cmd.CommandText = $@"RESET schemasmith.version_override; RESET schemasmith.unsupported_policy;
+                                 SELECT ""Doubled"" FROM ""{Schema}"".""{tableName}"";";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(42), "a refused deploy must not drop the column");
+        }
+        finally
+        {
+            cmd.CommandText = $@"RESET schemasmith.version_override; RESET schemasmith.unsupported_policy;
+                                 DROP TABLE IF EXISTS ""{Schema}"".""{tableName}"";";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    [Test]
+    public void Ungenerate_AtPg13_KeepsTheValues_AndRecordsNothing()
+    {
+        var tableName = $"Ungen13_{Guid.NewGuid().ToString("N")[..8]}";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            CreateGeneratedTable(cmd, tableName);
+            cmd.CommandText = "SET schemasmith.version_override = '13';";
+            cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(cmd, PlainColumnTableJson(tableName), productName: tableName);
+
+            cmd.CommandText = $@"SELECT ""Doubled"" FROM ""{Schema}"".""{tableName}"";";
+            var value = Convert.ToInt32(cmd.ExecuteScalar());
+            cmd.CommandText = $@"SELECT COUNT(*) FROM ""SchemaSmith"".""ChangeAudit"" WHERE ""ObjectType"" = '{UngenerateObjectType}'
+                                   AND ""ObjectName"" = '{Schema}.{tableName}.Doubled';";
+            var downgrades = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Multiple(() =>
+            {
+                Assert.That(value, Is.EqualTo(42));
+                Assert.That(downgrades, Is.Zero);
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $@"RESET schemasmith.version_override; DROP TABLE IF EXISTS ""{Schema}"".""{tableName}"";";
+            cmd.ExecuteNonQuery();
+        }
     }
 
     // warn (default): a VIRTUAL generated column on a < 18 target is skipped entirely (STORED siblings

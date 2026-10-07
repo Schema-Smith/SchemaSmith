@@ -72,6 +72,7 @@ public class CapabilityDocumentationTests
         ["PostgreSQL/expression-statistics"] = "**Expression statistics**",
         ["PostgreSQL/column-compression"] = "**Per-column compression**",
         ["PostgreSQL/table-access-method"] = "**Table access method**",
+        ["PostgreSQL/drop-expression"] = "**Removing a column's generation**",
         ["PostgreSQL/virtual-generated-column"] = "**`VIRTUAL` generated columns**",
 
         // ---- MySQL ----
