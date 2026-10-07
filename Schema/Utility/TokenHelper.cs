@@ -279,13 +279,16 @@ public static class TokenHelper
         };
     }
 
+    // Variable concatenation rather than STRING_AGG (2017), and a plain DROP TABLE rather than DROP TABLE IF EXISTS
+    // (2016): this runs before every query token, on every supported version (SS-123). Not FOR XML PATH, whose .value()
+    // fails under QUOTED_IDENTIFIER OFF. The order of the drops does not matter, and the WHERE keeps only tables that exist.
     private const string DropTempTablesSqlServer = """
-DECLARE @v_sql NVARCHAR(MAX) = ''
-SELECT @v_sql = STRING_AGG('DROP TABLE IF EXISTS ' + QUOTENAME([name]) + ';', CHAR(13) + CHAR(10))
+DECLARE @v_sql NVARCHAR(MAX) = N''
+SELECT @v_sql = @v_sql + N'DROP TABLE ' + QUOTENAME([name]) + N';' + NCHAR(13) + NCHAR(10)
   FROM tempdb..sysobjects WITH (NOLOCK)
-  WHERE [name] LIKE '#[^#]%'
-    AND OBJECT_ID('tempdb..' + QUOTENAME([name])) IS NOT NULL
-EXEC(@v_sql)
+ WHERE [name] LIKE '#[^#]%'
+   AND OBJECT_ID('tempdb..' + QUOTENAME([name])) IS NOT NULL
+IF @v_sql <> N'' EXEC(@v_sql)
 """;
 
     private const string DropTempTablesPostgreSQL = """

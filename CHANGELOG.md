@@ -24,6 +24,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **An event comment or body changed only in case or accent was not applied, and a tablespace spelled differently only in case was accepted (MySQL, MariaDB).** Both compared without regard to case on most databases. A scheduled event's comment and body are now compared exactly, so the change is applied; a declared `Tablespace` differing only in case is refused like any other move, since MySQL tablespace names are case-sensitive.
 - **A `MinimumVersion` with a pre-release suffix, such as PostgreSQL `18beta1`, was refused as unreadable.** It now reads as its leading number (18).
 - **SchemaTongs could not extract any SQL Server 2008 R2 database.** It read `sys.sequences`, which arrived in SQL Server 2012, and exited 3 with half a package on disk. Sequences are now extracted from 2012 on, and a 2008 R2 extraction completes.
+- **A query token failed on SQL Server 2008 R2 through 2016.** The temp-table cleanup that runs before each query token used `STRING_AGG` (2017) and `DROP TABLE IF EXISTS` (2016). It now runs on every supported version.
 
 ## [v2.7.1](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) — 2026-10-01
 
