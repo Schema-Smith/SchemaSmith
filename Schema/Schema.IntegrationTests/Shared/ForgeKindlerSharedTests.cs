@@ -377,10 +377,12 @@ public abstract class ForgeKindlerSharedTests
             "Kindle must release its GET_LOCK when done.");
     }
 
-    [TestCase("SchemaSmith_ProductOwnership", "ObjectSchema,ObjectName")]
-    [TestCase("SchemaSmith_ExpressionMap", "ObjectSchema,ObjectTable,ObjectName")]
+    // Each table in the key shape it actually shipped with: ProductOwnership on an AUTO_INCREMENT Id, ExpressionMap with
+    // no primary key at all.
+    [TestCase("SchemaSmith_ProductOwnership", "ObjectSchema,ObjectName", "`Id` INT AUTO_INCREMENT PRIMARY KEY, ")]
+    [TestCase("SchemaSmith_ExpressionMap", "ObjectSchema,ObjectTable,ObjectName", "")]
     public void KindleTheForge_LegacyCaseInsensitiveIdentifierColumns_BootstrapConvergesThemToBinary(
-        string table, string identifierColumns)
+        string table, string identifierColumns, string legacyKeyDdl)
     {
         // The UPGRADE half of the case-differing-identifier fix, and the half every EXISTING
         // installation depends on. Every other fixture creates a brand-new database, so these tables are
@@ -408,8 +410,7 @@ public abstract class ForgeKindlerSharedTests
             var identifierDdl = string.Join(", ", columns.Select(c => $"`{c}` VARCHAR(64) NOT NULL"));
             command.CommandText = $@"
                 CREATE TABLE `{table}` (
-                    `Id` INT AUTO_INCREMENT PRIMARY KEY,
-                    {identifierDdl}
+                    {legacyKeyDdl}{identifierDdl}
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
             command.ExecuteNonQuery();
 

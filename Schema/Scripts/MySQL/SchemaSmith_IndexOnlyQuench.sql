@@ -625,6 +625,7 @@ BEGIN
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyKCU;
         CREATE TEMPORARY TABLE _SchemaSmith_IdxOnlyKCU (
+            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ReferencedTableName VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
@@ -639,6 +640,7 @@ BEGIN
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyTC;
         CREATE TEMPORARY TABLE _SchemaSmith_IdxOnlyTC (
+            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             KEY ix_iotc (TableName, ConstraintName)
