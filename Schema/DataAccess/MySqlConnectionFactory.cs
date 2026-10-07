@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Data;
 using MySqlConnector;
+using MySqlConnector.Authentication.Ed25519;
 using Schema.Isolators;
 
 namespace Schema.DataAccess;
@@ -15,6 +16,14 @@ public class MySqlConnectionFactory : IDbConnectionFactory
     private static readonly ConcurrentDictionary<string, Lazy<MySqlDataSource>> DataSources = new();
 
     internal static int CachedDataSourceCount => DataSources.Count;
+
+    // MariaDB accounts can authenticate with ed25519 (10.1.22+) or PARSEC (11.6+), which the connector supports only
+    // once their plugins are installed. Without them such an account could not connect at all.
+    static MySqlConnectionFactory()
+    {
+        Ed25519AuthenticationPlugin.Install();
+        ParsecAuthenticationPlugin.Install();
+    }
 
     public IDbConnection GetDbConnection(string connectionString)
     {

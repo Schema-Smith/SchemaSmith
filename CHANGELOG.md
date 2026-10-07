@@ -33,6 +33,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **A new table lost its declared access method below PostgreSQL 15.** `CREATE TABLE` never emitted `USING`, so the table was created on `heap` and a downgrade was recorded, although `CREATE TABLE ... USING` works from PostgreSQL 12. A new table now gets its declared method on every supported version; only changing an existing table's method still needs 15.
 - **Below PostgreSQL 13, turning a generated column into a plain one lost its values without a record.** The column is dropped and re-added there, since `DROP EXPRESSION` arrived in 13. A downgrade now names each such column, and `UnsupportedFeaturePolicy=fail` refuses before anything is dropped.
 - **A long unique key extracted from MariaDB 10.4+ failed the deploy to 10.2 or 10.3 with a key-length error.** MariaDB 10.4 enforces a unique key over a wide column through a hidden hash; InnoDB on 10.2/10.3 cannot (1071, 1170). Such a deploy is now refused by name before anything is created, under either `UnsupportedFeaturePolicy`, since skipping the key would drop the uniqueness.
+- **A MariaDB account using ed25519 or PARSEC authentication could not connect.** The connection library supports both only once their plugins are installed, so every tool failed at login with "You must install the MySqlConnector.Authentication.Ed25519 package". Both are now installed.
 
 ## [v2.7.1](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) — 2026-10-01
 
