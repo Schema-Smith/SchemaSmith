@@ -1827,4 +1827,79 @@ public class CoherenceCheckTests
 
         Assert.That(RunPg(table).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
     }
+
+    // ---- A foreign-key name reused across tables (SS-FK-006) ----
+    //
+    // MySQL names foreign keys per database and SQL Server per schema, so a second table reusing a name fails the
+    // deploy. MariaDB names them per table from 12.1, so there it fails only on an older server -- a warning, unless
+    // MinimumVersion already rules older servers out. PostgreSQL names them per table on every version.
+
+    private static ForeignKey ParentFk(string name) =>
+        new() { Name = name, Columns = "ParentId", RelatedTable = "Parent", RelatedColumns = "Id" };
+
+    private static Finding[] RunFkReuse(Platform platform, string minimumVersion, params (string Schema, string Table, string Fk)[] tables)
+    {
+        var template = new Template { Name = "T" };
+        foreach (var (schema, name, fk) in tables)
+        {
+            Table table = platform switch
+            {
+                Platform.SqlServer => new SqlServerTable { Name = name, Schema = schema },
+                Platform.PostgreSQL => new PostgreSqlTable { Name = name, Schema = schema },
+                Platform.MariaDb => new MariaDbTable { Name = name },
+                _ => new MySqlTable { Name = name }
+            };
+            table.ForeignKeys.Add(ParentFk(fk));
+            template.Tables.Add(table);
+        }
+        var product = new Product { Name = "Acme", Platform = platform, MinimumVersion = minimumVersion, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg"))
+            .Where(f => f.Code == "SS-FK-006").ToArray();
+    }
+
+    [Test]
+    public void FkNameReusedAcrossTables_OnMySql_IsAnErrorNamingBothTables()
+    {
+        var findings = RunFkReuse(Platform.MySQL, null!, ("", "Orders", "fk_parent"), ("", "Invoices", "`FK_Parent`"));
+
+        Assert.That(findings, Has.Length.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+            Assert.That(findings[0].Message, Does.Contain("Orders").And.Contain("Invoices").And.Contain("fk_parent"));
+        });
+    }
+
+    [TestCase(null, Severity.Warning)]
+    [TestCase("10.6", Severity.Warning)]
+    [TestCase("12.0", Severity.Warning)]
+    public void FkNameReusedAcrossTables_OnMariaDbThatMayBeBelow121_IsAWarning(string minimumVersion, Severity expected)
+    {
+        var findings = RunFkReuse(Platform.MariaDb, minimumVersion, ("", "Orders", "fk_parent"), ("", "Invoices", "fk_parent"));
+
+        Assert.That(findings.Select(f => f.Severity), Is.EqualTo(new[] { expected }));
+        Assert.That(findings[0].Message, Does.Contain("12.1"));
+    }
+
+    [TestCase("12.1")]
+    [TestCase("13.0")]
+    public void FkNameReusedAcrossTables_OnMariaDb121AndLater_IsNotReported(string minimumVersion) =>
+        Assert.That(RunFkReuse(Platform.MariaDb, minimumVersion, ("", "Orders", "fk_parent"), ("", "Invoices", "fk_parent")), Is.Empty);
+
+    [Test]
+    public void FkNameReusedAcrossTables_OnSqlServer_IsAnErrorInTheSameSchemaOnly()
+    {
+        Assert.That(RunFkReuse(Platform.SqlServer, null!, ("dbo", "Orders", "FK_Parent"), ("[dbo]", "Invoices", "[FK_Parent]"))
+            .Select(f => f.Severity), Is.EqualTo(new[] { Severity.Error }));
+        Assert.That(RunFkReuse(Platform.SqlServer, null!, ("dbo", "Orders", "FK_Parent"), ("sales", "Invoices", "FK_Parent")), Is.Empty,
+            "constraint names are per schema on SQL Server");
+    }
+
+    [Test]
+    public void FkNameReusedAcrossTables_OnPostgreSql_IsNotReported() =>
+        Assert.That(RunFkReuse(Platform.PostgreSQL, null!, ("public", "Orders", "fk_parent"), ("public", "Invoices", "fk_parent")), Is.Empty);
+
+    [Test]
+    public void DistinctFkNames_AreNotReported() =>
+        Assert.That(RunFkReuse(Platform.MySQL, null!, ("", "Orders", "fk_orders_parent"), ("", "Invoices", "fk_invoices_parent")), Is.Empty);
 }
