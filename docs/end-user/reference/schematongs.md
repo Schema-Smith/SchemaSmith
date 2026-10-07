@@ -67,7 +67,7 @@ Source SqlServer version 16.0.4260.1 (compatibility level 160)
 
 The compatibility level is appended on SQL Server only; the other engines have no such concept. The version string is whatever the engine itself publishes — see [SchemaQuench — The detected version is reported in each engine's own form](schemaquench.md#the-detected-version-is-reported-in-each-engines-own-form) for why the four differ.
 
-**The floor is structural, not opt-in.** You declare nothing. It is the version below which the engine scripts do not run at all — SQL Server 2008, PostgreSQL 12, MySQL 5.7, MariaDB 10.2. A below-floor source aborts before extraction starts:
+**The floor is structural, not opt-in.** You declare nothing. It is the version below which the engine scripts do not run at all — SQL Server 2008, PostgreSQL 12, MySQL 5.7.22 (8.0.23 on the 8.0 line), MariaDB 10.2. A below-floor source aborts before extraction starts:
 
 ```
 srv01: detected SqlServer version 9.00.5000.00 is below the minimum supported version

@@ -473,7 +473,9 @@ public class ForgeKindlerTests
         //   engine compares case-insensitively on every lower_case_table_names setting).
         // +1 = SchemaSmith_CatalogSnapshot (keyed TABLES/COLUMNS snapshots, so catalog reads compare names through
         //   their keys without a key function on every row of a catalog join).
-        Assert.That(mysql.Length, Is.EqualTo(68));
+        // +1 = SchemaSmith_ServerVersionPatchNum (major*10000+minor*100+patch, for gates that turn on a patch: MariaDB's
+        //   RENAME COLUMN / RENAME INDEX at 10.5.2).
+        Assert.That(mysql.Length, Is.EqualTo(69));
     }
 
     [Test]

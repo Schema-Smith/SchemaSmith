@@ -43,14 +43,45 @@ namespace Schema.Utility
         {
             Platform.SqlServer => "2008 (major 10)",
             Platform.PostgreSQL => "12",
-            Platform.MySQL => "5.7",
+            Platform.MySQL => "5.7.22 / 8.0.23",
             Platform.MariaDb => "10.2",
             _ => HardFloorComparable(platform).ToString()
         };
 
+        // MySQL's floor is a patch on two lines: 5.7.22 (JSON_ARRAYAGG, which DataTongs needs) and 8.0.23 (the 8.0
+        // feature gates key on 800 and fire on earlier patches that lack the feature). MySQL 8.0.0-8.0.22 and
+        // 5.7.0-5.7.21 are refused rather than gated patch by patch.
+        private const int MySqlFloor57 = 50722;
+        private const int MySqlFloor80 = 80023;
+
         /// <summary>True when the detected server comparable is below the platform's intrinsic hard floor.</summary>
         public static bool IsBelowFloor(Platform platform, int serverComparable)
             => serverComparable < HardFloorComparable(platform);
+
+        /// <summary>True when the detected server is below the platform's floor, including MySQL's patch floors.</summary>
+        public static bool IsBelowFloor(TargetVersionInfo info)
+        {
+            if (info.Platform != Platform.MySQL)
+                return IsBelowFloor(info.Platform, info.ServerComparable);
+
+            var patch = ParsePatchComparable(info.RawVersion, info.Platform) ?? info.ServerComparable * 100;
+            return patch < MySqlFloor57 || (patch >= 80000 && patch < MySqlFloor80);
+        }
+
+        /// <summary>
+        /// The MySQL family's <c>major*10000+minor*100+patch</c>, for the few gates that turn on a patch. Null on
+        /// other engines and when the version cannot be read. The everyday comparable stays <c>major*100+minor</c>.
+        /// </summary>
+        public static int? ParsePatchComparable(string rawVersion, Platform platform)
+        {
+            if (platform.GetBasePlatform() != Platform.MySQL || string.IsNullOrWhiteSpace(rawVersion)) return null;
+            var parts = rawVersion.Trim().Split('.');
+            var major = LeadingNumber(parts[0]);
+            if (major == null) return null;
+            var minor = parts.Length >= 2 ? LeadingNumber(parts[1]) ?? 0 : 0;
+            var patch = parts.Length >= 3 ? LeadingNumber(parts[2]) ?? 0 : 0;
+            return major.Value * 10000 + minor * 100 + patch;
+        }
 
         /// <summary>
         /// Human-friendly detected-version string for logging. PostgreSQL's raw
@@ -68,7 +99,7 @@ namespace Schema.Utility
 
             if (platform.GetBasePlatform() == Platform.MySQL) return ParseMajorMinor(version);
 
-            if (!int.TryParse(SplitFirst(version), out var value)) return null;
+            if (LeadingNumber(SplitFirst(version)) is not { } value) return null;
 
             // SQL Server: a year (>= 2000) is an alias for its major.
             if (platform == Platform.SqlServer && value >= 2000)
@@ -108,6 +139,14 @@ namespace Schema.Utility
             var minor = 0;
             if (parts.Length >= 2 && !int.TryParse(parts[1], out minor)) return null;
             return major * 100 + minor;
+        }
+
+        // "18beta1" -> 18, "23-log" -> 23: a version part's leading digits. Null when it has none.
+        private static int? LeadingNumber(string part)
+        {
+            var digits = 0;
+            while (digits < part.Length && char.IsAsciiDigit(part[digits])) digits++;
+            return digits > 0 && int.TryParse(part.AsSpan(0, digits), out var value) ? value : null;
         }
 
         private static string SplitFirst(string version)

@@ -13,12 +13,10 @@ NO SQL
 BEGIN
   -- 1 when the target supports the `ALTER TABLE ... RENAME COLUMN old TO new` syntax:
   --   * MySQL: since 8.0.0 -> major >= 8.
-  --   * MariaDB: since 10.5.2. ServerVersionNum() has major*100+minor granularity (cannot see the .2
-  --     patch), so we require >= 10.6 (the safe direction — never claim support that isn't there; 10.5.x
-  --     falls back harmlessly). MariaDB 10.5.0-10.5.1 would lack it anyway.
+  --   * MariaDB: since 10.5.2, read through the patch-level comparable.
   -- Below this (MySQL 5.7 / MariaDB 10.2-10.5), the rename is emitted as a version-agnostic
   -- `CHANGE COLUMN old new <current-definition>` instead (see SchemaSmith_MissingTableAndColumnQuench).
-  RETURN IF((VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1006)
+  RETURN IF((VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionPatchNum() >= 100502)
             OR (VERSION() NOT LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 800), 1, 0);
 END //
 

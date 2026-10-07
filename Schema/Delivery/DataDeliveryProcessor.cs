@@ -57,7 +57,7 @@ public class DataDeliveryProcessor : IDataDelivery
         // Automatic data delivery below MySQL 8.0 is unsupported: 5.7 has neither JSON_TABLE nor recursive
         // CTEs, so the JSON-array shred cannot be generated. Skip it with a clear message (warn, the default)
         // or abort (fail) per Target:UnsupportedFeaturePolicy. The supported path on such targets is manual
-        // data scripts. MariaDB (>= 1000) always proceeds -- 10.2-10.5 use the recursive-CTE fallback.
+        // data scripts. MariaDB always proceeds -- 10.2-10.5 use the recursive-CTE fallback.
         if (context.MySqlServerVersionNum is > 0 and < 800)
         {
             var msg = $"Automatic data delivery requires MySQL 8.0+ (JSON_TABLE); the target is MySQL " +

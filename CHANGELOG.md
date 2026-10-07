@@ -6,6 +6,10 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **The MySQL floor is now 5.7.22 on the 5.7 line and 8.0.23 on the 8.0 line.** MySQL 5.7.0-5.7.21 and 8.0.0-8.0.22 are refused before anything runs, naming the detected version. On 5.7.0-5.7.21 DataTongs extracted nothing and still exited 0, and on early 8.0 patches deploys failed or churned on features those patches lack (functional indexes, enforced CHECK constraints, invisible indexes). Upgrade within the line to continue.
+
 ### Fixed
 
 - **SchemaSmith now works on MySQL and MariaDB servers that fold table names (`lower_case_table_names` 1 or 2, the Windows and macOS defaults) — #433.** Such a server stores database and table names in lowercase while SchemaSmith compared them with the configured spelling, so kindling stopped with a duplicate-column error and no tool could run. Every comparison now asks the server whether two names are the same object, so deploys, data delivery, DataTongs extraction, SchemaTongs procedure and function extraction, the CASCADE guard and `Target.Databases` behave the same on every setting. Extraction from a server with `lower_case_table_names = 1` writes lowercase table names, because the server holds no other spelling. A package declaring two tables whose names differ only in case is refused (exit 2) on a folding server, where they would be one table; `--Validate` already reports such a pair as `SS-DUP-001`. The v2.7.0 notes said folding servers were unaffected by the case-sensitive table fixes; in fact they could not be deployed to at all.
@@ -18,6 +22,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **CDC or Change Tracking enabled by a `Before` script was recorded as downgraded on the first deploy, so no tables were tracked (SQL Server) — #432.** The database-level check ran before the `Before` slot, so a new or restored database read as not enabled and the deploy exited 0 with nothing captured; the second deploy tracked everything. When the template has `Before` scripts, the check now runs after them. Without any, it still runs up front, so `UnsupportedFeaturePolicy=fail` refuses before anything is created.
 - **A failure writing a local file was reported as a lost server connection.** A missing checkpoint folder, a file in use or a full disk on the machine running SchemaQuench produced "Lost connection to <server> ... check the server/container logs and available memory". These now report the file error itself.
 - **An event comment or body changed only in case or accent was not applied, and a tablespace spelled differently only in case was accepted (MySQL, MariaDB).** Both compared without regard to case on most databases. A scheduled event's comment and body are now compared exactly, so the change is applied; a declared `Tablespace` differing only in case is refused like any other move, since MySQL tablespace names are case-sensitive.
+- **A `MinimumVersion` with a pre-release suffix, such as PostgreSQL `18beta1`, was refused as unreadable.** It now reads as its leading number (18).
 
 ## [v2.7.1](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) — 2026-10-01
 

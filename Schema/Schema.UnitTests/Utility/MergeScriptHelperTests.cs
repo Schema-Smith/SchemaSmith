@@ -2972,4 +2972,24 @@ public class MergeScriptHelperTests
 
     #endregion
 
+    // MySQL went 5.7, 8.x, 9.x, then calendar years from 26: 26.7 reads 2607. Only MariaDB 10.2-10.5 lacks JSON_TABLE.
+    [TestCase(0, true)]
+    [TestCase(507, false)]
+    [TestCase(800, true)]
+    [TestCase(904, true)]
+    [TestCase(1002, false)]
+    [TestCase(1005, false)]
+    [TestCase(1006, true)]
+    [TestCase(1300, true)]
+    [TestCase(2600, true)]
+    [TestCase(2607, true)]
+    public void MySqlFamilyHasJsonTable_ByVersionNum(int versionNum, bool expected)
+        => Assert.That(MergeScriptHelper.MySqlFamilyHasJsonTable(versionNum), Is.EqualTo(expected));
+
+    [TestCase(1002, true)]
+    [TestCase(1300, true)]
+    [TestCase(904, false)]
+    [TestCase(2607, false)]   // MySQL 26.7, not MariaDB
+    public void IsMariaDbVersionNum_ByVersionNum(int versionNum, bool expected)
+        => Assert.That(MergeScriptHelper.IsMariaDbVersionNum(versionNum), Is.EqualTo(expected));
 }

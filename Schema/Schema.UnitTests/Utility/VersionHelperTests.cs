@@ -25,6 +25,8 @@ namespace Schema.UnitTests.Utility
         [TestCase("8", Platform.MySQL, 800)]
         [TestCase("10.6", Platform.MariaDb, 1006)]
         [TestCase("11.4", Platform.MariaDb, 1104)]
+        [TestCase("18beta1", Platform.PostgreSQL, 18)]   // a pre-release of 18 is 18, not an unreadable gate (PG-116)
+        [TestCase("19devel", Platform.PostgreSQL, 19)]
         public void ParseDeclaredVersion_NormalizesToComparable(string version, Platform platform, int expected)
         {
             Assert.That(VersionHelper.ParseDeclaredVersion(version, platform), Is.EqualTo(expected));
@@ -94,7 +96,7 @@ namespace Schema.UnitTests.Utility
 
         [TestCase(Platform.SqlServer, "2008 (major 10)")]
         [TestCase(Platform.PostgreSQL, "12")]
-        [TestCase(Platform.MySQL, "5.7")]
+        [TestCase(Platform.MySQL, "5.7.22 / 8.0.23")]
         [TestCase(Platform.MariaDb, "10.2")]
         public void HardFloorDisplay_MatchesSupportedFloorsTable(Platform platform, string expected)
         {
@@ -109,6 +111,54 @@ namespace Schema.UnitTests.Utility
         {
             var info = new TargetVersionInfo(platform, raw, comparable);
             Assert.That(VersionHelper.DisplayVersion(info), Is.EqualTo(expected));
+        }
+
+        // The MySQL family's patch, which the major*100+minor comparable cannot see (MY-001, MA-053).
+        [TestCase("8.0.23", Platform.MySQL, 80023)]
+        [TestCase("8.0.23-log", Platform.MySQL, 80023)]
+        [TestCase("5.7.21", Platform.MySQL, 50721)]
+        [TestCase("26.7.0", Platform.MySQL, 260700)]      // calendar versioning
+        [TestCase("8.0", Platform.MySQL, 80000)]
+        [TestCase("10.5.2-MariaDB", Platform.MariaDb, 100502)]
+        [TestCase("11.4.2-MariaDB-1:11.4.2+maria~ubu2404", Platform.MariaDb, 110402)]
+        public void ParsePatchComparable_ReadsMajorMinorPatch(string raw, Platform platform, int expected)
+        {
+            Assert.That(VersionHelper.ParsePatchComparable(raw, platform), Is.EqualTo(expected));
+        }
+
+        [TestCase(Platform.SqlServer, "16.0.1000.6")]
+        [TestCase(Platform.PostgreSQL, "160004")]
+        public void ParsePatchComparable_IsMySqlFamilyOnly(Platform platform, string raw)
+        {
+            Assert.That(VersionHelper.ParsePatchComparable(raw, platform), Is.Null);
+        }
+
+        // P1: the MySQL floor is 5.7.22 on the 5.7 line and 8.0.23 on the 8.0 line. Below them DataTongs extracts
+        // nothing (5.7.21, MY-009) and the 8.0 feature gates fire on patches that lack the feature (MY-001).
+        [TestCase("5.6.51", true)]
+        [TestCase("5.7.21", true)]
+        [TestCase("5.7.22", false)]
+        [TestCase("5.7.44", false)]
+        [TestCase("8.0.12", true)]
+        [TestCase("8.0.22", true)]
+        [TestCase("8.0.23", false)]
+        [TestCase("8.4.0", false)]
+        [TestCase("9.0.1", false)]
+        [TestCase("26.7.0", false)]
+        public void IsBelowFloor_MySql_IsPatchAware(string raw, bool expected)
+        {
+            var info = new TargetVersionInfo(Platform.MySQL, raw, VersionHelper.ParseDetectedVersion(raw, Platform.MySQL)!.Value);
+            Assert.That(VersionHelper.IsBelowFloor(info), Is.EqualTo(expected));
+        }
+
+        [TestCase(Platform.MariaDb, "10.1.48-MariaDB", true)]
+        [TestCase(Platform.MariaDb, "10.2.0-MariaDB", false)]
+        [TestCase(Platform.SqlServer, "9.0.5000.0", true)]
+        [TestCase(Platform.SqlServer, "10.50.4000.0", false)]
+        public void IsBelowFloor_OtherEngines_KeepTheirFloors(Platform platform, string raw, bool expected)
+        {
+            var info = new TargetVersionInfo(platform, raw, VersionHelper.ParseDetectedVersion(raw, platform)!.Value);
+            Assert.That(VersionHelper.IsBelowFloor(info), Is.EqualTo(expected));
         }
     }
 }
