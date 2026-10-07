@@ -34,6 +34,9 @@ BEGIN
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'BEGIN IndexOnlyQuench');
 
+    -- Declarations no degrade can rescue are refused before anything is created.
+    CALL SchemaSmith_RefuseUnsupportedIndexes();
+
     -- Ensure _SchemaSmith_FullTextIndexes exists (ParseTableJson may not create it if there are no fulltext indexes).
     -- Keep this fallback schema in lockstep with ParseTableJson's primary definition (see
     -- SchemaSmith_ParseTableJson.sql) — both use a synthetic RowId so two same-named entries

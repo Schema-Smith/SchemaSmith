@@ -576,6 +576,7 @@ public static class ForgeKindler
                 new("SchemaSmith_GenerateTableJson.sql"),
                 new("SchemaSmith_CatalogSnapshot.sql"),
                 new("SchemaSmith_ParseTableJson.sql"),
+                new("SchemaSmith_RefuseUnsupportedIndexes.sql"),
                 new("SchemaSmith_MissingTableAndColumnQuench.sql"),
                 new("SchemaSmith_ModifiedTableQuench.sql"),
                 new("SchemaSmith_MissingIndexesAndConstraintsQuench.sql"),

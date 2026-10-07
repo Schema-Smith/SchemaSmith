@@ -15,6 +15,11 @@ namespace Schema.Capabilities
 
         /// <summary>The object is created but with reduced fidelity below the floor — e.g. a descending index
         /// key part is stored ascending.</summary>
-        Reduced
+        Reduced,
+
+        /// <summary>No degrade is safe, so the deploy is refused below the floor whatever the unsupported-feature
+        /// policy — e.g. a long unique key, where dropping the key would drop the uniqueness. Such a row has no
+        /// manifest object type, since nothing is deployed to record.</summary>
+        Refused
     }
 }

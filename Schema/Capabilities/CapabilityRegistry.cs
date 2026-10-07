@@ -261,6 +261,10 @@ namespace Schema.Capabilities
                 "a data directory on a filesystem that supports hole punching"));
 
             // ---- MariaDb (distinct rows — different intro versions; NO CHECK row: supported at the 10.2 floor)
+            // Refused rather than degraded: a long unique key (MariaDB 10.4+ enforces it through a hidden hash and
+            // extracts it as IndexType HASH) cannot exist on 10.2/10.3, and dropping it would drop the uniqueness.
+            rows.Add(new("long-unique-key", "Long unique key (UNIQUE ... USING HASH)", Platform.MariaDb,
+                1004, "MariaDB 10.4", null, DegradeKind.Refused, null));
             rows.Add(new("invisible-index", "Invisible index (IGNORED)", Platform.MariaDb,
                 1006, "MariaDB 10.6", null, DegradeKind.Skip, "INDEX (invisible, MySQL 8.0 / MariaDB 10.6)"));
             rows.Add(new("descending-index", "Descending index key part", Platform.MariaDb,

@@ -94,6 +94,7 @@ public class CapabilityDocumentationTests
         ["MariaDb/application-time-period"] = "**Application-time period**",
         ["MariaDb/column-history-exclusion"] = "**Per-column history exclusion**",
         ["MariaDb/table-system-versioning"] = "**Table-level system versioning**",
+        ["MariaDb/long-unique-key"] = "**Long unique key**",
     };
 
     private static string RepoRoot()

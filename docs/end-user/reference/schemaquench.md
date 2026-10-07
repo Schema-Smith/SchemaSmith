@@ -489,6 +489,7 @@ The schema model itself parses on every supported version — a version-agnostic
 | **Column `DEFAULT` expression** (a function or expression default, not a literal) | MySQL 8.0.13 (MariaDB: at the 10.2 floor) | **skips the whole column**, not just the default + records a downgrade — see the warning below |
 | **Functional / expression index** (a key part that is an expression) | MySQL 8.0.13 (MariaDB: no equivalent at any version) | skips the index + records a downgrade |
 | **Column SRID restriction** (`SRID n` on a spatial column) | MySQL 8.0.3 (MariaDB: no equivalent at any version) | creates the column without the SRID restriction + records a downgrade |
+| **Long unique key** (`UNIQUE ... USING HASH`, extracted from MariaDB 10.4+) | MariaDB 10.4 | refuses the deploy by name before anything is created, under either policy. InnoDB on 10.2/10.3 cannot enforce the key, and skipping it would drop the uniqueness |
 | **Application-time period** (`PERIOD FOR`) | MariaDB 10.4.3 (MySQL: no equivalent at any version) | creates the table without the period + records a downgrade |
 | **Table-level system versioning** (`WITH SYSTEM VERSIONING`) | MariaDB 10.3 (MySQL: no equivalent) | creates an ordinary, non-versioned table + records a downgrade |
 | **Per-column history exclusion** (`WITHOUT SYSTEM VERSIONING`) | MariaDB 10.3.4 (MySQL: no equivalent) | creates the column without the exclusion + records a downgrade — the column survives, the exclusion does not |
