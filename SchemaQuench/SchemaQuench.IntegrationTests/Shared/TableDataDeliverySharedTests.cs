@@ -917,9 +917,11 @@ public abstract class TableDataDeliverySharedTests
     }
 
     // A mixed-case parent must still be found where the server folds table names and reports them in lowercase.
-    [TestCase("_test_rparent_")]
-    [TestCase("_Test_RParent_")]
-    public void DeliverTableData_ViaQuench_FailsFastOnReplaceCascade(string parentPrefix)
+    // WhatIf must refuse it too: a preview that passes where the deploy aborts is the wrong preview.
+    [TestCase("_test_rparent_", "0")]
+    [TestCase("_Test_RParent_", "0")]
+    [TestCase("_test_rparent_", "1")]
+    public void DeliverTableData_ViaQuench_FailsFastOnReplaceCascade(string parentPrefix, string whatIf)
     {
         if (!SupportsDataDelivery)
             Assert.Ignore("Data delivery requires MySQL 8.0; skipped below the floor.");
@@ -984,7 +986,7 @@ public abstract class TableDataDeliverySharedTests
 
                 var product = new Product { Name = "TestProduct", Platform = Platform };
                 var quench = new DatabaseQuench("127.0.0.1", product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
+                    suppressKindling: true, whatIfOnly: whatIf, runScriptsTwice: false,
                     dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
                     deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
                 quench.Execute();
