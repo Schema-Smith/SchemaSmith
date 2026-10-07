@@ -2432,63 +2432,44 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- Set auto-increment seed when declared value is higher than the live value (set-if-higher, idempotent).
     -- COALESCE(ist.AUTO_INCREMENT, 0): MySQL returns NULL for AUTO_INCREMENT on an empty InnoDB table,
     -- treating NULL as 0 ensures a declared seed is applied even on tables that have never had rows.
+    -- AUTO_INCREMENT is a cached statistic on MySQL 8, and a stale-high value would skip the seed silently, so
+    -- the read bypasses the cache. It covers only the tables that declare a seed, so a deploy does not
+    -- populate the statistics cache for every table in the schema.
+    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Set auto-increment seed');
+    CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_AutoIncStmts;
+    CREATE TEMPORARY TABLE _SchemaSmith_AutoIncStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    CALL SchemaSmith_BypassStatisticsCache();
+    INSERT INTO _SchemaSmith_AutoIncStmts (Stmt)
+    SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' AUTO_INCREMENT=', t.AutoIncrementValue)
+    FROM _SchemaSmith_Tables t
+    INNER JOIN _SchemaSmith_CatTables k
+        ON k.TableKey = t.TableKey
+    INNER JOIN INFORMATION_SCHEMA.TABLES ist
+        ON ist.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ist.TABLE_SCHEMA) = v_DbKey
+        AND ist.TABLE_NAME = k.TABLE_NAME
+    WHERE t.NewTable = 0
+      AND t.AutoIncrementValue IS NOT NULL
+      AND t.AutoIncrementValue > COALESCE(ist.AUTO_INCREMENT, 0)
+    ORDER BY t.TableName;
+    CALL SchemaSmith_RestoreStatisticsCache();
+
     IF p_WhatIf = 1 THEN
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Set auto-increment seed');
-        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' AUTO_INCREMENT=', t.AutoIncrementValue)
-        FROM _SchemaSmith_Tables t
-        INNER JOIN _SchemaSmith_CatTables k
-            ON k.TableKey = t.TableKey
-        -- AUTO_INCREMENT is a cached statistic on MySQL 8: read it only for the tables that declare a seed, as before,
-        -- so a deploy does not populate the statistics cache for every table in the schema.
-        INNER JOIN INFORMATION_SCHEMA.TABLES ist
-            ON ist.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ist.TABLE_SCHEMA) = v_DbKey
-            AND ist.TABLE_NAME = k.TABLE_NAME
-        WHERE t.NewTable = 0
-          AND t.AutoIncrementValue IS NOT NULL
-          AND t.AutoIncrementValue > COALESCE(ist.AUTO_INCREMENT, 0);
+        SELECT CONNECTION_ID(), Stmt FROM _SchemaSmith_AutoIncStmts ORDER BY RowId;
     ELSE
-        BEGIN
-            DECLARE v_AutoIncDone INT DEFAULT FALSE;
-            DECLARE v_AutoIncSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-            DECLARE cur_AutoIncChanges CURSOR FOR
-                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' AUTO_INCREMENT=', t.AutoIncrementValue) AS AlterAutoIncStatement
-                FROM _SchemaSmith_Tables t
-                INNER JOIN _SchemaSmith_CatTables k
-                    ON k.TableKey = t.TableKey
-                -- AUTO_INCREMENT is a cached statistic on MySQL 8: read it only for the tables that declare a seed, as before,
-                -- so a deploy does not populate the statistics cache for every table in the schema.
-                INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                    ON ist.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ist.TABLE_SCHEMA) = v_DbKey
-                    AND ist.TABLE_NAME = k.TABLE_NAME
-                WHERE t.NewTable = 0
-                  AND t.AutoIncrementValue IS NOT NULL
-                  AND t.AutoIncrementValue > COALESCE(ist.AUTO_INCREMENT, 0);
-
-            DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_AutoIncDone = TRUE;
-
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Set auto-increment seed');
-            SET v_AutoIncDone = FALSE;
-            CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
-            OPEN cur_AutoIncChanges;
-
-            autoinc_changes_loop: LOOP
-                FETCH cur_AutoIncChanges INTO v_AutoIncSql;
-                IF v_AutoIncDone THEN
-                    LEAVE autoinc_changes_loop;
-                END IF;
-
-                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Set auto-increment: ', v_AutoIncSql));
-                SET @exec_sql = v_AutoIncSql;
-                PREPARE stmt FROM @exec_sql;
-                EXECUTE stmt;
-                DEALLOCATE PREPARE stmt;
-            END LOOP;
-
-            CLOSE cur_AutoIncChanges;
-        END;
+        SET @v_autoinc_id := (SELECT MIN(RowId) FROM _SchemaSmith_AutoIncStmts);
+        WHILE @v_autoinc_id IS NOT NULL DO
+            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_AutoIncStmts WHERE RowId = @v_autoinc_id;
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Set auto-increment: ', @exec_sql));
+            PREPARE stmt FROM @exec_sql;
+            EXECUTE stmt;
+            DEALLOCATE PREPARE stmt;
+            SET @v_autoinc_id := (SELECT MIN(RowId) FROM _SchemaSmith_AutoIncStmts WHERE RowId > @v_autoinc_id);
+        END WHILE;
     END IF;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_AutoIncStmts;
 
     -- =======================
     -- STEP 7.5: SYSTEM VERSIONING CONVERGENCE (EXISTING TABLES)

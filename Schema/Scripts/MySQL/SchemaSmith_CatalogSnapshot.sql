@@ -83,6 +83,46 @@ BEGIN
      WHERE TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(TABLE_SCHEMA) = v_DbKey;
 END //
 
+-- MySQL 8 serves TABLES.AUTO_INCREMENT and the other table statistics from a server-wide cache that lives for
+-- information_schema_stats_expiry (24 hours by default), so a read can return a value from before the table was dropped,
+-- re-created or truncated. A caller that decides something from a statistic brackets the read with these two. The
+-- variable does not exist on MySQL 5.7 or MariaDB, which have no such cache, so it is reached only through PREPARE
+-- under a handler: naming it in the body would fail the CREATE there.
+
+DROP PROCEDURE IF EXISTS SchemaSmith_BypassStatisticsCache//
+
+CREATE PROCEDURE SchemaSmith_BypassStatisticsCache()
+SQL SECURITY DEFINER
+BEGIN
+    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION SET @ss_saved_stats_expiry = NULL;
+    SET @ss_saved_stats_expiry = NULL;
+    SET @ss_stats_sql = 'SELECT @@SESSION.information_schema_stats_expiry INTO @ss_saved_stats_expiry';
+    PREPARE ss_stats_cache FROM @ss_stats_sql;
+    EXECUTE ss_stats_cache;
+    DEALLOCATE PREPARE ss_stats_cache;
+    IF @ss_saved_stats_expiry IS NOT NULL THEN
+        SET @ss_stats_sql = 'SET SESSION information_schema_stats_expiry = 0';
+        PREPARE ss_stats_cache FROM @ss_stats_sql;
+        EXECUTE ss_stats_cache;
+        DEALLOCATE PREPARE ss_stats_cache;
+    END IF;
+END //
+
+DROP PROCEDURE IF EXISTS SchemaSmith_RestoreStatisticsCache//
+
+CREATE PROCEDURE SchemaSmith_RestoreStatisticsCache()
+SQL SECURITY DEFINER
+BEGIN
+    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION SET @ss_saved_stats_expiry = NULL;
+    IF @ss_saved_stats_expiry IS NOT NULL THEN
+        SET @ss_stats_sql = CONCAT('SET SESSION information_schema_stats_expiry = ', @ss_saved_stats_expiry);
+        PREPARE ss_stats_cache FROM @ss_stats_sql;
+        EXECUTE ss_stats_cache;
+        DEALLOCATE PREPARE ss_stats_cache;
+        SET @ss_saved_stats_expiry = NULL;
+    END IF;
+END //
+
 -- Marks the declared renames that are ready to run: the old name is in the catalog and the new one is not. Split into
 -- an insert and a delete because a statement may not read the same temporary table twice.
 
