@@ -35,6 +35,7 @@ namespace Schema.UnitTests.Capabilities
             "expression statistics (PG14)",
             "per-column compression (PG14)",
             "table access method (PG15)",
+            "un-generated column, values not kept (PG13)",
             "VIRTUAL generated column (PG18)",
             "table without its PERIOD FOR clause",
             "table without its WITH SYSTEM VERSIONING clause",

@@ -1266,6 +1266,30 @@ BEGIN
     -- unlike PG13+ in-place DROP EXPRESSION). Runs before the "Alter Modified Columns" pass, which excludes
     -- these columns (the re-add carries the full target definition — type/collation/nullability/default).
     IF "SchemaSmith"."ServerVersionNum"() < 13 THEN
+      -- The lost values go on the record (PG-110): 'fail' refuses before anything is dropped, 'warn' records a
+      -- downgrade row per column, and the drop-and-re-add below runs.
+      IF EXISTS (SELECT 1 FROM temp_columns c
+                   JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema" AND ec."TableName" = c."TableName" AND ec."ColumnName" = c."Name"
+                  WHERE (COALESCE(c."Generated", 'NEVER') = 'NEVER' OR COALESCE(c."GenerationExpression", '') = '')
+                    AND COALESCE(ec."GenerationExpression", '') != '') THEN
+        IF "SchemaSmith"."UnsupportedFeaturePolicy"() = 'fail' THEN
+          RAISE EXCEPTION 'Turning a generated column into a plain one keeps its values from PostgreSQL 13 (DROP EXPRESSION); below that the column is dropped and re-added empty (detected major %); column(s): %',
+            "SchemaSmith"."ServerVersionNum"(),
+            (SELECT STRING_AGG(c."TableSchema" || '.' || c."TableName" || '.' || c."Name", ', ')
+               FROM temp_columns c
+               JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema" AND ec."TableName" = c."TableName" AND ec."ColumnName" = c."Name"
+              WHERE (COALESCE(c."Generated", 'NEVER') = 'NEVER' OR COALESCE(c."GenerationExpression", '') = '')
+                AND COALESCE(ec."GenerationExpression", '') != '');
+        END IF;
+        INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+          SELECT pg_backend_pid(), 'un-generated column, values not kept (PG13)',
+                 c."TableSchema" || '.' || c."TableName" || '.' || c."Name", 'downgraded'
+            FROM temp_columns c
+            JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema" AND ec."TableName" = c."TableName" AND ec."ColumnName" = c."Name"
+           WHERE (COALESCE(c."Generated", 'NEVER') = 'NEVER' OR COALESCE(c."GenerationExpression", '') = '')
+             AND COALESCE(ec."GenerationExpression", '') != '';
+      END IF;
+
       SELECT STRING_AGG('RAISE NOTICE ''  Un-generating column ' || c."TableSchema" || '.' || c."TableName" || '.' || c."Name" || ' (drop+re-add as plain; PG < 13 has no DROP EXPRESSION)'';' || CHR(10) ||
                         'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '" DROP COLUMN IF EXISTS "' || c."Name" || '" CASCADE;' || CHR(10) ||
                         'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '" ADD "' || c."Name" || '" ' || c."DataType" ||
@@ -1440,22 +1464,35 @@ BEGIN
                      AND COALESCE(c."Generated", 'NEVER') = COALESCE(ec."Generated", 'NEVER')
                      AND COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", ''));
 
-    -- Unsupported-feature policy: a table-level access method (ALTER TABLE ... SET ACCESS METHOD) requires
-    -- PostgreSQL 15. The emit above is gated off under 15 (and the fixup WHERE ignores the AccessMethod
-    -- difference there so it doesn't churn); 'fail' aborts, 'warn' (default) records a downgrade manifest per
-    -- table that declared a non-default access method. Same routing spine as per-column compression.
+    -- Unsupported-feature policy: CHANGING an existing table's access method (ALTER TABLE ... SET ACCESS METHOD)
+    -- requires PostgreSQL 15. The emit above is gated off under 15 (and the fixup WHERE ignores the AccessMethod
+    -- difference there so it doesn't churn); 'fail' aborts, 'warn' (default) records a downgrade manifest per table
+    -- whose live access method differs from the declared one. A new table already got its method from CREATE TABLE
+    -- ... USING (PostgreSQL 12+), so it never reaches this. Same routing spine as per-column compression.
     IF "SchemaSmith"."ServerVersionNum"() < 15 THEN
       IF "SchemaSmith"."UnsupportedFeaturePolicy"() = 'fail'
-         AND EXISTS (SELECT 1 FROM temp_tables WHERE COALESCE("AccessMethod", '') NOT IN ('', 'heap')) THEN
+         AND EXISTS (SELECT 1 FROM temp_tables t
+                       JOIN pg_class c ON c.relname = t."Name"
+                       JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = t."Schema"
+                       JOIN pg_am am ON am.oid = c.relam
+                      WHERE c.relkind IN ('r', 'p') AND COALESCE(t."AccessMethod", '') <> '' AND t."AccessMethod" <> am.amname) THEN
         RAISE EXCEPTION 'Table access method (SET ACCESS METHOD) requires PostgreSQL 15 (detected major %); table(s): %',
           "SchemaSmith"."ServerVersionNum"(),
-          (SELECT STRING_AGG("Schema" || '.' || "Name", ', ')
-             FROM temp_tables WHERE COALESCE("AccessMethod", '') NOT IN ('', 'heap'));
+          (SELECT STRING_AGG(t."Schema" || '.' || t."Name", ', ')
+             FROM temp_tables t
+             JOIN pg_class c ON c.relname = t."Name"
+             JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = t."Schema"
+             JOIN pg_am am ON am.oid = c.relam
+            WHERE c.relkind IN ('r', 'p') AND COALESCE(t."AccessMethod", '') <> '' AND t."AccessMethod" <> am.amname);
       ELSE
         INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
           SELECT pg_backend_pid(), 'table access method (PG15)',
-                 "Schema" || '.' || "Name", 'downgraded'
-            FROM temp_tables WHERE COALESCE("AccessMethod", '') NOT IN ('', 'heap');
+                 t."Schema" || '.' || t."Name", 'downgraded'
+            FROM temp_tables t
+            JOIN pg_class c ON c.relname = t."Name"
+            JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = t."Schema"
+            JOIN pg_am am ON am.oid = c.relam
+           WHERE c.relkind IN ('r', 'p') AND COALESCE(t."AccessMethod", '') <> '' AND t."AccessMethod" <> am.amname;
       END IF;
     END IF;
 

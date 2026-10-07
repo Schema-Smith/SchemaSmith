@@ -77,6 +77,10 @@ namespace Schema.Capabilities
                 13, "SQL Server 2016", null, DegradeKind.Skip, "clustered columnstore beside rowstore indexes (SQL Server 2016)"));
 
             // ---- PostgreSQL (major gated via ServerVersionNum; all skipped) ---------------------------------
+            // Reduced: the column becomes plain as declared, but below 13 it is dropped and re-added, so its values
+            // are not kept (13+ converts it in place with DROP EXPRESSION).
+            rows.Add(new("drop-expression", "Removing a column's generation, keeping its values", Platform.PostgreSQL,
+                13, "PostgreSQL 13", null, DegradeKind.Reduced, "un-generated column, values not kept (PG13)"));
             rows.Add(new("nulls-not-distinct", "Unique index NULLS NOT DISTINCT", Platform.PostgreSQL,
                 15, "PostgreSQL 15", null, DegradeKind.Skip, "NULLS NOT DISTINCT (PG15)"));
             rows.Add(new("expression-statistics", "Extended statistics on expressions", Platform.PostgreSQL,

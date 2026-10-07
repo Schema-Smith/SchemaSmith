@@ -57,6 +57,10 @@ BEGIN
                          -- present at CREATE time, and inlining them here created a plain column then churned
                          -- it to generated via a drop-and-re-add. Identity columns are NOT deferred.
                          AND NOT (COALESCE(tc."Generated", 'NEVER') = 'ALWAYS' AND COALESCE(tc."GenerationExpression", '') <> '')) || ')' ||
+                    -- USING precedes WITH in the grammar and has existed since PostgreSQL 12, so a new table gets its
+                    -- declared access method on every supported version. Only changing an existing table's method
+                    -- needs 15 (SET ACCESS METHOD, in ModifiedTableQuench).
+                    CASE WHEN COALESCE(tt."AccessMethod", '') <> '' THEN ' USING "' || tt."AccessMethod" || '"' ELSE '' END ||
                     ' WITH (fillfactor = ' || tt."FillFactor" || ')' ||
                     -- TABLESPACE follows WITH in the CREATE TABLE grammar. Emitted only when declared:
                     -- an unset Tablespace means placement is not managed, so the table lands wherever
