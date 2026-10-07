@@ -43,7 +43,8 @@ namespace Schema.UnitTests.Capabilities
             "column (DEFAULT expression, MySQL 8.0.13)",
             "column (invisible, MySQL 8.0.23 / MariaDB 10.3)",
             "column (SRID, MySQL 8.0.3)",
-            "INDEX (functional/expression, MySQL 8.0.13)"
+            "INDEX (functional/expression, MySQL 8.0.13)",
+            "table without its COMPRESSION option"
         };
 
         [Test]

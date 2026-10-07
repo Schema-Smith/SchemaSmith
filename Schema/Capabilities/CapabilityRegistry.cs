@@ -219,6 +219,13 @@ namespace Schema.Capabilities
             rows.Add(new("functional-index", "Functional/expression index", Platform.MySQL,
                 800, "MySQL 8.0.13", null, DegradeKind.Skip, "INDEX (functional/expression, MySQL 8.0.13)"));
 
+            // Gated on the server's filesystem rather than its version: MySQL refuses page compression where the
+            // data directory cannot punch holes (Windows among them). Reduced: the table deploys uncompressed.
+            rows.Add(new("page-compression", "Page compression (COMPRESSION)", Platform.MySQL,
+                0, "any supported version (needs a data directory on a filesystem that supports hole punching)",
+                null, DegradeKind.Reduced, "table without its COMPRESSION option",
+                "a data directory on a filesystem that supports hole punching"));
+
             // ---- MariaDb (distinct rows — different intro versions; NO CHECK row: supported at the 10.2 floor)
             rows.Add(new("invisible-index", "Invisible index (IGNORED)", Platform.MariaDb,
                 1006, "MariaDB 10.6", null, DegradeKind.Skip, "INDEX (invisible, MySQL 8.0 / MariaDB 10.6)"));

@@ -77,6 +77,8 @@ public class CapabilityDocumentationTests
         ["MySQL/invisible-column"] = "**Invisible column**",
         ["MySQL/column-srid"] = "**Column SRID restriction**",
         ["MySQL/functional-index"] = "**Functional / expression index**",
+        // Gated on the server's filesystem, so documented in prose below the table, like FILESTREAM.
+        ["MySQL/page-compression"] = "**Page compression**",
 
         // ---- MariaDB (shares three rows with MySQL above; the doc cell names both thresholds) ----
         ["MariaDb/invisible-index"] = "**Invisible index**",
