@@ -505,6 +505,100 @@ namespace SchemaQuench.IntegrationTests.SqlServer
         }
 
         // ---------------------------------------------------------------------------------------------------
+        // Full-text STATISTICAL_SEMANTICS (SS-054) needs a registered semantic language statistics database; without
+        // one SQL Server refuses the whole full-text index (41209). The demo container has full-text and no semantic
+        // database, so this is the real refusal, not a simulation.
+        // ---------------------------------------------------------------------------------------------------
+
+        private const string SemanticsObjectType = "full-text statistical semantics (no semantic database)";
+
+        private static string SemanticFullTextJson(string tableName) => $$"""
+{
+    "Schema": "[dbo]",
+    "Name": "[{{tableName}}]",
+    "Columns": [
+        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+        {"Name": "[Body]", "DataType": "NVARCHAR(MAX)", "Nullable": true}
+    ],
+    "Indexes": [
+        {"Name": "[PK_{{tableName}}]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]"}
+    ],
+    "FullTextIndex": {"FullTextCatalog": "[ss_semantics_cat]", "KeyIndex": "[PK_{{tableName}}]", "Columns": "[Body] LANGUAGE 1033 STATISTICAL_SEMANTICS"}
+}
+""";
+
+        private static void EnsureFullTextCatalog(IDbCommand cmd)
+        {
+            cmd.CommandText = "IF FULLTEXTSERVICEPROPERTY('IsFullTextInstalled') = 0 SELECT -1 " +
+                              "ELSE IF EXISTS (SELECT 1 FROM sys.fulltext_semantic_language_statistics_database) SELECT -2 " +
+                              "ELSE BEGIN IF NOT EXISTS (SELECT 1 FROM sys.fulltext_catalogs WHERE name = 'ss_semantics_cat') " +
+                              "CREATE FULLTEXT CATALOG ss_semantics_cat; SELECT 0 END";
+            var state = Convert.ToInt32(cmd.ExecuteScalar());
+            if (state == -1) Assert.Ignore("Full-text search is not installed on this server.");
+            if (state == -2) Assert.Ignore("A semantic language statistics database is registered on this server.");
+        }
+
+        [Test]
+        public void StatisticalSemantics_WithoutASemanticDatabase_CreatesTheFullTextIndexWithoutIt_AndRecordsTheDowngrade()
+        {
+            var tableName = $"Sem_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("SemBake", policy: "warn");
+            using var cmd = conn.CreateCommand();
+            EnsureFullTextCatalog(cmd);
+
+            RunTableQuenchProc(cmd, SemanticFullTextJson(tableName), productName: tableName);
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, SemanticFullTextJson(tableName), productName: tableName));
+
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.fulltext_index_columns WHERE [object_id] = OBJECT_ID('dbo.{tableName}')";
+            var columns = Convert.ToInt32(cmd.ExecuteScalar());
+            var downgrades = DowngradeRowCount(cmd, SemanticsObjectType, $"[dbo].[{tableName}]");
+            Assert.Multiple(() =>
+            {
+                Assert.That(columns, Is.EqualTo(1), "the full-text index must exist, without statistical semantics");
+                Assert.That(downgrades, Is.EqualTo(2), "once per quench");
+            });
+        }
+
+        // The --IndexOnly path parses full-text indexes itself, after its other index degrades, so it calls the
+        // full-text degrade separately.
+        [Test]
+        public void StatisticalSemantics_WithoutASemanticDatabase_OnTheIndexOnlyPath_CreatesTheFullTextIndexWithoutIt()
+        {
+            var tableName = $"SemIo_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("SemBake", policy: "warn");
+            using var cmd = conn.CreateCommand();
+            EnsureFullTextCatalog(cmd);
+            cmd.CommandText = $"CREATE TABLE dbo.[{tableName}] (Id INT NOT NULL CONSTRAINT [PK_{tableName}] PRIMARY KEY CLUSTERED, Body NVARCHAR(MAX) NULL)";
+            cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(cmd, SemanticFullTextJson(tableName), indexOnly: true, productName: tableName);
+
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.fulltext_index_columns WHERE [object_id] = OBJECT_ID('dbo.{tableName}')";
+            var columns = Convert.ToInt32(cmd.ExecuteScalar());
+            var downgrades = DowngradeRowCount(cmd, SemanticsObjectType, $"[dbo].[{tableName}]");
+            Assert.Multiple(() =>
+            {
+                Assert.That(columns, Is.EqualTo(1));
+                Assert.That(downgrades, Is.EqualTo(1));
+            });
+        }
+
+        [Test]
+        public void StatisticalSemantics_WithoutASemanticDatabase_UnderFail_Aborts()
+        {
+            var tableName = $"SemFail_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("SemFailBake", policy: "fail");
+            using var cmd = conn.CreateCommand();
+            EnsureFullTextCatalog(cmd);
+
+            var ex = Assert.Catch(() => RunTableQuenchProc(cmd, SemanticFullTextJson(tableName), productName: tableName));
+            // Not the engine's own 41209, which also names the semantic database: the refusal has to come before the table.
+            Assert.That(ex!.Message, Does.Contain("STATISTICAL_SEMANTICS requires a registered semantic language statistics database"));
+            cmd.CommandText = $"SELECT OBJECT_ID('dbo.{tableName}')";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(DBNull.Value), "a refused deploy must not create the table");
+        }
+
+        // ---------------------------------------------------------------------------------------------------
         // Edition (SS-053). Below 2016 SP1 (13.0.4001), compression and columnstore need Enterprise or Developer
         // edition: Express 2008 R2-2014 refuse them with 7738 and 35315. The demo container is Developer, so the
         // edition is simulated through the CONTEXT_INFO override fn_ServerMajorVersion reads, extended with an

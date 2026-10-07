@@ -222,6 +222,15 @@ namespace Schema.Capabilities
                 "columnstore index (Enterprise edition below SQL Server 2016 SP1)",
                 "Enterprise or Developer edition below SQL Server 2016 SP1"));
 
+            // Gated on server state: STATISTICAL_SEMANTICS needs a registered semantic language statistics database,
+            // and without one SQL Server refuses the whole full-text index (41209). Reduced: the index is still
+            // created, without semantic statistics.
+            rows.Add(new("fulltext-statistical-semantics", "Full-text statistical semantics", Platform.SqlServer,
+                0, "SQL Server 2012 (needs a registered semantic language statistics database)",
+                null, DegradeKind.Reduced,
+                "full-text statistical semantics (no semantic database)",
+                "a registered semantic language statistics database"));
+
             rows.Add(new("filestream-column", "FILESTREAM columns", Platform.SqlServer,
                 0, "any supported version (needs FILESTREAM on the server and a filegroup on the database)",
                 null, DegradeKind.Reduced,

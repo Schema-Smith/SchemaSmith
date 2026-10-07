@@ -190,6 +190,7 @@ BEGIN
   -- Columnstore (nonclustered 2012 / clustered 2014) -- drops the unsupported index rows from #Indexes.
   -- Shared with the --IndexOnly path, which calls this proc directly (it has only #Indexes).
   EXEC SchemaSmith.DegradeUnsupportedColumnStore
+  EXEC SchemaSmith.DegradeUnsupportedFullText
 
   -- Table compression where the edition lacks it (SS-053): below SQL Server 2016 SP1, Standard, Web and Express refuse
   -- DATA_COMPRESSION with 7738. The table is created uncompressed; index compression is handled with the indexes above.

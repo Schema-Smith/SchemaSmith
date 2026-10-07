@@ -370,6 +370,7 @@ public static class ForgeKindler
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.fn_EnterpriseFeaturesUnavailable.sql"),
                 new("SchemaSmith.DegradeUnsupportedColumnStore.sql"),
+                new("SchemaSmith.DegradeUnsupportedFullText.sql"),
                 new("SchemaSmith.DegradeDatabaseToggles.sql"),
                 new("SchemaSmith.DegradeUnsupportedFeatures.sql"),
                 new("SchemaSmith.PrintWithNoWait.sql"),
