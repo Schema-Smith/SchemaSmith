@@ -1122,7 +1122,8 @@ public class SchemaTongs
             if (_includeDDLTriggers) ScriptSqlServerDDLTriggers(command);
             if (_includeXmlSchemaCollections) ScriptSqlServerXmlSchemaCollections(command);
             if (_includeIndexedViews) CastSqlServerIndexedViews(command);
-            if (_includeSequences) ScriptSqlServerSequences(command);
+            // Sequences arrived in SQL Server 2012 (major 11); 2008 R2 has no sys.sequences, so there is nothing to cast.
+            if (_includeSequences && sourceMajor is 0 or >= 11) ScriptSqlServerSequences(command);
             if (_includeSynonyms) ScriptSqlServerSynonyms(command);
         }
         finally
