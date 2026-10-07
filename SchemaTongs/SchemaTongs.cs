@@ -2900,11 +2900,12 @@ SELECT mv.schemaname, mv.matviewname
             try
             {
                 using var command = connection.CreateCommand();
-                command.CommandText = "SET sql_mode='PIPES_AS_CONCAT';";
-                command.ExecuteNonQuery();
-
                 _progressLog.Info("Kindling The Forge");
                 ForgeKindler.KindleTheForge(command, _platform, allowReadOnlyTarget: true);
+
+                // The routine-scripting queries below build text with || and backslash escapes. Set only after the kindle,
+                // which creates the procedures under the server's own mode, so both tools stamp the same kindle.
+                using var sqlMode = MySqlSessionSettings.UseParseNeutralSqlMode(command, "PIPES_AS_CONCAT");
 
                 if (_includeTables) ExtractMySqlTableDefinitions(command, targetSchema);
                 if (_includeUserDefinedFunctions) ScriptMySqlFunctions(command, targetSchema);

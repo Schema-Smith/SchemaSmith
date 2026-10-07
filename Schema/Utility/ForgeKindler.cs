@@ -55,6 +55,10 @@ public static class ForgeKindler
         AcquireKindleLock(command, platform); // throws ArgumentException for unsupported platforms (before the try)
         try
         {
+            // A stored routine keeps the sql_mode it was created under, so the kindle session's mode is every kindled
+            // procedure's mode for good. Kindle under the parse-neutral form of the server's mode, and stamp it, so a
+            // server whose mode changes re-kindles rather than reusing routines created under another.
+            using var sqlMode = platform.GetBasePlatform() == Platform.MySQL ? MySqlSessionSettings.UseParseNeutralSqlMode(command) : null;
             // Footgun kill: a caller that does not supply the server version must NOT silently get the
             // serverMajorVersion == 0 ("assume OLD") branch on a modern server. That branch composes the
             // pre-2025 xml_compression reference (CONVERT(BIT, NULL)) into GenerateTableJSON and disables
@@ -69,7 +73,7 @@ public static class ForgeKindler
             if (platform == Platform.SqlServer && serverMajorVersion == 0)
                 serverMajorVersion = TargetVersionDetector.TryDetect(command, Platform.SqlServer)?.ServerComparable ?? 0;
 
-            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy);
+            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode);
             var current = ReadStamp(command, platform);
             if (!forceReKindle && string.Equals(current, expected, StringComparison.Ordinal))
             {
@@ -802,9 +806,11 @@ public static class ForgeKindler
     /// -> the next kindle re-runs automatically (alternating version/policy across runs re-kindles; cheap).
     /// </summary>
     public static string ComputeKindleStamp(Platform platform, IngestEncoding encoding = IngestEncoding.Json,
-        int serverMajorVersion = 0, string policy = "warn")
+        int serverMajorVersion = 0, string policy = "warn", string sqlMode = null)
     {
         var sb = new StringBuilder();
+        if (!string.IsNullOrEmpty(sqlMode))
+            sb.Append("sql_mode=").Append(sqlMode).Append('\n');
         // The XML encoding swaps in different script bodies (and drops fn_FormatJson), so the concatenated
         // resolved text — and therefore the stamp — already differs from Json; no extra discriminator needed.
         foreach (var s in GetKindlingScripts(platform, encoding))

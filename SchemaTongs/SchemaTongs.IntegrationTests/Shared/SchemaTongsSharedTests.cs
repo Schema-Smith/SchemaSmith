@@ -65,6 +65,44 @@ public abstract class SchemaTongsSharedTests
         }
     }
 
+    // Extraction used to replace the session mode with PIPES_AS_CONCAT before kindling, so procedures it created ran
+    // non-strict and with || as concatenation, and SchemaQuench then found the stamp current and reused them.
+    [Test]
+    public void ShouldKindleUnderTheServersOwnMode()
+    {
+        using (var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM SchemaSmith_KindleStamp";
+            cmd.ExecuteNonQuery();
+        }
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            LogFactory.Register("ErrorLog", Substitute.For<ILog>());
+            LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+            FactoryContainer.Register(Substitute.For<IEnvironment>());
+            FactoryContainer.Register(Substitute.For<IFile>());
+            FactoryContainer.Register(Substitute.For<IDirectory>());
+            var config = SetupConfig();
+            config["ShouldCast:Tables"] = "true";
+            new SchemaTongs(Platform).CastTemplate();
+            config["ShouldCast:Tables"] = "false";
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+
+        using var check = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};");
+        check.Open();
+        using var query = check.CreateCommand();
+        query.CommandText = $"SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '{_integrationDb}' " +
+                            "AND CONCAT(',', SQL_MODE, ',') LIKE '%,PIPES_AS_CONCAT,%'";
+        Assert.That(Convert.ToInt32(query.ExecuteScalar()), Is.Zero, "no procedure may be kindled under the extraction session's mode");
+        query.CommandText = $"SELECT COUNT(*) FROM SchemaSmith_KindleStamp";
+        Assert.That(Convert.ToInt32(query.ExecuteScalar()), Is.EqualTo(1), "the extraction did kindle");
+    }
+
     [Test]
     public void ShouldCastViews()
     {
