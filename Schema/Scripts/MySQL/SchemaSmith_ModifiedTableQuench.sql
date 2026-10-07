@@ -3886,9 +3886,22 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_DropIdxStmts WHERE RowId = @ss_id;
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
                 PREPARE stmt FROM @exec_sql;
-                EXECUTE stmt;
-                -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
-                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
+                -- An index a foreign key on the table still needs cannot be dropped (1553): MySQL creates one for any
+                -- key with no declared index. It is kept, with its ownership; once the key goes, a later deploy drops it.
+                SET @ss_fk_needs_index := 0;
+                BEGIN
+                    DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                    EXECUTE stmt;
+                END;
+                IF @ss_fk_needs_index = 1 THEN
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_auditname, ': a foreign key needs it'));
+                    DELETE FROM _SchemaSmith_IndexesToDrop
+                     WHERE CONCAT(TableName, '.', IndexName) = CONVERT(@ss_auditname USING utf8mb4) COLLATE utf8mb4_bin;
+                ELSE
+                    -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
+                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
+                END IF;
                 DEALLOCATE PREPARE stmt;
                 SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropIdxStmts WHERE RowId > @ss_id);
             END WHILE;
