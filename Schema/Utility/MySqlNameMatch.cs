@@ -14,6 +14,13 @@ public static class MySqlNameMatch
     public static string Folded(string catalogColumn, string valueSql) =>
         $"{catalogColumn} = {valueSql} AND {Key(catalogColumn)} = {Key(valueSql)}";
 
-    private static string Key(string sql) =>
-        $"CONVERT(IF(@@lower_case_table_names = 0, {sql}, LOWER({sql})) USING utf8mb4) COLLATE utf8mb4_bin";
+    // For a routine's schema (ROUTINES.ROUTINE_SCHEMA, PARAMETERS.SPECIFIC_SCHEMA). With lower_case_table_names = 2,
+    // MariaDB stores it in lowercase and answers a constant compare from a case-sensitive key, so the configured
+    // spelling of a mixed-case database finds no routines. The prefilter therefore compares the folded value.
+    public static string FoldedRoutineSchema(string catalogColumn, string valueSql) =>
+        $"{catalogColumn} = {FoldedValue(valueSql)} AND {Key(catalogColumn)} = {Key(valueSql)}";
+
+    private static string FoldedValue(string sql) => $"IF(@@lower_case_table_names = 0, {sql}, LOWER({sql}))";
+
+    private static string Key(string sql) => $"CONVERT({FoldedValue(sql)} USING utf8mb4) COLLATE utf8mb4_bin";
 }

@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System.Data;
+using Schema.Utility;
 using Schema.DataAccess;
 using Schema.Domain;
 using System;
@@ -73,7 +74,7 @@ public abstract class TableQuenchTestsSharedTests
         using var command = _connection.CreateCommand();
         command.CommandText = $@"
             SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
-            WHERE ROUTINE_SCHEMA = '{MainDb}'
+            WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{MainDb}'")}
             AND ROUTINE_NAME = 'SchemaSmith_TableQuench'
             AND ROUTINE_TYPE = 'PROCEDURE'";
         var result = command.ExecuteScalar();
@@ -88,7 +89,7 @@ public abstract class TableQuenchTestsSharedTests
         using var command = _connection.CreateCommand();
         command.CommandText = $@"
             SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
-            WHERE ROUTINE_SCHEMA = '{MainDb}'
+            WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{MainDb}'")}
             AND ROUTINE_NAME = 'SchemaSmith_ParseTableJson'
             AND ROUTINE_TYPE = 'PROCEDURE'";
         var result = command.ExecuteScalar();
@@ -103,7 +104,7 @@ public abstract class TableQuenchTestsSharedTests
         using var command = _connection.CreateCommand();
         command.CommandText = $@"
             SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
-            WHERE ROUTINE_SCHEMA = '{MainDb}'
+            WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{MainDb}'")}
             AND ROUTINE_NAME = 'SchemaSmith_MissingTableAndColumnQuench'
             AND ROUTINE_TYPE = 'PROCEDURE'";
         var result = command.ExecuteScalar();
@@ -118,7 +119,7 @@ public abstract class TableQuenchTestsSharedTests
         using var command = _connection.CreateCommand();
         command.CommandText = $@"
             SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
-            WHERE ROUTINE_SCHEMA = '{MainDb}'
+            WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{MainDb}'")}
             AND ROUTINE_NAME = 'SchemaSmith_ModifiedTableQuench'
             AND ROUTINE_TYPE = 'PROCEDURE'";
         var result = command.ExecuteScalar();
@@ -333,7 +334,7 @@ public abstract class TableQuenchTestsSharedTests
         using var command = _connection.CreateCommand();
         command.CommandText = $@"
             SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
-            WHERE ROUTINE_SCHEMA = '{MainDb}'
+            WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{MainDb}'")}
             AND ROUTINE_NAME = 'SchemaSmith_MissingIndexesAndConstraintsQuench'
             AND ROUTINE_TYPE = 'PROCEDURE'";
         var result = command.ExecuteScalar();
