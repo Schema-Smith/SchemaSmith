@@ -967,7 +967,7 @@ public class DatabaseQuench
                         {
                             Tables = _template.Tables.Cast<IDeliverableTable>().ToList(),
                             Command = command,
-                            Platform = _product.Platform.ToString(),
+                            Platform = _product.Platform.GetBasePlatform().ToString(),
                             DatabaseName = _databaseName,
                             SchemaName = _schemaName,
                             VersionTokens = _versionScriptTokens,
