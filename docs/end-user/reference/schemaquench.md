@@ -338,8 +338,10 @@ These are the minimum versions SchemaSmith supports for deployment:
 |----------|------------------|
 | SQL Server | 2008 (major version 10) |
 | PostgreSQL | 12 |
-| MySQL | 5.7 |
+| MySQL | 5.7.22 on the 5.7 line; 8.0.23 on the 8.0 line |
 | MariaDB | 10.2 |
+
+**MySQL's floor is a patch, on two lines.** MySQL 5.7.0-5.7.21 lack `JSON_ARRAYAGG`, so DataTongs extracts nothing from them. MySQL 8.0.0-8.0.22 lack, patch by patch, features SchemaSmith reads as "8.0": functional indexes, enforced CHECK constraints, multi-valued and invisible indexes. Both bands are refused before anything runs, naming the detected version.
 
 **And the other end of the range is measured, not assumed — new in v2.7.0.** Every engine also has a
 CI leg pinned to that engine's **`latest`** tag, so each release is exercised against whatever the vendor
@@ -465,7 +467,7 @@ One further case is compatibility-level gated rather than version gated: a `Json
 
 
 
-The supported range (MySQL 5.7 through current, MariaDB 10.2 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
+The supported range (MySQL 5.7.22 and 8.0.23 through current, MariaDB 10.2 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
 
 The schema model itself parses on every supported version — a version-agnostic `JSON_EXTRACT` shred stands in for `JSON_TABLE` (MySQL 8.0 / MariaDB 10.6), so nothing about kindling or ingest depends on the target version. Beyond that, a feature a target lacks is either taken by an equivalent path (same end state) or degraded through the **unsupported-feature policy** (`Target:UnsupportedFeaturePolicy`, default `warn` → emit without the feature + an **Unsupported Feature Downgrades** line; `fail` → abort with a "requires MySQL N" message):
 

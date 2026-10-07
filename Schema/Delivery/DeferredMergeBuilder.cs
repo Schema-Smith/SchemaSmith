@@ -396,11 +396,11 @@ internal static class DeferredMergeBuilder
     }
 
     // Version-adaptive "<source> AS jt" fragment for the deferred MySQL insert. See MergeScriptHelper's
-    // BuildJsonRowSourceMySql for the full rationale; versionNum >= 1000 identifies MariaDB.
+    // BuildJsonRowSourceMySql for the full rationale.
     private static string BuildDeferredJsonRowSourceMySql(List<MergeColumnInfo> columns, int versionNum)
     {
-        var isMariaDb = versionNum >= 1000;
-        var hasJsonTable = versionNum == 0 || (isMariaDb ? versionNum >= 1006 : versionNum >= 800);
+        var isMariaDb = MergeScriptHelper.IsMariaDbVersionNum(versionNum);
+        var hasJsonTable = MergeScriptHelper.MySqlFamilyHasJsonTable(versionNum);
         if (hasJsonTable)
         {
             var jsonTableColumns = string.Join(",\n    ", columns.Select(c =>

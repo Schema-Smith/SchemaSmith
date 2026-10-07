@@ -29,7 +29,7 @@ namespace Schema.Utility
         /// </summary>
         public static void CheckOrThrow(TargetVersionInfo info, string serverLabel, string databaseLabel = null)
         {
-            if (VersionHelper.IsBelowFloor(info.Platform, info.ServerComparable))
+            if (VersionHelper.IsBelowFloor(info))
                 throw new Exception(
                     $"{serverLabel}: detected {info.Platform} version {VersionHelper.DisplayVersion(info)} is below the minimum " +
                     $"supported version {VersionHelper.HardFloorDisplay(info.Platform)}. SchemaSmith cannot run against it.");

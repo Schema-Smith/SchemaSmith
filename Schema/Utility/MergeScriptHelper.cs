@@ -1777,8 +1777,7 @@ SELECT c.column_name, c.udt_name
         // Insert/Update/Delete (update and/or delete) -> Upsert + DELETE WHERE NOT EXISTS
         //   REPLACE INTO was used previously but it deletes+reinserts every matching row,
         //   breaking ON DELETE RESTRICT foreign keys.
-        var hasJsonTable = mySqlServerVersionNum == 0 ||
-                           (mySqlServerVersionNum >= 1000 ? mySqlServerVersionNum >= 1006 : mySqlServerVersionNum >= 800);
+        var hasJsonTable = MySqlFamilyHasJsonTable(mySqlServerVersionNum);
         var chunked = TryChunkMySqlPayload(hasJsonTable, tokenizeScripts, tableData, out var payloadRows);
 
         if (mergeDelete)
@@ -2191,12 +2190,20 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     // MariaDB 10.2, hence embedding inside the derived table). MySQL below 8.0 has neither and is unsupported
     // for automatic data delivery (gated upstream in DataDeliveryProcessor) -- this throws so that gate has a
     // single source of truth. versionNum is major*100+minor; 0 means "unknown/modern" (unit tests, callers
-    // that don't detect) and takes the JSON_TABLE path. versionNum >= 1000 identifies MariaDB (10+/11+);
-    // MySQL never reaches major 10, so the single number distinguishes the engine family.
+    // that don't detect) and takes the JSON_TABLE path. See MySqlFamilyHasJsonTable for how one number serves
+    // both engines.
+    // The MySQL family's major*100+minor: MariaDB is 10.x-13.x (1002-1300) and MySQL went 5.7, 8.x, 9.x, then
+    // calendar years from 26 (2600+), so MySQL never occupies 1000-1005, the only band where the engines diverge
+    // (MariaDB 10.2-10.5, no JSON_TABLE). Any other number at or above 1000 has JSON_TABLE on either engine.
+    internal static bool IsMariaDbVersionNum(int versionNum) => versionNum is >= 1000 and < 2600;
+
+    internal static bool MySqlFamilyHasJsonTable(int versionNum)
+        => versionNum == 0 || (IsMariaDbVersionNum(versionNum) ? versionNum >= 1006 : versionNum >= 800);
+
     private static string BuildJsonRowSourceMySql(List<MySqlColumnInfo> columns, int versionNum)
     {
-        var isMariaDb = versionNum >= 1000;
-        var hasJsonTable = versionNum == 0 || (isMariaDb ? versionNum >= 1006 : versionNum >= 800);
+        var isMariaDb = IsMariaDbVersionNum(versionNum);
+        var hasJsonTable = MySqlFamilyHasJsonTable(versionNum);
         if (hasJsonTable)
             return "JSON_TABLE(\n    @json_data,\n    '$[*]' COLUMNS (\n      " +
                    BuildJsonTableColumnsMySql(columns) + "\n    )\n  ) AS jt";

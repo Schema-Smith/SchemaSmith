@@ -495,6 +495,7 @@ public static class ForgeKindler
                 new("SchemaSmith_SafeBacktickWrap.sql"),
                 new("SchemaSmith_StripLeadingSelect.sql"),
                 new("SchemaSmith_ServerVersionNum.sql"),
+                new("SchemaSmith_ServerVersionPatchNum.sql"),
                 new("SchemaSmith_UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith_SupportsCheckConstraints.sql"),
                 new("SchemaSmith_SupportsRenameColumn.sql"),
