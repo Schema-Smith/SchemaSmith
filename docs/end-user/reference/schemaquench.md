@@ -489,6 +489,8 @@ The schema model itself parses on every supported version — a version-agnostic
 
 > **"No equivalent at any version" is not the same as "old".** Several rows above are not version gates at all — MySQL has no application-time periods or system versioning at *any* release, and MariaDB has no SRID restriction or functional index at any release. Those degrade on every target of that platform, current versions included, which is why they appear here rather than reading as legacy concerns.
 
+**One more routes through the same policy but is gated on the server's filesystem, not its version.** **Page compression** (`Compression`, MySQL only) needs a data directory on a filesystem that supports hole punching, and MySQL refuses it anywhere else with error 4029 — a Windows data directory, for one. Under `warn` the table is created without its `COMPRESSION` option and the downgrade is recorded; under `fail` the deploy stops. `Compression` is applied when a table is created, so only new tables are affected.
+
 The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7 through current, or MariaDB 10.2 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
 ### MariaDB (MySQL family) — where the native DDL diverges

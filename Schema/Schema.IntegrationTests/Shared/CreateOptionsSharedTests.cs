@@ -2,6 +2,7 @@
 
 using System;
 using System.Data;
+using MySqlConnector;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -105,11 +106,48 @@ public abstract class CreateOptionsSharedTests
         });
     }
 
+    private bool? _canPunchHoles;
+
+    // MySQL refuses COMPRESSION (error 4029) where the data directory's filesystem cannot punch holes, as on
+    // Windows. CI's Linux containers can, so the degrade tests below run only against a server that cannot.
+    private bool ServerCanPunchHoles()
+    {
+        if (_canPunchHoles is { } known) return known;
+        const string probe = "create_opts_punch_probe";
+        try
+        {
+            Exec($"CREATE TABLE `{TestDb}`.`{probe}` (id INT PRIMARY KEY) ENGINE=InnoDB COMPRESSION='zlib'");
+            _canPunchHoles = true;
+        }
+        catch (MySqlException ex) when (ex.Number == 4029)
+        {
+            _canPunchHoles = false;
+        }
+        finally
+        {
+            Exec($"DROP TABLE IF EXISTS `{TestDb}`.`{probe}`");
+        }
+        return _canPunchHoles.Value;
+    }
+
+    private void RequireServerWithoutHolePunching()
+    {
+        if (IsMariaDb)
+            Assert.Ignore("MariaDB has no COMPRESSION table option at any version; it spells this PAGE_COMPRESSED.");
+        if (ServerCanPunchHoles())
+            Assert.Ignore("This server can punch holes, so COMPRESSION applies; run against a Windows data directory to exercise the degrade.");
+    }
+
+    private long TableCount() => Convert.ToInt64(ScalarStr(
+        $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{TestDb}' AND TABLE_NAME = '{TableName}'"));
+
     [Test]
     public void Compression_IsAppliedAndRoundTrips_OnMySqlOnly()
     {
         if (IsMariaDb)
             Assert.Ignore("MariaDB has no COMPRESSION table option at any version; it spells this PAGE_COMPRESSED.");
+        if (!ServerCanPunchHoles())
+            Assert.Ignore("This server cannot punch holes, so COMPRESSION degrades; the degrade tests cover it.");
 
         Deploy(", \"Compression\": \"zlib\"");
 
@@ -118,6 +156,43 @@ public abstract class CreateOptionsSharedTests
             Assert.That(CreateOptions(), Does.Contain("zlib"), CreateOptions());
             Assert.That(ExtractedJson(), Does.Contain("Compression"), ExtractedJson());
         });
+    }
+
+    [Test]
+    public void Compression_OnAServerThatCannotPunchHoles_CreatesTheTableWithoutIt_AndRecordsTheDowngrade()
+    {
+        RequireServerWithoutHolePunching();
+        Exec($"DELETE FROM SchemaSmith_ChangeAudit WHERE ObjectName = '{TableName}'");
+
+        Deploy(", \"Compression\": \"zlib\", \"Comment\": \"kept\"");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TableCount(), Is.EqualTo(1), "the table must still be created");
+            Assert.That(CreateOptions().ToUpperInvariant(), Does.Not.Contain("COMPRESSION="), CreateOptions());
+            Assert.That(ScalarStr($"SELECT TABLE_COMMENT FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{TestDb}' AND TABLE_NAME = '{TableName}'"),
+                Is.EqualTo("kept"), "only the COMPRESSION option may be dropped, not the rest of the table's options");
+            Assert.That(ScalarStr("SELECT COUNT(*) FROM SchemaSmith_ChangeAudit WHERE ActionType = 'downgraded' "
+                                  + $"AND ObjectType = 'table without its COMPRESSION option' AND ObjectName = '{TableName}'"),
+                Is.EqualTo("1"), "the lost compression must be recorded as a downgrade");
+        });
+    }
+
+    [Test]
+    public void Compression_OnAServerThatCannotPunchHoles_FailsTheDeployUnderPolicyFail()
+    {
+        RequireServerWithoutHolePunching();
+        Exec("SET @schemasmith_unsupported_policy = 'fail'");
+        try
+        {
+            Assert.That(() => Deploy(", \"Compression\": \"zlib\""),
+                Throws.Exception.With.Message.Contains("hole punching"));
+            Assert.That(TableCount(), Is.Zero, "under 'fail' the table must not be created without its compression");
+        }
+        finally
+        {
+            Exec("SET @schemasmith_unsupported_policy = NULL");
+        }
     }
 
     [Test]

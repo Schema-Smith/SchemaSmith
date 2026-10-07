@@ -26,6 +26,9 @@ BEGIN
     DECLARE v_Sql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_StatusTableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_StatusVariant VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_CompressionClause TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_CreateErrNo INT DEFAULT 0;
+    DECLARE v_NoPunchHole TINYINT DEFAULT 0;
     -- Catalog reads go through the keyed snapshots in SchemaSmith_CatalogSnapshot; the one direct read (ROUTINES)
     -- uses the same case-insensitive schema prefilter followed by the exact key compare.
     DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
@@ -165,7 +168,10 @@ BEGIN
                 -- still deploys as an ordinary table -- see the degrade guard below, which reports the loss.
                 CASE WHEN t.IsSystemVersioned = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
                      THEN ' WITH SYSTEM VERSIONING' ELSE '' END
-            ) AS CreateTableStatement
+            ) AS CreateTableStatement,
+            CASE WHEN t.Compression IS NOT NULL AND t.Compression != '' AND VERSION() NOT LIKE '%MariaDB%'
+                 THEN CONCAT(' COMPRESSION=''', t.Compression, '''')
+                 ELSE '' END AS CompressionClause
         FROM _SchemaSmith_Tables t
         INNER JOIN _SchemaSmith_Columns c ON c.TableName = t.TableName
         WHERE t.NewTable = 1
@@ -828,7 +834,7 @@ BEGIN
         OPEN cur_NewTables;
 
         create_tables_loop: LOOP
-            FETCH cur_NewTables INTO v_StatusTableName, v_StatusVariant, v_Sql;
+            FETCH cur_NewTables INTO v_StatusTableName, v_StatusVariant, v_Sql, v_CompressionClause;
             IF v_Done THEN
                 LEAVE create_tables_loop;
             END IF;
@@ -837,7 +843,42 @@ BEGIN
                 CASE WHEN COALESCE(v_StatusVariant, '') <> '' THEN CONCAT(' (variant: ', v_StatusVariant, ')') ELSE '' END));
             SET @exec_sql = v_Sql;
             PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
+            SET v_NoPunchHole = 0;
+            BEGIN
+                -- MySQL refuses COMPRESSION, creating nothing, when the data directory's filesystem cannot punch
+                -- holes (error 4029; Windows, for one). That is the server's environment rather than the package, so
+                -- it goes through the unsupported-feature policy instead of failing the deploy outright.
+                DECLARE EXIT HANDLER FOR SQLEXCEPTION
+                BEGIN
+                    GET DIAGNOSTICS CONDITION 1 v_CreateErrNo = MYSQL_ERRNO;
+                    IF v_CreateErrNo <> 4029 OR v_CompressionClause = '' THEN
+                        RESIGNAL;
+                    END IF;
+                    SET v_NoPunchHole = 1;
+                END;
+                EXECUTE stmt;
+            END;
+            IF v_NoPunchHole = 1 THEN
+                DEALLOCATE PREPARE stmt;
+                IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail' THEN
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  Page compression needs a filesystem that supports hole punching (UnsupportedFeaturePolicy=fail): ',
+                            SchemaSmith_StripBacktickWrapping(v_StatusTableName)));
+                    SET @ss_msg = 'Page compression needs a filesystem that supports hole punching (UnsupportedFeaturePolicy=fail). See the run log.';
+                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+                END IF;
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('  Table created without page compression (the server''s filesystem cannot punch holes - downgraded): ',
+                        SchemaSmith_StripBacktickWrapping(v_StatusTableName)));
+                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+                VALUES (CONNECTION_ID(), 'table without its COMPRESSION option', SchemaSmith_StripBacktickWrapping(v_StatusTableName), 'downgraded');
+                -- The option list follows every column definition, so the clause is its last occurrence.
+                SET @exec_sql = INSERT(v_Sql,
+                                       CHAR_LENGTH(v_Sql) - LOCATE(REVERSE(v_CompressionClause), REVERSE(v_Sql)) - CHAR_LENGTH(v_CompressionClause) + 2,
+                                       CHAR_LENGTH(v_CompressionClause), '');
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+            END IF;
             -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'table', v_StatusTableName, 'created');
             DEALLOCATE PREPARE stmt;
