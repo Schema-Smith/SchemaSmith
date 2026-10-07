@@ -9,6 +9,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 ### Fixed
 
 - **CDC or Change Tracking enabled by a `Before` script was recorded as downgraded on the first deploy, so no tables were tracked (SQL Server) — #432.** The database-level check ran before the `Before` slot, so a new or restored database read as not enabled and the deploy exited 0 with nothing captured; the second deploy tracked everything. When the template has `Before` scripts, the check now runs after them. Without any, it still runs up front, so `UnsupportedFeaturePolicy=fail` refuses before anything is created.
+- **A failure writing a local file was reported as a lost server connection.** A missing checkpoint folder, a file in use or a full disk on the machine running SchemaQuench produced "Lost connection to <server> ... check the server/container logs and available memory". These now report the file error itself.
 
 ## [v2.7.1](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) — 2026-10-01
 
