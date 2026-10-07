@@ -25,6 +25,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **A `MinimumVersion` with a pre-release suffix, such as PostgreSQL `18beta1`, was refused as unreadable.** It now reads as its leading number (18).
 - **SchemaTongs could not extract any SQL Server 2008 R2 database.** It read `sys.sequences`, which arrived in SQL Server 2012, and exited 3 with half a package on disk. Sequences are now extracted from 2012 on, and a 2008 R2 extraction completes.
 - **A query token failed on SQL Server 2008 R2 through 2016.** The temp-table cleanup that runs before each query token used `STRING_AGG` (2017) and `DROP TABLE IF EXISTS` (2016). It now runs on every supported version.
+- **DataTongs failed on a SQL Server source older than 2017.** Its JSON extraction uses `FOR JSON` and `STRING_AGG`. With `DeliveryEncoding` unset, such a source now extracts XML and says so; an explicit `Json` is refused by name.
 
 ## [v2.7.1](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) — 2026-10-01
 
