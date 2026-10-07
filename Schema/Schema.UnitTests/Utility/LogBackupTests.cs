@@ -98,6 +98,28 @@ public class LogBackupTests
         });
     }
 
+    // Directories earlier runs left behind are not collisions. Counting them against the retry limit meant that once
+    // fifty backups existed, no run archived its logs again.
+    [Test]
+    public void BackupLogsAndExit_ManyEarlierBackups_StillArchivesIntoTheNextFreeDirectory()
+    {
+        _mockDirectory.Exists(Arg.Is<string>(s => IsEarlierBackup(s))).Returns(true);
+        _mockDirectory.GetFiles(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<SearchOption>())
+            .Returns(new[] { Path.Join("logs", "TestApp - run.log") });
+
+        LogBackup.BackupLogsAndExit("TestApp");
+
+        _mockFile.Received().Copy(Arg.Any<string>(), Arg.Is<string>(s => s.Contains("TestApp.0061")), Arg.Any<bool>());
+    }
+
+    private static bool IsEarlierBackup(string path) => ExistingBackupIndex(path) is >= 1 and <= 60;
+
+    private static int ExistingBackupIndex(string path)
+    {
+        var dot = path.LastIndexOf("TestApp.", StringComparison.Ordinal);
+        return dot >= 0 && int.TryParse(path.AsSpan(dot + "TestApp.".Length), out var index) ? index : 0;
+    }
+
     [Test]
     public void BackupLogsAndExit_IncrementsDirectoryWhenExists()
     {
