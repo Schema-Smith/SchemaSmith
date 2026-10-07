@@ -87,6 +87,7 @@ BEGIN
     -- MESSAGE_TEXT is a VARCHAR(128) condition item in the server's own charset; a utf8mb4
     -- variable is refused by MariaDB with "Data too long for condition item" whatever its length.
     DECLARE v_SignalMsg VARCHAR(128) CHARACTER SET utf8mb3;
+    DECLARE v_PkReplacedIndex VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_OldTableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_TableRenameOldExists INT;
     DECLARE v_TableRenameNewExists INT;
@@ -418,7 +419,9 @@ BEGIN
         IF COALESCE(v_AiPrimaryKey, 0) = 1 THEN
             -- A declared PRIMARY KEY whose deployed key columns differ is swapped in ONE statement: MySQL will
             -- not let an AUTO_INCREMENT column sit without a key even momentarily, so DROP and ADD cannot be
-            -- separate statements. The rows are untouched.
+            -- separate statements. The rows are untouched. A table an older kindle created with no key gets one
+            -- added, which sql_require_primary_key needs before the table can be altered at all; a secondary
+            -- index already carrying the declared name is the key this replaces, so it goes in the same ALTER.
             SET v_ShapeKeys = NULL;
             SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') INTO v_ShapeKeys
               FROM information_schema.statistics
@@ -426,8 +429,8 @@ BEGIN
                AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
                AND index_name = 'PRIMARY';
 
-            IF v_ShapeKeys IS NOT NULL
-               AND UPPER(v_ShapeKeys) <> UPPER(REPLACE(REPLACE(v_AiIndexColumns, '`', ''), ' ', '')) THEN
+            IF v_ShapeKeys IS NULL
+               OR UPPER(v_ShapeKeys) <> UPPER(REPLACE(REPLACE(v_AiIndexColumns, '`', ''), ' ', '')) THEN
             -- GROUP BY takes plain column names. A prefix length (ScriptPath(200)) and a sort direction are
             -- both legal in the index declaration and both a syntax error here, so each key part is reduced to
             -- its column name. No REGEXP_REPLACE: it does not exist on the MySQL 5.7 floor.
@@ -456,8 +459,17 @@ BEGIN
                                                   v_TableName, '; the existing key is unchanged'), 128);
                     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_SignalMsg;
                 END IF;
-                SET @exec_sql = CONCAT('ALTER TABLE `', v_Db, '`.`', v_TableName, '` DROP PRIMARY KEY, ADD PRIMARY KEY (',
-                                       v_AiIndexColumns, ')');
+                SET v_PkReplacedIndex = NULL;
+                SELECT MIN(index_name) INTO v_PkReplacedIndex
+                  FROM information_schema.statistics
+                 WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey
+                   AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
+                   AND index_name <> 'PRIMARY'
+                   AND SchemaSmith_NameKeyCI(index_name) = SchemaSmith_NameKeyCI(v_AiIndexName);
+                SET @exec_sql = CONCAT('ALTER TABLE `', v_Db, '`.`', v_TableName, '` ',
+                                       IF(v_ShapeKeys IS NULL, '', 'DROP PRIMARY KEY, '),
+                                       'ADD PRIMARY KEY (', v_AiIndexColumns, ')',
+                                       IF(v_PkReplacedIndex IS NULL, '', CONCAT(', DROP INDEX `', v_PkReplacedIndex, '`')));
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;

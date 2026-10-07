@@ -2011,7 +2011,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
             var type = col != null ? GetMySqlTypeForJsonTable(col) : "LONGTEXT";
             return $"`{k}` {type}";
         });
-        return $"CREATE TEMPORARY TABLE `{MySqlDeleteKeyTable}` (\n  {string.Join(",\n  ", defs)}\n);";
+        return $"CREATE TEMPORARY TABLE `{MySqlDeleteKeyTable}` (\n  RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,\n  {string.Join(",\n  ", defs)}\n);";
     }
 
     private static string BuildDeleteStatementMySql(string databaseName, string tableName,

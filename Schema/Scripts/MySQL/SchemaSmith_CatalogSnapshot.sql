@@ -26,6 +26,7 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CatTables;
     CREATE TEMPORARY TABLE _SchemaSmith_CatTables (
+        RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
         TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         TABLE_NAME VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         TABLE_TYPE VARCHAR(64) DEFAULT NULL,
@@ -55,6 +56,7 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CatColumns;
     CREATE TEMPORARY TABLE _SchemaSmith_CatColumns (
+        RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
         TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         TABLE_NAME VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,

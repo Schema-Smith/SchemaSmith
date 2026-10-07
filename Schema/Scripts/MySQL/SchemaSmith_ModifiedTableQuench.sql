@@ -925,6 +925,7 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildColumnOrder;
     CREATE TEMPORARY TABLE _SchemaSmith_RebuildColumnOrder (
+        RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         DeclaredPos INT NOT NULL,
         DeclaredSeq INT NOT NULL,
@@ -941,6 +942,7 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildColumnOrderPeer;
     CREATE TEMPORARY TABLE _SchemaSmith_RebuildColumnOrderPeer (
+        RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         DeclaredPos INT NOT NULL,
         DeclaredSeq INT NOT NULL,
@@ -1706,6 +1708,7 @@ BEGIN
     -- Create helper table to copy defined columns (avoids referencing _SchemaSmith_Columns multiple times)
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DefinedColumns;
     CREATE TEMPORARY TABLE _SchemaSmith_DefinedColumns (
+        RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         OldName VARCHAR(128) NULL,
@@ -1768,6 +1771,7 @@ BEGIN
     IF p_CaptureWouldDrop = 1 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropColumns;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropColumns (
+            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -2742,6 +2746,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Capture tables suppressed by PreventDrop (would drop by absence)');
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropTables;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropTables (
+            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -3715,6 +3720,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- FK rows referencing a product table (for the FK-before-index drop join). Same-schema FKs.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8KCU;
         CREATE TEMPORARY TABLE _SchemaSmith_Step8KCU (
+            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ReferencedTableName VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
@@ -3729,6 +3735,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8TC;
         CREATE TEMPORARY TABLE _SchemaSmith_Step8TC (
+            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             KEY ix_s8tc (TableName, ConstraintName)
