@@ -46,6 +46,12 @@ internal static class ConnectionLostClassifier
         sqlState != null &&
         (sqlState.StartsWith("08", StringComparison.Ordinal) || sqlState == "57P01" || sqlState == "57P02");
 
+    // The deploy also writes local files (checkpoints, logs, debug scripts), and those fail as IOException too. A
+    // missing folder or a full disk on this machine is not the server going away.
+    private static bool IsLocalFileError(IOException io) =>
+        io is DirectoryNotFoundException or FileNotFoundException or PathTooLongException or DriveNotFoundException
+        || ((io.HResult & 0xFFFF0000) == 0x80070000 && (io.HResult & 0xFFFF) is 0x20 or 0x21 or 0x27 or 0x70);
+
     public static bool IsConnectionLost(Exception ex)
     {
         for (var e = ex; e != null; e = e.InnerException)
@@ -55,7 +61,8 @@ internal static class ConnectionLostClassifier
                 // Unambiguous transport failure anywhere in the chain. IOException also covers
                 // EndOfStreamException (derived) — how Npgsql/MySqlConnector surface a torn stream.
                 case SocketException:
-                case IOException:
+                    return true;
+                case IOException io when !IsLocalFileError(io):
                     return true;
 
                 case SqlException sql when IsSqlServerConnectionLostNumber(sql.Number):
