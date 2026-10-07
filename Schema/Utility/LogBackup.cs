@@ -22,10 +22,14 @@ public static class LogBackup
             // Two runs from one install race here: CreateDirectory is idempotent, so both settle on the
             // same App.0001 and the loser's Copy hits a destination that already exists. That threw into
             // the catch below and exited 4 -- a run that had just printed PASS reported as a failure, which
-            // CI parallelism makes routine. On a collision, take the next index and try again.
-            const int maxAttempts = 50;
+            // CI parallelism makes routine. On a collision, take the next index and try again. A directory an
+            // earlier run left behind is not a collision and does not use up an attempt: counting those meant that
+            // once fifty backups existed, no run archived its logs again.
+            const int maxCollisions = 50;
+            const int maxIndex = 9999;
+            var collisions = 0;
             var copied = false;
-            for (var attempt = 0; attempt < maxAttempts && !copied; attempt++)
+            while (!copied && collisions < maxCollisions && ext < maxIndex)
             {
                 backupDir = Path.Join(cwd, $"{appName}.{$"{++ext}".PadLeft(4, '0')}");
                 if (directory.Exists(backupDir)) continue;
@@ -47,6 +51,7 @@ public static class LogBackup
                 catch (IOException)
                 {
                     // Another run got here first. Leave its files alone and try the next directory.
+                    collisions++;
                 }
             }
 
