@@ -242,6 +242,12 @@ public abstract class AutoIncrementValueQuenchSharedTests
         var hasStatsCache = HasStatsCache(cmd);
         try
         {
+            // The shared connection may have had the cache switched off by another test; the premise needs it on.
+            if (hasStatsCache)
+            {
+                cmd.CommandText = "SET SESSION information_schema_stats_expiry = DEFAULT";
+                cmd.ExecuteNonQuery();
+            }
             cmd.CommandText = $"CREATE TABLE `{_testDb}`.`ai_extract_test` (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(20))";
             cmd.ExecuteNonQuery();
             cmd.CommandText = $"INSERT INTO `{_testDb}`.`ai_extract_test` (name) VALUES ('a'), ('b')";
