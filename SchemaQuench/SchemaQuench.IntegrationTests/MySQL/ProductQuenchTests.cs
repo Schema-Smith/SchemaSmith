@@ -296,7 +296,7 @@ public class ProductUpdateTests
     }
 
     [Test]
-    public void ShouldThrowExceptionWhenAfterProductScriptErrors()
+    public void ShouldFailWhenAfterProductScriptErrors()
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -304,8 +304,9 @@ public class ProductUpdateTests
 
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] = TestHelper.GetTestProductPath("MySQL", "AfterProductScriptError");
 
-            var ex = Assert.Throws<Exception>(RunSchemaQuench);
-            Assert.That(ex!.Message, Contains.Substring("Product script quench FAILED"));
+            RunSchemaQuench();
+            _environment.Received(1).Exit(2);
+            _progressLog.Received(1).Error("FAILED: " + "Product script quench FAILED");
 
             _progressLog.Received().Error(Arg.Is<string>(s => s.Contains("Unable to quench") && s.Contains("Job 1.sql") && s.Contains("KABOOM")));
 
@@ -315,7 +316,7 @@ public class ProductUpdateTests
     }
 
     [Test]
-    public void ShouldThrowExceptionWhenInvalidServer()
+    public void ShouldFailWhenInvalidServer()
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -323,8 +324,9 @@ public class ProductUpdateTests
 
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] = TestHelper.GetTestProductPath("MySQL", "InvalidServer");
 
-            var ex = Assert.Throws<Exception>(RunSchemaQuench);
-            Assert.That(ex!.Message, Contains.Substring("Invalid server for this product"));
+            RunSchemaQuench();
+            _environment.Received(1).Exit(2);
+            _progressLog.Received(1).Error("FAILED: " + "Invalid server for this product");
 
             LogFactory.Clear();
             FactoryContainer.Unregister<IEnvironment>();

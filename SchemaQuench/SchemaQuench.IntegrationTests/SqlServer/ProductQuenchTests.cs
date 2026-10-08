@@ -379,7 +379,7 @@ TRUNCATE TABLE SchemaSmith.TestLog";
     }
 
     [Test]
-    public void ShouldThrowExceptionWhenAfterProductScripErrors()
+    public void ShouldFailWhenAfterProductScripErrors()
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -387,8 +387,9 @@ TRUNCATE TABLE SchemaSmith.TestLog";
 
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "AfterProductScriptError");
 
-            var ex = Assert.Throws<Exception>(RunSchemaQuench);
-            Assert.That(ex!.ToString(), Contains.Substring("Product script quench FAILED"));
+            RunSchemaQuench();
+            _environment.Received(1).Exit(2);
+            _progressLog.Received(1).Error("FAILED: " + "Product script quench FAILED");
 
             _progressLog.Received(1).Error(Arg.Is<string>(s => s.Contains("Unable to quench") && s.Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Contains("Jobs/Job 1.sql") && s.Contains("KABOOM")));
 
@@ -398,7 +399,7 @@ TRUNCATE TABLE SchemaSmith.TestLog";
     }
 
     [Test]
-    public void ShouldThrowExceptionWhenInvalidServer()
+    public void ShouldFailWhenInvalidServer()
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -406,8 +407,9 @@ TRUNCATE TABLE SchemaSmith.TestLog";
 
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "InvalidServer");
 
-            var ex = Assert.Throws<Exception>(RunSchemaQuench);
-            Assert.That(ex!.Message, Contains.Substring("Invalid server for this product"));
+            RunSchemaQuench();
+            _environment.Received(1).Exit(2);
+            _progressLog.Received(1).Error("FAILED: " + "Invalid server for this product");
 
             LogFactory.Clear();
             FactoryContainer.Unregister<IEnvironment>();

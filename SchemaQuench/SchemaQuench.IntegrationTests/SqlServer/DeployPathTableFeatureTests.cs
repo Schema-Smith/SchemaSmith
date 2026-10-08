@@ -129,7 +129,7 @@ public class DeployPathTableFeatureTests
             // Asserted on the log, not on SchemaSmith.ChangeAudit: a real deploy reads its session's audit rows into the
             // deployment summary and then deletes them, so the table is empty afterwards whether or not the degrade ran.
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database")));
-        });
+        }, expectIncomplete: true);
     }
 
     // Under 'fail' the refusal must come before anything is created. The degrade runs in the ingest batch ahead of
@@ -196,7 +196,7 @@ public class DeployPathTableFeatureTests
             deploy(CdcTable(enableCdc: true, extraColumn: false));
             Assert.That(IsTrackedByCdc(cmd), Is.False);
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database")));
-        });
+        }, expectIncomplete: true);
     }
 
     [Test]
@@ -380,7 +380,8 @@ public class DeployPathTableFeatureTests
         """;
 
     private void RunScenario(string prefix, string setupDatabase, Action<Action<string>, string, IDbCommand> body,
-                             string templateExtra = "", bool expectFailure = false, string policy = "warn", bool xmlIngest = false)
+                             string templateExtra = "", bool expectFailure = false, string policy = "warn", bool xmlIngest = false,
+                             bool expectIncomplete = false)
     {
         var db = prefix + "_" + Guid.NewGuid().ToString("N")[..12];
         var tempDir = Path.Join(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
@@ -418,6 +419,11 @@ public class DeployPathTableFeatureTests
                     var fails = expectFailure || _nextDeployFails;
                     _nextDeployFails = false;
                     if (fails) _environment.Received().Exit(Arg.Is<int>(code => code != 0));
+                    else if (expectIncomplete)
+                    {
+                        _environment.Received(1).Exit(1);
+                        _environment.DidNotReceive().Exit(Arg.Is<int>(code => code > 1));
+                    }
                     else _environment.DidNotReceive().Exit(Arg.Is<int>(code => code != 0));
                 }, db, cmd);
             }

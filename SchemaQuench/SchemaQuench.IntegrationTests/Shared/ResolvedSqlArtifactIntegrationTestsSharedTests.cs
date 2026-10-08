@@ -365,11 +365,9 @@ public abstract class ResolvedSqlArtifactIntegrationTestsSharedTests
 
             try
             {
-                // Unlike template script failures (caught in Program.Main -> Exit(2)), a product-level
-                // Before/After script failure propagates out of ProductQuench.QuenchProduct uncaught
-                // (matches ProductQuenchTests.ShouldThrowExceptionWhenAfterProductScripErrors).
-                var ex = Assert.Throws<Exception>(RunSchemaQuench);
-                Assert.That(ex!.ToString(), Contains.Substring("Product script quench FAILED"));
+                RunSchemaQuench();
+                _environment.Received(1).Exit(2);
+                _progressLog.Received(1).Error("FAILED: " + "Product script quench FAILED");
 
                 var artifactFiles = Directory.GetFiles(_artifactDir, "*.sql");
                 Assert.That(artifactFiles, Has.Length.GreaterThan(0),
@@ -422,8 +420,9 @@ public abstract class ResolvedSqlArtifactIntegrationTestsSharedTests
 
             try
             {
-                var ex = Assert.Throws<Exception>(RunSchemaQuench);
-                Assert.That(ex!.ToString(), Contains.Substring("Product script quench FAILED"));
+                RunSchemaQuench();
+                _environment.Received(1).Exit(2);
+                _progressLog.Received(1).Error("FAILED: " + "Product script quench FAILED");
 
                 var artifactFiles = Directory.GetFiles(_artifactDir, "*.sql");
                 Assert.That(artifactFiles, Has.Length.GreaterThan(0),
