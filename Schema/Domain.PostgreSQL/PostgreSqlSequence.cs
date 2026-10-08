@@ -71,5 +71,14 @@ namespace Schema.Domain.PostgreSQL
         [SchemaProperty(MaxLength = 128, Description = "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied.")]
         [JsonProperty(Order = 11, NullValueHandling = NullValueHandling.Ignore)]
         public string VariantName { get; set; }
+
+        /// <summary>
+        /// <c>Unlogged</c> for a sequence that skips the write-ahead log (PostgreSQL 15+), as on a table; left out, the
+        /// sequence is logged and an existing one's persistence is left alone. Below 15 the clause is dropped and the
+        /// downgrade recorded, under the unsupported-feature policy.
+        /// </summary>
+        [SchemaProperty(Description = "Unlogged for a sequence that skips the write-ahead log (PostgreSQL 15+), or Logged. Left out, the sequence is created logged and an existing one's persistence is not changed.")]
+        [JsonProperty(Order = 12, NullValueHandling = NullValueHandling.Ignore)]
+        public string PersistenceType { get; set; }
     }
 }

@@ -125,6 +125,37 @@ public class SequenceTests
         });
     }
 
+    // UNLOGGED sequences (PostgreSQL 15+): created as declared, extracted, converged both ways, and left alone by a
+    // package that does not say. Below 15 the clause is a downgrade under the unsupported-feature policy.
+    [Test]
+    public void Persistence_IsCreatedExtractedAndConverged()
+    {
+        OnDb(cmd =>
+        {
+            cmd.CommandText = "SELECT current_setting('server_version_num')::int";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) < 150000)
+                Assert.Ignore("UNLOGGED sequences need PostgreSQL 15; below it the downgrade path applies.");
+
+            string Persistence() { cmd.CommandText = "SELECT relpersistence::text FROM pg_class WHERE relname = 'seq_unlogged'"; return Convert.ToString(cmd.ExecuteScalar()); }
+
+            Deploy(cmd, Package("seq_unlogged", ", \"PersistenceType\": \"Unlogged\""));
+            Assert.That(Persistence(), Is.EqualTo("u"), "the sequence must be created unlogged");
+            cmd.CommandText = "SELECT COUNT(*) FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() AND \"ObjectName\" = 'public.seq_unlogged' AND \"ActionType\" = 'modified'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0),
+                "it must be created unlogged, not created and then altered -- the summary would report a change that was not one");
+
+            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateSequenceJSON\"('public', 'seq_unlogged')";
+            Assert.That(Convert.ToString(cmd.ExecuteScalar()), Does.Contain("\"PersistenceType\": \"Unlogged\""),
+                "extraction must carry it");
+
+            Deploy(cmd, Package("seq_unlogged"));
+            Assert.That(Persistence(), Is.EqualTo("u"), "a package that does not declare it must leave it alone");
+
+            Deploy(cmd, Package("seq_unlogged", ", \"PersistenceType\": \"Logged\""));
+            Assert.That(Persistence(), Is.EqualTo("p"), "a declared change must converge");
+        });
+    }
+
     [Test]
     public void ChangedAttributes_Converge()
     {

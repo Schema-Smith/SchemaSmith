@@ -402,6 +402,7 @@ A feature a target version lacks is either taken by an equivalent longer path (s
 | Authored feature | Requires | Below that version, SchemaSmith… |
 |---|---|---|
 | **`NULLS NOT DISTINCT`** (unique index / constraint) | PostgreSQL 15 | emits the object *without* the clause + records a downgrade |
+| **Unlogged sequence** (`"PersistenceType": "Unlogged"`) | PostgreSQL 15 | creates the sequence logged and leaves an existing one's persistence alone + records a downgrade |
 | **`MERGE` data delivery** (`Insert/Update`) | PostgreSQL 15 | uses a manual, NULL-safe INSERT + UPDATE upsert with identical semantics |
 | **In-place generated-column expression change** (`SET EXPRESSION`) | PostgreSQL 17 | drops and re-adds the generated column (data type, collation, nullability, storage, compression preserved) |
 | **Per-column compression** (`SET COMPRESSION`) | PostgreSQL 14 | omits the compression + records a downgrade |

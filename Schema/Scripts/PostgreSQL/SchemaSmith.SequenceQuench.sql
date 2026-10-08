@@ -40,6 +40,7 @@ BEGIN
          (elem ->> 'MaxValue')::BIGINT AS "MaxValue",
          COALESCE((elem ->> 'Cache')::BIGINT, 1) AS "Cache",
          COALESCE((elem ->> 'Cycle')::BOOLEAN, false) AS "Cycle",
+         LOWER(NULLIF(TRIM(elem ->> 'PersistenceType'), '')) AS "PersistenceType",
          COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression"
     FROM src, JSON_ARRAY_ELEMENTS(arr) AS elem;
 
@@ -52,9 +53,24 @@ BEGIN
     WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, false);
 
+  -- Unsupported-feature policy: an UNLOGGED sequence needs PostgreSQL 15. Below it the clause is left off the create
+  -- and the persistence change below is skipped; 'fail' refuses naming the sequences, 'warn' records each as
+  -- downgraded.
+  IF "SchemaSmith"."ServerVersionNum"() < 15 AND EXISTS (SELECT 1 FROM temp_sequences WHERE "PersistenceType" = 'unlogged') THEN
+    IF "SchemaSmith"."UnsupportedFeaturePolicy"() = 'fail' THEN
+      RAISE EXCEPTION 'An UNLOGGED sequence requires PostgreSQL 15 (detected major %); sequence(s): %',
+        "SchemaSmith"."ServerVersionNum"(),
+        (SELECT STRING_AGG("Schema" || '.' || "Name", ', ') FROM temp_sequences WHERE "PersistenceType" = 'unlogged');
+    END IF;
+    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+      SELECT pg_backend_pid(), 'UNLOGGED sequence (PG15)', "Schema" || '.' || "Name", 'downgraded'
+        FROM temp_sequences WHERE "PersistenceType" = 'unlogged';
+  END IF;
+
   RAISE NOTICE 'Add Missing Sequences';
   SELECT STRING_AGG('RAISE NOTICE ''  Create sequence ' || s."Schema" || '.' || s."Name" || ''';' || CHR(10) ||
-                    'CREATE SEQUENCE "' || s."Schema" || '"."' || s."Name" || '" AS ' || s."DataType" ||
+                    'CREATE ' || CASE WHEN s."PersistenceType" = 'unlogged' AND "SchemaSmith"."ServerVersionNum"() >= 15 THEN 'UNLOGGED ' ELSE '' END ||
+                    'SEQUENCE "' || s."Schema" || '"."' || s."Name" || '" AS ' || s."DataType" ||
                     ' INCREMENT BY ' || s."Increment" ||
                     CASE WHEN s."MinValue" IS NOT NULL THEN ' MINVALUE ' || s."MinValue" ELSE ' NO MINVALUE' END ||
                     CASE WHEN s."MaxValue" IS NOT NULL THEN ' MAXVALUE ' || s."MaxValue" ELSE ' NO MAXVALUE' END ||
@@ -112,5 +128,21 @@ BEGIN
       OR (s."Start" IS NOT NULL AND q.seqstart <> s."Start")
       OR q.seqcache <> s."Cache"
       OR q.seqcycle <> s."Cycle";
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
+  -- Persistence is its own statement (ALTER SEQUENCE ... SET LOGGED / UNLOGGED, PostgreSQL 15+). Only a declared
+  -- value is converged, so a package that leaves it out never touches an existing sequence.
+  RAISE NOTICE 'Fixup Sequence Persistence';
+  SELECT STRING_AGG('RAISE NOTICE ''  Setting sequence ' || s."Schema" || '.' || s."Name" || ' ' || UPPER(s."PersistenceType") || ''';' || CHR(10) ||
+                    'ALTER SEQUENCE "' || s."Schema" || '"."' || s."Name" || '" SET ' || UPPER(s."PersistenceType") || ';' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
+                    'VALUES (pg_backend_pid(), ''sequence'', ''' || s."Schema" || '.' || s."Name" || ''', ''modified'');', CHR(10))
+    INTO sql_script
+    FROM temp_sequences s
+    JOIN pg_class c ON c.relname = s."Name" AND c.relkind = 'S'
+    JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = s."Schema"
+   WHERE s."PersistenceType" IN ('logged', 'unlogged')
+     AND "SchemaSmith"."ServerVersionNum"() >= 15
+     AND (s."PersistenceType" = 'unlogged') <> (c.relpersistence = 'u');
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 END $$;

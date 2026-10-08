@@ -48,6 +48,10 @@
       "maxLength": 128,
       "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
     },
+    "PersistenceType": {
+      "type": "string",
+      "description": "Unlogged for a sequence that skips the write-ahead log (PostgreSQL 15+), or Logged. Left out, the sequence is created logged and an existing one's persistence is not changed."
+    },
     "Extensions": {}
   },
   "additionalProperties": false,

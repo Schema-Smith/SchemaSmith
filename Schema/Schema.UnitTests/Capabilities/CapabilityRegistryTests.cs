@@ -32,6 +32,7 @@ namespace Schema.UnitTests.Capabilities
             "Always Encrypted (SQL Server 2016)",
             "columnstore index (SQL Server 2012/2014)",
             "NULLS NOT DISTINCT (PG15)",
+            "UNLOGGED sequence (PG15)",
             "expression statistics (PG14)",
             "per-column compression (PG14)",
             "table access method (PG15)",
