@@ -547,31 +547,19 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE,
             var precision = reader.IsDBNull(4) ? 0 : Convert.ToInt32(reader.GetValue(4));
             var scale = reader.IsDBNull(5) ? 0 : Convert.ToInt32(reader.GetValue(5));
 
-            // MySQL JSON_TABLE COLUMNS clause requires real column types — not CAST aliases
-            // like SIGNED/UNSIGNED. Integer types must be spelled out (INT, BIGINT, etc.).
-            // Character/text types mirror the non-deferred path (GetMySqlTypeForJsonTable): CHAR maxes
-            // at 255 and utf8mb4 VARCHAR at 16383. The old `CHAR(maxLen)` default emitted e.g. CHAR(65535)
-            // for a TEXT column, which MySQL tolerated in JSON_TABLE but MariaDB rejects with
-            // "Column length too big ... (max = 255); use BLOB or TEXT instead". Read oversized/text as TEXT.
-            var jsonType = dataType switch
+            // The same JSON_TABLE type map as the single-pass path, so the two cannot drift apart again.
+            var jsonType = GetMySqlTypeForJsonTable(new MySqlColumnInfo
             {
-                "tinyint" or "smallint" or "mediumint" or "int" or "integer" or "bigint" => dataType.ToUpperInvariant(),
-                "float" or "double" or "real" => "DOUBLE",
-                "decimal" or "numeric" => $"DECIMAL({precision},{scale})",
-                "date" => "DATE",
-                "datetime" or "timestamp" => "DATETIME",
-                "time" => "TIME",
-                "year" => "YEAR",
-                "json" => "JSON",
-                "tinytext" or "text" or "mediumtext" or "longtext"
-                    or "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob" => "TEXT",
-                "char" => maxLen is > 0 and <= 255 ? $"CHAR({maxLen})" : "TEXT",
-                "varchar" => maxLen is > 0 and <= 16383 ? $"VARCHAR({maxLen})" : "TEXT",
-                _ => maxLen is > 0 and <= 255 ? $"CHAR({maxLen})" : "TEXT"
-            };
-
-            var isGeometry = dataType is "point" or "linestring" or "polygon" or "geometry"
-                or "multipoint" or "multilinestring" or "multipolygon" or "geometrycollection";
+                Name = reader.GetString(0),
+                DataType = dataType,
+                ColumnType = reader.GetString(2),
+                CharMaxLength = maxLen > 0 ? maxLen : null,
+                NumericPrecision = reader.IsDBNull(4) ? null : precision,
+                NumericScale = reader.IsDBNull(5) ? null : scale,
+                DatetimePrecision = reader.IsDBNull(6) ? null : Convert.ToInt32(reader.GetValue(6)),
+                IsJson = dataType == "json"
+            });
+            var isGeometry = IsGeometryTypeMySql(dataType);
             var isBinary = dataType is "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob";
 
             results.Add(new MergeColumnInfo
@@ -2280,13 +2268,16 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
 
         return dataType switch
         {
-            "tinyint" or "smallint" or "mediumint" or "int" or "integer" or "bigint" => dataType.ToUpperInvariant(),
+            // UNSIGNED from COLUMN_TYPE: read as signed, a value past the signed range arrived NULL, silently.
+            "tinyint" or "smallint" or "mediumint" or "int" or "integer" or "bigint"
+                => dataType.ToUpperInvariant() + (col.ColumnType.Contains("unsigned", StringComparison.OrdinalIgnoreCase) ? " UNSIGNED" : ""),
             "decimal" or "numeric" => col.NumericPrecision.HasValue && col.NumericScale.HasValue
                 ? $"DECIMAL({col.NumericPrecision},{col.NumericScale})"
                 : "DECIMAL(65,30)",
             "float" => "FLOAT",
             "double" => "DOUBLE",
-            "bit" => col.NumericPrecision.HasValue ? $"BIT({col.NumericPrecision})" : "BIT(1)",
+            // Extraction writes a BIT as its unsigned number; read through BIT(n), MariaDB stored the digits' characters.
+            "bit" => "BIGINT UNSIGNED",
             "date" => "DATE",
             "datetime" => col.DatetimePrecision.HasValue && col.DatetimePrecision > 0
                 ? $"DATETIME({col.DatetimePrecision})"
@@ -2304,9 +2295,10 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
             "varchar" => col.CharMaxLength.HasValue
                 ? $"VARCHAR({col.CharMaxLength})"
                 : "VARCHAR(65535)",
+            // LONGTEXT, not TEXT: TEXT holds 64 KB, and a longer value (base64 for a blob) arrived NULL or truncated.
             "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob"
-                => "TEXT",
-            "tinytext" or "text" or "mediumtext" or "longtext" => "TEXT",
+                => "LONGTEXT",
+            "tinytext" or "text" or "mediumtext" or "longtext" => "LONGTEXT",
             // Read ENUM/SET as text in JSON_TABLE: MySQL accepts the raw `enum(...)`/`set(...)`
             // column type here, but MariaDB rejects it. The extracted string value coerces back
             // into the real ENUM/SET column on INSERT, so VARCHAR is behavior-identical on MySQL
@@ -2317,15 +2309,16 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
                 : "VARCHAR(65535)",
             "json" => "JSON",
             "geometry" or "point" or "linestring" or "polygon" or "multipoint"
-                or "multilinestring" or "multipolygon" or "geometrycollection" => "TEXT",
-            _ => "TEXT"
+                or "multilinestring" or "multipolygon" or "geometrycollection" or "geomcollection" => "LONGTEXT",
+            _ => "LONGTEXT"
         };
     }
 
+    // MySQL 8 reports a geometry collection as 'geomcollection'; missing it, the column arrived NULL.
     private static bool IsGeometryTypeMySql(string dataType) => dataType.ToLowerInvariant() switch
     {
         "geometry" or "point" or "linestring" or "polygon" or "multipoint"
-            or "multilinestring" or "multipolygon" or "geometrycollection" => true,
+            or "multilinestring" or "multipolygon" or "geometrycollection" or "geomcollection" => true,
         _ => false
     };
 

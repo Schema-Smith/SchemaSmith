@@ -1346,7 +1346,7 @@ public class MergeScriptHelperTests
             tokenizeScripts: false, mergeFilter: null);
 
         Assert.That(result, Does.Contain("FROM_BASE64(`data`)"));
-        Assert.That(result, Does.Contain("`data` TEXT PATH '$.data'"));
+        Assert.That(result, Does.Contain("`data` LONGTEXT PATH '$.data'"));
     }
 
     [Test]
@@ -2637,7 +2637,7 @@ public class MergeScriptHelperTests
 
         Assert.That(result, Does.Contain("`id` INT PATH '$.id'"));
         Assert.That(result, Does.Contain("`name` VARCHAR(100) PATH '$.name'"));
-        Assert.That(result, Does.Contain("`location` TEXT PATH '$.location'"));
+        Assert.That(result, Does.Contain("`location` LONGTEXT PATH '$.location'"));
     }
 
     [Test]
