@@ -56,6 +56,8 @@ namespace Schema.UnitTests.Capabilities
                 "expression statistics (PG14)");
             Assert.That(LoadScript("PostgreSQL.SchemaSmith.IndexNullsNotDistinct.sql"), Does.Contain(">= 15"),
                 "NULLS NOT DISTINCT (PG15)");
+            Assert.That(LoadScript("PostgreSQL.SchemaSmith.SequenceQuench.sql"), Does.Contain("ServerVersionNum\"() < 15"),
+                "UNLOGGED sequence (PG15)");
         }
 
         // Data delivery has no callable predicate and no ChangeAudit manifest — the boundary lives in the

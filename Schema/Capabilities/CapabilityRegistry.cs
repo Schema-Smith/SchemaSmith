@@ -83,6 +83,8 @@ namespace Schema.Capabilities
                 13, "PostgreSQL 13", null, DegradeKind.Reduced, "un-generated column, values not kept (PG13)"));
             rows.Add(new("nulls-not-distinct", "Unique index NULLS NOT DISTINCT", Platform.PostgreSQL,
                 15, "PostgreSQL 15", null, DegradeKind.Skip, "NULLS NOT DISTINCT (PG15)"));
+            rows.Add(new("unlogged-sequence", "Unlogged sequence", Platform.PostgreSQL,
+                15, "PostgreSQL 15", null, DegradeKind.Skip, "UNLOGGED sequence (PG15)"));
             rows.Add(new("expression-statistics", "Extended statistics on expressions", Platform.PostgreSQL,
                 14, "PostgreSQL 14", null, DegradeKind.Skip, "expression statistics (PG14)"));
             rows.Add(new("column-compression", "Per-column compression method", Platform.PostgreSQL,

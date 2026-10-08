@@ -69,6 +69,7 @@ public class CapabilityDocumentationTests
 
         // ---- PostgreSQL ----
         ["PostgreSQL/nulls-not-distinct"] = "**`NULLS NOT DISTINCT`**",
+        ["PostgreSQL/unlogged-sequence"] = "**Unlogged sequence**",
         ["PostgreSQL/expression-statistics"] = "**Expression statistics**",
         ["PostgreSQL/column-compression"] = "**Per-column compression**",
         ["PostgreSQL/table-access-method"] = "**Table access method**",
