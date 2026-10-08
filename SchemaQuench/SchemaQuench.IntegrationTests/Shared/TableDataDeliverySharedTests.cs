@@ -127,6 +127,42 @@ public abstract class TableDataDeliverySharedTests
         Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("Item A"));
     }
 
+    // 4-byte characters must arrive intact. On MariaDB 10.2-10.5 the recursive-CTE row source reads every value through
+    // SchemaSmith_JsonScalarStr, whose JSON parameter is LONGTEXT in the database's default character set there, so in a
+    // latin1 database an emoji became '?'. The test uses its own latin1 database, kindled there, because the function
+    // takes its parameter's character set from the database it is created in, and delivery runs in the target database.
+    // Asserted on the stored bytes; the JSON_TABLE path (MySQL 8, MariaDB 10.6+) runs it too.
+    [Test]
+    public void DeliverTableData_KeepsFourByteCharacters()
+    {
+        var db = $"_t_utf8_{Guid.NewGuid():N}".Substring(0, 24);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"CREATE DATABASE `{db}` CHARACTER SET latin1 COLLATE latin1_swedish_ci";
+            command.ExecuteNonQuery();
+            _connection.ChangeDatabase(db);
+            ForgeKindler.KindleTheForge(command, Platform);
+            command.CommandText = "CREATE TABLE `t4` (code VARCHAR(20) NOT NULL PRIMARY KEY, "
+                                  + "name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL)";
+            command.ExecuteNonQuery();
+
+            var script = BuildMergeScript(command, db, "t4", "[{\"code\":\"E1\",\"name\":\"ä😀\"}]", "`code`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            ExecuteScript(command, script);
+
+            command.CommandText = "SELECT HEX(name) FROM `t4` WHERE code = 'E1'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("C3A4F09F9880"),
+                "the stored bytes must be the UTF-8 of the delivered characters");
+        }
+        finally
+        {
+            _connection.ChangeDatabase(_testDb);
+            command.CommandText = $"DROP DATABASE IF EXISTS `{db}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void DeliverTableData_ReplaceType_ReplacesExistingRows()
     {

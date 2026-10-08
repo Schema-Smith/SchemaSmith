@@ -815,14 +815,19 @@ SELECT JSON_AGG(ROW_TO_JSON(tbl))
 
         var qualifiedTable = $"`{Identifier.EscapeDelimited(databaseName, Platform.MySQL)}`.`{Identifier.EscapeDelimited(tableName, Platform.MySQL)}`";
 
-        // JSON_ARRAYAGG is MySQL 5.7.22+ / MariaDB 10.5+. On MariaDB 10.2-10.4 it does not exist, so aggregate the
-        // rows with GROUP_CONCAT(JSON_OBJECT(...)) wrapped in brackets instead (empty table -> '[]'). GROUP_CONCAT
-        // silently truncates at group_concat_max_len (which would corrupt a large table's extracted JSON), so
-        // raise it to the max_allowed_packet ceiling first — the same effective limit JSON_ARRAYAGG has.
-        if (!SupportsJsonArrayAgg(cmd))
+        // MariaDB's JSON_ARRAYAGG is built on GROUP_CONCAT and is cut off at group_concat_max_len (1 MiB by default)
+        // with only a warning, which left a large table's extracted JSON unterminated. So on every MariaDB version,
+        // not just the 10.2-10.4 GROUP_CONCAT fallback, raise it to the max_allowed_packet ceiling first.
+        if (IsMariaDb(cmd))
         {
             cmd.CommandText = "SET SESSION group_concat_max_len = 1073741824";
             cmd.ExecuteNonQuery();
+        }
+
+        // JSON_ARRAYAGG is MySQL 5.7.22+ / MariaDB 10.5+. On MariaDB 10.2-10.4 it does not exist, so aggregate the
+        // rows with GROUP_CONCAT(JSON_OBJECT(...)) wrapped in brackets instead (empty table -> '[]').
+        if (!SupportsJsonArrayAgg(cmd))
+        {
             cmd.CommandText = $@"
 SELECT COALESCE(CONCAT('[', GROUP_CONCAT(
         JSON_OBJECT(
@@ -845,6 +850,12 @@ ORDER BY {orderColumns};";
 
         var result = cmd.ExecuteScalar();
         return result?.ToString() ?? "[]";
+    }
+
+    private static bool IsMariaDb(IDbCommand cmd)
+    {
+        cmd.CommandText = "SELECT VERSION()";
+        return (cmd.ExecuteScalar()?.ToString() ?? "").Contains("MariaDB", StringComparison.OrdinalIgnoreCase);
     }
 
     // JSON_ARRAYAGG is available on MySQL 5.7.22+ (our 5.7 floor is well past that in practice) and MariaDB 10.5+.
@@ -972,7 +983,7 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE
     internal static List<ColumnInfo> GetMySqlColumnInfo(IDbCommand cmd, string databaseName, string tableName)
     {
         cmd.CommandText = $@"
-SELECT c.COLUMN_NAME, c.DATA_TYPE
+SELECT c.COLUMN_NAME, c.DATA_TYPE, CASE WHEN c.COLUMN_TYPE LIKE '%zerofill%' THEN 1 ELSE 0 END AS IsZeroFill
 FROM INFORMATION_SCHEMA.COLUMNS c
 WHERE {MySqlNameMatch.Folded("c.TABLE_SCHEMA", Literal(databaseName))}
   AND {MySqlNameMatch.Folded("c.TABLE_NAME", Literal(tableName))}
@@ -986,7 +997,8 @@ ORDER BY c.ORDINAL_POSITION;";
             columns.Add(new ColumnInfo
             {
                 Name = reader.GetString(0),
-                DataType = reader.GetString(1)
+                DataType = reader.GetString(1),
+                ZeroFill = Convert.ToInt32(reader.GetValue(2)) == 1
             });
         }
         return columns;
@@ -1012,6 +1024,9 @@ ORDER BY c.ORDINAL_POSITION;";
                 // into an untyped destination column.
                 => $"{quotedName}, ST_AsText({columnRef}), '{column.Name.Replace("'", "''")}.STSrid', ST_SRID({columnRef})",
             "bit" => $"{quotedName}, CAST({columnRef} AS UNSIGNED)",
+            // MariaDB's JSON_OBJECT writes a ZEROFILL number with its padding (MDEV-30962) -- 00007, which is not JSON,
+            // so delivery failed parsing the file. Adding zero yields the plain number.
+            _ when column.ZeroFill => $"{quotedName}, {columnRef} + 0",
             _ => $"{quotedName}, {columnRef}"
         };
     }
@@ -1114,5 +1129,6 @@ SELECT c.column_name, c.udt_name
     {
         public string Name { get; init; } = "";
         public string DataType { get; init; } = "";
+        public bool ZeroFill { get; init; }
     }
 }
