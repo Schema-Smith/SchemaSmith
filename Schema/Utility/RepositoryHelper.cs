@@ -302,7 +302,7 @@ public static class RepositoryHelper
         JObject existingObj;
         try
         {
-            existingObj = JObject.Parse(existing);
+            existingObj = JsonText.ParseObject(existing);
         }
         catch (JsonException ex)
         {
@@ -646,7 +646,7 @@ public static class RepositoryHelper
     {
         // Parse purely as a guard. The result is thrown away and the edit is textual, but a file that
         // does not parse is a file this must not rewrite.
-        if (JToken.Parse(json) is not JObject parsed) return null;
+        if (JsonText.Parse(json) is not JObject parsed) return null;
 
         var encoded = JsonConvert.ToString(reference);
         if (parsed["$schema"] is not null)

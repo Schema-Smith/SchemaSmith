@@ -74,7 +74,7 @@ public sealed class TableFileNameCheck : ISchemaCheck
     private static IEnumerable<Finding> CheckModeledObject(string path)
     {
         JObject content;
-        try { content = JObject.Parse(ProductFileWrapper.GetFromFactory().ReadAllText(path)); }
+        try { content = JsonText.ParseObject(ProductFileWrapper.GetFromFactory().ReadAllText(path)); }
         catch (JsonReaderException) { yield break; } // malformed content is another check's concern
 
         var name = content.Value<string>("Name");

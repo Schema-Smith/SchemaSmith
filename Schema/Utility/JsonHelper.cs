@@ -32,7 +32,7 @@ public static class JsonHelper
             throw new RunFailedException($"File {filePath} does not exist");
 
         var text = FileWrapper.GetFromFactory().ReadAllText(filePath);
-        return WithFileContext(filePath, () => JsonConvert.DeserializeObject<T>(text));
+        return WithFileContext(filePath, () => JsonText.Deserialize<T>(text));
     }
 
     // Matches --Validate (JSON-schema additionalProperties:false) and the generated editor
@@ -55,7 +55,7 @@ public static class JsonHelper
             throw new RunFailedException($"File {filePath} does not exist");
 
         var text = ProductFileWrapper.GetFromFactory().ReadAllText(filePath);
-        var settings = new JsonSerializerSettings { MissingMemberHandling = missingMemberHandling };
+        var settings = JsonText.Settings(new JsonSerializerSettings { MissingMemberHandling = missingMemberHandling });
         return WithFileContext(filePath, () => JsonConvert.DeserializeObject<Product>(text, settings))
             ?? throw new JsonSerializationException($"Failed to deserialize Product from {filePath}");
     }

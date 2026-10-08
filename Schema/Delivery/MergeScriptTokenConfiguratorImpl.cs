@@ -33,7 +33,7 @@ public class MergeScriptTokenConfiguratorImpl : IMergeScriptTokenConfigurator
         }
 
         var json = file.ReadAllText(templateJsonFile);
-        var template = JObject.Parse(json);
+        var template = JsonText.ParseObject(json);
 
         if (template["ScriptTokens"] is not JObject scriptTokens)
         {

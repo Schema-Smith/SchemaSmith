@@ -330,4 +330,41 @@ public class ConfigurationLoggerTests
         Assert.That(logLines, Has.Some.Matches<string>(s => s.Contains("First")));
         Assert.That(logLines, Has.Some.Matches<string>(s => s.Contains("Second")));
     }
+
+    // A list's entries are keyed by index ("password:0"), so judging each by its own name logged every entry of a
+    // sensitively-named list in clear.
+    [Test]
+    public void LogConfiguration_MasksTheEntriesOfAListUnderASensitiveName()
+    {
+        var logLines = new List<string>();
+
+        ConfigurationLogger.LogConfiguration(ConfigWith(("password:0", "hunter2"), ("password:1", "swordfish")), s => logLines.Add(s));
+
+        Assert.That(logLines, Has.None.Matches<string>(s => s.Contains("hunter2") || s.Contains("swordfish")));
+        Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "0: ***"));
+    }
+
+    // "Token" is a sensitive pattern, so masking a whole object under a sensitive ancestor would hide every token.
+    [Test]
+    public void LogConfiguration_KeepsScriptTokenValuesReadable_WhileTokenLoggingIsOn()
+    {
+        var logLines = new List<string>();
+
+        ConfigurationLogger.LogConfiguration(ConfigWith(("ScriptTokens:Env", "Prod")), s => logLines.Add(s));
+
+        Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "Env: Prod"));
+    }
+
+    // LogTokens: false suppressed only the separate token section; the configuration echo still printed every value.
+    [Test]
+    public void LogConfiguration_MasksScriptTokenValues_WhenTokenLoggingIsOff()
+    {
+        var logLines = new List<string>();
+
+        ConfigurationLogger.LogConfiguration(
+            ConfigWith(("ScriptTokens:Env", "Prod"), ("LogHygiene:LogTokens", "false")), s => logLines.Add(s));
+
+        Assert.That(logLines, Has.None.Matches<string>(s => s.Contains("Prod")));
+        Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "Env: ***"));
+    }
 }

@@ -128,7 +128,7 @@ public class DataTongs
         var outputScriptsSetting = config[SettingsKeys.ShouldCast.OutputScripts];
         var outputScripts = outputScriptsSetting?.ToLower() != "false";
         var contentsPath = config[SettingsKeys.ContentPath] ?? ".";
-        var scriptPath = config[SettingsKeys.ScriptPath] ?? ".";
+        var scriptPath = ConfigHelper.PathSetting(config, SettingsKeys.ScriptPath);
         var configureDataDelivery = CommandLineParser.ContainsSwitch("ConfigureDataDelivery")
             || config[SettingsKeys.ShouldCast.ConfigureDataDelivery]?.ToLower() == "true";
 
@@ -512,7 +512,7 @@ public class DataTongs
         {
             var json = fileWrapper.ReadAllText(templateJsonPath);
             if (string.IsNullOrWhiteSpace(json)) return false;
-            var obj = JObject.Parse(json);
+            var obj = JsonText.ParseObject(json);
             var scriptValue = obj["SchemaIdentificationScript"]?.ToString();
             return !string.IsNullOrWhiteSpace(scriptValue);
         }
@@ -1008,7 +1008,7 @@ ORDER BY c.ORDINAL_POSITION;";
         return rawJson.Replace("}, {", "},\r\n{").Replace("},{", "},\r\n{").Replace("[{", "[\r\n{").Replace("}]", "}\r\n]");
     }
 
-    internal static int CountRows(string tableDataJson) => JArray.Parse(tableDataJson).Count;
+    internal static int CountRows(string tableDataJson) => JsonText.ParseArray(tableDataJson).Count;
 
     // Counts <row> elements in the delivery XML shape (<rows><row>...</row></rows>). The element is
     // always emitted as a bare "<row>" (no attributes), so a literal substring count is exact and

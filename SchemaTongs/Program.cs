@@ -22,6 +22,7 @@ public static class Program
         try
         {
             CommandLineParser.RefuseUnrecognizedArguments(KnownArguments);
+            ConfigHelper.CheckStartupSettings(config, LogFactory.GetLogger("ProgressLog").Warn);
         }
         catch (RunFailedException e)
         {

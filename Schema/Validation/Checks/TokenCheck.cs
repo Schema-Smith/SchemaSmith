@@ -185,7 +185,7 @@ public sealed class TokenCheck : ISchemaCheck
     {
         try
         {
-            return JObject.Parse(text);
+            return JsonText.ParseObject(text);
         }
         catch
         {

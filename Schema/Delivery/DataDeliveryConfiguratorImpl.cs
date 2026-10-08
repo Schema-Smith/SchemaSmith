@@ -6,6 +6,7 @@ using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Schema.Isolators;
+using Schema.Utility;
 
 namespace Schema.Delivery;
 
@@ -32,7 +33,7 @@ public class DataDeliveryConfiguratorImpl : IDataDeliveryConfigurator
         }
 
         var json = FileWrapper.GetFromFactory().ReadAllText(tableJsonFile);
-        var table = JObject.Parse(json);
+        var table = JsonText.ParseObject(json);
 
         JObject delivery;
         var isArrayElement = false;

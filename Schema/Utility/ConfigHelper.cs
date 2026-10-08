@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using log4net;
 using log4net.Config;
 using Microsoft.Extensions.Configuration;
@@ -44,6 +45,29 @@ public static class ConfigHelper
 
     // NOTE: No Platform constant — unified tools read platform from Product.Platform
 
+    /// <summary>
+    /// A folder setting, trimmed, with a blank value meaning the current directory. Untrimmed, a value of spaces made
+    /// SchemaTongs write into a folder named " " (which Windows tools cannot open) and DataTongs throw on it.
+    /// </summary>
+    public static string PathSetting(IConfiguration config, string key) =>
+        config?[key]?.Trim() is { Length: > 0 } path ? path : ".";
+
+    // Keyed by the configuration it was built for, so a configuration a test registers directly never inherits one.
+    private static readonly ConditionalWeakTable<IConfigurationRoot, string> MissingSettingsFiles = new();
+
+    /// <summary>
+    /// Stops the run on settings it cannot use, before anything connects: a <c>--ConfigFile</c> that does not exist.
+    /// A <c>LogHygiene</c> block the tools cannot read is a warning, naming the key, since the run can go ahead.
+    /// </summary>
+    public static void CheckStartupSettings(IConfigurationRoot config, Action<string> warn)
+    {
+        if (config != null && MissingSettingsFiles.TryGetValue(config, out var missing))
+            throw new RunFailedException($"Settings file not found: {missing}. Nothing was run. A --ConfigFile path is read relative to the current directory.");
+
+        foreach (var problem in LogHygieneOptions.Problems(config))
+            warn?.Invoke(problem);
+    }
+
     public static IConfigurationRoot GetAppSettingsAndUserSecrets(string app, Action<string> logLine)
     {
         lock (FactoryContainer.SharedLockObject)
@@ -55,14 +79,21 @@ public static class ConfigHelper
             // tests register a mock IDirectory for other components, and a mock's null
             // GetCurrentDirectory() would break ConfigurationBuilder.SetBasePath here.
             var basePath = Directory.GetCurrentDirectory();
-            var settingsFile = CommandLineParser.ValueOfSwitch("ConfigFile", null) ?? $"{app}.settings.json";
+            var explicitFile = CommandLineParser.ValueOfSwitch("ConfigFile", null);
+            var settingsFile = explicitFile ?? $"{app}.settings.json";
             var builder = new ConfigurationBuilder()
                 .SetBasePath(basePath);
 
-            // Check AppContext.BaseDirectory as fallback (test runners may not set CWD to the output directory)
-            var appBasePath = AppContext.BaseDirectory;
-            if (!File.Exists(Path.Join(basePath, settingsFile)) && File.Exists(Path.Join(appBasePath, settingsFile)))
-                builder.SetBasePath(appBasePath);
+            // The default file falls back to the tool's own folder (test runners may not set CWD to the output
+            // directory). A file named with --ConfigFile never does: reading a same-named file from somewhere else
+            // would run with settings nobody asked for.
+            string missingFile = null;
+            if (!File.Exists(Path.GetFullPath(settingsFile, basePath)))
+            {
+                var appBasePath = AppContext.BaseDirectory;
+                if (explicitFile != null) missingFile = Path.GetFullPath(settingsFile, basePath);
+                else if (File.Exists(Path.Join(appBasePath, settingsFile))) builder.SetBasePath(appBasePath);
+            }
 
             builder.AddJsonFile(settingsFile, optional: true)
 #if DEBUG
@@ -72,6 +103,7 @@ public static class ConfigHelper
                 .AddInMemoryCollection(CommandLineParser.ConfigOverrides);
 
             config = builder.Build();
+            if (missingFile != null) MissingSettingsFiles.AddOrUpdate(config, missingFile);
             FactoryContainer.Register(config);
             logLine?.Invoke(app);
 

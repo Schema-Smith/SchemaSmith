@@ -161,6 +161,23 @@ public class MergeScriptHelperTests
         });
     }
 
+    // The chunked path re-serialises the rows it parsed. Read with the default reader, a date-like value became a
+    // DateTime and was sent converted to the host's time zone.
+    [Test]
+    public void BuildChunkedMergeMySql_SendsADateLikeValueExactlyAsDelivered()
+    {
+        const string when = "2026-10-07T12:00:00.000+02:00";
+        var payload = "[" + string.Join(",", Enumerable.Range(0, MergeScriptHelper.MariaDbShredChunkRows + 1)
+            .Select(i => $"{{\"Id\":{i},\"When\":\"{when}\"}}")) + "]";
+        Assert.That(MergeScriptHelper.TryChunkMySqlPayload(false, false, payload, out var rows), Is.True);
+        var columns = new List<MergeScriptHelper.MySqlColumnInfo> { new() { Name = "Id", DataType = "int" } };
+
+        var sql = MergeScriptHelper.BuildChunkedMergeMySql("db", "t", "`Id`, `When`", "jt.`Id`, jt.`When`",
+            "(SELECT 1) AS jt", null, "`Id`", rows, columns, null, null);
+
+        Assert.That(CountOf(sql, when), Is.EqualTo(MergeScriptHelper.MariaDbShredChunkRows + 1));
+    }
+
     [Test]
     public void BuildChunkedMergeMySql_WithoutDelete_EmitsNoKeyTable()
     {

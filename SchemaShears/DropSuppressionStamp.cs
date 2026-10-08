@@ -9,6 +9,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Schema.Domain;
 using Schema.Isolators;
+using Schema.Utility;
 
 namespace SchemaShears;
 
@@ -35,7 +36,7 @@ public static class DropSuppressionStamp
 
         ValidateCategories(allowDrops);
 
-        var json = JObject.Parse(FileWrapper.GetFromFactory().ReadAllText(productJsonPath));
+        var json = JsonText.ParseObject(FileWrapper.GetFromFactory().ReadAllText(productJsonPath));
         var platform = Enum.TryParse<Platform>(json["Platform"]?.Value<string>(), ignoreCase: true, out var p) ? p : Platform.Unknown;
 
         foreach (var (category, flags) in CategoryToFlags)
