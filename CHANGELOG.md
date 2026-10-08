@@ -94,6 +94,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **DataTongs dropped fractional seconds from MySQL and MariaDB date and time columns — #461.** `DATETIME`, `TIMESTAMP` and `TIME` values were formatted to whole seconds, so `10:11:12.123456` extracted as `10:11:12` and was delivered that way. A column with fractional precision now extracts with its fraction, to that precision; a whole-second column extracts exactly as before.
 - **DataTongs `SelectColumns` on MySQL and MariaDB extracted the selected columns as plain text — #462.** Each configured column stood in as `varchar`, so the type-aware forms were skipped: a binary column was written raw instead of base64, `BIT`, geometry and `ZEROFILL` columns were not converted, and dates lost their format. `SelectColumns` now narrows the table's real columns, so each keeps its type's handling.
 - **DataTongs broke text values containing `},{` when writing extracted JSON — #463.** Rows were split onto separate lines wherever `},{` appeared, including inside strings, so a SQL Server or PostgreSQL column holding `[{"a":1},{"b":2}]` produced a file that was not valid JSON. Line breaks now go between rows only; files without such values are written exactly as before.
+- **XML data delivery rounded wide numeric values — #465.** Converting extracted JSON to XML read numbers as doubles, so `12345678901234567890.123456789` lost its trailing digits. Each number is now carried as its literal text.
 
 ## [v2.7.1](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) — 2026-10-01
 

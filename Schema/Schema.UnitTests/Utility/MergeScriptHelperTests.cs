@@ -81,6 +81,23 @@ public class MergeScriptHelperTests
         Assert.That(xml, Does.Not.Contain("false").IgnoreCase);
     }
 
+    // Numbers went through double: a wide numeric lost its tail digits, and 100.50 became 100.5.
+    [Test]
+    public void JsonPayloadToXml_NumberColumn_KeepsItsLiteralText()
+    {
+        var xml = MergeScriptHelper.JsonPayloadToXml(
+            @"[{""big"":12345678901234567890.123456789,""cents"":100.50,""neg"":-1.5E-7,""n"":42,""doc"":{""x"":1.25,""s"":""7""}}]");
+        Assert.Multiple(() =>
+        {
+            Assert.That(xml, Does.Contain("<c n=\"big\">12345678901234567890.123456789</c>"));
+            Assert.That(xml, Does.Contain("<c n=\"cents\">100.50</c>"));
+            Assert.That(xml, Does.Contain("<c n=\"neg\">-1.5E-7</c>"));
+            Assert.That(xml, Does.Contain("<c n=\"n\">42</c>"));
+            Assert.That(xml, Does.Contain("\"x\": 1.25").And.Contain("\"s\": \"7\""),
+                "a number inside a json column's value is part of that document and stays a number");
+        });
+    }
+
     [Test]
     public void JsonPayloadToXml_EmptyOrNullPayload_ReturnsEmptyString()
     {

@@ -174,7 +174,7 @@ public static class MergeScriptHelper
     public static string JsonPayloadToXml(string tableData)
     {
         if (string.IsNullOrWhiteSpace(tableData) || tableData == "null") return "";
-        var array = JsonText.ParseArray(tableData);
+        var array = JsonText.ParseArray(QuoteRowNumbers(tableData));
         if (array.Count == 0) return "";
 
         var rows = new System.Xml.Linq.XElement("rows");
@@ -192,6 +192,40 @@ public static class MergeScriptHelper
             rows.Add(row);
         }
         return rows.ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+    }
+
+    // A column's number as its literal text: parsed, it went through double and a wide numeric lost digits. Only values
+    // directly in a row are quoted; a number inside a json column's document is left as it is.
+    private static string QuoteRowNumbers(string json)
+    {
+        var sb = new StringBuilder(json.Length + 32);
+        var depth = 0;
+        var inString = false;
+        for (var i = 0; i < json.Length; i++)
+        {
+            var ch = json[i];
+            if (inString)
+            {
+                sb.Append(ch);
+                if (ch == '\\' && i + 1 < json.Length) sb.Append(json[++i]);
+                else if (ch == '"') inString = false;
+                continue;
+            }
+            switch (ch)
+            {
+                case '"': inString = true; break;
+                case '[' or '{': depth++; break;
+                case ']' or '}': depth--; break;
+                case '-' or (>= '0' and <= '9') when depth == 2:
+                    var end = i;
+                    while (end < json.Length && (char.IsDigit(json[end]) || json[end] is '-' or '+' or '.' or 'e' or 'E')) end++;
+                    sb.Append('"').Append(json, i, end - i).Append('"');
+                    i = end - 1;
+                    continue;
+            }
+            sb.Append(ch);
+        }
+        return sb.ToString();
     }
 
     // B1: the SQL Server data-delivery metadata helpers below aggregate column lists with
