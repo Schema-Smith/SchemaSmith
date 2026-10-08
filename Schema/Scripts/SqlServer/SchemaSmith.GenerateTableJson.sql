@@ -20,7 +20,7 @@ SET NOCOUNT ON
 DECLARE @v_DatabaseCollation NVARCHAR(200) = CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS NVARCHAR(200))
 -- SchemaSmith-internal extended properties to exclude from extraction (one-line change to add new names)
 DECLARE @InternalEPNames TABLE ([Name] NVARCHAR(128))
-INSERT @InternalEPNames VALUES (N'ProductName'), (N'PreventDrop')  -- PreventDrop is a SchemaSmith ownership marker, not a user extended property (#270)
+INSERT @InternalEPNames VALUES (N'ProductName'), (N'PreventDrop'), (N'SchemaSmith_SuspendedHistory')  -- PreventDrop is a SchemaSmith ownership marker, not a user extended property (#270)
 
 -- Ledger (#ledger) is SQL Server 2022, and this proc is a plain CREATE PROCEDURE -- every column it
 -- names is bound when the proc is created, so a static sys.tables.ledger_type_desc reference would fail

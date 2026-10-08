@@ -361,6 +361,40 @@ public class DeployPathTableFeatureTests
         });
     }
 
+    // A system-versioned table whose primary-key column changes: SQL Server will not drop the key while versioning is
+    // on (13557), so the deploy failed with "Could not drop constraint". Versioning is now suspended around the rebuild
+    // and resumed with the SAME history table -- a custom-named one, so a resume by the default name would show -- and
+    // the history rows written before the change must still be there, under the new collation.
+    [Test]
+    public void ATemporalTablesPrimaryKeyColumnChange_KeepsVersioningAndItsHistory()
+    {
+        RunScenario("DeployTemporalPk", setupDatabase: null, (deploy, db, cmd) =>
+        {
+            deploy(TemporalTable("Latin1_General_CS_AS"));
+            cmd.CommandText = "INSERT dbo.DeployProbe (Code, Val) VALUES ('a', 1); UPDATE dbo.DeployProbe SET Val = 2;";
+            cmd.ExecuteNonQuery();
+
+            deploy(TemporalTable("Latin1_General_CI_AS"));
+
+            cmd.CommandText = "SELECT h.[name] FROM sys.tables t JOIN sys.tables h ON h.[object_id] = t.history_table_id WHERE t.[object_id] = OBJECT_ID('dbo.DeployProbe') AND t.temporal_type = 2";
+            Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("DeployProbe_Archive"), "versioning must be back on, with the same history table");
+            cmd.CommandText = "SELECT COUNT(*) FROM dbo.DeployProbe_Archive WHERE Val = 1";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the history written before the change must survive");
+            cmd.CommandText = "SELECT STRING_AGG(OBJECT_NAME([object_id]) + ':' + collation_name, ',') WITHIN GROUP (ORDER BY OBJECT_NAME([object_id])) "
+                              + "FROM sys.columns WHERE [name] = 'Code' AND [object_id] IN (OBJECT_ID('dbo.DeployProbe'), OBJECT_ID('dbo.DeployProbe_Archive'))";
+            Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("DeployProbe:Latin1_General_CI_AS,DeployProbe_Archive:Latin1_General_CI_AS"));
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.extended_properties WHERE major_id = OBJECT_ID('dbo.DeployProbe') AND [name] = 'SchemaSmith_SuspendedHistory'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "the suspension marker must be removed once versioning is back on");
+        });
+    }
+
+    private static string TemporalTable(string collation) => $$"""
+        { "Schema": "[dbo]", "Name": "[DeployProbe]", "IsTemporal": true, "HistoryTableName": "[DeployProbe_Archive]",
+          "Columns": [ { "Name": "[Code]", "DataType": "VARCHAR(20)", "Nullable": false, "Collation": "{{collation}}" },
+                       { "Name": "[Val]", "DataType": "INT", "Nullable": true } ],
+          "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Code]" } ] }
+        """;
+
     private static string CdcTable(bool enableCdc, bool extraColumn, bool? netChanges = null, bool primaryKey = true,
                                    bool extraColumnC = false, bool uniqueIndex = false) => $$"""
         { "Schema": "[dbo]", "Name": "[DeployProbe]", "EnableCDC": {{(enableCdc ? "true" : "false")}},

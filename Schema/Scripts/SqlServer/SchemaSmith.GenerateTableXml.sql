@@ -50,7 +50,7 @@ DECLARE @v_HistTableSchema SYSNAME = NULL, @v_HistTableName SYSNAME = NULL, @v_H
 -- Internal SchemaSmith ownership markers, excluded from the user Extensions/ExtendedProperties (mirrors the
 -- JSON proc). PreventDrop is surfaced as its own top-level property, not a user EP (#270).
 DECLARE @InternalEPNames TABLE ([Name] NVARCHAR(128))
-INSERT @InternalEPNames VALUES (N'ProductName'), (N'PreventDrop')
+INSERT @InternalEPNames VALUES (N'ProductName'), (N'PreventDrop'), (N'SchemaSmith_SuspendedHistory')
 
 CREATE TABLE #ColMeta
 (
