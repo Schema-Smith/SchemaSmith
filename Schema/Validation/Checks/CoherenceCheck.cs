@@ -846,11 +846,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     {
         if (template.Events.Count == 0) yield break;
 
-        var scriptedEventNames = template.ObjectScripts?
-            .Where(s => (s.FilePath ?? "").Replace(Path.DirectorySeparatorChar, '/').Contains("/Events/", StringComparison.OrdinalIgnoreCase))
-            .Select(s => Path.GetFileNameWithoutExtension(s.FilePath ?? ""))
-            .Where(n => !string.IsNullOrWhiteSpace(n))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
+        var scriptedEventNames = ScriptedNamesIn(template, "Events");
 
         foreach (var ev in template.Events.Where(e => scriptedEventNames.Contains(e.Name ?? "")))
             yield return new Finding(Severity.Error, DuplicateEventCode, Category,
@@ -888,21 +884,21 @@ public sealed class CoherenceCheck : ISchemaCheck
     {
         foreach (var finding in CoexistenceFindings(
                      template, "Enum Types", DuplicateEnumTypeCode, "Enum type",
-                     template.EnumTypes.Select(e => e.Name),
+                     template.EnumTypes.Select(e => (e.Schema, e.Name)),
                      "The scripted form is a guarded CREATE TYPE, so once the type exists the script " +
                      "silently does nothing while the declared form is what converges"))
             yield return finding;
 
         foreach (var finding in CoexistenceFindings(
                      template, "Domain Types", DuplicateDomainTypeCode, "Domain type",
-                     template.DomainTypes.Select(d => d.Name),
+                     template.DomainTypes.Select(d => (d.Schema, d.Name)),
                      "There is no CREATE OR REPLACE DOMAIN, so the scripted form is a guarded CREATE " +
                      "DOMAIN and silently does nothing once the domain exists"))
             yield return finding;
 
         foreach (var finding in CoexistenceFindings(
                      template, "Sequences", DuplicateSequenceCode, "Sequence",
-                     template.Sequences.Select(s => s.Name),
+                     template.Sequences.Select(s => (s.Schema, s.Name)),
                      "Two authoring paths for one object leave it ambiguous which one is in charge"))
             yield return finding;
     }
@@ -912,31 +908,33 @@ public sealed class CoherenceCheck : ISchemaCheck
         string folder,
         string code,
         string noun,
-        IEnumerable<string> declaredNames,
+        IEnumerable<(string Schema, string Name)> declaredNames,
         string consequence)
     {
-        var declared = declaredNames.Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+        var declared = declaredNames.Where(n => !string.IsNullOrWhiteSpace(n.Name)).ToList();
         if (declared.Count == 0) yield break;
 
         var scripted = ScriptedNamesIn(template, folder);
         if (scripted.Count == 0) yield break;
 
-        foreach (var name in declared.Where(scripted.Contains))
+        // A script file names its object bare ("status.sql") or schema-qualified ("public.status.sql").
+        foreach (var (schema, name) in declared.Where(d => scripted.Contains(d.Name) || scripted.Contains($"{d.Schema}.{d.Name}")))
             yield return new Finding(Severity.Error, code, Category,
                 $"Template '{template.Name}'",
-                $"{noun} '{name}' is declared as JSON and also scripted as a .sql file in the same " +
+                $"{noun} '{(string.IsNullOrEmpty(schema) ? name : $"{schema}.{name}")}' is declared as JSON and also scripted as a .sql file in the same " +
                 $"{folder} folder. {consequence} — keep one.");
     }
 
-    // Same folder discriminator and filename-as-object-name convention the events check uses: a
-    // scripted object is named by its file, and the folder is what says which kind it is.
+    // A scripted object is named by its file, and the folder that holds it is what says which kind it is. The folder
+    // is the script folder's own path under the template, first segment: matching "/<folder>/" anywhere in a script's
+    // full path counted a directory above the package, or a same-named subfolder of another folder, as that folder.
     private static HashSet<string> ScriptedNamesIn(Template template, string folder) =>
-        template.ObjectScripts?
-            .Where(s => (s.FilePath ?? "").Replace(Path.DirectorySeparatorChar, '/')
-                .Contains($"/{folder}/", StringComparison.OrdinalIgnoreCase))
+        template.ObjectFolders
+            .Where(f => (f.FolderPath ?? "").Split('/', '\\')[0].Equals(folder, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(f => f.Scripts)
             .Select(s => Path.GetFileNameWithoutExtension(s.FilePath ?? ""))
             .Where(n => !string.IsNullOrWhiteSpace(n))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     // Mirrors SchemaSmith_NormalizeIndexColumns.sql's DESC/ASC suffix handling (source of truth —
     // keep in sync): a trailing " DESC" or " ASC" (case-insensitive) is ordering, not part of the
