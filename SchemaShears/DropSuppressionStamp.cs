@@ -33,16 +33,7 @@ public static class DropSuppressionStamp
         if (!FileWrapper.GetFromFactory().Exists(productJsonPath))
             throw new PatchBuildException($"Product.json not found in patch output: '{productJsonPath}'.");
 
-        var unknown = allowDrops
-            .Where(c => !CategoryToFlags.ContainsKey(c))
-            .ToList();
-
-        if (unknown.Count > 0)
-        {
-            var valid = string.Join(", ", CategoryToFlags.Keys);
-            throw new PatchBuildException(
-                $"Unknown drop category '{unknown[0]}'. Valid categories: {valid}.");
-        }
+        ValidateCategories(allowDrops);
 
         var json = JObject.Parse(FileWrapper.GetFromFactory().ReadAllText(productJsonPath));
         var platform = Enum.TryParse<Platform>(json["Platform"]?.Value<string>(), ignoreCase: true, out var p) ? p : Platform.Unknown;
@@ -55,6 +46,22 @@ public static class DropSuppressionStamp
         }
 
         FileWrapper.GetFromFactory().WriteAllText(productJsonPath, json.ToString(Formatting.Indented));
+    }
+
+    // Checked before anything is written as well: a typo found after the copy left a half-built patch behind, and the
+    // re-run then failed because the output already existed.
+    public static void ValidateCategories(IReadOnlyCollection<string> allowDrops)
+    {
+        var unknown = allowDrops
+            .Where(c => !CategoryToFlags.ContainsKey(c))
+            .ToList();
+
+        if (unknown.Count > 0)
+        {
+            var valid = string.Join(", ", CategoryToFlags.Keys);
+            throw new PatchBuildException(
+                $"Unknown drop category '{unknown[0]}'. Valid categories: {valid}.");
+        }
     }
 
     // A setting scoped to some engines is not part of the product schema on the others, so stamping it there
