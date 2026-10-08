@@ -403,6 +403,8 @@ public class LogScrubberTests
     [TestCase("export PGPASSWORD=envsecret", "export PGPASSWORD=***")]
     [TestCase("DB_PASSWORD=envsecret2\nnext line", "DB_PASSWORD=***\nnext line")]
     [TestCase("MYSQL_PWD=envsecret3; mysql -u app", "MYSQL_PWD=***; mysql -u app")]
+    [TestCase("-- marker AdminPassword=s3cret Region=us-east", "-- marker AdminPassword=*** Region=us-east")]
+    [TestCase("Server=db;Password=pass with spaces;Database=app", "Server=db;Password=***;Database=app")]
     [TestCase("ALTER USER u IDENTIFIED BY 'n;ew' REPLACE 'o;ld';", "ALTER USER u IDENTIFIED BY *** REPLACE ***;")]
     [TestCase("SET PASSWORD = PASSWORD('a;b');", "SET PASSWORD =***;")]
     [TestCase("CREATE DATABASE SCOPED CREDENTIAL c WITH IDENTITY = 'u', SECRET = 'cred;secret';",
