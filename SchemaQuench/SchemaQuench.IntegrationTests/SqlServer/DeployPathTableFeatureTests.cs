@@ -401,7 +401,7 @@ public class DeployPathTableFeatureTests
 
             try
             {
-                cmd.CommandText = $"CREATE DATABASE [{db}];";
+                cmd.CommandText = $"CREATE DATABASE [{db}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
                 cmd.ExecuteNonQuery();
                 conn.ChangeDatabase(db);
                 if (setupDatabase != null) ExecuteWithDeadlockRetry(cmd, setupDatabase);

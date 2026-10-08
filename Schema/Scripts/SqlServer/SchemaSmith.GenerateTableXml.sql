@@ -55,10 +55,10 @@ CREATE TABLE #ColMeta
 (
   [column_id] INT PRIMARY KEY,
   GeneratedAlwaysType TINYINT NOT NULL DEFAULT 0,
-  MaskingFunction NVARCHAR(4000) NULL,
-  EncryptionType NVARCHAR(64) NULL,
-  EncryptionKey NVARCHAR(388) NULL,
-  EncryptionAlgorithm NVARCHAR(128) NULL
+  MaskingFunction NVARCHAR(4000) COLLATE DATABASE_DEFAULT NULL,
+  EncryptionType NVARCHAR(64) COLLATE DATABASE_DEFAULT NULL,
+  EncryptionKey NVARCHAR(388) COLLATE DATABASE_DEFAULT NULL,
+  EncryptionAlgorithm NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
 )
 IF SchemaSmith.fn_ServerMajorVersion() >= 13
   EXEC sp_executesql N'

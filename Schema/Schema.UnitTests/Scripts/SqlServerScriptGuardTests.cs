@@ -69,6 +69,63 @@ public class SqlServerScriptGuardTests
     }
 
     /// <summary>
+    /// Every character column of a temp table names its collation. Without one it takes tempdb's, which is the
+    /// server's, and the first comparison with a column of a database in another collation fails to compile:
+    /// "Cannot resolve the collation conflict". That is every deploy to such a database, from the first table on --
+    /// and nothing a deploy into a database in the server's own collation can show. Table variables and
+    /// SELECT ... INTO take the database's collation, so only CREATE TABLE # is checked. SchemaQuench declares one
+    /// temp table in C#, which is scanned with the scripts.
+    /// </summary>
+    [Test]
+    public void EveryTempTableCharacterColumn_NamesItsCollation()
+    {
+        var sources = SqlServerScripts().ToList();
+        var databaseQuench = Path.Join(RepoSources.Root, "SchemaQuench", "DatabaseQuench.cs");
+        Assert.That(File.Exists(databaseQuench), "expected to scan DatabaseQuench.cs; if it moved, move this with it");
+        sources.Add(("DatabaseQuench.cs", File.ReadAllText(databaseQuench)));
+
+        var offenders = new List<string>();
+        var columnsChecked = 0;
+        foreach (var (name, sql) in sources)
+        foreach (var block in CreateTableBlocks(WithoutLineComments(sql)))
+        {
+            var table = Regex.Match(block, @"#\w+").Value;
+            var body = block[(block.IndexOf('(') + 1)..^1];
+            foreach (var column in TopLevelItems(body).Select(c => Regex.Replace(c, @"\s+", " ").Trim()))
+            {
+                if (!Regex.IsMatch(column, @"^(?:\[[^\]]+\]|\w+) (?:N?VARCHAR|N?CHAR|SYSNAME|N?TEXT)\b", RegexOptions.IgnoreCase))
+                    continue;
+                columnsChecked++;
+                if (!Regex.IsMatch(column, @"\bCOLLATE\b", RegexOptions.IgnoreCase))
+                    offenders.Add($"{name}: {table} {column}");
+            }
+        }
+
+        Assert.That(columnsChecked, Is.GreaterThan(40), "too few temp table character columns found; the scan is broken");
+        Assert.That(offenders, Is.Empty,
+            "A temp table character column has no COLLATE, so it takes tempdb's collation and any deploy to a "
+            + "database in another collation fails comparing with it. Add COLLATE DATABASE_DEFAULT:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    private static IEnumerable<string> TopLevelItems(string list)
+    {
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i < list.Length; i++)
+        {
+            if (list[i] == '(') depth++;
+            else if (list[i] == ')') depth--;
+            else if (list[i] == ',' && depth == 0)
+            {
+                yield return list[start..i];
+                start = i + 1;
+            }
+        }
+        yield return list[start..];
+    }
+
+    /// <summary>
     /// The C# sources that BUILD SQL Server catalog queries as string literals. The sibling guard below
     /// scans these because the resource-based one structurally cannot: it enumerates manifest resources
     /// filtered to <c>.EndsWith(".sql")</c>, and a query assembled in C# is neither. v2.7.0 dropped the

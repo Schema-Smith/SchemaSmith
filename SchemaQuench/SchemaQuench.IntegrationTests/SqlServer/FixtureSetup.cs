@@ -163,10 +163,11 @@ END";
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
+        var collation = Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd);
         cmd.CommandText = @$"
-CREATE DATABASE [{_integrationSecondaryDb}];
+CREATE DATABASE [{_integrationSecondaryDb}] COLLATE {collation};
 
-CREATE DATABASE [{_integrationMainDb}];
+CREATE DATABASE [{_integrationMainDb}] COLLATE {collation};
 ";
         cmd.ExecuteNonQuery();
 

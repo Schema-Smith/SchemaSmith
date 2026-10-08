@@ -217,7 +217,7 @@ BEGIN
   IF SchemaSmith.fn_ServerMajorVersion() >= 14
   BEGIN
     IF OBJECT_ID('tempdb..#DeployedGraphType') IS NOT NULL DROP TABLE #DeployedGraphType
-    CREATE TABLE #DeployedGraphType (FullName NVARCHAR(1010), Declared NVARCHAR(10), Deployed NVARCHAR(10))
+    CREATE TABLE #DeployedGraphType (FullName NVARCHAR(1010) COLLATE DATABASE_DEFAULT, Declared NVARCHAR(10) COLLATE DATABASE_DEFAULT, Deployed NVARCHAR(10) COLLATE DATABASE_DEFAULT)
     EXEC sp_executesql N'
       INSERT INTO #DeployedGraphType (FullName, Declared, Deployed)
         SELECT t.[Schema] + ''.'' + t.[Name],
@@ -248,7 +248,7 @@ BEGIN
   IF SchemaSmith.fn_ServerMajorVersion() >= 12
   BEGIN
     IF OBJECT_ID('tempdb..#DeployedMemOpt') IS NOT NULL DROP TABLE #DeployedMemOpt
-    CREATE TABLE #DeployedMemOpt (FullName NVARCHAR(1010), DeclaredMO BIT, DeployedMO BIT, DeclaredDur NVARCHAR(20), DeployedDur NVARCHAR(20))
+    CREATE TABLE #DeployedMemOpt (FullName NVARCHAR(1010) COLLATE DATABASE_DEFAULT, DeclaredMO BIT, DeployedMO BIT, DeclaredDur NVARCHAR(20) COLLATE DATABASE_DEFAULT, DeployedDur NVARCHAR(20) COLLATE DATABASE_DEFAULT)
     EXEC sp_executesql N'
       INSERT INTO #DeployedMemOpt (FullName, DeclaredMO, DeployedMO, DeclaredDur, DeployedDur)
         SELECT t.[Schema] + ''.'' + t.[Name],
@@ -289,7 +289,7 @@ BEGIN
     -- (is_memory_optimized, sys.hash_indexes) go in dynamic SQL, and STRING_AGG (2017) / STRING_SPLIT
     -- (needs compat 130) are avoided entirely -- fn_SplitList and FOR XML PATH are the all-version idioms.
     IF OBJECT_ID('tempdb..#MODeplIx') IS NOT NULL DROP TABLE #MODeplIx
-    CREATE TABLE #MODeplIx (sch SYSNAME, tbl SYSNAME, ixname SYSNAME, obj_id INT, idx_id INT, is_unique BIT, is_hash BIT, buckets BIGINT, colset NVARCHAR(MAX) NULL)
+    CREATE TABLE #MODeplIx (sch SYSNAME COLLATE DATABASE_DEFAULT, tbl SYSNAME COLLATE DATABASE_DEFAULT, ixname SYSNAME COLLATE DATABASE_DEFAULT, obj_id INT, idx_id INT, is_unique BIT, is_hash BIT, buckets BIGINT, colset NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL)
     EXEC sp_executesql N'
       INSERT INTO #MODeplIx (sch, tbl, ixname, obj_id, idx_id, is_unique, is_hash, buckets)
         SELECT SCHEMA_NAME(o.[schema_id]), o.[name], i.[name], i.[object_id], i.index_id, i.is_unique,
@@ -358,7 +358,7 @@ BEGIN
   IF SchemaSmith.fn_ServerMajorVersion() >= 16
   BEGIN
     IF OBJECT_ID('tempdb..#DeployedLedger') IS NOT NULL DROP TABLE #DeployedLedger
-    CREATE TABLE #DeployedLedger (FullName NVARCHAR(1010), Declared NVARCHAR(12), Deployed NVARCHAR(12))
+    CREATE TABLE #DeployedLedger (FullName NVARCHAR(1010) COLLATE DATABASE_DEFAULT, Declared NVARCHAR(12) COLLATE DATABASE_DEFAULT, Deployed NVARCHAR(12) COLLATE DATABASE_DEFAULT)
     EXEC sp_executesql N'
       INSERT INTO #DeployedLedger (FullName, Declared, Deployed)
         SELECT t.[Schema] + ''.'' + t.[Name],
