@@ -382,9 +382,8 @@ internal static class DeferredMergeBuilder
 
         for (var offset = 0; offset < payloadRows.Count; offset += MergeScriptHelper.MariaDbShredChunkRows)
         {
-            var chunk = new Newtonsoft.Json.Linq.JArray(
-                payloadRows.Skip(offset).Take(MergeScriptHelper.MariaDbShredChunkRows));
-            sb.AppendLine($"SET @json_data = '{chunk.ToString(Newtonsoft.Json.Formatting.None).Replace("'", "''")}';");
+            var chunk = MergeScriptHelper.JsonArrayOf(payloadRows.Skip(offset).Take(MergeScriptHelper.MariaDbShredChunkRows));
+            sb.AppendLine($"SET @json_data = '{chunk.Replace("'", "''")}';");
             sb.AppendLine();
             sb.AppendLine($"INSERT INTO `{db}`.`{table}` ({columnList})");
             sb.AppendLine($"SELECT {selectExpressions}");
