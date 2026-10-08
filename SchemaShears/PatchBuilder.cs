@@ -29,6 +29,9 @@ public class PatchBuilder
             throw new PatchBuildException($"Source folder is not a product (no Product.json): '{request.SourcePath}'.");
         if (string.IsNullOrWhiteSpace(request.OutputPath))
             throw new PatchBuildException("Output path is required.");
+        DropSuppressionStamp.ValidateCategories(request.AllowDrops ?? Array.Empty<string>());
+        if (request.Zip)
+            PatchZipper.RequireNoExistingZip(request.OutputPath);
 
         var manifest = PatchManifest.Read(request.ManifestPath, request.SourcePath);
         var alwaysInclude = AlwaysIncludeList.Expand(request.AlwaysIncludePath, request.SourcePath);

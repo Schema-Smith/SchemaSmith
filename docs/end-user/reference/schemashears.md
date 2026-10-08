@@ -134,6 +134,10 @@ SchemaShears writes the patch package to the `--Output` directory, preserving th
 
 When `--Zip` is set, SchemaShears additionally compresses the output directory into a `.zip` archive at the same location, ready for artifact handoff or archival.
 
+### Exit code
+
+SchemaShears exits `0` when the patch is built. It exits `2` when the request cannot be built: the source folder, `Product.json` or manifest is missing, an always-include entry does not exist, the output folder or zip already exists, or `--AllowDrops` names an unknown category. The reason is in the progress log and in `SchemaShears - Errors.log`. These checks run before anything is written, so a failed request leaves no partial output. The full table of codes is in [Configuration -- Exit Codes](configuration.md#exit-codes).
+
 ---
 
 ## Drop Suppression

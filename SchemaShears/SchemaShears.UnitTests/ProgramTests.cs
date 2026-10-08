@@ -113,37 +113,95 @@ public class ProgramTests
         }
     }
 
+    // The test environment's Exit does not end the process, so after --help prints usage, Main carries on and fails
+    // for the missing source.
     [Test]
     public void Main_WithHelpSwitch_ShowsUsageThenFailsForMissingSource()
     {
-        var (environment, exception) = RunMainExpectingThrow("SchemaShears.exe --help", new Dictionary<string, string>());
+        var (environment, errorLog) = RunMainExpectingFailure("SchemaShears.exe --help", new Dictionary<string, string>());
 
         Assert.Multiple(() =>
         {
             environment.Received(1).Exit(0);
-            Assert.That(exception.Message, Does.Contain("Source product folder not found"));
+            environment.Received(1).Exit(2);
+            errorLog.Received().Error(Arg.Is<object>(o => o.ToString().Contains("Source product folder not found")));
+        });
+    }
+
+    // A request the user can correct is a failure, exit 2 with the reason in the error log -- not an unhandled
+    // exception (3), which is what every bad input used to produce.
+    [Test]
+    public void Main_NoSourceConfigured_ExitsTwoAndNamesTheProblem()
+    {
+        var (environment, errorLog) = RunMainExpectingFailure("SchemaShears.exe", new Dictionary<string, string>());
+
+        Assert.Multiple(() =>
+        {
+            environment.Received(1).Exit(2);
+            environment.DidNotReceive().Exit(3);
+            errorLog.Received().Error(Arg.Is<object>(o => o.ToString().Contains("Source product folder not found")));
         });
     }
 
     [Test]
-    public void Main_NoSourceConfigured_ThrowsPatchBuildException()
+    public void Main_ManifestNotFound_ExitsTwoAndNamesTheProblem()
     {
-        var (_, exception) = RunMainExpectingThrow("SchemaShears.exe", new Dictionary<string, string>());
-
-        Assert.That(exception.Message, Does.Contain("Source product folder not found"));
-    }
-
-    [Test]
-    public void Main_ManifestNotFound_ThrowsPatchBuildException()
-    {
-        var (_, exception) = RunMainExpectingThrow("SchemaShears.exe", new Dictionary<string, string>
+        var (environment, errorLog) = RunMainExpectingFailure("SchemaShears.exe", new Dictionary<string, string>
         {
             ["SourcePath"] = _source,
             ["ManifestPath"] = Path.Join(_root, "nope.txt"),
             ["OutputPath"] = _output
         });
 
-        Assert.That(exception.Message, Does.Contain("Manifest file not found"));
+        Assert.Multiple(() =>
+        {
+            environment.Received(1).Exit(2);
+            errorLog.Received().Error(Arg.Is<object>(o => o.ToString().Contains("Manifest file not found")));
+        });
+    }
+
+    // A typo in --AllowDrops used to be found only after the package was copied, leaving a half-built patch whose
+    // presence then made the re-run fail.
+    [Test]
+    public void Main_UnknownDropCategory_ExitsTwoBeforeWritingAnything()
+    {
+        var manifest = Path.Join(_root, "m.txt");
+        File.WriteAllText(manifest, "Templates/Main/Tables/dbo.Orders.json\n");
+
+        var (environment, errorLog) = RunMainExpectingFailure("SchemaShears.exe --AllowDrops:Colums", new Dictionary<string, string>
+        {
+            ["SourcePath"] = _source,
+            ["ManifestPath"] = manifest,
+            ["OutputPath"] = _output
+        });
+
+        Assert.Multiple(() =>
+        {
+            environment.Received(1).Exit(2);
+            errorLog.Received().Error(Arg.Is<object>(o => o.ToString().Contains("Unknown drop category 'Colums'")));
+            Assert.That(Directory.Exists(_output), Is.False, "nothing is written for a request that cannot succeed");
+        });
+    }
+
+    [Test]
+    public void Main_ZipAlreadyExists_ExitsTwoBeforeWritingAnything()
+    {
+        var manifest = Path.Join(_root, "m.txt");
+        File.WriteAllText(manifest, "Templates/Main/Tables/dbo.Orders.json\n");
+        File.WriteAllText(_output + ".zip", "an earlier patch");
+
+        var (environment, _) = RunMainExpectingFailure("SchemaShears.exe --Zip", new Dictionary<string, string>
+        {
+            ["SourcePath"] = _source,
+            ["ManifestPath"] = manifest,
+            ["OutputPath"] = _output
+        });
+
+        Assert.Multiple(() =>
+        {
+            environment.Received(1).Exit(2);
+            Assert.That(Directory.Exists(_output), Is.False);
+        });
     }
 
     [Test]
@@ -255,23 +313,24 @@ public class ProgramTests
         }
     }
 
-    private static (IEnvironment environment, PatchBuildException exception) RunMainExpectingThrow(
+    private static (IEnvironment environment, ILog errorLog) RunMainExpectingFailure(
         string commandLine, Dictionary<string, string> configValues)
     {
         lock (FactoryContainer.SharedLockObject)
         {
             var environment = Arrange(commandLine, configValues);
-            PatchBuildException exception;
+            var errorLog = Substitute.For<ILog>();
+            LogFactory.Register("ErrorLog", errorLog);
             try
             {
-                exception = Assert.Throws<PatchBuildException>(() => Program.Main([]));
+                Assert.DoesNotThrow(() => Program.Main([]), "a bad request is reported and exits, it does not throw");
             }
             finally
             {
                 FactoryContainer.Clear();
                 LogFactory.Clear();
             }
-            return (environment, exception);
+            return (environment, errorLog);
         }
     }
 }
