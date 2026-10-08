@@ -660,16 +660,19 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE,
   JOIN sys.columns sc ON sc.[object_id] = ic.[object_id]
                                    AND sc.column_id = ic.column_id
   WHERE si.[object_id] = OBJECT_ID(@objname)
+    AND ic.is_included_column = 0
+    -- A key that is unique across the whole table: a filtered index is unique only within its filter, and
+    -- INCLUDE columns are not part of the key.
     AND si.index_id = (SELECT TOP 1 si2.index_id
                          FROM sys.indexes si2
                          WHERE si2.[object_id] = si.[object_id]
                            AND si2.is_unique = 1
-                         ORDER BY CASE WHEN is_primary_key = 1 THEN 0 ELSE 1 END,
-                                  (SELECT COUNT(*)
-                                    FROM sys.index_columns ic2
-                                    JOIN sys.columns sc ON sc.[object_id] = ic2.[object_id] AND sc.column_id = ic2.column_id
-                                    WHERE ic2.[object_id] = si2.[object_id]
-                                      AND sc.is_nullable = 0))
+                           AND si2.has_filter = 0
+                           AND si2.is_disabled = 0
+                           AND si2.is_hypothetical = 0
+                         -- The NOT NULL column count this once ordered by was not correlated to the index, so it
+                         -- tied for every index and the order was index_id; that order is now stated.
+                         ORDER BY CASE WHEN is_primary_key = 1 THEN 0 ELSE 1 END, si2.index_id)
 ";
         if (belowCliff)
         {
@@ -699,15 +702,22 @@ SELECT STRING_AGG(CASE WHEN c.is_nullable = 'YES' THEN '*' ELSE '' END || '""' |
                                    AND c.column_name = a.attname
   WHERE ns.nspname = @schema
     AND tbl.relname = @table
+    AND ik.ord <= idx.indnkeyatts
+    -- A key that is unique across the whole table: a partial index is unique only within its predicate, an
+    -- expression's key part is no column, and INCLUDE columns (past indnkeyatts) are not part of the key.
     AND idx.indexrelid = (SELECT i2.indexrelid
                             FROM pg_index i2
                             WHERE i2.indrelid = tbl.oid
                               AND i2.indisunique = true
+                              AND i2.indisvalid = true
+                              AND i2.indpred IS NULL
+                              AND i2.indexprs IS NULL
                             ORDER BY CASE WHEN i2.indisprimary THEN 0 ELSE 1 END,
                                      (SELECT COUNT(*)
-                                        FROM UNNEST(i2.indkey) AS k(attnum)
+                                        FROM UNNEST(i2.indkey[0:i2.indnkeyatts - 1]) AS k(attnum)
                                         JOIN pg_attribute pa ON pa.attrelid = tbl.oid AND pa.attnum = k.attnum
-                                        WHERE pa.attnotnull = true)
+                                        WHERE pa.attnotnull = true),
+                                     i2.indexrelid
                             LIMIT 1);
 ";
         return cmd.ExecuteScalar()?.ToString() ?? "";

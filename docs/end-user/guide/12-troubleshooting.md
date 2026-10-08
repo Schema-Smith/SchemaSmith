@@ -361,7 +361,7 @@ See [SchemaTongs Reference](../reference/schematongs.md) for the full per-platfo
 
 **Symptom:** The progress log shows a message like "Table [name] has no primary key or unique index and no KeyColumns configured. Skipping table."
 
-**Cause:** DataTongs generates sync scripts that need a key to match source and target rows. It looks for a primary key first, then a unique index. If neither exists, it can't proceed.
+**Cause:** DataTongs generates sync scripts that need a key to match source and target rows. It looks for a primary key first, then, on SQL Server and PostgreSQL, a unique index that covers the whole table. A filtered or partial unique index doesn't qualify, because it's unique only within its filter, and neither does one on an expression. On MySQL and MariaDB only the primary key is detected. If no key qualifies, it can't proceed.
 
 **Fix:** Specify key columns manually in your DataTongs configuration:
 
