@@ -45,6 +45,10 @@
         ]
       }
     },
+    "Collation": {
+      "type": "string",
+      "description": "The domain's collation, when it differs from the base type's. Create-time only: PostgreSQL cannot alter it, so a change is refused rather than attempted. Omit it to leave the collation unchecked."
+    },
     "ShouldApplyExpression": {
       "type": "string"
     },

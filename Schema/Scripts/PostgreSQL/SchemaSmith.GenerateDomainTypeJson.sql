@@ -31,6 +31,11 @@ BEGIN
                  FORMAT_TYPE(ty.typbasetype, ty.typtypmod) AS "DataType",
                  ty.typnotnull AS "NotNull",
                  PG_GET_EXPR(ty.typdefaultbin, 0) AS "Default",
+                 -- Only a collation the domain chose: one inherited from its base type is not part of the declaration.
+                 CASE WHEN ty.typcollation IN (0, (SELECT bt.typcollation FROM pg_type bt WHERE bt.oid = ty.typbasetype)) THEN NULL
+                                 ELSE (SELECT "SchemaSmith"."ColumnCollation"(cn.nspname, co.collname)
+                                         FROM pg_collation co JOIN pg_namespace cn ON cn.oid = co.collnamespace
+                                        WHERE co.oid = ty.typcollation) END AS "Collation",
                  COALESCE((SELECT JSON_AGG(JSON_BUILD_OBJECT('Name', c.conname,
                                                              -- pg_get_constraintdef renders "CHECK (expr)";
                                                              -- the package carries the predicate alone, so the

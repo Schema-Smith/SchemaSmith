@@ -1633,7 +1633,7 @@ engine. Each is documented in full in its own section below.
 | Object | Converged | Where it stops, and why |
 |---|---|---|
 | Sequence | type, increment, bounds, cache | **The current position is never managed** — it records which numbers were handed out, so it is data, not schema |
-| Domain type | `CHECK`, default, nullability | **A base-type change is refused** — PostgreSQL has no `ALTER DOMAIN … TYPE`; it is a syntax error, not an unsupported operation |
+| Domain type | `CHECK`, default, nullability | **A base-type or collation change is refused** — PostgreSQL has no `ALTER DOMAIN … TYPE` or `… COLLATE`; it is a syntax error, not an unsupported operation |
 | Enum type | added values, ordering | **Removing a value is reported, never performed** — PostgreSQL cannot remove one without recreating the type, which would drop every column using it |
 | Scheduled event | schedule, body, status | **Removal reaches only events SchemaSmith created**, and only with `DropEventsRemovedFromProduct` on — one made by hand is never touched |
 
@@ -1685,6 +1685,7 @@ Domain types live in the `Domain Types/` directory of each template, which accep
 | `NotNull` | bool | `false` | Converges in place via `ALTER DOMAIN … SET/DROP NOT NULL`. |
 | `Default` | string | `null` | Default applied to a column of this domain that declares no default of its own. Converges in place. |
 | `CheckConstraints` | array | `[]` | Named `CHECK` constraints — `{ "Name": "...", "Expression": "VALUE > 0" }`. Write the predicate alone, without the surrounding `CHECK (…)`. |
+| `Collation` | string | `null` | The domain's collation when it differs from the base type's, such as `"C"`; one in another schema is written delimited, as `"sales"."ci"`. Create-time only: PostgreSQL cannot alter it, so a change is refused rather than attempted. Leave it out and it is not checked. |
 
 **Constraints converge as a set.** One the package declares and the server lacks is added; one the server has and the package no longer declares is dropped. Dropping is safe here in a way removing an enum value is not — it removes a validation rule, destroys no data, and cascades to nothing.
 

@@ -45,6 +45,7 @@ BEGIN
          elem ->> 'DataType' AS "DataType",
          COALESCE((elem ->> 'NotNull')::BOOLEAN, false) AS "NotNull",
          elem ->> 'Default' AS "Default",
+         NULLIF(TRIM(elem ->> 'Collation'), '') AS "Collation",
          COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
          elem -> 'CheckConstraints' AS "CheckConstraints"
     FROM src, JSON_ARRAY_ELEMENTS(arr) AS elem;
@@ -72,6 +73,7 @@ BEGIN
   RAISE NOTICE 'Add Missing Domain Types';
   SELECT STRING_AGG('RAISE NOTICE ''  Create domain type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
                     'CREATE DOMAIN "' || t."Schema" || '"."' || t."Name" || '" AS ' || t."DataType" ||
+                    "SchemaSmith"."CollateClause"(t."Collation") ||
                     CASE WHEN t."Default" IS NOT NULL THEN ' DEFAULT ' || t."Default" ELSE '' END ||
                     CASE WHEN t."NotNull" THEN ' NOT NULL' ELSE '' END ||
                     COALESCE((SELECT STRING_AGG(' CONSTRAINT "' || ck."ConstraintName" || '" CHECK (' || ck."Expression" || ')', '')
@@ -147,6 +149,24 @@ BEGIN
       RAISE EXCEPTION 'Domain type %.% declares base type "%", but is currently deployed as "%". PostgreSQL has no ALTER DOMAIN ... TYPE -- changing it means dropping the domain and every column that uses it. Migrate it with a script, or correct the declared type to match.',
         bad."Schema", bad."Name", bad.declared, bad.deployed;
     END IF;
+  END LOOP;
+
+  -- REFUSE a collation change for the same reason: there is no ALTER DOMAIN ... COLLATE. Only a declared
+  -- collation is checked, so a package that leaves it out keeps deploying whatever the domain has.
+  FOR bad IN
+    SELECT t."Schema", t."Name", t."Collation" AS declared, x.deployed
+      FROM temp_domain_types t
+      JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
+      JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
+     CROSS JOIN LATERAL (SELECT CASE WHEN ty.typcollation IN (0, (SELECT bt.typcollation FROM pg_type bt WHERE bt.oid = ty.typbasetype)) THEN NULL
+                                             ELSE (SELECT "SchemaSmith"."ColumnCollation"(cn.nspname, co.collname)
+                                                     FROM pg_collation co JOIN pg_namespace cn ON cn.oid = co.collnamespace
+                                                    WHERE co.oid = ty.typcollation) END AS deployed) x
+     WHERE t."Collation" IS NOT NULL
+       AND t."Collation" IS DISTINCT FROM x.deployed
+  LOOP
+    RAISE EXCEPTION 'Domain type %.% declares collation "%", but is deployed with "%". PostgreSQL cannot alter a domain''s collation -- changing it means dropping the domain and every column that uses it. Migrate it with a script, or correct the declared collation to match.',
+      bad."Schema", bad."Name", bad.declared, COALESCE(bad.deployed, 'the base type''s');
   END LOOP;
 
   -- NOT NULL and DEFAULT, each emitted only when it actually differs so an unchanged domain produces no
