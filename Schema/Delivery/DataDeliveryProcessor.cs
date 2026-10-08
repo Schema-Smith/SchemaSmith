@@ -127,37 +127,6 @@ public class DataDeliveryProcessor : IDataDelivery
 
         var appliedByTable = tablesToDeliver.ToDictionary(t => t, ResolveApplied);
 
-        // B1 slice 2: a JSON (OPENJSON) delivery requires SQL Server compatibility level 130. On a
-        // below-cliff target (compat 100-120, common where a line-of-business app is certified at an
-        // older level) an XML-encoded delivery still applies (.nodes()/.value() works at every level),
-        // but a JSON one parse-errors — so degrade it per Target:UnsupportedFeaturePolicy: warn (the
-        // default) skips just that delivery with a clear message and delivers the rest; fail aborts.
-        // Per-delivery (not a whole-table return like the MySQL < 8.0 case at :59) because the encoding
-        // is a per-delivery author choice — a table may pair a JSON and an XML variant. Filtered before
-        // CASCADE validation / content reads / the deliver loop so skipped deliveries never reach them.
-        if (platform.Equals("SqlServer", StringComparison.OrdinalIgnoreCase) &&
-            context.SqlServerCompatibilityLevel is > 0 and < 130)
-        {
-            var failFast = string.Equals(context.UnsupportedFeaturePolicy, "fail", StringComparison.OrdinalIgnoreCase);
-            foreach (var table in tablesToDeliver)
-            {
-                var applied = appliedByTable[table];
-                var kept = applied.Where(x => string.Equals(x.Delivery.ContentEncoding, "Xml", StringComparison.OrdinalIgnoreCase)).ToList();
-                foreach (var (_, delivery) in applied.Where(x => !string.Equals(x.Delivery.ContentEncoding, "Xml", StringComparison.OrdinalIgnoreCase)))
-                {
-                    var msg = $"JSON data delivery for {DataDeliveryHelper.GetTableKey(table, platform)}{VariantSuffix(delivery)} " +
-                              $"requires SQL Server compatibility level 130 (target is at {context.SqlServerCompatibilityLevel}); " +
-                              "re-encode this delivery as XML (\"ContentEncoding\": \"Xml\") to deploy it on a legacy-compat target.";
-                    if (failFast)
-                        throw new NotSupportedException(msg);
-                    log($"    [SKIPPED - requires compatibility level 130 for JSON delivery] {msg}");
-                    context.RecordDowngrade?.Invoke("data delivery", $"{DataDeliveryHelper.GetTableKey(table, platform)}{VariantSuffix(delivery)}");
-                }
-                if (kept.Count != applied.Count)
-                    appliedByTable[table] = kept;
-            }
-        }
-
         // CASCADE validation is scoped to the gated-IN (applied) deliveries only — a delivery
         // whose gate is false this run will never execute here, so its table must not be able to
         // false-abort the whole run just because a CASCADE FK exists on it (#278). Unlike
@@ -190,8 +159,12 @@ public class DataDeliveryProcessor : IDataDelivery
         var deliverySet = DataDeliveryHelper.BuildDeliveryTableSet(tablesToDeliver, platform);
 
         var tableEdges = new Dictionary<IDeliverableTable, (HashSet<string> RequiredDeps, List<string> DeferredColumns)>();
-        var tableDataMap = new Dictionary<(IDeliverableTable Table, int Index), string>();
+        var tableDataMap = new Dictionary<(IDeliverableTable Table, int Index), DeliveryContent>();
         var contentFileErrors = new List<string>();
+
+        // Below SQL Server compatibility level 130 there is no OPENJSON, but the XML shred works at every level, so a
+        // JSON delivery is converted to the XML shape on read and delivered through the XML merge.
+        var jsonAsXml = platform.Equals("SqlServer", StringComparison.OrdinalIgnoreCase) && context.SqlServerCompatibilityLevel is > 0 and < 130;
 
         foreach (var table in tablesToDeliver.ToList())
         {
@@ -221,7 +194,9 @@ public class DataDeliveryProcessor : IDataDelivery
                         contentFileErrors.Add($"{tableKey}: Content file not found: '{contentPath}'");
                         continue;
                     }
-                    tableDataMap[(table, index)] = content;
+                    tableDataMap[(table, index)] = jsonAsXml && !IsXml(delivery)
+                        ? new DeliveryContent(MergeScriptHelper.JsonPayloadToXml(content), "Xml")
+                        : new DeliveryContent(content, delivery.ContentEncoding ?? "Json");
                 }
                 catch (Exception ex)
                 {
@@ -329,15 +304,15 @@ public class DataDeliveryProcessor : IDataDelivery
                 var keyColumns = string.IsNullOrWhiteSpace(delivery.MatchColumns)
                     ? helper.GetKeyColumns(context.Command, schemaOrDb, table.Name)
                     : delivery.MatchColumns;
-                var tableData = tableDataMap.TryGetValue((table, index), out var data) ? data : "";
+                var content = ContentOf(tableDataMap, table, index, delivery);
                 var update = (delivery.MergeType ?? "").IndexOf("Update", StringComparison.OrdinalIgnoreCase) >= 0;
                 var delete = (delivery.MergeType ?? "").IndexOf("Delete", StringComparison.OrdinalIgnoreCase) >= 0;
                 var mergeFilter = ResolveMergeFilter(delivery.MergeFilter, context.SchemaName);
 
                 var mergeScript = helper.BuildMergeScript(context.Command, schemaOrDb, table.Name,
-                    tableData, keyColumns, update, delete, delivery.MergeDisableTriggers, false, mergeFilter,
+                    content.Data, keyColumns, update, delete, delivery.MergeDisableTriggers, false, mergeFilter,
                     delivery.MergeDisableRules, delivery.MergeUpdateDescendents, context.PostgreSqlServerVersionNum, context.MySqlServerVersionNum,
-                    delivery.ContentEncoding ?? "Json");
+                    content.Encoding);
 
                 if (!context.WhatIf)
                 {
@@ -376,7 +351,7 @@ public class DataDeliveryProcessor : IDataDelivery
     }
 
     private void DeliverTable(DataDeliveryContext context, IDeliverableTable table,
-        Dictionary<(IDeliverableTable Table, int Index), string> tableDataMap, List<string> deferredColumns,
+        Dictionary<(IDeliverableTable Table, int Index), DeliveryContent> tableDataMap, List<string> deferredColumns,
         HashSet<string> delivered,
         List<(IDeliverableTable Table, int Index, DataDelivery Delivery, List<string> DeferredColumns)> pass2Units,
         bool isCircularFallback, Dictionary<string, string> pendingArtifacts, HashSet<string> deliverySucceeded,
@@ -408,13 +383,13 @@ public class DataDeliveryProcessor : IDataDelivery
             var keyColumns = string.IsNullOrWhiteSpace(delivery.MatchColumns)
                 ? helper.GetKeyColumns(context.Command, schemaOrDb, table.Name)
                 : delivery.MatchColumns;
-            var tableData = tableDataMap.TryGetValue((table, index), out var data) ? data : "";
+            var content = ContentOf(tableDataMap, table, index, delivery);
 
             if (deferredColumns.Count > 0 && !isCircularFallback)
             {
                 log($"    Delivering {tableKey}{VariantSuffix(delivery)} (pass 1 - deferred columns as NULL)");
 
-                var mergeScript = BuildDeferredMergeScript(context, schemaOrDb, table, delivery, tableData, keyColumns, deferredColumns);
+                var mergeScript = BuildDeferredMergeScript(context, schemaOrDb, table, delivery, content, keyColumns, deferredColumns);
 
                 try
                 {
@@ -437,9 +412,9 @@ public class DataDeliveryProcessor : IDataDelivery
                 var delete = (delivery.MergeType ?? "").IndexOf("Delete", StringComparison.OrdinalIgnoreCase) >= 0;
                 var mergeFilter = ResolveMergeFilter(delivery.MergeFilter, context.SchemaName);
                 var mergeScript = helper.BuildMergeScript(context.Command, schemaOrDb, table.Name,
-                    tableData, keyColumns, update, delete, delivery.MergeDisableTriggers, false, mergeFilter,
+                    content.Data, keyColumns, update, delete, delivery.MergeDisableTriggers, false, mergeFilter,
                     delivery.MergeDisableRules, delivery.MergeUpdateDescendents, context.PostgreSqlServerVersionNum, context.MySqlServerVersionNum,
-                    delivery.ContentEncoding ?? "Json");
+                    content.Encoding);
 
                 try
                 {
@@ -474,14 +449,25 @@ public class DataDeliveryProcessor : IDataDelivery
     private static string WithDeliveryTimeZone(DataDeliveryContext context, DataDelivery delivery, string script) =>
         PinsTimeZone(context, delivery) ? MySqlSessionSettings.WithTimeZone(script, delivery.TimeZone) : script;
 
+    // A delivery's content as read, and the encoding it is delivered in, which differs from the declared one when a JSON
+    // delivery was converted to XML for a target below compatibility level 130.
+    internal readonly record struct DeliveryContent(string Data, string Encoding);
+
+    private static bool IsXml(DataDelivery delivery) =>
+        string.Equals(delivery.ContentEncoding, "Xml", StringComparison.OrdinalIgnoreCase);
+
+    private static DeliveryContent ContentOf(Dictionary<(IDeliverableTable Table, int Index), DeliveryContent> tableDataMap,
+        IDeliverableTable table, int index, DataDelivery delivery) =>
+        tableDataMap.TryGetValue((table, index), out var content) ? content : new DeliveryContent("", delivery.ContentEncoding ?? "Json");
+
     internal static string BuildDeferredMergeScript(DataDeliveryContext context, string schemaOrDb,
-        IDeliverableTable table, DataDelivery delivery, string tableData, string keyColumns, List<string> deferredColumns)
+        IDeliverableTable table, DataDelivery delivery, DeliveryContent content, string keyColumns, List<string> deferredColumns)
     {
         return DeferredMergeBuilder.Build(context.ScriptHelper, context.Command, context.Platform,
-            schemaOrDb, table.Name, tableData, keyColumns,
+            schemaOrDb, table.Name, content.Data, keyColumns,
             delivery.MergeDisableTriggers, deferredColumns,
             delivery.MergeDisableRules, delivery.MergeUpdateDescendents,
-            context.PostgreSqlServerVersionNum, delivery.ContentEncoding ?? "Json");
+            context.PostgreSqlServerVersionNum, content.Encoding);
     }
 
     /// <summary>
