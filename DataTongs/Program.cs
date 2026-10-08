@@ -23,8 +23,9 @@ public static class Program
 
         var platform = ResolvePlatform();
 
-        new DataTongs(platform).CastData();
-        LogBackup.BackupLogsAndExit("DataTongs");
+        var tongs = new DataTongs(platform);
+        tongs.CastData();
+        LogBackup.BackupLogsAndExit("DataTongs", tongs.ExitCode);
     }
 
     public static void UnhandledException(object sender, UnhandledExceptionEventArgs e)

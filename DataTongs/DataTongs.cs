@@ -20,6 +20,16 @@ namespace DataTongs;
 public class DataTongs
 {
     private readonly ILog _progressLog = LogFactory.GetLogger("ProgressLog");
+    private readonly ILog _errorLog = LogFactory.GetLogger("ErrorLog");
+
+    /// <summary>True when a table's extraction failed.</summary>
+    public bool Failed { get; private set; }
+
+    /// <summary>True when a table was skipped, so the run finished without producing everything asked of it.</summary>
+    public bool Incomplete { get; private set; }
+
+    /// <summary>2 when a table failed, 1 when one was skipped, otherwise 0.</summary>
+    public int ExitCode => Failed ? 2 : Incomplete ? 1 : 0;
     private readonly Platform _platform;
 
     public DataTongs(Platform platform)
@@ -303,7 +313,7 @@ public class DataTongs
 
                 if (!TableExists(cmd, querySchema, tableName))
                 {
-                    _progressLog.Error($"  Table {displayName} does not exist in source database. Skipping table.");
+                    SkipTable($"  Table {displayName} does not exist in source database. Skipping table.");
                     continue;
                 }
 
@@ -313,13 +323,13 @@ public class DataTongs
 
                 if (string.IsNullOrWhiteSpace(keyColumns))
                 {
-                    _progressLog.Error($"  No match columns found for {displayName}. Skipping table.");
+                    SkipTable($"  No match columns found for {displayName}. Skipping table.");
                     continue;
                 }
 
                 if (!IsValidKeyColumns(keyColumns))
                 {
-                    _progressLog.Error($"  Invalid KeyColumns '{keyColumns}' for {displayName}. Expected comma-separated column names (e.g., 'Col1,Col2'). Skipping table.");
+                    SkipTable($"  Invalid KeyColumns '{keyColumns}' for {displayName}. Expected comma-separated column names (e.g., 'Col1,Col2'). Skipping table.");
                     continue;
                 }
 
@@ -460,7 +470,9 @@ public class DataTongs
             catch (Exception ex)
             {
                 errors++;
+                Failed = true;
                 _progressLog.Error($"  Error processing table {table.TableName}: {ex.Message}");
+                _errorLog.Error($"Error processing table {table.TableName}", ex);
             }
         }
 
@@ -469,6 +481,13 @@ public class DataTongs
         _progressLog.Info($"  Tables processed: {tablesProcessed}");
         if (errors > 0) _progressLog.Info($"  Errors: {errors}");
         _progressLog.Info("DataTongs completed.");
+    }
+
+    private void SkipTable(string message)
+    {
+        Incomplete = true;
+        _progressLog.Error(message);
+        _errorLog.Error(message.Trim());
     }
 
     /// <summary>
