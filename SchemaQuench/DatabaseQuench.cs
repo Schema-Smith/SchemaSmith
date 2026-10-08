@@ -1595,6 +1595,7 @@ public class DatabaseQuench
             return;
 
         SafeProgressLog("  Quenching missing tables and columns");
+        using var timestampDefaults = PinExplicitTimestampDefaults(tableCommand);
 
         switch (_product.Platform.GetBasePlatform())
         {
@@ -1662,6 +1663,7 @@ EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmit
             return;
 
         SafeProgressLog("  Quenching modified tables");
+        using var timestampDefaults = PinExplicitTimestampDefaults(tableCommand);
 
         switch (_product.Platform.GetBasePlatform())
         {
@@ -2718,6 +2720,24 @@ SET NOCOUNT ON
     {
         var schemaSuffix = string.IsNullOrEmpty(_schemaName) ? "" : $".{_schemaName}";
         return $"SchemaQuench - {label} {_server}.{_databaseName}{schemaSuffix}.sql";
+    }
+
+    private bool _explicitTimestampDefaultsReadOnlyReported;
+
+    // A TIMESTAMP column must be created with the default it declares. With explicit_defaults_for_timestamp off the
+    // engine invents one, so the table steps run with it on and give the session its own value back afterwards. User
+    // scripts on the same connection keep the server's setting.
+    private IDisposable PinExplicitTimestampDefaults(IDbCommand tableCommand)
+    {
+        if (_product.Platform.GetBasePlatform() != Platform.MySQL) return null;
+        return MySqlSessionSettings.UseExplicitTimestampDefaults(tableCommand, () =>
+        {
+            if (_explicitTimestampDefaultsReadOnlyReported) return;
+            _explicitTimestampDefaultsReadOnlyReported = true;
+            SafeProgressLog("  explicit_defaults_for_timestamp is OFF and this server does not let a session change it, so a " +
+                            "TIMESTAMP NOT NULL column declared without a default gets one the server chooses. Declare the " +
+                            "default, or turn the variable ON in the server configuration.");
+        });
     }
 
     private void SafeProgressLog(string msg)
