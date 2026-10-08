@@ -233,5 +233,8 @@ public static class SettingsKeys
     public const string OutputPath = "OutputPath";
     public const string Zip = "Zip";
     public const string AllowDrops = "AllowDrops";
+    // Every tool: a run that would exit 0 but logged a warning exits 1 instead, for pipelines that treat warnings as
+    // failures. Also accepted as the bare switch --ExitNonZeroOnWarning.
+    public const string ExitNonZeroOnWarning = "ExitNonZeroOnWarning";
 
 }

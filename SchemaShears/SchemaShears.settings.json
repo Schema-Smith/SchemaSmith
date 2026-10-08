@@ -5,4 +5,5 @@
     "OutputPath": "",        // Destination folder for the patch package
     "Zip": false,            // Also produce <OutputPath>.zip
     "AllowDrops": ""         // Comma-separated drop categories to leave enabled (e.g. "Columns,Indexes"); empty suppresses all drops
+    // "ExitNonZeroOnWarning": false // Exit 1 instead of 0 when the run logged a warning, for pipelines that treat warnings as failures. Also the --ExitNonZeroOnWarning switch.
 }

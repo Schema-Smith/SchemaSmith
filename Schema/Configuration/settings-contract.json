@@ -17,6 +17,7 @@
       "DropStatisticsRemovedFromProduct",
       "DropTablesRemovedFromProduct",
       "DropUnknownIndexes",
+      "ExitNonZeroOnWarning",
       "FailureContextLines",
       "ForceReKindle",
       "KindleTheForge",
@@ -50,6 +51,7 @@
       "WhatIfONLY"
     ],
     "SchemaTongs": [
+      "ExitNonZeroOnWarning",
       "FolderMapping",
       "LogHygiene",
       "OrphanHandling:Mode",
@@ -102,6 +104,7 @@
     ],
     "DataTongs": [
       "ContentPath",
+      "ExitNonZeroOnWarning",
       "ScriptPath",
       "ScriptTokens",
       "ShouldCast:ConfigureDataDelivery",
@@ -131,6 +134,7 @@
     "SchemaShears": [
       "AllowDrops",
       "AlwaysIncludePath",
+      "ExitNonZeroOnWarning",
       "ManifestPath",
       "OutputPath",
       "SourcePath",

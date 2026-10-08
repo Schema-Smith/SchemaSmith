@@ -129,7 +129,7 @@ public static class CommandLineParser
     }
 
     private static readonly string[] CommonBareFlags =
-        { "v", "ver", "version", "?", "h", "help", "Encrypt", "NoEncrypt", "debug", "verbose" };
+        { "v", "ver", "version", "?", "h", "help", "Encrypt", "NoEncrypt", "debug", "verbose", "ExitNonZeroOnWarning" };
 
     /// <summary>
     /// Arguments this run will never read, in command-line order. Two shapes qualify, and both are
@@ -231,6 +231,7 @@ public static class CommandLineParser
         Console.WriteLine("  --Encrypt | --NoEncrypt          Force transport encryption on/off (SQL Server Encrypt, PostgreSQL SSL Mode, MySQL/MariaDB SslMode). Wins over ConnectionProperties.");
         Console.WriteLine("  --<Key>=<value>                  Override any configuration option (also --<Key>:<value>; nest with '__', e.g. --Source__Server=host). Logged at startup; sensitive values scrubbed.");
         toolSpecificSwitches?.Invoke();
+        Console.WriteLine("  --ExitNonZeroOnWarning           Exit 1 instead of 0 when the run logged a warning (also the ExitNonZeroOnWarning setting).");
         Console.WriteLine("  --help                           Show the command line options");
         EnvironmentWrapper.GetFromFactory().Exit(0);
     }
