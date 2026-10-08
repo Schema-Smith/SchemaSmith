@@ -494,6 +494,20 @@ public class TableQuench_AlterColumnTests : BaseTableQuenchTests
     }
 
 
+    [Test]
+    public void TableQuench_ShouldMakeTypedXmlADocument()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+
+        cmd.CommandText = "SELECT CAST(is_xml_document AS INT) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.TypedXmlToDocument') AND [name] = 'Body'";
+        Assert.That(cmd.ExecuteScalar(), Is.EqualTo(1), "a column declared XML(DOCUMENT ...) must be a document column");
+        Assert.That(GetColumnDataType(cmd, "TypedXmlToDocument", "Body"), Is.EqualTo("XML(DOCUMENT [dbo].[AlterXsc])").IgnoreCase);
+        conn.Close();
+    }
+
     // A type change must not reset a character column's collation: ALTER COLUMN without COLLATE moves it to the
     // database default, and refuses outright (5074) when the column is indexed.
     [TestCase("Declared", "Latin1_General_100_CS_AS")]
@@ -642,6 +656,9 @@ CREATE TABLE dbo.ModifyColumnCollation (Column1 VARCHAR(10) COLLATE Latin1_Gener
 --TableQuench_ShouldKeepCollationWhenTheTypeChanges
 CREATE TABLE dbo.KeepCollationOnTypeChange (Declared VARCHAR(10) COLLATE Latin1_General_100_CS_AS NULL, Ignored VARCHAR(10) COLLATE Latin1_General_100_CS_AS NULL, Indexed VARCHAR(10) COLLATE Latin1_General_100_CS_AS NOT NULL, DbDefault VARCHAR(10) NULL)
 CREATE INDEX IX_KeepCollationOnTypeChange_Indexed ON dbo.KeepCollationOnTypeChange (Indexed)
+--TableQuench_ShouldMakeTypedXmlADocument
+CREATE XML SCHEMA COLLECTION dbo.AlterXsc AS N'<xsd:schema xmlns:xsd=""http://www.w3.org/2001/XMLSchema""><xsd:element name=""r"" type=""xsd:string""/></xsd:schema>'
+EXEC('CREATE TABLE dbo.TypedXmlToDocument (Id INT NOT NULL, Body XML(CONTENT dbo.AlterXsc) NULL)')
 --TableQuench_ShouldAlterColmnSparseness
 CREATE TABLE dbo.ModifyColmnSparseness (Column1 INT SPARSE NULL, Column2 INT NULL)
 --TableQuench_ShouldAlterColmnDataMasking
@@ -1230,6 +1247,14 @@ CREATE TABLE dbo.ModifyColmnDataMasking (Column1 VARCHAR(100) MASKED WITH (FUNCT
                       "Nullable": true,
                       "Collation": "IGNORE"
                     }
+                ]
+            },
+            {
+                "Schema": "[dbo]",
+                "Name": "[TypedXmlToDocument]",
+                "Columns": [
+                    { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                    { "Name": "[Body]", "DataType": "XML(DOCUMENT [dbo].[AlterXsc])", "Nullable": true }
                 ]
             },
             {
