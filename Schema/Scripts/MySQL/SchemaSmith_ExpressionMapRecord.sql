@@ -11,9 +11,21 @@ CREATE PROCEDURE SchemaSmith_ExpressionMapRecord(
     IN p_WhatIf TINYINT(1)
 )
 proc: BEGIN
-    -- An index-only quench never builds the declared working set; a missing temp table means there is nothing
-    -- to record, not a failure. 1146 is "table doesn't exist".
-    DECLARE CONTINUE HANDLER FOR 1146 BEGIN END;
+    DECLARE v_WorkingSetMissing TINYINT DEFAULT 0;
+    DECLARE v_Probe INT;
+
+    -- An index-only quench, or a package with no tables, never builds the declared working set, so there is nothing
+    -- to record. Probed up front rather than by a handler over the whole body: such a handler also swallowed the
+    -- failed PREPARE below, and the EXECUTE after it then failed with "Unknown prepared statement handler".
+    -- 1146 is "table doesn't exist".
+    BEGIN
+        DECLARE CONTINUE HANDLER FOR 1146 SET v_WorkingSetMissing = 1;
+        SELECT COUNT(*) INTO v_Probe FROM _SchemaSmith_Columns;
+        SELECT COUNT(*) INTO v_Probe FROM _SchemaSmith_CheckConstraints;
+    END;
+    IF v_WorkingSetMissing = 1 THEN
+        LEAVE proc;
+    END IF;
 
     -- #242. Records what was applied for every expression-bearing object this run declared: the authored text,
     -- the canonical text the engine reports NOW, and the engine version that decides canonicalisation.
