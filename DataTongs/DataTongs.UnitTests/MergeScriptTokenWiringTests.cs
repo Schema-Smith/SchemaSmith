@@ -172,6 +172,33 @@ public class MergeScriptTokenWiringTests
                 Arg.Is<string>(s =>
                     s.ContainsIgnoringCase("\"dbo.TestTable.tabledata\"") &&
                     s.ContainsIgnoringCase("<*File*>Table Data/dbo.TestTable.tabledata")));
+            Assert.That(dt.ExitCode, Is.Zero, "the script and its token are complete");
+
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
+    // A script whose data token cannot be wired will not deploy as written, so the run is incomplete.
+    [Test]
+    public void TokenizeScripts_TokenCannotBeWired_ExitsOne()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetUpMocks();
+            RegisterTemplateJson(_templateRoot);
+            var config = BuildConfig(_templateRoot, "TestTable", new Dictionary<string, string>
+            {
+                ["ShouldCast:OutputContentFiles"] = "false"
+            });
+            StubCatalogQueriesForSingleTable();
+            Register(config);
+
+            var dt = new global::DataTongs.DataTongs(Platform.SqlServer);
+            dt.CastData();
+
+            _progressLog.Received().Warn(Arg.Is<string>(s => s.Contains("Cannot wire the")));
+            Assert.That(dt.ExitCode, Is.EqualTo(1));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
