@@ -44,4 +44,5 @@
         "UpdateDescendents": true // Update child/dependent tables
     },
     "ScriptTokens": {} // Token values substituted into generated scripts, e.g. { "MainDB": "AppDb" }.
+    // "ExitNonZeroOnWarning": false // Exit 1 instead of 0 when the run logged a warning, for pipelines that treat warnings as failures. Also the --ExitNonZeroOnWarning switch.
 }

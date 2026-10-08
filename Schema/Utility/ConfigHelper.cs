@@ -25,6 +25,11 @@ public static class ConfigHelper
         {
             XmlConfigurator.Configure(logRepository); // use default config if not embedded
         }
+
+        // Every logger, not the root: the tools' loggers are non-additive, so a root appender would see nothing.
+        var counter = new WarningCounter();
+        foreach (var logger in logRepository.GetCurrentLoggers())
+            ((log4net.Repository.Hierarchy.Logger)logger).AddAppender(counter);
     }
 
     public static string ResolveLogPath()

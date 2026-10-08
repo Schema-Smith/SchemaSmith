@@ -48,6 +48,7 @@ Every SchemaSmith CLI tool recognizes these switches. They're processed before a
 | `--LogPath:<path>` | | Directory for log files and backup subdirectories. Defaults to the tool's executable directory. |
 | `--ConnectionString:<connstr>` | | Full ADO.NET / Npgsql / MySqlConnector connection string appropriate to the target platform. When provided, this bypasses all individual connection settings (`Server`, `Port`, `User`, `Password`, `ConnectionProperties`). |
 | `--Encrypt` / `--NoEncrypt` | | Force transport encryption on or off using the right property per engine (SQL Server `Encrypt`, PostgreSQL `SSL Mode`, MySQL/MariaDB `SslMode`). Wins over `ConnectionProperties`. Applies to SchemaQuench, SchemaTongs, and DataTongs. |
+| `--ExitNonZeroOnWarning` | | Exit `1` instead of `0` when the run finished but logged a warning, for pipelines that treat warnings as failures. Never lowers or replaces a failure code. Also available as the `ExitNonZeroOnWarning` setting. All four tools. |
 
 ### Examples
 
@@ -510,6 +511,8 @@ SchemaSmith surfaces the database engine's informational output -- notices, prin
 | `2` | Failed, for a reason you can fix: a required setting is missing (such as the platform), the package cannot be loaded, a validation script, product script or version check failed, a target was refused, or a `TemplateTargets` rule was broken. Also: SchemaQuench -- one or more database quenches failed; SchemaTongs -- one or more tables failed to extract; DataTongs -- one or more tables failed to extract; SchemaShears -- the patch request cannot be built (missing source or manifest, output already exists, unknown drop category) | Check the progress and error logs for what failed and why. Fix the cause and re-run. |
 | `3` | Unhandled exception -- a defect in the tool | An unexpected error occurred. The exception is logged to both the progress and error logs before exit. Please report it with the log contents. |
 | `4` | Log backup failure | The tool completed its main work but couldn't back up the log files. Check directory permissions and disk space in the log directory. The base log files may still be readable even though the backup failed. |
+
+`--ExitNonZeroOnWarning` (or the `ExitNonZeroOnWarning` setting) turns a `0` into a `1` when the run logged a warning; every other code is unchanged.
 
 ---
 

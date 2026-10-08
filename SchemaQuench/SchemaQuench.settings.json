@@ -94,4 +94,5 @@
     "BottleneckThresholdMs": 30000, // Slot operations slower than this (ms) are highlighted as bottlenecks in the deployment summary report
     // "ArtifactPath": "", // Where resolved-SQL artifacts are written when a script fails. Blank = beside the log.
     // "ScrubArtifacts": false // Apply log-hygiene scrubbing to those artifacts too. Off by default because an artifact exists to be debugged, and scrubbing can remove the value that explains the failure.
+    // "ExitNonZeroOnWarning": false // Exit 1 instead of 0 when the run logged a warning, for pipelines that treat warnings as failures. Also the --ExitNonZeroOnWarning switch.
 }

@@ -74,7 +74,8 @@ public static class SettingsContract
             SettingsKeys.DeliverData, SettingsKeys.VerboseLogging, SettingsKeys.FailureContextLines,
             SettingsKeys.BottleneckThresholdMs, SettingsKeys.TrackRunOnceMigrations,
             SettingsKeys.PruneObsoleteMigrationTracking,
-            SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.ScriptTokens
+            SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.ScriptTokens,
+            SettingsKeys.ExitNonZeroOnWarning
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.SchemaTongs)).Concat(
@@ -84,19 +85,19 @@ public static class SettingsContract
             SettingsKeys.ProductKeys.ObjectOrder, SettingsKeys.ProductKeys.PreserveExistingOrder,
             SettingsKeys.TemplateKeys.Name, SettingsKeys.TemplateKeys.SchemaIdentificationScript,
             SettingsKeys.OrphanHandling.Mode, SettingsKeys.FolderMapping, SettingsKeys.LogHygiene,
-            SettingsKeys.ScriptTokens
+            SettingsKeys.ScriptTokens, SettingsKeys.ExitNonZeroOnWarning
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.DataTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.DataTongs)).Concat(
         [
             SettingsKeys.ContentPath, SettingsKeys.ScriptPath, SettingsKeys.TemplatePath,
-            SettingsKeys.TablesToExtract, SettingsKeys.ScriptTokens
+            SettingsKeys.TablesToExtract, SettingsKeys.ScriptTokens, SettingsKeys.ExitNonZeroOnWarning
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaShears] = new(
         [
             SettingsKeys.SourcePath, SettingsKeys.ManifestPath, SettingsKeys.AlwaysIncludePath,
-            SettingsKeys.OutputPath, SettingsKeys.Zip, SettingsKeys.AllowDrops
+            SettingsKeys.OutputPath, SettingsKeys.Zip, SettingsKeys.AllowDrops, SettingsKeys.ExitNonZeroOnWarning
         ], StringComparer.OrdinalIgnoreCase)
     };
 
