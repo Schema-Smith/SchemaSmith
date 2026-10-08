@@ -46,7 +46,7 @@ BEGIN
   SELECT STRING_AGG('RAISE NOTICE ''  Create new table ' || tt."Schema" || '.' || tt."Name" || CASE WHEN COALESCE(tt."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tt."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
                     'CREATE TABLE "' || tt."Schema" || '"."' || tt."Name" || '" (' ||
                     (SELECT STRING_AGG('"' || tc."Name" || '" ' || tc."DataType" ||
-                            CASE WHEN COALESCE(tc."Collation", '') != '' THEN ' COLLATE "' || tc."Collation" || '"' ELSE '' END ||
+                            "SchemaSmith"."CollateClause"(tc."Collation") ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' THEN ' ' || tc."Generated" ELSE '' END ||
                             CASE WHEN tc."Nullable" THEN '' ELSE ' NOT NULL' END ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%' AND COALESCE(tc."Default", '') != '' THEN ' DEFAULT ' || tc."Default" ELSE '' END, ', ' ORDER BY tc."_RowId")
@@ -91,7 +91,7 @@ BEGIN
                     ')'';' || CHR(10) ||
                     'ALTER TABLE "' || tt."Schema" || '"."' || tt."Name" || '" ' ||
                     (SELECT STRING_AGG('ADD "' || tc."Name" || '" ' || tc."DataType" ||
-                            CASE WHEN COALESCE(tc."Collation", '') != '' THEN ' COLLATE "' || tc."Collation" || '"' ELSE '' END ||
+                            "SchemaSmith"."CollateClause"(tc."Collation") ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' THEN ' ' || tc."Generated" ELSE '' END ||
                             CASE WHEN tc."Nullable" THEN '' ELSE ' NOT NULL' END ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%' AND COALESCE(tc."Default", '') != '' THEN ' DEFAULT ' || tc."Default" ELSE '' END, ', ' ORDER BY tc."_RowId")

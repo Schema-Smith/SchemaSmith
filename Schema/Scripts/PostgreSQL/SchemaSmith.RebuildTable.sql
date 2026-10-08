@@ -218,7 +218,7 @@ BEGIN
   -- cannot drift apart into a positional mismatch that would write data into the wrong column.
   ----------------------------------------------------------------------------------------------------
   SELECT STRING_AGG(quote_ident(c."Name") || ' ' || c."DataType" ||
-           CASE WHEN COALESCE(c."Collation", '') <> '' THEN ' COLLATE ' || quote_ident(c."Collation") ELSE '' END ||
+           "SchemaSmith"."CollateClause"(c."Collation") ||
            CASE WHEN UPPER(COALESCE(c."Generated", 'NEVER')) LIKE 'GENERATED%IDENTITY%' THEN ' ' || c."Generated" ELSE '' END ||
            CASE WHEN COALESCE(c."Generated", 'NEVER') = 'ALWAYS' AND COALESCE(c."GenerationExpression", '') <> ''
                 THEN ' GENERATED ALWAYS AS (' || c."GenerationExpression" || ') ' || CASE WHEN c."Virtual" THEN 'VIRTUAL' ELSE 'STORED' END
