@@ -389,6 +389,33 @@ public class LogScrubberTests
         Assert.That(LogScrubber.ScrubConnectionStringSubfields(text), Is.EqualTo(expected));
     }
 
+    // Password forms with no Password= key of their own: a prefixed key, and the SQL forms that take no '='.
+    [TestCase("ALTER LOGIN [sa] WITH PASSWORD = 'new;pw' OLD_PASSWORD = 'old;secret';",
+              "ALTER LOGIN [sa] WITH PASSWORD =*** OLD_PASSWORD =***;")]
+    [TestCase("ALTER ROLE app WITH LOGIN PASSWORD 'pg;secret';", "ALTER ROLE app WITH LOGIN PASSWORD ***;")]
+    [TestCase("CREATE ROLE app ENCRYPTED PASSWORD 'pg;secret' VALID UNTIL 'infinity';",
+              "CREATE ROLE app ENCRYPTED PASSWORD *** VALID UNTIL 'infinity';")]
+    [TestCase("CREATE USER 'app'@'%' IDENTIFIED BY 'my;secret';", "CREATE USER 'app'@'%' IDENTIFIED BY ***;")]
+    [TestCase("ALTER USER 'app'@'%' IDENTIFIED WITH caching_sha2_password BY 'my;secret';",
+              "ALTER USER 'app'@'%' IDENTIFIED WITH caching_sha2_password BY ***;")]
+    [TestCase("GRANT ALL ON db.* TO 'app'@'%' IDENTIFIED BY PASSWORD '*94BDCEBE';",
+              "GRANT ALL ON db.* TO 'app'@'%' IDENTIFIED BY PASSWORD ***;")]
+    [TestCase("export PGPASSWORD=envsecret", "export PGPASSWORD=***")]
+    [TestCase("DB_PASSWORD=envsecret2\nnext line", "DB_PASSWORD=***\nnext line")]
+    [TestCase("MYSQL_PWD=envsecret3; mysql -u app", "MYSQL_PWD=***; mysql -u app")]
+    public void ScrubConnectionStringSubfields_PasswordFormsWithoutAPasswordKey_AreMasked(string text, string expected)
+    {
+        Assert.That(LogScrubber.ScrubConnectionStringSubfields(text), Is.EqualTo(expected));
+    }
+
+    [TestCase("ALTER USER 'app'@'%' IDENTIFIED BY RANDOM PASSWORD;")]
+    [TestCase("Server=db1;PasswordHint=abc")]
+    [TestCase("ALTER ROLE app PASSWORD NULL;")]
+    public void ScrubConnectionStringSubfields_PasswordWordsWithNoSecret_AreLeftAlone(string text)
+    {
+        Assert.That(LogScrubber.ScrubConnectionStringSubfields(text), Is.EqualTo(text));
+    }
+
     // An unquoted password that merely starts with N is not an N'...' literal.
     [Test]
     public void ScrubConnectionStringSubfields_UnquotedValueStartingWithN_StopsAtTheSemicolon()

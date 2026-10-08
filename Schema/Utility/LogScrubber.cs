@@ -19,14 +19,19 @@ public static class LogScrubber
     private static readonly string[] DefaultSensitivePatterns =
         ["Password", "Pwd", "Secret", "ApiKey", "Token", "ConnectionString", "Credential"];
 
-    // Connection-string Password=/Pwd= subfield, and the same keyword in T-SQL (PASSWORD = N'...'). \b anchors to
-    // the actual key so a "MyPasswordHint=" key is not matched. The quoted forms come first because each can hold a
+    // Connection-string Password=/Pwd= subfield, the same keyword in T-SQL (PASSWORD = N'...'), and the forms with no
+    // key of that name: a prefixed key (OLD_PASSWORD =, PGPASSWORD=, MYSQL_PWD=), PostgreSQL's PASSWORD '...' and the
+    // MySQL family's IDENTIFIED [WITH plugin] BY [PASSWORD] '...'. Those last two take no '=', so they match only
+    // when a quote follows -- IDENTIFIED BY RANDOM PASSWORD and PASSWORD NULL carry no secret. A key must end at
+    // the '=', so a "MyPasswordHint=" key is not matched. The quoted forms come first because each can hold a
     // ';': a JSON-escaped \"...\", "..." and '...' (optionally N'...') with a doubled quote as an escape, and {...}
     // with }} as one. A quote that never closes runs to the end of the text: a truncated value is still all secret,
     // so failing open would log its tail. The unquoted form stops at ';' or a line break, so a stack trace after the
     // value survives, and only spaces and tabs may surround '=' so an empty value at a line end masks nothing more.
     private static readonly Regex ConnectionStringSecret =
-        new(@"(?<key>\b(?:password|pwd)[ \t]*=)[ \t]*"
+        new(@"(?<key>(?:password|pwd)[ \t]*="
+            + @"|\bpassword[ \t]+(?=N?['""])"
+            + @"|\bidentified(?:[ \t]+with[ \t]+\w+)?[ \t]+by(?:[ \t]+password)?[ \t]+(?=['""]))[ \t]*"
             + @"(?:\\""(?:(?!\\"")[\s\S])*(?:\\"")?"
             + @"|""(?:[^""]|"""")*""?"
             + @"|N?'(?:[^']|'')*'?"
