@@ -1019,7 +1019,7 @@ public class MergeScriptHelperTests
     }
 
     [Test]
-    public void BuildMergeScript_PostgreSql_XmlEncoding_ArrayColumn_UsesStringToArrayWithSameDelimiter()
+    public void BuildMergeScript_PostgreSql_XmlEncoding_ArrayColumn_ReadsLiteralOrLegacyDelimiter()
     {
         var cmd = CreatePostgreSqlXmlMockCommand(
             unsupportedComments: null, identAndSeq: null,
@@ -1041,8 +1041,11 @@ public class MergeScriptHelperTests
             Assert.That(script, Does.Contain("\"Tags\" text PATH"),
                 "An array column must be shredded as text — the '*,*'-delimited form is not a PG array literal.");
             Assert.That(script,
-                Does.Contain("STRING_TO_ARRAY(\"x\".\"Tags\", '*,*', '*NULL_VALUE_REPRESENTATION*')::_int4"),
-                "Same function, delimiter, and NULL sentinel GetJsonColumnDefinitionsPostgreSql applies to the JSON row source.");
+                Does.Contain("CASE WHEN LEFT(\"x\".\"Tags\", 1) IN ('{', '[') THEN \"x\".\"Tags\"::integer[] "),
+                "An array is extracted as its own literal, which keeps dimensions, bounds and quoting.");
+            Assert.That(script,
+                Does.Contain("ELSE STRING_TO_ARRAY(\"x\".\"Tags\", '*,*', '*NULL_VALUE_REPRESENTATION*')::integer[] END"),
+                "A file extracted in the older '*,*' form must still load.");
         });
     }
 
@@ -1689,13 +1692,10 @@ public class MergeScriptHelperTests
 
     [TestCase("geometry", true)]
     [TestCase("geography", true)]
-    [TestCase("point", true)]
-    [TestCase("linestring", true)]
-    [TestCase("polygon", true)]
-    [TestCase("multipoint", true)]
-    [TestCase("multilinestring", true)]
-    [TestCase("multipolygon", true)]
-    [TestCase("geometrycollection", true)]
+    // PostgreSQL's own geometric types: ST_AsText / ST_GeomFromText reject them.
+    [TestCase("point", false)]
+    [TestCase("polygon", false)]
+    [TestCase("box", false)]
     [TestCase("int4", false)]
     [TestCase("varchar", false)]
     [TestCase("text", false)]
@@ -2288,7 +2288,7 @@ public class MergeScriptHelperTests
         if (updateCols != null)
         {
             sequence.Add(updateCols);
-            sequence.Add(null); // GetXmlColumnsPostgreSql: no xml-typed target columns
+            sequence.Add(null); // GetTextCompareColumnsPostgreSql: no xml or geometric target columns
         }
         sequence.Add(insertCols);
 
@@ -2334,8 +2334,15 @@ public class MergeScriptHelperTests
         reader.GetString(8).Returns(ci => columns[idx].Nullable ? "YES" : "NO");
         reader.GetValue(9).Returns(false);
         reader.GetValue(10).Returns(false);
+        reader.GetString(11).Returns(ci => FormatTypeLike(columns[idx]));
         return reader;
     }
+
+    // What format_type returns for the shapes these tests use.
+    private static string FormatTypeLike((string Name, string DataType, string UdtName, string UdtSchema, int? MaxLen, bool Nullable) c) =>
+        c.UdtName.StartsWith('_') ? (c.UdtName == "_int4" ? "integer" : c.UdtName[1..]) + "[]"
+        : c.MaxLen is null ? c.DataType
+        : $"{c.DataType}({c.MaxLen})";
 
     #endregion
 

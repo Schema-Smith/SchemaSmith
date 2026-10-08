@@ -695,13 +695,18 @@ SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('GEOGRAPHY', 'GEOMETRY')
     {
         cmd.CommandText = $@"
 SELECT STRING_AGG(
-    CASE WHEN c.udt_name IN ('geometry','geography','point','linestring','polygon',
-                              'multipoint','multilinestring','multipolygon','geometrycollection')
+    CASE WHEN c.udt_name IN ('geometry','geography')
          THEN 'ST_AsText(""' || c.column_name || '"") AS ""' || c.column_name || '"", ST_SRID(""' || c.column_name || '"") AS ""' || c.column_name || '.STSrid""'
          WHEN c.udt_name = 'bytea'
          THEN 'encode(""' || c.column_name || '"", ''base64'') AS ""' || c.column_name || '""'
+         -- An array as PostgreSQL's own literal, which keeps its dimensions, bounds and quoting; joining it on '*,*'
+         -- flattened a two-dimensional array, lost non-default lower bounds, and split any element containing the delimiter.
          WHEN LEFT(c.udt_name, 1) = '_'
-         THEN 'ARRAY_TO_STRING(""' || c.column_name || '"", ''*,*'', ''*NULL_VALUE_REPRESENTATION*'') AS ""' || c.column_name || '""'
+         THEN '""' || c.column_name || '""::text AS ""' || c.column_name || '""'
+         -- The single-byte char type; a non-ASCII byte is written as its signed number (always '-' and digits, which no
+         -- char text can be), since its text form is an escape that PostgreSQL before 15 cannot read back.
+         WHEN c.udt_name = 'char'
+         THEN 'CASE WHEN ""' || c.column_name || '""::int < 0 THEN (""' || c.column_name || '""::int)::text ELSE ""' || c.column_name || '""::text END AS ""' || c.column_name || '""'
          ELSE '""' || c.column_name || '""' END, ',' ORDER BY c.column_name)
   FROM information_schema.columns c
   JOIN pg_class cls ON cls.relname = c.table_name
