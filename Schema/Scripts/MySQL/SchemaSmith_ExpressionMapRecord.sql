@@ -49,18 +49,18 @@ proc: BEGIN
     -- default, and mixing them is an error rather than a wrong answer.
     SET @v_emRebaselined := (
         SELECT COUNT(*) FROM SchemaSmith_ExpressionMap em
-         WHERE BINARY em.ObjectSchema = BINARY p_DatabaseName
-           AND BINARY em.EngineVersion != BINARY VERSION()
+         WHERE CAST(em.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
+           AND CAST(em.EngineVersion AS BINARY) != CAST(VERSION() AS BINARY)
            AND ((em.ObjectKind = 'COLUMN' AND em.Slot = 'generated'
                  AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
-                              WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY em.ObjectTable
-                                AND BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName) = BINARY em.ObjectName
-                                AND BINARY c.GeneratedExpression = BINARY em.AuthoredText))
+                              WHERE CAST(SchemaSmith_StripBacktickWrapping(c.TableName) AS BINARY) = CAST(em.ObjectTable AS BINARY)
+                                AND CAST(SchemaSmith_StripBacktickWrapping(c.ColumnName) AS BINARY) = CAST(em.ObjectName AS BINARY)
+                                AND CAST(c.GeneratedExpression AS BINARY) = CAST(em.AuthoredText AS BINARY)))
              OR (em.ObjectKind = 'CHECK' AND em.Slot = 'expression'
                  AND EXISTS (SELECT 1 FROM _SchemaSmith_CheckConstraints k
-                              WHERE BINARY SchemaSmith_StripBacktickWrapping(k.TableName) = BINARY em.ObjectTable
-                                AND BINARY SchemaSmith_StripBacktickWrapping(k.ConstraintName) = BINARY em.ObjectName
-                                AND BINARY k.Expression = BINARY em.AuthoredText))));
+                              WHERE CAST(SchemaSmith_StripBacktickWrapping(k.TableName) AS BINARY) = CAST(em.ObjectTable AS BINARY)
+                                AND CAST(SchemaSmith_StripBacktickWrapping(k.ConstraintName) AS BINARY) = CAST(em.ObjectName AS BINARY)
+                                AND CAST(k.Expression AS BINARY) = CAST(em.AuthoredText AS BINARY)))));
     IF IFNULL(@v_emRebaselined, 0) > 0 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         VALUES (CONNECTION_ID(), CONCAT('  Re-baselined ', @v_emRebaselined,

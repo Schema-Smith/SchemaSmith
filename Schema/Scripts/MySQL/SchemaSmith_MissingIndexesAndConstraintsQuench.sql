@@ -314,8 +314,8 @@ JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
     ON cc.CONSTRAINT_SCHEMA = @v_mcDbCi AND SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = @v_mcDbKey
     AND SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) = c.ConstraintKey', SchemaSmith_CheckTableJoin(), '
-WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))
-    != BINARY SchemaSmith_NormalizeCheckExpression(c.Expression)
+WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4)) AS BINARY)
+    != CAST(SchemaSmith_NormalizeCheckExpression(c.Expression) AS BINARY)
   AND SchemaSmith_ExpressionMapUnchanged(@v_mcDbName, SchemaSmith_StripBacktickWrapping(c.TableName),
         ''CHECK'', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ''expression'',
         c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0');

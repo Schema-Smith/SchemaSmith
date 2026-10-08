@@ -101,8 +101,8 @@ BEGIN
       FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
       JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
         ON rc.CONSTRAINT_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(rc.CONSTRAINT_SCHEMA) = v_DbKey
-       AND BINARY rc.CONSTRAINT_NAME = BINARY tc.CONSTRAINT_NAME
-       AND BINARY rc.TABLE_NAME = BINARY tc.TABLE_NAME
+       AND CAST(rc.CONSTRAINT_NAME AS BINARY) = CAST(tc.CONSTRAINT_NAME AS BINARY)
+       AND CAST(rc.TABLE_NAME AS BINARY) = CAST(tc.TABLE_NAME AS BINARY)
      WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
        AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
 
@@ -119,25 +119,25 @@ BEGIN
         ON e.TableKey = f.TableKey
         AND e.ConstraintKey = f.KeyNameKey
     LEFT JOIN _SchemaSmith_ExistingFKCols c
-        ON BINARY c.TableName = BINARY e.TableName
-        AND BINARY c.ConstraintName = BINARY e.ConstraintName
+        ON CAST(c.TableName AS BINARY) = CAST(e.TableName AS BINARY)
+        AND CAST(c.ConstraintName AS BINARY) = CAST(e.ConstraintName AS BINARY)
     WHERE (
         -- Spelled differently only in case: the same constraint to the engine, so it is dropped and re-created under
         -- the package's spelling. MySQL and MariaDB both refuse that as one ALTER (the new name is a duplicate until
         -- the drop commits), so the drop and the create are separate statements here, as for any modified FK.
-        BINARY e.ConstraintName != BINARY SchemaSmith_StripBacktickWrapping(f.KeyName)
+        CAST(e.ConstraintName AS BINARY) != CAST(SchemaSmith_StripBacktickWrapping(f.KeyName) AS BINARY)
         -- Or different referenced table
         OR e.ReferencedTableKey != f.RelatedTableKey
         -- Or different delete action
-        OR BINARY e.DeleteRule != BINARY COALESCE(f.DeleteAction, 'NO ACTION')
+        OR CAST(e.DeleteRule AS BINARY) != CAST(COALESCE(f.DeleteAction, 'NO ACTION') AS BINARY)
         -- Or different update action
-        OR BINARY e.UpdateRule != BINARY COALESCE(f.UpdateAction, 'NO ACTION')
+        OR CAST(e.UpdateRule AS BINARY) != CAST(COALESCE(f.UpdateAction, 'NO ACTION') AS BINARY)
         -- Or different columns (aggregate comparison handles composite FKs;
         -- REPLACE strips backticks from comma-separated column lists like `Col1`,`Col2`)
         -- (column names compare case-insensitively, as the engine does)
-        OR BINARY LOWER(c.FkColumns) != BINARY LOWER(REPLACE(f.Columns, '`', ''))
+        OR CAST(LOWER(c.FkColumns) AS BINARY) != CAST(LOWER(REPLACE(f.Columns, '`', '')) AS BINARY)
         -- Or different referenced columns
-        OR BINARY LOWER(c.RefColumns) != BINARY LOWER(REPLACE(f.RelatedColumns, '`', ''))
+        OR CAST(LOWER(c.RefColumns) AS BINARY) != CAST(LOWER(REPLACE(f.RelatedColumns, '`', '')) AS BINARY)
     );
 
     -- Drop modified FKs

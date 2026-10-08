@@ -100,11 +100,11 @@ BEGIN
   IF COALESCE(p_Preserve, 0) <> v_preserve THEN RETURN 0; END IF;
   -- The comment and body are the user's text, so they compare byte for byte: a change only in case or accent is a
   -- change, whatever the database's collation.
-  IF BINARY COALESCE(p_Comment, '') <> BINARY COALESCE(v_comment, '') THEN RETURN 0; END IF;
+  IF CAST(COALESCE(p_Comment, '') AS BINARY) <> CAST(COALESCE(v_comment, '') AS BINARY) THEN RETURN 0; END IF;
 
   -- The body is compared with whitespace collapsed at the ends only. The server stores the body
   -- essentially verbatim, so anything more aggressive risks calling two genuinely different bodies equal.
-  IF BINARY TRIM(COALESCE(p_Definition, '')) <> BINARY TRIM(COALESCE(v_def, '')) THEN RETURN 0; END IF;
+  IF CAST(TRIM(COALESCE(p_Definition, '')) AS BINARY) <> CAST(TRIM(COALESCE(v_def, '')) AS BINARY) THEN RETURN 0; END IF;
 
   RETURN 1;
 END //

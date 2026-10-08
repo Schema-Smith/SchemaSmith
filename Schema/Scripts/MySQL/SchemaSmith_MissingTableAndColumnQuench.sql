@@ -754,7 +754,7 @@ BEGIN
         JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId
         JOIN _SchemaSmith_CatColumns isc
             ON isc.TableKey = c.TableKey
-           AND BINARY isc.COLUMN_NAME = BINARY r.LiveName
+           AND CAST(isc.COLUMN_NAME AS BINARY) = CAST(r.LiveName AS BINARY)
         GROUP BY c.TableName;
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)

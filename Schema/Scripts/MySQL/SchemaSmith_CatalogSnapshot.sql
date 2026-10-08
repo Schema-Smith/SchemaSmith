@@ -174,5 +174,5 @@ BEGIN
     INSERT IGNORE INTO _SchemaSmith_ColRenameReady (RowId, LiveName)
     SELECT c.RowId, isc.COLUMN_NAME FROM _SchemaSmith_Columns c
       JOIN _SchemaSmith_CatColumns isc ON isc.TableKey = c.TableKey AND isc.ColumnKey = c.ColumnKey
-     WHERE BINARY isc.COLUMN_NAME <> BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName);
+     WHERE CAST(isc.COLUMN_NAME AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(c.ColumnName) AS BINARY);
 END //

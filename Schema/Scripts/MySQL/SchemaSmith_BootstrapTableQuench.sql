@@ -84,9 +84,6 @@ BEGIN
     DECLARE v_GroupPart VARCHAR(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_GroupIdx INT;
     DECLARE v_SupportsDescIndex TINYINT;
-    -- MESSAGE_TEXT is a VARCHAR(128) condition item in the server's own charset; a utf8mb4
-    -- variable is refused by MariaDB with "Data too long for condition item" whatever its length.
-    DECLARE v_SignalMsg VARCHAR(128) CHARACTER SET utf8mb3;
     DECLARE v_PkReplacedIndex VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_OldTableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_TableRenameOldExists INT;
@@ -385,7 +382,7 @@ BEGIN
               AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_AcColName)
             LIMIT 1;
 
-            IF v_LiveCollation IS NOT NULL AND BINARY v_LiveCollation <> BINARY v_AcCollation THEN
+            IF v_LiveCollation IS NOT NULL AND CAST(v_LiveCollation AS BINARY) <> CAST(v_AcCollation AS BINARY) THEN
                 SET v_CollateClauses = CONCAT(v_CollateClauses, IF(v_CollateClauses = '', '', ', '),
                     'MODIFY COLUMN `', v_AcColName, '` ', v_AcDataType, ' COLLATE ', v_AcCollation,
                     CASE WHEN v_AcNullable = 1 THEN ' NULL' ELSE ' NOT NULL' END,
@@ -455,9 +452,11 @@ BEGIN
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
                 IF COALESCE(@v_dupes, 0) > 0 THEN
-                    SET v_SignalMsg = LEFT(CONCAT('SchemaSmith bootstrap: duplicate rows block the declared PRIMARY KEY on ',
+                    -- A user variable, in the connection's charset: MariaDB refuses a utf8mb4 local as MESSAGE_TEXT
+                    -- ("Data too long for condition item"), and declaring the local utf8mb3 is deprecated on MySQL.
+                    SET @ss_bootstrap_msg = LEFT(CONCAT('SchemaSmith bootstrap: duplicate rows block the declared PRIMARY KEY on ',
                                                   v_TableName, '; the existing key is unchanged'), 128);
-                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_SignalMsg;
+                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_bootstrap_msg;
                 END IF;
                 SET v_PkReplacedIndex = NULL;
                 SELECT MIN(index_name) INTO v_PkReplacedIndex
@@ -541,9 +540,9 @@ BEGIN
                         IF COALESCE(@v_dupes, 0) > 0 THEN
                             -- MESSAGE_TEXT is capped at 128 characters (MariaDB errors rather than truncating),
                             -- so the message is short by construction and LEFT() guards a long index name.
-                            SET v_SignalMsg = LEFT(CONCAT('SchemaSmith bootstrap: duplicate rows block UNIQUE ',
+                            SET @ss_bootstrap_msg = LEFT(CONCAT('SchemaSmith bootstrap: duplicate rows block UNIQUE ',
                                                           v_AiIndexName, '; the existing index is unchanged'), 128);
-                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_SignalMsg;
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_bootstrap_msg;
                         END IF;
                     END IF;
                     SET @exec_sql = CONCAT('ALTER TABLE `', v_Db, '`.`', v_TableName, '` DROP INDEX `', v_AiIndexName, '`');

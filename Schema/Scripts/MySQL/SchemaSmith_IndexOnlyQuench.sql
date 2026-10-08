@@ -167,12 +167,12 @@ BEGIN
                        CONCAT('`', s.COLUMN_NAME, '`',
                               -- SPATIAL's SUB_PART is a phantom internal value (always 32), not a declared prefix; exclude it or spatial indexes never converge
                               IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL', CONCAT('(', s.SUB_PART, ')'), ''),
-                              CASE WHEN BINARY s.COLLATION = BINARY 'D' THEN ' DESC' ELSE '' END)
+                              CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    ELSE
                        CONCAT('(', REGEXP_REPLACE(
                            REPLACE(s.EXPRESSION, CONCAT(CHAR(92), CHAR(39)), CHAR(39)),
                            '_[A-Za-z0-9]+''', ''''), ')',
-                              CASE WHEN BINARY s.COLLATION = BINARY 'D' THEN ' DESC' ELSE '' END)
+                              CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    END
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
@@ -191,7 +191,7 @@ BEGIN
                GROUP_CONCAT(
                    CONCAT('`', s.COLUMN_NAME, '`',
                           IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL', CONCAT('(', s.SUB_PART, ')'), ''),
-                          CASE WHEN BINARY s.COLLATION = BINARY 'D' THEN ' DESC' ELSE '' END)
+                          CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
@@ -282,8 +282,8 @@ BEGIN
     JOIN _SchemaSmith_IdxDetectSnap snap
         ON snap.TableKey = i.TableKey
     JOIN SchemaSmith_ProductOwnership po
-        ON BINARY po.ProductName = BINARY p_ProductName
-        AND BINARY po.ObjectSchema = BINARY p_DatabaseName
+        ON CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
+        AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
         AND po.ObjectType = 'INDEX'
         AND CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(snap.TableKey, '.', snap.IndexKey)
     WHERE i.IsPrimaryKey = 0
@@ -294,7 +294,7 @@ BEGIN
             AND s2.IndexKey = i.IndexKey
       )
       -- Old index exists with same columns (compare normalized column list)
-      AND BINARY SchemaSmith_NormalizeIndexColumns(i.IndexColumns) = BINARY snap.NormColumns
+      AND CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) = CAST(snap.NormColumns AS BINARY)
       -- Same uniqueness
       AND i.IsUnique = (snap.NonUnique = 0);
 
@@ -336,8 +336,8 @@ BEGIN
         INNER JOIN _SchemaSmith_IndexRenames r
             ON CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(r.TableKey, '.', r.OldIndexKey)
         SET po.ObjectName = CONCAT(r.TableName, '.', r.NewIndexName)
-        WHERE BINARY po.ProductName = BINARY p_ProductName
-          AND BINARY po.ObjectSchema = BINARY p_DatabaseName
+        WHERE CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
+          AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
           AND po.ObjectType = 'INDEX';
     END IF;
 
@@ -379,7 +379,7 @@ BEGIN
             ON snap.TableKey = i.TableKey
            AND snap.IndexKey = i.IndexKey
          WHERE i.IsPrimaryKey = 0
-           AND BINARY snap.IndexName <> BINARY SchemaSmith_StripBacktickWrapping(i.IndexName);
+           AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY);
 
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -418,8 +418,8 @@ BEGIN
         ON snap.TableKey = i.TableKey
         AND snap.IndexKey = i.IndexKey
     LEFT JOIN _SchemaSmith_ExistingIndexVisibility viz
-        ON BINARY viz.TableName = BINARY snap.TableName
-        AND BINARY viz.IndexName = BINARY snap.IndexName
+        ON CAST(viz.TableName AS BINARY) = CAST(snap.TableName AS BINARY)
+        AND CAST(viz.IndexName AS BINARY) = CAST(snap.IndexName AS BINARY)
     WHERE i.IsPrimaryKey = 0
       -- Skip indexes that were just renamed
       AND NOT EXISTS (
@@ -435,19 +435,19 @@ BEGIN
       -- Check if definition differs (columns, uniqueness, or index type)
       AND (
           -- Spelled differently only in case, on MariaDB (see the case-only spelling step above)
-          (VERSION() LIKE '%MariaDB%' AND snap.FkBacked = 0 AND BINARY snap.IndexName <> BINARY SchemaSmith_StripBacktickWrapping(i.IndexName))
+          (VERSION() LIKE '%MariaDB%' AND snap.FkBacked = 0 AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY))
           -- Or columns differ
-          OR BINARY SchemaSmith_NormalizeIndexColumns(i.IndexColumns) != BINARY snap.NormColumns
+          OR CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
           -- Or uniqueness differs
           OR i.IsUnique != (snap.NonUnique = 0)
           -- Or index type differs (BTREE vs HASH)
-          OR (BINARY UPPER(COALESCE(i.IndexType, 'BTREE')) != BINARY UPPER(snap.IndexType)
-              AND NOT (BINARY UPPER(COALESCE(i.IndexType, 'BTREE')) = BINARY 'BTREE' AND BINARY UPPER(snap.IndexType) = BINARY 'BTREE'))
+          OR (CAST(UPPER(COALESCE(i.IndexType, 'BTREE')) AS BINARY) != CAST(UPPER(snap.IndexType) AS BINARY)
+              AND NOT (CAST(UPPER(COALESCE(i.IndexType, 'BTREE')) AS BINARY) = CAST('BTREE' AS BINARY) AND CAST(UPPER(snap.IndexType) AS BINARY) = CAST('BTREE' AS BINARY)))
           -- Or visibility differs (FULLTEXT indexes don't support INVISIBLE, skip them). Below the
           -- invisible-index floor (MySQL 8.0 / MariaDB 10.6) the keyword can't be emitted, so a declared
           -- invisible index is stored visible; ignore the visibility difference there or it churns every run.
           -- viz.IsVisible is the once-snapshotted per-engine visibility, replacing SchemaSmith_IndexIsVisible().
-          OR (BINARY UPPER(snap.IndexType) != BINARY 'FULLTEXT'
+          OR (CAST(UPPER(snap.IndexType) AS BINARY) != CAST('FULLTEXT' AS BINARY)
               AND SchemaSmith_SupportsInvisibleIndex() = 1
               AND i.IsVisible != viz.IsVisible)
           -- Or comment differs (symmetric: covers added, changed, and cleared, matching the column
@@ -455,7 +455,7 @@ BEGIN
           -- (they are parsed separately into _SchemaSmith_FullTextIndexes and have no modified-index
           -- detection pass at all -- see this file's Comment column note), so no FULLTEXT exclusion
           -- is needed here.
-          OR (BINARY COALESCE(snap.IndexComment, '') != BINARY COALESCE(i.Comment, ''))
+          OR (CAST(COALESCE(snap.IndexComment, '') AS BINARY) != CAST(COALESCE(i.Comment, '') AS BINARY))
       );
 
     -- Drop modified indexes (they'll be recreated later)
@@ -994,8 +994,8 @@ BEGIN
         WHERE s.IndexType = 'FULLTEXT'
           AND EXISTS (
               SELECT 1 FROM SchemaSmith_ProductOwnership po
-              WHERE BINARY po.ProductName = BINARY p_ProductName
-                AND BINARY po.ObjectSchema = BINARY p_DatabaseName
+              WHERE CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
+                AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
                 AND po.ObjectType = 'INDEX'
                 AND CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(s.TableKey, '.', s.IndexKey)
           )
