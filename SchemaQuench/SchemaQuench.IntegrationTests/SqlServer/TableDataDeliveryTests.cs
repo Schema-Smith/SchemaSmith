@@ -268,11 +268,11 @@ public class TableDataDeliveryTests
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
         const string amount = "1234567890123456789012345678.1234567890";
-        File.WriteAllText(Path.Combine(tempDir, "json.tabledata"),
+        File.WriteAllText(Path.Join(tempDir, "json.tabledata"),
             "[{\"code\":\"J001\",\"name\":\"Zoë 名\",\"amt\":" + amount + ",\"dt\":\"2024-03-05T10:11:12.1234567\","
             + "\"dto\":\"2024-03-05T10:11:12.1234567+05:30\",\"bin\":\"3q2+7wA=\",\"flag\":true,\"shape\":\"POINT (1 2)\",\"shape.STSrid\":4326,"
             + "\"uid\":\"6F9619FF-8B86-D011-B42D-00C04FC964FF\",\"notes\":\"[{\\\"a\\\":1},{\\\"b\\\":2}]\"}]");
-        File.WriteAllText(Path.Combine(tempDir, "xml.tabledata"),
+        File.WriteAllText(Path.Join(tempDir, "xml.tabledata"),
             "<rows><row><c n=\"code\">X001</c><c n=\"name\">Zoë 名</c><c n=\"amt\">" + amount + "</c><c n=\"dt\">2024-03-05T10:11:12.1234567</c>"
             + "<c n=\"dto\">2024-03-05T10:11:12.1234567+05:30</c><c n=\"bin\">3q2+7wA=</c><c n=\"flag\">1</c><c n=\"shape\">POINT (1 2)</c><c n=\"shape.STSrid\">4326</c>"
             + "<c n=\"uid\">6F9619FF-8B86-D011-B42D-00C04FC964FF</c><c n=\"notes\">[{\"a\":1},{\"b\":2}]</c></row></rows>");
