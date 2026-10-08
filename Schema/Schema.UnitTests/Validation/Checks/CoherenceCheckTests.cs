@@ -1610,6 +1610,47 @@ public class CoherenceCheckTests
         return new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg")).ToList();
     }
 
+    // ---- SS-COL-002: a character set other than the table's, with no collation, gets that set's default ----
+
+    private static MySqlTable CharsetTable(string columnCharset, string columnCollation = null,
+                                           string tableCollation = "utf8mb4_unicode_ci", bool maria = false)
+    {
+        var table = maria ? new MariaDbTable { Name = "invoice", Collation = tableCollation }
+                          : new MySqlTable { Name = "invoice", Collation = tableCollation };
+        var column = maria ? new MariaDbColumn() : new MySqlColumn();
+        column.Name = "code";
+        column.DataType = "varchar(20)";
+        column.CharacterSet = columnCharset;
+        column.Collation = columnCollation;
+        table.Columns.Add(column);
+        return table;
+    }
+
+    [TestCase(false, Platform.MySQL)]
+    [TestCase(true, Platform.MariaDb)]
+    public void AColumnCharsetOtherThanTheTables_WithNoCollation_IsAWarning(bool maria, Platform platform)
+    {
+        var finding = RunFor(CharsetTable("latin1", maria: maria), platform).Single(f => f.Code == "SS-COL-002");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Warning));
+            Assert.That(finding.Message, Does.Contain("'code'").And.Contain("latin1"),
+                "the author needs the column and the character set to act on it. " + finding.Message);
+        });
+    }
+
+    [TestCase("utf8mb4", null, "utf8mb4_unicode_ci")]
+    [TestCase("UTF8MB4", null, "utf8mb4_unicode_ci")]
+    [TestCase("latin1", "latin1_bin", "utf8mb4_unicode_ci")]
+    [TestCase("latin1", null, null)]
+    [TestCase(null, null, "utf8mb4_unicode_ci")]
+    public void ACharsetTheDeployResolves_IsSilent(string charset, string collation, string tableCollation)
+    {
+        Assert.That(RunFor(CharsetTable(charset, collation, tableCollation), Platform.MySQL)
+            .Where(f => f.Code == "SS-COL-002"), Is.Empty);
+    }
+
     // ---- SS-IDENT-001: a " in a PostgreSQL name is refused, because no stored form of it deploys ----
 
     private static PostgreSqlTable QTable(string tableName = "invoice", string columnName = "id",

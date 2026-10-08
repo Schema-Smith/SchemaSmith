@@ -31,6 +31,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string ForeignKeyNameReusedCode = "SS-FK-006";
     private const string IndexColumnCode = "SS-IDX-001";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
+    private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RebuildThresholdCode = "SS-TBL-001";
     private const string IgnoredThresholdCode = "SS-TBL-002";
     private const string RlsWithoutPoliciesCode = "SS-RLS-001";
@@ -108,6 +109,7 @@ public sealed class CoherenceCheck : ISchemaCheck
                 findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
 
             findings.AddRange(CheckBackfill(table, location));
+            findings.AddRange(CheckCharsetWithoutCollation(table, location));
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
             findings.AddRange(CheckRowLevelSecurity(table, location));
             findings.AddRange(CheckReplicaIdentity(table, location));
@@ -263,6 +265,28 @@ public sealed class CoherenceCheck : ISchemaCheck
             yield return new Finding(Severity.Warning, BackfillWithoutDefaultCode, Category, tableLocation,
                 $"Column '{column.Name}' sets BackfillExistingRows but has no Default, so there is no value to " +
                 "apply to existing rows and the setting has no effect.");
+    }
+
+    /// <summary>
+    /// A MySQL-family column that names a character set and no collation gets that character set's DEFAULT
+    /// collation, which is not the table's and differs between engine versions (utf8mb4 defaults to
+    /// utf8mb4_0900_ai_ci on MySQL 8, utf8mb4_uca1400_ai_ci on MariaDB 11.4, utf8mb4_general_ci on older ones).
+    /// The deploy gives a column in the table's own character set the table's collation; one in another set it
+    /// cannot place, so it says so here. A table that declares no collation has nothing to compare against.
+    /// </summary>
+    private static IEnumerable<Finding> CheckCharsetWithoutCollation(Table table, string tableLocation)
+    {
+        if (table is not MySqlTable { Collation: { } tableCollation } || string.IsNullOrWhiteSpace(tableCollation))
+            yield break;
+
+        foreach (var column in table.Columns.OfType<MySqlColumn>()
+                     .Where(c => !string.IsNullOrWhiteSpace(c.CharacterSet) && string.IsNullOrWhiteSpace(c.Collation)
+                                 && !tableCollation.Trim().StartsWith(c.CharacterSet.Trim() + "_",
+                                     StringComparison.OrdinalIgnoreCase)))
+            yield return new Finding(Severity.Warning, CharsetWithoutCollationCode, Category, tableLocation,
+                $"Column '{column.Name}' declares CharacterSet '{column.CharacterSet.Trim()}' but no Collation, so it " +
+                $"gets that character set's default collation, which depends on the engine version. Add a Collation " +
+                $"to choose one; the table's own '{tableCollation.Trim()}' belongs to a different character set.");
     }
 
     /// <summary>
