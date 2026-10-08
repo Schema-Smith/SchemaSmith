@@ -126,7 +126,10 @@ BEGIN
              END,
         ' ON COMPLETION ', CASE WHEN Preserve = 1 THEN 'PRESERVE' ELSE 'NOT PRESERVE' END,
         ' ', CASE Status WHEN 'DISABLE' THEN 'DISABLE'
-                         WHEN 'DISABLE ON SLAVE' THEN 'DISABLE ON SLAVE'
+                         -- MySQL 8.4 deprecates the SLAVE spelling (warning 1287) and 8.0 does not accept REPLICA;
+                         -- MariaDB accepts SLAVE without complaint back to the 10.2 floor.
+                         WHEN 'DISABLE ON SLAVE' THEN IF(VERSION() NOT LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 804,
+                                                         'DISABLE ON REPLICA', 'DISABLE ON SLAVE')
                          ELSE 'ENABLE' END,
         CASE WHEN NULLIF(Comment, '') IS NOT NULL
              THEN CONCAT(' COMMENT ''', REPLACE(Comment, '''', ''''''), '''') ELSE '' END,

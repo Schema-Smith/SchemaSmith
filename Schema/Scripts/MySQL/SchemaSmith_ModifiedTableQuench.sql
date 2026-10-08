@@ -514,7 +514,7 @@ BEGIN
                 CALL SchemaSmith_TableTablespace(p_DatabaseName, SchemaSmith_StripBacktickWrapping(v_TtsTableName), v_TtsDeployed);
 
                 -- Tablespace names are case-sensitive, so one spelled differently in case is a different tablespace.
-                IF BINARY COALESCE(v_TtsDeployed, '') <> BINARY v_TtsDeclared THEN
+                IF CAST(COALESCE(v_TtsDeployed, '') AS BINARY) <> CAST(v_TtsDeclared AS BINARY) THEN
                     -- Log every offending table (not just the one named in the SIGNAL below), same shape
                     -- as the partitioning guard above.
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(),
@@ -837,20 +837,19 @@ BEGIN
           -- STEP 3's set: any declared attribute differs from the live one.
           OR CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                     OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                  THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                  THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                   ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
           OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
           OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
           OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-              AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                  SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+              AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
               AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                   c.DefaultValue, isc.DATA_TYPE) = 0)
           OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
-          OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+          OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
           OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-              AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+              AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
               -- #242: the texts differ, but they always differ once the engine has reformatted the expression.
               -- Ask what was actually applied before calling it a change.
               AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -865,8 +864,8 @@ BEGIN
               AND (isc.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%') <> (c.IsWithoutSystemVersioning = 1))
           OR (SchemaSmith_SupportsColumnSrid() = 1
               AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
-          OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
-          OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+          OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
+          OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
       )
     GROUP BY c.TableName;
 
@@ -1176,7 +1175,7 @@ BEGIN
               -- synonym normalization would wrongly fold a real value-case change.
               CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                      != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
@@ -1184,18 +1183,17 @@ BEGIN
               -- Default value changes (strip outer single quotes from JSON default for comparison,
               -- since GenerateTableJson wraps string/enum defaults in quotes for DDL but INFORMATION_SCHEMA stores raw values)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               -- Collation changes (only when JSON specifies a collation)
-              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
               -- Generated expression changes (both sides are generated, but expression differs)
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
                   -- actually applied before calling it a change.
                   AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -1223,11 +1221,11 @@ BEGIN
                   AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
               -- Comment differs (symmetric: covers added, changed, and cleared -- a declared NULL
               -- comment against a live comment counts as a difference the same as a value change).
-              OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
+              OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
               -- ON UPDATE CURRENT_TIMESTAMP[(n)] differs (symmetric: added, changed -- e.g. a precision
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
-              OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+              OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           );
 
         -- #363: WhatIf twin of the ELSE-branch 'column'/'modified' audit; same source/predicate, wouldModify.
@@ -1256,22 +1254,21 @@ BEGIN
           AND (
               CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                      != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
-              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
                   -- actually applied before calling it a change.
                   AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -1298,11 +1295,11 @@ BEGIN
                   AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
               -- Comment differs (symmetric: covers added, changed, and cleared -- a declared NULL
               -- comment against a live comment counts as a difference the same as a value change).
-              OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
+              OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
               -- ON UPDATE CURRENT_TIMESTAMP[(n)] differs (symmetric: added, changed -- e.g. a precision
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
-              OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+              OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           );
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Modify columns');
@@ -1345,7 +1342,7 @@ BEGIN
               -- synonym normalization would wrongly fold a real value-case change.
               CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                      != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
@@ -1353,18 +1350,17 @@ BEGIN
               -- Default value changes (strip outer single quotes from JSON default for comparison,
               -- since GenerateTableJson wraps string/enum defaults in quotes for DDL but INFORMATION_SCHEMA stores raw values)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               -- Collation changes (only when JSON specifies a collation)
-              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
               -- Generated expression changes (both sides are generated, but expression differs)
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
                   -- actually applied before calling it a change.
                   AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -1392,11 +1388,11 @@ BEGIN
                   AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
               -- Comment differs (symmetric: covers added, changed, and cleared -- a declared NULL
               -- comment against a live comment counts as a difference the same as a value change).
-              OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
+              OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
               -- ON UPDATE CURRENT_TIMESTAMP[(n)] differs (symmetric: added, changed -- e.g. a precision
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
-              OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+              OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           );
 
         -- Object-change audit (#243 E5): one row per column about to be modified. Same join +
@@ -1428,22 +1424,21 @@ BEGIN
           AND (
               CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                      != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
-              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
                   -- actually applied before calling it a change.
                   AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -1470,11 +1465,11 @@ BEGIN
                   AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
               -- Comment differs (symmetric: covers added, changed, and cleared -- a declared NULL
               -- comment against a live comment counts as a difference the same as a value change).
-              OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
+              OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
               -- ON UPDATE CURRENT_TIMESTAMP[(n)] differs (symmetric: added, changed -- e.g. a precision
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
-              OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+              OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           );
 
         -- Materialize: fold each table's column modifications into one multi-clause ALTER, then drain.
@@ -1507,22 +1502,21 @@ BEGIN
           AND (
               CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                      != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
-              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
                   -- actually applied before calling it a change.
                   AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -1549,11 +1543,11 @@ BEGIN
                   AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
               -- Comment differs (symmetric: covers added, changed, and cleared -- a declared NULL
               -- comment against a live comment counts as a difference the same as a value change).
-              OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
+              OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
               -- ON UPDATE CURRENT_TIMESTAMP[(n)] differs (symmetric: added, changed -- e.g. a precision
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
-              OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+              OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           )
         GROUP BY c.TableName;
 
@@ -2226,7 +2220,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INNER JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = t.TableKey
         WHERE t.NewTable = 0
-          AND BINARY COALESCE(ist.TABLE_COMMENT, '') != BINARY COALESCE(t.Comment, '');
+          AND CAST(COALESCE(ist.TABLE_COMMENT, '') AS BINARY) != CAST(COALESCE(t.Comment, '') AS BINARY);
     ELSE
         BEGIN
             DECLARE v_CommentDone INT DEFAULT FALSE;
@@ -2238,7 +2232,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 INNER JOIN _SchemaSmith_CatTables ist
                     ON ist.TableKey = t.TableKey
                 WHERE t.NewTable = 0
-                  AND BINARY COALESCE(ist.TABLE_COMMENT, '') != BINARY COALESCE(t.Comment, '');
+                  AND CAST(COALESCE(ist.TABLE_COMMENT, '') AS BINARY) != CAST(COALESCE(t.Comment, '') AS BINARY);
 
             DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_CommentDone = TRUE;
 
@@ -2366,13 +2360,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           AND (
               (VERSION() NOT LIKE '%MariaDB%'
                AND t.Encryption IS NOT NULL AND t.Encryption != ''
-               AND BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION'), 'N')) != BINARY UPPER(t.Encryption))
+               AND CAST(UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION'), 'N')) AS BINARY) != CAST(UPPER(t.Encryption) AS BINARY))
               OR
               (VERSION() LIKE '%MariaDB%'
                AND (
-                   (CASE WHEN BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTED'), 'NO')) = BINARY 'YES' THEN 1 ELSE 0 END) != t.Encrypted
+                   (CASE WHEN CAST(UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTED'), 'NO')) AS BINARY) = CAST('YES' AS BINARY) THEN 1 ELSE 0 END) != t.Encrypted
                    OR (t.Encrypted = 1 AND t.EncryptionKeyId IS NOT NULL
-                       AND BINARY COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION_KEY_ID'), '') != BINARY CAST(t.EncryptionKeyId AS CHAR))
+                       AND CAST(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION_KEY_ID'), '') AS BINARY) != CAST(CAST(t.EncryptionKeyId AS CHAR) AS BINARY))
                ))
           );
     ELSE
@@ -2397,13 +2391,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                   AND (
                       (VERSION() NOT LIKE '%MariaDB%'
                        AND t.Encryption IS NOT NULL AND t.Encryption != ''
-                       AND BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION'), 'N')) != BINARY UPPER(t.Encryption))
+                       AND CAST(UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION'), 'N')) AS BINARY) != CAST(UPPER(t.Encryption) AS BINARY))
                       OR
                       (VERSION() LIKE '%MariaDB%'
                        AND (
-                           (CASE WHEN BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTED'), 'NO')) = BINARY 'YES' THEN 1 ELSE 0 END) != t.Encrypted
+                           (CASE WHEN CAST(UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTED'), 'NO')) AS BINARY) = CAST('YES' AS BINARY) THEN 1 ELSE 0 END) != t.Encrypted
                            OR (t.Encrypted = 1 AND t.EncryptionKeyId IS NOT NULL
-                               AND BINARY COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION_KEY_ID'), '') != BINARY CAST(t.EncryptionKeyId AS CHAR))
+                               AND CAST(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION_KEY_ID'), '') AS BINARY) != CAST(CAST(t.EncryptionKeyId AS CHAR) AS BINARY))
                        ))
                   );
 
@@ -3250,12 +3244,12 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                        CONCAT('`', s.COLUMN_NAME, '`',
                               -- SPATIAL's SUB_PART is a phantom internal value (always 32), not a declared prefix; exclude it or spatial indexes never converge
                               IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL', CONCAT('(', s.SUB_PART, ')'), ''),
-                              CASE WHEN BINARY s.COLLATION = BINARY 'D' THEN ' DESC' ELSE '' END)
+                              CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    ELSE
                        CONCAT('(', REGEXP_REPLACE(
                            REPLACE(s.EXPRESSION, CONCAT(CHAR(92), CHAR(39)), CHAR(39)),
                            '_[A-Za-z0-9]+''', ''''), ')',
-                              CASE WHEN BINARY s.COLLATION = BINARY 'D' THEN ' DESC' ELSE '' END)
+                              CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    END
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
@@ -3274,7 +3268,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                GROUP_CONCAT(
                    CONCAT('`', s.COLUMN_NAME, '`',
                           IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL', CONCAT('(', s.SUB_PART, ')'), ''),
-                          CASE WHEN BINARY s.COLLATION = BINARY 'D' THEN ' DESC' ELSE '' END)
+                          CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
@@ -3366,8 +3360,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     JOIN _SchemaSmith_IdxDetectSnap snap
         ON snap.TableKey = i.TableKey
     JOIN SchemaSmith_ProductOwnership po
-        ON BINARY po.ProductName = BINARY p_ProductName
-        AND BINARY po.ObjectSchema = BINARY p_DatabaseName
+        ON CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
+        AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
         AND po.ObjectType = 'INDEX'
         AND CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(snap.TableKey, '.', snap.IndexKey)
     WHERE i.IsPrimaryKey = 0
@@ -3378,7 +3372,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             AND s2.IndexKey = i.IndexKey
       )
       -- Old index exists with same columns (compare normalized column list)
-      AND BINARY SchemaSmith_NormalizeIndexColumns(i.IndexColumns) = BINARY snap.NormColumns
+      AND CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) = CAST(snap.NormColumns AS BINARY)
       -- Same uniqueness
       AND i.IsUnique = (snap.NonUnique = 0);
 
@@ -3420,8 +3414,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INNER JOIN _SchemaSmith_IndexRenames r
             ON CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(r.TableKey, '.', r.OldIndexKey)
         SET po.ObjectName = CONCAT(r.TableName, '.', r.NewIndexName)
-        WHERE BINARY po.ProductName = BINARY p_ProductName
-          AND BINARY po.ObjectSchema = BINARY p_DatabaseName
+        WHERE CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
+          AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
           AND po.ObjectType = 'INDEX';
     END IF;
 
@@ -3463,7 +3457,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             ON snap.TableKey = i.TableKey
            AND snap.IndexKey = i.IndexKey
          WHERE i.IsPrimaryKey = 0
-           AND BINARY snap.IndexName <> BINARY SchemaSmith_StripBacktickWrapping(i.IndexName);
+           AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY);
 
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -3502,8 +3496,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         ON snap.TableKey = i.TableKey
         AND snap.IndexKey = i.IndexKey
     LEFT JOIN _SchemaSmith_ExistingIndexVisibility viz
-        ON BINARY viz.TableName = BINARY snap.TableName
-        AND BINARY viz.IndexName = BINARY snap.IndexName
+        ON CAST(viz.TableName AS BINARY) = CAST(snap.TableName AS BINARY)
+        AND CAST(viz.IndexName AS BINARY) = CAST(snap.IndexName AS BINARY)
     WHERE i.IsPrimaryKey = 0
       -- Skip indexes that were just renamed
       AND NOT EXISTS (
@@ -3518,9 +3512,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
       -- Check if definition differs
       AND (
           -- Spelled differently only in case, on MariaDB (see the case-only spelling step above)
-          (VERSION() LIKE '%MariaDB%' AND snap.FkBacked = 0 AND BINARY snap.IndexName <> BINARY SchemaSmith_StripBacktickWrapping(i.IndexName))
+          (VERSION() LIKE '%MariaDB%' AND snap.FkBacked = 0 AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY))
           -- Or columns differ
-          OR BINARY SchemaSmith_NormalizeIndexColumns(i.IndexColumns) != BINARY snap.NormColumns
+          OR CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
           -- Or uniqueness differs
           OR i.IsUnique != (snap.NonUnique = 0)
           -- Or visibility differs (FULLTEXT indexes don't support INVISIBLE, skip them). Below the
@@ -3529,13 +3523,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           -- viz.IsVisible is the once-snapshotted per-engine visibility (IS_VISIBLE / IGNORED), replacing
           -- the per-candidate SchemaSmith_IndexIsVisible() read; it is populated only at/above the floor,
           -- which is exactly when SchemaSmith_SupportsInvisibleIndex() = 1 gates this term.
-          OR (BINARY UPPER(snap.IndexType) != BINARY 'FULLTEXT'
+          OR (CAST(UPPER(snap.IndexType) AS BINARY) != CAST('FULLTEXT' AS BINARY)
               AND SchemaSmith_SupportsInvisibleIndex() = 1
               AND i.IsVisible != viz.IsVisible)
           -- Or comment differs (symmetric: covers added, changed, and cleared, matching the column
           -- comment predicate in ModifiedTableQuench). FULLTEXT indexes never reach this file (parsed
           -- separately into _SchemaSmith_FullTextIndexes), so no FULLTEXT exclusion is needed here.
-          OR (BINARY COALESCE(snap.IndexComment, '') != BINARY COALESCE(i.Comment, ''))
+          OR (CAST(COALESCE(snap.IndexComment, '') AS BINARY) != CAST(COALESCE(i.Comment, '') AS BINARY))
       );
 
     -- Drop modified indexes (they'll be recreated later)
@@ -4024,8 +4018,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                     '  AND NOT EXISTS ( ',
                     '      SELECT 1 FROM _SchemaSmith_Periods d ',
                     '      WHERE d.TableName = t.TableName ',
-                    '        AND BINARY SchemaSmith_StripBacktickWrapping(d.PeriodName) ',
-                    '          = BINARY JSON_UNQUOTE(JSON_EXTRACT(live.PeriodJson, ''$.Name'')))');
+                    '        AND CAST(SchemaSmith_StripBacktickWrapping(d.PeriodName) AS BINARY) ',
+                    '          = CAST(JSON_UNQUOTE(JSON_EXTRACT(live.PeriodJson, ''$.Name'')) AS BINARY))');
                 PREPARE ss_pdd_stmt FROM @ss_pdd_sql;
                 EXECUTE ss_pdd_stmt;
                 DEALLOCATE PREPARE ss_pdd_stmt;

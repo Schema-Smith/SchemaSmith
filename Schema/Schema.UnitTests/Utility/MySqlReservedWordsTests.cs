@@ -14,6 +14,10 @@ public class MySqlReservedWordsTests
     [TestCase("TABLE")]
     [TestCase("FROM")]
     [TestCase("WHERE")]
+    [TestCase("intersect")]
+    [TestCase("QUALIFY")]
+    [TestCase("TABLESAMPLE")]
+    [TestCase("MASTER_BIND")]
     public void IsReserved_ReturnsTrue_ForReservedWords(string word)
     {
         Assert.That(MySqlReservedWords.IsReserved(word), Is.True);

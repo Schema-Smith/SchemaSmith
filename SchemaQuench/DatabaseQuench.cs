@@ -1953,10 +1953,10 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
     /// Converges DECLARED scheduled events (MySQL/MariaDB). Scripted events in the same Events/ folder
     /// still run through the Objects slot untouched, so this is purely additive for existing packages.
     /// <para><b>This is the only quench that executes DDL from C# rather than inside the procedure, and
-    /// it is not a style choice.</b> MySQL cannot PREPARE event DDL at all — both CREATE EVENT and DROP
+    /// it is not a style choice.</b> MySQL before 9.0 cannot PREPARE event DDL — both CREATE EVENT and DROP
     /// EVENT fail with 1295, "This command is not supported in the prepared statement protocol yet" —
-    /// so a stored procedure physically cannot create an event there. MariaDB can, but writing to the
-    /// lower common denominator keeps ONE implementation for both engines.</para>
+    /// so a stored procedure cannot create an event on 8.4 and below. MariaDB and MySQL 9.0+ can, but writing to
+    /// the lowest common denominator keeps ONE implementation for every supported version.</para>
     /// <para>All the decision-making still lives in SQL: the procedure compares, decides, and returns an
     /// ORDERED list of statements. This method is a dumb executor. The ownership and audit writes are
     /// part of that list, so if a CREATE fails execution stops and no ownership row is left claiming an
