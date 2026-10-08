@@ -564,6 +564,15 @@ public class DataTongsTests
         Assert.That(result, Is.EqualTo("[\r\n{\"a\":1},\r\n{\"b\":2}\r\n]"));
     }
 
+    // The row breaks went into string values too: a value holding "},{" was split across lines, which is not valid JSON.
+    [Test]
+    public void FormatJsonResult_BreaksBetweenRowsOnly_NeverInsideAString()
+    {
+        var result = global::DataTongs.DataTongs.FormatJsonResult(
+            "[{\"g\":\"{{1,2},{3,4}}\",\"t\":\"[{x}]\\\"},{\"},{\"id\":2}]");
+        Assert.That(result, Is.EqualTo("[\r\n{\"g\":\"{{1,2},{3,4}}\",\"t\":\"[{x}]\\\"},{\"},\r\n{\"id\":2}\r\n]"));
+    }
+
     #endregion
 
     #region CountRows Tests

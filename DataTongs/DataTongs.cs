@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Linq;
+using System.Text;
 using log4net;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json.Linq;
@@ -963,7 +964,37 @@ ORDER BY c.ORDINAL_POSITION;";
     internal static string FormatJsonResult(string rawJson)
     {
         if (string.IsNullOrWhiteSpace(rawJson)) return "";
-        return rawJson.Replace("}, {", "},\r\n{").Replace("},{", "},\r\n{").Replace("[{", "[\r\n{").Replace("}]", "}\r\n]");
+        // The same breaks as always, outside string values only: a value holding "},{" was split across lines.
+        var sb = new StringBuilder(rawJson.Length + 64);
+        var inString = false;
+        for (var i = 0; i < rawJson.Length; i++)
+        {
+            var ch = rawJson[i];
+            if (inString)
+            {
+                sb.Append(ch);
+                if (ch == '\\' && i + 1 < rawJson.Length) sb.Append(rawJson[++i]);
+                else if (ch == '"') inString = false;
+                continue;
+            }
+            if (ch == '"') inString = true;
+            if (ch == '}' && string.CompareOrdinal(rawJson, i, "}, {", 0, 4) == 0)
+            {
+                sb.Append("},\r\n{");
+                i += 3;
+                continue;
+            }
+            sb.Append(ch);
+            if ((ch == '}' && i + 2 < rawJson.Length && rawJson[i + 1] == ',' && rawJson[i + 2] == '{')
+                || (ch == '[' && i + 1 < rawJson.Length && rawJson[i + 1] == '{'))
+            {
+                if (ch == '}') { sb.Append(','); i++; }
+                sb.Append("\r\n");
+            }
+            else if (ch == '}' && i + 1 < rawJson.Length && rawJson[i + 1] == ']')
+                sb.Append("\r\n");
+        }
+        return sb.ToString();
     }
 
     internal static int CountRows(string tableDataJson) => JsonText.ParseArray(tableDataJson).Count;
