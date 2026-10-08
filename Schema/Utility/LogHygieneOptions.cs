@@ -32,6 +32,37 @@ public sealed class LogHygieneOptions
         return options;
     }
 
+    private static readonly string[] ListKeys = ["ScrubTokens", "ScrubPatterns", "AllowTokens"];
+
+    /// <summary>
+    /// What in a <c>LogHygiene</c> block will not be read, each naming the key. Every one of these used to be ignored
+    /// in silence, so a user who wrote <c>"ScrubTokens": "DeployKey"</c> believed a value was masked that was logged
+    /// in clear.
+    /// </summary>
+    public static IEnumerable<string> Problems(IConfiguration config)
+    {
+        var section = config?.GetSection(SettingsKeys.LogHygiene);
+        if (section == null || !section.Exists()) yield break;
+
+        foreach (var child in section.GetChildren())
+        {
+            if (child.Key.Equals("LogTokens", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!bool.TryParse(child.Value, out _))
+                    yield return $"LogHygiene:LogTokens is '{child.Value ?? "(an object)"}', not true or false. Token values will be logged.";
+            }
+            else if (ListKeys.Contains(child.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                if (child.Value != null)
+                    yield return $"LogHygiene:{child.Key} is a single value, not a list, and is ignored. Write it as [ \"{child.Value}\" ].";
+            }
+            else
+            {
+                yield return $"LogHygiene:{child.Key} is not a setting and is ignored. The settings are LogTokens, ScrubTokens, ScrubPatterns and AllowTokens.";
+            }
+        }
+    }
+
     private static IEnumerable<string> ReadArray(IConfiguration section, string key) =>
         section.GetSection(key).GetChildren()
             .Select(c => c.Value)

@@ -344,4 +344,72 @@ public class LogScrubberTests
             + "in the very same string");
     }
 
+    // ---- ScrubConnectionStringSubfields: line breaks, unclosed quotes, escaped quotes, cost ----
+
+    // Masking ran to the next ';' across line breaks, so a stack trace logged after a connection string vanished.
+    [Test]
+    public void ScrubConnectionStringSubfields_UnquotedValue_StopsAtTheLineBreak()
+    {
+        var text = "Login failed for Server=db1;Password=hunter2\n   at Foo.Bar() in C:\\x\\Foo.cs:line 12\n   at Baz.Qux()";
+
+        Assert.That(LogScrubber.ScrubConnectionStringSubfields(text),
+            Is.EqualTo("Login failed for Server=db1;Password=***\n   at Foo.Bar() in C:\\x\\Foo.cs:line 12\n   at Baz.Qux()"));
+    }
+
+    [Test]
+    public void ScrubConnectionStringSubfields_EmptyValueAtALineEnd_DoesNotMaskTheNextLine()
+    {
+        Assert.That(LogScrubber.ScrubConnectionStringSubfields("Server=db1;Password=\nnext line;tail"),
+            Is.EqualTo("Server=db1;Password=***\nnext line;tail"));
+    }
+
+    // A value whose quote never closes is all secret. Matching it as unquoted stopped at its first ';' and logged the rest.
+    [TestCase("Password=\"S12A;S12B")]
+    [TestCase("Password='S12A;S12B")]
+    [TestCase("Password={S12A;S12B")]
+    [TestCase("Password=\\\"S12A;S12B")]
+    public void ScrubConnectionStringSubfields_UnclosedQuote_MasksToTheEnd(string text)
+    {
+        var scrubbed = LogScrubber.ScrubConnectionStringSubfields(text);
+
+        Assert.That(scrubbed, Does.Not.Contain("S12B"), scrubbed);
+        Assert.That(scrubbed, Is.EqualTo("Password=***"));
+    }
+
+    // The escapes ADO.NET, ODBC, T-SQL and JSON use for a quote inside a quoted value. Treated as the closing quote,
+    // each left the rest of the password in clear.
+    [TestCase("Server=db;Password=\"a\"\"b;S2\";Database=app", "Server=db;Password=***;Database=app")]
+    [TestCase("Password='a''b;S2';Database=app", "Password=***;Database=app")]
+    [TestCase("Password={a}}b;S2};Database=app", "Password=***;Database=app")]
+    [TestCase("ALTER LOGIN [x] WITH PASSWORD = 'it''s;secret'", "ALTER LOGIN [x] WITH PASSWORD =***")]
+    [TestCase("CREATE LOGIN [x] WITH PASSWORD = N'S1;S2'", "CREATE LOGIN [x] WITH PASSWORD =***")]
+    [TestCase("{\"cs\":\"Server=db;Password=\\\"S1;S2\\\"\"}", "{\"cs\":\"Server=db;Password=***\"}")]
+    public void ScrubConnectionStringSubfields_EscapedQuoteInsideTheValue_MasksTheWholeValue(string text, string expected)
+    {
+        Assert.That(LogScrubber.ScrubConnectionStringSubfields(text), Is.EqualTo(expected));
+    }
+
+    // An unquoted password that merely starts with N is not an N'...' literal.
+    [Test]
+    public void ScrubConnectionStringSubfields_UnquotedValueStartingWithN_StopsAtTheSemicolon()
+    {
+        Assert.That(LogScrubber.ScrubConnectionStringSubfields("Password=Nabc;Database=app"),
+            Is.EqualTo("Password=***;Database=app"));
+    }
+
+    // The URL pattern was retried from every position of a word with no "://": quadratic, and a 5 MB line never
+    // finished. A dotted run gives the most starting positions a word boundary allows.
+    [TestCase("0123456789abcdef")]
+    [TestCase("a.")]
+    public void ScrubConnectionStringSubfields_OnAMegabyteWithNoUrl_IsLinear(string unit)
+    {
+        var text = new System.Text.StringBuilder().Insert(0, unit, 1_048_576 / unit.Length).ToString();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var scrubbed = LogScrubber.ScrubConnectionStringSubfields(text);
+
+        clock.Stop();
+        Assert.That(scrubbed, Is.EqualTo(text));
+        Assert.That(clock.Elapsed.TotalSeconds, Is.LessThan(2), $"took {clock.Elapsed.TotalSeconds:F1}s");
+    }
 }

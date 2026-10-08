@@ -163,7 +163,7 @@ public sealed class JsonSchemaCheck : ISchemaCheck
 
         try
         {
-            return JObject.Parse(file.ReadAllText(schemaPath));
+            return JsonText.ParseObject(file.ReadAllText(schemaPath));
         }
         catch
         {

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
+using Schema.Configuration;
 
 namespace Schema.Utility;
 
@@ -37,8 +38,8 @@ public static class ConfigurationLogger
                 indents++;
                 key = TryIndexToItemName(key.Substring(key.IndexOf(":", StringComparison.Ordinal) + 1), entries, entry, arrayNameKeys);
             }
-            var value = LogScrubber.ShouldScrubName(key, hygiene)
-                ? LogScrubber.Mask // sensitively-named key: mask the whole value
+            var value = ShouldMask(entry.Key, key, hygiene)
+                ? LogScrubber.Mask
                 : LogScrubber.ScrubConnectionStringSubfields(entry.Value ?? ""); // strip any embedded connection-string password
             logLine?.Invoke($"{new string(' ', indents * 2)}{key}: {value}");
         }
@@ -68,6 +69,23 @@ public static class ConfigurationLogger
 
         logLine?.Invoke("");
         logLine?.Invoke("");
+    }
+
+    // A value is masked when its own name is sensitive, when it is an entry of a list whose name is sensitive (the
+    // entry's own name is just its index, "password:0"), and, with LogTokens off, when it is a script token. Objects
+    // are still judged leaf by leaf: masking everything under a sensitive ancestor would hide every ScriptTokens
+    // value, since "Token" is one of the sensitive patterns.
+    private static bool ShouldMask(string fullKey, string displayName, LogHygieneOptions hygiene)
+    {
+        if (LogScrubber.ShouldScrubName(displayName, hygiene)) return true;
+
+        var segments = fullKey.Split(':');
+        if (!hygiene.LogTokens && segments.Length > 1 && segments[0].EqualsIgnoringCase(SettingsKeys.ScriptTokens))
+            return true;
+
+        var owner = segments.Length - 1;
+        while (owner >= 0 && int.TryParse(segments[owner], out _)) owner--;
+        return owner < segments.Length - 1 && owner >= 0 && LogScrubber.ShouldScrubName(segments[owner], hygiene);
     }
 
     private static string TryIndexToItemName(string key, Dictionary<string, string> entries, KeyValuePair<string, string> entry, HashSet<string> arrayNameKeys)

@@ -29,7 +29,7 @@ namespace Schema.Utility
             // Wrap the array under the singular item property so Json.NET emits one repeated element per entry,
             // then give the whole thing the requested root element.
             var wrapped = "{\"" + itemElement + "\":" + modelJsonArray + "}";
-            var doc = JsonConvert.DeserializeXNode(wrapped, rootElement);
+            var doc = JsonText.ToXDocument(wrapped, rootElement);
             return doc!.ToString(SaveOptions.DisableFormatting);
         }
 
@@ -41,7 +41,7 @@ namespace Schema.Utility
         /// <param name="rootElement">The XML root element name (e.g. <c>Table</c>).</param>
         public static string ToIngestXmlObject(string modelJsonObject, string rootElement)
         {
-            var doc = JsonConvert.DeserializeXNode(modelJsonObject, rootElement);
+            var doc = JsonText.ToXDocument(modelJsonObject, rootElement);
             return doc!.ToString(SaveOptions.DisableFormatting);
         }
 
@@ -65,7 +65,7 @@ namespace Schema.Utility
             // SerializeXNode keys JSON by element name, so that lands as {"ExtendedProperties":{"p":{...}|[...]}}.
             // Rebuild the {Name: Value} dict the JSON-tier proc produces directly. Runs everywhere Extensions
             // appears (table + nested columns/indexes/FKs/stats/checks). (B2 — legacy-tier EP round-trip.)
-            var obj = JObject.Parse(json);
+            var obj = JsonText.ParseObject(json);
             RebuildExtendedProperties(obj);
             return obj.ToString(Newtonsoft.Json.Formatting.None);
         }

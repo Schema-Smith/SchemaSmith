@@ -167,7 +167,7 @@ To use a different file entirely, pass the `--ConfigFile` switch:
 SchemaQuench --ConfigFile:C:\configs\production.json
 ```
 
-The path can be absolute or relative to the current working directory.
+The path can be absolute or relative to the current working directory. A file named this way must exist: the executable-directory fallback applies only to the default file name, and a `--ConfigFile` that is not found stops the run with exit code `2` before anything connects, naming the path it tried.
 
 ### Unrecognized settings are reported
 
@@ -321,7 +321,8 @@ An optional `LogHygiene` block in any tool's `*.settings.json` tunes the behavio
 ```jsonc
 "LogHygiene": {
   // Suppress the token-logging section entirely -- one notice line, no token
-  // names and no values. For products with hundreds of tokens. Default: true.
+  // names and no values -- and mask the ScriptTokens values in the
+  // configuration echo. For products with hundreds of tokens. Default: true.
   "LogTokens": true,
 
   // Scrub these exact token names too, beyond the default patterns.
@@ -337,6 +338,10 @@ An optional `LogHygiene` block in any tool's `*.settings.json` tunes the behavio
 ```
 
 When a token name appears in both `AllowTokens` and a scrub rule, `AllowTokens` wins and the value is logged verbatim -- but an embedded connection-string password is still stripped.
+
+The three lists must be lists, even with one entry (`"ScrubTokens": [ "DeployKey" ]`), and `LogTokens` must be `true` or `false`. A block the tools cannot read -- a single value where a list belongs, a key that is not one of these four, or another `LogTokens` value -- is reported as a warning naming the key, and that part of the block has no effect.
+
+The entries of a list whose name is sensitive are masked as well: `"password": [ "..." ]` logs `***` for each entry.
 
 ---
 

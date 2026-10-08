@@ -1056,7 +1056,7 @@ namespace Schema.Domain
             try
             {
                 var text = ProductFileWrapper.GetFromFactory().ReadAllText(filePath);
-                JToken.Parse(text);
+                JsonText.Parse(text);
                 return true;
             }
             catch
