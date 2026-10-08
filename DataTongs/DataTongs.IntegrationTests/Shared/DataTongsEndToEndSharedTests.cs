@@ -438,6 +438,56 @@ public abstract class DataTongsEndToEndSharedTests
         }
     }
 
+    // Values JSON_TABLE used to read through the wrong type, each lost without an error: an unsigned integer past the
+    // signed range (NULL), text and blobs over 64 KB (NULL, or truncated), a geometry collection (NULL -- MySQL 8 calls
+    // it geomcollection), and BIT, whose digits' characters MariaDB stored. Delivered values are compared with the source.
+    [Test]
+    public void EndToEnd_RoundTrip_PreservesUnsignedLongTextBlobGeometryCollectionAndBit()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_types_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_types_t_{Guid.NewGuid():N}".Substring(0, 30);
+        const string columns = "id INT PRIMARY KEY, u BIGINT UNSIGNED NULL, big LONGTEXT NULL, bl LONGBLOB NULL, "
+                               + "gc GEOMETRYCOLLECTION NULL, b8 BIT(8) NULL, b1 BIT(1) NULL";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` ({columns})";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` ({columns})";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` VALUES (1, 18446744073709551615, REPEAT('x', 100000), "
+                                  + "REPEAT('y', 70000), ST_GeomFromText('GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))'), b'00000101', b'0')";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT CONCAT_WS(',',
+                   IF(d.u <=> s.u, NULL, 'u'), IF(d.big <=> s.big, NULL, 'big'), IF(d.bl <=> s.bl, NULL, 'bl'),
+                   IF(ST_AsText(d.gc) <=> ST_AsText(s.gc), NULL, 'gc'), IF(d.b8 <=> s.b8, NULL, 'b8'), IF(d.b1 <=> s.b1, NULL, 'b1'))
+                FROM `{_testDb}`.`{sourceTable}` s LEFT JOIN `{_testDb}`.`{targetTable}` d ON d.id = s.id";
+            Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty,
+                "every column must arrive equal to its source; the list names the ones that did not");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void EndToEnd_RoundTrip_HandlesBinaryData()
     {

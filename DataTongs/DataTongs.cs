@@ -724,7 +724,7 @@ SELECT GROUP_CONCAT(
     CASE
         WHEN c.DATA_TYPE IN ('binary','varbinary','tinyblob','blob','mediumblob','longblob')
             THEN CONCAT('REPLACE(REPLACE(TO_BASE64(`', c.COLUMN_NAME, '`), ''\n'', ''''), ''\r'', '''') AS `', c.COLUMN_NAME, '`')
-        WHEN c.DATA_TYPE IN ('geometry','point','linestring','polygon','multipoint','multilinestring','multipolygon','geometrycollection')
+        WHEN c.DATA_TYPE IN ('geometry','point','linestring','polygon','multipoint','multilinestring','multipolygon','geometrycollection','geomcollection')
             THEN CONCAT('ST_AsText(`', c.COLUMN_NAME, '`) AS `', c.COLUMN_NAME, '`, ST_SRID(`', c.COLUMN_NAME, '`) AS `', c.COLUMN_NAME, '.STSrid`')
         WHEN c.DATA_TYPE = 'bit'
             THEN CONCAT('CAST(`', c.COLUMN_NAME, '` AS UNSIGNED) AS `', c.COLUMN_NAME, '`')
@@ -1006,7 +1006,7 @@ ORDER BY c.ORDINAL_POSITION;";
             "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob"
                 => $"{quotedName}, REPLACE(REPLACE(TO_BASE64({columnRef}), '\n', ''), '\r', '')",
             "geometry" or "point" or "linestring" or "polygon" or "multipoint"
-                or "multilinestring" or "multipolygon" or "geometrycollection"
+                or "multilinestring" or "multipolygon" or "geometrycollection" or "geomcollection"
                 // WKT alone drops the reference system. Pair it with a "<col>.STSrid" companion, the
                 // same shape SQL Server extraction has always produced, so the CRS survives delivery
                 // into an untyped destination column.
