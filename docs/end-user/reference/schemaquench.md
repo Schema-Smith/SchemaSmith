@@ -244,7 +244,7 @@ With schema templates, a single database can contribute many work units -- one p
 
 ## ContinueOnDatabaseFailure
 
-Failure isolation at the database level applies to all templates -- both regular templates and schema templates. When `ContinueOnDatabaseFailure` is `true` (the default), one database's failure does not abort the product run; SchemaQuench logs the failure, continues processing remaining databases, and exits with code 2 after all work units have completed or failed.
+Failure isolation at the database level applies to all templates -- both regular templates and schema templates. When `ContinueOnDatabaseFailure` is `true` (the default), one database's failure does not abort the product run; SchemaQuench logs the failure, continues processing remaining databases, and exits with code 2 after all work units have completed or failed. Continuing does not make the run complete: after any failure, the product's `After Product` scripts and its `VersionStampScript` are skipped, so the next run is not told this version is deployed. A later `--ResumeQuench` that finishes the failed work runs them.
 
 When `false`, the first database-level failure aborts subsequent iterations. In-flight work units drain naturally -- SchemaQuench does not cancel active database connections because an incomplete transaction is more hazardous than a completed one. The product run exits with code 2.
 
