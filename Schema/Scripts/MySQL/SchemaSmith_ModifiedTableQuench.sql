@@ -848,6 +848,9 @@ BEGIN
                                                   c.DefaultValue, isc.DATA_TYPE) = 0)
           OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
           OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+          OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+              AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+              != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
           OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
               AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
               -- #242: the texts differ, but they always differ once the engine has reformatted the expression.
@@ -1191,6 +1194,9 @@ BEGIN
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               -- Collation changes (only when JSON specifies a collation)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+              OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                  AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                  != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
               -- Generated expression changes (both sides are generated, but expression differs)
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
                   AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
@@ -1267,6 +1273,9 @@ BEGIN
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+              OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                  AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                  != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
                   AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
@@ -1358,6 +1367,9 @@ BEGIN
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               -- Collation changes (only when JSON specifies a collation)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+              OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                  AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                  != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
               -- Generated expression changes (both sides are generated, but expression differs)
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
                   AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
@@ -1437,6 +1449,9 @@ BEGIN
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+              OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                  AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                  != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
                   AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
@@ -1515,6 +1530,9 @@ BEGIN
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+              OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                  AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                  != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
                   AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
@@ -2142,14 +2160,17 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                       ' DEFAULT CHARACTER SET ',
-                      SUBSTRING_INDEX(t.Collation, '_', 1),
-                      ' COLLATE ', t.Collation)
+                      COALESCE(SUBSTRING_INDEX(t.Collation, '_', 1), t.CharacterSet),
+                      IF(t.Collation IS NULL, '', CONCAT(' COLLATE ', t.Collation)))
         FROM _SchemaSmith_Tables t
         INNER JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = t.TableKey
         WHERE t.NewTable = 0
-          AND t.Collation IS NOT NULL
-          AND ist.TABLE_COLLATION != t.Collation;
+          AND ((t.Collation IS NOT NULL AND ist.TABLE_COLLATION != t.Collation)
+               -- A table that names only its character set is compared on the character set alone.
+               OR (t.Collation IS NULL AND t.CharacterSet IS NOT NULL
+                   AND CAST(IF(LOWER(TRIM(SUBSTRING_INDEX(ist.TABLE_COLLATION, '_', 1))) = 'utf8', 'utf8mb3', LOWER(TRIM(SUBSTRING_INDEX(ist.TABLE_COLLATION, '_', 1)))) AS BINARY)
+                    != CAST(IF(LOWER(TRIM(t.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(t.CharacterSet))) AS BINARY)));
     ELSE
         BEGIN
             DECLARE v_CollationDone INT DEFAULT FALSE;
@@ -2157,14 +2178,17 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DECLARE cur_CollationChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                               ' DEFAULT CHARACTER SET ',
-                              SUBSTRING_INDEX(t.Collation, '_', 1),
-                              ' COLLATE ', t.Collation) AS AlterCollationStatement
+                              COALESCE(SUBSTRING_INDEX(t.Collation, '_', 1), t.CharacterSet),
+                              IF(t.Collation IS NULL, '', CONCAT(' COLLATE ', t.Collation))) AS AlterCollationStatement
                 FROM _SchemaSmith_Tables t
                 INNER JOIN _SchemaSmith_CatTables ist
                     ON ist.TableKey = t.TableKey
                 WHERE t.NewTable = 0
-                  AND t.Collation IS NOT NULL
-                  AND ist.TABLE_COLLATION != t.Collation;
+                  AND ((t.Collation IS NOT NULL AND ist.TABLE_COLLATION != t.Collation)
+                       -- A table that names only its character set is compared on the character set alone.
+                       OR (t.Collation IS NULL AND t.CharacterSet IS NOT NULL
+                           AND CAST(IF(LOWER(TRIM(SUBSTRING_INDEX(ist.TABLE_COLLATION, '_', 1))) = 'utf8', 'utf8mb3', LOWER(TRIM(SUBSTRING_INDEX(ist.TABLE_COLLATION, '_', 1)))) AS BINARY)
+                            != CAST(IF(LOWER(TRIM(t.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(t.CharacterSet))) AS BINARY)));
 
             DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_CollationDone = TRUE;
 
