@@ -144,6 +144,61 @@ INSERT INTO [dbo].[Src] VALUES
         }
     }
 
+    // The XML producer converted with CONVERT's default style -- 6 significant digits of a float, 2 decimals of money --
+    // and wrote geometry with STAsText, which drops Z and M. Every value is compared with its source after delivery, a
+    // float bit for bit.
+    [Test]
+    public void XmlExtraction_KeepsFloatMoneyAndGeometryZM()
+    {
+        var db = "dt_xmlnum_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        using (var master = _connection.CreateCommand())
+        {
+            master.CommandText = $"CREATE DATABASE [{db}]";
+            master.ExecuteNonQuery();
+        }
+        try
+        {
+            _connection.ChangeDatabase(db);
+            const string columns = "[id] INT NOT NULL PRIMARY KEY, [f] FLOAT NULL, [r] REAL NULL, [m] MONEY NULL, [sm] SMALLMONEY NULL, [g] GEOMETRY NULL";
+            using (var c = _connection.CreateCommand())
+            {
+                c.CommandText = $@"
+CREATE TABLE [dbo].[Src] ({columns});
+CREATE TABLE [dbo].[Dst] ({columns});
+INSERT INTO [dbo].[Src] VALUES
+  (1, 1.2345678901234567, CAST(3.1415927 AS REAL), 12345.6789, 98.7654, geometry::STGeomFromText('POINT (1 2 3 4)', 0)),
+  (2, 1e-300, CAST(-1.17549435E-38 AS REAL), -922337203685477.5808, -214748.3648, geometry::STGeomFromText('LINESTRING (0 0 1, 2 2 2)', 4326));";
+                c.ExecuteNonQuery();
+            }
+
+            string xml;
+            using (var c = _connection.CreateCommand())
+                xml = _dataTongs.GetTableDataXmlSqlServer(c, "dbo", "Src", "[id]", null);
+            using (var c = _connection.CreateCommand())
+            {
+                c.CommandText = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, c, "dbo", "Dst", xml, "[id]",
+                    mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false,
+                    mergeFilter: null, contentEncoding: "Xml");
+                c.ExecuteNonQuery();
+            }
+
+            using (var c = _connection.CreateCommand())
+            {
+                c.CommandText = @"SELECT COUNT(*) FROM [dbo].[Src] s JOIN [dbo].[Dst] d ON d.[id] = s.[id]
+WHERE CAST(d.[f] AS VARBINARY(8)) = CAST(s.[f] AS VARBINARY(8)) AND CAST(d.[r] AS VARBINARY(4)) = CAST(s.[r] AS VARBINARY(4))
+  AND d.[m] = s.[m] AND d.[sm] = s.[sm] AND d.[g].AsTextZM() = s.[g].AsTextZM() AND d.[g].STSrid = s.[g].STSrid";
+                Assert.That(c.ExecuteScalar(), Is.EqualTo(2), "every value must arrive exactly as it left. XML: " + xml);
+            }
+        }
+        finally
+        {
+            _connection.ChangeDatabase(_integrationDb);
+            using var master = _connection.CreateCommand();
+            master.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
+            master.ExecuteNonQuery();
+        }
+    }
+
     #endregion
 
     #region TableExists Tests

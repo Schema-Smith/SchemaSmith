@@ -875,7 +875,11 @@ ORDER BY {orderColumns};";
         var columns = GetSqlServerColumnInfo(cmd, tableSchema, tableName);
         if (columns.Count == 0) return "";
 
-        var fragments = string.Join(",\r\n        ", columns.Select(BuildSqlServerXmlValueFragment));
+        // Style 3 (17 significant digits, lossless) is SQL Server 2016+, and an unknown style is an error, so it is
+        // chosen here rather than in the query. 2008-2014 get style 2, 16 digits, the closest they offer.
+        cmd.CommandText = "SELECT CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(128)), 4) AS INT)";
+        var floatStyle = Convert.ToInt32(cmd.ExecuteScalar()) >= 13 ? 3 : 2;
+        var fragments = string.Join(",\r\n        ", columns.Select(c => BuildSqlServerXmlValueFragment(c, floatStyle)));
         var whereClause = string.IsNullOrWhiteSpace(filter) ? "" : $"WHERE {filter}";
 
         // QUOTED_IDENTIFIER ON is required for the XML data-type methods used below.
@@ -902,7 +906,7 @@ SELECT CAST((
     // One VALUES tuple per column: ('ColName', <text-yielding expression over t.[ColName]>). The name
     // becomes a SQL string literal (for the @n attribute); the value expression uses the DB's native
     // text form so it matches the shred's typed .value(...). Geometry emits a second (SRID) tuple.
-    internal static string BuildSqlServerXmlValueFragment(ColumnInfo c)
+    internal static string BuildSqlServerXmlValueFragment(ColumnInfo c, int floatStyle = 3)
     {
         var nameLiteral = c.Name.Replace("'", "''");
         var ident = $"[{c.Name.Replace("]", "]]")}]";
@@ -910,10 +914,20 @@ SELECT CAST((
         {
             case "geometry":
             case "geography":
-                return $"('{nameLiteral}', t.{ident}.STAsText())," +
+                // AsTextZM, not STAsText: the latter drops Z and M, so POINT (1 2 3 4) arrived as POINT (1 2).
+                return $"('{nameLiteral}', t.{ident}.AsTextZM())," +
                        $"('{nameLiteral}.STSrid', CONVERT(NVARCHAR(MAX), t.{ident}.STSrid))";
             case "hierarchyid":
                 return $"('{nameLiteral}', t.{ident}.ToString())";
+            // CONVERT's default style keeps 6 significant digits of a float and 2 decimals of money.
+            // Through float, which holds a real exactly, and into VARCHAR(30): style 3 into NVARCHAR overflows (Msg 8115) on
+            // any negative value and on a real, probed on SQL Server 2022. The longest value is 24 characters.
+            case "float":
+            case "real":
+                return $"('{nameLiteral}', CONVERT(VARCHAR(30), CAST(t.{ident} AS FLOAT), {floatStyle}))";
+            case "money":
+            case "smallmoney":
+                return $"('{nameLiteral}', CONVERT(NVARCHAR(MAX), t.{ident}, 2))";
             case "binary":
             case "varbinary":
             case "image":
