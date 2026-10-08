@@ -419,6 +419,7 @@ public static class ForgeKindler
                 new("SchemaSmith.ExecuteOrDebug.sql"),
                 new("SchemaSmith.QuoteColumnList.sql"),
                 new("SchemaSmith.QuoteIndexColumnList.sql"),
+                new("SchemaSmith.QuoteName.sql"),
                 // #242: declared index and statistics definitions compared in the form the catalog reads back.
                 // SQL-language functions are validated at creation, so the splitter and StripParenWrapping
                 // must be kindled before the statistics forms that call them.
