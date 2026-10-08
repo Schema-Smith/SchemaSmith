@@ -158,6 +158,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                           ORDER BY con.conname) sub) AS "CheckConstraints",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))
                   FROM (SELECT se.stxname AS "Name",
+                               -- Written only when the statistics object lives outside its table's schema.
+                               NULLIF(sn.nspname, t.table_schema) AS "Schema",
                                -- 'e' is left out: EXPRESSIONS is implied by an expression and CREATE STATISTICS rejects it as a
                                -- kind, so extracting it produced a package that could not be deployed.
                                COALESCE((SELECT STRING_AGG(CASE k WHEN 'd' THEN 'NDISTINCT' WHEN 'f' THEN 'DEPENDENCIES' WHEN 'm' THEN 'MCV' ELSE k::text END, ',')
@@ -167,8 +169,9 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                                                               JOIN pg_attribute a ON a.attrelid = se.stxrelid AND a.attnum = t.attnum
                                                                               WHERE a.attnum > 0),
                                                                            ARRAY[]::text[]),
-                                                                  "SchemaSmith"."StatisticsExpressionColumns"(t.table_schema, se.stxname)), ','), '') AS "StatisticsColumns"
+                                                                  "SchemaSmith"."StatisticsExpressionColumns"(sn.nspname, se.stxname)), ','), '') AS "StatisticsColumns"
                           FROM pg_statistic_ext se
+                          JOIN pg_namespace sn ON sn.oid = se.stxnamespace
                           WHERE se.stxrelid = ('"' || t.table_schema || '"."' || t.table_name || '"')::regclass
                           ORDER BY se.stxname) sub) AS "Statistics",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))

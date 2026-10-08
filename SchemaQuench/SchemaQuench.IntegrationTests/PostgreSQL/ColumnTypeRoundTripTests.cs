@@ -80,6 +80,62 @@ public class ColumnTypeRoundTripTests : BaseTableQuenchTests
         }
     }
 
+    // A statistics object can live in a schema other than its table's. Extraction recorded only its name, so a
+    // redeploy created it in the table's schema; and a change dropped it by the table's schema, which missed it, so
+    // the recreate then failed because it still existed.
+    [Test]
+    public void AStatisticInAnotherSchema_RedeploysThereAndCanBeChanged()
+    {
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var schema = $"ws04s_{id}";
+        var table = $"StatHome_{id}";
+
+        using var conn = (NpgsqlConnection)DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            cmd.CommandText = $"""
+                CREATE SCHEMA "{schema}";
+                CREATE TABLE public."{table}" ("Id" integer NOT NULL PRIMARY KEY, a integer, b integer);
+                CREATE STATISTICS "{schema}".st (dependencies) ON a, b FROM public."{table}";
+                """;
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = $"SELECT \"SchemaSmith\".\"GenerateTableJSON\"('public', '{table}')";
+            var extracted = (string)cmd.ExecuteScalar()!;
+            cmd.CommandText = $"DROP TABLE public.\"{table}\"";
+            cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(cmd, extracted);
+            Assert.That(StatisticSchemaAndKind(cmd, table), Is.EqualTo($"{schema} f"),
+                "the statistics object must be recreated in its own schema. Extracted: " + extracted);
+
+            RunTableQuenchProc(cmd, extracted.Replace("\"DEPENDENCIES\"", "\"NDISTINCT\""));
+            Assert.That(StatisticSchemaAndKind(cmd, table), Is.EqualTo($"{schema} d"),
+                "a changed statistics object must be dropped from its own schema and recreated there");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS public.\"{table}\"; DROP SCHEMA IF EXISTS \"{schema}\" CASCADE;";
+            cmd.ExecuteNonQuery();
+            conn.Close();
+        }
+    }
+
+    private static string StatisticSchemaAndKind(System.Data.IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $"""
+            SELECT string_agg(n.nspname || ' ' || array_to_string(se.stxkind, ','), ';')
+              FROM pg_statistic_ext se JOIN pg_namespace n ON n.oid = se.stxnamespace
+             WHERE se.stxrelid = 'public."{table}"'::regclass
+            """;
+        return cmd.ExecuteScalar() as string;
+    }
+
     private static List<string> Columns(System.Data.IDbCommand cmd, string table)
     {
         cmd.CommandText = $"""

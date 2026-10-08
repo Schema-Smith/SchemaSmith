@@ -135,6 +135,7 @@ BEGIN
     SELECT elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
+           NULLIF(celem ->> 'Schema', '') AS "StatisticsSchema",
            COALESCE(celem ->> 'Kind', '') AS "Kind",
            COALESCE(celem ->> 'StatisticsColumns', '') AS "StatisticsColumns",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
@@ -418,6 +419,7 @@ BEGIN
       SELECT t."Schema" AS "TableSchema",
              t."Name" AS "TableName",
              se.stxname AS "StatisticsName",
+             (SELECT sn.nspname FROM pg_namespace sn WHERE sn.oid = se.stxnamespace) AS "StatisticsSchema",
              -- Both definitions in the normalised forms of SchemaSmith.StatisticsDefinitionForms; the declared side
              -- is put through the same functions wherever it is compared.
              "SchemaSmith"."NormalizeStatisticsKind"((SELECT STRING_AGG(CASE k WHEN 'd' THEN 'NDISTINCT' WHEN 'f' THEN 'DEPENDENCIES' WHEN 'm' THEN 'MCV' ELSE NULL END, ',')
@@ -442,7 +444,7 @@ BEGIN
 
     RAISE NOTICE 'Drop Modified Statistics';
     SELECT STRING_AGG('RAISE NOTICE ''  Statistics ' || es."TableSchema" || '.' || es."StatisticsName" || ' modified'';' || CHR(10) ||
-                      'DROP STATISTICS IF EXISTS "' || es."TableSchema" || '"."' || es."StatisticsName" || '" CASCADE;', CHR(10))
+                      'DROP STATISTICS IF EXISTS "' || es."StatisticsSchema" || '"."' || es."StatisticsName" || '" CASCADE;', CHR(10))
       INTO sql_script
       FROM temp_existing_statistics es
       JOIN temp_statistics ts ON ts."TableSchema" = es."TableSchema"
@@ -474,7 +476,7 @@ BEGIN
 
   RAISE NOTICE 'Add Missing Statistics';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing statistics ' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || CASE WHEN COALESCE(ts."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ts."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
-                    'CREATE STATISTICS "' || ts."TableSchema" || '"."' || ts."Name" || '"' ||
+                    'CREATE STATISTICS "' || COALESCE(ts."StatisticsSchema", ts."TableSchema") || '"."' || ts."Name" || '"' ||
                     -- EXPRESSIONS is not a kind CREATE STATISTICS accepts; an extracted package carries it.
                     "SchemaSmith"."StatisticsKindClause"(ts."Kind") ||
                     ' ON ' || "SchemaSmith"."QuoteIndexColumnList"(ts."StatisticsColumns") ||

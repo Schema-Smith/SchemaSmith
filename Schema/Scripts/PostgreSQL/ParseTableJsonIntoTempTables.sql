@@ -364,6 +364,7 @@
            elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
+           NULLIF(celem ->> 'Schema', '') AS "StatisticsSchema",
            COALESCE(celem ->> 'Kind', '') AS "Kind",
            COALESCE(celem ->> 'StatisticsColumns', '') AS "StatisticsColumns",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
