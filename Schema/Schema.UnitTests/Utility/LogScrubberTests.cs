@@ -403,6 +403,10 @@ public class LogScrubberTests
     [TestCase("export PGPASSWORD=envsecret", "export PGPASSWORD=***")]
     [TestCase("DB_PASSWORD=envsecret2\nnext line", "DB_PASSWORD=***\nnext line")]
     [TestCase("MYSQL_PWD=envsecret3; mysql -u app", "MYSQL_PWD=***; mysql -u app")]
+    [TestCase("ALTER USER u IDENTIFIED BY 'n;ew' REPLACE 'o;ld';", "ALTER USER u IDENTIFIED BY *** REPLACE ***;")]
+    [TestCase("SET PASSWORD = PASSWORD('a;b');", "SET PASSWORD =***;")]
+    [TestCase("CREATE DATABASE SCOPED CREDENTIAL c WITH IDENTITY = 'u', SECRET = 'cred;secret';",
+              "CREATE DATABASE SCOPED CREDENTIAL c WITH IDENTITY = 'u', SECRET =***;")]
     public void ScrubConnectionStringSubfields_PasswordFormsWithoutAPasswordKey_AreMasked(string text, string expected)
     {
         Assert.That(LogScrubber.ScrubConnectionStringSubfields(text), Is.EqualTo(expected));
