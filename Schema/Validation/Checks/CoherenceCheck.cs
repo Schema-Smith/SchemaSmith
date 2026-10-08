@@ -38,6 +38,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string PoliciesWithoutRlsCode = "SS-RLS-002";
     private const string ReplicaIdentityIndexMissingCode = "SS-RI-001";
     private const string QuotedIdentifierCode = "SS-IDENT-001";
+    private const string IdentifierTooLongCode = "SS-IDENT-002";
+    private const int PostgreSqlMaxIdentifierBytes = 63;
     private const string ReplicaIdentityIndexUnknownCode = "SS-RI-002";
     private const string ReplicaIdentityIndexNotUniqueCode = "SS-RI-003";
     private const string ReplicaIdentityIndexIgnoredCode = "SS-RI-004";
@@ -87,6 +89,9 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckPostgreSqlQuotedIdentifierOnModeledObjects(template));
+
+        foreach (var template in ctx.Templates)
+            findings.AddRange(IdentifierLengthFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'"));
 
         foreach (var template in ctx.Templates)
         foreach (var table in template.Tables)
@@ -512,7 +517,28 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static IEnumerable<Finding> CheckPostgreSqlQuotedIdentifier(Table table, string tableLocation)
     {
         if (table is not PostgreSqlTable pgTable) return [];
-        return QuotedIdentifierFindings(NamedParts(pgTable), tableLocation);
+        return QuotedIdentifierFindings(NamedParts(pgTable), tableLocation)
+            .Concat(IdentifierLengthFindings(NamedParts(pgTable), tableLocation));
+    }
+
+    /// <summary>
+    /// PostgreSQL truncates an identifier longer than 63 bytes, with only a NOTICE. The object is created under the
+    /// shorter name, the next deploy looks for the declared one, misses it, and fails creating it again. The limit is
+    /// in bytes (NAMEDATALEN - 1), so a name in multi-byte characters reaches it sooner than its length suggests.
+    /// </summary>
+    private static IEnumerable<Finding> IdentifierLengthFindings(IEnumerable<(string Kind, string Name)> parts, string location)
+    {
+        foreach (var (kind, name) in parts)
+        {
+            if (string.IsNullOrEmpty(name)) continue;
+            var bare = name.Length >= 2 && name[0] == '"' && name[^1] == '"' ? name[1..^1] : name;
+            var bytes = System.Text.Encoding.UTF8.GetByteCount(bare);
+            if (bytes <= PostgreSqlMaxIdentifierBytes) continue;
+            yield return new Finding(Severity.Error, IdentifierTooLongCode, Category, location,
+                $"{kind} '{name}' is {bytes} bytes long. PostgreSQL truncates identifiers to {PostgreSqlMaxIdentifierBytes} " +
+                "bytes, so it would be stored under a shorter name and the next deploy, not finding the declared one, " +
+                $"would fail creating it again. Shorten it to {PostgreSqlMaxIdentifierBytes} bytes or fewer.");
+        }
     }
 
     /// <summary>
