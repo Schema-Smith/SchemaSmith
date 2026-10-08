@@ -23,6 +23,7 @@ SchemaQuench --LogPath:path/to/logs
 # Pre-flight diagnostics (no deployment)
 SchemaQuench --TestConnection     # validate connections + MinimumVersion, then exit
 SchemaQuench --PreviewTargets     # validate connections + MinimumVersion + show target report, then exit
+SchemaQuench --WhatIf             # dry run: log the SQL a deployment would run, change nothing
 
 # SQL Server
 SchemaQuench --ConnectionString:"Data Source=myserver;Initial Catalog=master;User ID=sa;Password=secret;TrustServerCertificate=True;"
@@ -58,7 +59,7 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `SchemaPackagePath` | string | _(required)_ | Path to the schema package directory or ZIP file. |
-| `WhatIfONLY` | bool | `false` | Dry-run mode. Generates SQL without executing. |
+| `WhatIfONLY` | bool | `false` | Dry-run mode. Generates SQL without executing. The `--WhatIf` switch turns it on for one run. |
 | `KindleTheForge` | bool | `true` | Deploy SchemaSmith helper procedures and the migration tracking table to each target database before quenching. |
 | `UpdateTables` | bool | `true` | Apply table structure changes (columns, indexes, constraints, foreign keys) from the schema package. |
 | `DropTablesRemovedFromProduct` | bool | `true` | Drop tables that exist in the database but aren't defined in the schema package. Also settable as a `Product.json` property — see [DropTablesRemovedFromProduct](#droptablesremovedfromproduct). |
@@ -1358,7 +1359,8 @@ For a narrative walkthrough and decision guide (when to use the sentinel vs. `Sh
 | Code | Meaning |
 |------|---------|
 | 0 | Successful quench (or passing pre-flight). All databases quenched, logs backed up. |
-| 2 | Failure. One or more database quenches failed; a `--TestConnection` / `--PreviewTargets` pre-flight found a connection error, version violation, or required-template target miss; or a `--Validate` pass found an Error-severity finding (warnings alone still exit `0`). |
+| 1 | Finished, but a feature the target lacks was downgraded under `UnsupportedFeaturePolicy: warn`; the deployment summary lists each one. With `--ExitNonZeroOnWarning`, also any run that logged a warning. |
+| 2 | Failure. A command-line argument was not recognized (nothing runs); the package could not be loaded; one or more database quenches failed; a `--TestConnection` / `--PreviewTargets` pre-flight found a connection error, version violation, or required-template target miss; or a `--Validate` pass found an Error-severity finding (warnings alone still exit `0`). |
 | 3 | Unhandled exception. An unexpected error occurred outside the normal quench flow. |
 | 4 | Unable to back up log files. |
 

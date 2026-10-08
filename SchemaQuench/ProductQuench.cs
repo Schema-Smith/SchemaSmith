@@ -126,7 +126,10 @@ public class ProductQuench
 
         if (!int.TryParse(_config[SettingsKeys.MaxThreads], out _maxThreads) || _maxThreads < 1 || _maxThreads > 20)
             _maxThreads = 10;
-        _whatIfOnly = FormatWhatIfOnly(_config[SettingsKeys.WhatIfOnly]?.ToLower() == "true");
+        // --WhatIf is the switch people reach for; it is the same dry run as the WhatIfONLY setting.
+        var whatIfSwitch = CommandLineParser.ContainsSwitch("WhatIf")
+                           && !string.Equals(CommandLineParser.ValueOfSwitch("WhatIf"), "false", StringComparison.OrdinalIgnoreCase);
+        _whatIfOnly = FormatWhatIfOnly(whatIfSwitch || _config[SettingsKeys.WhatIfOnly]?.ToLower() == "true");
         _runScriptsTwice = _config[SettingsKeys.RunScriptsTwice]?.ToLower() == "true";
         _primaryServer = _config[SettingsKeys.Target.Server] ?? "localhost";
         _skipKindling = _config[SettingsKeys.KindleTheForge]?.ToLower() == "false";

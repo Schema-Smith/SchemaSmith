@@ -18,7 +18,15 @@ public static class Program
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;
         var config = ConfigHelper.GetAppSettingsAndUserSecrets("DataTongs", LogFactory.GetLogger("ProgressLog").Info);
-        CommandLineParser.WarnOnUnrecognizedArguments(KnownArguments, LogFactory.GetLogger("ProgressLog").Warn);
+        try
+        {
+            CommandLineParser.RefuseUnrecognizedArguments(KnownArguments);
+        }
+        catch (RunFailedException e)
+        {
+            LogBackup.FailedRunExit("DataTongs", e);
+            return;
+        }
         SettingsContract.WarnOnUnrecognizedKeys(config, SettingsTool.DataTongs, LogFactory.GetLogger("ProgressLog").Warn);
 
         try
