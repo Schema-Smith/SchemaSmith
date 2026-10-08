@@ -95,18 +95,18 @@ public class DataDirectoryQuenchTests
         return r == null || r == DBNull.Value ? null : r.ToString();
     }
 
-    private void Deploy(string extraProps, int whatIf = 0)
+    private void Deploy(string extraProps, int whatIf = 0, string table = TableName)
     {
-        var json = "[{ \"Name\": \"`" + TableName + "`\", \"Engine\": \"InnoDB\"" + extraProps
+        var json = "[{ \"Name\": \"`" + table + "`\", \"Engine\": \"InnoDB\"" + extraProps
                    + ", \"Columns\": [ { \"Name\": \"`id`\", \"DataType\": \"INT\", \"Nullable\": false } ],"
-                   + " \"Indexes\": [ { \"Name\": \"`pk_" + TableName + "`\", \"PrimaryKey\": true, \"Unique\": true, \"IndexColumns\": \"`id`\" } ] }]";
+                   + " \"Indexes\": [ { \"Name\": \"`pk_" + table.Replace("-", "_") + "`\", \"PrimaryKey\": true, \"Unique\": true, \"IndexColumns\": \"`id`\" } ] }]";
         Exec($"CALL SchemaSmith_TableQuench('DataDirectoryProduct', '{_testDb}', '{json.Replace("'", "''")}', {whatIf}, 0, 0)");
     }
 
-    private string ExtractedJson()
+    private string ExtractedJson(string table = TableName)
     {
         using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_testDb}', '{TableName}')";
+        cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_testDb}', '{table}')";
         var r = cmd.ExecuteScalar();
         return r == null || r == DBNull.Value ? "" : r.ToString();
     }
@@ -120,6 +120,25 @@ public class DataDirectoryQuenchTests
         $"SELECT df.PATH FROM INFORMATION_SCHEMA.INNODB_DATAFILES df "
         + $"JOIN INFORMATION_SCHEMA.INNODB_TABLES it ON it.SPACE = df.SPACE "
         + $"WHERE it.NAME = '{_testDb}/{TableName}'");
+
+    [Test]
+    public void DataDirectory_IsAppliedAndRoundTrips_ForANameInnoDbEncodes()
+    {
+        // InnoDB stores `dd-probe` (and its .ibd file) as `dd@002dprobe`; matching the raw name read back no directory,
+        // so extraction dropped it and a redeploy declaring it was refused as a move.
+        const string table = "dd-probe";
+        try
+        {
+            Deploy($", \"DataDirectory\": \"{DataDir}\"", table: table);
+            Assert.That(ExtractedJson(table), Does.Contain(DataDir), ExtractedJson(table));
+            Assert.DoesNotThrow(() => Deploy($", \"DataDirectory\": \"{DataDir}\"", table: table),
+                "redeploying the same directory must not be refused as a move");
+        }
+        finally
+        {
+            Exec($"DROP TABLE IF EXISTS `{_testDb}`.`{table}`");
+        }
+    }
 
     [Test]
     public void DataDirectory_IsAppliedAndRoundTrips()

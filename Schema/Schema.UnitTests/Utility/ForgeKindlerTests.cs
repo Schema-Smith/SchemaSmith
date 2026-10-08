@@ -485,7 +485,8 @@ public class ForgeKindlerTests
         //   is refused before anything is created).
         // +1 = SchemaSmith_CheckTableJoin (the MariaDB-only table predicate for CHECK_CONSTRAINTS joins, as a
         //   string because MySQL's CHECK_CONSTRAINTS has no TABLE_NAME).
-        Assert.That(mysql.Length, Is.EqualTo(71));
+        // +1 = SchemaSmith_InnodbName (InnoDB's filename-encoded name, for the placement reads).
+        Assert.That(mysql.Length, Is.EqualTo(72));
     }
 
     [Test]
