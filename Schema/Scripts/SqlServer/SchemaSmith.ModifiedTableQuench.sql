@@ -1477,6 +1477,37 @@ BEGIN TRY
       WHERE EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND id.[IsClustered] = 1)
         AND NOT EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND [xIndexName] = [IndexName])
   
+  -- A system-versioned table's primary key cannot be dropped while versioning is on (13557, which reaches the log only
+  -- as "Could not drop constraint"). Both the drops below and the clustered-conflict drop after the column changes take
+  -- one off when a key column changes, so versioning is suspended first. The history table it pairs with is recorded on
+  -- the table in an extended property: a history table can have any name, and re-enabling with the wrong one would start
+  -- an empty history. The column changes are mirrored onto the history table further down, and
+  -- MissingIndexesAndConstraintsQuench turns versioning back on once the key exists again. Recorded in the database
+  -- rather than in this run, so a run that fails part-way is resumed by the next one.
+  RAISERROR('Suspend System Versioning On Temporal Tables Losing Their Primary Key', 10, 100) WITH NOWAIT
+  IF SchemaSmith.fn_ServerMajorVersion() >= 13
+  BEGIN
+    SET @v_SQL = NULL
+    EXEC sp_executesql N'SELECT @out = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
+         ''RAISERROR(''''  Suspending system versioning on '' + T.[Schema] + ''.'' + T.[Name] + '''''', 10, 100) WITH NOWAIT;'' + CHAR(13) + CHAR(10) +
+         ''EXEC sys.sp_addextendedproperty N''''SchemaSmith_SuspendedHistory'''', N'''''' + REPLACE(QUOTENAME(SCHEMA_NAME(h.[schema_id])) + ''.'' + QUOTENAME(h.[name]), '''''''', '''''''''''') +
+         '''''', N''''SCHEMA'''', N'''''' + REPLACE(SCHEMA_NAME(st.[schema_id]), '''''''', '''''''''''') + '''''', N''''TABLE'''', N'''''' + REPLACE(st.[name], '''''''', '''''''''''') + '''''';'' + CHAR(13) + CHAR(10) +
+         ''ALTER TABLE '' + T.[Schema] + ''.'' + T.[Name] + '' SET (SYSTEM_VERSIONING = OFF);'' AS NVARCHAR(MAX))
+    FROM #Tables T WITH (NOLOCK)
+    JOIN sys.tables st ON st.[object_id] = OBJECT_ID(T.[Schema] + ''.'' + T.[Name]) AND st.temporal_type = 2
+    JOIN sys.tables h ON h.[object_id] = st.history_table_id
+    WHERE T.IsTemporal = 1
+      AND (EXISTS (SELECT * FROM #IndexesToDrop di WITH (NOLOCK)
+                     JOIN sys.indexes si ON si.[object_id] = st.[object_id] AND si.[name] = di.[IndexName] COLLATE DATABASE_DEFAULT AND si.is_primary_key = 1
+                    WHERE di.[Schema] = T.[Schema] AND di.[TableName] = T.[Name])
+           OR (EXISTS (SELECT * FROM #Indexes i WITH (NOLOCK)
+                        WHERE i.[Schema] = T.[Schema] AND i.[TableName] = T.[Name] AND i.[Clustered] = 1
+                          AND NOT EXISTS (SELECT * FROM sys.indexes x WHERE x.[object_id] = st.[object_id] AND x.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) COLLATE DATABASE_DEFAULT))
+               AND EXISTS (SELECT * FROM sys.indexes pk WHERE pk.[object_id] = st.[object_id] AND pk.is_primary_key = 1 AND pk.[type] IN (1, 5))))
+    FOR XML PATH(''''), TYPE).value(''.'', ''NVARCHAR(MAX)''), 1, 2, '''')', N'@out NVARCHAR(MAX) OUTPUT', @out = @v_SQL OUTPUT
+    IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  END
+
   RAISERROR('Drop Referencing Foreign Keys When Dropping Unique Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping foreign Key ' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '.' + OBJECT_NAME(fk.parent_object_id) + '.' + fk.[name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'IF OBJECT_ID(''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''') IS NOT NULL ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + ' DROP CONSTRAINT ' + QUOTENAME(fk.[name]) + ';' AS NVARCHAR(MAX))
@@ -2202,6 +2233,57 @@ BEGIN TRY
         WHERE [MustDropAndRecreate] = 0
           AND [MustSwapColumn] = 0
           AND [DropOnly] = 0
+
+  -- With versioning suspended, a column change reaches the current table only, and versioning cannot come back on until
+  -- the history table matches it by name, type, collation and nullability (probed: nullability is checked too). Make it
+  -- match: drop what the current table no longer has, add what it gained, and restate what differs.
+  RAISERROR('Mirror Column Changes Onto The History Tables Of Suspended Temporal Tables', 10, 100) WITH NOWAIT
+  IF OBJECT_ID('tempdb..#SuspendedTemporal') IS NOT NULL DROP TABLE #SuspendedTemporal
+  SELECT [CurrentId] = ep.major_id, [HistoryName] = CAST(ep.[value] AS NVARCHAR(600)),
+         [HistoryId] = OBJECT_ID(CAST(ep.[value] AS NVARCHAR(600)))
+    INTO #SuspendedTemporal
+    FROM sys.extended_properties ep
+    JOIN #Tables T WITH (NOLOCK) ON OBJECT_ID(T.[Schema] + '.' + T.[Name]) = ep.major_id
+    WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.[name] = N'SchemaSmith_SuspendedHistory'
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(x.Stmt AS NVARCHAR(MAX))
+                           FROM (SELECT 1 AS Ord, 'ALTER TABLE ' + s.HistoryName + ' DROP COLUMN ' + QUOTENAME(hc.[name]) + ';' AS Stmt
+                                   FROM #SuspendedTemporal s WITH (NOLOCK)
+                                   JOIN sys.columns hc ON hc.[object_id] = s.HistoryId
+                                   WHERE NOT EXISTS (SELECT * FROM sys.columns c2 WHERE c2.[object_id] = s.CurrentId AND c2.[name] = hc.[name])
+                                 UNION ALL
+                                 SELECT 2, 'ALTER TABLE ' + s.HistoryName + ' ADD ' + QUOTENAME(cc.[name]) + ' ' + CASE WHEN t.is_user_defined = 1 THEN QUOTENAME(SCHEMA_NAME(t.[schema_id])) + '.' ELSE '' END + QUOTENAME(t.[name]) +
+         CASE WHEN t.is_user_defined = 1 THEN ''
+              WHEN t.[name] IN ('varchar', 'char', 'varbinary', 'binary') THEN '(' + CASE WHEN cc.max_length = -1 THEN 'MAX' ELSE CAST(cc.max_length AS VARCHAR(10)) END + ')'
+              WHEN t.[name] IN ('nvarchar', 'nchar') THEN '(' + CASE WHEN cc.max_length = -1 THEN 'MAX' ELSE CAST(cc.max_length / 2 AS VARCHAR(10)) END + ')'
+              WHEN t.[name] IN ('decimal', 'numeric') THEN '(' + CAST(cc.[precision] AS VARCHAR(10)) + ',' + CAST(cc.scale AS VARCHAR(10)) + ')'
+              WHEN t.[name] IN ('datetime2', 'time', 'datetimeoffset') THEN '(' + CAST(cc.scale AS VARCHAR(10)) + ')'
+              ELSE '' END +
+         CASE WHEN cc.collation_name IS NOT NULL THEN ' COLLATE ' + cc.collation_name ELSE '' END + ' NULL;'
+                                   FROM #SuspendedTemporal s WITH (NOLOCK)
+                                   JOIN sys.columns cc ON cc.[object_id] = s.CurrentId
+                                   JOIN sys.types t ON t.user_type_id = cc.user_type_id
+                                   WHERE NOT EXISTS (SELECT * FROM sys.columns h2 WHERE h2.[object_id] = s.HistoryId AND h2.[name] = cc.[name])
+                                 UNION ALL
+                                 SELECT 3, 'ALTER TABLE ' + s.HistoryName + ' ALTER COLUMN ' + QUOTENAME(cc.[name]) + ' ' + CASE WHEN t.is_user_defined = 1 THEN QUOTENAME(SCHEMA_NAME(t.[schema_id])) + '.' ELSE '' END + QUOTENAME(t.[name]) +
+         CASE WHEN t.is_user_defined = 1 THEN ''
+              WHEN t.[name] IN ('varchar', 'char', 'varbinary', 'binary') THEN '(' + CASE WHEN cc.max_length = -1 THEN 'MAX' ELSE CAST(cc.max_length AS VARCHAR(10)) END + ')'
+              WHEN t.[name] IN ('nvarchar', 'nchar') THEN '(' + CASE WHEN cc.max_length = -1 THEN 'MAX' ELSE CAST(cc.max_length / 2 AS VARCHAR(10)) END + ')'
+              WHEN t.[name] IN ('decimal', 'numeric') THEN '(' + CAST(cc.[precision] AS VARCHAR(10)) + ',' + CAST(cc.scale AS VARCHAR(10)) + ')'
+              WHEN t.[name] IN ('datetime2', 'time', 'datetimeoffset') THEN '(' + CAST(cc.scale AS VARCHAR(10)) + ')'
+              ELSE '' END +
+         CASE WHEN cc.collation_name IS NOT NULL THEN ' COLLATE ' + cc.collation_name ELSE '' END +
+                                        CASE WHEN cc.is_nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END + ';'
+                                   FROM #SuspendedTemporal s WITH (NOLOCK)
+                                   JOIN sys.columns cc ON cc.[object_id] = s.CurrentId
+                                   JOIN sys.types t ON t.user_type_id = cc.user_type_id
+                                   JOIN sys.columns hc ON hc.[object_id] = s.HistoryId AND hc.[name] = cc.[name]
+                                   WHERE cc.user_type_id <> hc.user_type_id OR cc.max_length <> hc.max_length
+                                      OR cc.[precision] <> hc.[precision] OR cc.scale <> hc.scale
+                                      OR ISNULL(cc.collation_name, '') <> ISNULL(hc.collation_name, '')
+                                      OR cc.is_nullable <> hc.is_nullable) x
+                           ORDER BY x.Ord
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Identify Existing Clustered Index Conflicts', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#MissingClusteredIndexTables') IS NOT NULL DROP TABLE #MissingClusteredIndexTables
