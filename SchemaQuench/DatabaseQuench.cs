@@ -985,17 +985,20 @@ public class DatabaseQuench
                         });
                     }
 
-                    // WhatIf: Materialized views (PostgreSQL only)
-                    if (_product.Platform == Platform.PostgreSQL && _template.MaterializedViews.Count > 0)
-                    {
-                        SafeProgressLog("  [WhatIf] Would quench materialized views");
-                    }
+                    // The same steps as the real run, in the same order. Each procedure takes the WhatIf flag and
+                    // records what it would do instead of doing it; skipping the call left those changes out of the
+                    // preview entirely.
+                    if (!_template.IndexOnlyTableQuenches && _updateTables)
+                        QuenchForeignKeys(effectiveTableCmd);
 
-                    // WhatIf: Indexed views (SQL Server only)
+                    if (_product.Platform == Platform.PostgreSQL && _template.MaterializedViews.Count > 0)
+                        QuenchMaterializedViews(effectiveTableCmd);
+
+                    if (ShouldQuenchEvents(_product.Platform, _template.Events.Count, DropRemovedEvents))
+                        QuenchEvents(effectiveTableCmd);
+
                     if (_product.Platform == Platform.SqlServer && _template.IndexedViews.Count > 0)
-                    {
-                        SafeProgressLog($"  [WhatIf] Would quench {_template.IndexedViews.Count} indexed view(s)");
-                    }
+                        QuenchIndexedViews(effectiveTableCmd);
 
                     SafeProgressLog("  [WhatIf] After database scripts:");
                     WhatIfLogTemplateScripts(command, "After", _iteration.AfterScripts, DatabaseScriptSlot.After);
