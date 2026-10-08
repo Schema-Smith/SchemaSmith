@@ -149,6 +149,7 @@ By default, SchemaShears suppresses all recognized drop categories. The emitted 
   "DropTablesRemovedFromProduct": false,
   "DropColumnsRemovedFromProduct": false,
   "DropUnknownIndexes": false,
+  "DropIndexesRemovedFromProduct": false,
   "DropForeignKeysRemovedFromProduct": false,
   "DropCheckConstraintsRemovedFromProduct": false,
   "DropExcludeConstraintsRemovedFromProduct": false,
@@ -180,13 +181,15 @@ Valid category names:
 |----------|---------|
 | `Tables` | Drop tables absent from the patch |
 | `Columns` | Drop columns absent from included tables |
-| `Indexes` | Drop indexes absent from included tables |
+| `Indexes` | Drop indexes absent from included tables: ones the product no longer declares (`DropIndexesRemovedFromProduct`) and ones it never declared (`DropUnknownIndexes`) |
 | `ForeignKeys` | Drop foreign keys absent from included tables |
 | `CheckConstraints` | Drop check constraints absent from included tables |
 | `ExcludeConstraints` | Drop exclude constraints absent from included tables |
 | `Statistics` | Drop statistics absent from included tables |
 
 Any category not listed in `--AllowDrops` continues to be suppressed.
+
+Two drop settings are not part of `Product.json`, so a patch cannot carry them: `DropEventsRemovedFromProduct` and `DropPeriodsRemovedFromProduct` (MariaDB). Both default to `false`. If the target environment's SchemaQuench settings turn either on, a patch that leaves out some events or periods drops them. Deploy patches with those settings off, or with `PreventDrop` on.
 
 ---
 
