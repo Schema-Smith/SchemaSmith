@@ -25,5 +25,9 @@ namespace Schema.Domain.PostgreSQL
         [SchemaProperty(MaxLength = 128, Description = "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied.")]
         [JsonProperty(Order = 5)]
         public string VariantName { get; set; }
+
+        [SchemaProperty(Description = "The statistics object's schema, when it is not its table's. Left out, it is created in the table's schema.")]
+        [JsonProperty(Order = 6, NullValueHandling = NullValueHandling.Ignore)]
+        public string Schema { get; set; }
     }
 }

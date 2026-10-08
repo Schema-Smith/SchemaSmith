@@ -424,6 +424,10 @@
             "maxLength": 128,
             "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
           },
+          "Schema": {
+            "type": "string",
+            "description": "The statistics object's schema, when it is not its table's. Left out, it is created in the table's schema."
+          },
           "Extensions": {}
         },
         "additionalProperties": false,

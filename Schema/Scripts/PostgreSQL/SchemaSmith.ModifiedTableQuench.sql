@@ -546,6 +546,7 @@ BEGIN
       SELECT t."Schema" AS "TableSchema",
              t."Name" AS "TableName",
              se.stxname AS "StatisticsName",
+             (SELECT sn.nspname FROM pg_namespace sn WHERE sn.oid = se.stxnamespace) AS "StatisticsSchema",
              -- Both definitions in the normalised forms of SchemaSmith.StatisticsDefinitionForms; the declared side
              -- is put through the same functions wherever it is compared.
              "SchemaSmith"."NormalizeStatisticsKind"((SELECT STRING_AGG(CASE k WHEN 'd' THEN 'NDISTINCT' WHEN 'f' THEN 'DEPENDENCIES' WHEN 'm' THEN 'MCV' ELSE NULL END, ',')
@@ -801,7 +802,7 @@ BEGIN
     END IF;
     RAISE NOTICE 'Drop Modified or Removed Statistics';
     SELECT STRING_AGG('RAISE NOTICE ''  Statistics ' || es."TableSchema" || '.' || es."StatisticsName" || ' modified or no longer in product'';' || CHR(10) ||
-                      'DROP STATISTICS IF EXISTS "' || es."TableSchema" || '"."' || es."StatisticsName" || '" CASCADE;', CHR(10))
+                      'DROP STATISTICS IF EXISTS "' || es."StatisticsSchema" || '"."' || es."StatisticsName" || '" CASCADE;', CHR(10))
       INTO sql_script
       FROM temp_existing_statistics es
       JOIN temp_tables tt ON tt."Schema" = es."TableSchema"
