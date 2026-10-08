@@ -386,6 +386,18 @@ Merge scripts are written to `ScriptPath` and `.tabledata` content files to `Con
 
 When the output lands inside a `Table Data` folder of a schema package, SchemaQuench picks it up automatically on the next deployment via the `TableData` quench slot. Reference data ships alongside schema, in the same package, in the same release.
 
+### Exit code
+
+A table that cannot be extracted does not stop the run: DataTongs logs it and moves on to the next table. The exit code then tells a pipeline whether every table made it:
+
+| Code | Meaning |
+|---|---|
+| `0` | Every configured table was extracted. |
+| `1` | Finished, but at least one table was skipped: it does not exist in the source, it has no key columns, or its `KeyColumns` are malformed. |
+| `2` | At least one table failed to extract. |
+
+Each skipped or failed table is named, with the reason, in the progress log and in `DataTongs - Errors.log`. The full table of codes is in [Configuration -- Exit Codes](configuration.md#exit-codes).
+
 ---
 
 ## Change Detection

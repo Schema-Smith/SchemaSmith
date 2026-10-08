@@ -10,6 +10,10 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 - **`--Validate` reports a foreign-key name used on two tables (`SS-FK-006`).** MySQL names foreign keys per database and SQL Server per schema, so the second one fails the deploy: an error. MariaDB names them per table from 12.1, so there it is a warning, unless the product's `MinimumVersion` is 12.1 or later.
 
+### Changed
+
+- **DataTongs now exits non-zero when a table is not extracted.** It used to exit 0 however many tables failed, and wrote nothing to `DataTongs - Errors.log`. It now exits `1` when it skips a table (missing from the source, no key columns, or malformed `KeyColumns`), and `2` when a table fails to extract. Each such table is named, with the reason, in the error log. A pipeline that ran DataTongs and ignored failures will now see them.
+
 ### Fixed
 
 - **CDC or Change Tracking enabled by a `Before` script was recorded as downgraded on the first deploy, so no tables were tracked (SQL Server) — #432.** The database-level check ran before the `Before` slot, so a new or restored database read as not enabled and the deploy exited 0 with nothing captured; the second deploy tracked everything. When the template has `Before` scripts, the check now runs after them. Without any, it still runs up front, so `UnsupportedFeaturePolicy=fail` refuses before anything is created.
