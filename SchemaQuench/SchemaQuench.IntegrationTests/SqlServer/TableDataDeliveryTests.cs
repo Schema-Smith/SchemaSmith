@@ -259,17 +259,23 @@ public class TableDataDeliveryTests
     }
 
     [Test]
-    public void DeliverTables_JsonBelowCompat130_SkipsGracefully_WhileXmlSiblingApplies()
+    public void DeliverTables_JsonBelowCompat130_LandsExactlyAsTheXmlDelivery()
     {
-        // B1 slice 2 (end-to-end): on a compatibility-level-100 target the DataDeliveryProcessor skips a
-        // JSON-encoded delivery with a clear warning (default policy) and still applies an XML-encoded
-        // delivery on the same table — the graceful degrade the low-level "JSON parse-errors at compat
-        // 100" proof above motivates. Exercises the real MergeScriptHelperAdapter + real SQL execution.
+        // At compatibility level 100 there is no OPENJSON, so a JSON delivery used to be skipped. It is now converted to
+        // the XML shape and delivered through the XML merge: the same values sent both ways must land identically, with
+        // nothing skipped or downgraded. Exercises the real MergeScriptHelperAdapter + real SQL execution.
         var db = "vctdd_s2_" + Guid.NewGuid().ToString("N").Substring(0, 8);
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
-        File.WriteAllText(Path.Combine(tempDir, "json.tabledata"), @"[{""code"":""J001"",""name"":""FromJson""}]");
-        File.WriteAllText(Path.Combine(tempDir, "xml.tabledata"), @"<rows><row><c n=""code"">X001</c><c n=""name"">FromXml</c></row></rows>");
+        const string amount = "1234567890123456789012345678.1234567890";
+        File.WriteAllText(Path.Combine(tempDir, "json.tabledata"),
+            "[{\"code\":\"J001\",\"name\":\"Zoë 名\",\"amt\":" + amount + ",\"dt\":\"2024-03-05T10:11:12.1234567\","
+            + "\"dto\":\"2024-03-05T10:11:12.1234567+05:30\",\"bin\":\"3q2+7wA=\",\"flag\":true,\"shape\":\"POINT (1 2)\",\"shape.STSrid\":4326,"
+            + "\"uid\":\"6F9619FF-8B86-D011-B42D-00C04FC964FF\",\"notes\":\"[{\\\"a\\\":1},{\\\"b\\\":2}]\"}]");
+        File.WriteAllText(Path.Combine(tempDir, "xml.tabledata"),
+            "<rows><row><c n=\"code\">X001</c><c n=\"name\">Zoë 名</c><c n=\"amt\">" + amount + "</c><c n=\"dt\">2024-03-05T10:11:12.1234567</c>"
+            + "<c n=\"dto\">2024-03-05T10:11:12.1234567+05:30</c><c n=\"bin\">3q2+7wA=</c><c n=\"flag\">1</c><c n=\"shape\">POINT (1 2)</c><c n=\"shape.STSrid\">4326</c>"
+            + "<c n=\"uid\">6F9619FF-8B86-D011-B42D-00C04FC964FF</c><c n=\"notes\">[{\"a\":1},{\"b\":2}]</c></row></rows>");
 
         using (var master = _connection.CreateCommand())
         {
@@ -281,23 +287,25 @@ public class TableDataDeliveryTests
             _connection.ChangeDatabase(db);
             using (var c = _connection.CreateCommand())
             {
-                c.CommandText = $"CREATE TABLE [dbo].[{_testTableName}] ([code] VARCHAR(20) NOT NULL PRIMARY KEY, [name] VARCHAR(100) NOT NULL)";
+                c.CommandText = $@"CREATE TABLE [dbo].[{_testTableName}] ([code] VARCHAR(20) NOT NULL PRIMARY KEY, [name] NVARCHAR(50) NOT NULL,
+                    [amt] DECIMAL(38,10) NOT NULL, [dt] DATETIME2(7) NOT NULL, [dto] DATETIMEOFFSET(7) NOT NULL, [bin] VARBINARY(16) NOT NULL,
+                    [flag] BIT NOT NULL, [shape] GEOMETRY NOT NULL, [uid] UNIQUEIDENTIFIER NOT NULL, [notes] NVARCHAR(MAX) NOT NULL)";
                 c.ExecuteNonQuery();
             }
 
             var logs = new List<string>();
+            var downgrades = new List<string>();
             var table = new SqlServerTable
             {
                 Name = _testTableName,
                 Schema = "dbo",
                 Columns =
                 [
-                    new Column { Name = "code", DataType = "VARCHAR(20)" },
-                    new Column { Name = "name", DataType = "VARCHAR(100)" }
+                    new Column { Name = "code", DataType = "VARCHAR(20)" }
                 ],
                 DataDelivery =
                 [
-                    // ContentEncoding absent => Json => must be skipped at compat 100.
+                    // ContentEncoding absent => Json.
                     new DataDelivery { MergeType = "Insert", ContentFile = "json.tabledata", VariantName = "json" },
                     new DataDelivery { MergeType = "Insert", ContentFile = "xml.tabledata", ContentEncoding = "Xml", VariantName = "xml" }
                 ]
@@ -322,7 +330,9 @@ public class TableDataDeliveryTests
                     },
                     ProgressLog = msg => logs.Add(msg),
                     ProgressLogError = msg => logs.Add("ERROR: " + msg),
-                    SqlServerCompatibilityLevel = 100
+                    RecordDowngrade = (_, name) => downgrades.Add(name),
+                    SqlServerCompatibilityLevel = 100,
+                    UnsupportedFeaturePolicy = "fail"
                 };
 
                 DataDeliveryProcessor.GetFromFactory().DeliverTables(context);
@@ -330,12 +340,17 @@ public class TableDataDeliveryTests
 
             using (var c = _connection.CreateCommand())
             {
-                c.CommandText = $"SELECT COUNT(*) FROM [dbo].[{_testTableName}] WHERE [code] = 'X001'";
-                Assert.That(Convert.ToInt32(c.ExecuteScalar()), Is.EqualTo(1), "The XML delivery must apply at compatibility level 100.");
-                c.CommandText = $"SELECT COUNT(*) FROM [dbo].[{_testTableName}] WHERE [code] = 'J001'";
-                Assert.That(Convert.ToInt32(c.ExecuteScalar()), Is.EqualTo(0), "The JSON delivery must be skipped at compatibility level 100.");
+                c.CommandText = $@"SELECT CONCAT_WS(',',
+                        IIF(j.name = x.name, NULL, 'name'), IIF(j.amt = x.amt AND j.amt = {amount}, NULL, 'amt'),
+                        IIF(j.dt = x.dt, NULL, 'dt'), IIF(CAST(j.dto AS NVARCHAR(40)) = CAST(x.dto AS NVARCHAR(40)), NULL, 'dto'),
+                        IIF(j.bin = x.bin, NULL, 'bin'), IIF(j.flag = x.flag, NULL, 'flag'),
+                        IIF(j.shape.STEquals(x.shape) = 1 AND j.shape.STSrid = x.shape.STSrid, NULL, 'shape'),
+                        IIF(j.uid = x.uid, NULL, 'uid'), IIF(j.notes = x.notes, NULL, 'notes'))
+                    FROM [dbo].[{_testTableName}] j JOIN [dbo].[{_testTableName}] x ON j.code = 'J001' AND x.code = 'X001'";
+                Assert.That(c.ExecuteScalar()?.ToString(), Is.Empty, "the list names each column where the JSON delivery differs from the XML one");
             }
-            Assert.That(logs, Has.Some.Contains("compatibility level 130"), "The JSON skip must be logged with a clear reason.");
+            Assert.That(downgrades, Is.Empty, "nothing was skipped, so nothing is downgraded");
+            Assert.That(logs, Has.None.Contains("SKIPPED"));
         }
         finally
         {
