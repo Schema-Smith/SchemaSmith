@@ -36,7 +36,8 @@ public class MergeScriptHelperIntegrationTests
         // that cannot run them (production is unaffected — it generates for the detected version).
         using var probe = _connection.CreateCommand();
         if (TargetVersionDetector.Detect(probe, Platform.PostgreSQL).ServerComparable < 15
-            && TestContext.CurrentContext.Test.MethodName != nameof(BuildMergeScript_NativeVersion_DeletesRowsAbsentFromSource))
+            && TestContext.CurrentContext.Test.MethodName is not (nameof(BuildMergeScript_NativeVersion_DeletesRowsAbsentFromSource)
+                or nameof(GetKeyColumns_TakesOnlyAWholeTableUniqueKey_AndTheUpsertKeepsEveryRow)))
             Assert.Ignore("MergeScriptHelper modern-MERGE execution tests require PostgreSQL 15+; the below-15 path is covered by BuildMergeScript_NativeVersion and the SchemaQuench legacy-upsert integration tests.");
     }
 
@@ -46,6 +47,48 @@ public class MergeScriptHelperIntegrationTests
         _connection?.Close();
         _connection?.Dispose();
     }
+
+    #region Key Selection Tests
+
+    // The merge key was the first unique index of any kind. A partial one is not unique across the table, so rows
+    // sharing its value collapsed (below 15) or failed MERGE (15+); an expression's key part matched no column, so
+    // the key shrank; and INCLUDE columns widened it, so a changed included value inserted a duplicate.
+    [TestCase("CREATE UNIQUE INDEX {0} ON public.\"{1}\" (grp) WHERE v > 0")]
+    [TestCase("CREATE UNIQUE INDEX {0} ON public.\"{1}\" (lower(name))")]
+    [TestCase(null)]
+    public void GetKeyColumns_TakesOnlyAWholeTableUniqueKey_AndTheUpsertKeepsEveryRow(string decoyIndex)
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"_test_key_{Guid.NewGuid():N}"[..40];
+        try
+        {
+            command.CommandText = $@"CREATE TABLE public.""{tableName}"" (id INT NOT NULL, grp INT NOT NULL, v INT NOT NULL, name TEXT NOT NULL);
+                {(decoyIndex == null ? "" : string.Format(decoyIndex, $"\"{tableName[..30]}_d\"", tableName) + ";")}
+                CREATE UNIQUE INDEX ""{tableName[..30]}_k"" ON public.""{tableName}"" (id) INCLUDE (v);
+                INSERT INTO public.""{tableName}"" VALUES (1, 1, 5, 'A'), (2, 1, -2, 'b');
+                SELECT current_setting('server_version_num')::int / 10000";
+            var serverMajor = Convert.ToInt32(command.ExecuteScalar());
+
+            var keyColumns = MergeScriptHelper.GetKeyColumns(Platform.PostgreSQL, command, "public", tableName);
+            Assert.That(keyColumns, Is.EqualTo("\"id\""));
+
+            const string tableData = @"[{""id"":1,""grp"":1,""v"":7,""name"":""A""},{""id"":2,""grp"":1,""v"":-2,""name"":""b""}]";
+            command.CommandText = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, command, "public", tableName, tableData,
+                keyColumns, mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false,
+                mergeFilter: null, pgServerVersionNum: serverMajor);
+            command.ExecuteNonQuery();
+
+            command.CommandText = $@"SELECT STRING_AGG(id || ':' || grp || ':' || v || ':' || name, ',' ORDER BY id) FROM public.""{tableName}""";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1:1:7:A,2:1:-2:b"));
+        }
+        finally
+        {
+            command.CommandText = $@"DROP TABLE IF EXISTS public.""{tableName}""";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    #endregion
 
     #region JSON Tests
 

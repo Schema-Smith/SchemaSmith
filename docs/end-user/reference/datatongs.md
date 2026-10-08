@@ -90,7 +90,7 @@ The typical placement inside a schema package is `ScriptPath` pointing at `Templ
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `Name` | string | _(required)_ | Table name in `schema.table` format. If no schema prefix is given, the platform default is assumed (`dbo` on SQL Server, `public` on PostgreSQL, the connection database on MySQL). |
-| `KeyColumns` | string | _(auto-detected)_ | Comma-separated column names for the row-matching key. When blank, auto-detected from the table's primary key or best unique index. Prefix a column with `*` for NULL-safe comparison on nullable keys. |
+| `KeyColumns` | string | _(auto-detected)_ | Comma-separated column names for the row-matching key. When blank, auto-detected from the table's primary key or, on SQL Server and PostgreSQL, a unique index that covers the whole table: a filtered or partial unique index, or one with an expression key, is not used, and `INCLUDE` columns are not part of the key. On MySQL and MariaDB only the primary key is detected. Prefix a column with `*` for NULL-safe comparison on nullable keys. |
 | `SelectColumns` | string | _(all columns)_ | Comma-separated column names to extract. When blank, every non-excluded column is extracted. Use to narrow extraction to a specific subset. |
 | `Filter` | string | _(empty)_ | SQL `WHERE` clause (without the `WHERE` keyword) to filter which rows are extracted. Also applied to the delete clause when `MergeDelete` is enabled. |
 | `MergeType` | string | _(derived)_ | Per-table override for the `DataDelivery:MergeType` default. Values: `None`, `Insert`, `Insert/Update`, `Insert/Update/Delete`. When blank, derived from global `ShouldCast:MergeUpdate` + `ShouldCast:MergeDelete`. |
