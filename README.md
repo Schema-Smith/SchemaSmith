@@ -58,7 +58,7 @@ The floor is enforced from the detected server version — below it, the run abo
 choco install schemasmith
 ```
 
-Installs `schemaquench`, `schematongs`, and `datatongs` onto your PATH as a single combined package. Binaries are Authenticode-signed via Azure Trusted Signing — no SmartScreen warnings.
+Installs `schemaquench`, `schematongs`, `datatongs`, and `schemashears` onto your PATH as a single combined package. Binaries are Authenticode-signed via Azure Trusted Signing — no SmartScreen warnings.
 
 ### winget (Windows)
 
