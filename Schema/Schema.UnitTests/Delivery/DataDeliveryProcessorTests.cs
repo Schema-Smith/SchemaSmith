@@ -150,11 +150,14 @@ public class DataDeliveryProcessorTests
         var context = MakeContext(tables);
         context.Platform = "MySQL";
         context.MySqlServerVersionNum = 507; // MySQL 5.7
+        var downgrades = new List<(string Type, string Name)>();
+        context.RecordDowngrade = (type, name) => downgrades.Add((type, name));
 
         processor.DeliverTables(context);
 
         Assert.That(_executedScripts, Is.Empty, "No data may be delivered below the MySQL 8.0 floor.");
         Assert.That(_logs, Has.Some.Contains("MySQL 8.0"), "A clear skip message naming the floor must be logged.");
+        Assert.That(downgrades, Has.Some.Matches<(string Type, string Name)>(d => d.Type == "data delivery" && d.Name.Contains("Config")));
     }
 
     [Test]
@@ -174,11 +177,15 @@ public class DataDeliveryProcessorTests
         };
         var context = MakeContext(tables);
         context.SqlServerCompatibilityLevel = 100;
+        var downgrades = new List<(string Type, string Name)>();
+        context.RecordDowngrade = (type, name) => downgrades.Add((type, name));
 
         processor.DeliverTables(context);
 
         Assert.That(_executedScripts, Is.Empty, "A JSON delivery must not run below compatibility level 130.");
         Assert.That(_logs, Has.Some.Contains("compatibility level 130"), "A clear skip message naming the cliff must be logged.");
+        // Recorded as a downgrade, so the run reports itself incomplete (exit 1) and the summary lists it.
+        Assert.That(downgrades, Has.Some.Matches<(string Type, string Name)>(d => d.Type == "data delivery" && d.Name.Contains("Config")));
     }
 
     [Test]

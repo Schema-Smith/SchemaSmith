@@ -28,11 +28,18 @@ public static class Program
             return;
         }
 
-        var platform = ResolvePlatform();
-
-        var tongs = new SchemaTongs(platform);
-        tongs.PreFlightSourceVersion();   // fail fast on an unsupported source before kindling
-        tongs.CastTemplate();
+        SchemaTongs tongs;
+        try
+        {
+            tongs = new SchemaTongs(ResolvePlatform());
+            tongs.PreFlightSourceVersion();   // fail fast on an unsupported source before kindling
+            tongs.CastTemplate();
+        }
+        catch (RunFailedException e)
+        {
+            LogBackup.FailedRunExit("SchemaTongs", e);
+            return;
+        }
         // Matches SchemaQuench's partial-failure convention (exit 2): a table extraction failure no
         // longer aborts the run, so a clean exit code must not be the only signal a caller checks —
         // the package on disk can be short tables that failed and were skipped (see SchemaTongs.Failed).
@@ -87,7 +94,7 @@ public static class Program
         var config = FactoryContainer.ResolveOrCreate<Microsoft.Extensions.Configuration.IConfigurationRoot>();
         var platformValue = config[SettingsKeys.Target.Platform] ?? config[SettingsKeys.Source.Platform];
         if (string.IsNullOrWhiteSpace(platformValue))
-            throw new Exception("Platform is required. Set 'Target:Platform' or 'Source:Platform' in SchemaTongs.settings.json.");
+            throw new RunFailedException("Platform is required. Set 'Target:Platform' or 'Source:Platform' in SchemaTongs.settings.json.");
 
         return PlatformExtensions.ParsePlatform(platformValue);
     }

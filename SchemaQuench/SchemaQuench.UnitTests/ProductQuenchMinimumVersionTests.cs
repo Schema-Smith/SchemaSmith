@@ -107,7 +107,7 @@ namespace SchemaQuench.UnitTests
                     ConfigureProduct("PostgreSQL", minimumVersion: "16");
                     var quench = new StubDetectProductQuench("150010"); // server_version_num -> major 15
 
-                    var ex = Assert.Throws<Exception>(() => quench.ValidateMinimumVersion());
+                    var ex = Assert.Throws<RunFailedException>(() => quench.ValidateMinimumVersion());
                     Assert.That(ex!.Message, Does.Contain("below the product's declared MinimumVersion"));
                     Assert.That(ex.Message, Does.Contain("primary-server"));
                 }
@@ -143,7 +143,7 @@ namespace SchemaQuench.UnitTests
                     ConfigureProduct("SqlServer", minimumVersion: "2019", secondaryServers: "secondary-server");
                     var quench = new StubDetectProductQuench("14"); // major 14 < 2019 (major 15)
 
-                    var ex = Assert.Throws<Exception>(() => quench.ValidateMinimumVersion());
+                    var ex = Assert.Throws<RunFailedException>(() => quench.ValidateMinimumVersion());
                     Assert.That(ex!.Message, Does.Contain("primary-server"));
                     Assert.That(ex.Message, Does.Contain("secondary-server"));
                 }
@@ -162,7 +162,7 @@ namespace SchemaQuench.UnitTests
                     ConfigureProduct("SqlServer", minimumVersion: "");   // no declared floor at all
                     var quench = new StubDetectProductQuench("9");         // SQL Server 2005, below floor 10
 
-                    var ex = Assert.Throws<Exception>(() => quench.ValidateServerVersionFloor());
+                    var ex = Assert.Throws<RunFailedException>(() => quench.ValidateServerVersionFloor());
                     Assert.That(ex!.Message, Does.Contain("below the minimum supported"));
                     Assert.That(ex.Message, Does.Contain("primary-server"));
                 }
@@ -198,7 +198,7 @@ namespace SchemaQuench.UnitTests
                     ConfigureProduct("PostgreSQL", minimumVersion: "not-a-version");
                     var quench = new StubDetectProductQuench("150010");
 
-                    var ex = Assert.Throws<Exception>(() => quench.ValidateMinimumVersion());
+                    var ex = Assert.Throws<RunFailedException>(() => quench.ValidateMinimumVersion());
                     Assert.That(ex!.Message, Does.Contain("is not a valid"));
                 }
                 finally { FactoryContainer.Clear(); }

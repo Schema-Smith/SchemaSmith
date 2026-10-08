@@ -170,7 +170,7 @@ public class ProgramTests
             var config = new ConfigurationBuilder().AddInMemoryCollection(configValues).Build();
             FactoryContainer.Register<IConfigurationRoot>(config);
 
-            Assert.Throws<Exception>(() => Program.ResolvePlatform());
+            Assert.Throws<RunFailedException>(() => Program.ResolvePlatform());
 
             FactoryContainer.Clear();
         }
@@ -188,7 +188,7 @@ public class ProgramTests
             var config = new ConfigurationBuilder().AddInMemoryCollection(configValues).Build();
             FactoryContainer.Register<IConfigurationRoot>(config);
 
-            Assert.Throws<Exception>(() => Program.ResolvePlatform());
+            Assert.Throws<RunFailedException>(() => Program.ResolvePlatform());
 
             FactoryContainer.Clear();
         }

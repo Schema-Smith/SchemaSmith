@@ -27,7 +27,7 @@ public class ProductQuench
     private readonly LogHygieneOptions _logHygiene;
     private readonly ILog _errorLog = LogFactory.GetLogger("ErrorLog");
     private readonly ILog _progressLog = LogFactory.GetLogger("ProgressLog");
-    private readonly Product _product = Product.Load();
+    private readonly Product _product = LoadPackage(() => Product.Load());
 
     private readonly string _whatIfOnly;
     private readonly int _maxThreads;
@@ -111,10 +111,16 @@ public class ProductQuench
     /// </summary>
     public bool Failed => _anyFailure;
 
+    /// <summary>
+    /// True when the run finished but left something the package asked for unapplied: a feature downgraded on a target
+    /// that lacks it, including a data delivery the target cannot take. Exit code 1.
+    /// </summary>
+    public bool Incomplete => !Failed && _changeAudit.Snapshot().Any(r => r.Action == "downgraded");
+
     public ProductQuench()
     {
         if (_product.Platform == Platform.Unknown)
-            throw new Exception($"Product '{_product.Name}' does not have a Platform assigned. Use SchemaTongs or edit the product.json file to assign a platform before quenching.");
+            throw new RunFailedException($"Product '{_product.Name}' does not have a Platform assigned. Use SchemaTongs or edit the product.json file to assign a platform before quenching.");
 
         _logHygiene = LogHygieneOptions.FromConfiguration(_config);
 
@@ -375,7 +381,7 @@ public class ProductQuench
 
         var required = VersionHelper.ParseDeclaredVersion(_product.MinimumVersion, _product.Platform);
         if (required == null)
-            throw new Exception($"Product MinimumVersion '{_product.MinimumVersion}' is not a valid {_product.Platform} version.");
+            throw new RunFailedException($"Product MinimumVersion '{_product.MinimumVersion}' is not a valid {_product.Platform} version.");
 
         _progressLog.Info("Validate Minimum Version");
         var detected = new List<(string Server, TargetVersionInfo Info)>();
@@ -395,7 +401,7 @@ public class ProductQuench
 
         var failures = BuildMinimumVersionFailures(detected, required.Value, _product.MinimumVersion);
         if (failures.Count > 0)
-            throw new Exception(
+            throw new RunFailedException(
                 "One or more target servers are below the product's declared MinimumVersion; aborting before any deployment:"
                 + Environment.NewLine + string.Join(Environment.NewLine, failures));
     }
@@ -432,7 +438,7 @@ public class ProductQuench
                 var message = $"Folder '{folder.FolderPath}'{ServerSuffix(server)} ShouldApplyExpression failed: {e.Message}";
                 _progressLog.Error($"  {message}");
                 _errorLog.Error(message, e);
-                throw;
+                throw new RunFailedException(message, e);
             }
 
             survivors.Add(folder);
@@ -507,7 +513,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new Exception($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -556,7 +562,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new Exception($"Unable to connect to {server} [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException($"Unable to connect to {server} [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -604,7 +610,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new Exception($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -768,6 +774,14 @@ public class ProductQuench
         {
             QuenchProductCore(suppressKindlingForTesting);
         }
+        catch (RunFailedException)
+        {
+            // A failed validation, product script or version check, or a refused target: a failure the user can act
+            // on. Main reports it and exits 2.
+            _runTiming.Stop();
+            WriteDeploymentSummary(RunOutcome.Aborted, 2);
+            throw;
+        }
         catch
         {
             // An exception escaping Core (e.g. a baseline/validate/after-product-script failure that
@@ -782,7 +796,9 @@ public class ProductQuench
 
         // Normal Success / continue-mode PartialFailure. (Hard-abort sites inside Core already wrote
         // their Aborted summary and Exit()ed before control could return here.)
-        WriteDeploymentSummary(Failed ? RunOutcome.PartialFailure : RunOutcome.Success, Failed ? 2 : 0);
+        WriteDeploymentSummary(
+            Failed ? RunOutcome.PartialFailure : Incomplete ? RunOutcome.Incomplete : RunOutcome.Success,
+            Failed ? 2 : Incomplete ? 1 : 0);
     }
 
     private void QuenchProductCore(bool suppressKindlingForTesting)
@@ -822,7 +838,7 @@ public class ProductQuench
                     _failureRecords.Add(new FailureRecord("Validate", "Product",
                         "Invalid server for this product", Array.Empty<string>(), null));
                     EmitFailureRollup();
-                    throw new Exception("Invalid server for this product");
+                    throw new RunFailedException("Invalid server for this product");
                 }
             }
 
@@ -835,7 +851,7 @@ public class ProductQuench
                     _failureRecords.Add(new FailureRecord("Validate", "Product",
                         "Invalid baseline for this release", Array.Empty<string>(), null));
                     EmitFailureRollup();
-                    throw new Exception("Invalid baseline for this release");
+                    throw new RunFailedException("Invalid baseline for this release");
                 }
             }
 
@@ -1075,6 +1091,28 @@ public class ProductQuench
             ? snapshot
             : snapshot.Replace(Schema.Domain.SchemaDefaultResolver.SchemaNameToken, CrossTemplateSchemaPlaceholder);
 
+    // A package that cannot be loaded (a missing path, malformed JSON, an invalid template setting) is the author's to
+    // fix, so it is a failed run rather than a defect in the tool.
+    private static T LoadPackage<T>(Func<T> load)
+    {
+        try
+        {
+            return load();
+        }
+        catch (InvalidOperationException e)
+        {
+            throw new RunFailedException(e.Message, e);
+        }
+        catch (Newtonsoft.Json.JsonException e)
+        {
+            throw new RunFailedException(e.Message, e);
+        }
+        catch (System.IO.IOException e)
+        {
+            throw new RunFailedException(e.Message, e);
+        }
+    }
+
     private List<Template> LoadTemplates()
     {
         var templates = new List<Template>();
@@ -1082,7 +1120,7 @@ public class ProductQuench
         foreach (var templateName in _product.TemplateOrder.Where(templateName => !string.IsNullOrWhiteSpace(templateName)))
         {
             _progressLog.Info($"Load Template Schema: {templateName}");
-            var template = Template.Load(templateName, _product);
+            var template = LoadPackage(() => Template.Load(templateName, _product));
             foreach (var kvp in BuildSpecialTokens(template))
                 specialTokens.Add(kvp.Key, kvp.Value);
             templates.Add(template);
@@ -1126,7 +1164,7 @@ public class ProductQuench
         {
             _anyFailure = true;
             EmitFailureRollup();
-            throw new Exception("Product script quench FAILED");
+            throw new RunFailedException("Product script quench FAILED");
         }
     }
 
@@ -1208,7 +1246,7 @@ public class ProductQuench
             shouldFail = true;
         }
 
-        if (shouldFail) throw new Exception("Error validating configured servers");
+        if (shouldFail) throw new RunFailedException("Error validating configured servers");
 
         _progressLog.Info("");
         _progressLog.Info("");
@@ -2152,7 +2190,7 @@ public class ProductQuench
                     new[] { $"Unable to quench '{sqlScript.LogPath}'" }, artifactPath));
             }
 
-            throw new Exception($"{serverMsg}[{initDb}] Unable to quench one or more scripts");
+            throw new RunFailedException($"{serverMsg}[{initDb}] Unable to quench one or more scripts");
         }
     }
 

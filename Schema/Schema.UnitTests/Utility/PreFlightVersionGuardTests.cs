@@ -15,7 +15,7 @@ namespace Schema.UnitTests.Utility
         {
             var info = new TargetVersionInfo(Platform.SqlServer, "9", 9);   // SQL Server 2005 — below the 2008 floor
 
-            var ex = Assert.Throws<Exception>(() =>
+            var ex = Assert.Throws<RunFailedException>(() =>
                 PreFlightVersionGuard.CheckOrThrow(info, "SQL2K5\\SC2K5", "Chinook"));
 
             Assert.That(ex!.Message, Does.Contain("below the minimum supported"));
@@ -27,7 +27,7 @@ namespace Schema.UnitTests.Utility
         {
             var info = new TargetVersionInfo(Platform.SqlServer, "10", 10, 90);   // 2008 binary, compat-90 DB
 
-            var ex = Assert.Throws<Exception>(() =>
+            var ex = Assert.Throws<RunFailedException>(() =>
                 PreFlightVersionGuard.CheckOrThrow(info, "srv", "OldDb"));
 
             Assert.That(ex!.Message, Does.Contain("compatibility level 90"));
@@ -65,7 +65,7 @@ namespace Schema.UnitTests.Utility
         {
             var info = new TargetVersionInfo(Platform.PostgreSQL, "110006", 11);   // PostgreSQL 11 — below the 12 floor
 
-            var ex = Assert.Throws<Exception>(() => PreFlightVersionGuard.CheckOrThrow(info, "pg"));
+            var ex = Assert.Throws<RunFailedException>(() => PreFlightVersionGuard.CheckOrThrow(info, "pg"));
             Assert.That(ex!.Message, Does.Contain("below the minimum supported"));
         }
 
@@ -82,7 +82,7 @@ namespace Schema.UnitTests.Utility
         {
             var info = new TargetVersionInfo(Platform.MariaDb, "10.1.48-MariaDB", 1001);   // 10.1 — below the 10.2 floor (no JSON)
 
-            var ex = Assert.Throws<Exception>(() => PreFlightVersionGuard.CheckOrThrow(info, "maria"));
+            var ex = Assert.Throws<RunFailedException>(() => PreFlightVersionGuard.CheckOrThrow(info, "maria"));
             Assert.That(ex!.Message, Does.Contain("below the minimum supported"));
         }
 
@@ -99,7 +99,7 @@ namespace Schema.UnitTests.Utility
         {
             var info = new TargetVersionInfo(Platform.MySQL, "5.6.51", 506);   // 5.6 — below the 5.7 floor (no JSON)
 
-            var ex = Assert.Throws<Exception>(() => PreFlightVersionGuard.CheckOrThrow(info, "mysql"));
+            var ex = Assert.Throws<RunFailedException>(() => PreFlightVersionGuard.CheckOrThrow(info, "mysql"));
             Assert.That(ex!.Message, Does.Contain("below the minimum supported"));
         }
 
@@ -109,7 +109,7 @@ namespace Schema.UnitTests.Utility
         {
             var info = new TargetVersionInfo(Platform.MySQL, raw, VersionHelper.ParseDetectedVersion(raw, Platform.MySQL)!.Value);
 
-            var ex = Assert.Throws<Exception>(() => PreFlightVersionGuard.CheckOrThrow(info, "mysql"));
+            var ex = Assert.Throws<RunFailedException>(() => PreFlightVersionGuard.CheckOrThrow(info, "mysql"));
             Assert.That(ex!.Message, Does.Contain(raw).And.Contain("5.7.22").And.Contain("8.0.23"));
         }
     }

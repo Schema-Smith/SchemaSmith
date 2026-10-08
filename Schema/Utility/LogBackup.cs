@@ -74,6 +74,17 @@ public static class LogBackup
         }
     }
 
+    /// <summary>
+    /// Ends a run that failed for a reason the user can fix: the message on the console, the detail in the error log,
+    /// and exit 2. An unhandled exception, by contrast, is a defect and exits 3.
+    /// </summary>
+    public static void FailedRunExit(string appName, RunFailedException e)
+    {
+        LogFactory.GetLogger("ProgressLog").Error($"FAILED: {e.Message}");
+        LogFactory.GetLogger("ErrorLog").Error(e.Message, e);
+        BackupLogsAndExit(appName, 2);
+    }
+
     public static void UnhandledExceptionLogger(string appName, UnhandledExceptionEventArgs e)
     {
         LogFactory.GetLogger("ProgressLog").Error($"EXCEPTION - See the error log:\r\n{e.ExceptionObject}");

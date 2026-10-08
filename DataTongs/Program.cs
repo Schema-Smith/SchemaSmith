@@ -21,11 +21,16 @@ public static class Program
         CommandLineParser.WarnOnUnrecognizedArguments(KnownArguments, LogFactory.GetLogger("ProgressLog").Warn);
         SettingsContract.WarnOnUnrecognizedKeys(config, SettingsTool.DataTongs, LogFactory.GetLogger("ProgressLog").Warn);
 
-        var platform = ResolvePlatform();
-
-        var tongs = new DataTongs(platform);
-        tongs.CastData();
-        LogBackup.BackupLogsAndExit("DataTongs", tongs.ExitCode);
+        try
+        {
+            var tongs = new DataTongs(ResolvePlatform());
+            tongs.CastData();
+            LogBackup.BackupLogsAndExit("DataTongs", tongs.ExitCode);
+        }
+        catch (RunFailedException e)
+        {
+            LogBackup.FailedRunExit("DataTongs", e);
+        }
     }
 
     public static void UnhandledException(object sender, UnhandledExceptionEventArgs e)
@@ -38,7 +43,7 @@ public static class Program
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
         var platformValue = config[SettingsKeys.Source.Platform] ?? config[SettingsKeys.Target.Platform];
         if (string.IsNullOrWhiteSpace(platformValue))
-            throw new Exception("Platform is required. Set 'Source:Platform' or 'Target:Platform' in DataTongs.settings.json.");
+            throw new RunFailedException("Platform is required. Set 'Source:Platform' or 'Target:Platform' in DataTongs.settings.json.");
 
         return PlatformExtensions.ParsePlatform(platformValue);
     }

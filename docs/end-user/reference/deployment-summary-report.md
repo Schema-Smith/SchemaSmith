@@ -63,7 +63,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     "finishedUtc": "2026-07-09T14:03:47.881Z",
     "durationMs": 36677,            // run wall-clock
     "mode": "Quench",               // Quench | WhatIf | Validate
-    "outcome": "Success",           // Success | PartialFailure | Aborted
+    "outcome": "Success",           // Success | Incomplete | PartialFailure | Aborted
     "exitCode": 0,
     "resumedFromCheckpoint": false
   },
@@ -154,7 +154,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `startedUtc` / `finishedUtc` | Run start and end, UTC. |
 | `durationMs` | Wall-clock milliseconds for the whole run. |
 | `mode` | `Quench` (a real deploy), `WhatIf` (a dry run), or `Validate`. |
-| `outcome` | `Success`, `PartialFailure` (some targets failed, others succeeded), or `Aborted`. |
+| `outcome` | `Success`; `Incomplete` (every target finished, but a feature was downgraded on a target that lacks it -- see `unsupportedDowngrade` -- exit code `1`); `PartialFailure` (some targets failed, others succeeded); or `Aborted`. |
 | `exitCode` | The process exit code the run returned. |
 | `resumedFromCheckpoint` | `true` when the run resumed a prior interrupted deployment. |
 

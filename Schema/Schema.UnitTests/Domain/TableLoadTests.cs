@@ -9,6 +9,7 @@ using Schema.Domain.PostgreSQL;
 using Schema.Domain.MySQL;
 using Schema.Isolators;
 using Schema.Delivery;
+using Schema.Utility;
 
 namespace Schema.UnitTests.Domain
 {
@@ -199,7 +200,7 @@ namespace Schema.UnitTests.Domain
             var filePath = Path.Combine("C:", "tables", "nonexistent.json");
             _mockFile.Exists(filePath).Returns(false);
 
-            var ex = Assert.Throws<Exception>(() => Table.Load(filePath, Platform.SqlServer));
+            var ex = Assert.Throws<RunFailedException>(() => Table.Load(filePath, Platform.SqlServer));
 
             Assert.That(ex.Message, Does.Contain("nonexistent.json"));
         }
@@ -211,7 +212,7 @@ namespace Schema.UnitTests.Domain
             _mockFile.Exists(filePath).Returns(true);
             _mockFile.ReadAllText(filePath).Returns("{ invalid json }");
 
-            var ex = Assert.Throws<Exception>(() => Table.Load(filePath, Platform.SqlServer));
+            var ex = Assert.Throws<RunFailedException>(() => Table.Load(filePath, Platform.SqlServer));
 
             Assert.That(ex.Message, Does.Contain("bad.json"));
         }
@@ -288,7 +289,7 @@ namespace Schema.UnitTests.Domain
             _mockFile.Exists(filePath).Returns(true);
             _mockFile.ReadAllText(filePath).Returns(tableJson);
 
-            var ex = Assert.Throws<Exception>(() => Table.Load(filePath, Platform.SqlServer));
+            var ex = Assert.Throws<RunFailedException>(() => Table.Load(filePath, Platform.SqlServer));
 
             Assert.That(ex.Message, Does.Contain("NotARealTableProperty"));
             Assert.That(ex.Message, Does.Contain(filePath));

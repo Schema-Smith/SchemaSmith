@@ -41,7 +41,7 @@ namespace Schema.Domain
         public static SqlScript Load(string filePath, List<KeyValuePair<string, string>> scriptTokens, Platform platform = Platform.SqlServer)
         {
             if (!ProductFileWrapper.GetFromFactory().Exists(filePath))
-                throw new Exception($"File {LongPathSupport.StripLongPathPrefix(filePath)} does not exist");
+                throw new RunFailedException($"File {LongPathSupport.StripLongPathPrefix(filePath)} does not exist");
 
             try
             {
@@ -55,7 +55,7 @@ namespace Schema.Domain
             }
             catch (Exception e)
             {
-                throw new Exception($"Error loading {LongPathSupport.StripLongPathPrefix(filePath)}\r\n{e.Message}", e);
+                throw new RunFailedException($"Error loading {LongPathSupport.StripLongPathPrefix(filePath)}\r\n{e.Message}", e);
             }
         }
 

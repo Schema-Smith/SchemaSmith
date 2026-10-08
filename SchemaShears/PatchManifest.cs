@@ -1,13 +1,14 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using Schema.Utility;
 using System.Collections.Generic;
 using System.IO;
 using Schema.Isolators;
 
 namespace SchemaShears;
 
-public class PatchBuildException : Exception
+public class PatchBuildException : RunFailedException
 {
     public PatchBuildException(string message) : base(message) { }
 }

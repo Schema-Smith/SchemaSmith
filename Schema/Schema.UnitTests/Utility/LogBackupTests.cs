@@ -40,6 +40,29 @@ public class LogBackupTests
         LogFactory.Clear();
     }
 
+    // A failure the user can fix ends in one plain line and exit 2. It is not an unhandled exception (exit 3), which is
+    // what every such failure used to produce: a stack dump the user had to read past to find the message.
+    [Test]
+    public void FailedRunExit_LogsTheMessage_AndExitsTwo()
+    {
+        var progressLog = Substitute.For<ILog>();
+        var errorLog = Substitute.For<ILog>();
+        LogFactory.Register("ProgressLog", progressLog);
+        LogFactory.Register("ErrorLog", errorLog);
+        _mockDirectory.GetFiles(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<SearchOption>()).Returns(Array.Empty<string>());
+        var failure = new RunFailedException("Platform is required.");
+
+        LogBackup.FailedRunExit("TestApp", failure);
+
+        Assert.Multiple(() =>
+        {
+            progressLog.Received(1).Error("FAILED: Platform is required.");
+            errorLog.Received(1).Error("Platform is required.", failure);
+            _mockEnvironment.Received(1).Exit(2);
+            _mockEnvironment.DidNotReceive().Exit(3);
+        });
+    }
+
     [Test]
     public void BackupLogsAndExit_CreatesBackupDirectory()
     {

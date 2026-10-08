@@ -110,7 +110,7 @@ namespace Schema.Domain
             }
             catch (Exception e)
             {
-                throw new Exception($"Error loading table from {filePath}\r\n{e.Message}", e);
+                throw new RunFailedException($"Error loading table from {filePath}\r\n{e.Message}", e);
             }
         }
 

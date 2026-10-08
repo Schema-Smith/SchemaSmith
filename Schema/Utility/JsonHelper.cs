@@ -29,7 +29,7 @@ public static class JsonHelper
     public static T Load<T>(string filePath)
     {
         if (!FileWrapper.GetFromFactory().Exists(filePath))
-            throw new Exception($"File {filePath} does not exist");
+            throw new RunFailedException($"File {filePath} does not exist");
 
         var text = FileWrapper.GetFromFactory().ReadAllText(filePath);
         return WithFileContext(filePath, () => JsonConvert.DeserializeObject<T>(text));
@@ -52,7 +52,7 @@ public static class JsonHelper
     public static Product ProductLoad(string filePath, MissingMemberHandling missingMemberHandling = MissingMemberHandling.Error)
     {
         if (!ProductFileWrapper.GetFromFactory().Exists(filePath))
-            throw new Exception($"File {filePath} does not exist");
+            throw new RunFailedException($"File {filePath} does not exist");
 
         var text = ProductFileWrapper.GetFromFactory().ReadAllText(filePath);
         var settings = new JsonSerializerSettings { MissingMemberHandling = missingMemberHandling };
@@ -63,7 +63,7 @@ public static class JsonHelper
     public static Table TableLoad(string filePath, Platform platform)
     {
         if (!ProductFileWrapper.GetFromFactory().Exists(filePath))
-            throw new Exception($"File {filePath} does not exist");
+            throw new RunFailedException($"File {filePath} does not exist");
 
         var text = ProductFileWrapper.GetFromFactory().ReadAllText(filePath);
         return WithFileContext(filePath, () => PlatformDeserializer.DeserializeTable(text, platform));
@@ -74,7 +74,7 @@ public static class JsonHelper
     public static Template TemplateLoad(string filePath, Platform platform, MissingMemberHandling missingMemberHandling = MissingMemberHandling.Error)
     {
         if (!ProductFileWrapper.GetFromFactory().Exists(filePath))
-            throw new Exception($"File {filePath} does not exist");
+            throw new RunFailedException($"File {filePath} does not exist");
 
         var text = ProductFileWrapper.GetFromFactory().ReadAllText(filePath);
         return WithFileContext(filePath, () => PlatformDeserializer.DeserializeTemplate(text, platform, missingMemberHandling));
