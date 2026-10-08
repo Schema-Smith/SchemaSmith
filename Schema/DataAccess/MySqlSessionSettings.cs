@@ -51,6 +51,35 @@ public static class MySqlSessionSettings
         return new SqlModeScope(command, original, neutral);
     }
 
+    /// <summary>
+    /// Turns <c>explicit_defaults_for_timestamp</c> on until the returned scope is disposed, so a <c>TIMESTAMP</c> column is
+    /// created with exactly the default it declares. With it off (the default on MySQL 5.7 and on MariaDB before 10.10)
+    /// the engine invents one. Where the server will not let a session change it, <paramref name="readOnly"/> is told and
+    /// nothing changes.
+    /// </summary>
+    public static IDisposable UseExplicitTimestampDefaults(IDbCommand command, Action readOnly)
+    {
+        command.CommandText = "SELECT @@SESSION.explicit_defaults_for_timestamp";
+        if (command.ExecuteScalar()?.ToString() is "1" or "ON") return null;
+        try
+        {
+            command.CommandText = "SET SESSION explicit_defaults_for_timestamp = 1";
+            command.ExecuteNonQuery();
+        }
+        // 1238: the server reports the variable read-only for a session (MariaDB 10.2-10.3, early 10.4-10.6 patches).
+        catch (MySqlConnector.MySqlException ex) when (ex.Number == 1238)
+        {
+            readOnly?.Invoke();
+            return null;
+        }
+        return new RestoreOnDispose(() =>
+        {
+            if (command.Connection?.State != ConnectionState.Open) return;
+            command.CommandText = "SET SESSION explicit_defaults_for_timestamp = 0";
+            command.ExecuteNonQuery();
+        });
+    }
+
     // An offset only: named zones need the server's time zone tables, which are often not loaded.
     private static readonly System.Text.RegularExpressions.Regex OffsetZone = new(@"^[+-](0[0-9]|1[0-4]):[0-5][0-9]$");
 
