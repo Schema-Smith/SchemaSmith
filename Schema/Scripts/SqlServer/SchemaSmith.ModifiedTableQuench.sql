@@ -413,7 +413,15 @@ BEGIN TRY
                                                     + CASE WHEN c.[Persisted] = 1 AND c.[NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END
               -- Otherwise we need to build the column definition
               ELSE REPLACE(REPLACE(UPPER(LEFT([DataType], COALESCE(NULLIF(CHARINDEX('IDENTITY', [DataType]), 0), LEN([DataType]) + 1) - 1)), 'ROWGUIDCOL', ''), 'NOT FOR REPLICATION', '') +
-                   CASE WHEN [Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') <> [Collation] THEN ' COLLATE ' + ISNULL(NULLIF(RTRIM([Collation]), ''), @v_DatabaseCollation) ELSE '' END +
+                   -- ALTER COLUMN without COLLATE resets a character column to the database default, and fails (5074) when
+                   -- the column is indexed, so a character column always names its collation: the declared one, the
+                   -- database default for an empty declaration, or the live one under IGNORE.
+                   CASE WHEN [Collation] NOT IN ('IGNORE', '') THEN ' COLLATE ' + [Collation]
+                        WHEN NOT EXISTS (SELECT 1 FROM sys.types ty
+                                          WHERE ty.user_type_id = TYPE_ID(RTRIM(LEFT([DataType], CHARINDEX('(', [DataType] + '(') - 1)))
+                                            AND ty.collation_name IS NOT NULL) THEN ''
+                        WHEN [Collation] = 'IGNORE' THEN ' COLLATE ' + ISNULL(ic.COLLATION_NAME, @v_DatabaseCollation)
+                        ELSE ' COLLATE ' + @v_DatabaseCollation END +
                    CASE WHEN [Sparse] = 1 THEN ' SPARSE' ELSE '' END +
                    CASE WHEN Nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END +
                    CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE'
