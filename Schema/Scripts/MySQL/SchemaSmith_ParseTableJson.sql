@@ -418,6 +418,20 @@ BEGIN
            AND UPPER(TRIM(DefaultValue)) NOT REGEXP '^(CURRENT_TIMESTAMP|NOW|LOCALTIME|LOCALTIMESTAMP)[[:space:]]*\\([0-9]*\\)$';
     END IF;
 
+    -- A column that declares the table's character set and no collation takes the table's collation, as it would in
+    -- a CREATE TABLE naming neither. CHARACTER SET on its own gives the character set's DEFAULT collation instead, which
+    -- changes sorting, comparison and unique keys whenever the table's collation is not that default -- and extraction
+    -- omits a column collation equal to the table's, so every such column was redeployed in the wrong one. Resolved
+    -- here, before anything compares, so the column script and every modified-column check see the same value.
+    -- A collation name starts with its character set's name and an underscore, on both engines.
+    UPDATE _SchemaSmith_Columns c
+      JOIN _SchemaSmith_Tables t ON t.TableKey = c.TableKey
+       SET c.Collation = TRIM(t.Collation)
+     WHERE (c.Collation IS NULL OR TRIM(c.Collation) = '')
+       AND c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != ''
+       AND t.Collation IS NOT NULL
+       AND TRIM(t.Collation) LIKE CONCAT(TRIM(c.CharacterSet), '\\_%');
+
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Build column scripts');
 
     -- Build ColumnScript for each column

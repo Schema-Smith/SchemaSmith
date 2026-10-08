@@ -711,6 +711,8 @@ default" authorable. It requires `Default`; without one there is no value to app
 
 `GenerationExpression`, `CharacterSet`, `Collation`, `Comment`, and `AutoIncrement` (bool) for an `AUTO_INCREMENT` column -- or spell it in `DataType` (`INT AUTO_INCREMENT`).
 
+A column that sets `CharacterSet` to the table's character set and leaves `Collation` out gets the table's collation, as it would in `CREATE TABLE`. One in a different character set gets that set's default collation, which varies by engine version, so give it a `Collation` (`--Validate` reports `SS-COL-002`).
+
 `Invisible` (bool) hides a column from `SELECT *` and from an `INSERT` that names no column list; it is still readable when named explicitly. Requires MySQL 8.0.23 or MariaDB 10.3 -- below those the column deploys visible, per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation).
 
 `Srid` (int) restricts a spatial column to one spatial reference system -- `"Srid": 4326` deploys as `col POINT SRID 4326`, so the column accepts only geometries in that reference system. MySQL 8.0.3+ only; below that (and on MariaDB, which has no equivalent attribute at any version) the restriction is silently skipped and the column deploys unrestricted, per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). Omit `Srid` for an unrestricted spatial column.
