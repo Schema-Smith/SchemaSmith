@@ -723,6 +723,10 @@ public class SchemaTongs
     // this to the same partial-failure exit code SchemaQuench uses.
     public bool Failed => _stats.TableErrors > 0;
 
+    /// <summary>2 when a table failed; 1 when an object was skipped or its script was invalid, so the package is
+    /// missing it; otherwise 0.</summary>
+    public int ExitCode => Failed ? 2 : _stats.SkippedObjects > 0 || _invalidScripts.Count > 0 ? 1 : 0;
+
     private readonly Dictionary<string, ExtractionFileIndex> _folderIndexes = new();
     private readonly List<string> _pendingSqulerrorCleanup = new();
 
@@ -830,6 +834,7 @@ public class SchemaTongs
         if (!file.Exists(errorPath)) return false;
 
         _progressLog.Info($"  Skipping export for known invalid script: {Path.GetFileName(filePath)} (.sqlerror exists, validation off)");
+        _stats.SkippedObjects++;
         return true;
     }
 
@@ -1913,6 +1918,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
                     if (reader.IsDBNull(0))
                     {
                         _progressLog.Warn($"  WARNING: {triggerName} is encrypted, skipping");
+                        _stats.SkippedObjects++;
                         continue;
                     }
                     definition = reader.GetString(0);
@@ -2022,7 +2028,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
         return result;
     }
 
-    private string ScriptSqlServerProgrammableObject(IDbCommand command, string schemaName, string objectName,
+    internal string ScriptSqlServerProgrammableObject(IDbCommand command, string schemaName, string objectName,
         string level1Type, string level2Type = null, string level2ParentName = null)
     {
         command.CommandText = $@"
@@ -2043,6 +2049,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
                 if (reader.IsDBNull(0))
                 {
                     _progressLog.Warn($"  WARNING: {schemaName}.{objectName} is encrypted, skipping");
+                    _stats.SkippedObjects++;
                     return null;
                 }
                 definition = reader.GetString(0);
@@ -2161,6 +2168,7 @@ SELECT s.name AS SchemaName, v.name AS ViewName
             if (string.IsNullOrWhiteSpace(viewJson) || viewJson.Trim().Equals("{}"))
             {
                 _progressLog.Error($"    No json returned for {schema}.{name}");
+                _stats.SkippedObjects++;
                 continue;
             }
             var viewObj = JsonConvert.DeserializeObject<SqlServerIndexedView>(viewJson);
@@ -2451,6 +2459,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
             if (string.IsNullOrWhiteSpace(typeJson) || typeJson.Trim() == "{}")
             {
                 _progressLog.Error($"    No json returned for domain type {schema}.{name}");
+                _stats.SkippedObjects++;
                 continue;
             }
 
@@ -2513,6 +2522,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
             if (string.IsNullOrWhiteSpace(typeJson) || typeJson.Trim() == "{}")
             {
                 _progressLog.Error($"    No json returned for enum type {schema}.{name}");
+                _stats.SkippedObjects++;
                 continue;
             }
 
@@ -2694,6 +2704,7 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
             if (string.IsNullOrWhiteSpace(seqJson) || seqJson.Trim() == "{}")
             {
                 _progressLog.Error($"    No json returned for sequence {schema}.{name}");
+                _stats.SkippedObjects++;
                 continue;
             }
 
@@ -2826,6 +2837,7 @@ SELECT mv.schemaname, mv.matviewname
             if (string.IsNullOrWhiteSpace(viewJson) || viewJson.Trim().Equals("{}"))
             {
                 _progressLog.Error($"    No json returned for {schema}.{name}");
+                _stats.SkippedObjects++;
                 continue;
             }
             var viewObj = JsonConvert.DeserializeObject<PostgreSqlMaterializedView>(viewJson);
@@ -3058,6 +3070,7 @@ SELECT EVENT_NAME
             if (string.IsNullOrWhiteSpace(eventJson) || eventJson.Trim() == "{}")
             {
                 _progressLog.Error($"    No json returned for event {name}");
+                _stats.SkippedObjects++;
                 continue;
             }
 
@@ -3623,11 +3636,16 @@ SELECT cc.name AS [Name],
                 break;
         }
 
+        LogIfPositive("  Skipped:    ", _stats.SkippedObjects);
+        LogIfPositive("  Invalid:    ", _invalidScripts.Count);
         _progressLog.Info($"  Elapsed:    {_stopwatch.Elapsed.TotalSeconds:F1} seconds");
         _progressLog.Info("");
-        _progressLog.Info(_stats.TableErrors > 0
-            ? "Casting Completed with Errors"
-            : "Casting Completed Successfully");
+        _progressLog.Info(ExitCode switch
+        {
+            2 => "Casting Completed with Errors",
+            1 => "Casting Completed, but some objects were not extracted (see Skipped and Invalid above)",
+            _ => "Casting Completed Successfully"
+        });
     }
 
     private void LogIfPositive(string label, int count)
@@ -3642,6 +3660,7 @@ SELECT cc.name AS [Name],
     {
         public int Tables { get; set; }
         public int TableErrors { get; set; }
+        public int SkippedObjects { get; set; }
         public int Schemas { get; set; }
         public int DataTypes { get; set; }
         public int DomainTypes { get; set; }

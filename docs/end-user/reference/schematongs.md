@@ -418,6 +418,18 @@ To override a false positive, rename the file from `.sqlerror` to `.sql`. Schema
 
 When any scripts fail validation, SchemaTongs generates an `_InvalidObjectCleanup.sql` file in the log directory containing diagnostic information for all invalid objects detected during the extraction run.
 
+### Exit code
+
+Extraction carries on past an object it cannot write, and the exit code tells a pipeline whether the package is complete:
+
+| Code | Meaning |
+|---|---|
+| `0` | Every object was extracted. |
+| `1` | Finished, but the package is missing something: a script failed validation (saved as `.sqlerror` or removed), an existing `.sqlerror` was skipped with validation off, a module is encrypted (SQL Server), or an object's definition came back empty. The summary counts them under `Skipped` and `Invalid`. |
+| `2` | At least one table failed to extract. |
+
+The full table of codes is in [Configuration -- Exit Codes](configuration.md#exit-codes).
+
 ---
 
 ## Subfolder Preservation

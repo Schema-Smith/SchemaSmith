@@ -506,7 +506,7 @@ SchemaSmith surfaces the database engine's informational output -- notices, prin
 | Code | Condition | Recommended action |
 |---|---|---|
 | `0` | Normal completion | None -- the operation succeeded. |
-| `1` | Finished, but did not produce everything asked: DataTongs skipped a table (it does not exist in the source, has no key columns, or its `KeyColumns` are malformed) | The skipped tables and the reason for each are in the progress log and the error log. Fix the table list or the source, and re-run. |
+| `1` | Finished, but did not produce everything asked: DataTongs skipped a table (it does not exist in the source, has no key columns, or its `KeyColumns` are malformed); SchemaTongs left an object out of the package (invalid or skipped script, encrypted module, empty definition) | The skipped tables or objects and the reason for each are in the progress log (and, for DataTongs, the error log). Fix the cause and re-run. |
 | `2` | Failed: SchemaQuench -- one or more database quenches failed; SchemaTongs -- one or more tables failed to extract; DataTongs -- one or more tables failed to extract; SchemaShears -- the patch request cannot be built (missing source or manifest, output already exists, unknown drop category) | Check the progress and error logs for what failed and why. Fix the cause and re-run. |
 | `3` | Unhandled exception | An unexpected error occurred. The exception is logged to both the progress and error logs before exit. Report the error with the log contents if the cause isn't obvious. |
 | `4` | Log backup failure | The tool completed its main work but couldn't back up the log files. Check directory permissions and disk space in the log directory. The base log files may still be readable even though the backup failed. |
