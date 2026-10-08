@@ -191,7 +191,7 @@ Open `my-northwind/Templates/Northwind/Tables/dbo.Shippers.json`. The file decla
 
 You just declared the desired state: "the Shippers table should have an Email column." You didn't write an ALTER TABLE script. You didn't check whether the column already exists. You described what the table should look like. You decide the shape. The forge handles the rest.
 
-Now let's see what SchemaSmith will do -- without actually touching the database. Run SchemaQuench in WhatIf mode by setting `"WhatIfONLY": true` in a copy of your settings file:
+Now let's see what SchemaSmith will do -- without changing your schema. Run SchemaQuench in WhatIf mode by setting `"WhatIfONLY": true` in a copy of your settings file:
 
 ```json
 {
@@ -217,7 +217,7 @@ Save this as `quench-whatif.json` and run:
 SchemaQuench --ConfigFile:quench-whatif.json
 ```
 
-In the output, you'll see `[WhatIf]` entries showing the computed changes. SchemaQuench compared the declared state (your JSON with the new Email column) against the live `Northwind` database (which has no Email column) and determined that an `ALTER TABLE ... ADD` is needed. No changes were applied -- WhatIf mode is read-only. Preview before you commit. Confidence before you deploy.
+In the output, you'll see `[WhatIf]` entries showing the computed changes. SchemaQuench compared the declared state (your JSON with the new Email column) against the live `Northwind` database (which has no Email column) and determined that an `ALTER TABLE ... ADD` is needed. None of your objects were changed. WhatIf does install or update SchemaSmith's own helper schema on the target, the same one a real run uses, so it needs the same permissions. Preview before you commit. Confidence before you deploy.
 
 Rather than scan the full log, read the summary: every run writes a human-readable **`SchemaQuench - Summary.md`** next to the logs, and in WhatIf mode it lists exactly what *would* be applied, skipped, or delivered -- the at-a-glance view of the plan. Its twin `SchemaQuench - Summary.json` is the same facts as a stable, machine-readable contract for CI. Both are always on; see the [Deployment Summary Report reference](../reference/deployment-summary-report.md).
 
@@ -247,7 +247,7 @@ You just completed the full SchemaSmith workflow:
 2. **Review** -- The JSON and SQL files are human-readable and diff-friendly, ready for pull requests
 3. **Quench** -- SchemaQuench built a complete database from those files, reproducibly
 4. **Change** -- You edited a JSON file to declare a new column
-5. **Preview** -- WhatIf mode showed you the computed change without touching the database
+5. **Preview** -- WhatIf mode showed you the computed change without applying it
 6. **Apply** -- SchemaQuench made the target match the declared state, changing only what needed to change
 
 No migration scripts. No ordered chains of ALTERs. No guessing what the target looks like. You declare the state you want, and SchemaSmith gets you there. Every time.
