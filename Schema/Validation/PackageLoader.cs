@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json;
 using Schema.Domain;
+using Schema.Utility;
 
 namespace Schema.Validation;
 
@@ -114,6 +115,12 @@ public static class PackageLoader
             return (null, BuildTemplateLoadFailure(name, product, e));
         }
         catch (InvalidOperationException e)
+        {
+            return (null, BuildTemplateLoadFailure(name, product, e));
+        }
+        // A TemplateOrder entry that names no template folder, or a Template.json that is missing: a package
+        // problem the deploy refuses, so --Validate reports it rather than stopping.
+        catch (RunFailedException e)
         {
             return (null, BuildTemplateLoadFailure(name, product, e));
         }

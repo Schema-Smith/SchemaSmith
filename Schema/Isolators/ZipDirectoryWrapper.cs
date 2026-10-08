@@ -37,6 +37,27 @@ public class ZipDirectoryWrapper : IDirectory
             .ToArray();
     }
 
+    // Immediate subfolders only, which is all a package read asks for (the template folders). A zip has no
+    // directory entries of its own to rely on, so a folder is any first path segment below the given path.
+    public string[] GetDirectories(string path, string searchPattern, SearchOption searchOption)
+    {
+        if (searchOption != SearchOption.TopDirectoryOnly || (searchPattern ?? "*") != "*")
+            throw new NotImplementedException("A zip-backed package lists only immediate subfolders.");
+        if (_zipEntries == null) return [];
+
+        var normalizedPath = NormalizePath(path);
+        return _zipEntries
+            .Select(e => e.FullName.Replace('\\', '/'))
+            .Where(name => name.StartsWith(normalizedPath, StringComparison.OrdinalIgnoreCase))
+            .Select(name => name.Substring(normalizedPath.Length))
+            .Where(rest => rest.Contains('/'))
+            .Select(rest => rest.Substring(0, rest.IndexOf('/')))
+            .Where(folder => folder.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .Select(folder => normalizedPath + folder)
+            .ToArray();
+    }
+
     private static string NormalizePath(string path)
     {
         var normalized = path.Replace('\\', '/').Trim('/');
@@ -52,7 +73,6 @@ public class ZipDirectoryWrapper : IDirectory
 
     // Other IDirectory methods not used for zip access
     IDirectoryInfo IDirectory.CreateDirectory(string path) => throw new NotImplementedException();
-    public string[] GetDirectories(string path, string searchPattern, SearchOption searchOption) => throw new NotImplementedException();
     public IEnumerable<string> EnumerateFiles(string path, string searchPattern, SearchOption searchOption) => throw new NotImplementedException();
     public IEnumerable<string> EnumerateFileSystemEntries(string path, string searchPattern, SearchOption searchOption) => throw new NotImplementedException();
     // Not implemented for the same reason as EnumerateFiles above: a zip-backed package is not walked

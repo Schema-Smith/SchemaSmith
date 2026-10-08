@@ -126,4 +126,19 @@ public class ZipDirectoryWrapperTests
         Assert.That(files, Has.Length.EqualTo(1));
         Assert.That(files[0], Does.Not.EndWith("/"));
     }
+
+    // --- GetDirectories ---
+
+    [Test]
+    public void GetDirectories_ListsTheImmediateSubfolders_Once()
+    {
+        var wrapper = CreateWrapper(
+            MockEntry("Templates/Main/Template.json"),
+            MockEntry("Templates/Main/Tables/dbo.Test.json"),
+            MockEntry("Templates/Other/Template.json"),
+            MockEntry("Product.json"));
+
+        Assert.That(wrapper.GetDirectories("Templates", "*", SearchOption.TopDirectoryOnly),
+            Is.EquivalentTo(new[] { "Templates/Main", "Templates/Other" }));
+    }
 }
