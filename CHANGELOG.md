@@ -15,6 +15,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 - **`--Validate` reports a foreign-key name used on two tables (`SS-FK-006`).** MySQL names foreign keys per database and SQL Server per schema, so the second one fails the deploy: an error. MariaDB names them per table from 12.1, so there it is a warning, unless the product's `MinimumVersion` is 12.1 or later.
 - **`--ExitNonZeroOnWarning` on every tool.** With the switch, or the `ExitNonZeroOnWarning` setting, a run that would exit `0` but logged a warning exits `1`, for pipelines that treat warnings as failures. Failure codes are unchanged.
+- **`--Validate` reports a PostgreSQL name longer than 63 bytes (`SS-IDENT-002`).** PostgreSQL truncates such a name with only a notice, so the object was created under a shorter name and the next deploy, looking for the declared one, failed creating it again. The limit is in bytes, so a name in multi-byte characters reaches it sooner than its length suggests.
 
 ### Changed
 

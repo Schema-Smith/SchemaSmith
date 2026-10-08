@@ -1651,6 +1651,49 @@ public class CoherenceCheckTests
             .Where(f => f.Code == "SS-COL-002"), Is.Empty);
     }
 
+    // ---- SS-IDENT-002: a PostgreSQL name longer than 63 bytes is stored truncated ----
+
+    [Test]
+    public void APostgreSqlColumnNameOver63Bytes_IsAnError()
+    {
+        var name = new string('c', 64);
+        var finding = RunFor(QTable(columnName: name), Platform.PostgreSQL).Single(f => f.Code == "SS-IDENT-002");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Error), "the second deploy fails");
+            Assert.That(finding.Message, Does.Contain(name).And.Contain("64 bytes"), finding.Message);
+        });
+    }
+
+    // The limit is bytes, not characters: 31 two-byte characters (62 bytes) fit, 32 (64 bytes) do not.
+    [TestCase(31, false)]
+    [TestCase(32, true)]
+    public void ThePostgreSqlLimitIsInBytes(int characters, bool reported)
+    {
+        var findings = RunFor(QTable(tableName: new string('\u00e9', characters)), Platform.PostgreSQL)
+            .Where(f => f.Code == "SS-IDENT-002");
+        Assert.That(findings, reported ? Is.Not.Empty : Is.Empty);
+    }
+
+    [Test]
+    public void ALongSequenceName_IsAnError()
+    {
+        var template = new Template { Name = "Main" };
+        template.Sequences.Add(new PostgreSqlSequence { Name = new string('s', 70) });
+        var product = new Product { Name = "Acme", Platform = Platform.PostgreSQL, TemplateOrder = [] };
+        var findings = new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg")).ToList();
+        Assert.That(findings.Where(f => f.Code == "SS-IDENT-002"), Is.Not.Empty);
+    }
+
+    [Test]
+    public void ALongNameOnAnotherEngine_IsNotThisCheck()
+    {
+        var table = new SqlServerTable { Name = new string('t', 100) };
+        table.Columns.Add(new SqlServerColumn { Name = "id", DataType = "INT" });
+        Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-002"), Is.Empty);
+    }
+
     // ---- SS-IDENT-001: a " in a PostgreSQL name is refused, because no stored form of it deploys ----
 
     private static PostgreSqlTable QTable(string tableName = "invoice", string columnName = "id",
