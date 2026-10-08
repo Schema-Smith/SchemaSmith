@@ -234,6 +234,51 @@ public class CoherenceCheckTests
         Assert.That(RunOnPg(template).Select(f => f.Code), Has.No.Member("SS-ENUM-001"));
     }
 
+    // The folder is the script folder's own path under the template. Searching the script's full path for
+    // "/Enum Types/" counted a directory above the package, and a same-named subfolder of another folder.
+    [Test]
+    public void AFolderNamedLikeAKindAboveThePackage_DoesNotMakeItsScriptsThatKind()
+    {
+        var template = new Template { Name = "T" };
+        var folder = new TemplateFolder { FolderPath = "Functions", QuenchSlot = TemplateQuenchSlot.Objects };
+        folder.Scripts.Add(new SqlScript { Name = "status", FilePath = "/work/Enum Types/pkg/T/Functions/status.sql" });
+        template.ScriptFolders.Add(folder);
+        template.EnumTypes.Add(new PostgreSqlEnumType { Name = "status" });
+
+        Assert.That(RunOnPg(template).Select(f => f.Code), Has.No.Member("SS-ENUM-001"));
+    }
+
+    [Test]
+    public void ASubfolderNamedLikeAKindInsideAnotherFolder_IsNotThatKind()
+    {
+        var template = PgTemplateWithFolder("Functions/Enum Types", "status");
+        template.EnumTypes.Add(new PostgreSqlEnumType { Name = "status" });
+
+        Assert.That(RunOnPg(template).Select(f => f.Code), Has.No.Member("SS-ENUM-001"));
+    }
+
+    // A schema-qualified file name scripts the same object as the bare one, and the finding names the schema, so
+    // the same name in two schemas does not give two identical findings.
+    [Test]
+    public void ASchemaQualifiedScriptFile_IsMatched_AndTheFindingNamesTheSchema()
+    {
+        var template = PgTemplateWithFolder("Enum Types", "public.status");
+        template.EnumTypes.Add(new PostgreSqlEnumType { Schema = "public", Name = "status" });
+
+        var finding = RunOnPg(template).Single(f => f.Code == "SS-ENUM-001");
+
+        Assert.That(finding.Message, Does.Contain("'public.status'"));
+    }
+
+    [Test]
+    public void AScriptQualifiedWithAnotherSchema_IsADifferentObject()
+    {
+        var template = PgTemplateWithFolder("Enum Types", "sales.status");
+        template.EnumTypes.Add(new PostgreSqlEnumType { Schema = "public", Name = "status" });
+
+        Assert.That(RunOnPg(template).Select(f => f.Code), Has.No.Member("SS-ENUM-001"));
+    }
+
     [Test]
     public void MemoryOptimizedWithFileGroup_IsError()
     {
