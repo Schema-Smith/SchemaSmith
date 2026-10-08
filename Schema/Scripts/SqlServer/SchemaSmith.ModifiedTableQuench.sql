@@ -526,18 +526,28 @@ BEGIN TRY
   
   RAISERROR('Detect Computed Columns Impacted by Other Column Changes', 10, 100) WITH NOWAIT
   INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly])
-    SELECT C.[Schema], C.[TableName], c.[ColumnName],
+    -- An unchanged computed column that reads a column being altered has to come off first: SQL Server refuses the
+    -- ALTER COLUMN while anything accesses the column (5074). It is dropped and added back by the computed-column
+    -- passes below. Dependencies come from sys.sql_expression_dependencies, which names the exact column a computed
+    -- column reads; matching the expression text by LIKE also caught a column whose name contains the changed one.
+    -- DISTINCT because one computed column can read several changed columns.
+    SELECT DISTINCT c.[Schema], c.[TableName], c.[ColumnName],
            [ColumnScript] = 'AS (' + ComputedExpression + ')' + CASE WHEN c.[Persisted] = 1 THEN ' PERSISTED' ELSE '' END
                                                               + CASE WHEN c.[Persisted] = 1 AND c.[NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END,
            [SpecialColumnScript] = '',
            MustDropAndRecreate = CAST(1 AS BIT), MustSwapColumn = CAST(0 AS BIT), [DropOnly] = CAST(0 AS BIT)
       FROM #ColumnChanges cc WITH (NOLOCK)
-      JOIN sys.computed_columns sc ON sc.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
-                                                AND sc.[definition] LIKE '%' + SchemaSmith.fn_StripBracketWrapping(cc.ColumnName) + '%'
-      JOIN #Columns c WITH (NOLOCK) ON C.[Schema] = cc.[Schema] 
-                                   AND C.[TableName] = cc.[TableName]
-                                   AND c.[ColumnName] = cc.[ColumnName]
-      WHERE NOT EXISTS (SELECT * FROM #ColumnChanges cc2 WITH (NOLOCK) WHERE cc2.[Schema] = cc.[Schema] AND cc2.[TableName] = cc.[TableName] AND cc2.[ColumnName] = cc.[ColumnName])
+      JOIN sys.columns changed ON changed.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
+                              AND QUOTENAME(changed.[name]) = cc.[ColumnName] COLLATE DATABASE_DEFAULT
+      JOIN sys.sql_expression_dependencies d ON d.referencing_id = changed.[object_id]
+                                            AND d.referenced_id = changed.[object_id]
+                                            AND d.referenced_minor_id = changed.column_id
+                                            AND d.referencing_minor_id > 0
+      JOIN sys.computed_columns sc ON sc.[object_id] = changed.[object_id] AND sc.column_id = d.referencing_minor_id
+      JOIN #Columns c WITH (NOLOCK) ON c.[Schema] = cc.[Schema]
+                                   AND c.[TableName] = cc.[TableName]
+                                   AND c.[ColumnName] = QUOTENAME(sc.[name]) COLLATE DATABASE_DEFAULT
+      WHERE NOT EXISTS (SELECT * FROM #ColumnChanges cc2 WITH (NOLOCK) WHERE cc2.[Schema] = c.[Schema] AND cc2.[TableName] = c.[TableName] AND cc2.[ColumnName] = c.[ColumnName])
   
   -- Engine-owned columns must never be considered for a drop. They exist because the table is a node or
   -- edge table, not because anything declared them, so the drop-by-absence pass would otherwise try to
