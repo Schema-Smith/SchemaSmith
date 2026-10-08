@@ -13,6 +13,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 ### Changed
 
 - **DataTongs now exits non-zero when a table is not extracted.** It used to exit 0 however many tables failed, and wrote nothing to `DataTongs - Errors.log`. It now exits `1` when it skips a table (missing from the source, no key columns, or malformed `KeyColumns`), and `2` when a table fails to extract. Each such table is named, with the reason, in the error log. A pipeline that ran DataTongs and ignored failures will now see them.
+- **DataTongs now exits non-zero when a table is not extracted.** It used to exit 0 however many tables failed, and wrote nothing to `DataTongs - Errors.log`. It now exits `2` when a table fails to extract. It exits `1` when it finishes without producing everything asked: a skipped table (missing from the source, no key columns, or malformed `KeyColumns`), a column left out because its type cannot be delivered (a `rowversion` does not count), a merge script not written for a MySQL source older than 8.0, or a script whose data token could not be wired. Each such table is named, with the reason, in the error log. A pipeline that ran DataTongs and ignored failures will now see them.
 
 ### Fixed
 
