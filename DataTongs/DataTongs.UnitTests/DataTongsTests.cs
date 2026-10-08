@@ -1202,6 +1202,16 @@ public class DataTongsTests
 
         connectionFactory.GetDbConnection(Arg.Any<string>()).Returns(connection);
         connection.CreateCommand().Returns(command);
+        // The table's real columns, which a configured SelectColumns narrows; 'secret' is not selected.
+        command.ExecuteReader().Returns(_ =>
+        {
+            var columns = new System.Data.DataTable();
+            columns.Columns.Add("COLUMN_NAME"); columns.Columns.Add("DATA_TYPE");
+            columns.Columns.Add("IsZeroFill", typeof(int)); columns.Columns.Add("DtPrecision", typeof(int));
+            foreach (var (name, type) in new[] { ("id", "int"), ("name", "varchar"), ("email", "varchar"), ("secret", "varchar") })
+                columns.Rows.Add(name, type, 0, 0);
+            return columns.CreateDataReader();
+        });
 
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
@@ -1233,12 +1243,13 @@ public class DataTongsTests
             var dt = new global::DataTongs.DataTongs(Platform.MySQL);
             dt.CastData();
 
-            // configSelectColumns branch: uses configured columns, builds JSON_OBJECT with varchar defaults
+            // The configured columns, with their real types, and nothing that was not selected
             Assert.That(command.CommandText, Does.Contain("JSON_ARRAYAGG"));
             Assert.That(command.CommandText, Does.Contain("JSON_OBJECT"));
             Assert.That(command.CommandText, Does.Contain("`id`"));
             Assert.That(command.CommandText, Does.Contain("`name`"));
             Assert.That(command.CommandText, Does.Contain("`email`"));
+            Assert.That(command.CommandText, Does.Not.Contain("`secret`"));
 
             fileWrapper.Received().WriteAllText(
                 Arg.Is<string>(s => s.Contains("users.tabledata")),

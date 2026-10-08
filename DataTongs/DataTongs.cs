@@ -788,25 +788,23 @@ SELECT JSON_AGG(ROW_TO_JSON(tbl))
         return FormatJsonResult(cmd.ExecuteScalar()?.ToString() ?? "");
     }
 
-    private string GetTableDataJsonMySql(IDbCommand cmd, string databaseName,
+    internal string GetTableDataJsonMySql(IDbCommand cmd, string databaseName,
         string tableName, string orderColumns, string filter, string configSelectColumns)
     {
         databaseName = databaseName.Trim().Trim('`');
         tableName = tableName.Trim().Trim('`');
 
         // Get structured column info for type-aware JSON generation
-        List<ColumnInfo> columns;
+        // A configured SelectColumns narrows the real column list rather than replacing it: read as plain varchar, the
+        // selected columns lost every type-aware form below -- binary unencoded, BIT, geometry, ZEROFILL, dates.
+        var columns = GetMySqlColumnInfo(cmd, databaseName, tableName);
         if (!string.IsNullOrWhiteSpace(configSelectColumns))
         {
-            columns = configSelectColumns.Split(',')
+            var selected = configSelectColumns.Split(',')
                 .Select(c => c.Trim().Trim('`'))
                 .Where(c => !string.IsNullOrWhiteSpace(c))
-                .Select(c => new ColumnInfo { Name = c, DataType = "varchar" })
-                .ToList();
-        }
-        else
-        {
-            columns = GetMySqlColumnInfo(cmd, databaseName, tableName);
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            columns = columns.Where(c => selected.Contains(c.Name)).ToList();
         }
 
         var jsonObjectArgs = columns.Select(c => FormatColumnForJsonObject(c)).ToList();

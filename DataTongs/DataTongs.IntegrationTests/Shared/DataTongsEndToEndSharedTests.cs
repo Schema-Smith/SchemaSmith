@@ -625,6 +625,49 @@ public abstract class DataTongsEndToEndSharedTests
         }
     }
 
+    // A configured SelectColumns used to stand each selected column in as plain varchar, so a selected binary column
+    // was written raw instead of base64 and a DATETIME(6) lost its fraction. It now narrows the real column list.
+    [Test]
+    public void EndToEnd_SelectColumns_KeepTheirTypes()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_sel_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_sel_t_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` (id INT PRIMARY KEY, bl VARBINARY(16) NULL, dt6 DATETIME(6) NULL, other INT NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` (id INT PRIMARY KEY, bl VARBINARY(16) NULL, dt6 DATETIME(6) NULL, other INT NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` VALUES (1, 0xDEADBEEF00, '2024-03-05 10:11:12.123456', 42)";
+            command.ExecuteNonQuery();
+
+            var json = _dataTongs.GetTableDataJsonMySql(command, _testDb, sourceTable, "`id`", null, "`id`, `bl`, `dt6`");
+            Assert.That(json, Does.Not.Contain("other"), "a column that was not selected must not be extracted: " + json);
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT CONCAT_WS(',', IF(d.bl <=> s.bl, NULL, 'bl'), IF(d.dt6 <=> s.dt6, NULL, 'dt6'))
+                FROM `{_testDb}`.`{sourceTable}` s LEFT JOIN `{_testDb}`.`{targetTable}` d ON d.id = s.id";
+            Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty, "the list names the selected columns that did not arrive equal");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void EndToEnd_RoundTrip_HandlesBinaryData()
     {
