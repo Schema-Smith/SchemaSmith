@@ -77,6 +77,9 @@ BEGIN
                 -- CharacterSet is not parsed into _SchemaSmith_Tables at all, and deriving it guarantees the two agree.
                 CASE WHEN t.Collation IS NOT NULL AND t.Collation != ''
                      THEN CONCAT(' DEFAULT CHARACTER SET ', SUBSTRING_INDEX(t.Collation, '_', 1), ' COLLATE ', t.Collation)
+                     -- A table that names only its character set gets that set's default collation, as in plain DDL.
+                     WHEN t.CharacterSet IS NOT NULL
+                     THEN CONCAT(' DEFAULT CHARACTER SET ', t.CharacterSet)
                      ELSE '' END,
                 CASE WHEN t.RowFormat IS NOT NULL AND t.RowFormat != ''
                      THEN CONCAT(' ROW_FORMAT=', t.RowFormat)
@@ -555,6 +558,9 @@ BEGIN
                       -- CharacterSet is not parsed into _SchemaSmith_Tables at all, and deriving it guarantees the two agree.
                       CASE WHEN t.Collation IS NOT NULL AND t.Collation != ''
                            THEN CONCAT(' DEFAULT CHARACTER SET ', SUBSTRING_INDEX(t.Collation, '_', 1), ' COLLATE ', t.Collation)
+                           -- A table that names only its character set gets that set's default collation, as in plain DDL.
+                           WHEN t.CharacterSet IS NOT NULL
+                           THEN CONCAT(' DEFAULT CHARACTER SET ', t.CharacterSet)
                            ELSE '' END,
                       CASE WHEN t.RowFormat IS NOT NULL AND t.RowFormat != ''
                            THEN CONCAT(' ROW_FORMAT=', t.RowFormat)

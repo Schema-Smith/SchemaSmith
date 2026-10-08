@@ -74,6 +74,7 @@ BEGIN
         OldNameKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Engine VARCHAR(50) DEFAULT 'InnoDB',
         Collation VARCHAR(100) DEFAULT NULL,
+        CharacterSet VARCHAR(50) DEFAULT NULL,
         OldName VARCHAR(128) DEFAULT NULL,
         RowFormat VARCHAR(20) DEFAULT NULL,
         Compression VARCHAR(20) DEFAULT NULL,
@@ -140,11 +141,12 @@ BEGIN
     SET v_TblIdx = 0;
     WHILE v_TblIdx < v_TblCnt DO
         IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name'))) IS NOT NULL THEN
-            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned)
+            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, CharacterSet, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned)
             SELECT
                 SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name')))) AS TableName,
                 COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Engine')))), ''), 'InnoDB') AS Engine,
                 NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Collation')))), '') AS Collation,
+                NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].CharacterSet')))), '') AS CharacterSet,
                 -- #375: a blank/whitespace OldName means "no rename" -> NULL, not a manufactured `` backtick pair.
                 -- Otherwise the OldName IS NOT NULL rename guards fire and two empty-OldName tables collide on
                 -- _SchemaSmith_TableRenames.PRIMARY (OldTableName = '') on the second deploy.
@@ -432,6 +434,20 @@ BEGIN
        AND t.Collation IS NOT NULL
        AND TRIM(t.Collation) LIKE CONCAT(TRIM(c.CharacterSet), '\\_%');
 
+    -- An existing character column that declares neither a character set nor a collation keeps the ones it has. A
+    -- MODIFY made for any other reason restates the column, and without them the engine moves it to the table's
+    -- default -- a silent conversion of its data. Only for a character type: the live values must not be pinned on
+    -- a column whose declared type no longer takes them.
+    UPDATE _SchemaSmith_Columns c
+      JOIN _SchemaSmith_CatColumns isc ON isc.TableKey = c.TableKey AND isc.ColumnKey = c.ColumnKey
+       SET c.CharacterSet = isc.CHARACTER_SET_NAME, c.Collation = isc.COLLATION_NAME
+     WHERE c.NewColumn = 0
+       AND (c.CharacterSet IS NULL OR TRIM(c.CharacterSet) = '')
+       AND (c.Collation IS NULL OR TRIM(c.Collation) = '')
+       AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
+       AND isc.CHARACTER_SET_NAME IS NOT NULL
+       AND TRIM(c.DataType) REGEXP '^(var)?char|^(tiny|medium|long)?text|^enum|^set';
+
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Build column scripts');
 
     -- Build ColumnScript for each column
@@ -450,8 +466,14 @@ BEGIN
         CASE
             WHEN GeneratedExpression IS NOT NULL AND TRIM(GeneratedExpression) != '' THEN
                 CONCAT(
-                    SchemaSmith_UpperDataType(DataType), ' ',
-                    'GENERATED ALWAYS AS (', GeneratedExpression, ') ',
+                    SchemaSmith_UpperDataType(DataType),
+                    -- A generated column's own character set and collation, as on a regular column; left out, the
+                    -- column took the expression's and the compare re-issued the same MODIFY on every deploy.
+                    CASE WHEN CharacterSet IS NOT NULL AND TRIM(CharacterSet) != ''
+                         THEN CONCAT(' CHARACTER SET ', CharacterSet) ELSE '' END,
+                    CASE WHEN Collation IS NOT NULL AND TRIM(Collation) != ''
+                         THEN CONCAT(' COLLATE ', Collation) ELSE '' END,
+                    ' GENERATED ALWAYS AS (', GeneratedExpression, ') ',
                     COALESCE(UPPER(GeneratedType), 'VIRTUAL'),
                     CASE WHEN IsNullable = 0 AND VERSION() NOT LIKE '%MariaDB%' THEN ' NOT NULL' ELSE '' END
                 )

@@ -220,6 +220,110 @@ public abstract class TableCollationDeployTestsSharedTests
         }
     }
 
+    // Character sets the deploy used to drop or overwrite, over two deploys:
+    //   - a table naming only its character set gets it (it was ignored, leaving the database's latin1);
+    //   - a column switched to another character set with no collation is converted (the compare never looked);
+    //   - an existing column declaring neither keeps its own when it is MODIFYed for a type change (it was moved
+    //     to the table's default);
+    //   - a generated column keeps its declared collation (the clause was never emitted).
+    [Test]
+    public void CharacterSets_AreAppliedAndKept_WhereTheDeclarationSaysSo()
+    {
+        var db = "TestCharset_" + Guid.NewGuid().ToString("N")[..12];
+        var tempDir = Path.Join(Path.GetTempPath(), $"Charset_{Guid.NewGuid():N}");
+        var serverConnectionString = BaseConnectionString + "Database=information_schema;";
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetupSharedMocks();
+            WritePackage(tempDir, db, "CharsetCols", """
+                {
+                  "Name": "`CharsetCols`",
+                  "Engine": "InnoDB",
+                  "Collation": "utf8mb4_unicode_ci",
+                  "Columns": [
+                    { "Name": "`Id`", "DataType": "int", "Nullable": false },
+                    { "Name": "`Undeclared`", "DataType": "varchar(40)", "Nullable": true },
+                    { "Name": "`Switched`", "DataType": "varchar(20)", "Nullable": true, "CharacterSet": "ascii" },
+                    { "Name": "`Gen`", "DataType": "varchar(30)", "CharacterSet": "utf8mb4", "Collation": "utf8mb4_bin",
+                      "Generated": "VIRTUAL", "GenerationExpression": "concat('x', `Id`)", "Nullable": true }
+                  ]
+                }
+                """);
+            File.WriteAllText(Path.Join(tempDir, "Templates", "Main", "Tables", "CharsetOnly.json"), """
+                {
+                  "Name": "`CharsetOnly`",
+                  "Engine": "InnoDB",
+                  "CharacterSet": "utf8mb4",
+                  "Columns": [ { "Name": "`Id`", "DataType": "int", "Nullable": false } ]
+                }
+                """);
+
+            using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(serverConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 300;
+
+            var config = FactoryContainer.Resolve<Microsoft.Extensions.Configuration.IConfigurationRoot>();
+
+            try
+            {
+                cmd.CommandText = $"CREATE DATABASE IF NOT EXISTS `{db}` CHARACTER SET latin1 COLLATE latin1_swedish_ci;";
+                cmd.ExecuteNonQuery();
+                conn.ChangeDatabase(db);
+                ForgeKindler.KindleTheForge(cmd, Platform);
+                cmd.CommandText = "CREATE TABLE `CharsetCols` (`Id` int NOT NULL, "
+                                  + "`Undeclared` varchar(20) CHARACTER SET latin1 COLLATE latin1_german1_ci NULL, "
+                                  + "`Switched` varchar(20) CHARACTER SET latin1 NULL) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                cmd.ExecuteNonQuery();
+
+                config["SchemaPackagePath"] = tempDir;
+
+                for (var deploy = 1; deploy <= 2; deploy++)
+                {
+                    _environment.ClearReceivedCalls();
+                    RunSchemaQuench();
+                    _environment.DidNotReceive().Exit(2);
+                    _environment.DidNotReceive().Exit(3);
+
+                    var tableCharset = ScalarOrNull(cmd,
+                        $"SELECT SUBSTRING_INDEX(TABLE_COLLATION, '_', 1) FROM information_schema.TABLES WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='CharsetOnly'");
+                    var undeclared = ScalarOrNull(cmd, ColumnCollationSql(db, "Undeclared", "CharsetCols"));
+                    var undeclaredType = ScalarOrNull(cmd,
+                        $"SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='CharsetCols' AND COLUMN_NAME='Undeclared'");
+                    var switched = ScalarOrNull(cmd,
+                        $"SELECT CHARACTER_SET_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='CharsetCols' AND COLUMN_NAME='Switched'");
+                    var gen = ScalarOrNull(cmd, ColumnCollationSql(db, "Gen", "CharsetCols"));
+                    Assert.Multiple(() =>
+                    {
+                        Assert.That(tableCharset, Is.EqualTo("utf8mb4"), $"deploy {deploy}: a table naming only its character set must get it");
+                        Assert.That(undeclaredType, Is.EqualTo("varchar(40)"), $"deploy {deploy}: the type change must apply");
+                        Assert.That(undeclared, Is.EqualTo("latin1_german1_ci"),
+                            $"deploy {deploy}: a column declaring no character set must keep its own through a MODIFY");
+                        Assert.That(switched, Is.EqualTo("ascii"), $"deploy {deploy}: a declared character set change must apply");
+                        Assert.That(gen, Is.EqualTo("utf8mb4_bin"), $"deploy {deploy}: a generated column must keep its declared collation");
+                    });
+                }
+            }
+            finally
+            {
+                config["SchemaPackagePath"] = string.Empty;
+                try
+                {
+                    conn.ChangeDatabase("information_schema");
+                    cmd.CommandText = $"DROP DATABASE IF EXISTS `{db}`;";
+                    cmd.ExecuteNonQuery();
+                }
+                catch (DbException) { /* best-effort cleanup */ }
+                catch (InvalidOperationException) { /* connection already unusable */ }
+                conn.Close();
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+            }
+        }
+    }
+
     // MySQL before 8.0.30 and MariaDB before 10.6 name utf8mb3 collations by their old alias (utf8_general_ci);
     // same collation, older spelling, so fold it rather than pin the modern engines' rendering.
     private static string ModernCollationName(string name) =>
