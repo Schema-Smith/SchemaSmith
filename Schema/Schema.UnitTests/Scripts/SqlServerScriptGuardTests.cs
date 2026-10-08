@@ -176,34 +176,24 @@ public class SqlServerScriptGuardTests
     // that shows up when the insertion lands just after a doc comment instead of just before one.
     public void NoMemberCarriesBackToBackSummaryBlocks()
     {
-        var dir = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
-        while (dir != null && !File.Exists(Path.Join(dir.FullName, "SchemaSmith.sln"))) dir = dir.Parent;
-        Assert.That(dir, Is.Not.Null, "could not locate the repository root");
+        Assert.That(RepoSources.Root, Is.Not.Null, "could not locate the repository root");
 
         var offenders = new List<string>();
         var scanned = 0;
-        foreach (var project in new[] { "Schema", "SchemaQuench", "SchemaTongs", "DataTongs", "SchemaShears" })
+        foreach (var cs in RepoSources.CSharpFiles(includeTestProjects: true))
         {
-            var root = new DirectoryInfo(Path.Join(dir!.FullName, project));
-            if (!root.Exists) continue;
-            foreach (var cs in root.GetFiles("*.cs", SearchOption.AllDirectories))
+            scanned++;
+            var lines = File.ReadAllLines(cs);
+            for (var i = 0; i < lines.Length; i++)
             {
-                if (cs.FullName.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
-                 || cs.FullName.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
-                    continue;
-                scanned++;
-                var lines = File.ReadAllLines(cs.FullName);
-                for (var i = 0; i < lines.Length; i++)
-                {
-                    if (!lines[i].Contains("</summary>", StringComparison.Ordinal)) continue;
-                    var j = i + 1;
-                    while (j < lines.Length && lines[j].Trim().Length == 0) j++;
-                    if (j < lines.Length && lines[j].Contains("<summary>", StringComparison.Ordinal))
-                        // The path relative to the repository root, not the bare file name: several projects
-                        // carry same-named files (two Statistic.cs, two SqlServerTable-adjacent partials), so
-                        // a bare name leaves the reader grepping for which one.
-                        offenders.Add($"{Path.GetRelativePath(dir!.FullName, cs.FullName)}:{i + 1}");
-                }
+                if (!lines[i].Contains("</summary>", StringComparison.Ordinal)) continue;
+                var j = i + 1;
+                while (j < lines.Length && lines[j].Trim().Length == 0) j++;
+                if (j < lines.Length && lines[j].Contains("<summary>", StringComparison.Ordinal))
+                    // The path relative to the repository root, not the bare file name: several projects
+                    // carry same-named files (two Statistic.cs, two SqlServerTable-adjacent partials), so
+                    // a bare name leaves the reader grepping for which one.
+                    offenders.Add($"{Path.GetRelativePath(RepoSources.Root, cs)}:{i + 1}");
             }
         }
 
