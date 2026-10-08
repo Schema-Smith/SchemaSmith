@@ -496,13 +496,13 @@ BEGIN TRY
       -- is never applied; comparing it could only re-add the column forever. Its changes are the expression's.
       AND ((RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
                                            CASE WHEN sc.xml_collection_id <> 0
-                                                THEN (SELECT '' + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) + '' FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
+                                                THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) + '' FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                 END,
                                            sc.is_rowguidcol) +
                                       CASE WHEN ident.column_id IS NOT NULL
                                            THEN ' IDENTITY(' + CONVERT(NVARCHAR(20), ident.seed_value) + ', ' + CONVERT(NVARCHAR(20), ident.increment_value) + ')' +
                                                 CASE WHEN ident.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
-                                           ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
+                                           ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), '(CONTENT ', '('), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
         -- A computed column's nullability belongs to the engine unless the package states one: it is derivable from
         -- the expression, and only a PERSISTED column can be declared NOT NULL at all. Comparing an OMITTED value
         -- here re-added every such column on every deploy, and (once the emit side agreed with it) dropped an
