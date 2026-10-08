@@ -488,6 +488,95 @@ public abstract class DataTongsEndToEndSharedTests
         }
     }
 
+    // MariaDB's JSON_OBJECT writes a ZEROFILL number with its padding (MDEV-30962): {"n": 00007}, which is not JSON, so
+    // DataTongs wrote a file delivery could not parse. Extracted and delivered here; the value must arrive as 7.
+    [Test]
+    public void EndToEnd_RoundTrip_ZeroFillColumn()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_zf_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_zf_t_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` (id INT PRIMARY KEY, n INT(5) UNSIGNED ZEROFILL NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` (id INT PRIMARY KEY, n INT(5) UNSIGNED ZEROFILL NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` VALUES (1, 7)";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
+            Assert.DoesNotThrow(() => JsonText.ParseArray(json), "the extracted file must be valid JSON: " + json);
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT n + 0 FROM `{_testDb}`.`{targetTable}` WHERE id = 1";
+            Assert.That(Convert.ToInt64(command.ExecuteScalar()), Is.EqualTo(7));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // MariaDB's JSON_ARRAYAGG is cut off at group_concat_max_len (1 MiB by default) with only a warning, so a table whose
+    // extracted JSON passed 1 MiB was written unterminated and delivery failed parsing it. 1,200 rows of 1,000 characters.
+    [Test]
+    public void EndToEnd_RoundTrip_ExtractionOverOneMebibyte()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_big_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_big_t_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` (id INT PRIMARY KEY, v TEXT NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` (id INT PRIMARY KEY, v TEXT NULL)";
+            command.ExecuteNonQuery();
+            const string digits = "SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 "
+                                  + "UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9";
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` (id, v) SELECT h.n * 100 + t.n * 10 + o.n, REPEAT('x', 1000) "
+                                  + $"FROM ({digits} UNION ALL SELECT 10 UNION ALL SELECT 11) h CROSS JOIN ({digits}) t CROSS JOIN ({digits}) o";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
+            Assert.That(json.Length, Is.GreaterThan(1048576), "the extract must pass 1 MiB for this to test anything");
+            Assert.That(JsonText.ParseArray(json).Count, Is.EqualTo(1200), "the extracted file must be complete, valid JSON");
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+            command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{targetTable}` WHERE CHAR_LENGTH(v) = 1000";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(1200));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void EndToEnd_RoundTrip_HandlesBinaryData()
     {
