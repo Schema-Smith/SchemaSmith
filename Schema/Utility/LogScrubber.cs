@@ -23,19 +23,23 @@ public static class LogScrubber
     // key of that name: a prefixed key (OLD_PASSWORD =, PGPASSWORD=, MYSQL_PWD=), PostgreSQL's PASSWORD '...' and the
     // MySQL family's IDENTIFIED [WITH plugin] BY [PASSWORD] '...'. Those last two take no '=', so they match only
     // when a quote follows -- IDENTIFIED BY RANDOM PASSWORD and PASSWORD NULL carry no secret. A key must end at
-    // the '=', so a "MyPasswordHint=" key is not matched. The quoted forms come first because each can hold a
+    // the '=', so a "MyPasswordHint=" key is not matched. SECRET = is a SQL Server credential's, and MySQL 8's REPLACE '...'
+    // is the old password an ALTER USER verifies. A value wrapped in a function call, PASSWORD('...'), is read to its
+    // closing quote. The quoted forms come first because each can hold a
     // ';': a JSON-escaped \"...\", "..." and '...' (optionally N'...') with a doubled quote as an escape, and {...}
     // with }} as one. A quote that never closes runs to the end of the text: a truncated value is still all secret,
     // so failing open would log its tail. The unquoted form stops at ';' or a line break, so a stack trace after the
     // value survives, and only spaces and tabs may surround '=' so an empty value at a line end masks nothing more.
     private static readonly Regex ConnectionStringSecret =
-        new(@"(?<key>(?:password|pwd)[ \t]*="
+        new(@"(?<key>(?:password|pwd|secret)[ \t]*="
             + @"|\bpassword[ \t]+(?=N?['""])"
-            + @"|\bidentified(?:[ \t]+with[ \t]+\w+)?[ \t]+by(?:[ \t]+password)?[ \t]+(?=['""]))[ \t]*"
+            + @"|\bidentified(?:[ \t]+with[ \t]+\w+)?[ \t]+by(?:[ \t]+password)?[ \t]+(?=['""])"
+            + @"|\breplace[ \t]+(?=['""]))[ \t]*"
             + @"(?:\\""(?:(?!\\"")[\s\S])*(?:\\"")?"
             + @"|""(?:[^""]|"""")*""?"
             + @"|N?'(?:[^']|'')*'?"
             + @"|\{(?:[^}]|\}\})*\}?"
+            + @"|\w+\([ \t]*N?'(?:[^']|'')*'?[ \t]*\)?"
             + @"|[^;\r\n]*)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
     // A credential in a URL's userinfo component -- scheme://user:password@host. Not covered by the
