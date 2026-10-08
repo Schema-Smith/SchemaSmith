@@ -36,7 +36,8 @@ IF OBJECT_ID('SchemaSmith.GenerateTableXml', 'P') IS NOT NULL DROP PROCEDURE Sch
 GO
 CREATE PROCEDURE SchemaSmith.GenerateTableXml
   @p_Schema SYSNAME = 'dbo',
-  @p_Table SYSNAME
+  @p_Table SYSNAME,
+  @p_ObjectOrder SYSNAME = 'Name'
 AS
 SET NOCOUNT ON
 DECLARE @v_DatabaseCollation NVARCHAR(200) = CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS NVARCHAR(200))
@@ -312,7 +313,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     AND ISNULL(cm.GeneratedAlwaysType, 0) = 0
                     -- and the graph pseudo-columns staged above (empty below 2017).
                     AND NOT EXISTS (SELECT 1 FROM #GraphCols g WITH (NOLOCK) WHERE g.[column_id] = sc.column_id)
-                  ORDER BY c.COLUMN_NAME
+                  -- Column sequence: 'Name' (default) or 'Physical', as GenerateTableJSON orders it.
+                  ORDER BY CASE WHEN @p_ObjectOrder = 'Physical' THEN c.ORDINAL_POSITION END,
+                           CASE WHEN @p_ObjectOrder = 'Physical' THEN NULL ELSE c.COLUMN_NAME END
                   FOR XML PATH('Columns'), TYPE),
        (SELECT 'true' AS [@json:Array],
                QUOTENAME([Name]) AS [Name],
