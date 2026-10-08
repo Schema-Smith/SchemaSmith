@@ -494,6 +494,28 @@ public class TableQuench_AlterColumnTests : BaseTableQuenchTests
     }
 
 
+    // An unchanged computed column that reads an altered column must come off and go back on, or SQL Server refuses
+    // the ALTER COLUMN (5074). One that reads a different column must be left alone: c reads ab, whose name contains
+    // a's, and matching the expression text used to drop and rebuild it for nothing.
+    [Test]
+    public void TableQuench_ShouldAlterAColumnAnUnchangedComputedColumnReads()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+
+        cmd.CommandText = "SELECT CAST(COLUMNPROPERTY(OBJECT_ID('dbo.ComputedOverAltered'), 'a', 'AllowsNull') AS INT)";
+        Assert.That(cmd.ExecuteScalar(), Is.EqualTo(0), "the ALTER COLUMN on a must have been applied");
+        cmd.CommandText = "SELECT [name] + ':' + CAST(column_id AS VARCHAR(10)) FROM sys.computed_columns WHERE [object_id] = OBJECT_ID('dbo.ComputedOverAltered') ORDER BY [name]";
+        var computed = new System.Collections.Generic.List<string>();
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read()) computed.Add(reader.GetString(0));
+        Assert.That(computed, Has.Count.EqualTo(2), "both computed columns must still exist");
+        Assert.That(computed, Does.Contain("c:5"), "c reads ab, not a, so it must not have been dropped and re-added");
+        conn.Close();
+    }
+
     [Test]
     public void TableQuench_ShouldMakeTypedXmlADocument()
     {
@@ -656,6 +678,8 @@ CREATE TABLE dbo.ModifyColumnCollation (Column1 VARCHAR(10) COLLATE Latin1_Gener
 --TableQuench_ShouldKeepCollationWhenTheTypeChanges
 CREATE TABLE dbo.KeepCollationOnTypeChange (Declared VARCHAR(10) COLLATE Latin1_General_100_CS_AS NULL, Ignored VARCHAR(10) COLLATE Latin1_General_100_CS_AS NULL, Indexed VARCHAR(10) COLLATE Latin1_General_100_CS_AS NOT NULL, DbDefault VARCHAR(10) NULL)
 CREATE INDEX IX_KeepCollationOnTypeChange_Indexed ON dbo.KeepCollationOnTypeChange (Indexed)
+--TableQuench_ShouldAlterAColumnAnUnchangedComputedColumnReads
+CREATE TABLE dbo.ComputedOverAltered (Id INT NOT NULL PRIMARY KEY, a NVARCHAR(128) NULL, ab INT NULL, b AS ('x' + [a]), c AS ([ab] * 2) PERSISTED)
 --TableQuench_ShouldMakeTypedXmlADocument
 CREATE XML SCHEMA COLLECTION dbo.AlterXsc AS N'<xsd:schema xmlns:xsd=""http://www.w3.org/2001/XMLSchema""><xsd:element name=""r"" type=""xsd:string""/></xsd:schema>'
 EXEC('CREATE TABLE dbo.TypedXmlToDocument (Id INT NOT NULL, Body XML(CONTENT dbo.AlterXsc) NULL)')
@@ -1247,6 +1271,17 @@ CREATE TABLE dbo.ModifyColmnDataMasking (Column1 VARCHAR(100) MASKED WITH (FUNCT
                       "Nullable": true,
                       "Collation": "IGNORE"
                     }
+                ]
+            },
+            {
+                "Schema": "[dbo]",
+                "Name": "[ComputedOverAltered]",
+                "Columns": [
+                    { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                    { "Name": "[a]", "DataType": "NVARCHAR(128)", "Nullable": false },
+                    { "Name": "[ab]", "DataType": "INT", "Nullable": true },
+                    { "Name": "[b]", "DataType": "NVARCHAR(129)", "Nullable": true, "ComputedExpression": "'x'+[a]" },
+                    { "Name": "[c]", "DataType": "INT", "Nullable": true, "ComputedExpression": "[ab]*(2)", "Persisted": true }
                 ]
             },
             {
