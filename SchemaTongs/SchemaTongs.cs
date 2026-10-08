@@ -110,7 +110,7 @@ public class SchemaTongs
 
     internal CheckConstraintStyle CheckConstraintStyle => _checkConstraintStyle;
     private CheckConstraintStyle _checkConstraintStyle;
-    private ObjectOrder _objectOrder = ObjectOrder.Name;
+    private ObjectOrder _objectOrder = ObjectOrder.Physical;
     private bool _preserveExistingOrder = true;
 
     // The wire encoding used to KINDLE and to READ the SQL Server schema model back out of the source.
@@ -316,7 +316,7 @@ public class SchemaTongs
         // PreserveExistingOrder defaults ON: it only has any effect when a file already exists, so a first
         // extract is unaffected and nobody is opted into a surprise.
         _objectOrder = Enum.TryParse<ObjectOrder>(config[SettingsKeys.ProductKeys.ObjectOrder], true, out var order)
-            ? order : ObjectOrder.Name;
+            ? order : ObjectOrder.Physical;
         _preserveExistingOrder = !bool.TryParse(config[SettingsKeys.ProductKeys.PreserveExistingOrder], out var preserve) || preserve;
 
         var productFile = Path.Combine(_productPath, "Product.json");
@@ -2353,6 +2353,11 @@ SELECT con.conname AS ""Name"",
                 var contentSchema = (tableObj as IDeliverableTable)?.Schema ?? "";
                 var resolution = resolver.Resolve(contentSchema, table);
                 var tableFile = resolution.WritePath;
+                // A refreshed file keeps the form it was written in: one that declares "Schema": "public" keeps
+                // declaring it, so its file name and content still agree.
+                if (!_isSchemaTemplate && string.IsNullOrEmpty(contentSchema) && !string.IsNullOrEmpty(resolution.ExistingSchema)
+                    && tableObj is PostgreSqlTable refreshed)
+                    refreshed.Schema = resolution.ExistingSchema;
                 MarkPathWritten(castPath, tableFile);
                 if (resolution.UngatedEmit)
                     _progressLog.Warn($"    Extracted {schema}.{table} did not match any active variant — writing ungated '{Path.GetFileName(tableFile)}'; resolve its gating (SS-DUP-001).");
@@ -3075,10 +3080,24 @@ SELECT EVENT_NAME
             }
 
             var eventObj = JsonConvert.DeserializeObject<MySqlEvent>(eventJson);
-            var file = ResolveOutputPath(castPath, EncodeObjectFileName("", name, ".json"));
+            var fileName = EncodeFileName(name, ".json");
+            var file = ResolveOutputPath(castPath, fileName);
             WritePackageObject(file, eventObj, "events");
+            RetireDottedEventFile(castPath, fileName, file);
             _stats.Events++;
         }
+    }
+
+    // Earlier releases wrote events as ".name.json" (an empty schema segment), which Linux and macOS hide and which
+    // --Validate flags as non-canonical. The refreshed file replaces it rather than sitting beside it.
+    private void RetireDottedEventFile(string castPath, string fileName, string writtenPath)
+    {
+        var dotted = Path.Join(castPath, "." + fileName);
+        var file = FileWrapper.GetFromFactory();
+        if (string.Equals(dotted, writtenPath, StringComparison.OrdinalIgnoreCase) || !file.Exists(dotted)) return;
+        _folderIndexes.GetValueOrDefault(GetRelativeFolderName(castPath))?.MarkWritten(dotted);
+        file.Delete(dotted);
+        _progressLog.Info($"    Renamed {Path.GetFileName(dotted)} to {fileName}");
     }
 
     /// <summary>

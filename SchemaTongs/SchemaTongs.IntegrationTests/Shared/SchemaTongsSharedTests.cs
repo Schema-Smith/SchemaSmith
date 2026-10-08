@@ -277,18 +277,23 @@ public abstract class SchemaTongsSharedTests
                 .Do(ci => enabledJson = ci.ArgAt<string>(1));
             file.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("Events") && s.EndsWithIgnoringCase("TestEventSlaveDisabled.json")), Arg.Any<string>()))
                 .Do(ci => slaveDisabledJson = ci.ArgAt<string>(1));
+            // A package from an earlier release holds the event under the old dotted name.
+            file.Exists(Arg.Is<string>(s => System.IO.Path.GetFileName(s) == ".TestEvent.json")).Returns(true);
 
             var tongs = new SchemaTongs(Platform);
             tongs.CastTemplate();
+
+            file.Received(1).Delete(Arg.Is<string>(s => s.Contains("Events") && System.IO.Path.GetFileName(s) == ".TestEvent.json"));
+            file.DidNotReceive().Delete(Arg.Is<string>(s => System.IO.Path.GetFileName(s) == "TestEvent.json"));
 
             file.Received().WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("product.json")), Arg.Any<string>());
             file.Received().WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("template.json")), Arg.Any<string>());
             // Events are now cast as DECLARATIVE .json rather than raw .sql (F4). The .sql form still
             // DEPLOYS -- a hand-written script in Events/ runs exactly as before -- but extraction now
             // writes the declared form, which is what can be compared and converged.
-            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && s.EndsWithIgnoringCase("TestEvent.json")), Arg.Any<string>());
-            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && s.EndsWithIgnoringCase("TestEventEnabled.json")), Arg.Any<string>());
-            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && s.EndsWithIgnoringCase("TestEventSlaveDisabled.json")), Arg.Any<string>());
+            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && System.IO.Path.GetFileName(s) == "TestEvent.json"), Arg.Any<string>());
+            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && System.IO.Path.GetFileName(s) == "TestEventEnabled.json"), Arg.Any<string>());
+            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && System.IO.Path.GetFileName(s) == "TestEventSlaveDisabled.json"), Arg.Any<string>());
 
             // What this test exists for is UNCHANGED (#391): INFORMATION_SCHEMA.EVENTS.STATUS reports
             // ENABLED / DISABLED / SLAVESIDE_DISABLED, and the package must carry the spelling an author
