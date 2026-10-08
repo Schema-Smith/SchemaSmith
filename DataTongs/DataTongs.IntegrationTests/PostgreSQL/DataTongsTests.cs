@@ -143,8 +143,10 @@ INSERT INTO public.""TestTable"" (""Id"", ""Name"", ""Description"")
             tongs.CastData();
 
             file.DidNotReceive().WriteAllText(Arg.Any<string>(), Arg.Any<string>());
-            errorLog.DidNotReceive().Error(Arg.Any<string>());
+            // A skipped table is reported in the error log too, and the run reports itself incomplete.
+            errorLog.Received(1).Error(Arg.Is<string>(s => s.ContainsIgnoringCase("No match columns found for public.TestTable. Skipping table.")));
             progressLog.Received(1).Error(Arg.Is<string>(s => s.ContainsIgnoringCase("  No match columns found for public.TestTable. Skipping table.")));
+            Assert.That(tongs.ExitCode, Is.EqualTo(1));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
