@@ -217,7 +217,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                        -- a false on every column. Both catalog columns predate the 2008 floor.
                        CASE WHEN sc.is_filestream = 1 THEN CAST(1 AS BIT) END AS [FileStream],
                        sc.is_column_set AS [IsColumnSet],
-                       ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') AS [Collation],
+                       ISNULL(NULLIF(sc.collation_name, @v_DatabaseCollation), '') AS [Collation],
                        ISNULL(mc.masking_function, '') COLLATE DATABASE_DEFAULT AS DataMaskFunction,
                        ISNULL(sc.encryption_type_desc, 'NONE') COLLATE DATABASE_DEFAULT AS EncryptionType,
                        ISNULL((SELECT QUOTENAME(cek.[name])
