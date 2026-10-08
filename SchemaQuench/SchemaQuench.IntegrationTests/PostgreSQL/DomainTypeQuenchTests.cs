@@ -280,6 +280,51 @@ public class DomainTypeQuenchTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // A domain's own collation: created as declared, extracted, redeployed as extracted, and -- because there is no
+    // ALTER DOMAIN ... COLLATE -- a declared change refused by name. A package that leaves it out is not checked, so
+    // one extracted before the property existed keeps deploying.
+    [Test]
+    public void DomainType_Collation_IsCreatedExtractedAndNeverSilentlyChanged()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var domain = $"domcoll_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunDomainTypeQuench(cmd, DomainWithCollation(domain, "C"));
+            cmd.CommandText = $"SELECT co.collname FROM pg_type ty JOIN pg_collation co ON co.oid = ty.typcollation WHERE ty.typtype = 'd' AND ty.typname = '{domain}'";
+            Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("C"), "the declared collation must be created");
+
+            cmd.CommandText = $"SELECT \"SchemaSmith\".\"GenerateDomainTypeJSON\"('public', '{domain}')";
+            var extracted = (string)cmd.ExecuteScalar()!;
+            Assert.That(Newtonsoft.Json.Linq.JObject.Parse(extracted)["Collation"]?.ToString(), Is.EqualTo("C"),
+                "extraction must carry the domain's own collation. Extracted: " + extracted);
+
+            Assert.DoesNotThrow(() => RunDomainTypeQuench(cmd, "[" + extracted + "]"), "the extracted domain must redeploy");
+            Assert.DoesNotThrow(() => RunDomainTypeQuench(cmd, OneDomain(domain, "text")),
+                "a package that does not declare a collation must not be refused");
+            var ex = Assert.Throws<Npgsql.PostgresException>(() => RunDomainTypeQuench(cmd, DomainWithCollation(domain, "POSIX")));
+            Assert.That(ex!.MessageText, Does.Contain("collation"), "the refusal must name what changed");
+        }
+        finally
+        {
+            DropDomain(cmd, domain);
+        }
+        conn.Close();
+    }
+
+    private static string DomainWithCollation(string name, string collation) => $$"""
+[
+  { "Schema": "public", "Name": "{{name}}", "DataType": "text", "NotNull": false, "Collation": "{{collation}}" }
+]
+""";
+
     // ---- fixtures -------------------------------------------------------------
 
     // Keys are the ones DomainTypeQuench actually reads: Schema, Name, DataType, NotNull, Default,
