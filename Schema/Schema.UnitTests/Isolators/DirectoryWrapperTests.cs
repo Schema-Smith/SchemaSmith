@@ -133,4 +133,15 @@ public class DirectoryWrapperTests
         Assert.That(newestFirst.First(), Is.EqualTo("newer.sql"));
     }
 
+    // Windows always matched a pattern without regard to case; Linux and macOS did not, so "status.SQL" was a script on
+    // one OS and invisible on the others.
+    [Test]
+    public void GetFiles_MatchesThePatternWhateverTheFileNameCase()
+    {
+        File.WriteAllText(Path.Join(_root, "Upper.SQL"), "x");
+
+        var files = new DirectoryWrapper().GetFiles(_root, "*.sql", SearchOption.TopDirectoryOnly).Select(Path.GetFileName);
+
+        Assert.That(files, Does.Contain("Upper.SQL"));
+    }
 }

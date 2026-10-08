@@ -17,7 +17,7 @@ The `Product.json` file sits at the root of the schema package and is the top-le
 | `Name` | string | | Yes | Product name. Automatically added as a `{{ProductName}}` script token. Used for migration script tracking and version stamping. |
 | `Platform` | string | | Yes | Target platform. Valid values: `"SqlServer"`, `"PostgreSQL"`, `"MySQL"`, `"MariaDb"`. Determines which platform adapter handles deployment, extraction, and the default folder set. |
 | `ValidationScript` | string | | Yes | SQL expression evaluated before quench begins. Must return a truthy value or the quench aborts. Supports token replacement. |
-| `TemplateOrder` | string[] | `[]` | No | Ordered list of template directory names. Templates are quenched in this order. |
+| `TemplateOrder` | string[] | `[]` | No | Ordered list of template directory names. Templates are quenched in this order. Each entry is the name of a folder directly under `Templates/`, matched without regard to case on every OS -- not a path: an entry with a path separator, `.` or `..`, a leading or trailing space, a trailing dot, or any of `< > : " \| ? *` is refused, as is one that matches no folder, by the deploy and by `--Validate`. |
 | `ScriptTokens` | object | `{}` | No | Key-value pairs for `{{TokenName}}` replacement in scripts and SQL properties. See the [Script Tokens Reference](script-tokens.md). |
 | `BaselineValidationScript` | string | | No | SQL expression evaluated after server validation but before template processing. |
 | `VersionStampScript` | string | | No | SQL executed once after all templates complete successfully. Typically records the release version on the server. |
