@@ -325,6 +325,9 @@ DataTongs detects column types and applies the correct extraction and restoratio
 - **Identity columns** -- handled via `OVERRIDING SYSTEM VALUE` where appropriate.
 - **Generated columns** -- auto-excluded.
 - **JSON / JSONB** -- preserved through the round-trip.
+- **Arrays** -- extracted as PostgreSQL's own array literal, so multi-dimensional arrays, non-default lower bounds and elements containing commas or quotes round-trip unchanged.
+- **PostGIS types** -- `geometry` and `geography` extracted as WKT with their SRID.
+- **`point` / `polygon`** -- PostgreSQL's built-in geometric types, carried in their own text form; PostGIS is not required.
 - **Auto-excluded with warning:** `tsvector`, `tsquery`, `money`, geometric types (`box`, `circle`, `line`, `lseg`, `path`), and user-defined composite types. These are skipped because their JSON representation can't reliably round-trip without manual intervention.
 
 ### MySQL

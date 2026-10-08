@@ -161,6 +161,64 @@ public class DataTongsEndToEndTests
         }
     }
 
+    // Types whose extraction or delivery used to lose them: bit(8) delivered as bit (one bit), "char" above 127 as an
+    // escape older servers cannot read, arrays flattened on '*,*' (dimensions, bounds and delimiter-bearing elements
+    // lost), the native point / polygon handed to PostGIS functions, and an unconstrained numeric cast to numeric(0, 0).
+    // The script runs with only pg_catalog on the search_path, so the public enum resolves only if the cast names its schema.
+    [TestCase("Json")]
+    [TestCase("Xml")]
+    public void EndToEnd_RoundTrip_TypesThatNeedTheirOwnRendering(string encoding)
+    {
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"E2ETyS_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"E2ETyT_{Guid.NewGuid():N}".Substring(0, 30);
+        var moodType = $"e2e_mood_{Guid.NewGuid():N}".Substring(0, 30);
+        var columns = $@"""Mood"" public.{moodType}, ""Id"" INT PRIMARY KEY, ""Bits"" BIT(8), ""Flag"" ""char"", ""Grid"" INT[][],
+                    ""Offset"" INT[], ""Words"" TEXT[], ""Spot"" POINT, ""Shape"" POLYGON, ""Amount"" NUMERIC";
+        try
+        {
+            command.CommandText = $@"CREATE TYPE public.{moodType} AS ENUM ('calm', 'busy');
+                CREATE TABLE public.""{sourceTable}"" ({columns});
+                CREATE TABLE public.""{targetTable}"" ({columns});
+                INSERT INTO public.""{sourceTable}"" VALUES
+                ('busy', 1, B'10100101', (-56)::""char"", '{{{{1,2}},{{3,4}}}}', '[0:1]={{5,6}}', '{{""a*,*b"",c,NULL}}',
+                    '(1.5,2)', '((0,0),(1,0),(1,1))', 12345678901234567890.123456789),
+                ('calm', 2, B'00000001', 'x', NULL, '{{}}', '{{""""}}', NULL, NULL, 0.5)";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, "public", sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, "public", sourceTable, "\"Id\"", null);
+            var content = encoding == "Xml" ? MergeScriptHelper.JsonPayloadToXml(json) : json;
+            var script = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, command, "public", targetTable, content, "\"Id\"",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false,
+                tokenizeScripts: false, mergeFilter: null, pgServerVersionNum: _pgServerVersionNum, contentEncoding: encoding);
+            command.CommandText = "SET search_path TO pg_catalog";
+            command.ExecuteNonQuery();
+            command.CommandText = script;
+            command.ExecuteNonQuery();
+            command.CommandText = "RESET search_path";
+            command.ExecuteNonQuery();
+
+            command.CommandText = $@"SELECT COALESCE(STRING_AGG(s.""Id"" || '.' || col, ',' ORDER BY s.""Id"", col), '')
+                FROM public.""{sourceTable}"" s LEFT JOIN public.""{targetTable}"" d ON d.""Id"" = s.""Id""
+                CROSS JOIN LATERAL (VALUES
+                    ('Bits', s.""Bits""::text, d.""Bits""::text), ('Flag', s.""Flag""::int::text, d.""Flag""::int::text),
+                    ('Grid', s.""Grid""::text, d.""Grid""::text), ('Offset', s.""Offset""::text, d.""Offset""::text),
+                    ('Words', s.""Words""::text, d.""Words""::text), ('Spot', s.""Spot""::text, d.""Spot""::text),
+                    ('Shape', s.""Shape""::text, d.""Shape""::text), ('Amount', s.""Amount""::text, d.""Amount""::text), ('Mood', s.""Mood""::text, d.""Mood""::text),
+                    ('row', '1', CASE WHEN d.""Id"" IS NULL THEN NULL ELSE '1' END)) v(col, src, dst)
+                WHERE v.src IS DISTINCT FROM v.dst";
+            Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty,
+                "the list names Id.column for each value that did not arrive equal; extracted: " + json);
+        }
+        finally
+        {
+            command.CommandText = $@"RESET search_path; DROP TABLE IF EXISTS public.""{sourceTable}""; DROP TABLE IF EXISTS public.""{targetTable}"";
+                DROP TYPE IF EXISTS public.{moodType}";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void EndToEnd_RoundTrip_PreservesDecimalPrecision()
     {

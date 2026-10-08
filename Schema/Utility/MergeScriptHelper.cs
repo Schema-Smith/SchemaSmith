@@ -495,11 +495,14 @@ SELECT c.column_name, c.data_type, c.udt_name, c.udt_schema,
        c.character_maximum_length, c.numeric_precision, c.numeric_scale, c.datetime_precision,
        c.is_nullable,
        CASE WHEN a.attidentity != '' OR a.attgenerated != '' THEN true ELSE false END AS is_identity,
-       CASE WHEN a.attgenerated != '' THEN true ELSE false END AS is_computed
+       CASE WHEN a.attgenerated != '' THEN true ELSE false END AS is_computed,
+       {PostgreSqlQualifiedColumnType} AS type_rendering
   FROM information_schema.columns c
   JOIN pg_class cls ON cls.relname = c.table_name
   JOIN pg_namespace ns ON ns.oid = cls.relnamespace AND ns.nspname = c.table_schema
   JOIN pg_attribute a ON a.attrelid = cls.oid AND a.attname = c.column_name AND NOT a.attisdropped AND a.attgenerated = ''
+  JOIN pg_type pt ON pt.oid = a.atttypid
+  JOIN pg_namespace tn ON tn.oid = pt.typnamespace
   WHERE c.table_schema = @schema AND c.table_name = @table{BuildJsonKeyFilter(jsonKeys, "c.column_name")}
   ORDER BY c.column_name
 ";
@@ -508,31 +511,13 @@ SELECT c.column_name, c.data_type, c.udt_name, c.udt_schema,
         while (reader.Read())
         {
             var udtName = reader.GetString(2);
-            var udtSchema = reader.GetString(3);
             var maxLen = reader.IsDBNull(4) ? 0 : Convert.ToInt32(reader.GetValue(4));
             var precision = reader.IsDBNull(5) ? 0 : Convert.ToInt32(reader.GetValue(5));
             var scale = reader.IsDBNull(6) ? 0 : Convert.ToInt32(reader.GetValue(6));
-            var dtPrecision = reader.IsDBNull(7) ? 0 : Convert.ToInt32(reader.GetValue(7));
 
-            var fullType = udtSchema is not "pg_catalog" and not "information_schema"
-                ? $"{udtSchema}.{udtName}" : udtName;
-
-            // Same cast-target-not-DDL reasoning as GetColumnMetadataSqlServer above applies here — this
-            // stays separate from C1-0a's catalog-derived function by design. Unlike the SQL Server twin,
-            // this branch already covers time/timestamp precision (no gap to record).
-            //
-            // maxLen > 0 ? "(n)" : "" (no "MAX" keyword, unlike SQL Server's -1-sentinel case above) is
-            // correct PostgreSQL syntax, not a missing case: an unbounded varchar/text has no length
-            // parameter at all in PostgreSQL — there is no "(MAX)"-equivalent token to emit. maxLen is 0
-            // here only when the column is genuinely unbounded (a bare "char" reports length 1, not 0).
-            var parseType = fullType;
-            var dataType = reader.GetString(1);
-            if (dataType.Contains("char", StringComparison.OrdinalIgnoreCase) || dataType.Contains("binary", StringComparison.OrdinalIgnoreCase))
-                parseType += maxLen > 0 ? $"({maxLen})" : "";
-            else if (dataType is "numeric" or "decimal")
-                parseType += $"({precision}, {scale})";
-            else if (dataType.StartsWith("timestamp") || dataType.StartsWith("time"))
-                parseType += dtPrecision > 0 ? $"({dtPrecision})" : "";
+            // The engine's own rendering of the type, as the JSON row source uses: rebuilding it lost bit(n), turned an
+            // unconstrained numeric into numeric(0, 0), and dropped extension modifiers.
+            var parseType = reader.GetString(11);
 
             results.Add(new MergeColumnInfo
             {
@@ -1292,14 +1277,14 @@ ON {matchColumns}
         if (mergeUpdate)
         {
             var updateColumns = GetUpdateColumnsPostgreSql(cmd, tableSchema, tableName, jsonKeys);
-            var xmlColumns = GetXmlColumnsPostgreSql(cmd, tableSchema, tableName);
+            var textCompareColumns = GetTextCompareColumnsPostgreSql(cmd, tableSchema, tableName);
             var jsonCols = GetJsonColumnsPostgreSql(cmd, tableSchema, tableName);
             // IS DISTINCT FROM is NULL-safe — treats (NULL, X) and (X, NULL) as different without falling into three-valued-logic NULL results
             var updateCompare = string.Join(" OR ",
                 updateColumns!.Split(',').Select(c =>
                 {
                     var colName = c.Trim().Trim('"');
-                    if (xmlColumns.Contains(colName))
+                    if (textCompareColumns.Contains(colName))
                         return $"\"Target\".{c}::text IS DISTINCT FROM \"Source\".{c}::text";
                     if (jsonCols.TryGetValue(colName, out var jsonType))
                     {
@@ -1421,12 +1406,12 @@ DELETE FROM {(updateDescendents ? "" : "ONLY ")}""{destSchema}"".""{tableName}""
         if (mergeUpdate)
         {
             var updateColumns = GetUpdateColumnsPostgreSql(cmd, tableSchema, tableName, jsonKeys);
-            var xmlColumns = GetXmlColumnsPostgreSql(cmd, tableSchema, tableName);
+            var textCompareColumns = GetTextCompareColumnsPostgreSql(cmd, tableSchema, tableName);
             var jsonCols = GetJsonColumnsPostgreSql(cmd, tableSchema, tableName);
             string CompareExpr(string c)
             {
                 var colName = c.Trim().Trim('"');
-                if (xmlColumns.Contains(colName))
+                if (textCompareColumns.Contains(colName))
                     return $"\"Target\".{c}::text IS DISTINCT FROM \"Source\".{c}::text";
                 if (jsonCols.TryGetValue(colName, out var jsonType))
                 {
@@ -1547,29 +1532,18 @@ SELECT c.column_name || '=' || COALESCE(PG_GET_SERIAL_SEQUENCE(c.table_schema ||
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         cmd.CommandText = $@"
 SELECT STRING_AGG(
-    CASE WHEN c.udt_name IN ('geometry','geography','point','linestring','polygon',
-                              'multipoint','multilinestring','multipolygon','geometrycollection')
+    CASE WHEN c.udt_name IN ('geometry','geography')
          THEN 'ST_GeomFromText(elem ->> ''' || c.column_name || ''', COALESCE(NULLIF(elem ->> ''' || c.column_name || '.STSrid'', '''')::int, 0))'
          WHEN c.udt_name = 'bytea'
          THEN 'decode(elem ->> ''' || c.column_name || ''', ''base64'')'
          WHEN LEFT(c.udt_name, 1) = '_'
-         THEN 'STRING_TO_ARRAY((elem ->> ''' || c.column_name || '''), ''*,*'', ''*NULL_VALUE_REPRESENTATION*'')::' ||
-              CASE WHEN c.udt_schema NOT IN ('pg_catalog','information_schema')
-                   THEN c.udt_schema || '.' || c.udt_name
-                   ELSE c.udt_name END
-         ELSE '(elem ->> ''' || c.column_name || ''')::' ||
-              CASE WHEN c.udt_schema NOT IN ('pg_catalog','information_schema')
-                   THEN c.udt_schema || '.' || c.udt_name
-                   ELSE c.udt_name END ||
-              CASE WHEN c.data_type ILIKE '%char%' OR c.data_type ILIKE '%binary%'
-                   THEN CASE WHEN c.character_maximum_length IS NULL
-                             THEN '' ELSE '(' || c.character_maximum_length || ')' END
-                   WHEN c.data_type IN ('numeric','decimal') AND c.numeric_precision IS NOT NULL
-                   THEN '(' || c.numeric_precision::text || ', ' || COALESCE(c.numeric_scale::text,'0') || ')'
-                   WHEN c.data_type LIKE 'timestamp%' OR c.data_type LIKE 'time%'
-                   THEN CASE WHEN c.datetime_precision IS NULL
-                             THEN '' ELSE '(' || c.datetime_precision::text || ')' END
-                   ELSE '' END
+         THEN 'CASE WHEN LEFT(elem ->> ''' || c.column_name || ''', 1) IN (''{{'', ''['') THEN (elem ->> ''' || c.column_name || ''')::' || {PostgreSqlQualifiedColumnType} ||
+              ' ELSE STRING_TO_ARRAY((elem ->> ''' || c.column_name || '''), ''*,*'', ''*NULL_VALUE_REPRESENTATION*'')::' || {PostgreSqlQualifiedColumnType} || ' END'
+         WHEN c.udt_name = 'char'
+         THEN 'CASE WHEN (elem ->> ''' || c.column_name || ''') ~ ''^-[0-9]+$'' THEN ((elem ->> ''' || c.column_name || ''')::int)::""char"" ELSE (elem ->> ''' || c.column_name || ''')::""char"" END'
+         -- format_type, not a type rebuilt from information_schema: that turned bit(8) into bit (= bit(1)), an
+         -- unconstrained numeric into numeric(0, 0), and lost every extension type's modifier.
+         ELSE '(elem ->> ''' || c.column_name || ''')::' || {PostgreSqlQualifiedColumnType}
     END || ' AS ""' || c.column_name || '""', ',' || CHR(10) || '           ' ORDER BY c.column_name)
   FROM information_schema.columns c
   JOIN pg_class cls ON cls.relname = c.table_name
@@ -1578,6 +1552,8 @@ SELECT STRING_AGG(
                      AND a.attname = c.column_name
                      AND NOT a.attisdropped
                      AND a.attgenerated = ''
+  JOIN pg_type pt ON pt.oid = a.atttypid
+  JOIN pg_namespace tn ON tn.oid = pt.typnamespace
   WHERE c.table_schema = @schema AND c.table_name = @table
     {PostgreSqlUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.column_name")}
 ";
@@ -1614,7 +1590,7 @@ SELECT STRING_AGG(
     // IsByteaTypePostgreSql). internal: shared with DeferredMergeBuilder so the 2-pass path classifies
     // columns identically rather than drifting.
     internal static bool RequiresXmlColumnTransformPostgreSql(MergeColumnInfo c) =>
-        c.IsGeometry || c.IsBinary || c.DataType.StartsWith("_", StringComparison.Ordinal);
+        c.IsGeometry || c.IsBinary || c.DataType.StartsWith("_", StringComparison.Ordinal) || c.DataType == "char";
 
     // B1: the per-type expression GetJsonColumnDefinitionsPostgreSql applies to `elem ->> 'col'`,
     // reapplied here to xmltable()'s text output for the same three cases — ST_GeomFromText, decode(...,
@@ -1628,7 +1604,10 @@ SELECT STRING_AGG(
             return $"ST_GeomFromText({raw}, COALESCE(NULLIF(\"{sourceAlias}\".\"{c.Name}.STSrid\", '')::int, 0))";
         if (c.IsBinary) return $"decode({raw}, 'base64')";
         if (c.DataType.StartsWith("_", StringComparison.Ordinal))
-            return $"STRING_TO_ARRAY({raw}, '*,*', '*NULL_VALUE_REPRESENTATION*')::{c.JsonParseType}";
+            return $"CASE WHEN LEFT({raw}, 1) IN ('{{', '[') THEN {raw}::{c.JsonParseType} " +
+                   $"ELSE STRING_TO_ARRAY({raw}, '*,*', '*NULL_VALUE_REPRESENTATION*')::{c.JsonParseType} END";
+        if (c.DataType == "char")
+            return $"CASE WHEN {raw} ~ '^-[0-9]+$' THEN ({raw}::int)::\"char\" ELSE {raw}::\"char\" END";
         return raw;
     }
 
@@ -1679,8 +1658,9 @@ SELECT STRING_AGG('""' || c.column_name || '""', ',' ORDER BY c.column_name)
     /// </summary>
     internal static bool IsGeometryTypePostgreSql(string udtName) => udtName.ToLowerInvariant() switch
     {
-        "geometry" or "geography" or "point" or "linestring" or "polygon"
-            or "multipoint" or "multilinestring" or "multipolygon" or "geometrycollection" => true,
+        // A PostGIS column reports geometry or geography whatever its subtype; point and polygon here are PostgreSQL's
+        // own geometric types, which ST_AsText / ST_GeomFromText do not accept.
+        "geometry" or "geography" => true,
         _ => false
     };
 
@@ -1693,7 +1673,17 @@ SELECT STRING_AGG('""' || c.column_name || '""', ',' ORDER BY c.column_name)
     internal static bool IsXmlTypePostgreSql(string udtName) =>
         udtName.ToLowerInvariant() == "xml";
 
-    private static HashSet<string> GetXmlColumnsPostgreSql(IDbCommand cmd, string tableSchema, string tableName)
+    // A column's type as format_type renders it, schema-qualified: format_type leaves off the schema of a type visible on
+    // the current search_path, and a delivery script can run under another one. Needs pg_attribute a, pg_namespace tn.
+    private const string PostgreSqlQualifiedColumnType = """
+        CASE WHEN tn.nspname IN ('pg_catalog', 'information_schema')
+                  OR starts_with(format_type(a.atttypid, a.atttypmod), quote_ident(tn.nspname) || '.')
+             THEN format_type(a.atttypid, a.atttypmod)
+             ELSE quote_ident(tn.nspname) || '.' || format_type(a.atttypid, a.atttypmod) END
+        """;
+
+    // Columns compared as text: xml, point and polygon have no equality operator, so the upsert failed to compile.
+    private static HashSet<string> GetTextCompareColumnsPostgreSql(IDbCommand cmd, string tableSchema, string tableName)
     {
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         cmd.CommandText = $@"
@@ -1701,7 +1691,7 @@ SELECT STRING_AGG(c.column_name, ',')
   FROM information_schema.columns c
   WHERE c.table_schema = @schema
     AND c.table_name = @table
-    AND c.udt_name = 'xml';
+    AND c.udt_name IN ('xml','point','polygon');
 ";
         var result = cmd.ExecuteScalar()?.ToString();
         if (string.IsNullOrEmpty(result)) return new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
