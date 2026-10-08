@@ -983,7 +983,8 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE
     internal static List<ColumnInfo> GetMySqlColumnInfo(IDbCommand cmd, string databaseName, string tableName)
     {
         cmd.CommandText = $@"
-SELECT c.COLUMN_NAME, c.DATA_TYPE, CASE WHEN c.COLUMN_TYPE LIKE '%zerofill%' THEN 1 ELSE 0 END AS IsZeroFill
+SELECT c.COLUMN_NAME, c.DATA_TYPE, CASE WHEN c.COLUMN_TYPE LIKE '%zerofill%' THEN 1 ELSE 0 END AS IsZeroFill,
+       COALESCE(c.DATETIME_PRECISION, 0) AS DtPrecision
 FROM INFORMATION_SCHEMA.COLUMNS c
 WHERE {MySqlNameMatch.Folded("c.TABLE_SCHEMA", Literal(databaseName))}
   AND {MySqlNameMatch.Folded("c.TABLE_NAME", Literal(tableName))}
@@ -998,7 +999,8 @@ ORDER BY c.ORDINAL_POSITION;";
             {
                 Name = reader.GetString(0),
                 DataType = reader.GetString(1),
-                ZeroFill = Convert.ToInt32(reader.GetValue(2)) == 1
+                ZeroFill = Convert.ToInt32(reader.GetValue(2)) == 1,
+                DatetimePrecision = Convert.ToInt32(reader.GetValue(3))
             });
         }
         return columns;
@@ -1013,7 +1015,12 @@ ORDER BY c.ORDINAL_POSITION;";
         return dataType switch
         {
             "date" => $"{quotedName}, DATE_FORMAT({columnRef}, '%Y-%m-%d')",
+            // The fraction, cut to the column's precision, only where it has one: '%s' alone dropped it.
+            "datetime" or "timestamp" when column.DatetimePrecision > 0
+                => $"{quotedName}, CONCAT(DATE_FORMAT({columnRef}, '%Y-%m-%dT%H:%i:%s.'), LEFT(DATE_FORMAT({columnRef}, '%f'), {column.DatetimePrecision}))",
             "datetime" or "timestamp" => $"{quotedName}, DATE_FORMAT({columnRef}, '%Y-%m-%dT%H:%i:%s')",
+            "time" when column.DatetimePrecision > 0
+                => $"{quotedName}, CONCAT(TIME_FORMAT({columnRef}, '%H:%i:%s.'), LEFT(TIME_FORMAT({columnRef}, '%f'), {column.DatetimePrecision}))",
             "time" => $"{quotedName}, TIME_FORMAT({columnRef}, '%H:%i:%s')",
             "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob"
                 => $"{quotedName}, REPLACE(REPLACE(TO_BASE64({columnRef}), '\n', ''), '\r', '')",
@@ -1130,5 +1137,6 @@ SELECT c.column_name, c.udt_name
         public string Name { get; init; } = "";
         public string DataType { get; init; } = "";
         public bool ZeroFill { get; init; }
+        public int DatetimePrecision { get; init; }
     }
 }

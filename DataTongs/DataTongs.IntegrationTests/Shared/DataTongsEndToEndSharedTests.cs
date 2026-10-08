@@ -577,6 +577,54 @@ public abstract class DataTongsEndToEndSharedTests
         }
     }
 
+    // Fractional seconds were formatted away ('%s' with no '%f'): DATETIME(6) 10:11:12.123456 extracted as 10:11:12.
+    // A whole-second column must still extract without a fraction, so existing files do not change.
+    [Test]
+    public void EndToEnd_RoundTrip_FractionalSeconds()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_frac_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_frac_t_{Guid.NewGuid():N}".Substring(0, 30);
+        const string columns = "id INT PRIMARY KEY, dt6 DATETIME(6) NULL, ts3 TIMESTAMP(3) NULL, t6 TIME(6) NULL, dt0 DATETIME NULL";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` ({columns})";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` ({columns})";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` VALUES "
+                                  + "(1, '2024-03-05 10:11:12.123456', '2024-03-05 10:11:12.456', '01:02:03.456789', '2024-03-05 10:11:12')";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
+            Assert.That(json, Does.Contain("\"2024-03-05T10:11:12\"").And.Contain("10:11:12.123456"),
+                "a whole-second column keeps its old form; a fractional one carries its fraction: " + json);
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT CONCAT_WS(',', IF(d.dt6 <=> s.dt6, NULL, 'dt6'), IF(d.ts3 <=> s.ts3, NULL, 'ts3'),
+                   IF(d.t6 <=> s.t6, NULL, 't6'), IF(d.dt0 <=> s.dt0, NULL, 'dt0'))
+                FROM `{_testDb}`.`{sourceTable}` s LEFT JOIN `{_testDb}`.`{targetTable}` d ON d.id = s.id";
+            Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty, "the list names the columns that did not arrive equal");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void EndToEnd_RoundTrip_HandlesBinaryData()
     {
