@@ -19,19 +19,19 @@ public static class LogScrubber
     private static readonly string[] DefaultSensitivePatterns =
         ["Password", "Pwd", "Secret", "ApiKey", "Token", "ConnectionString", "Credential"];
 
-    // Connection-string Password=/Pwd= subfield, the same keyword in T-SQL (PASSWORD = N'...'), and the forms with no
-    // key of that name: a prefixed key (OLD_PASSWORD =, PGPASSWORD=, MYSQL_PWD=), PostgreSQL's PASSWORD '...' and the
-    // MySQL family's IDENTIFIED [WITH plugin] BY [PASSWORD] '...'. Those last two take no '=', so they match only
-    // when a quote follows -- IDENTIFIED BY RANDOM PASSWORD and PASSWORD NULL carry no secret. A key must end at
-    // the '=', so a "MyPasswordHint=" key is not matched. SECRET = is a SQL Server credential's, and MySQL 8's REPLACE '...'
-    // is the old password an ALTER USER verifies. A value wrapped in a function call, PASSWORD('...'), is read to its
-    // closing quote. The quoted forms come first because each can hold a
-    // ';': a JSON-escaped \"...\", "..." and '...' (optionally N'...') with a doubled quote as an escape, and {...}
-    // with }} as one. A quote that never closes runs to the end of the text: a truncated value is still all secret,
-    // so failing open would log its tail. The unquoted form stops at ';' or a line break, so a stack trace after the
-    // value survives, and only spaces and tabs may surround '=' so an empty value at a line end masks nothing more.
+    // A password, and the key or keyword that introduces it. The keys: a connection string's Password= or Pwd=, the
+    // same word in T-SQL (PASSWORD = N'...'), a credential's SECRET =, and any key ending in one of them (OLD_PASSWORD =,
+    // PGPASSWORD=, MYSQL_PWD=). A key must end at the '=', so "MyPasswordHint=" is not one. The keywords take no '=' and
+    // match only when a quote follows, since IDENTIFIED BY RANDOM PASSWORD and PASSWORD NULL carry no secret:
+    // PostgreSQL's PASSWORD '...', and the MySQL family's IDENTIFIED [WITH plugin] BY [PASSWORD] '...' and REPLACE '...'.
+    // The value forms that can hold a ';' come first: a JSON-escaped \"...\", "..." and '...' (optionally N'...') with
+    // a doubled quote as an escape, {...} with }} as one, and a quoted value wrapped in a call, PASSWORD('...'). A quote
+    // that never closes runs to the end of the text: a truncated value is still all secret, so failing open would log
+    // its tail. An unquoted value stops at ';' or a line break, so a stack trace after it survives -- or, after a key
+    // that ends a longer word (a shell or token assignment), at whitespace too, so the next assignment survives. Only
+    // spaces and tabs may surround '=', so an empty value at a line end masks nothing more.
     private static readonly Regex ConnectionStringSecret =
-        new(@"(?<key>(?:password|pwd|secret)[ \t]*="
+        new(@"(?<key>(?<prefixed>(?<=\w))?(?:password|pwd|secret)[ \t]*="
             + @"|\bpassword[ \t]+(?=N?['""])"
             + @"|\bidentified(?:[ \t]+with[ \t]+\w+)?[ \t]+by(?:[ \t]+password)?[ \t]+(?=['""])"
             + @"|\breplace[ \t]+(?=['""]))[ \t]*"
@@ -40,7 +40,7 @@ public static class LogScrubber
             + @"|N?'(?:[^']|'')*'?"
             + @"|\{(?:[^}]|\}\})*\}?"
             + @"|\w+\([ \t]*N?'(?:[^']|'')*'?[ \t]*\)?"
-            + @"|[^;\r\n]*)",
+            + @"|(?(prefixed)[^\s;]*|[^;\r\n]*))",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
     // A credential in a URL's userinfo component -- scheme://user:password@host. Not covered by the
     // keyword pattern above, so "?password=x" in a value masked while "user:pass@host" earlier in the
