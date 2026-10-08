@@ -67,6 +67,8 @@ public class DataDeliveryProcessor : IDataDelivery
             if (string.Equals(context.UnsupportedFeaturePolicy, "fail", StringComparison.OrdinalIgnoreCase))
                 throw new NotSupportedException(msg);
             log($"  [SKIPPED - unsupported below MySQL 8.0] {msg}");
+            foreach (var table in tablesToDeliver)
+                context.RecordDowngrade?.Invoke("data delivery", DataDeliveryHelper.GetTableKey(table, platform));
             return;
         }
 
@@ -149,6 +151,7 @@ public class DataDeliveryProcessor : IDataDelivery
                     if (failFast)
                         throw new NotSupportedException(msg);
                     log($"    [SKIPPED - requires compatibility level 130 for JSON delivery] {msg}");
+                    context.RecordDowngrade?.Invoke("data delivery", $"{DataDeliveryHelper.GetTableKey(table, platform)}{VariantSuffix(delivery)}");
                 }
                 if (kept.Count != applied.Count)
                     appliedByTable[table] = kept;

@@ -11,6 +11,7 @@ using Schema.Domain.PostgreSQL;
 using Schema.Domain.MySQL;
 using Schema.Isolators;
 using Schema.Delivery;
+using Schema.Utility;
 
 namespace Schema.UnitTests.Domain
 {
@@ -318,7 +319,7 @@ namespace Schema.UnitTests.Domain
                 FilePath = Path.Combine("C:", "products", "Product.json")
             };
 
-            Assert.Throws<Exception>(() => Template.Load("Main", product));
+            Assert.Throws<RunFailedException>(() => Template.Load("Main", product));
         }
 
         [Test]

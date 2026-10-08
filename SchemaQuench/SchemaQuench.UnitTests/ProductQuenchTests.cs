@@ -11,6 +11,7 @@ using NUnit.Framework;
 using Schema.Domain;
 using Schema.Domain.SqlServer;
 using Schema.Isolators;
+using Schema.Utility;
 
 namespace SchemaQuench.UnitTests;
 
@@ -2144,7 +2145,8 @@ public class ProductQuenchTests
             var command = Substitute.For<IDbCommand>();
             command.ExecuteScalar().Returns(_ => throw new Exception("syntax error"));
 
-            Assert.Throws<Exception>(() => quench.GateProductFolders(command, new[] { bad }));
+            var ex = Assert.Throws<RunFailedException>(() => quench.GateProductFolders(command, new[] { bad }));
+            Assert.That(ex!.InnerException?.Message, Is.EqualTo("syntax error"), "the engine's own error is kept for the log");
         });
     }
 
@@ -2210,7 +2212,7 @@ public class ProductQuenchTests
                 throw new Exception("Incorrect syntax near '{'.");
             });
 
-            Assert.Throws<Exception>(() => quench.GateProductFolders(command, new[] { folder }));
+            Assert.Throws<RunFailedException>(() => quench.GateProductFolders(command, new[] { folder }));
 
             Assert.That(gateCommandText, Does.Contain("{{CompatibilityLevel}}"),
                 "An unresolvable token must reach the server as literal text, not be replaced with a wrong value.");

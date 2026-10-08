@@ -179,7 +179,7 @@ namespace Schema.Domain
                 schemaPackagePath = ""; // use root of zip
             }
             else if (!DirectoryWrapper.GetFromFactory().Exists(schemaPackagePath))
-                throw new Exception($"SchemaPackagePath not found '{schemaPackagePath}'");
+                throw new RunFailedException($"SchemaPackagePath not found '{schemaPackagePath}'");
 
             var productFilePath = Path.Combine(schemaPackagePath, "Product.json");
             var product = JsonHelper.ProductLoad(productFilePath, missingMemberHandling);

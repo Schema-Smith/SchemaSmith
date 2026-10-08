@@ -30,13 +30,13 @@ namespace Schema.Utility
         public static void CheckOrThrow(TargetVersionInfo info, string serverLabel, string databaseLabel = null)
         {
             if (VersionHelper.IsBelowFloor(info))
-                throw new Exception(
+                throw new RunFailedException(
                     $"{serverLabel}: detected {info.Platform} version {VersionHelper.DisplayVersion(info)} is below the minimum " +
                     $"supported version {VersionHelper.HardFloorDisplay(info.Platform)}. SchemaSmith cannot run against it.");
 
             if (info.Platform.GetBasePlatform() == Platform.SqlServer &&
                 info.CompatibilityLevel is { } compat && compat < SqlServerCompatFloor)
-                throw new Exception(
+                throw new RunFailedException(
                     $"{serverLabel}: database {databaseLabel} is at compatibility level {compat}; SchemaSmith requires " +
                     $"{SqlServerCompatFloor} (SQL Server 2008) or higher. Raise it with " +
                     $"ALTER DATABASE ... SET COMPATIBILITY_LEVEL = {SqlServerCompatFloor}.");

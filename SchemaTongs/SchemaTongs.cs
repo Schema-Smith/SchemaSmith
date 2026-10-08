@@ -2935,7 +2935,7 @@ SELECT mv.schemaname, mv.matviewname
         catch (MySqlException ex)
         {
             _progressLog.Error($"MySQL Error: {ex.Message}");
-            throw new Exception($"Database connection or query failed: {ex.Message}", ex);
+            throw new RunFailedException($"Database connection or query failed: {ex.Message}", ex);
         }
     }
 

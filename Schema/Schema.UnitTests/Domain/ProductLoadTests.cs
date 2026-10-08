@@ -174,7 +174,7 @@ namespace Schema.UnitTests.Domain
             var productPath = Path.Combine("C:", "products", "Product.json");
             _mockFile.Exists(productPath).Returns(false);
 
-            Assert.Throws<Exception>(() => Product.LoadForDisplay(productPath));
+            Assert.Throws<RunFailedException>(() => Product.LoadForDisplay(productPath));
         }
 
         [Test]

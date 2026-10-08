@@ -40,13 +40,31 @@ public static class Program
             return;
         }
 
-        var productQuench = new ProductQuench();
+        ProductQuench productQuench;
+        try
+        {
+            productQuench = new ProductQuench();
+        }
+        catch (RunFailedException e)
+        {
+            LogBackup.FailedRunExit("SchemaQuench", e);
+            return;
+        }
 
         var testConnection = CommandLineParser.ContainsSwitch("TestConnection");
         var previewTargets = CommandLineParser.ContainsSwitch("PreviewTargets");
         if (testConnection || previewTargets)
         {
-            var ok = productQuench.RunPreFlight(previewTargets);
+            bool ok;
+            try
+            {
+                ok = productQuench.RunPreFlight(previewTargets);
+            }
+            catch (RunFailedException e)
+            {
+                LogBackup.FailedRunExit("SchemaQuench", e);
+                return;
+            }
             LogBackup.BackupLogsAndExit("SchemaQuench", ok ? 0 : 2);
             return;
         }
@@ -74,13 +92,22 @@ public static class Program
             LogBackup.BackupLogsAndExit("SchemaQuench", 2);
             return;
         }
+        catch (RunFailedException e)
+        {
+            // A failed validation, product script, version check or refused target: the run is over, the user can fix
+            // it, and checkpoints stay for --ResumeQuench.
+            LogBackup.FailedRunExit("SchemaQuench", e);
+            return;
+        }
 
         // Clean up checkpoint files only on a clean success — a failed run must preserve
         // checkpoints so the next invocation can resume.
         if (!productQuench.Failed)
         {
             CleanupCheckpoints();
-            LogBackup.BackupLogsAndExit("SchemaQuench");
+            // 1 when a feature was downgraded on a target that lacks it: the deploy finished, but not everything the
+            // package declares is in place. The summary lists each downgrade.
+            LogBackup.BackupLogsAndExit("SchemaQuench", productQuench.Incomplete ? 1 : 0);
         }
         else
         {

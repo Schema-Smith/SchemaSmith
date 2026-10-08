@@ -825,7 +825,7 @@ namespace Schema.Domain
                 // prepush-allow: generic-catch -- any load failure must surface wrapped with the file that caused it
                 catch (Exception e) when (!tolerateComponentLoadErrors)
                 {
-                    throw new Exception($"Error loading sequence from {f}" + Environment.NewLine + e.Message, e);
+                    throw new RunFailedException($"Error loading sequence from {f}" + Environment.NewLine + e.Message, e);
                 }
                 // prepush-allow: generic-catch -- --Validate must record ANY component failure
                 catch (Exception e)
@@ -854,7 +854,7 @@ namespace Schema.Domain
                 // prepush-allow: generic-catch -- any load failure must surface wrapped with the file that caused it
                 catch (Exception e) when (!tolerateComponentLoadErrors)
                 {
-                    throw new Exception($"Error loading domain type from {f}" + Environment.NewLine + e.Message, e);
+                    throw new RunFailedException($"Error loading domain type from {f}" + Environment.NewLine + e.Message, e);
                 }
                 // prepush-allow: generic-catch -- --Validate must record ANY component failure
                 catch (Exception e)
@@ -887,7 +887,7 @@ namespace Schema.Domain
                 // prepush-allow: generic-catch -- any load failure must surface wrapped with the file that caused it
                 catch (Exception e) when (!tolerateComponentLoadErrors)
                 {
-                    throw new Exception($"Error loading enum type from {f}" + Environment.NewLine + e.Message, e);
+                    throw new RunFailedException($"Error loading enum type from {f}" + Environment.NewLine + e.Message, e);
                 }
                 // prepush-allow: generic-catch -- --Validate must record ANY component failure
                 catch (Exception e)
@@ -922,7 +922,7 @@ namespace Schema.Domain
                 // prepush-allow: generic-catch -- any load failure must surface wrapped with the file that caused it
                 catch (Exception e) when (!tolerateComponentLoadErrors)
                 {
-                    throw new Exception($"Error loading event from {f}" + Environment.NewLine + e.Message, e);
+                    throw new RunFailedException($"Error loading event from {f}" + Environment.NewLine + e.Message, e);
                 }
                 // prepush-allow: generic-catch -- --Validate must record ANY component failure
                 catch (Exception e)
@@ -950,7 +950,7 @@ namespace Schema.Domain
                 // prepush-allow: generic-catch -- any load failure must surface wrapped with the file that caused it; narrowing would let one escape unlabelled
                 catch (Exception e) when (!tolerateComponentLoadErrors)
                 {
-                    throw new Exception($"Error loading materialized view from {f}\r\n{e.Message}", e);
+                    throw new RunFailedException($"Error loading materialized view from {f}\r\n{e.Message}", e);
                 }
                 // prepush-allow: generic-catch -- --Validate must record ANY component failure, and DeserializeMaterializedView rewraps into plain Exception
                 catch (Exception e)
@@ -982,7 +982,7 @@ namespace Schema.Domain
                 // prepush-allow: generic-catch -- any load failure must surface wrapped with the file that caused it; narrowing would let one escape unlabelled
                 catch (Exception e) when (!tolerateComponentLoadErrors)
                 {
-                    throw new Exception($"Error loading indexed view from {f}\r\n{e.Message}", e);
+                    throw new RunFailedException($"Error loading indexed view from {f}\r\n{e.Message}", e);
                 }
                 // prepush-allow: generic-catch -- --Validate must record ANY component failure, and DeserializeIndexedView rewraps into plain Exception
                 catch (Exception e)

@@ -37,7 +37,7 @@ public class JsonHelperTests
     {
         _mockFile.Exists(@"C:\missing.json").Returns(false);
 
-        var ex = Assert.Throws<Exception>(() => JsonHelper.Load<Table>(@"C:\missing.json"));
+        var ex = Assert.Throws<RunFailedException>(() => JsonHelper.Load<Table>(@"C:\missing.json"));
         Assert.That(ex.Message, Does.Contain("does not exist"));
     }
 
@@ -60,7 +60,7 @@ public class JsonHelperTests
     {
         _mockFile.Exists(@"C:\missing.json").Returns(false);
 
-        var ex = Assert.Throws<Exception>(() => JsonHelper.ProductLoad(@"C:\missing.json"));
+        var ex = Assert.Throws<RunFailedException>(() => JsonHelper.ProductLoad(@"C:\missing.json"));
         Assert.That(ex.Message, Does.Contain("does not exist"));
     }
 
@@ -139,7 +139,7 @@ public class JsonHelperTests
     {
         _mockFile.Exists(@"C:\table.json").Returns(false);
 
-        var ex = Assert.Throws<Exception>(() => JsonHelper.TableLoad(@"C:\table.json", Platform.SqlServer));
+        var ex = Assert.Throws<RunFailedException>(() => JsonHelper.TableLoad(@"C:\table.json", Platform.SqlServer));
         Assert.That(ex.Message, Does.Contain("does not exist"));
     }
 
@@ -197,7 +197,7 @@ public class JsonHelperTests
     {
         _mockFile.Exists(@"C:\template.json").Returns(false);
 
-        var ex = Assert.Throws<Exception>(() => JsonHelper.TemplateLoad(@"C:\template.json", Platform.SqlServer));
+        var ex = Assert.Throws<RunFailedException>(() => JsonHelper.TemplateLoad(@"C:\template.json", Platform.SqlServer));
         Assert.That(ex.Message, Does.Contain("does not exist"));
     }
 

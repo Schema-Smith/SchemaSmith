@@ -852,6 +852,7 @@ public class DatabaseQuench
                                 ExecuteScript = (name, script) => { effectiveSilentCmd.CommandText = script; effectiveSilentCmd.ExecuteNonQuery(); },
                                 ProgressLog = SafeProgressLog,
                                 ProgressLogError = SafeProgressLogError,
+                                RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded"),
                                 WhatIf = IsWhatIf,
                                 PostgreSqlServerVersionNum = _postgreSqlServerVersionNum,
                                 MySqlServerVersionNum = _mySqlServerVersionNum,
@@ -981,6 +982,7 @@ public class DatabaseQuench
                             ExecuteScript = (_, _) => { },
                             ProgressLog = SafeProgressLog,
                             ProgressLogError = SafeProgressLogError,
+                            RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded"),
                             WhatIf = true
                         });
                     }
