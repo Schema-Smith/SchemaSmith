@@ -41,8 +41,8 @@ BEGIN TRY
 
   EXEC SchemaSmith.MissingTableAndColumnQuench @WhatIf
   -- Filled by ModifiedTableQuench's CDC headroom check, consumed by CdcQuench once every column exists.
-  CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
-                           NewFilegroup NVARCHAR(256), NewNetChanges BIT, Reason NVARCHAR(20))
+  CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(256) COLLATE DATABASE_DEFAULT, OldCaptureInstance NVARCHAR(256) COLLATE DATABASE_DEFAULT,
+                           NewFilegroup NVARCHAR(256) COLLATE DATABASE_DEFAULT, NewNetChanges BIT, Reason NVARCHAR(20) COLLATE DATABASE_DEFAULT)
   EXEC SchemaSmith.ModifiedTableQuench @ProductName = @ProductName, @WhatIf = @WhatIf, @DropUnknownIndexes = @DropUnknownIndexes, @DropTablesRemovedFromProduct = @DropTablesRemovedFromProduct, @DropSchemaBoundDependents = @DropSchemaBoundDependents,
                                        @RebuildPolicyMode = @RebuildPolicyMode, @RebuildPolicyThreshold = @RebuildPolicyThreshold, @RebuildPolicyOnOrderMismatch = @RebuildPolicyOnOrderMismatch
   EXEC SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName, @WhatIf

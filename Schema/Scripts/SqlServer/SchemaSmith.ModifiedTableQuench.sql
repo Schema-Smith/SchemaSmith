@@ -383,10 +383,10 @@ BEGIN TRY
   (
     [object_id] INT NOT NULL,
     column_id INT NOT NULL,
-    ExistingMaskFn NVARCHAR(4000) NULL,
-    ExistingEncType NVARCHAR(64) NULL,
-    ExistingEncAlgo NVARCHAR(128) NULL,
-    ExistingEncKeyDb NVARCHAR(128) NULL,
+    ExistingMaskFn NVARCHAR(4000) COLLATE DATABASE_DEFAULT NULL,
+    ExistingEncType NVARCHAR(64) COLLATE DATABASE_DEFAULT NULL,
+    ExistingEncAlgo NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    ExistingEncKeyDb NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
     PRIMARY KEY ([object_id], column_id)
   )
   IF SchemaSmith.fn_ServerMajorVersion() >= 13
@@ -540,7 +540,7 @@ BEGIN TRY
   -- statically: this proc body is kindled for the XML tier too, which reaches older servers. Empty below
   -- 2017, where graph tables cannot exist.
   IF OBJECT_ID('tempdb..#EngineOwnedColumns') IS NOT NULL DROP TABLE #EngineOwnedColumns
-  CREATE TABLE #EngineOwnedColumns (TableSchema NVARCHAR(256), TableName NVARCHAR(256), ColumnName NVARCHAR(256))
+  CREATE TABLE #EngineOwnedColumns (TableSchema NVARCHAR(256) COLLATE DATABASE_DEFAULT, TableName NVARCHAR(256) COLLATE DATABASE_DEFAULT, ColumnName NVARCHAR(256) COLLATE DATABASE_DEFAULT)
   IF SchemaSmith.fn_ServerMajorVersion() >= 14
     EXEC sp_executesql N'
       INSERT INTO #EngineOwnedColumns (TableSchema, TableName, ColumnName)
@@ -1605,8 +1605,8 @@ BEGIN TRY
   -- SQL Server fixes it per capture instance and cannot alter it in place.
   -- TableQuench owns #CdcRotate: the rotation itself runs in SchemaSmith.CdcQuench, after every column exists.
   IF OBJECT_ID('tempdb..#CdcRotate') IS NULL
-    CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
-                             NewFilegroup NVARCHAR(256), NewNetChanges BIT, Reason NVARCHAR(20))
+    CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(256) COLLATE DATABASE_DEFAULT, OldCaptureInstance NVARCHAR(256) COLLATE DATABASE_DEFAULT,
+                             NewFilegroup NVARCHAR(256) COLLATE DATABASE_DEFAULT, NewNetChanges BIT, Reason NVARCHAR(20) COLLATE DATABASE_DEFAULT)
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   BEGIN
     DECLARE @v_DefaultFilegroup SYSNAME = (SELECT [name] FROM sys.filegroups WHERE is_default = 1)

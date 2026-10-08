@@ -264,10 +264,10 @@ BEGIN TRY
   IF OBJECT_ID('tempdb..#AddTableColumns') IS NOT NULL DROP TABLE #AddTableColumns
   CREATE TABLE #AddTableColumns
   (
-    [KeySchema] NVARCHAR(200) NULL,
-    [KeyTableName] NVARCHAR(200) NULL,
+    [KeySchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [KeyTableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [_RowId] BIGINT NULL,
-    [ColumnScript] NVARCHAR(MAX) NULL,
+    [ColumnScript] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     -- Whether the column belongs in the CREATE at all: computed columns and the FILESTREAM column are
     -- added afterwards, the latter because it needs a unique constraint first.
     [InCreate] BIT NOT NULL,

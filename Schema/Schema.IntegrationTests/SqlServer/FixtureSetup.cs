@@ -153,7 +153,7 @@ END";
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_masterConnectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"CREATE DATABASE [{_integrationMainDb}];";
+        cmd.CommandText = $"CREATE DATABASE [{_integrationMainDb}] COLLATE {ForeignCollation.For(cmd)};";
         cmd.ExecuteNonQuery();
 
         conn.ChangeDatabase(_integrationMainDb);
