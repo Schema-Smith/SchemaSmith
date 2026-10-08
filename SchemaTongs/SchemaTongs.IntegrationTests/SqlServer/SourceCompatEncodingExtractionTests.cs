@@ -36,6 +36,7 @@ public class SourceCompatEncodingExtractionTests
     private const string TemplateName = "LegacyExtract";
     private const string ProductName = "SourceEncodingProduct";
     private const string ExtendedPropertyValue = "A rich table";
+    private const string CollatedColumnCollation = "Latin1_General_100_CS_AS";
 
     private string _integrationDb = "";
     private string _connectionString;
@@ -100,6 +101,17 @@ public class SourceCompatEncodingExtractionTests
             "The modern (JSON) extraction must carry the extended property in Extensions.");
         Assert.That(legacyRich, Does.Contain(ExtendedPropertyValue),
             "The legacy (XML) extraction must ALSO carry the extended property in Extensions (B2 — extended properties are preserved below the JSON cliff).");
+
+        // ----- Column collation: a non-default collation is extracted, the database default is left empty. -----
+        foreach (var (encoding, path) in new[] { ("modern", modernPath), ("legacy", legacyPath) })
+        {
+            var columns = JObject.Parse(ReadTableFile(path, "Collated"))["Columns"]!
+                .ToDictionary(c => (string)c["Name"]!, c => (string)c["Collation"] ?? "");
+            Assert.That(columns["[Cs]"], Is.EqualTo(CollatedColumnCollation),
+                $"The {encoding} extraction must carry the column's own collation, or a redeploy resets it.");
+            Assert.That(columns["[Plain]"], Is.Empty,
+                $"The {encoding} extraction must leave a database-default collation empty.");
+        }
 
         // ----- Correctness: every emitted table + indexed view is model-equal minus Extensions. -----
         var modernFiles = ReadPackageObjects(modernPath);
@@ -268,6 +280,10 @@ CREATE TABLE dbo.Rich (
         Exec(cmd, "CREATE PRIMARY XML INDEX XI_Primary_Doc ON dbo.Rich (Doc)");
         Exec(cmd, "CREATE XML INDEX XI_Secondary_Doc_Path ON dbo.Rich (Doc) USING XML INDEX XI_Primary_Doc FOR PATH");
         Exec(cmd, "CREATE FULLTEXT INDEX ON dbo.Rich (Name) KEY INDEX PK_Rich ON FT_Catalog WITH CHANGE_TRACKING = AUTO, STOPLIST = SL_Test");
+
+        Exec(cmd, $"CREATE TABLE dbo.Collated (Id INT NOT NULL PRIMARY KEY, Cs VARCHAR(20) COLLATE {CollatedColumnCollation} NULL, Plain VARCHAR(20) NULL)");
+        cmd.CommandText = "SELECT CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS NVARCHAR(200))";
+        Assert.That(cmd.ExecuteScalar() as string, Is.Not.EqualTo(CollatedColumnCollation), "the collation test needs a non-default collation");
 
         // Extended property → captured in Extensions on BOTH the JSON and (post-B2) the XML path; the test
         // asserts each extraction carries it.
