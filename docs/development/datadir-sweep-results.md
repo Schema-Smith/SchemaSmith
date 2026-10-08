@@ -17,3 +17,10 @@ standing evidence that it ran, and against what.
 |---|---|---|
 | mariadb @ 13418 | Passed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5, Duration: 3 s - Schema.IntegrationTests.dll (net10.0) | smoke check passed |
 | mysql @ 13480 | Passed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5, Duration: 9 s - Schema.IntegrationTests.dll (net10.0) | smoke check passed |
+
+## 2026-10-08T19:56:25Z - commit 0b7d9535
+
+| Target | Result | Infra |
+|---|---|---|
+| mariadb @ 13418 | Passed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5, Duration: 4 s - Schema.IntegrationTests.dll (net10.0) | smoke check passed |
+| mysql @ 13480 | Passed!  - Failed:     0, Passed:     6, Skipped:     0, Total:     6, Duration: 11 s - Schema.IntegrationTests.dll (net10.0) | smoke check passed |
