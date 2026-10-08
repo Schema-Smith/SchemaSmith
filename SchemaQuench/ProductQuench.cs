@@ -916,13 +916,24 @@ public class ProductQuench
                 }
             }
 
-            QuenchProductScriptsWithCheckpoint(_product.AfterFolders, "After Product", false);
-
-            if (!string.IsNullOrWhiteSpace(_product.VersionStampScript))
+            // ContinueOnDatabaseFailure keeps the other templates deploying; it does not make a failed deploy complete.
+            // After Product scripts finish a product whose templates are all in place, and the version stamp tells
+            // the next run this version is deployed, so neither runs after a failure. Neither is checkpointed, so a
+            // --ResumeQuench that completes the failed templates runs them then.
+            if (_anyFailure)
             {
-                _progressLog.Info("Stamp product version");
-                command.CommandText = _product.VersionStampScript;
-                command.ExecuteNonQuery();
+                _progressLog.Error("Skipped the After Product scripts and the product version stamp: one or more templates failed.");
+            }
+            else
+            {
+                QuenchProductScriptsWithCheckpoint(_product.AfterFolders, "After Product", false);
+
+                if (!string.IsNullOrWhiteSpace(_product.VersionStampScript))
+                {
+                    _progressLog.Info("Stamp product version");
+                    command.CommandText = _product.VersionStampScript;
+                    command.ExecuteNonQuery();
+                }
             }
         }
         finally

@@ -11,6 +11,7 @@ using Schema.Utility;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
+using System.Linq;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -93,6 +94,90 @@ public class FailureIsolationTests
                 FactoryContainer.Unregister<IEnvironment>();
             }
         }
+    }
+
+    /// <summary>
+    /// Continuing past a failed template keeps the other templates deploying; it must not finish the product as if
+    /// the deploy had succeeded. The After Product scripts and the version stamp each create a marker table: a clean
+    /// run creates both (so the scripts are proven to work), and a run in which a tenant fails creates neither.
+    /// </summary>
+    [Test]
+    public void AFailedTemplate_SkipsTheAfterProductScriptsAndTheVersionStamp()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var productPath = TestHelper.GetTestProductPath("SqlServer", FailureProductName);
+            var productFile = Path.Join(productPath, "Product.json");
+            var original = File.ReadAllText(productFile);
+            var finalizeDir = Path.Join(productPath, "Finalize");
+            const string afterMarker = "AfterProductProbe";
+            const string stampMarker = "VersionStampProbe";
+
+            try
+            {
+                Directory.CreateDirectory(finalizeDir);
+                File.WriteAllText(Path.Join(finalizeDir, "Finalize.sql"),
+                    $"CREATE TABLE [{{{{MainDB}}}}].dbo.{afterMarker} (Id INT)");
+                File.WriteAllText(productFile, original
+                    .Replace("\"ScriptFolders\": [],",
+                        "\"ScriptFolders\": [ { \"FolderPath\": \"Finalize\", \"QuenchSlot\": \"After\" } ],")
+                    .Replace("\"Platform\": \"MSSQL\"",
+                        $"\"VersionStampScript\": \"CREATE TABLE [{{{{MainDB}}}}].dbo.{stampMarker} (Id INT)\",\n    \"Platform\": \"MSSQL\""));
+                FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] = productPath;
+
+                SetupSharedMocks();
+                DropMarkers(afterMarker, stampMarker);
+                ResetTrackingAndCreateTenantSchemas(FiveTenants.Where(t => t != "tenant_boom"), FailureProductName);
+                RunSchemaQuench();
+                _environment.DidNotReceive().Exit(2);
+                Assert.That(MarkerExists(afterMarker) && MarkerExists(stampMarker), Is.True,
+                    "a clean run must run the After Product scripts and the version stamp, or the check below proves nothing");
+
+                SetupSharedMocks();
+                DropMarkers(afterMarker, stampMarker);
+                ResetTrackingAndCreateTenantSchemas(FiveTenants, FailureProductName);
+                RunSchemaQuench();
+                _environment.Received().Exit(2);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(MarkerExists(afterMarker), Is.False, "After Product scripts ran after a template failed");
+                    Assert.That(MarkerExists(stampMarker), Is.False, "the version stamp was written after a template failed");
+                });
+                _progressLog.Received(1).Error(Arg.Is<string>(m => m.Contains("Skipped the After Product scripts")));
+            }
+            finally
+            {
+                File.WriteAllText(productFile, original);
+                if (Directory.Exists(finalizeDir)) Directory.Delete(finalizeDir, true);
+                DropMarkers(afterMarker, stampMarker);
+                DropTenantSchemas(FiveTenants, FailureProductName);
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+            }
+        }
+    }
+
+    private void DropMarkers(params string[] tables)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        foreach (var table in tables)
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS dbo.{table}";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private bool MarkerExists(string table)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT CAST(CASE WHEN OBJECT_ID('dbo.{table}') IS NULL THEN 0 ELSE 1 END AS BIT)";
+        return (bool)cmd.ExecuteScalar()!;
     }
 
     /// <summary>
