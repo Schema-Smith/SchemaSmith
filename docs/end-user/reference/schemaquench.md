@@ -536,6 +536,22 @@ A server on setting `1` or `2` has two consequences worth knowing:
 - **Extraction:** SchemaTongs run against a server on setting `1` writes lowercase table names, because the server holds no other spelling. Setting `2` keeps the declared spelling.
 - **Case-colliding tables:** a template that declares two tables whose names differ only in case is refused (exit code `2`) on a server on setting `1` or `2`, before any database is touched -- the server would hold one table for both. Variants gated by `ShouldApplyExpression` are not a collision. [`--Validate`](validate.md) reports such a pair as `SS-DUP-001` whatever the target.
 
+### Server settings on MySQL and MariaDB
+
+A MySQL or MariaDB server can be configured in ways that change how SQL is read and how columns and data behave.
+SchemaSmith runs its own work under a known setting for each of those, and puts the session back afterwards. Your
+scripts (Before, After, Objects, migration scripts and `ValidationScript`) always run under the server's own settings.
+
+| Server setting | What SchemaSmith does |
+|---|---|
+| `sql_mode` | Creates its procedures and delivers data under your server's mode with the flags that change how SQL text is read taken out: `ANSI_QUOTES`, `PIPES_AS_CONCAT`, `NO_BACKSLASH_ESCAPES`, `IGNORE_SPACE`, the combination modes `ANSI`, `ORACLE`, `MSSQL`, `DB2`, `POSTGRESQL` and `MAXDB`, `NO_KEY_OPTIONS`, `NO_TABLE_OPTIONS`, `NO_FIELD_OPTIONS`, `EMPTY_STRING_IS_NULL` and `SIMULTANEOUS_ASSIGNMENT`. Strictness flags such as `STRICT_TRANS_TABLES`, `NO_ZERO_DATE` and `ONLY_FULL_GROUP_BY` stay as your server has them. When the server's mode changes, the next run re-creates the procedures. |
+| `explicit_defaults_for_timestamp` | Turned on while tables are created and altered, so a `TIMESTAMP` column gets exactly the default it declares. With it off, the default on MySQL 5.7 and MariaDB before 10.10, the server would invent one. A few MariaDB versions (10.2, 10.3 and early 10.4 to 10.6 patches) do not let a session change it; there the deploy logs a note, and a `TIMESTAMP NOT NULL` column needs its default declared. |
+| `time_zone` | DataTongs extracts at `+00:00` and records that on the delivery it configures (`TimeZone`). Delivery uses the recorded zone, so `TIMESTAMP` values arrive unchanged whatever zone either server runs in. A delivery without `TimeZone` runs in the session's zone. |
+| `sql_mode` during data delivery | `NO_AUTO_VALUE_ON_ZERO` is added, so a row whose `AUTO_INCREMENT` key is `0` keeps `0`. |
+| `sql_require_primary_key` (MySQL), `innodb_force_primary_key` (MariaDB) | SchemaSmith's own tables all have primary keys. Your tables must declare one, because the server refuses any table without it. |
+| `information_schema_stats_expiry` (MySQL 8.0+) | Read past for `AUTO_INCREMENT`, on deploy and on extraction, so a stale statistics cache cannot hide the table's current value. |
+| `lower_case_table_names` | See [Name case on MySQL](#name-case-on-mysql). |
+
 ---
 
 ## Quench Slots
