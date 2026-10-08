@@ -10,8 +10,11 @@ using Schema.Utility;
 
 namespace SchemaTongs;
 
-/// <summary>Where an extracted table should be written, and whether it is an ungated emit.</summary>
-public sealed record TableResolution(string WritePath, bool UngatedEmit);
+/// <summary>
+/// Where an extracted table should be written, and whether it is an ungated emit. <see cref="ExistingSchema"/> is the
+/// <c>Schema</c> the matched file declares, as written, so a refresh can keep the file's form.
+/// </summary>
+public sealed record TableResolution(string WritePath, bool UngatedEmit, string ExistingSchema = "");
 
 /// <summary>
 /// Resolves the write target for an extracted table by CONTENT identity (Schema + Name) against the
@@ -26,15 +29,17 @@ public sealed class TableFileResolver
     private readonly string _tablesDir;
     private readonly bool _isSchemaTemplate;
     private readonly Func<string, bool> _isVariantActive;
+    private readonly Platform _platform;
     private readonly Dictionary<(string Schema, string Name), List<TableFileEntry>> _byIdentity = new(IdentityComparer.Instance);
 
-    private sealed record TableFileEntry(string Path, string Gate, string VariantName);
+    private sealed record TableFileEntry(string Path, string Gate, string VariantName, string DeclaredSchema);
 
     public TableFileResolver(string tablesDir, Platform platform, bool isSchemaTemplate, Func<string, bool> isVariantActive)
     {
         _tablesDir = tablesDir;
         _isSchemaTemplate = isSchemaTemplate;
         _isVariantActive = isVariantActive;
+        _platform = platform;
 
         var directory = DirectoryWrapper.GetFromFactory();
         if (!directory.Exists(tablesDir)) return;
@@ -48,11 +53,11 @@ public sealed class TableFileResolver
 
             // Schema-template files are schema-scrubbed on extraction, so identity is name-only there.
             // Identifiers load quoted ([dbo], `Widget`); normalize so they match the unquoted query.
-            var schema = _isSchemaTemplate ? "" : TableFileName.NormalizeIdentifier((table as IDeliverableTable)?.Schema ?? "");
-            var key = (schema, TableFileName.NormalizeIdentifier(table.Name));
+            var declaredSchema = (table as IDeliverableTable)?.Schema ?? "";
+            var key = (_isSchemaTemplate ? "" : IdentitySchema(declaredSchema), TableFileName.NormalizeIdentifier(table.Name));
             if (!_byIdentity.TryGetValue(key, out var entries))
                 _byIdentity[key] = entries = new List<TableFileEntry>();
-            entries.Add(new TableFileEntry(path, table.ShouldApplyExpression ?? "", table.VariantName ?? ""));
+            entries.Add(new TableFileEntry(path, table.ShouldApplyExpression ?? "", table.VariantName ?? "", declaredSchema));
         }
     }
 
@@ -64,20 +69,31 @@ public sealed class TableFileResolver
         // SS-FILE-NAME-003 check, which derives its canonical name with the same empty-schema test,
         // so extraction output and validation agree by construction.
         var schemaLess = _isSchemaTemplate || string.IsNullOrEmpty(schema);
-        var key = (_isSchemaTemplate ? "" : TableFileName.NormalizeIdentifier(schema), TableFileName.NormalizeIdentifier(name));
+        var key = (_isSchemaTemplate ? "" : IdentitySchema(schema), TableFileName.NormalizeIdentifier(name));
         var matches = _byIdentity.TryGetValue(key, out var entries) ? entries : new List<TableFileEntry>();
 
         if (matches.Count == 0)
             return new TableResolution(Path.Join(_tablesDir, TableFileName.Canonical(schema, name, "", schemaLess)), UngatedEmit: false);
 
         if (matches.Count == 1)
-            return new TableResolution(matches[0].Path, UngatedEmit: false);
+            return new TableResolution(matches[0].Path, UngatedEmit: false, matches[0].DeclaredSchema);
 
         // Variant set: attribute the extracted shape to the active variant, or emit ungated.
         var decision = VariantAttribution.Decide(matches, e => e.Gate, _isVariantActive);
         return decision.Action == VariantAction.RefreshActive
-            ? new TableResolution(matches[decision.ActiveIndex].Path, UngatedEmit: false)
+            ? new TableResolution(matches[decision.ActiveIndex].Path, UngatedEmit: false, matches[decision.ActiveIndex].DeclaredSchema)
             : new TableResolution(Path.Join(_tablesDir, TableFileName.Canonical(schema, name, "", schemaLess)), UngatedEmit: true);
+    }
+
+    // PostgreSQL extraction omits the default schema from content, while a hand-written or demo package often
+    // declares it. Both name the same table; keyed apart, a re-extract wrote a duplicate beside the original.
+    private string IdentitySchema(string schema)
+    {
+        var normalized = TableFileName.NormalizeIdentifier(schema);
+        return _platform.GetBasePlatform() == Platform.PostgreSQL
+               && string.Equals(normalized, _platform.GetDefaultSchema(), StringComparison.Ordinal)
+            ? ""
+            : normalized;
     }
 
     private sealed class IdentityComparer : IEqualityComparer<(string Schema, string Name)>

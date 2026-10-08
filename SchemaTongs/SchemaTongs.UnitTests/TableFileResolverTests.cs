@@ -69,6 +69,34 @@ public class TableFileResolverTests
         Assert.That(Path.GetFileName(res.WritePath), Is.EqualTo("dbo.Orders.json"));
     }
 
+    // Extraction omits PostgreSQL's default schema from content; the shipped demos declare it. A re-extract keyed the
+    // two apart and wrote a bare duplicate beside every declared file, without its DataDelivery.
+    [TestCase("public")]
+    [TestCase("\\\"public\\\"")]
+    public void Resolve_PostgreSqlFileDeclaringPublic_MatchesTheSchemaLessExtraction_AndReportsItsForm(string declared)
+    {
+        var existing = Path.Join("pkg", "Tables", "public.categories.json");
+        StubTablesFolder((existing, TableJson(declared, "categories")));
+
+        var resolver = new TableFileResolver(TablesDir, Platform.PostgreSQL, isSchemaTemplate: false, AnyGate);
+        var res = resolver.Resolve("", "categories");
+
+        Assert.That(res.WritePath, Is.EqualTo(existing));
+        Assert.That(res.ExistingSchema, Is.EqualTo(declared.Replace("\\\"", "\"")));
+    }
+
+    // Only the default schema folds: a named schema is a different table.
+    [Test]
+    public void Resolve_PostgreSqlFileInANamedSchema_DoesNotMatchTheDefaultSchema()
+    {
+        StubTablesFolder((Path.Join("pkg", "Tables", "sales.categories.json"), TableJson("sales", "categories")));
+
+        var resolver = new TableFileResolver(TablesDir, Platform.PostgreSQL, isSchemaTemplate: false, AnyGate);
+        var res = resolver.Resolve("", "categories");
+
+        Assert.That(Path.GetFileName(res.WritePath), Is.EqualTo("categories.json"));
+    }
+
     [Test]
     public void Resolve_SingleExistingMatch_NonCanonicalName_ReturnsExistingPath()
     {

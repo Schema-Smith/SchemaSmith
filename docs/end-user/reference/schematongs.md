@@ -207,7 +207,7 @@ The `--ConnectionString` switch bypasses all `Source` settings entirely. When pr
 | `Product:Path` | string | _(required)_ | Directory where the schema package is created or updated. |
 | `Product:Name` | string | _(directory name)_ | Product name written to `Product.json`. If blank, defaults to the last segment of `Product:Path`. |
 | `Product:CheckConstraintStyle` | string | `ColumnLevel` | Controls how check constraints are written when creating a new `Product.json`. See [CheckConstraintStyle](#checkconstraintstyle). |
-| `Product:ObjectOrder` | string | `Name` | Sequence used for a table's **column list** when there is nothing to preserve. `Name` sorts alphabetically; `Physical` uses the table's own column order. Every other list is always name-ordered. See [Column and object order](#column-and-object-order). |
+| `Product:ObjectOrder` | string | `Physical` | Sequence used for a table's **column list** when there is nothing to preserve. `Physical` uses the table's own column order; `Name` sorts alphabetically. Every other list is always name-ordered. See [Column and object order](#column-and-object-order). |
 | `Product:PreserveExistingOrder` | bool | `true` | When a table file already exists, keep the order it already had. See [Column and object order](#column-and-object-order). |
 | `Template:Name` | string | Source database name | Template name. Creates the template directory under `Templates/<Name>/`. Defaults to the `Source:Database` value when not specified. |
 
@@ -334,6 +334,11 @@ SchemaTongs builds a file index for each extraction folder before extraction beg
 
 Orphan detection only runs for object types that were fully extracted (`ShouldCast` flag enabled and no `ObjectList` filter active).
 
+Two kinds of file are never orphans, because extraction was never going to write them:
+
+- **Files in the SchemaSmith namespace** -- `SchemaSmith.<name>` on SQL Server and PostgreSQL, `SchemaSmith_<name>` on MySQL and MariaDB. Extraction does not read that namespace (see [Excluded Objects](#excluded-objects)), but your own objects can live there: the [recycle-bin hooks](recyclebin.md) do.
+- **Gated table declarations** -- a table file with a `ShouldApplyExpression` whose table is absent from this source. The gate kept it off this database; it was not removed.
+
 ### The core tension
 
 An "orphan" might be a script for an object that was genuinely removed from the database, OR it might be a new object you added to the package that has not been deployed yet. Deleting it automatically would destroy your pending work. The default (`Detect`) is conservative because it never destroys anything -- it just tells you.
@@ -374,7 +379,7 @@ SchemaTongs writes each table file under a canonical name derived from the table
 
 The optional `VariantName` segment comes after the schema and table, so a table's [conditional variants](schema-packages.md#conditional-application) sort together in source control and in a file listing. The schema segment is omitted whenever the table's content carries no `Schema` (`<table>[.<VariantName>].json`): MySQL and MariaDB, which have no per-table schema; schema-template packages, where the schema is the iteration variable; and PostgreSQL tables in the default `public` schema, which SchemaTongs omits from the written content so the deploy re-resolves it. A PostgreSQL table in a *named* schema keeps both the content `Schema` and the filename prefix (`sales.order_lines.json`).
 
-A table's identity lives in its file *content* -- `Schema`, `Name`, and `VariantName` -- not in its filename. SchemaTongs matches an existing file to an extracted table by that content identity, so a file you renamed by hand is still found and refreshed in place rather than duplicated. The canonical name is a convention, not a contract: if a file's name drifts from canonical, the deploy still works and [`--Validate`](validate.md#file-naming) emits an `SS-FILE-NAME-003` warning pointing at the canonical name.
+A table's identity lives in its file *content* -- `Schema`, `Name`, and `VariantName` -- not in its filename. SchemaTongs matches an existing file to an extracted table by that content identity, so a file you renamed by hand is still found and refreshed in place rather than duplicated. On PostgreSQL, `"Schema": "public"` and an absent `Schema` are the same identity: extraction omits the default schema, and a file that declares it is refreshed in place and keeps declaring it. The canonical name is a convention, not a contract: if a file's name drifts from canonical, the deploy still works and [`--Validate`](validate.md#file-naming) emits an `SS-FILE-NAME-003` warning pointing at the canonical name.
 
 ## Variant Reconciliation on Re-Extraction
 
@@ -498,13 +503,16 @@ that arrangement every time it is refreshed.
 
 Set it to `false` to have every extraction re-sequence the whole file from scratch using `ObjectOrder`.
 
-### ObjectOrder (default `Name`)
+### ObjectOrder (default `Physical`)
 
-`Name` sorts alphabetically. It is the default because it is stable: the same table extracts identically
-whichever engine it came from, and it does not shift when a source table's internal column order changes.
+`Physical` writes the columns in the table's own order. It is the default because SchemaQuench creates a new
+table with its columns in file order: a table deployed fresh from the package then has the same column order
+as the table it came from, so code that relies on position -- an `INSERT` without a column list, a
+`SELECT *` read by ordinal -- behaves the same against both.
 
-`Physical` uses the table's own column order instead, which is useful when you want the package to read
-the way the table does. Two points worth knowing:
+`Name` sorts the columns alphabetically instead. It is stable: the same table extracts identically whichever
+server it came from, and it does not shift when a source table's column order changes. Two points worth
+knowing:
 
 - It applies to the **column list only**. Indexes, foreign keys, check constraints and statistics have no
   ordinal that anyone authors toward, so those stay alphabetical either way.
@@ -532,8 +540,8 @@ SET @SchemaSmith_ObjectOrder = 'Physical';
 CALL SchemaSmith_GenerateTableJSON('mydb', 'customer');
 ```
 
-Omit the argument (or leave the session variable unset) and you get `Name`, which is what the tool writes
-by default.
+Omit the argument (or leave the session variable unset) and you get `Name`. SchemaTongs always passes the
+order explicitly, so the tool's own default is `Physical`.
 > **Called by hand, the argument reorders columns only.** The setting orders a table's other object
 > lists too — indexes, foreign keys, check constraints, and on SQL Server statistics and XML indexes
 > — but SchemaTongs sequences those itself after the procedure returns. So a direct `CALL` with
@@ -642,7 +650,7 @@ SchemaTongs automatically excludes the platform's system schemas and internal in
 - **System objects** -- Anything flagged as system-shipped by the source engine.
 - **System schemas** -- `sys` and `INFORMATION_SCHEMA` (SQL Server); `pg_catalog`, `information_schema`, `pg_toast`, and the per-session `pg_temp_*` / `pg_toast_temp_*` schemas (PostgreSQL). On MySQL, SchemaTongs is single-schema-scoped: it extracts only the schema named in `Source:Database`, so the system schemas (`mysql`, `information_schema`, `performance_schema`, `sys`) are simply outside scope unless you point at one explicitly.
 - **User schemas are NOT excluded.** SQL Server's `dbo` and `guest`, and PostgreSQL's `public`, are user schemas. Their tables, views, procedures, functions, triggers, and types are all extracted normally. The shipped Northwind demo lives under `dbo` and round-trips end to end.
-- **SchemaSmith infrastructure** -- All objects in the `SchemaSmith` schema (the helper procedures SchemaTongs and SchemaQuench deploy).
+- **SchemaSmith infrastructure** -- All objects in the `SchemaSmith` schema, or named `SchemaSmith_*` on MySQL and MariaDB (the helper procedures SchemaTongs and SchemaQuench deploy). Files you keep there, such as the recycle-bin hooks, are left alone by [Orphan Detection](#orphan-detection).
 - **Schema-creation script gaps (SQL Server)** -- The pass that emits `Schemas/*.sql` scripts additionally skips system-shipped schemas (`schema_id <= 4`, which covers `dbo`, `guest`, `INFORMATION_SCHEMA`, `sys`) and database-role schemas (names matching `db[_]%`). Object extraction under those schemas is not affected -- the gap is only in the standalone `CREATE SCHEMA` scripts.
 - **Replication artifacts** (SQL Server) -- Tables prefixed with `MSPeer_` or `MSPub_`.
 - **Legacy system tables** (SQL Server) -- `dtproperties` and `sysdiagrams`.

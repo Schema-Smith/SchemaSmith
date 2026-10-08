@@ -226,6 +226,32 @@ public class OrphanHandlerTests
             Arg.Is<string>(s => s.Contains("DROP PROCEDURE")));
     }
 
+    // The recycle-bin hooks are user-authored procedures in SchemaSmith's own namespace, which extraction never reads.
+    // Treated as orphans, they were deleted from the package and the cleanup script dropped them from the database.
+    [TestCase(Platform.SqlServer, "SchemaSmith.CustomTableDrop.sql")]
+    [TestCase(Platform.PostgreSQL, "SchemaSmith.CustomTableRestore.sql")]
+    [TestCase(Platform.MySQL, "SchemaSmith_CustomTableDrop.sql")]
+    [TestCase(Platform.MariaDb, "SchemaSmith_CustomTableRestore.sql")]
+    public void ProcessOrphans_DetectDeleteAndCleanup_SchemaSmithNamespaceFile_IsNeitherDroppedNorDeleted(Platform platform, string hookFile)
+    {
+        var procsPath = Path.Join("C:", "pkg", "template", "Procedures");
+        var hook = Path.Join(procsPath, hookFile);
+        var realOrphan = Path.Join(procsPath, platform.GetBasePlatform() == Platform.MySQL ? "OldProc.sql" : "dbo.OldProc.sql");
+
+        var index = CreateIndexWithOrphans(procsPath, [hook, realOrphan], []);
+        var folderIndexes = new Dictionary<string, ExtractionFileIndex> { ["Procedures"] = index };
+        var folderObjectTypes = new Dictionary<string, ScriptObjectType> { ["Procedures"] = ScriptObjectType.Procedures };
+
+        new OrphanHandler().ProcessOrphans(folderIndexes, platform, OrphanHandlingMode.DetectDeleteAndCleanup,
+            ["Procedures"], Path.Join("C:", "logs"), folderObjectTypes);
+
+        _file.Received(1).Delete(realOrphan);
+        _file.DidNotReceive().Delete(hook);
+        _file.Received(1).WriteAllText(Arg.Any<string>(), Arg.Is<string>(s => s.Contains("OldProc")));
+        _file.DidNotReceive().WriteAllText(Arg.Any<string>(), Arg.Is<string>(s => s.Contains("CustomTable")));
+        _progressLog.DidNotReceive().Warn(Arg.Is<string>(s => s.Contains("CustomTable")));
+    }
+
     [Test]
     public void ProcessOrphans_DetectDeleteAndCleanup_GatedTableFile_NotDeleted()
     {
