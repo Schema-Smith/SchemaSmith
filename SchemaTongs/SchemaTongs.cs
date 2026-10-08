@@ -3380,7 +3380,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                 try
                 {
                     var json = _ingestEncoding == IngestEncoding.Xml
-                        ? ExtractTableModelXml(commandJson, tableSchema, tableName)
+                        ? ExtractTableModelXml(commandJson, tableSchema, tableName, _objectOrder)
                         : ExtractTableModelJson(commandJson, tableSchema, tableName, _objectOrder);
                     if (string.IsNullOrWhiteSpace(json) || json.Trim().Equals("{}"))
                     {
@@ -3473,9 +3473,9 @@ SELECT cc.name AS [Name],
     // Legacy encoding (pre-2016 binary, or Source:CompatEncoding=legacy): GenerateTableXml emits the model
     // as FOR XML PATH, converted back to the JSON model via ModelXmlSerializer.FromIngestXml. FOR XML also
     // splits across rows past ~2033 chars, so concatenate every row into the single <Table> document first.
-    private static string ExtractTableModelXml(IDbCommand command, string tableSchema, string tableName)
+    private static string ExtractTableModelXml(IDbCommand command, string tableSchema, string tableName, ObjectOrder objectOrder)
     {
-        command.CommandText = $"EXEC SchemaSmith.GenerateTableXml @p_Schema = '{EscapeSql(tableSchema)}', @p_Table = '{EscapeSql(tableName)}'";
+        command.CommandText = $"EXEC SchemaSmith.GenerateTableXml @p_Schema = '{EscapeSql(tableSchema)}', @p_Table = '{EscapeSql(tableName)}', @p_ObjectOrder = '{objectOrder}'";
         using var reader = command.ExecuteReader();
         var xml = new StringBuilder();
         while (reader.Read())
