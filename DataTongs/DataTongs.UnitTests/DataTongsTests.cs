@@ -1256,10 +1256,65 @@ public class DataTongsTests
             FactoryContainer.Register(dirWrapper);
             LogFactory.Register("ProgressLog", progressLog);
 
+            var errorLog = Substitute.For<ILog>();
+            LogFactory.Register("ErrorLog", errorLog);
+
             var dt = new global::DataTongs.DataTongs(Platform.SqlServer);
             dt.CastData();
 
             progressLog.Received().Error(Arg.Is<string>(s => s.Contains("Invalid KeyColumns")));
+            // A skipped table is an incomplete run: exit 1, and the reason is in Errors.log.
+            Assert.That(dt.ExitCode, Is.EqualTo(1));
+            errorLog.Received().Error(Arg.Is<object>(o => o.ToString().Contains("Invalid KeyColumns")));
+
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
+    // A table whose extraction throws used to be logged to the console only, and the run exited 0 with an empty
+    // Errors.log.
+    [Test]
+    public void CastData_TableThatFailsExtraction_ExitsTwo_AndWritesErrorsLog()
+    {
+        var progressLog = Substitute.For<ILog>();
+        var errorLog = Substitute.For<ILog>();
+        var connectionFactory = Substitute.For<IDbConnectionFactory>();
+        var connection = Substitute.For<IDbConnection>();
+        var command = Substitute.For<IDbCommand>();
+        var dirWrapper = Substitute.For<IDirectory>();
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+        {
+            ["Source:Server"] = "localhost",
+            ["Source:Database"] = "testdb",
+            ["Source:User"] = "user",
+            ["Source:Password"] = "pass",
+            ["Tables:0:Name"] = "dbo.Users",
+            ["Tables:0:KeyColumns"] = "Id"
+        }).Build();
+
+        connectionFactory.GetDbConnection(Arg.Any<string>()).Returns(connection);
+        connection.CreateCommand().Returns(command);
+        command.ExecuteScalar().Returns(true); // TableExists
+        command.ExecuteReader().Returns(_ => throw new InvalidOperationException("the source dropped the connection"));
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Register<IConfigurationRoot>(config);
+            FactoryContainer.Register<IDbConnectionFactory>(connectionFactory);
+            FactoryContainer.Register(dirWrapper);
+            LogFactory.Register("ProgressLog", progressLog);
+            LogFactory.Register("ErrorLog", errorLog);
+
+            var dt = new global::DataTongs.DataTongs(Platform.SqlServer);
+            dt.CastData();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(dt.ExitCode, Is.EqualTo(2));
+                errorLog.Received().Error(Arg.Is<object>(o => o.ToString().Contains("dbo.Users")), Arg.Is<Exception>(e => e.Message.Contains("dropped the connection")));
+            });
 
             FactoryContainer.Clear();
             LogFactory.Clear();
