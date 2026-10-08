@@ -574,6 +574,8 @@ public static class ForgeKindler
                 // unconditionally. Must precede BOTH GenerateTableJson (CALLs it for extraction) and
                 // ModifiedTableQuench (CALLs it in the tablespace-move refuse guard), which is why it sits
                 // just ahead of the former.
+                // InnoDB's filename-encoded spelling of a name, which both placement reads below match on.
+                new("SchemaSmith_InnodbName.sql"),
                 new("SchemaSmith_TableTablespace.sql"),
                 // The DATA DIRECTORY placement read (F2c), both engines -- unlike SchemaSmith_TableTablespace
                 // above (MySQL-only), the MariaDb per-file override here resolves through the same

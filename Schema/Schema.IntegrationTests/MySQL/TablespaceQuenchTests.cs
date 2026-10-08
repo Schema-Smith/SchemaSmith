@@ -32,6 +32,7 @@ public class TablespaceQuenchTests
     private const string Tablespace2 = "ss_test_tablespace_2";
 
     private IDbConnection _connection = null!;
+    private bool _sysViews;
     private string _testDb = null!;
 
     [OneTimeSetUp]
@@ -41,15 +42,10 @@ public class TablespaceQuenchTests
         _connection = DbConnectionFactory.ForPlatform(Platform.MySQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         _connection.Open();
 
-        // Version gate: SchemaSmith_TableTablespace's read is gated to MySQL 8.0+ (below the floor it returns
-        // NULL), so on the MySQL 5.7 floor a placed table reads back as unplaced and the round-trip/refuse
-        // tests would fail for a version where the feature is deliberately unreported. Skip the fixture there
-        // rather than fail — the same posture the DataDirectory and encryption fixtures take for absent infra.
+        // 5.7 keeps the placement facts under the SYS_-prefixed view names; the reader and this fixture's own
+        // catalog read both pick the names by version.
         var version = ScalarStr("SELECT VERSION()") ?? "";
-        var major = int.TryParse(version.Split('.')[0], out var m) ? m : 0;
-        if (major < 8)
-            Assert.Ignore($"MySQL general-tablespace placement requires MySQL 8.0+ (SchemaSmith_TableTablespace "
-                          + $"is gated below 8.0); this server is '{version}'. Not applicable on the floor.");
+        _sysViews = int.TryParse(version.Split('.')[0], out var m) && m < 8;
 
         // Defensive: a prior aborted run could have left either object behind.
         Exec($"DROP TABLE IF EXISTS `{_testDb}`.`{TableName}`");
@@ -108,18 +104,18 @@ public class TablespaceQuenchTests
         return r == null || r == DBNull.Value ? null : r.ToString();
     }
 
-    private void Deploy(string extraProps, int whatIf = 0)
+    private void Deploy(string extraProps, int whatIf = 0, string table = TableName)
     {
-        var json = "[{ \"Name\": \"`" + TableName + "`\", \"Engine\": \"InnoDB\"" + extraProps
+        var json = "[{ \"Name\": \"`" + table + "`\", \"Engine\": \"InnoDB\"" + extraProps
                    + ", \"Columns\": [ { \"Name\": \"`id`\", \"DataType\": \"INT\", \"Nullable\": false } ],"
-                   + " \"Indexes\": [ { \"Name\": \"`pk_" + TableName + "`\", \"PrimaryKey\": true, \"Unique\": true, \"IndexColumns\": \"`id`\" } ] }]";
+                   + " \"Indexes\": [ { \"Name\": \"`pk_" + table.Replace("-", "_") + "`\", \"PrimaryKey\": true, \"Unique\": true, \"IndexColumns\": \"`id`\" } ] }]";
         Exec($"CALL SchemaSmith_TableQuench('TablespaceProduct', '{_testDb}', '{json.Replace("'", "''")}', {whatIf}, 0, 0)");
     }
 
-    private string ExtractedJson()
+    private string ExtractedJson(string table = TableName)
     {
         using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_testDb}', '{TableName}')";
+        cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_testDb}', '{table}')";
         var r = cmd.ExecuteScalar();
         return r == null || r == DBNull.Value ? "" : r.ToString();
     }
@@ -132,9 +128,39 @@ public class TablespaceQuenchTests
     // CREATE TABLE SQL -- is the outcome that actually matters: the table really is (or is not)
     // physically placed in the tablespace.
     private string DeployedTablespace() => ScalarStr(
-        $"SELECT ts.NAME FROM INFORMATION_SCHEMA.INNODB_TABLES it "
-        + $"JOIN INFORMATION_SCHEMA.INNODB_TABLESPACES ts ON ts.SPACE = it.SPACE "
+        $"SELECT ts.NAME FROM INFORMATION_SCHEMA.{(_sysViews ? "INNODB_SYS_TABLES" : "INNODB_TABLES")} it "
+        + $"JOIN INFORMATION_SCHEMA.{(_sysViews ? "INNODB_SYS_TABLESPACES" : "INNODB_TABLESPACES")} ts ON ts.SPACE = it.SPACE "
         + $"WHERE it.NAME = '{_testDb}/{TableName}' AND ts.SPACE_TYPE = 'General'");
+
+    // InnoDB stores `ts-probe` as `ts@002dprobe`. Matching the raw name missed it, so the placement read back as none:
+    // extraction dropped it, and a redeploy declaring it was refused as a move.
+    [Test]
+    public void ATableWhoseNameInnoDbEncodes_RoundTripsItsTablespace()
+    {
+        const string table = "ts-probe";
+        try
+        {
+            Deploy($", \"Tablespace\": \"{Tablespace1}\"", table: table);
+            Assert.That(ExtractedJson(table), Does.Contain(Tablespace1), ExtractedJson(table));
+            Assert.DoesNotThrow(() => Deploy($", \"Tablespace\": \"{Tablespace1}\"", table: table),
+                "redeploying the same placement must not be refused as a move");
+        }
+        finally
+        {
+            Exec($"DROP TABLE IF EXISTS `{_testDb}`.`{table}`");
+        }
+    }
+
+    // A table placed explicitly in the system tablespace is space 0, which has no tablespace row, so it read back as
+    // unplaced and a redeploy declaring innodb_system was refused.
+    [Test]
+    public void ATableInTheSystemTablespace_RoundTripsIt()
+    {
+        Deploy(", \"Tablespace\": \"innodb_system\"");
+        Assert.That(ExtractedJson(), Does.Contain("innodb_system"), ExtractedJson());
+        Assert.DoesNotThrow(() => Deploy(", \"Tablespace\": \"innodb_system\""),
+            "redeploying the same placement must not be refused as a move");
+    }
 
     [Test]
     public void Tablespace_IsAppliedAndRoundTrips()

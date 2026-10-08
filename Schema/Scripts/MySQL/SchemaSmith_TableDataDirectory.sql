@@ -47,65 +47,31 @@ BEGIN
     -- a partitioned table therefore does not round-trip and is not refuse-guarded on redeploy -- per-partition
     -- placement is out of scope, and resolving the table-level default from the partition catalog is a
     -- deliberate follow-up decision, not silently papered over here.
-    IF SchemaSmith_ServerVersionNum() < 800 THEN
-        SET p_DataDirectory = NULL;
-    ELSE
-      -- Nested block so the NOT FOUND handler below is scoped to (and consumed by) the zero-row read, and
-      -- can never escape to a caller. A no-match `SELECT ... INTO` raises SQLSTATE 02000 (NOT FOUND), NOT
-      -- merely a warning, inside a stored program. Callers run this CALL with their OWN
-      -- `CONTINUE HANDLER FOR NOT FOUND` active (ModifiedTableQuench's DATA DIRECTORY refuse cursor;
-      -- extraction cursors above GenerateTableJson): if this callee left 02000 unhandled it would propagate
-      -- up and fire the CALLER's handler, prematurely tripping its loop-done flag and silently skipping
-      -- every remaining table -- a false-negative refuse, or a truncated extraction. Handling it locally
-      -- (leaving @ss_tdd_out at its NULL seed) keeps the "no declared placement" common case a non-event
-      -- regardless of caller context.
-      BEGIN
-        -- Computed OUTSIDE the dynamic-SQL string (plain SQL, using the routine's own IN params) so the
-        -- string stays a single simple SELECT -- the suffix-stripping below runs after EXECUTE returns.
+    -- 5.7 keeps the same facts under the SYS_-prefixed names, chosen by version inside the dynamic string so only the
+    -- present ones are ever parsed; reading NULL there refused every redeploy of a table that declared a directory.
+    -- InnoDB names the table, and its .ibd file, in the filename-encoded form (SchemaSmith_InnodbName).
+    BEGIN
         DECLARE v_suffix VARCHAR(600) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
         DECLARE CONTINUE HANDLER FOR NOT FOUND SET @ss_tdd_out = NULL;
-
-        -- Session variables, not routine params, inside the dynamic SQL string: a prepared statement
-        -- cannot reference IN/local routine variables directly, only session (@-prefixed) ones.
-        SET @ss_tdd_schema = p_Schema;
-        SET @ss_tdd_table = p_Table;
+        SET @ss_tdd_name = CONCAT(SchemaSmith_InnodbName(p_Schema), '/', SchemaSmith_InnodbName(p_Table));
         SET @ss_tdd_out = NULL;
-        -- A single multi-line quoted string literal, NOT '...' || '...' concatenation -- MySQL treats ||
-        -- as logical OR by default (PIPES_AS_CONCAT is an opt-in SQL mode, not assumable here). Matches the
-        -- existing CHECK_CONSTRAINTS dynamic-SQL block in SchemaSmith_GenerateTableJson.sql and the sibling
-        -- SchemaSmith_TableTablespace: embedded literals are doubled single quotes ('' for a literal ').
-        SET @ss_tdd_sql = 'SELECT df.PATH INTO @ss_tdd_out
-FROM INFORMATION_SCHEMA.INNODB_DATAFILES df
-JOIN INFORMATION_SCHEMA.INNODB_TABLES it ON it.SPACE = df.SPACE
-WHERE it.NAME = CONCAT(@ss_tdd_schema, ''/'', @ss_tdd_table)
-LIMIT 1';
+        SET @ss_tdd_sql = CONCAT('SELECT df.PATH INTO @ss_tdd_out
+FROM INFORMATION_SCHEMA.', IF(SchemaSmith_ServerVersionNum() < 800, 'INNODB_SYS_DATAFILES', 'INNODB_DATAFILES'), ' df
+JOIN INFORMATION_SCHEMA.', IF(SchemaSmith_ServerVersionNum() < 800, 'INNODB_SYS_TABLES', 'INNODB_TABLES'), ' it ON it.SPACE = df.SPACE
+WHERE it.NAME = @ss_tdd_name
+LIMIT 1');
         PREPARE ss_tdd_stmt FROM @ss_tdd_sql;
         EXECUTE ss_tdd_stmt;
         DEALLOCATE PREPARE ss_tdd_stmt;
-
-        -- No matching row leaves @ss_tdd_out at the NULL seed above (should not happen -- the caller
-        -- always names an existing table -- but the handler above keeps it harmless either way).
-        --
-        -- A `./`-relative PATH means the table lives in the default datadir -- no declared placement.
-        -- An absolute PATH's declared directory is everything before its trailing /<schema>/<table>.ibd,
-        -- which is what the data file is always named -- stripping that known suffix, rather than parsing
-        -- forward, is robust to a directory path that itself contains slashes.
-        SET v_suffix = CONCAT('/', p_Schema, '/', p_Table, '.ibd');
+        SET v_suffix = CONCAT('/', @ss_tdd_name, '.ibd');
         IF @ss_tdd_out IS NULL OR LEFT(@ss_tdd_out, 2) = './' THEN
             SET p_DataDirectory = NULL;
         ELSEIF RIGHT(@ss_tdd_out, CHAR_LENGTH(v_suffix)) = v_suffix THEN
-            -- TRIM(TRAILING '/' ...) is defensive, not load-bearing here (the suffix strip above already
-            -- leaves no trailing slash) -- it keeps this derivation and the MariaDb CREATE_OPTIONS-parsed
-            -- one below normalizing to the identical no-trailing-slash form.
             SET p_DataDirectory = TRIM(TRAILING '/' FROM LEFT(@ss_tdd_out, CHAR_LENGTH(@ss_tdd_out) - CHAR_LENGTH(v_suffix)));
         ELSE
-            -- Defensive: PATH did not end with the expected <schema>/<table>.ibd suffix -- should not
-            -- happen given the join predicate above pins it to this exact table -- report unplaced rather
-            -- than emit a mangled path.
             SET p_DataDirectory = NULL;
         END IF;
-      END;
-    END IF;
+    END;
 END //
 
 DELIMITER ;

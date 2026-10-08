@@ -42,47 +42,39 @@ BEGIN
     -- form: INNODB_TABLESPACES.NAME for a file-per-table space is the SCHEMA/TABLE name itself (SPACE_TYPE
     -- 'Single'), not a tablespace a user could have declared, so it must never read back as a placement.
     --
-    -- Below MySQL 8.0 the unprefixed INNODB_TABLES/INNODB_TABLESPACES views do not exist at all (5.7 has
-    -- only the SYS_-prefixed names), so the read degrades to NULL there -- general-tablespace placement is
-    -- simply unreported below the floor. The dynamic-SQL string is never built or PREPAREd in that branch,
-    -- so nothing below-floor-unsafe is ever parsed.
-    IF SchemaSmith_ServerVersionNum() < 800 THEN
-        SET p_Tablespace = NULL;
-    ELSE
-      -- Nested block so the NOT FOUND handler below is scoped to (and consumed by) the zero-row read,
-      -- and can never escape to a caller. A no-match `SELECT ... INTO` raises SQLSTATE 02000 (NOT FOUND),
-      -- NOT merely a warning, inside a stored program. Callers run this CALL with their OWN
-      -- `CONTINUE HANDLER FOR NOT FOUND` active (ModifiedTableQuench STEP -0.4's refuse cursor;
-      -- extraction cursors above GenerateTableJson): if this callee left 02000 unhandled it would
-      -- propagate up and fire the CALLER's handler, prematurely tripping its loop-done flag and silently
-      -- skipping every remaining table -- a false-negative refuse, or a truncated extraction. Handling it
-      -- locally (leaving @ss_tts_out at its NULL seed) keeps the "no named tablespace" common case a
-      -- non-event regardless of caller context.
-      BEGIN
+    -- MySQL 5.7 has the same facts under the SYS_-prefixed names (INNODB_SYS_TABLES, INNODB_SYS_TABLESPACES, with the
+    -- same columns), so the view names are chosen by version inside the dynamic string and only the present ones are
+    -- ever parsed. Reading NULL there used to refuse every redeploy of a table that declared a tablespace.
+    --
+    -- InnoDB names a table by the filename-encoded form (SchemaSmith_InnodbName), so a name like `a-b` is matched as
+    -- `a@002db`. A table placed explicitly in the system tablespace is space 0, which has no tablespace row; it reads
+    -- back as innodb_system.
+    -- Nested block so the NOT FOUND handler below is scoped to (and consumed by) the zero-row read, and can never
+    -- escape to a caller. A no-match `SELECT ... INTO` raises SQLSTATE 02000 (NOT FOUND), NOT merely a warning, inside
+    -- a stored program. Callers run this CALL with their OWN `CONTINUE HANDLER FOR NOT FOUND` active (ModifiedTableQuench
+    -- STEP -0.4's refuse cursor; extraction cursors above GenerateTableJson): if this callee left 02000 unhandled it would
+    -- propagate up and fire the CALLER's handler, prematurely tripping its loop-done flag and silently skipping every
+    -- remaining table. Handling it locally keeps the "no named tablespace" common case a non-event.
+    BEGIN
         DECLARE CONTINUE HANDLER FOR NOT FOUND SET @ss_tts_out = NULL;
-        -- Session variables, not routine params, inside the dynamic SQL string: a prepared statement
-        -- cannot reference IN/local routine variables directly, only session (@-prefixed) ones.
-        SET @ss_tts_schema = p_Schema;
-        SET @ss_tts_table = p_Table;
+        -- Session variables, not routine params, inside the dynamic SQL string: a prepared statement cannot reference
+        -- IN/local routine variables directly, only session (@-prefixed) ones.
+        SET @ss_tts_name = CONCAT(SchemaSmith_InnodbName(p_Schema), '/', SchemaSmith_InnodbName(p_Table));
         SET @ss_tts_out = NULL;
-        -- A single multi-line quoted string literal, NOT '...' || '...' concatenation -- MySQL treats ||
-        -- as logical OR by default (PIPES_AS_CONCAT is an opt-in SQL mode, not assumable here). Matches
-        -- the existing CHECK_CONSTRAINTS dynamic-SQL block in SchemaSmith_GenerateTableJson.sql: embedded
-        -- literals are doubled single quotes ('' for a literal ').
-        SET @ss_tts_sql = 'SELECT ts.NAME INTO @ss_tts_out
-FROM INFORMATION_SCHEMA.INNODB_TABLES it
-JOIN INFORMATION_SCHEMA.INNODB_TABLESPACES ts ON ts.SPACE = it.SPACE
-WHERE it.NAME = CONCAT(@ss_tts_schema, ''/'', @ss_tts_table)
-  AND ts.SPACE_TYPE = ''General''
-LIMIT 1';
+        -- CONCAT, not ||, which is logical OR unless PIPES_AS_CONCAT is set. Embedded literals are doubled quotes.
+        SET @ss_tts_sql = CONCAT('SELECT CASE WHEN it.SPACE = 0 THEN ''innodb_system'' ELSE ts.NAME END INTO @ss_tts_out
+FROM INFORMATION_SCHEMA.', IF(SchemaSmith_ServerVersionNum() < 800, 'INNODB_SYS_TABLES', 'INNODB_TABLES'), ' it
+LEFT JOIN INFORMATION_SCHEMA.', IF(SchemaSmith_ServerVersionNum() < 800, 'INNODB_SYS_TABLESPACES', 'INNODB_TABLESPACES'), ' ts ON ts.SPACE = it.SPACE
+WHERE it.NAME = @ss_tts_name
+  AND (it.SPACE = 0 OR ts.SPACE_TYPE = ''General'')
+LIMIT 1');
         PREPARE ss_tts_stmt FROM @ss_tts_sql;
         EXECUTE ss_tts_stmt;
         DEALLOCATE PREPARE ss_tts_stmt;
-        -- No matching row leaves @ss_tts_out at the NULL seed above -- the common case (an
-        -- implicit-tablespace table) -- with the 02000 consumed by this block's own handler.
+        -- No matching row leaves @ss_tts_out at the NULL seed above -- the common case (an implicit-tablespace
+        -- table) -- with the 02000 consumed by this block's own handler.
         SET p_Tablespace = @ss_tts_out;
-      END;
-    END IF;
+    END;
 END //
 
 DELIMITER ;
