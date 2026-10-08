@@ -19,6 +19,7 @@ public static class Program
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;
         ConfigHelper.GetAppSettingsAndUserSecrets("SchemaShears", LogFactory.GetLogger("ProgressLog").Info);
         CommandLineParser.WarnOnUnrecognizedArguments(KnownArguments, LogFactory.GetLogger("ProgressLog").Warn);
+        ConfigHelper.CheckStartupSettings(FactoryContainer.Resolve<IConfigurationRoot>(), LogFactory.GetLogger("ProgressLog").Warn);
 
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
         SettingsContract.WarnOnUnrecognizedKeys(config, SettingsTool.SchemaShears, LogFactory.GetLogger("ProgressLog").Warn);

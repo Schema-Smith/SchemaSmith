@@ -21,7 +21,8 @@ namespace Schema.Domain
         // opaque JToken with no member-checking inside.
         internal static readonly JsonSerializerSettings StrictSettings = new()
         {
-            MissingMemberHandling = MissingMemberHandling.Error
+            MissingMemberHandling = MissingMemberHandling.Error,
+            DateParseHandling = DateParseHandling.None
         };
 
         public static Table DeserializeTable(string json, Platform platform)
@@ -91,6 +92,7 @@ namespace Schema.Domain
             return new JsonSerializerSettings
             {
                 MissingMemberHandling = missingMemberHandling,
+                DateParseHandling = DateParseHandling.None,
                 Converters = new List<JsonConverter>
                 {
                     new PlatformItemConverter(typeof(Column), GetColumnType(platform)),

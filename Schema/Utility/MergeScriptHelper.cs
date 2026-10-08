@@ -101,7 +101,7 @@ public static class MergeScriptHelper
         if (string.IsNullOrWhiteSpace(tableData)) return null;
         try
         {
-            var arr = JArray.Parse(tableData);
+            var arr = JsonText.ParseArray(tableData);
             if (arr.Count == 0) return null;
             return arr
                 .SelectMany(t => ((JObject)t).Properties().Select(p => p.Name))
@@ -174,7 +174,7 @@ public static class MergeScriptHelper
     public static string JsonPayloadToXml(string tableData)
     {
         if (string.IsNullOrWhiteSpace(tableData) || tableData == "null") return "";
-        var array = JArray.Parse(tableData);
+        var array = JsonText.ParseArray(tableData);
         if (array.Count == 0) return "";
 
         var rows = new System.Xml.Linq.XElement("rows");
@@ -1992,7 +1992,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         // tokenizeScripts emits a {{table.tabledata}} placeholder resolved later, so there is no
         // payload to slice at build time; that path keeps the single-statement form.
         if (hasJsonTable || tokenizeScripts || string.IsNullOrWhiteSpace(tableData)) return false;
-        try { rows = JArray.Parse(tableData); } catch { return false; }
+        try { rows = JsonText.ParseArray(tableData); } catch { return false; }
         return rows.Count > MariaDbShredChunkRows;
     }
 

@@ -19,6 +19,7 @@ public static class Program
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;
         var config = ConfigHelper.GetAppSettingsAndUserSecrets("DataTongs", LogFactory.GetLogger("ProgressLog").Info);
         CommandLineParser.WarnOnUnrecognizedArguments(KnownArguments, LogFactory.GetLogger("ProgressLog").Warn);
+        ConfigHelper.CheckStartupSettings(config, LogFactory.GetLogger("ProgressLog").Warn);
         SettingsContract.WarnOnUnrecognizedKeys(config, SettingsTool.DataTongs, LogFactory.GetLogger("ProgressLog").Warn);
 
         var platform = ResolvePlatform();

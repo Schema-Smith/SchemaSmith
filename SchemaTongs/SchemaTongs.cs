@@ -303,7 +303,7 @@ public class SchemaTongs
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
         var targetDb = config[SettingsKeys.Source.Database] ?? config[SettingsKeys.Source.Schema];
         if (string.IsNullOrEmpty(targetDb)) throw new Exception("Source database is required. Set 'Source:Database' in appsettings.json.");
-        _productPath = Path.Join(config[SettingsKeys.ProductKeys.Path] ?? ".");
+        _productPath = ConfigHelper.PathSetting(config, SettingsKeys.ProductKeys.Path);
 
         LoadShouldCastSettings(config);
 
@@ -662,7 +662,7 @@ public class SchemaTongs
     {
         var productJson = FileWrapper.GetFromFactory().ReadAllText(productFile);
         var product = productJson != null
-            ? (JsonConvert.DeserializeObject<Product>(productJson) ?? new Product())
+            ? (JsonText.Deserialize<Product>(productJson) ?? new Product())
             : new Product();
         var productStyle = product.CheckConstraintStyle;
 
@@ -708,7 +708,7 @@ public class SchemaTongs
         if (FileWrapper.GetFromFactory().Exists(productFile))
         {
             var productJson = FileWrapper.GetFromFactory().ReadAllText(productFile);
-            var product = productJson != null ? JsonConvert.DeserializeObject<Product>(productJson) : null;
+            var product = productJson != null ? JsonText.Deserialize<Product>(productJson) : null;
             if (product?.ScriptTokens != null) tokens.AddRange(product.ScriptTokens);
         }
 
@@ -2162,7 +2162,7 @@ SELECT s.name AS SchemaName, v.name AS ViewName
                 _progressLog.Error($"    No json returned for {schema}.{name}");
                 continue;
             }
-            var viewObj = JsonConvert.DeserializeObject<SqlServerIndexedView>(viewJson);
+            var viewObj = JsonText.Deserialize<SqlServerIndexedView>(viewJson);
             var viewFile = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".json"));
             // Schema-template mode (design §7.2 / §7.3): strip the Schema field; rewrite the indexed
             // view's Definition body AND any contained filtered-index FilterExpression so source-
@@ -2453,7 +2453,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
                 continue;
             }
 
-            var typeObj = JsonConvert.DeserializeObject<PostgreSqlDomainType>(typeJson);
+            var typeObj = JsonText.Deserialize<PostgreSqlDomainType>(typeJson);
             if (_isSchemaTemplate) typeObj.Schema = null;
             var file = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".json"));
             WritePackageObject(file, typeObj, "domaintypes");
@@ -2515,7 +2515,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
                 continue;
             }
 
-            var typeObj = JsonConvert.DeserializeObject<PostgreSqlEnumType>(typeJson);
+            var typeObj = JsonText.Deserialize<PostgreSqlEnumType>(typeJson);
             if (_isSchemaTemplate) typeObj.Schema = null;
             var file = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".json"));
             WritePackageObject(file, typeObj, "enumtypes");
@@ -2696,7 +2696,7 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
                 continue;
             }
 
-            var seqObj = JsonConvert.DeserializeObject<PostgreSqlSequence>(seqJson);
+            var seqObj = JsonText.Deserialize<PostgreSqlSequence>(seqJson);
             if (_isSchemaTemplate) seqObj.Schema = null;
             var file = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".json"));
             WritePackageObject(file, seqObj, "sequences");
@@ -2827,7 +2827,7 @@ SELECT mv.schemaname, mv.matviewname
                 _progressLog.Error($"    No json returned for {schema}.{name}");
                 continue;
             }
-            var viewObj = JsonConvert.DeserializeObject<PostgreSqlMaterializedView>(viewJson);
+            var viewObj = JsonText.Deserialize<PostgreSqlMaterializedView>(viewJson);
             var viewFile = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".json"));
             // Schema-template mode (design §7.2 / §7.3): strip the Schema field; rewrite the
             // materialized view's Definition body AND any contained filtered-index FilterExpression
@@ -3059,7 +3059,7 @@ SELECT EVENT_NAME
                 continue;
             }
 
-            var eventObj = JsonConvert.DeserializeObject<MySqlEvent>(eventJson);
+            var eventObj = JsonText.Deserialize<MySqlEvent>(eventJson);
             var file = ResolveOutputPath(castPath, EncodeObjectFileName("", name, ".json"));
             WritePackageObject(file, eventObj, "events");
             _stats.Events++;
