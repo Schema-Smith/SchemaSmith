@@ -186,7 +186,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
 
             // TEXT must be read as TEXT in JSON_TABLE, not an oversized CHAR that MariaDB rejects.
             // (MariaDB 10.2-10.5 uses the recursive-CTE shred instead of JSON_TABLE.)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`Notes` TEXT PATH '$.Notes'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain("`Notes` LONGTEXT PATH '$.Notes'"));
 
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
                          .Where(b => !string.IsNullOrWhiteSpace(b)))
@@ -384,7 +384,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
                 tableData, "`id`", true, false, false, false, null!);
 
             // JSON_TABLE should read geometry as TEXT (WKT string)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`location` TEXT PATH '$.location'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain("`location` LONGTEXT PATH '$.location'"));
 
             // JSON_TABLE must also read the "<col>.STSrid" companion the extractors emit beside the WKT
             if (UsesJsonTable)
@@ -473,7 +473,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
                 tableData, "`id`", true, false, false, false, null!);
 
             // JSON_TABLE should read blob as TEXT (Base64 string)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`picture` TEXT PATH '$.picture'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain("`picture` LONGTEXT PATH '$.picture'"));
 
             // SELECT should convert Base64 back to binary
             Assert.That(script, Does.Contain("FROM_BASE64(`picture`)"));
