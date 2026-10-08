@@ -194,6 +194,90 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         }
     }
 
+    // The deferred (FK-cycle) builder kept its own column handling, which the single-pass builder had outgrown:
+    // DATETIME/TIME were read without their fraction, BIT arrived as the character '5', a geometry lost its SRID
+    // (fatal on a MySQL SRID column), and a backslash in the payload was read as an escape.
+    [Test]
+    public void BuildDeferredMergeScript_DeliversEveryValueExactly()
+    {
+        if (_serverVersionNum is > 0 and < 800)
+            Assert.Ignore($"Automatic data delivery is gated below MySQL 8.0 (detected {_serverVersionNum}).");
+        using var command = _connection.CreateCommand();
+        var tableName = $"zz_deferred_exact_{Guid.NewGuid():N}";
+        var srid = Platform == Platform.MySQL ? 4326 : 0;
+        try
+        {
+            command.CommandText = $@"
+CREATE TABLE `{_testDb}`.`{tableName}` (
+    id INT PRIMARY KEY,
+    ParentId INT NULL,
+    dt6 DATETIME(6) NULL,
+    t3 TIME(3) NULL,
+    b BIT(8) NULL,
+    pt POINT {(srid == 0 ? "" : $"SRID {srid} ")}NULL,
+    note VARCHAR(40) NULL,
+    CONSTRAINT `fk_{tableName}_self` FOREIGN KEY (ParentId) REFERENCES `{_testDb}`.`{tableName}`(id)
+)";
+            command.ExecuteNonQuery();
+
+            var tableData = "[{\"id\":1,\"ParentId\":1,\"dt6\":\"2024-03-05T10:11:12.123456\",\"t3\":\"01:02:03.456\",\"b\":165,"
+                            + "\"pt\":\"POINT(1 2)\",\"pt.STSrid\":" + srid + ",\"note\":\"a\\\\b \\\"q\\\"\"}]";
+            var script = DeferredMergeBuilder.Build(new MergeScriptHelperAdapter(Platform), command, "MySQL", _testDb, tableName,
+                tableData, "`id`", false, new List<string> { "ParentId" });
+
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT CONCAT_WS(',',
+                IF(dt6 <=> '2024-03-05 10:11:12.123456', NULL, 'dt6'), IF(t3 <=> '01:02:03.456', NULL, 't3'),
+                IF(b + 0 <=> 165, NULL, 'b'), IF(ST_AsText(pt) = 'POINT(1 2)' AND ST_SRID(pt) = {srid}, NULL, 'pt'),
+                IF(note <=> CONCAT('a', CHAR(92), 'b ""q""'), NULL, 'note'), IF(ParentId IS NULL, NULL, 'ParentId'))
+                FROM `{_testDb}`.`{tableName}` WHERE id = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.Empty,
+                "the list names each column that did not arrive as delivered (ParentId is deferred, so pass 1 leaves it NULL)");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // Without JSON_TABLE (MariaDB 10.2-10.5) the shred hands every value over as text, and text into a BIT column is
+    // stored as its character codes: 165 arrived as 0x31.
+    [Test]
+    public void BuildMergeScript_BitColumn_DeliversItsNumber()
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"zz_bit_{Guid.NewGuid():N}";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, b BIT(8) NULL, b1 BIT(1) NULL)";
+            command.ExecuteNonQuery();
+
+            var script = BuildMergeScript(command, _testDb, tableName, "[{\"id\":1,\"b\":165,\"b1\":1},{\"id\":2,\"b\":0,\"b1\":0}]",
+                "`id`", true, false, false, false, null!);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT GROUP_CONCAT(id, ':', b + 0, ':', b1 + 0 ORDER BY id) FROM `{_testDb}`.`{tableName}`";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1:165:1,2:0:0"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void BuildDeferredMergeScript_TextColumn_UsesTextInJsonTableAndCanBeExecuted()
     {

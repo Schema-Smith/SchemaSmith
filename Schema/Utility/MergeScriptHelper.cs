@@ -1830,7 +1830,7 @@ SELECT c.column_name, c.udt_name
         return BuildInsertStatementMySql(databaseName, tableName, insertColumns, selectExpressions, jsonSource, tableData, tokenizeScripts, contentFileToken);
     }
 
-    private static List<MySqlColumnInfo> GetColumnInfoMySql(IDbCommand cmd, string databaseName, string tableName, bool excludeAutoIncrement, HashSet<string> jsonKeys = null)
+    internal static List<MySqlColumnInfo> GetColumnInfoMySql(IDbCommand cmd, string databaseName, string tableName, bool excludeAutoIncrement, HashSet<string> jsonKeys = null)
     {
         databaseName = databaseName.Trim().Trim('`');
         tableName = tableName.Trim().Trim('`');
@@ -2053,7 +2053,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
 
     internal static string JsonArrayOf(IEnumerable<string> rows) => "[" + string.Join(",", rows) + "]";
 
-    private static string EscapeMySqlPayload(string json) =>
+    internal static string EscapeMySqlPayload(string json) =>
         (json ?? "[]").Replace("\\", "\\\\").Replace("'", "''");
 
     // Key-column DDL for the delete-key temp table. String keys are declared utf8mb4/utf8mb4_unicode_ci
@@ -2258,7 +2258,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     internal static bool MySqlFamilyHasJsonTable(int versionNum)
         => versionNum == 0 || (IsMariaDbVersionNum(versionNum) ? versionNum >= 1006 : versionNum >= 800);
 
-    private static string BuildJsonRowSourceMySql(List<MySqlColumnInfo> columns, int versionNum)
+    internal static string BuildJsonRowSourceMySql(List<MySqlColumnInfo> columns, int versionNum)
     {
         var isMariaDb = IsMariaDbVersionNum(versionNum);
         var hasJsonTable = MySqlFamilyHasJsonTable(versionNum);
@@ -2402,13 +2402,14 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         return string.Join(", ", columns.Select(BuildSingleSelectExpressionMySql));
     }
 
-    private static string BuildSingleSelectExpressionMySql(MySqlColumnInfo c)
+    internal static string BuildSingleSelectExpressionMySql(MySqlColumnInfo c)
     {
-        return IsGeometryTypeMySql(c.DataType)
-            ? $"ST_GeomFromText(`{c.Name}`, COALESCE(`{c.Name}.STSrid`, 0))"
-            : IsBinaryTypeMySql(c.DataType)
-                ? $"FROM_BASE64(`{c.Name}`)"
-                : $"`{c.Name}`";
+        if (IsGeometryTypeMySql(c.DataType)) return $"ST_GeomFromText(`{c.Name}`, COALESCE(`{c.Name}.STSrid`, 0))";
+        if (IsBinaryTypeMySql(c.DataType)) return $"FROM_BASE64(`{c.Name}`)";
+        // BIT is delivered as its number; read as text (the shred below MariaDB 10.6), '165' would be stored as
+        // its character codes.
+        if (c.DataType.Equals("bit", StringComparison.OrdinalIgnoreCase)) return $"CAST(`{c.Name}` AS UNSIGNED)";
+        return $"`{c.Name}`";
     }
 
     private static List<string> ParseKeyColumnsMySql(string keyColumns)
