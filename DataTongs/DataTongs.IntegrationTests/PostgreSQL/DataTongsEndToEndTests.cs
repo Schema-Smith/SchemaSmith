@@ -164,6 +164,7 @@ public class DataTongsEndToEndTests
     // Types whose extraction or delivery used to lose them: bit(8) delivered as bit (one bit), "char" above 127 as an
     // escape older servers cannot read, arrays flattened on '*,*' (dimensions, bounds and delimiter-bearing elements
     // lost), the native point / polygon handed to PostGIS functions, and an unconstrained numeric cast to numeric(0, 0).
+    // Under XML delivery, timestamps lost their fraction, timestamptz shifted, and date-like text was rewritten.
     // The script runs with only pg_catalog on the search_path, so the public enum resolves only if the cast names its schema.
     [TestCase("Json")]
     [TestCase("Xml")]
@@ -174,7 +175,8 @@ public class DataTongsEndToEndTests
         var targetTable = $"E2ETyT_{Guid.NewGuid():N}".Substring(0, 30);
         var moodType = $"e2e_mood_{Guid.NewGuid():N}".Substring(0, 30);
         var columns = $@"""Mood"" public.{moodType}, ""Id"" INT PRIMARY KEY, ""Bits"" BIT(8), ""Flag"" ""char"", ""Grid"" INT[][],
-                    ""Offset"" INT[], ""Words"" TEXT[], ""Spot"" POINT, ""Shape"" POLYGON, ""Amount"" NUMERIC";
+                    ""Offset"" INT[], ""Words"" TEXT[], ""Spot"" POINT, ""Shape"" POLYGON, ""Amount"" NUMERIC,
+                    ""Stamp"" TIMESTAMP(6), ""StampTz"" TIMESTAMPTZ, ""Note"" TEXT";
         try
         {
             command.CommandText = $@"CREATE TYPE public.{moodType} AS ENUM ('calm', 'busy');
@@ -182,8 +184,9 @@ public class DataTongsEndToEndTests
                 CREATE TABLE public.""{targetTable}"" ({columns});
                 INSERT INTO public.""{sourceTable}"" VALUES
                 ('busy', 1, B'10100101', (-56)::""char"", '{{{{1,2}},{{3,4}}}}', '[0:1]={{5,6}}', '{{""a*,*b"",c,NULL}}',
-                    '(1.5,2)', '((0,0),(1,0),(1,1))', 12345678901234567890.123456789),
-                ('calm', 2, B'00000001', 'x', NULL, '{{}}', '{{""""}}', NULL, NULL, 0.5)";
+                    '(1.5,2)', '((0,0),(1,0),(1,1))', 12345678901234567890.123456789,
+                    '2020-01-02 03:04:05.123456', '2020-01-02 03:04:05.5+05', '2020-01-02 03:04:05'),
+                ('calm', 2, B'00000001', 'x', NULL, '{{}}', '{{""""}}', NULL, NULL, 0.5, NULL, NULL, '1/2/2020')";
             command.ExecuteNonQuery();
 
             var selectColumns = _dataTongs.GetSelectColumns(command, "public", sourceTable);
@@ -206,6 +209,8 @@ public class DataTongsEndToEndTests
                     ('Grid', s.""Grid""::text, d.""Grid""::text), ('Offset', s.""Offset""::text, d.""Offset""::text),
                     ('Words', s.""Words""::text, d.""Words""::text), ('Spot', s.""Spot""::text, d.""Spot""::text),
                     ('Shape', s.""Shape""::text, d.""Shape""::text), ('Amount', s.""Amount""::text, d.""Amount""::text), ('Mood', s.""Mood""::text, d.""Mood""::text),
+                    ('Stamp', s.""Stamp""::text, d.""Stamp""::text), ('StampTz', s.""StampTz""::text, d.""StampTz""::text),
+                    ('Note', s.""Note"", d.""Note""),
                     ('row', '1', CASE WHEN d.""Id"" IS NULL THEN NULL ELSE '1' END)) v(col, src, dst)
                 WHERE v.src IS DISTINCT FROM v.dst";
             Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty,

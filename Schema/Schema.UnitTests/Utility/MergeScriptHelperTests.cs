@@ -98,6 +98,21 @@ public class MergeScriptHelperTests
         });
     }
 
+    // Read with Newtonsoft's defaults, a date-like string became a DateTime and was written back in the host's culture
+    // and time zone: the fraction dropped, an offset shifted, and plain text that looked like a date was rewritten.
+    [Test]
+    public void JsonPayloadToXml_DateLikeStrings_KeepTheirLiteralText()
+    {
+        var xml = MergeScriptHelper.JsonPayloadToXml(
+            @"[{""ts"":""2020-01-02T03:04:05.123456"",""tz"":""2020-01-02T03:04:05+05:00"",""txt"":""2020-01-02 03:04:05""}]");
+        Assert.Multiple(() =>
+        {
+            Assert.That(xml, Does.Contain("<c n=\"ts\">2020-01-02T03:04:05.123456</c>"));
+            Assert.That(xml, Does.Contain("<c n=\"tz\">2020-01-02T03:04:05+05:00</c>"));
+            Assert.That(xml, Does.Contain("<c n=\"txt\">2020-01-02 03:04:05</c>"));
+        });
+    }
+
     [Test]
     public void JsonPayloadToXml_EmptyOrNullPayload_ReturnsEmptyString()
     {
