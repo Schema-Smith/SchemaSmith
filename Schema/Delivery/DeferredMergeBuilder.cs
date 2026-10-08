@@ -35,7 +35,7 @@ internal static class DeferredMergeBuilder
             // converted to JSON once, up front, and shredded through the same unchanged JSON row source
             // BuildMySql already uses for a hand-authored JSON payload.
             var mySqlTableData = isXml ? MergeScriptHelper.XmlPayloadToJson(tableData) : tableData;
-            return BuildMySql(helper, cmd, schemaOrDb, tableName, mySqlTableData, keyColumns, deferredColumns);
+            return BuildMySql(cmd, schemaOrDb, tableName, mySqlTableData, deferredColumns);
         }
 
         throw new ArgumentException($"Unsupported platform: {platform}", nameof(platform));
@@ -324,109 +324,59 @@ internal static class DeferredMergeBuilder
 
     #region MySQL
 
-    private static string BuildMySql(IMergeScriptHelper helper, IDbCommand cmd,
-        string schemaOrDb, string tableName, string tableData, string keyColumns,
+    // Built from the single-pass builder's own pieces -- the same column read, row source and per-column
+    // expressions -- so a column type handled there is handled here. This path kept a copy of its own, which
+    // read DATETIME/TIME without their fraction, passed BIT as text, dropped a geometry's SRID and did not
+    // escape backslashes in the payload.
+    private static string BuildMySql(IDbCommand cmd, string schemaOrDb, string tableName, string tableData,
         List<string> deferredColumns)
     {
         var db = schemaOrDb.Trim().Trim('`');
         var table = tableName.Trim().Trim('`');
         var deferredSet = new HashSet<string>(deferredColumns, StringComparer.OrdinalIgnoreCase);
 
-        // Version-adaptive JSON row source, mirroring MergeScriptHelper: JSON_TABLE on MySQL 8.0+ /
-        // MariaDB 10.6+; a recursive-CTE shred on MariaDB 10.2-10.5; MySQL < 8.0 is gated (no JSON_TABLE and
-        // no recursive CTE). DeferredMergeBuilder is integration-only (no mocked unit tests), so detecting
-        // from the live command is safe here.
+        // DeferredMergeBuilder is integration-only (no mocked unit tests), so detecting from the live command
+        // is safe here.
         cmd.Parameters.Clear();
         cmd.CommandText = "SELECT SchemaSmith_ServerVersionNum()";
         var versionNum = Convert.ToInt32(cmd.ExecuteScalar());
 
-        var columns = helper.GetColumnMetadata(cmd, schemaOrDb, tableName);
+        var columns = MergeScriptHelper.GetColumnInfoMySql(cmd, db, table, excludeAutoIncrement: false);
         if (columns.Count == 0)
             throw new InvalidOperationException($"No columns found for table `{db}`.`{table}`.");
 
         var columnList = string.Join(", ", columns.Select(c => $"`{c.Name}`"));
-
         var selectExpressions = string.Join(", ", columns.Select(c =>
-        {
-            if (deferredSet.Contains(c.Name)) return "NULL";
-            if (c.IsGeometry) return $"ST_GeomFromText(`jt`.`{c.Name}`)";
-            if (c.IsBinary) return $"FROM_BASE64(`jt`.`{c.Name}`)";
-            return $"`jt`.`{c.Name}`";
-        }));
+            deferredSet.Contains(c.Name) ? "NULL" : MergeScriptHelper.BuildSingleSelectExpressionMySql(c)));
+        var jsonSource = MergeScriptHelper.BuildJsonRowSourceMySql(columns, versionNum);
 
-        var jsonSource = BuildDeferredJsonRowSourceMySql(columns.Where(c => !c.IsComputed).ToList(), versionNum);
-
-        var updateCols = columns.Where(c => !c.IsIdentity && !c.IsComputed).Select(c =>
+        var updateCols = columns.Where(c => !c.IsAutoIncrement).Select(c =>
             deferredSet.Contains(c.Name) ? $"`{c.Name}` = NULL" : $"`{c.Name}` = VALUES(`{c.Name}`)");
         var onDuplicate = $"ON DUPLICATE KEY UPDATE {string.Join(", ", updateCols)};";
 
         var sb = new StringBuilder();
 
         // The pre-10.6 shred is quadratic in payload size (see MergeScriptHelper.MariaDbShredChunkRows),
-        // and this two-pass FK path shreds the same payload, so it needs the same slicing. Without it a
-        // large deferred table stalls here exactly as the single-pass path did. No delete half to worry
-        // about: pass 1 only inserts, so every chunk is independent.
+        // and this two-pass FK path shreds the same payload, so it needs the same slicing. No delete half to
+        // worry about: pass 1 only inserts, so every chunk is independent.
         var chunked = MergeScriptHelper.TryChunkMySqlPayload(
-            hasJsonTable: !jsonSource.Contains("_ss_seq"), tokenizeScripts: false, tableData, out var payloadRows);
+            MergeScriptHelper.MySqlFamilyHasJsonTable(versionNum), tokenizeScripts: false, tableData, out var payloadRows);
+        var payloads = chunked
+            ? Enumerable.Range(0, (payloadRows.Count + MergeScriptHelper.MariaDbShredChunkRows - 1) / MergeScriptHelper.MariaDbShredChunkRows)
+                .Select(n => MergeScriptHelper.JsonArrayOf(payloadRows.Skip(n * MergeScriptHelper.MariaDbShredChunkRows).Take(MergeScriptHelper.MariaDbShredChunkRows)))
+            : new[] { tableData };
 
-        if (!chunked)
+        foreach (var payload in payloads)
         {
-            sb.AppendLine($"SET @json_data = '{tableData?.Replace("'", "''")}';");
+            sb.AppendLine($"SET @json_data = '{MergeScriptHelper.EscapeMySqlPayload(payload)}';");
             sb.AppendLine();
             sb.AppendLine($"INSERT INTO `{db}`.`{table}` ({columnList})");
             sb.AppendLine($"SELECT {selectExpressions}");
             sb.AppendLine($"FROM {jsonSource}");
             sb.AppendLine(onDuplicate);
-            return sb.ToString();
-        }
-
-        for (var offset = 0; offset < payloadRows.Count; offset += MergeScriptHelper.MariaDbShredChunkRows)
-        {
-            var chunk = MergeScriptHelper.JsonArrayOf(payloadRows.Skip(offset).Take(MergeScriptHelper.MariaDbShredChunkRows));
-            sb.AppendLine($"SET @json_data = '{chunk.Replace("'", "''")}';");
-            sb.AppendLine();
-            sb.AppendLine($"INSERT INTO `{db}`.`{table}` ({columnList})");
-            sb.AppendLine($"SELECT {selectExpressions}");
-            sb.AppendLine($"FROM {jsonSource}");
-            sb.AppendLine(onDuplicate);
-            sb.AppendLine();
+            if (chunked) sb.AppendLine();
         }
         return sb.ToString();
-    }
-
-    // Version-adaptive "<source> AS jt" fragment for the deferred MySQL insert. See MergeScriptHelper's
-    // BuildJsonRowSourceMySql for the full rationale.
-    private static string BuildDeferredJsonRowSourceMySql(List<MergeColumnInfo> columns, int versionNum)
-    {
-        var isMariaDb = MergeScriptHelper.IsMariaDbVersionNum(versionNum);
-        var hasJsonTable = MergeScriptHelper.MySqlFamilyHasJsonTable(versionNum);
-        if (hasJsonTable)
-        {
-            var jsonTableColumns = string.Join(",\n    ", columns.Select(c =>
-                $"`{c.Name}` {c.JsonParseType} PATH '$.{c.Name}'"));
-            return "JSON_TABLE(\n  @json_data,\n  '$[*]' COLUMNS (\n    " + jsonTableColumns + "\n  )\n) AS jt";
-        }
-
-        if (!isMariaDb)
-            throw new NotSupportedException(
-                $"Automatic data delivery requires JSON_TABLE (MySQL 8.0+); it is unavailable on MySQL {versionNum / 100}.{versionNum % 100}. " +
-                "Deliver data on this target with manual data scripts.");
-
-        // MariaDB 10.2-10.5: recursive-CTE shred embedded in the derived table (JSON-null -> SQL NULL via
-        // SchemaSmith_JsonScalarStr; JSON columns keep their structure via JSON_EXTRACT).
-        var extractions = string.Join(",\n      ", columns.Select(c =>
-        {
-            var pathSuffix = c.Name.Contains(' ') || c.Name.Contains('.') || c.Name.Contains('-') ? $"\"{c.Name}\"" : c.Name;
-            var extract = $"JSON_EXTRACT(@json_data, CONCAT('$[', _ss_seq.i, '].{pathSuffix}'))";
-            return c.JsonParseType.Equals("JSON", StringComparison.OrdinalIgnoreCase)
-                ? $"{extract} AS `{c.Name}`"
-                : $"SchemaSmith_JsonScalarStr({extract}) AS `{c.Name}`";
-        }));
-        return "(\n" +
-               "    WITH RECURSIVE _ss_seq AS (SELECT 0 i UNION ALL SELECT i + 1 FROM _ss_seq WHERE i + 1 < JSON_LENGTH(@json_data))\n" +
-               "    SELECT\n      " + extractions + "\n" +
-               "    FROM _ss_seq WHERE _ss_seq.i < JSON_LENGTH(@json_data)\n" +
-               "  ) AS jt";
     }
 
     #endregion
