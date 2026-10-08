@@ -2008,15 +2008,50 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     // completed set at the end. That also stops the delete re-evaluating the shred per target row.
     private const string MySqlDeleteKeyTable = "_ss_merge_keys";
 
-    internal static bool TryChunkMySqlPayload(bool hasJsonTable, bool tokenizeScripts, string tableData, out JArray rows)
+    // Each row is kept as the text it was delivered in: re-serialised, a parsed row passed its numbers through double,
+    // so a wide DECIMAL lost digits.
+    internal static bool TryChunkMySqlPayload(bool hasJsonTable, bool tokenizeScripts, string tableData, out IReadOnlyList<string> rows)
     {
         rows = null;
         // tokenizeScripts emits a {{table.tabledata}} placeholder resolved later, so there is no
         // payload to slice at build time; that path keeps the single-statement form.
         if (hasJsonTable || tokenizeScripts || string.IsNullOrWhiteSpace(tableData)) return false;
-        try { rows = JsonText.ParseArray(tableData); } catch (Newtonsoft.Json.JsonException) { return false; }
+        try { JsonText.ParseArray(tableData); } catch (Newtonsoft.Json.JsonException) { return false; }
+        rows = SplitJsonArrayRows(tableData);
         return rows.Count > MariaDbShredChunkRows;
     }
+
+    // A JSON array of rows as one JSON text per row, split at the top-level commas.
+    internal static IReadOnlyList<string> SplitJsonArrayRows(string json)
+    {
+        var rows = new List<string>();
+        var depth = 0;
+        var inString = false;
+        var start = -1;
+        for (var i = 0; i < json.Length; i++)
+        {
+            var ch = json[i];
+            if (inString)
+            {
+                if (ch == '\\') i++;
+                else if (ch == '"') inString = false;
+                continue;
+            }
+            switch (ch)
+            {
+                case '"': inString = true; break;
+                case '[' or '{':
+                    if (++depth == 2) start = i;
+                    break;
+                case ']' or '}':
+                    if (depth-- == 2) rows.Add(json[start..(i + 1)]);
+                    break;
+            }
+        }
+        return rows;
+    }
+
+    internal static string JsonArrayOf(IEnumerable<string> rows) => "[" + string.Join(",", rows) + "]";
 
     private static string EscapeMySqlPayload(string json) =>
         (json ?? "[]").Replace("\\", "\\\\").Replace("'", "''");
@@ -2123,7 +2158,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     // updateColumns null => INSERT IGNORE (no update); stringKeys/mergeFilter null => no delete half.
     internal static string BuildChunkedMergeMySql(string databaseName, string tableName,
         string insertColumns, string selectExpressions, string jsonSource, string updateColumns,
-        string keyColumns, JArray payloadRows, List<MySqlColumnInfo> columns,
+        string keyColumns, IReadOnlyList<string> payloadRows, List<MySqlColumnInfo> columns,
         HashSet<string> stringKeys, string mergeFilter)
     {
         var keyColNames = ParseKeyColumnsMySql(keyColumns);
@@ -2142,8 +2177,8 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
 
         for (var offset = 0; offset < payloadRows.Count; offset += MariaDbShredChunkRows)
         {
-            var chunk = new JArray(payloadRows.Skip(offset).Take(MariaDbShredChunkRows));
-            sb.AppendLine($"SET @json_data = '{EscapeMySqlPayload(chunk.ToString(Newtonsoft.Json.Formatting.None))}';");
+            var chunk = JsonArrayOf(payloadRows.Skip(offset).Take(MariaDbShredChunkRows));
+            sb.AppendLine($"SET @json_data = '{EscapeMySqlPayload(chunk)}';");
 
             if (updateColumns == null)
                 sb.AppendLine($"INSERT IGNORE INTO `{databaseName}`.`{tableName}` ({insertColumns})");

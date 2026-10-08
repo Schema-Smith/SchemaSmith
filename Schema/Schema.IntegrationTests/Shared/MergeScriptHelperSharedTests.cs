@@ -156,6 +156,44 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         }
     }
 
+    // Below MariaDB 10.6 a payload over MariaDbShredChunkRows is delivered in chunks, and the chunks were rebuilt from
+    // parsed rows: a DECIMAL beyond double precision lost its tail digits. Each row now goes out as delivered.
+    [Test]
+    public void BuildMergeScript_ChunkedShred_DeliversEachValueExactly()
+    {
+        if (UsesJsonTable)
+            Assert.Ignore("Only the recursive-CTE shred (MariaDB 10.2-10.5) delivers in chunks.");
+        using var command = _connection.CreateCommand();
+        var tableName = $"zz_chunk_{Guid.NewGuid():N}";
+        const string amount = "12345678901234567890.123456789012345678";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT NOT NULL PRIMARY KEY, amt DECIMAL(38,18) NOT NULL, note VARCHAR(40) NOT NULL)";
+            command.ExecuteNonQuery();
+
+            var rowCount = MergeScriptHelper.MariaDbShredChunkRows + 10;
+            var tableData = "[" + string.Join(",", Enumerable.Range(1, rowCount)
+                .Select(i => "{\"id\":" + i + ",\"amt\":" + amount + ",\"note\":\"a \\\"q\\\" b\"}")) + "]";
+            var script = BuildMergeScript(command, _testDb, tableName, tableData, "`id`", true, false, false, false, null!);
+            Assert.That(script, Does.Contain("chunks of up to"), "the test must exercise the chunked path");
+
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{tableName}` WHERE amt = {amount} AND note = 'a \"q\" b'";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(rowCount), "rows whose amount and note arrived exactly");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void BuildDeferredMergeScript_TextColumn_UsesTextInJsonTableAndCanBeExecuted()
     {

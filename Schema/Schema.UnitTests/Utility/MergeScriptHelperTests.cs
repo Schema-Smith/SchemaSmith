@@ -154,7 +154,7 @@ public class MergeScriptHelperTests
         // Sized off the constant so retuning the chunk size doesn't silently invalidate the assertions.
         var expectedChunks = 3;
         var rowCount = MergeScriptHelper.MariaDbShredChunkRows * expectedChunks;
-        var rows = Newtonsoft.Json.Linq.JArray.Parse(BuildPayload(rowCount));
+        var rows = MergeScriptHelper.SplitJsonArrayRows(BuildPayload(rowCount));
         var columns = new List<MergeScriptHelper.MySqlColumnInfo>
         {
             new() { Name = "Id", DataType = "int" }
@@ -195,11 +195,28 @@ public class MergeScriptHelperTests
         Assert.That(CountOf(sql, when), Is.EqualTo(MergeScriptHelper.MariaDbShredChunkRows + 1));
     }
 
+    // Re-serialised from parsed rows, a number went through double: a wide DECIMAL lost its tail digits.
+    [Test]
+    public void BuildChunkedMergeMySql_SendsEachRowExactlyAsDelivered()
+    {
+        var rowText = Enumerable.Range(0, MergeScriptHelper.MariaDbShredChunkRows + 1)
+            .Select(i => "{\"Id\":" + i + ",\"Amount\":12345678901234567890.123456789,\"Doc\":{\"a\":[1.50,\"},{\\\"\"]}}")
+            .ToList();
+        Assert.That(MergeScriptHelper.TryChunkMySqlPayload(false, false, "[" + string.Join(", ", rowText) + "]", out var rows), Is.True);
+        Assert.That(rows, Is.EqualTo(rowText), "each row is split out as the exact text it arrived in");
+        var columns = new List<MergeScriptHelper.MySqlColumnInfo> { new() { Name = "Id", DataType = "int" } };
+
+        var sql = MergeScriptHelper.BuildChunkedMergeMySql("db", "t", "`Id`, `Amount`", "jt.`Id`, jt.`Amount`",
+            "(SELECT 1) AS jt", null, "`Id`", rows, columns, null, null);
+
+        Assert.That(CountOf(sql, "12345678901234567890.123456789"), Is.EqualTo(MergeScriptHelper.MariaDbShredChunkRows + 1));
+    }
+
     [Test]
     public void BuildChunkedMergeMySql_WithoutDelete_EmitsNoKeyTable()
     {
         var noDeleteChunks = 2;
-        var rows = Newtonsoft.Json.Linq.JArray.Parse(BuildPayload(MergeScriptHelper.MariaDbShredChunkRows * noDeleteChunks));
+        var rows = MergeScriptHelper.SplitJsonArrayRows(BuildPayload(MergeScriptHelper.MariaDbShredChunkRows * noDeleteChunks));
         var columns = new List<MergeScriptHelper.MySqlColumnInfo> { new() { Name = "Id", DataType = "int" } };
         var sql = MergeScriptHelper.BuildChunkedMergeMySql("db", "t", "`Id`", "jt.`Id`",
             "(SELECT 1) AS jt", null, "`Id`", rows, columns, null, null);
