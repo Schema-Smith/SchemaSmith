@@ -18,7 +18,15 @@ public static class Program
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;
         ConfigHelper.GetAppSettingsAndUserSecrets("SchemaShears", LogFactory.GetLogger("ProgressLog").Info);
-        CommandLineParser.WarnOnUnrecognizedArguments(KnownArguments, LogFactory.GetLogger("ProgressLog").Warn);
+        try
+        {
+            CommandLineParser.RefuseUnrecognizedArguments(KnownArguments);
+        }
+        catch (RunFailedException e)
+        {
+            LogBackup.FailedRunExit("SchemaShears", e);
+            return;
+        }
 
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
         SettingsContract.WarnOnUnrecognizedKeys(config, SettingsTool.SchemaShears, LogFactory.GetLogger("ProgressLog").Warn);

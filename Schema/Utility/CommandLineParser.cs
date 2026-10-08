@@ -157,16 +157,18 @@ public static class CommandLineParser
     }
 
     /// <summary>
-    /// Reports <see cref="UnrecognizedArguments"/> through <paramref name="warn"/>, naming the
-    /// grammar so the fix is in the message. Silent when everything on the line was read.
+    /// Stops the run on an argument the tool will never read. An argument the user typed and the tool did not
+    /// understand is a reason to stop, not to warn: <c>--WhatIf</c> misspelled, or a value written with a space, used
+    /// to be ignored, and the run went ahead, for real.
     /// </summary>
-    public static void WarnOnUnrecognizedArguments(IEnumerable<string> knownArguments, Action<string> warn)
+    public static void RefuseUnrecognizedArguments(IEnumerable<string> knownArguments)
     {
         var unread = UnrecognizedArguments(knownArguments);
         if (unread.Count == 0) return;
 
-        warn($"Ignored - not recognized: {string.Join(" ", unread)}"
-             + " (a switch value attaches with ':' or '=', never a space - e.g. --LogPath:./logs)");
+        throw new RunFailedException($"Not recognized: {string.Join(" ", unread)}. Nothing was run. Check the spelling "
+                                     + "(--help lists the switches); a switch value attaches with ':' or '=', never a space "
+                                     + "- e.g. --LogPath:./logs");
     }
 
     private static bool IsSwitch(string arg) => arg.StartsWith("/") || arg.StartsWith("-");

@@ -620,26 +620,23 @@ public class CommandLineParserTests
         Assert.That(unread, Is.EqualTo(new[] { "stray" }));
     }
 
+    // An unread argument stops the run. It used to be a warning, and the run went ahead: `--WhatIf` (no such switch
+    // then) deployed for real.
     [Test]
-    public void WarnOnUnrecognized_NamesTheArgumentsAndTheGrammar()
+    public void RefuseUnrecognized_StopsTheRun_NamingTheArgumentsAndTheGrammar()
     {
         _mockEnvironment.CommandLine.Returns("app.exe --report ./out/x");
-        var warnings = new List<string>();
 
-        CommandLineParser.WarnOnUnrecognizedArguments(KnownFlags, warnings.Add);
+        var ex = Assert.Throws<RunFailedException>(() => CommandLineParser.RefuseUnrecognizedArguments(KnownFlags));
 
-        Assert.That(warnings, Has.Count.EqualTo(1));
-        Assert.That(warnings[0], Does.Contain("--report").And.Contain("./out/x").And.Contain("never a space"));
+        Assert.That(ex!.Message, Does.Contain("--report").And.Contain("./out/x").And.Contain("never a space").And.Contain("Nothing was run"));
     }
 
     [Test]
-    public void WarnOnUnrecognized_CleanCommandLine_SaysNothing()
+    public void RefuseUnrecognized_CleanCommandLine_LetsTheRunProceed()
     {
         _mockEnvironment.CommandLine.Returns("app.exe --TestConnection --LogPath:./logs");
-        var warnings = new List<string>();
 
-        CommandLineParser.WarnOnUnrecognizedArguments(KnownFlags, warnings.Add);
-
-        Assert.That(warnings, Is.Empty);
+        Assert.DoesNotThrow(() => CommandLineParser.RefuseUnrecognizedArguments(KnownFlags));
     }
 }

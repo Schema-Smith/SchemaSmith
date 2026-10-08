@@ -23,7 +23,7 @@ public enum SettingsTool
 /// The enumerable shape of each tool's settings surface, and the runtime check that consumes it.
 /// <para>A mistyped configuration key is silently inert: <c>Target:Sever</c> binds nothing and the run
 /// proceeds as though the setting were absent. That is the same defect 2.4.0 fixed on the command line
-/// with <c>CommandLineParser.WarnOnUnrecognizedArguments</c> — a switch that goes unread is worse than
+/// with <c>CommandLineParser.RefuseUnrecognizedArguments</c> — a switch that goes unread is worse than
 /// one that errors — arriving through a different door, so it gets the same treatment: know the
 /// accepted set, warn on anything outside it.</para>
 /// </summary>
@@ -212,7 +212,7 @@ public static class SettingsContract
 
     /// <summary>
     /// Logs a warning naming each unrecognised key. Warns rather than fails, matching
-    /// <c>CommandLineParser.WarnOnUnrecognizedArguments</c>: the key may belong to a newer version or a
+    /// <c>CommandLineParser.RefuseUnrecognizedArguments</c>: the key may belong to a newer version or a
     /// deliberately shared file, so the operator decides.
     /// </summary>
     public static void WarnOnUnrecognizedKeys(IConfiguration config, SettingsTool tool, Action<string> warn)

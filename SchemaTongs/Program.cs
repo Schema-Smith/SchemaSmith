@@ -19,7 +19,15 @@ public static class Program
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;
         var config = ConfigHelper.GetAppSettingsAndUserSecrets("SchemaTongs", LogFactory.GetLogger("ProgressLog").Info);
-        CommandLineParser.WarnOnUnrecognizedArguments(KnownArguments, LogFactory.GetLogger("ProgressLog").Warn);
+        try
+        {
+            CommandLineParser.RefuseUnrecognizedArguments(KnownArguments);
+        }
+        catch (RunFailedException e)
+        {
+            LogBackup.FailedRunExit("SchemaTongs", e);
+            return;
+        }
         SettingsContract.WarnOnUnrecognizedKeys(config, SettingsTool.SchemaTongs, LogFactory.GetLogger("ProgressLog").Warn);
 
         if (CommandLineParser.ContainsSwitch("WriteSchemasOnly"))
