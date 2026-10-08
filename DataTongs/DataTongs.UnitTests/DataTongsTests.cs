@@ -1579,7 +1579,7 @@ public class DataTongsTests
     public void XmlFragment_Geometry_EmitsWktPlusSridCompanion()
     {
         var frag = Fragment("Shape", "geometry");
-        Assert.That(frag, Does.Contain("('Shape', t.[Shape].STAsText())"));
+        Assert.That(frag, Does.Contain("('Shape', t.[Shape].AsTextZM())"));
         Assert.That(frag, Does.Contain("('Shape.STSrid', CONVERT(NVARCHAR(MAX), t.[Shape].STSrid))"));
     }
 
