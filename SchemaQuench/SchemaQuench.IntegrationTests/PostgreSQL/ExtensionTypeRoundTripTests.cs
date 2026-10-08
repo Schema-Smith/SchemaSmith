@@ -17,15 +17,19 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 public class ExtensionTypeRoundTripTests : BaseTableQuenchTests
 {
     [Test]
-    public void PostGisColumns_RedeployWithTheirTypeModifiers()
+    public void ExtensionColumns_RedeployWithTheirTypeModifiers()
     {
         var db = $"ss_ext_{Guid.NewGuid():N}"[..24];
+        bool withPostGis, withVector;
         using var server = (NpgsqlConnection)DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
         server.Open();
         using (var probe = server.CreateCommand())
         {
             probe.CommandText = "SELECT COUNT(*) FROM pg_available_extensions WHERE name = 'postgis'";
-            if (Convert.ToInt32(probe.ExecuteScalar()) == 0) Assert.Ignore("PostGIS is not available on this server.");
+            withPostGis = Convert.ToInt32(probe.ExecuteScalar()) > 0;
+            probe.CommandText = "SELECT COUNT(*) FROM pg_available_extensions WHERE name = 'vector'";
+            withVector = Convert.ToInt32(probe.ExecuteScalar()) > 0;
+            if (!withPostGis && !withVector) Assert.Ignore("Neither PostGIS nor pgvector is available on this server.");
             probe.CommandText = $"CREATE DATABASE \"{db}\"";
             probe.ExecuteNonQuery();
         }
@@ -39,18 +43,14 @@ public class ExtensionTypeRoundTripTests : BaseTableQuenchTests
             conn.ChangeDatabase(db);
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 300;
-            cmd.CommandText = "CREATE EXTENSION postgis";
+            // pgvector, where the server has it, carries its dimension the same way: vector(3).
+            cmd.CommandText = (withPostGis ? "CREATE EXTENSION postgis;" : "") + (withVector ? "CREATE EXTENSION vector;" : "");
             cmd.ExecuteNonQuery();
             ForgeKindler.KindleTheForge(cmd, Platform.PostgreSQL);
 
-            cmd.CommandText = """
-                CREATE TABLE public.places (
-                    id integer NOT NULL PRIMARY KEY,
-                    pt geometry(Point, 4326),
-                    route geography(LineString, 4326),
-                    anything geometry
-                );
-                """;
+            cmd.CommandText = "CREATE TABLE public.places (id integer NOT NULL PRIMARY KEY"
+                              + (withPostGis ? ", pt geometry(Point, 4326), route geography(LineString, 4326), anything geometry" : "")
+                              + (withVector ? ", embedding vector(3)" : "") + ")";
             cmd.ExecuteNonQuery();
             var before = Types(cmd);
 
