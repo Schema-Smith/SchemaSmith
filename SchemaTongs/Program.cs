@@ -36,7 +36,7 @@ public static class Program
         // Matches SchemaQuench's partial-failure convention (exit 2): a table extraction failure no
         // longer aborts the run, so a clean exit code must not be the only signal a caller checks —
         // the package on disk can be short tables that failed and were skipped (see SchemaTongs.Failed).
-        LogBackup.BackupLogsAndExit("SchemaTongs", tongs.Failed ? 2 : 0);
+        LogBackup.BackupLogsAndExit("SchemaTongs", tongs.ExitCode);
     }
 
     public static void UnhandledException(object sender, UnhandledExceptionEventArgs e)
