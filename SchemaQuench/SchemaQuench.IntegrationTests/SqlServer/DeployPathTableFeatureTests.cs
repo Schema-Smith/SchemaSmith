@@ -54,7 +54,13 @@ public class DeployPathTableFeatureTests
                 "a column change must rotate to a capture instance that includes the new column");
             Assert.That(InstanceCount(cmd), Is.EqualTo(2), "rotation keeps the old instance for the operator to drain");
 
-            // 3. Turning it off disables it.
+            // 3. Leaving EnableCDC out leaves the table's CDC as it is: no disable, no rotation. It used to be disabled,
+            //    losing the change table and its history, which nothing could rebuild.
+            deploy(CdcTable(enableCdc: null, extraColumn: true));
+            Assert.That(IsTrackedByCdc(cmd), Is.True, "an unset EnableCDC must leave the table's CDC alone");
+            Assert.That(InstanceCount(cmd), Is.EqualTo(2), "an unset EnableCDC must not rotate the capture instance");
+
+            // 4. Only an explicit false turns it off.
             deploy(CdcTable(enableCdc: false, extraColumn: true));
             Assert.That(IsTrackedByCdc(cmd), Is.False, "EnableCDC false must disable CDC on the table");
         });
@@ -395,9 +401,9 @@ public class DeployPathTableFeatureTests
           "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Code]" } ] }
         """;
 
-    private static string CdcTable(bool enableCdc, bool extraColumn, bool? netChanges = null, bool primaryKey = true,
+    private static string CdcTable(bool? enableCdc, bool extraColumn, bool? netChanges = null, bool primaryKey = true,
                                    bool extraColumnC = false, bool uniqueIndex = false) => $$"""
-        { "Schema": "[dbo]", "Name": "[DeployProbe]", "EnableCDC": {{(enableCdc ? "true" : "false")}},
+        { "Schema": "[dbo]", "Name": "[DeployProbe]", {{(enableCdc is { } cdc ? $"\"EnableCDC\": {(cdc ? "true" : "false")}," : "")}}
           {{(netChanges is { } nc ? $"\"CdcSupportsNetChanges\": {(nc ? "true" : "false")}," : "")}}
           "Columns": [
             { "Name": "[Id]", "DataType": "INT", "Nullable": false },

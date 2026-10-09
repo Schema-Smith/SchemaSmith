@@ -890,6 +890,10 @@ CREATE TABLE dbo.MyOrdinaryPlacementTable (
             Assert.That(result.FileGroup, Is.Null);
             Assert.That(((SqlServerIndex)result.Indexes[0]).FileGroup, Is.Null);
             Assert.That(json, Does.Not.Contain("\"FileGroup\""));
+            // EnableCDC is written only when the table is tracked: an explicit false would turn CDC off on a target
+            // where it was enabled outside the package.
+            Assert.That(json, Does.Not.Contain("EnableCDC"));
+            Assert.That(result.EnableCDC, Is.Null);
         });
 
         conn.Close();
