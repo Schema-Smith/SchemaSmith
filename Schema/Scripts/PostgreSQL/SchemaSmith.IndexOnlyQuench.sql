@@ -341,12 +341,15 @@ BEGIN
                                      ELSE 'UNIQUE ' || CASE WHEN ti."NullsNotDistinct" THEN 'NULLS NOT DISTINCT ' ELSE '' END
                                      END ||
                                 '(' || "SchemaSmith"."QuoteIndexColumnList"(ti."IndexColumns") || ')' ||
+                                -- INCLUDE and the storage parameters, as MissingIndexesAndConstraintsQuench (PG-031).
+                                CASE WHEN NULLIF(ti."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(ti."IncludeColumns") || ')' ELSE '' END ||
                                 -- Positive gate, not a deny-list: an extension AM (e.g. pgvector's hnsw/ivfflat)
                                 -- can't be enumerated in advance, so allow-listing the AMs verified to accept
                                 -- fillfactor fails safe (no clause) instead of failing loud (PostgreSQL's own
                                 -- "unrecognized parameter" error) for anything not on the list.
                                 CASE WHEN COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash')
-                                     THEN ' WITH (fillfactor = ' || ti."FillFactor" || ')'
+                                     THEN ' WITH (fillfactor = ' || ti."FillFactor" || CASE WHEN COALESCE(ti."StorageParameters", '') <> '' THEN ', ' || ti."StorageParameters" ELSE '' END || ')'
+                                     WHEN COALESCE(ti."StorageParameters", '') <> '' THEN ' WITH (' || ti."StorageParameters" || ')'
                                      ELSE '' END ||
                                 -- USING INDEX TABLESPACE precedes DEFERRABLE per the table-constraint grammar
                               -- (verified live on 16). Emitted only when declared: unset means placement is
