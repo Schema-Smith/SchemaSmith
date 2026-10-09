@@ -10,6 +10,7 @@ using log4net;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json.Linq;
 using NSubstitute;
+using Schema.Configuration;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Isolators;
@@ -342,7 +343,12 @@ public abstract class WhatIfParityTestsSharedTests
     private void RunSchemaQuench(string logDir, bool whatIf)
     {
         _environment.ClearReceivedCalls();
-        _environment.CommandLine.Returns($"SchemaQuench.exe \"--LogPath:{logDir}\"{(whatIf ? " --WhatIf" : "")}");
-        Program.Main(["SkipKindlingForge"]);
+        _environment.CommandLine.Returns($"SchemaQuench.exe \"--LogPath:{logDir}\"");
+        // On this line WhatIf is the WhatIfONLY setting; the --WhatIf switch arrives with a later release.
+        var config = FactoryContainer.Resolve<IConfigurationRoot>();
+        var saved = config[SettingsKeys.WhatIfOnly];
+        config[SettingsKeys.WhatIfOnly] = whatIf ? "true" : "false";
+        try { Program.Main(["SkipKindlingForge"]); }
+        finally { config[SettingsKeys.WhatIfOnly] = saved; }
     }
 }
