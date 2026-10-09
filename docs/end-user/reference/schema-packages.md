@@ -802,8 +802,9 @@ DDL runs, naming the table:
 
 SQL Server rejects `CREATE INDEX` against a memory-optimized table, so every index is emitted inside the
 `CREATE TABLE` statement. Declare them in the ordinary `Indexes` array and SchemaSmith places them correctly —
-a primary key becomes `PRIMARY KEY NONCLUSTERED`, and an index with a `BucketCount` becomes a `HASH` index.
-`CompressionType` and `XmlCompression` are ignored here; neither applies to a memory-optimized table.
+a primary key becomes `PRIMARY KEY NONCLUSTERED`, a unique constraint a `UNIQUE NONCLUSTERED` constraint, an index
+with a `BucketCount` a `HASH` index, and a `ColumnStore` index a `CLUSTERED COLUMNSTORE` index. `CompressionType` and
+`XmlCompression` are ignored here; neither applies to a memory-optimized table.
 
 ### What is refused
 
