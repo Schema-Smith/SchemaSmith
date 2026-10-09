@@ -2036,7 +2036,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         // tokenizeScripts emits a {{table.tabledata}} placeholder resolved later, so there is no
         // payload to slice at build time; that path keeps the single-statement form.
         if (hasJsonTable || tokenizeScripts || string.IsNullOrWhiteSpace(tableData)) return false;
-        try { rows = JsonText.ParseArray(tableData); } catch { return false; }
+        try { rows = JsonText.ParseArray(tableData); } catch (Newtonsoft.Json.JsonException) { return false; }
         return rows.Count > MariaDbShredChunkRows;
     }
 
