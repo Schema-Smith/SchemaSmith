@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Linq;
+using System.Text;
 using log4net;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json.Linq;
@@ -20,6 +21,16 @@ namespace DataTongs;
 public class DataTongs
 {
     private readonly ILog _progressLog = LogFactory.GetLogger("ProgressLog");
+    private readonly ILog _errorLog = LogFactory.GetLogger("ErrorLog");
+
+    /// <summary>True when a table's extraction failed.</summary>
+    public bool Failed { get; private set; }
+
+    /// <summary>True when a table was skipped, so the run finished without producing everything asked of it.</summary>
+    public bool Incomplete { get; private set; }
+
+    /// <summary>2 when a table failed, 1 when one was skipped, otherwise 0.</summary>
+    public int ExitCode => Failed ? 2 : Incomplete ? 1 : 0;
     private readonly Platform _platform;
 
     public DataTongs(Platform platform)
@@ -96,7 +107,7 @@ public class DataTongs
         var outputScriptsSetting = config[SettingsKeys.ShouldCast.OutputScripts];
         var outputScripts = outputScriptsSetting?.ToLower() != "false";
         var contentsPath = config[SettingsKeys.ContentPath] ?? ".";
-        var scriptPath = config[SettingsKeys.ScriptPath] ?? ".";
+        var scriptPath = ConfigHelper.PathSetting(config, SettingsKeys.ScriptPath);
         var configureDataDelivery = CommandLineParser.ContainsSwitch("ConfigureDataDelivery")
             || config[SettingsKeys.ShouldCast.ConfigureDataDelivery]?.ToLower() == "true";
 
@@ -267,7 +278,7 @@ public class DataTongs
 
                 if (!TableExists(cmd, querySchema, tableName))
                 {
-                    _progressLog.Error($"  Table {displayName} does not exist in source database. Skipping table.");
+                    SkipTable($"  Table {displayName} does not exist in source database. Skipping table.");
                     continue;
                 }
 
@@ -277,13 +288,13 @@ public class DataTongs
 
                 if (string.IsNullOrWhiteSpace(keyColumns))
                 {
-                    _progressLog.Error($"  No match columns found for {displayName}. Skipping table.");
+                    SkipTable($"  No match columns found for {displayName}. Skipping table.");
                     continue;
                 }
 
                 if (!IsValidKeyColumns(keyColumns))
                 {
-                    _progressLog.Error($"  Invalid KeyColumns '{keyColumns}' for {displayName}. Expected comma-separated column names (e.g., 'Col1,Col2'). Skipping table.");
+                    SkipTable($"  Invalid KeyColumns '{keyColumns}' for {displayName}. Expected comma-separated column names (e.g., 'Col1,Col2'). Skipping table.");
                     continue;
                 }
 
@@ -377,6 +388,7 @@ public class DataTongs
                 {
                     _progressLog.Warn($"    Skipping data delivery script for {tableName}: automatic data delivery requires MySQL 8.0 " +
                                       $"(detected {mySqlServerVersionNum / 100}.{mySqlServerVersionNum % 100}); use manual data scripts.");
+                    Incomplete = true;
                     tablesProcessed++;
                     continue;
                 }
@@ -403,6 +415,7 @@ public class DataTongs
                         _progressLog.Warn($"    Cannot wire the '{{{{{contentFileToken}}}}}' token for {tableName}: " +
                                           $"{(string.IsNullOrWhiteSpace(templatePath) ? $"ContentPath '{contentsPath}' is not within a template" : "OutputContentFiles is disabled, so no .tabledata file was written")}. " +
                                           "The generated script will not deploy without manual ScriptTokens configuration.");
+                        Incomplete = true;
                     }
                 }
 
@@ -420,7 +433,9 @@ public class DataTongs
             catch (Exception ex)
             {
                 errors++;
+                Failed = true;
                 _progressLog.Error($"  Error processing table {table.TableName}: {ex.Message}");
+                _errorLog.Error($"Error processing table {table.TableName}", ex);
             }
         }
 
@@ -429,6 +444,13 @@ public class DataTongs
         _progressLog.Info($"  Tables processed: {tablesProcessed}");
         if (errors > 0) _progressLog.Info($"  Errors: {errors}");
         _progressLog.Info("DataTongs completed.");
+    }
+
+    private void SkipTable(string message)
+    {
+        Incomplete = true;
+        _progressLog.Error(message);
+        _errorLog.Error(message.Trim());
     }
 
     /// <summary>
@@ -451,7 +473,7 @@ public class DataTongs
         {
             var json = fileWrapper.ReadAllText(templateJsonPath);
             if (string.IsNullOrWhiteSpace(json)) return false;
-            var obj = JObject.Parse(json);
+            var obj = JsonText.ParseObject(json);
             var scriptValue = obj["SchemaIdentificationScript"]?.ToString();
             return !string.IsNullOrWhiteSpace(scriptValue);
         }
@@ -942,10 +964,40 @@ ORDER BY c.ORDINAL_POSITION;";
     internal static string FormatJsonResult(string rawJson)
     {
         if (string.IsNullOrWhiteSpace(rawJson)) return "";
-        return rawJson.Replace("}, {", "},\r\n{").Replace("},{", "},\r\n{").Replace("[{", "[\r\n{").Replace("}]", "}\r\n]");
+        // The same breaks as always, outside string values only: a value holding "},{" was split across lines.
+        var sb = new StringBuilder(rawJson.Length + 64);
+        var inString = false;
+        for (var i = 0; i < rawJson.Length; i++)
+        {
+            var ch = rawJson[i];
+            if (inString)
+            {
+                sb.Append(ch);
+                if (ch == '\\' && i + 1 < rawJson.Length) sb.Append(rawJson[++i]);
+                else if (ch == '"') inString = false;
+                continue;
+            }
+            if (ch == '"') inString = true;
+            if (ch == '}' && string.CompareOrdinal(rawJson, i, "}, {", 0, 4) == 0)
+            {
+                sb.Append("},\r\n{");
+                i += 3;
+                continue;
+            }
+            sb.Append(ch);
+            if ((ch == '}' && i + 2 < rawJson.Length && rawJson[i + 1] == ',' && rawJson[i + 2] == '{')
+                || (ch == '[' && i + 1 < rawJson.Length && rawJson[i + 1] == '{'))
+            {
+                if (ch == '}') { sb.Append(','); i++; }
+                sb.Append("\r\n");
+            }
+            else if (ch == '}' && i + 1 < rawJson.Length && rawJson[i + 1] == ']')
+                sb.Append("\r\n");
+        }
+        return sb.ToString();
     }
 
-    internal static int CountRows(string tableDataJson) => JArray.Parse(tableDataJson).Count;
+    internal static int CountRows(string tableDataJson) => JsonText.ParseArray(tableDataJson).Count;
 
     // Counts <row> elements in the delivery XML shape (<rows><row>...</row></rows>). The element is
     // always emitted as a bare "<row>" (no attributes), so a literal substring count is exact and
@@ -991,6 +1043,10 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE
             var colName = reader.GetString(0);
             var typeName = reader.GetString(1);
             _progressLog.Warn($"Column {tableSchema}.{tableName}.{colName} has type {typeName} which is not supported for data delivery — skipping");
+            // A rowversion is generated by the target on every write, so leaving it out loses nothing. Only
+            // sql_variant leaves data behind.
+            if (typeName.Equals("sql_variant", StringComparison.OrdinalIgnoreCase))
+                Incomplete = true;
         }
     }
 
@@ -1013,6 +1069,7 @@ SELECT c.column_name, c.udt_name
             var colName = reader.GetString(0);
             var typeName = reader.GetString(1);
             _progressLog.Warn($"Column {tableSchema}.{tableName}.{colName} has type {typeName} which is not supported for data delivery — skipping");
+            Incomplete = true;
         }
     }
 

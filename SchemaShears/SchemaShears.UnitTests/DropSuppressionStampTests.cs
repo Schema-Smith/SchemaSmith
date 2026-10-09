@@ -41,6 +41,23 @@ public class DropSuppressionStampTests
             Assert.That(json["DropCheckConstraintsRemovedFromProduct"]!.Value<bool>(), Is.False);
             Assert.That(json["DropExcludeConstraintsRemovedFromProduct"]!.Value<bool>(), Is.False);
             Assert.That(json["DropStatisticsRemovedFromProduct"]!.Value<bool>(), Is.False);
+            // Defaults on in the product, so leaving it unstamped dropped indexes removed from the patch's tables.
+            Assert.That(json["DropIndexesRemovedFromProduct"]?.Value<bool>(), Is.False,
+                "an index removed from an included table must not be dropped by a patch that suppresses all drops");
+        });
+    }
+
+    [Test]
+    public void Apply_AllowIndexes_LeavesBothIndexFlagsUnstamped()
+    {
+        DropSuppressionStamp.Apply(_productJson, new[] { "Indexes" });
+
+        var json = JObject.Parse(File.ReadAllText(_productJson));
+        Assert.Multiple(() =>
+        {
+            Assert.That(json["DropUnknownIndexes"], Is.Null);
+            Assert.That(json["DropIndexesRemovedFromProduct"], Is.Null);
+            Assert.That(json["DropColumnsRemovedFromProduct"]!.Value<bool>(), Is.False);
         });
     }
 

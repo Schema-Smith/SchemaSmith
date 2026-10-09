@@ -28,6 +28,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string RelatedTableCode = "SS-FK-002";
     private const string RelatedColumnCode = "SS-FK-004";
     private const string CardinalityCode = "SS-FK-005";
+    private const string ForeignKeyNameReusedCode = "SS-FK-006";
     private const string IndexColumnCode = "SS-IDX-001";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string RebuildThresholdCode = "SS-TBL-001";
@@ -42,6 +43,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string VersioningExclusionInertCode = "SS-SV-001";
     private const string MinimumVersionUnresolvableCode = "SS-VER-001";
     private const string CdcFilegroupInertCode = "SS-CDC-001";
+    private const string CdcIndexNameInvalidCode = "SS-CDC-002";
     private const string CompressionConflictCode = "SS-CO-001";
     private const string CompressionLevelInertCode = "SS-CO-002";
     private const string DuplicateEventCode = "SS-EVT-001";
@@ -78,6 +80,9 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckScheduledEvents(template));
 
         foreach (var template in ctx.Templates)
+            findings.AddRange(CheckForeignKeyNameReuse(template, ctx.Product));
+
+        foreach (var template in ctx.Templates)
             findings.AddRange(CheckModeledFolderObjectCoexistence(template));
 
         foreach (var template in ctx.Templates)
@@ -111,6 +116,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckSystemVersioningExclusions(table, location));
             findings.AddRange(CheckCdcFilegroup(table, location));
             findings.AddRange(CheckCdcSupportsNetChanges(table, location));
+            findings.AddRange(CheckCdcIndexName(table, location));
             findings.AddRange(CheckCompressionOptions(table, location));
             findings.AddRange(CheckPartitionPlacement(table, location));
             findings.AddRange(CheckMyPartitioning(table, location));
@@ -118,6 +124,47 @@ public sealed class CoherenceCheck : ISchemaCheck
         }
 
         return findings;
+    }
+
+    // MariaDB names foreign keys per table from 12.1 and per database before it.
+    private const int MariaDbPerTableForeignKeyNames = 1201;
+
+    /// <summary>
+    /// The same foreign-key name on two tables in one template. Where the engine names foreign keys per database
+    /// (MySQL) or per schema (SQL Server) the second one fails the deploy. MariaDB names them per table from 12.1,
+    /// so there the reuse fails only on an older server: a warning, unless MinimumVersion already excludes those.
+    /// PostgreSQL names them per table on every version.
+    /// </summary>
+    private static IEnumerable<Finding> CheckForeignKeyNameReuse(Template template, Product product)
+    {
+        if (product.Platform == Platform.PostgreSQL) yield break;
+        var severity = Severity.Error;
+        if (product.Platform == Platform.MariaDb)
+        {
+            if (VersionHelper.ParseDeclaredVersion(product.MinimumVersion, product.Platform) >= MariaDbPerTableForeignKeyNames)
+                yield break;
+            severity = Severity.Warning;
+        }
+
+        var scopeBySchema = product.Platform == Platform.SqlServer;
+        var reused = template.Tables
+            .SelectMany(t => t.ForeignKeys.Select(fk => (Table: t, Fk: fk)))
+            .Where(x => !string.IsNullOrWhiteSpace(x.Fk.Name))
+            .GroupBy(x => (Schema: scopeBySchema ? NormalizedSchema(x.Table) : "", Name: IdentityKey(x.Fk.Name)))
+            .Where(g => g.Select(x => TableKey(x.Table)).Distinct().Count() > 1);
+
+        foreach (var group in reused)
+        {
+            var name = NormalizeIdentifier(group.First().Fk.Name);
+            var tables = string.Join(", ", group.Select(x => $"'{x.Table.Name}'").Distinct());
+            yield return new Finding(severity, ForeignKeyNameReusedCode, Category, $"Template '{template.Name}'",
+                product.Platform == Platform.MariaDb
+                    ? $"Foreign key '{name}' is declared on tables {tables}. MariaDB names foreign keys per database " +
+                      "before 12.1, so the deploy fails on an older server. Rename one, or set the product's " +
+                      "MinimumVersion to 12.1 or later."
+                    : $"Foreign key '{name}' is declared on tables {tables}. {product.Platform} names foreign keys per " +
+                      (scopeBySchema ? "schema" : "database") + ", so the second one fails the deploy. Rename one.");
+        }
     }
 
     private static IEnumerable<Finding> CheckForeignKey(
@@ -609,7 +656,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// </summary>
     private static IEnumerable<Finding> CheckCdcFilegroup(Table table, string tableLocation)
     {
-        if (table is not SqlServerTable ssTable || ssTable.EnableCDC || string.IsNullOrWhiteSpace(ssTable.CdcFilegroup)) yield break;
+        if (table is not SqlServerTable ssTable || ssTable.EnableCDC == true || string.IsNullOrWhiteSpace(ssTable.CdcFilegroup)) yield break;
 
         yield return new Finding(Severity.Warning, CdcFilegroupInertCode, Category, tableLocation,
             $"Table '{table.Name}' sets CdcFilegroup '{ssTable.CdcFilegroup}' but not EnableCDC, so there is no change " +
@@ -622,11 +669,52 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// </summary>
     private static IEnumerable<Finding> CheckCdcSupportsNetChanges(Table table, string tableLocation)
     {
-        if (table is not SqlServerTable ssTable || ssTable.EnableCDC || ssTable.CdcSupportsNetChanges is not { } netChanges) yield break;
+        if (table is not SqlServerTable ssTable || ssTable.EnableCDC == true || ssTable.CdcSupportsNetChanges is not { } netChanges) yield break;
 
         yield return new Finding(Severity.Warning, CdcFilegroupInertCode, Category, tableLocation,
             $"Table '{table.Name}' sets CdcSupportsNetChanges {(netChanges ? "true" : "false")} but not EnableCDC, so there " +
             "is no capture instance to shape and the setting does nothing — set EnableCDC, or drop CdcSupportsNetChanges.");
+    }
+
+    /// <summary>
+    /// <c>CdcIndexName</c> picks the index a capture instance identifies rows by, so without <c>EnableCDC</c> it does
+    /// nothing. With it, SQL Server accepts only a unique index over NOT NULL columns, and the deploy refuses anything
+    /// else; checked against the declared indexes, as the deploy does, since the index may be created by it.
+    /// </summary>
+    private static IEnumerable<Finding> CheckCdcIndexName(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable ssTable || string.IsNullOrWhiteSpace(ssTable.CdcIndexName)) yield break;
+
+        if (ssTable.EnableCDC != true)
+        {
+            yield return new Finding(Severity.Warning, CdcFilegroupInertCode, Category, tableLocation,
+                $"Table '{table.Name}' sets CdcIndexName '{ssTable.CdcIndexName}' but not EnableCDC, so there is no " +
+                "capture instance to identify rows for and the setting does nothing — set EnableCDC, or drop CdcIndexName.");
+            yield break;
+        }
+
+        var problem = CdcIndexProblem(table, NormalizeIdentifier(ssTable.CdcIndexName));
+        if (problem != null)
+            yield return new Finding(Severity.Error, CdcIndexNameInvalidCode, Category, tableLocation,
+                $"Table '{table.Name}' names CdcIndexName '{ssTable.CdcIndexName}', {problem}. CDC identifies rows by a " +
+                "unique index over NOT NULL columns, and the deploy refuses anything else — name one of the table's " +
+                "declared unique indexes, or drop CdcIndexName to use the primary key.");
+    }
+
+    private static string CdcIndexProblem(Table table, string indexName)
+    {
+        var index = table.Indexes.FirstOrDefault(i =>
+            string.Equals(NormalizeIdentifier(i.Name), indexName, StringComparison.OrdinalIgnoreCase));
+        if (index == null) return "which is not one of its declared indexes";
+        if (!index.Unique && !index.PrimaryKey && !index.UniqueConstraint) return "which is not unique";
+        if (index.PrimaryKey) return null;
+
+        var nullableColumns = new HashSet<string>(
+            table.Columns.Where(c => c.Nullable).Select(c => NormalizeIdentifier(c.Name)), StringComparer.OrdinalIgnoreCase);
+        return SplitNames(index.IndexColumns).Select(StripOrderingSuffix)
+            .Any(column => nullableColumns.Contains(NormalizeIdentifier(column)))
+            ? "which has a nullable key column"
+            : null;
     }
 
     /// <summary>
@@ -801,11 +889,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     {
         if (template.Events.Count == 0) yield break;
 
-        var scriptedEventNames = template.ObjectScripts?
-            .Where(s => (s.FilePath ?? "").Replace(Path.DirectorySeparatorChar, '/').Contains("/Events/", StringComparison.OrdinalIgnoreCase))
-            .Select(s => Path.GetFileNameWithoutExtension(s.FilePath ?? ""))
-            .Where(n => !string.IsNullOrWhiteSpace(n))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
+        var scriptedEventNames = ScriptedNamesIn(template, "Events");
 
         foreach (var ev in template.Events.Where(e => scriptedEventNames.Contains(e.Name ?? "")))
             yield return new Finding(Severity.Error, DuplicateEventCode, Category,
@@ -843,21 +927,21 @@ public sealed class CoherenceCheck : ISchemaCheck
     {
         foreach (var finding in CoexistenceFindings(
                      template, "Enum Types", DuplicateEnumTypeCode, "Enum type",
-                     template.EnumTypes.Select(e => e.Name),
+                     template.EnumTypes.Select(e => (e.Schema, e.Name)),
                      "The scripted form is a guarded CREATE TYPE, so once the type exists the script " +
                      "silently does nothing while the declared form is what converges"))
             yield return finding;
 
         foreach (var finding in CoexistenceFindings(
                      template, "Domain Types", DuplicateDomainTypeCode, "Domain type",
-                     template.DomainTypes.Select(d => d.Name),
+                     template.DomainTypes.Select(d => (d.Schema, d.Name)),
                      "There is no CREATE OR REPLACE DOMAIN, so the scripted form is a guarded CREATE " +
                      "DOMAIN and silently does nothing once the domain exists"))
             yield return finding;
 
         foreach (var finding in CoexistenceFindings(
                      template, "Sequences", DuplicateSequenceCode, "Sequence",
-                     template.Sequences.Select(s => s.Name),
+                     template.Sequences.Select(s => (s.Schema, s.Name)),
                      "Two authoring paths for one object leave it ambiguous which one is in charge"))
             yield return finding;
     }
@@ -867,31 +951,33 @@ public sealed class CoherenceCheck : ISchemaCheck
         string folder,
         string code,
         string noun,
-        IEnumerable<string> declaredNames,
+        IEnumerable<(string Schema, string Name)> declaredNames,
         string consequence)
     {
-        var declared = declaredNames.Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+        var declared = declaredNames.Where(n => !string.IsNullOrWhiteSpace(n.Name)).ToList();
         if (declared.Count == 0) yield break;
 
         var scripted = ScriptedNamesIn(template, folder);
         if (scripted.Count == 0) yield break;
 
-        foreach (var name in declared.Where(scripted.Contains))
+        // A script file names its object bare ("status.sql") or schema-qualified ("public.status.sql").
+        foreach (var (schema, name) in declared.Where(d => scripted.Contains(d.Name) || scripted.Contains($"{d.Schema}.{d.Name}")))
             yield return new Finding(Severity.Error, code, Category,
                 $"Template '{template.Name}'",
-                $"{noun} '{name}' is declared as JSON and also scripted as a .sql file in the same " +
+                $"{noun} '{(string.IsNullOrEmpty(schema) ? name : $"{schema}.{name}")}' is declared as JSON and also scripted as a .sql file in the same " +
                 $"{folder} folder. {consequence} — keep one.");
     }
 
-    // Same folder discriminator and filename-as-object-name convention the events check uses: a
-    // scripted object is named by its file, and the folder is what says which kind it is.
+    // A scripted object is named by its file, and the folder that holds it is what says which kind it is. The folder
+    // is the script folder's own path under the template, first segment: matching "/<folder>/" anywhere in a script's
+    // full path counted a directory above the package, or a same-named subfolder of another folder, as that folder.
     private static HashSet<string> ScriptedNamesIn(Template template, string folder) =>
-        template.ObjectScripts?
-            .Where(s => (s.FilePath ?? "").Replace(Path.DirectorySeparatorChar, '/')
-                .Contains($"/{folder}/", StringComparison.OrdinalIgnoreCase))
+        template.ObjectFolders
+            .Where(f => (f.FolderPath ?? "").Split('/', '\\')[0].Equals(folder, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(f => f.Scripts)
             .Select(s => Path.GetFileNameWithoutExtension(s.FilePath ?? ""))
             .Where(n => !string.IsNullOrWhiteSpace(n))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     // Mirrors SchemaSmith_NormalizeIndexColumns.sql's DESC/ASC suffix handling (source of truth —
     // keep in sync): a trailing " DESC" or " ASC" (case-insensitive) is ordering, not part of the

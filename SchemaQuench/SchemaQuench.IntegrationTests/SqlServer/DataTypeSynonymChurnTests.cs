@@ -71,6 +71,44 @@ public class DataTypeSynonymChurnTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // Typed XML: the catalog reports DOCUMENT through is_xml_document and never reports CONTENT, the default. Read
+    // without it, a DOCUMENT column compared unequal to its own declaration and was altered on every deploy, and a
+    // declaration spelling CONTENT out did the same.
+    [TestCase("XML(DOCUMENT [dbo].[ChurnXsc])", TestName = "TypedXml_DOCUMENT_DoesNotChurn")]
+    [TestCase("XML(CONTENT [dbo].[ChurnXsc])", TestName = "TypedXml_CONTENT_DoesNotChurn")]
+    public void TypedXmlColumn_IsNotRewrittenOnRedeploy(string dataType)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"XmlProduct_{uid}";
+        var table = $"XmlTable_{uid}";
+        var defs = TableWithColumnType(table, dataType);
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = "IF NOT EXISTS (SELECT 1 FROM sys.xml_schema_collections WHERE [name] = 'ChurnXsc') "
+                          + "EXEC('CREATE XML SCHEMA COLLECTION dbo.ChurnXsc AS N''<xsd:schema xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">"
+                          + "<xsd:element name=\"r\" type=\"xsd:string\"/></xsd:schema>''')";
+        cmd.ExecuteNonQuery();
+
+        try
+        {
+            RunTableQuenchProc(cmd, defs, productName: product);
+            ClearChangeAudit(cmd);
+            RunTableQuenchProc(cmd, defs, productName: product);
+
+            Assert.That(ColumnChangesRecorded(cmd, table), Is.EqualTo(0),
+                $"a column declared {dataType} was altered on a redeploy of an unchanged declaration");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
     private static string TableWithColumnType(string table, string dataType) => $$"""
 [
   {

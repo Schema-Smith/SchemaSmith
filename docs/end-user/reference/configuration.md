@@ -164,7 +164,7 @@ To use a different file entirely, pass the `--ConfigFile` switch:
 SchemaQuench --ConfigFile:C:\configs\production.json
 ```
 
-The path can be absolute or relative to the current working directory.
+The path can be absolute or relative to the current working directory. A file named this way must exist: the executable-directory fallback applies only to the default file name, and a `--ConfigFile` that is not found stops the run with exit code `2` before anything connects, naming the path it tried.
 
 ### Unrecognized settings are reported
 
@@ -318,7 +318,8 @@ An optional `LogHygiene` block in any tool's `*.settings.json` tunes the behavio
 ```jsonc
 "LogHygiene": {
   // Suppress the token-logging section entirely -- one notice line, no token
-  // names and no values. For products with hundreds of tokens. Default: true.
+  // names and no values -- and mask the ScriptTokens values in the
+  // configuration echo. For products with hundreds of tokens. Default: true.
   "LogTokens": true,
 
   // Scrub these exact token names too, beyond the default patterns.
@@ -334,6 +335,10 @@ An optional `LogHygiene` block in any tool's `*.settings.json` tunes the behavio
 ```
 
 When a token name appears in both `AllowTokens` and a scrub rule, `AllowTokens` wins and the value is logged verbatim -- but an embedded connection-string password is still stripped.
+
+The three lists must be lists, even with one entry (`"ScrubTokens": [ "DeployKey" ]`), and `LogTokens` must be `true` or `false`. A block the tools cannot read -- a single value where a list belongs, a key that is not one of these four, or another `LogTokens` value -- is reported as a warning naming the key, and that part of the block has no effect.
+
+The entries of a list whose name is sensitive are masked as well: `"password": [ "..." ]` logs `***` for each entry.
 
 ---
 
@@ -506,7 +511,8 @@ SchemaSmith surfaces the database engine's informational output -- notices, prin
 | Code | Condition | Recommended action |
 |---|---|---|
 | `0` | Normal completion | None -- the operation succeeded. |
-| `2` | One or more database quenches failed (SchemaQuench only) | Check the progress and error logs for details on which databases failed and why. Fix the failing scripts and re-run. |
+| `1` | Finished, but did not produce everything asked: DataTongs skipped a table (it does not exist in the source, has no key columns, or its `KeyColumns` are malformed) | The skipped tables and the reason for each are in the progress log and the error log. Fix the table list or the source, and re-run. |
+| `2` | Failed: SchemaQuench -- one or more database quenches failed; SchemaTongs -- one or more tables failed to extract; DataTongs -- one or more tables failed to extract | Check the progress and error logs for what failed and why. Fix the cause and re-run. |
 | `3` | Unhandled exception | An unexpected error occurred. The exception is logged to both the progress and error logs before exit. Report the error with the log contents if the cause isn't obvious. |
 | `4` | Log backup failure | The tool completed its main work but couldn't back up the log files. Check directory permissions and disk space in the log directory. The base log files may still be readable even though the backup failed. |
 
@@ -1031,6 +1037,8 @@ Controls whether SchemaQuench drops indexes on managed tables that aren't define
 | Template | `DropUnknownIndexes` in `Template.json` | (inherit) |
 
 A `false` at any tier is sticky — it locks the effective value to `false` for all lower tiers and cannot be re-enabled by a more-specific setting. Absent inherits from the tier above. A `true` at a lower tier overrides an inherited `true` (or default `false`) but never an ancestor's explicit `false`.
+
+On SQL Server, an index of a kind a package cannot declare (spatial, JSON, selective XML) is never dropped as unknown: nothing could put it back.
 
 The environment tier is new in this release. Previously `DropUnknownIndexes` was settable only in `Product.json` and `Template.json`. It can now be set or suppressed in `SchemaQuench.settings.json` (or via environment variable) as a deployment-wide guardrail.
 

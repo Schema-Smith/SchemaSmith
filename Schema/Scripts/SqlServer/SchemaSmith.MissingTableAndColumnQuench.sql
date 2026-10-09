@@ -264,10 +264,10 @@ BEGIN TRY
   IF OBJECT_ID('tempdb..#AddTableColumns') IS NOT NULL DROP TABLE #AddTableColumns
   CREATE TABLE #AddTableColumns
   (
-    [KeySchema] NVARCHAR(200) NULL,
-    [KeyTableName] NVARCHAR(200) NULL,
+    [KeySchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [KeyTableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [_RowId] BIGINT NULL,
-    [ColumnScript] NVARCHAR(MAX) NULL,
+    [ColumnScript] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     -- Whether the column belongs in the CREATE at all: computed columns and the FILESTREAM column are
     -- added afterwards, the latter because it needs a unique constraint first.
     [InCreate] BIT NOT NULL,
@@ -324,13 +324,21 @@ BEGIN TRY
                                         -- INDEX clauses. Empty for an ordinary disk table, so nothing changes
                                         -- for one. The ordinary index passes skip memory-optimized tables.
                                         InlineIndexes = CASE WHEN T.[MemoryOptimized] = 1 THEN
+                                            -- A clustered columnstore has no key columns; built like the others its
+                                            -- NULL IndexColumns made the whole entry NULL, which FOR XML PATH drops, so
+                                            -- the table was created without it and the index pass then tried a CREATE
+                                            -- INDEX the engine refuses. A unique constraint stays a constraint (SS-055).
                                             ISNULL((SELECT ', ' +
-                                                      CASE WHEN I.[PrimaryKey] = 1
-                                                           THEN 'CONSTRAINT ' + I.[IndexName] + ' PRIMARY KEY NONCLUSTERED '
-                                                           ELSE 'INDEX ' + I.[IndexName] + CASE WHEN I.[Unique] = 1 THEN ' UNIQUE' ELSE '' END + ' NONCLUSTERED ' END +
-                                                      CASE WHEN I.[BucketCount] IS NOT NULL
-                                                           THEN 'HASH (' + I.[IndexColumns] + ') WITH (BUCKET_COUNT = ' + CAST(I.[BucketCount] AS NVARCHAR(20)) + ')'
-                                                           ELSE '(' + I.[IndexColumns] + ')' END
+                                                      CASE WHEN I.[ColumnStore] = 1
+                                                           THEN 'INDEX ' + I.[IndexName] + ' CLUSTERED COLUMNSTORE'
+                                                           ELSE CASE WHEN I.[PrimaryKey] = 1
+                                                                     THEN 'CONSTRAINT ' + I.[IndexName] + ' PRIMARY KEY NONCLUSTERED '
+                                                                     WHEN I.[UniqueConstraint] = 1
+                                                                     THEN 'CONSTRAINT ' + I.[IndexName] + ' UNIQUE NONCLUSTERED '
+                                                                     ELSE 'INDEX ' + I.[IndexName] + CASE WHEN I.[Unique] = 1 THEN ' UNIQUE' ELSE '' END + ' NONCLUSTERED ' END +
+                                                                CASE WHEN I.[BucketCount] IS NOT NULL
+                                                                     THEN 'HASH (' + I.[IndexColumns] + ') WITH (BUCKET_COUNT = ' + CAST(I.[BucketCount] AS NVARCHAR(20)) + ')'
+                                                                     ELSE '(' + I.[IndexColumns] + ')' END END
                                                      FROM #Indexes I WITH (NOLOCK)
                                                     WHERE I.[Schema] = T.[Schema] AND I.[TableName] = T.[Name]
                                                     ORDER BY I.[PrimaryKey] DESC, I.[IndexName]

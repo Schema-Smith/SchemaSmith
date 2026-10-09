@@ -26,25 +26,25 @@ public class DirectoryWrapper : IDirectory
     // StripLongPathPrefix leave the path untouched.
     public string[] GetFiles(string path, string searchPattern, SearchOption searchOption)
     {
-        return Directory.GetFiles(LongPathSupport.MakeSafeLongFilePath(path), searchPattern, searchOption)
+        return Directory.GetFiles(LongPathSupport.MakeSafeLongFilePath(path), searchPattern, Options(searchOption))
             .Select(LongPathSupport.StripLongPathPrefix).ToArray();
     }
 
     public string[] GetDirectories(string path, string searchPattern, SearchOption searchOption)
     {
-        return Directory.GetDirectories(LongPathSupport.MakeSafeLongFilePath(path), searchPattern, searchOption)
+        return Directory.GetDirectories(LongPathSupport.MakeSafeLongFilePath(path), searchPattern, Options(searchOption))
             .Select(LongPathSupport.StripLongPathPrefix).ToArray();
     }
 
     public IEnumerable<string> EnumerateFiles(string path, string searchPattern, SearchOption searchOption)
     {
-        return Directory.EnumerateFiles(LongPathSupport.MakeSafeLongFilePath(path), searchPattern, searchOption)
+        return Directory.EnumerateFiles(LongPathSupport.MakeSafeLongFilePath(path), searchPattern, Options(searchOption))
             .Select(LongPathSupport.StripLongPathPrefix);
     }
 
     public IEnumerable<string> EnumerateFileSystemEntries(string path, string searchPattern, SearchOption searchOption)
     {
-        return Directory.EnumerateFileSystemEntries(LongPathSupport.MakeSafeLongFilePath(path), searchPattern, searchOption)
+        return Directory.EnumerateFileSystemEntries(LongPathSupport.MakeSafeLongFilePath(path), searchPattern, Options(searchOption))
             .Select(LongPathSupport.StripLongPathPrefix);
     }
 
@@ -57,7 +57,7 @@ public class DirectoryWrapper : IDirectory
         // Select keeps this deferred -- EnumerateFiles is lazy and projection does not change that, so
         // a caller taking the first twenty of fifty thousand walks twenty.
         return new DirectoryInfo(LongPathSupport.MakeSafeLongFilePath(path))
-            .EnumerateFiles(searchPattern, searchOption)
+            .EnumerateFiles(searchPattern, Options(searchOption))
             .Select(f => new TimestampedFile(LongPathSupport.StripLongPathPrefix(f.FullName), f.LastWriteTimeUtc));
     }
 
@@ -75,6 +75,17 @@ public class DirectoryWrapper : IDirectory
     {
         return Directory.GetCurrentDirectory();
     }
+
+    // The options the SearchOption overloads use, except that a pattern ignores case on every OS, as it always has
+    // on Windows: a package's "status.SQL" or "Orders.JSON" was read on Windows and silently skipped elsewhere.
+    private static EnumerationOptions Options(SearchOption searchOption) => new()
+    {
+        MatchType = MatchType.Win32,
+        MatchCasing = MatchCasing.CaseInsensitive,
+        RecurseSubdirectories = searchOption == SearchOption.AllDirectories,
+        AttributesToSkip = 0,
+        IgnoreInaccessible = false
+    };
 
     public static IDirectory GetFromFactory()
     {

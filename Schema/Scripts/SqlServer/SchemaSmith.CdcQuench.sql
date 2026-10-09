@@ -28,7 +28,8 @@ BEGIN TRY
                 -- existing one. The key now exists by the time this runs, so a new table has to be told.
                 CASE WHEN t.CdcSupportsNetChanges IS NOT NULL THEN ', @supports_net_changes = ' + CASE WHEN t.CdcSupportsNetChanges = 1 THEN '1' ELSE '0' END
                      WHEN t.NewTable = 1 THEN ', @supports_net_changes = 0'
-                     ELSE '' END + ';' + CHAR(13) + CHAR(10)
+                     ELSE '' END +
+                ISNULL(', @index_name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName), '''', '''''') + '''', '') + ';' + CHAR(13) + CHAR(10)
            WHEN t.EnableCDC = 0 AND st.is_tracked_by_cdc = 1
            THEN 'RAISERROR(''  Disable CDC on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                 'EXEC sys.sp_cdc_disable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @capture_instance = N''' + ct.capture_instance + ''';' + CHAR(13) + CHAR(10)
@@ -51,13 +52,14 @@ BEGIN TRY
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1) AND @WhatIf = 0
   BEGIN
     IF OBJECT_ID('tempdb..#CdcCaptureDrift') IS NOT NULL DROP TABLE #CdcCaptureDrift
-    SELECT t.[Schema], t.[Name], newest.capture_instance, newest.filegroup_name, newest.supports_net_changes,
+    SELECT t.[Schema], t.[Name], newest.capture_instance, newest.filegroup_name, newest.supports_net_changes, newest.index_name,
            SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) AS DeclaredFilegroup, t.CdcSupportsNetChanges AS DeclaredNetChanges,
+           SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName) AS DeclaredIndexName,
            Instances = (SELECT COUNT(*) FROM cdc.change_tables c WITH (NOLOCK) WHERE c.source_object_id = st.[object_id])
       INTO #CdcCaptureDrift
       FROM #Tables t WITH (NOLOCK)
       JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name, ct.supports_net_changes, ct.[object_id] AS ChangeTableId
+      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name, ct.supports_net_changes, ct.index_name, ct.[object_id] AS ChangeTableId
                      FROM cdc.change_tables ct WITH (NOLOCK)
                     WHERE ct.source_object_id = st.[object_id]
                     ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
@@ -70,9 +72,9 @@ BEGIN TRY
                          WHERE cc.[object_id] = newest.ChangeTableId
                            AND NOT EXISTS (SELECT 1 FROM sys.columns sc WHERE sc.[object_id] = st.[object_id] AND sc.[name] = cc.column_name)))
 
-    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, NewNetChanges, Reason)
+    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, NewNetChanges, NewIndexName, Reason)
       SELECT d.[Schema], d.[Name], d.capture_instance, COALESCE(d.DeclaredFilegroup, d.filegroup_name),
-             COALESCE(d.DeclaredNetChanges, d.supports_net_changes), 'capture'
+             COALESCE(d.DeclaredNetChanges, d.supports_net_changes), COALESCE(d.DeclaredIndexName, d.index_name), 'capture'
         FROM #CdcCaptureDrift d
        WHERE d.Instances = 1
          AND NOT EXISTS (SELECT 1 FROM #CdcRotate r WHERE r.[Schema] = d.[Schema] AND r.[TableName] = d.[Name])
@@ -92,18 +94,17 @@ BEGIN TRY
   BEGIN
     SET @v_SQL = ''
     SELECT @v_SQL = @v_SQL +
-      'RAISERROR(''  CDC ROTATED on ' + r.[Schema] + '.' + r.[TableName] + ': new capture instance ' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ' now captures ' + CASE WHEN r.Reason = 'filegroup' THEN 'this table on filegroup ' + r.NewFilegroup WHEN r.Reason = 'netchanges' THEN 'with net changes ' + CASE WHEN r.NewNetChanges = 1 THEN 'ON' ELSE 'OFF' END WHEN r.Reason = 'capture' THEN 'every current column (the previous instance did not)' ELSE 'the new column set' END + '. The previous instance ' + r.OldCaptureInstance + ' STILL HOLDS ITS HISTORY and was NOT dropped -- drain it, then drop it with EXEC sys.sp_cdc_disable_table @capture_instance = N''''' + r.OldCaptureInstance + '''''. Until then the next column change on this table WILL FAIL: SQL Server allows only two capture instances.'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+      'RAISERROR(''  CDC ROTATED on ' + r.[Schema] + '.' + r.[TableName] + ': new capture instance ' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ' now captures ' + CASE WHEN r.Reason = 'filegroup' THEN 'this table on filegroup ' + r.NewFilegroup WHEN r.Reason = 'netchanges' THEN 'with net changes ' + CASE WHEN r.NewNetChanges = 1 THEN 'ON' ELSE 'OFF' END WHEN r.Reason = 'index' THEN 'identifying rows by index ' + REPLACE(r.NewIndexName, '''', '''''') WHEN r.Reason = 'capture' THEN 'every current column (the previous instance did not)' ELSE 'the new column set' END + '. The previous instance ' + r.OldCaptureInstance + ' STILL HOLDS ITS HISTORY and was NOT dropped -- drain it, then drop it with EXEC sys.sp_cdc_disable_table @capture_instance = N''''' + r.OldCaptureInstance + '''''. Until then the next column change on this table WILL FAIL: SQL Server allows only two capture instances.'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
       'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) + ''', @capture_instance = N''' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ''', @role_name = NULL' + ISNULL(', @filegroup_name = N''' + r.NewFilegroup + '''', '') +
       ISNULL(', @supports_net_changes = ' + CAST(r.NewNetChanges AS VARCHAR(1)), '') +
-      -- Net changes kept on an instance that identifies rows by a unique index rather than the primary key: without
-      -- the same @index_name, sp_cdc_enable_table looks for a primary key and fails.
-      CASE WHEN r.NewNetChanges = 1 AND old.index_name IS NOT NULL
-                AND EXISTS (SELECT 1 FROM sys.indexes i WHERE i.[object_id] = OBJECT_ID(r.[Schema] + '.' + r.[TableName]) AND i.[name] = old.index_name)
-           THEN ', @index_name = N''' + REPLACE(old.index_name, '''', '''''') + ''''
+      -- The declared index, else the one the old instance identifies rows by. Without it sp_cdc_enable_table picks the
+      -- primary key, so an instance on a unique index would move off it, and net changes with no primary key would fail.
+      CASE WHEN r.NewIndexName IS NOT NULL
+                AND EXISTS (SELECT 1 FROM sys.indexes i WHERE i.[object_id] = OBJECT_ID(r.[Schema] + '.' + r.[TableName]) AND i.[name] = r.NewIndexName)
+           THEN ', @index_name = N''' + REPLACE(r.NewIndexName, '''', '''''') + ''''
            ELSE '' END + ';' + CHAR(13) + CHAR(10)
       FROM #CdcRotate r WITH (NOLOCK)
       CROSS APPLY (SELECT SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + '_' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) AS BaseName) b
-      OUTER APPLY (SELECT ct.index_name FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.capture_instance = r.OldCaptureInstance) old
     IF @v_SQL <> ''
     BEGIN
       IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)

@@ -85,6 +85,40 @@ public class ConnectionLostClassifierTests
         Assert.That(ConnectionLostClassifier.IsConnectionLost(ex), Is.True);
     }
 
+    [Test] // Npgsql and MySqlConnector surface a torn stream as EndOfStreamException
+    public void InnerEndOfStream_IsConnectionLost()
+    {
+        var ex = new Exception("Exception while reading from stream", new EndOfStreamException());
+        Assert.That(ConnectionLostClassifier.IsConnectionLost(ex), Is.True);
+    }
+
+    // A local file the deploy writes (a checkpoint, a log, a debug script) failing is not the server going away, and
+    // telling the user to check the server's memory sends them to the wrong place.
+    [Test]
+    public void MissingDirectory_IsNotConnectionLost()
+    {
+        var ex = new DirectoryNotFoundException("Could not find a part of the path 'a.checkpoint'.");
+        Assert.That(ConnectionLostClassifier.IsConnectionLost(ex), Is.False);
+    }
+
+    [Test]
+    public void MissingFile_IsNotConnectionLost()
+        => Assert.That(ConnectionLostClassifier.IsConnectionLost(new FileNotFoundException("gone", "a.sql")), Is.False);
+
+    [Test]
+    public void PathTooLong_IsNotConnectionLost()
+        => Assert.That(ConnectionLostClassifier.IsConnectionLost(new PathTooLongException()), Is.False);
+
+    [TestCase(unchecked((int)0x80070020))] // ERROR_SHARING_VIOLATION: the file is in use by another process
+    [TestCase(unchecked((int)0x80070021))] // ERROR_LOCK_VIOLATION
+    [TestCase(unchecked((int)0x80070070))] // ERROR_DISK_FULL
+    [TestCase(unchecked((int)0x80070027))] // ERROR_HANDLE_DISK_FULL
+    public void LocalFileIoError_IsNotConnectionLost(int hresult)
+    {
+        var ex = new Exception("outer", new IOException("The process cannot access the file.", hresult));
+        Assert.That(ConnectionLostClassifier.IsConnectionLost(ex), Is.False);
+    }
+
     // --- Negative: NOT a connection loss (schema/script errors, contention) ---
 
     [Test]

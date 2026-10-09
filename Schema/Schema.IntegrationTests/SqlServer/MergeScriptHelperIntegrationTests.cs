@@ -80,6 +80,41 @@ CREATE TABLE [dbo].[{tableName}] (
         }
     }
 
+    // The merge key was the first unique index of any kind. A filtered one is not unique across the table, so rows
+    // sharing its value were merged as one; and INCLUDE columns widened it, so a changed included value inserted a
+    // duplicate.
+    [TestCase("CREATE UNIQUE INDEX [{0}] ON [dbo].[{1}] (grp) WHERE v > 0")]
+    [TestCase(null)]
+    public void GetKeyColumns_TakesOnlyAWholeTableUniqueKey_AndTheUpsertKeepsEveryRow(string decoyIndex)
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"_test_key_{Guid.NewGuid():N}"[..40];
+        try
+        {
+            command.CommandText = $@"CREATE TABLE [dbo].[{tableName}] (id INT NOT NULL, grp INT NOT NULL, v INT NOT NULL, name NVARCHAR(10) NOT NULL);
+                {(decoyIndex == null ? "" : string.Format(decoyIndex, tableName[..30] + "_d", tableName) + ";")}
+                CREATE UNIQUE INDEX [{tableName[..30]}_k] ON [dbo].[{tableName}] (id) INCLUDE (v);
+                INSERT INTO [dbo].[{tableName}] VALUES (1, 1, 5, N'A'), (2, 1, -2, N'b');";
+            command.ExecuteNonQuery();
+
+            var keyColumns = MergeScriptHelper.GetKeyColumns(Platform.SqlServer, command, "dbo", tableName);
+            Assert.That(keyColumns, Is.EqualTo("[id]"));
+
+            const string tableData = @"[{""id"":1,""grp"":1,""v"":7,""name"":""A""},{""id"":2,""grp"":1,""v"":-2,""name"":""b""}]";
+            command.CommandText = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, "dbo", tableName, tableData,
+                keyColumns, mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            command.ExecuteNonQuery();
+
+            command.CommandText = $@"SELECT STRING_AGG(CONCAT(id, ':', grp, ':', v, ':', name), ',') WITHIN GROUP (ORDER BY id) FROM [dbo].[{tableName}]";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1:1:7:A,2:1:-2:b"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [dbo].[{tableName}]";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void BuildMergeScript_GeometryColumn_UpdateExistingRow()
     {

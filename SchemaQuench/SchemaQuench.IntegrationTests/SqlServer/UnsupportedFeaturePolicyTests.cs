@@ -381,21 +381,325 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                 "the fail policy must abort naming the required version");
         }
 
-        // Granularity: a NONCLUSTERED columnstore is supported at major 11 (2012), so baking 11 must CREATE it
-        // (no downgrade) -- proving the emit-guard is not over-degrading NCCIs at the 2012 floor.
-        [Test]
-        public void ColumnStore_Nonclustered_AtSql2012_IsCreated()
+        // A NONCLUSTERED columnstore exists from 2012, but on 2012 and 2014 it makes its table read-only, so creating it
+        // would change what the application can do. It is skipped there and created from 2016 (major 13). This replaces
+        // a test that asserted creation at major 11, which pinned the read-only outcome (SS-052, D1 §7).
+        private const string NcciReadOnlyObjectType = "nonclustered columnstore index (writable from SQL Server 2016)";
+
+        [TestCase(11)]
+        [TestCase(12)]
+        public void ColumnStore_Nonclustered_At2012And2014_IsSkipped_BecauseItWouldMakeTheTableReadOnly(int major)
         {
-            var tableName = $"Ncci11_{Guid.NewGuid().ToString("N")[..8]}";
+            var tableName = $"Ncci{major}_{Guid.NewGuid().ToString("N")[..8]}";
             var indexName = $"ncci_{tableName}";
-            using var conn = KindleScratchDatabase("NcciBake11", serverMajorVersion: 11, policy: "warn");
+            using var conn = KindleScratchDatabase("NcciBake", serverMajorVersion: major, policy: "warn");
             using var cmd = conn.CreateCommand();
 
             RunTableQuenchProc(cmd, NonclusteredColumnStoreJson(tableName, indexName), productName: tableName);
 
-            Assert.That(ColumnStoreIndexCount(cmd, tableName), Is.EqualTo(1), "a nonclustered columnstore index must be created at major 11");
-            Assert.That(DowngradeRowCount(cmd, ColumnStoreObjectType, $"[dbo].[{tableName}].[{indexName}]"), Is.EqualTo(0),
-                "no downgrade may be recorded for a supported nonclustered columnstore at major 11");
+            Assert.That(ColumnStoreIndexCount(cmd, tableName), Is.EqualTo(0));
+            Assert.That(DowngradeRowCount(cmd, NcciReadOnlyObjectType, $"[dbo].[{tableName}].[{indexName}]"), Is.EqualTo(1));
+        }
+
+        // The read-only rule only stops SchemaSmith creating the index. One already on the table was made on purpose on
+        // this server; dropping it from the working set would let a later pass remove it.
+        [Test]
+        public void ColumnStore_Nonclustered_At2014_AlreadyOnTheTable_IsKept()
+        {
+            var tableName = $"NcciKeep_{Guid.NewGuid().ToString("N")[..8]}";
+            var indexName = $"ncci_{tableName}";
+            using var conn = KindleScratchDatabase("NcciBake", serverMajorVersion: 12, policy: "warn");
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"CREATE TABLE dbo.[{tableName}] (Id INT NOT NULL, Val NVARCHAR(100) NOT NULL); " +
+                              $"CREATE NONCLUSTERED COLUMNSTORE INDEX [{indexName}] ON dbo.[{tableName}] (Val)";
+            cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(cmd, NonclusteredColumnStoreJson(tableName, indexName), productName: tableName);
+
+            Assert.That(ColumnStoreIndexCount(cmd, tableName), Is.EqualTo(1));
+            Assert.That(DowngradeRowCount(cmd, NcciReadOnlyObjectType, $"[dbo].[{tableName}].[{indexName}]"), Is.EqualTo(0));
+        }
+
+        // A columnstore index reports COLUMNSTORE compression, and a declaration that names none means exactly that. The
+        // compression fix-up compared it with the declared default NONE and tried to rebuild the index to NONE, which the
+        // engine refuses, so every redeploy of a table with a columnstore index failed.
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ColumnStore_AtSql2016_RedeploysCleanly(bool clustered)
+        {
+            var tableName = $"CsTwice_{Guid.NewGuid().ToString("N")[..8]}";
+            var indexName = $"cs_{tableName}";
+            var json = clustered ? ClusteredColumnStoreJson(tableName, indexName) : NonclusteredColumnStoreJson(tableName, indexName);
+            using var conn = KindleScratchDatabase("NcciBake", serverMajorVersion: 13, policy: "warn");
+            using var cmd = conn.CreateCommand();
+
+            RunTableQuenchProc(cmd, json, productName: tableName);
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: tableName));
+            Assert.That(ColumnStoreIndexCount(cmd, tableName), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void ColumnStore_Nonclustered_AtSql2016_IsCreated()
+        {
+            var tableName = $"Ncci13_{Guid.NewGuid().ToString("N")[..8]}";
+            var indexName = $"ncci_{tableName}";
+            using var conn = KindleScratchDatabase("NcciBake", serverMajorVersion: 13, policy: "warn");
+            using var cmd = conn.CreateCommand();
+
+            RunTableQuenchProc(cmd, NonclusteredColumnStoreJson(tableName, indexName), productName: tableName);
+
+            Assert.That(ColumnStoreIndexCount(cmd, tableName), Is.EqualTo(1));
+        }
+
+        // A CLUSTERED columnstore exists from 2014, but 2014 refuses one beside any rowstore index (35304). The rowstore
+        // indexes carry keys and uniqueness, so the columnstore is the one skipped.
+        private const string CciBesideRowstoreObjectType = "clustered columnstore beside rowstore indexes (SQL Server 2016)";
+
+        private static string ClusteredColumnStoreBesideRowstoreJson(string tableName, string indexName) => $$"""
+{
+    "Schema": "[dbo]",
+    "Name": "[{{tableName}}]",
+    "Columns": [
+        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+        {"Name": "[Val]", "DataType": "NVARCHAR(100)", "Nullable": false}
+    ],
+    "Indexes": [
+        {"Name": "[{{indexName}}]", "Clustered": true, "ColumnStore": true, "PrimaryKey": false, "Unique": false},
+        {"Name": "[ux_{{tableName}}]", "Clustered": false, "Unique": true, "IndexColumns": "[Id]"}
+    ]
+}
+""";
+
+        [Test]
+        public void ColumnStore_Clustered_AtSql2014_Alone_IsCreated()
+        {
+            var tableName = $"Cci12_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("CciBake12", serverMajorVersion: 12, policy: "warn");
+            using var cmd = conn.CreateCommand();
+
+            RunTableQuenchProc(cmd, ClusteredColumnStoreJson(tableName, $"cci_{tableName}"), productName: tableName);
+
+            Assert.That(ColumnStoreIndexCount(cmd, tableName), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void ColumnStore_Clustered_AtSql2014_BesideARowstoreIndex_IsSkipped_AndTheRowstoreIndexStays()
+        {
+            var tableName = $"CciNc12_{Guid.NewGuid().ToString("N")[..8]}";
+            var indexName = $"cci_{tableName}";
+            using var conn = KindleScratchDatabase("CciBake12", serverMajorVersion: 12, policy: "warn");
+            using var cmd = conn.CreateCommand();
+
+            RunTableQuenchProc(cmd, ClusteredColumnStoreBesideRowstoreJson(tableName, indexName), productName: tableName);
+
+            var columnStores = ColumnStoreIndexCount(cmd, tableName);
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.{tableName}') AND name = 'ux_{tableName}'";
+            var rowstore = Convert.ToInt32(cmd.ExecuteScalar());
+            var downgrades = DowngradeRowCount(cmd, CciBesideRowstoreObjectType, $"[dbo].[{tableName}].[{indexName}]");
+            Assert.Multiple(() =>
+            {
+                Assert.That(columnStores, Is.EqualTo(0));
+                Assert.That(rowstore, Is.EqualTo(1), "the rowstore index must be created");
+                Assert.That(downgrades, Is.EqualTo(1));
+            });
+        }
+
+        // ---------------------------------------------------------------------------------------------------
+        // Full-text STATISTICAL_SEMANTICS (SS-054) needs a registered semantic language statistics database; without
+        // one SQL Server refuses the whole full-text index (41209). The demo container has full-text and no semantic
+        // database, so this is the real refusal, not a simulation.
+        // ---------------------------------------------------------------------------------------------------
+
+        private const string SemanticsObjectType = "full-text statistical semantics (no semantic database)";
+
+        private static string SemanticFullTextJson(string tableName) => $$"""
+{
+    "Schema": "[dbo]",
+    "Name": "[{{tableName}}]",
+    "Columns": [
+        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+        {"Name": "[Body]", "DataType": "NVARCHAR(MAX)", "Nullable": true}
+    ],
+    "Indexes": [
+        {"Name": "[PK_{{tableName}}]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]"}
+    ],
+    "FullTextIndex": {"FullTextCatalog": "[ss_semantics_cat]", "KeyIndex": "[PK_{{tableName}}]", "Columns": "[Body] LANGUAGE 1033 STATISTICAL_SEMANTICS"}
+}
+""";
+
+        private static void EnsureFullTextCatalog(IDbCommand cmd)
+        {
+            cmd.CommandText = "IF FULLTEXTSERVICEPROPERTY('IsFullTextInstalled') = 0 SELECT -1 " +
+                              "ELSE IF EXISTS (SELECT 1 FROM sys.fulltext_semantic_language_statistics_database) SELECT -2 " +
+                              "ELSE BEGIN IF NOT EXISTS (SELECT 1 FROM sys.fulltext_catalogs WHERE name = 'ss_semantics_cat') " +
+                              "CREATE FULLTEXT CATALOG ss_semantics_cat; SELECT 0 END";
+            var state = Convert.ToInt32(cmd.ExecuteScalar());
+            if (state == -1) Assert.Ignore("Full-text search is not installed on this server.");
+            if (state == -2) Assert.Ignore("A semantic language statistics database is registered on this server.");
+        }
+
+        [Test]
+        public void StatisticalSemantics_WithoutASemanticDatabase_CreatesTheFullTextIndexWithoutIt_AndRecordsTheDowngrade()
+        {
+            var tableName = $"Sem_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("SemBake", policy: "warn");
+            using var cmd = conn.CreateCommand();
+            EnsureFullTextCatalog(cmd);
+
+            RunTableQuenchProc(cmd, SemanticFullTextJson(tableName), productName: tableName);
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, SemanticFullTextJson(tableName), productName: tableName));
+
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.fulltext_index_columns WHERE [object_id] = OBJECT_ID('dbo.{tableName}')";
+            var columns = Convert.ToInt32(cmd.ExecuteScalar());
+            var downgrades = DowngradeRowCount(cmd, SemanticsObjectType, $"[dbo].[{tableName}]");
+            Assert.Multiple(() =>
+            {
+                Assert.That(columns, Is.EqualTo(1), "the full-text index must exist, without statistical semantics");
+                Assert.That(downgrades, Is.EqualTo(2), "once per quench");
+            });
+        }
+
+        // The --IndexOnly path parses full-text indexes itself, after its other index degrades, so it calls the
+        // full-text degrade separately.
+        [Test]
+        public void StatisticalSemantics_WithoutASemanticDatabase_OnTheIndexOnlyPath_CreatesTheFullTextIndexWithoutIt()
+        {
+            var tableName = $"SemIo_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("SemBake", policy: "warn");
+            using var cmd = conn.CreateCommand();
+            EnsureFullTextCatalog(cmd);
+            cmd.CommandText = $"CREATE TABLE dbo.[{tableName}] (Id INT NOT NULL CONSTRAINT [PK_{tableName}] PRIMARY KEY CLUSTERED, Body NVARCHAR(MAX) NULL)";
+            cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(cmd, SemanticFullTextJson(tableName), indexOnly: true, productName: tableName);
+
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.fulltext_index_columns WHERE [object_id] = OBJECT_ID('dbo.{tableName}')";
+            var columns = Convert.ToInt32(cmd.ExecuteScalar());
+            var downgrades = DowngradeRowCount(cmd, SemanticsObjectType, $"[dbo].[{tableName}]");
+            Assert.Multiple(() =>
+            {
+                Assert.That(columns, Is.EqualTo(1));
+                Assert.That(downgrades, Is.EqualTo(1));
+            });
+        }
+
+        [Test]
+        public void StatisticalSemantics_WithoutASemanticDatabase_UnderFail_Aborts()
+        {
+            var tableName = $"SemFail_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("SemFailBake", policy: "fail");
+            using var cmd = conn.CreateCommand();
+            EnsureFullTextCatalog(cmd);
+
+            var ex = Assert.Catch(() => RunTableQuenchProc(cmd, SemanticFullTextJson(tableName), productName: tableName));
+            // Not the engine's own 41209, which also names the semantic database: the refusal has to come before the table.
+            Assert.That(ex!.Message, Does.Contain("STATISTICAL_SEMANTICS requires a registered semantic language statistics database"));
+            cmd.CommandText = $"SELECT OBJECT_ID('dbo.{tableName}')";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(DBNull.Value), "a refused deploy must not create the table");
+        }
+
+        // ---------------------------------------------------------------------------------------------------
+        // Edition (SS-053). Below 2016 SP1 (13.0.4001), compression and columnstore need Enterprise or Developer
+        // edition: Express 2008 R2-2014 refuse them with 7738 and 35315. The demo container is Developer, so the
+        // edition is simulated through the CONTEXT_INFO override fn_ServerMajorVersion reads, extended with an
+        // 'SSED' marker that SchemaSmith.fn_EnterpriseFeaturesUnavailable reads.
+        // ---------------------------------------------------------------------------------------------------
+
+        private const string CompressionEditionObjectType = "data compression (Enterprise edition below SQL Server 2016 SP1)";
+        private const string ColumnStoreEditionObjectType = "columnstore index (Enterprise edition below SQL Server 2016 SP1)";
+
+        private static void SimulateEditionWithoutEnterpriseFeatures(IDbCommand cmd, int major)
+        {
+            cmd.CommandText = $"DECLARE @c VARBINARY(128) = 0x53534F56 + CONVERT(BINARY(4), {major}) + 0x5353454401; SET CONTEXT_INFO @c";
+            cmd.ExecuteNonQuery();
+        }
+
+        private static string CompressedTableJson(string tableName) => $$"""
+{
+    "Schema": "[dbo]",
+    "Name": "[{{tableName}}]",
+    "CompressionType": "PAGE",
+    "Columns": [
+        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+        {"Name": "[Val]", "DataType": "NVARCHAR(100)", "Nullable": false}
+    ],
+    "Indexes": [
+        {"Name": "[ix_{{tableName}}]", "Clustered": false, "IndexColumns": "[Val]", "CompressionType": "ROW"}
+    ]
+}
+""";
+
+        private static string CompressionOf(IDbCommand cmd, string tableName, int indexId)
+        {
+            cmd.CommandText = $"SELECT MAX(data_compression_desc) FROM sys.partitions WHERE [object_id] = OBJECT_ID('dbo.{tableName}') AND index_id = {indexId}";
+            return cmd.ExecuteScalar()?.ToString();
+        }
+
+        [Test]
+        public void Compression_OnAnEditionWithoutIt_DeploysUncompressed_RecordsTheDowngrade_AndStaysQuietOnRedeploy()
+        {
+            var tableName = $"EdComp_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("EdBake13", serverMajorVersion: 13, policy: "warn");
+            using var cmd = conn.CreateCommand();
+            SimulateEditionWithoutEnterpriseFeatures(cmd, 13);
+
+            RunTableQuenchProc(cmd, CompressedTableJson(tableName), productName: tableName);
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, CompressedTableJson(tableName), productName: tableName));
+
+            cmd.CommandText = $"SELECT index_id FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.{tableName}') AND name = 'ix_{tableName}'";
+            var ixId = Convert.ToInt32(cmd.ExecuteScalar());
+            var heap = CompressionOf(cmd, tableName, 0);
+            var index = CompressionOf(cmd, tableName, ixId);
+            var tableRows = DowngradeRowCount(cmd, CompressionEditionObjectType, $"[dbo].[{tableName}]");
+            var indexRows = DowngradeRowCount(cmd, CompressionEditionObjectType, $"[dbo].[{tableName}].[ix_{tableName}]");
+            Assert.Multiple(() =>
+            {
+                Assert.That(heap, Is.EqualTo("NONE"));
+                Assert.That(index, Is.EqualTo("NONE"));
+                Assert.That(tableRows, Is.EqualTo(2), "once per quench");
+                Assert.That(indexRows, Is.EqualTo(2), "once per quench");
+            });
+        }
+
+        [Test]
+        public void ColumnStore_OnAnEditionWithoutIt_IsSkipped_AndRecordsTheDowngrade()
+        {
+            var tableName = $"EdNcci_{Guid.NewGuid().ToString("N")[..8]}";
+            var indexName = $"ncci_{tableName}";
+            using var conn = KindleScratchDatabase("EdBake13", serverMajorVersion: 13, policy: "warn");
+            using var cmd = conn.CreateCommand();
+            SimulateEditionWithoutEnterpriseFeatures(cmd, 13);
+
+            RunTableQuenchProc(cmd, NonclusteredColumnStoreJson(tableName, indexName), productName: tableName);
+
+            Assert.That(ColumnStoreIndexCount(cmd, tableName), Is.EqualTo(0));
+            Assert.That(DowngradeRowCount(cmd, ColumnStoreEditionObjectType, $"[dbo].[{tableName}].[{indexName}]"), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Compression_OnAnEditionWithoutIt_UnderFail_Aborts()
+        {
+            var tableName = $"EdFail_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("EdFailBake13", serverMajorVersion: 13, policy: "fail");
+            using var cmd = conn.CreateCommand();
+            SimulateEditionWithoutEnterpriseFeatures(cmd, 13);
+
+            var ex = Assert.Catch(() => RunTableQuenchProc(cmd, CompressedTableJson(tableName), productName: tableName));
+            Assert.That(ex!.Message, Does.Contain("Enterprise"));
+            cmd.CommandText = $"SELECT OBJECT_ID('dbo.{tableName}')";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(DBNull.Value), "a refused deploy must not create the table");
+        }
+
+        [Test]
+        public void Compression_OnAnEditionWithIt_IsApplied()
+        {
+            var tableName = $"EdOk_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("EdBake13", serverMajorVersion: 13, policy: "warn");
+            using var cmd = conn.CreateCommand();
+
+            RunTableQuenchProc(cmd, CompressedTableJson(tableName), productName: tableName);
+
+            Assert.That(CompressionOf(cmd, tableName, 0), Is.EqualTo("PAGE"));
         }
 
         // The clustered/nonclustered split: a CLUSTERED columnstore needs major 12 (2014), so baking 11 must

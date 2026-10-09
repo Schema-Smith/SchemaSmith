@@ -140,20 +140,46 @@ BEGIN
   END
 
   -- Net changes need a unique key to identify a row: sp_cdc_enable_table refuses @supports_net_changes = 1 on a table
-  -- with no primary key (SchemaSmith passes no @index_name). The key is read from the DECLARED indexes, because a new
+  -- with no primary key unless CdcIndexName names one. The key is read from the DECLARED indexes, because a new
   -- table's primary key is not created until after this runs. Refuse up front rather than fail mid-run (#426).
   IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK)
-              WHERE t.EnableCDC = 1 AND t.CdcSupportsNetChanges = 1
+              WHERE t.EnableCDC = 1 AND t.CdcSupportsNetChanges = 1 AND t.CdcIndexName IS NULL
                 AND NOT EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
                                  WHERE i.[Schema] = t.[Schema] AND i.[TableName] = t.[Name] AND i.[PrimaryKey] = 1))
   BEGIN
     DECLARE @v_NetChangesTable NVARCHAR(1010)
     SELECT TOP 1 @v_NetChangesTable = t.[Schema] + '.' + t.[Name]
       FROM #Tables t WITH (NOLOCK)
-     WHERE t.EnableCDC = 1 AND t.CdcSupportsNetChanges = 1
+     WHERE t.EnableCDC = 1 AND t.CdcSupportsNetChanges = 1 AND t.CdcIndexName IS NULL
        AND NOT EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
                         WHERE i.[Schema] = t.[Schema] AND i.[TableName] = t.[Name] AND i.[PrimaryKey] = 1)
-    RAISERROR('Table %s sets CdcSupportsNetChanges true (on the table or as the template default), but declares no primary key. CDC net changes need one to identify a row. Declare a primary key, or set CdcSupportsNetChanges false.', 16, 1, @v_NetChangesTable)
+    RAISERROR('Table %s sets CdcSupportsNetChanges true (on the table or as the template default), but declares no primary key. CDC net changes need one to identify a row. Declare a primary key, name a unique index in CdcIndexName, or set CdcSupportsNetChanges false.', 16, 1, @v_NetChangesTable)
+  END
+
+  -- CdcIndexName is passed as @index_name, which SQL Server accepts only for a unique index over NOT NULL columns
+  -- (22838). Checked against the DECLARED indexes and columns, since the index may be created by this deploy, and
+  -- refused by name here rather than by sp_cdc_enable_table after every other table change has been made.
+  IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) WHERE t.EnableCDC = 1 AND t.CdcIndexName IS NOT NULL)
+  BEGIN
+    DECLARE @v_CdcIdxTable NVARCHAR(1010), @v_CdcIdxName NVARCHAR(500), @v_CdcIdxProblem NVARCHAR(200)
+    SELECT TOP 1 @v_CdcIdxTable = t.[Schema] + '.' + t.[Name], @v_CdcIdxName = SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName),
+                 @v_CdcIdxProblem = p.Problem
+      FROM #Tables t WITH (NOLOCK)
+      OUTER APPLY (SELECT TOP 1 i.* FROM #Indexes i WITH (NOLOCK)
+                    WHERE i.[Schema] = t.[Schema] AND i.[TableName] = t.[Name]
+                      AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName)) i
+      CROSS APPLY (SELECT Problem =
+                     CASE WHEN i.[IndexName] IS NULL THEN 'which is not one of its declared indexes'
+                          WHEN i.[Unique] = 0 AND i.[PrimaryKey] = 0 AND i.[UniqueConstraint] = 0 THEN 'which is not unique'
+                          WHEN i.[PrimaryKey] = 0
+                               AND EXISTS (SELECT 1 FROM SchemaSmith.fn_SplitList(i.[IndexColumns], ',') k
+                                             JOIN #Columns c WITH (NOLOCK) ON c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name]
+                                                                         AND c.[ColumnName] = SchemaSmith.fn_SafeBracketWrap(CASE WHEN RTRIM(k.[value]) LIKE '% DESC' THEN LEFT(RTRIM(k.[value]), LEN(RTRIM(k.[value])) - 5) ELSE k.[value] END)
+                                            WHERE c.[Nullable] = 1)
+                          THEN 'which has a nullable key column' END) p
+     WHERE t.EnableCDC = 1 AND t.CdcIndexName IS NOT NULL AND p.Problem IS NOT NULL
+    IF @v_CdcIdxTable IS NOT NULL
+      RAISERROR('Table %s names CdcIndexName %s, %s. CDC identifies rows by a unique index over NOT NULL columns. Name one of the table''s declared unique indexes, or remove CdcIndexName to use the primary key.', 16, 1, @v_CdcIdxTable, @v_CdcIdxName, @v_CdcIdxProblem)
   END
 
   -- Partition placement (#partitioning, K1) -- ADOPT AND VERIFY, the other half of the create-side apply.
@@ -217,7 +243,7 @@ BEGIN
   IF SchemaSmith.fn_ServerMajorVersion() >= 14
   BEGIN
     IF OBJECT_ID('tempdb..#DeployedGraphType') IS NOT NULL DROP TABLE #DeployedGraphType
-    CREATE TABLE #DeployedGraphType (FullName NVARCHAR(1010), Declared NVARCHAR(10), Deployed NVARCHAR(10))
+    CREATE TABLE #DeployedGraphType (FullName NVARCHAR(1010) COLLATE DATABASE_DEFAULT, Declared NVARCHAR(10) COLLATE DATABASE_DEFAULT, Deployed NVARCHAR(10) COLLATE DATABASE_DEFAULT)
     EXEC sp_executesql N'
       INSERT INTO #DeployedGraphType (FullName, Declared, Deployed)
         SELECT t.[Schema] + ''.'' + t.[Name],
@@ -248,7 +274,7 @@ BEGIN
   IF SchemaSmith.fn_ServerMajorVersion() >= 12
   BEGIN
     IF OBJECT_ID('tempdb..#DeployedMemOpt') IS NOT NULL DROP TABLE #DeployedMemOpt
-    CREATE TABLE #DeployedMemOpt (FullName NVARCHAR(1010), DeclaredMO BIT, DeployedMO BIT, DeclaredDur NVARCHAR(20), DeployedDur NVARCHAR(20))
+    CREATE TABLE #DeployedMemOpt (FullName NVARCHAR(1010) COLLATE DATABASE_DEFAULT, DeclaredMO BIT, DeployedMO BIT, DeclaredDur NVARCHAR(20) COLLATE DATABASE_DEFAULT, DeployedDur NVARCHAR(20) COLLATE DATABASE_DEFAULT)
     EXEC sp_executesql N'
       INSERT INTO #DeployedMemOpt (FullName, DeclaredMO, DeployedMO, DeclaredDur, DeployedDur)
         SELECT t.[Schema] + ''.'' + t.[Name],
@@ -289,7 +315,7 @@ BEGIN
     -- (is_memory_optimized, sys.hash_indexes) go in dynamic SQL, and STRING_AGG (2017) / STRING_SPLIT
     -- (needs compat 130) are avoided entirely -- fn_SplitList and FOR XML PATH are the all-version idioms.
     IF OBJECT_ID('tempdb..#MODeplIx') IS NOT NULL DROP TABLE #MODeplIx
-    CREATE TABLE #MODeplIx (sch SYSNAME, tbl SYSNAME, ixname SYSNAME, obj_id INT, idx_id INT, is_unique BIT, is_hash BIT, buckets BIGINT, colset NVARCHAR(MAX) NULL)
+    CREATE TABLE #MODeplIx (sch SYSNAME COLLATE DATABASE_DEFAULT, tbl SYSNAME COLLATE DATABASE_DEFAULT, ixname SYSNAME COLLATE DATABASE_DEFAULT, obj_id INT, idx_id INT, is_unique BIT, is_hash BIT, buckets BIGINT, colset NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL)
     EXEC sp_executesql N'
       INSERT INTO #MODeplIx (sch, tbl, ixname, obj_id, idx_id, is_unique, is_hash, buckets)
         SELECT SCHEMA_NAME(o.[schema_id]), o.[name], i.[name], i.[object_id], i.index_id, i.is_unique,
@@ -358,7 +384,7 @@ BEGIN
   IF SchemaSmith.fn_ServerMajorVersion() >= 16
   BEGIN
     IF OBJECT_ID('tempdb..#DeployedLedger') IS NOT NULL DROP TABLE #DeployedLedger
-    CREATE TABLE #DeployedLedger (FullName NVARCHAR(1010), Declared NVARCHAR(12), Deployed NVARCHAR(12))
+    CREATE TABLE #DeployedLedger (FullName NVARCHAR(1010) COLLATE DATABASE_DEFAULT, Declared NVARCHAR(12) COLLATE DATABASE_DEFAULT, Deployed NVARCHAR(12) COLLATE DATABASE_DEFAULT)
     EXEC sp_executesql N'
       INSERT INTO #DeployedLedger (FullName, Declared, Deployed)
         SELECT t.[Schema] + ''.'' + t.[Name],

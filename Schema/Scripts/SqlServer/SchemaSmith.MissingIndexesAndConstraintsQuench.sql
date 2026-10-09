@@ -216,6 +216,21 @@ BEGIN TRY
                             WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                               AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
 
+  -- Versioning suspended by ModifiedTableQuench while a primary key was rebuilt comes back on here, now that the key
+  -- exists again, with the history table recorded when it was suspended and the data checked against it. The tables this
+  -- covers are excluded from the step after, which would otherwise add a second pair of period columns.
+  RAISERROR('Resume System Versioning Suspended For A Primary Key Rebuild', 10, 100) WITH NOWAIT
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Resuming system versioning on ' + T.[Schema] + '.' + T.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' + CAST(ep.[value] AS NVARCHAR(600)) + ', DATA_CONSISTENCY_CHECK = ON));' + CHAR(13) + CHAR(10) +
+                                  'EXEC sys.sp_dropextendedproperty N''SchemaSmith_SuspendedHistory'', N''SCHEMA'', N''' + REPLACE(SCHEMA_NAME(o.[schema_id]), '''', '''''') + ''', N''TABLE'', N''' + REPLACE(o.[name], '''', '''''') + ''';' AS NVARCHAR(MAX))
+                           FROM #Tables T WITH (NOLOCK)
+                           JOIN sys.objects o ON o.[object_id] = OBJECT_ID(T.[Schema] + '.' + T.[Name])
+                           JOIN sys.extended_properties ep ON ep.class = 1 AND ep.major_id = o.[object_id] AND ep.minor_id = 0 AND ep.[name] = N'SchemaSmith_SuspendedHistory'
+                           WHERE T.IsTemporal = 1
+                             AND OBJECTPROPERTY(o.[object_id], 'TableTemporalType') = 0
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+
   RAISERROR('Turn on Temporal Tracking for tables defined as temporal', 10, 100) WITH NOWAIT
   -- HISTORY_TABLE + HISTORY_RETENTION_PERIOD only take effect here on the transition to versioned; see the
   -- reissue block below for an already-versioned table. ISNULL falls back to today's own-schema/<Table>_Hist
@@ -233,6 +248,9 @@ BEGIN TRY
                            FROM #Tables T WITH (NOLOCK)
                            WHERE t.IsTemporal = 1
                              AND OBJECTPROPERTY(OBJECT_ID([Schema] + '.' + [Name]), 'TableTemporalType') = 0
+                             AND NOT EXISTS (SELECT * FROM sys.extended_properties ep
+                                              WHERE ep.class = 1 AND ep.major_id = OBJECT_ID([Schema] + '.' + [Name])
+                                                AND ep.minor_id = 0 AND ep.[name] = N'SchemaSmith_SuspendedHistory')
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 

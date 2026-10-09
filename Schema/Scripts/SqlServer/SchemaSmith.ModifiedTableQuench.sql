@@ -144,7 +144,8 @@ BEGIN TRY
                  OR UPPER(RTRIM(ISNULL(t.[Durability], 'SCHEMA_AND_DATA'))) <> 'SCHEMA_AND_DATA'
                  OR ISNULL(t.[MemoryOptimized], 0) = 1
                  OR t.[CdcFilegroup] IS NOT NULL
-                 OR (t.[EnableCDC] = 1 AND t.[CdcSupportsNetChanges] = 1))
+                 OR (t.[EnableCDC] = 1 AND t.[CdcSupportsNetChanges] = 1)
+                 OR (t.[EnableCDC] = 1 AND t.[CdcIndexName] IS NOT NULL))
     SET @v_NeedsAttributeValidation = 1
 
   -- Deployed side. Version-composed because the catalog columns arrive in different releases and naming one
@@ -383,10 +384,10 @@ BEGIN TRY
   (
     [object_id] INT NOT NULL,
     column_id INT NOT NULL,
-    ExistingMaskFn NVARCHAR(4000) NULL,
-    ExistingEncType NVARCHAR(64) NULL,
-    ExistingEncAlgo NVARCHAR(128) NULL,
-    ExistingEncKeyDb NVARCHAR(128) NULL,
+    ExistingMaskFn NVARCHAR(4000) COLLATE DATABASE_DEFAULT NULL,
+    ExistingEncType NVARCHAR(64) COLLATE DATABASE_DEFAULT NULL,
+    ExistingEncAlgo NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    ExistingEncKeyDb NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
     PRIMARY KEY ([object_id], column_id)
   )
   IF SchemaSmith.fn_ServerMajorVersion() >= 13
@@ -413,7 +414,15 @@ BEGIN TRY
                                                     + CASE WHEN c.[Persisted] = 1 AND c.[NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END
               -- Otherwise we need to build the column definition
               ELSE REPLACE(REPLACE(UPPER(LEFT([DataType], COALESCE(NULLIF(CHARINDEX('IDENTITY', [DataType]), 0), LEN([DataType]) + 1) - 1)), 'ROWGUIDCOL', ''), 'NOT FOR REPLICATION', '') +
-                   CASE WHEN [Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') <> [Collation] THEN ' COLLATE ' + ISNULL(NULLIF(RTRIM([Collation]), ''), @v_DatabaseCollation) ELSE '' END +
+                   -- ALTER COLUMN without COLLATE resets a character column to the database default, and fails (5074) when
+                   -- the column is indexed, so a character column always names its collation: the declared one, the
+                   -- database default for an empty declaration, or the live one under IGNORE.
+                   CASE WHEN [Collation] NOT IN ('IGNORE', '') THEN ' COLLATE ' + [Collation]
+                        WHEN NOT EXISTS (SELECT 1 FROM sys.types ty
+                                          WHERE ty.user_type_id = TYPE_ID(RTRIM(LEFT([DataType], CHARINDEX('(', [DataType] + '(') - 1)))
+                                            AND ty.collation_name IS NOT NULL) THEN ''
+                        WHEN [Collation] = 'IGNORE' THEN ' COLLATE ' + ISNULL(ic.COLLATION_NAME, @v_DatabaseCollation)
+                        ELSE ' COLLATE ' + @v_DatabaseCollation END +
                    CASE WHEN [Sparse] = 1 THEN ' SPARSE' ELSE '' END +
                    CASE WHEN Nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END +
                    CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE'
@@ -488,13 +497,13 @@ BEGIN TRY
       -- is never applied; comparing it could only re-add the column forever. Its changes are the expression's.
       AND ((RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
                                            CASE WHEN sc.xml_collection_id <> 0
-                                                THEN (SELECT '' + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) + '' FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
+                                                THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) + '' FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                 END,
                                            sc.is_rowguidcol) +
                                       CASE WHEN ident.column_id IS NOT NULL
                                            THEN ' IDENTITY(' + CONVERT(NVARCHAR(20), ident.seed_value) + ', ' + CONVERT(NVARCHAR(20), ident.increment_value) + ')' +
                                                 CASE WHEN ident.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
-                                           ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
+                                           ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), '(CONTENT ', '('), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
         -- A computed column's nullability belongs to the engine unless the package states one: it is derivable from
         -- the expression, and only a PERSISTED column can be declared NOT NULL at all. Comparing an OMITTED value
         -- here re-added every such column on every deploy, and (once the emit side agreed with it) dropped an
@@ -518,18 +527,28 @@ BEGIN TRY
   
   RAISERROR('Detect Computed Columns Impacted by Other Column Changes', 10, 100) WITH NOWAIT
   INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly])
-    SELECT C.[Schema], C.[TableName], c.[ColumnName],
+    -- An unchanged computed column that reads a column being altered has to come off first: SQL Server refuses the
+    -- ALTER COLUMN while anything accesses the column (5074). It is dropped and added back by the computed-column
+    -- passes below. Dependencies come from sys.sql_expression_dependencies, which names the exact column a computed
+    -- column reads; matching the expression text by LIKE also caught a column whose name contains the changed one.
+    -- DISTINCT because one computed column can read several changed columns.
+    SELECT DISTINCT c.[Schema], c.[TableName], c.[ColumnName],
            [ColumnScript] = 'AS (' + ComputedExpression + ')' + CASE WHEN c.[Persisted] = 1 THEN ' PERSISTED' ELSE '' END
                                                               + CASE WHEN c.[Persisted] = 1 AND c.[NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END,
            [SpecialColumnScript] = '',
            MustDropAndRecreate = CAST(1 AS BIT), MustSwapColumn = CAST(0 AS BIT), [DropOnly] = CAST(0 AS BIT)
       FROM #ColumnChanges cc WITH (NOLOCK)
-      JOIN sys.computed_columns sc ON sc.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
-                                                AND sc.[definition] LIKE '%' + SchemaSmith.fn_StripBracketWrapping(cc.ColumnName) + '%'
-      JOIN #Columns c WITH (NOLOCK) ON C.[Schema] = cc.[Schema] 
-                                   AND C.[TableName] = cc.[TableName]
-                                   AND c.[ColumnName] = cc.[ColumnName]
-      WHERE NOT EXISTS (SELECT * FROM #ColumnChanges cc2 WITH (NOLOCK) WHERE cc2.[Schema] = cc.[Schema] AND cc2.[TableName] = cc.[TableName] AND cc2.[ColumnName] = cc.[ColumnName])
+      JOIN sys.columns changed ON changed.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
+                              AND QUOTENAME(changed.[name]) = cc.[ColumnName] COLLATE DATABASE_DEFAULT
+      JOIN sys.sql_expression_dependencies d ON d.referencing_id = changed.[object_id]
+                                            AND d.referenced_id = changed.[object_id]
+                                            AND d.referenced_minor_id = changed.column_id
+                                            AND d.referencing_minor_id > 0
+      JOIN sys.computed_columns sc ON sc.[object_id] = changed.[object_id] AND sc.column_id = d.referencing_minor_id
+      JOIN #Columns c WITH (NOLOCK) ON c.[Schema] = cc.[Schema]
+                                   AND c.[TableName] = cc.[TableName]
+                                   AND c.[ColumnName] = QUOTENAME(sc.[name]) COLLATE DATABASE_DEFAULT
+      WHERE NOT EXISTS (SELECT * FROM #ColumnChanges cc2 WITH (NOLOCK) WHERE cc2.[Schema] = c.[Schema] AND cc2.[TableName] = c.[TableName] AND cc2.[ColumnName] = c.[ColumnName])
   
   -- Engine-owned columns must never be considered for a drop. They exist because the table is a node or
   -- edge table, not because anything declared them, so the drop-by-absence pass would otherwise try to
@@ -540,7 +559,7 @@ BEGIN TRY
   -- statically: this proc body is kindled for the XML tier too, which reaches older servers. Empty below
   -- 2017, where graph tables cannot exist.
   IF OBJECT_ID('tempdb..#EngineOwnedColumns') IS NOT NULL DROP TABLE #EngineOwnedColumns
-  CREATE TABLE #EngineOwnedColumns (TableSchema NVARCHAR(256), TableName NVARCHAR(256), ColumnName NVARCHAR(256))
+  CREATE TABLE #EngineOwnedColumns (TableSchema NVARCHAR(256) COLLATE DATABASE_DEFAULT, TableName NVARCHAR(256) COLLATE DATABASE_DEFAULT, ColumnName NVARCHAR(256) COLLATE DATABASE_DEFAULT)
   IF SchemaSmith.fn_ServerMajorVersion() >= 14
     EXEC sp_executesql N'
       INSERT INTO #EngineOwnedColumns (TableSchema, TableName, ColumnName)
@@ -1028,14 +1047,17 @@ BEGIN TRY
 
   -- Handle index compression changes
   RAISERROR('Fixup Index Compression', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering index compression for ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ' TO ' + i.[CompressionType] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD PARTITION=ALL WITH (DATA_COMPRESSION=' + i.[CompressionType] + ');' AS NVARCHAR(MAX))
+  -- A columnstore index reports COLUMNSTORE (or COLUMNSTORE_ARCHIVE); a declaration that names neither means COLUMNSTORE.
+  -- Compared raw, the declared default NONE differed on every run and the rebuild to NONE was refused by the engine.
+  -- MIXED is SchemaTongs' word for partitions compressed differently: leave them as they are, as the table fixup does.
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering index compression for ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ' TO ' + CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD PARTITION=ALL WITH (DATA_COMPRESSION=' + CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END + ');' AS NVARCHAR(MAX))
                            FROM #Indexes i WITH (NOLOCK)
                            JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                                                             AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
                            LEFT JOIN sys.partitions p ON p.[object_id] = si.[object_id]
                                                                    AND p.index_id = si.index_id
-                           WHERE COALESCE(p.data_compression_desc COLLATE DATABASE_DEFAULT, 'NONE') <> i.[CompressionType]
+                           WHERE ISNULL(i.[CompressionType], '') <> 'MIXED' AND COALESCE(p.data_compression_desc COLLATE DATABASE_DEFAULT, 'NONE') <> CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
@@ -1143,6 +1165,8 @@ BEGIN TRY
                                      AND si.index_id > 0
                                      AND is_hypothetical = 0
                                      AND is_disabled = 0
+                                     -- A kind a package cannot declare is neither compared nor dropped. XML (3) has its own scan.
+                                     AND si.[type] IN (3, {{RenderableIndexTypes}})
     LEFT JOIN sys.partitions p ON p.[object_id] = si.[object_id]
                                             AND p.index_id = si.index_id
     LEFT JOIN sys.filegroups fg ON fg.data_space_id = si.data_space_id
@@ -1284,6 +1308,11 @@ BEGIN TRY
     FROM #IndexRenames ir WITH (NOLOCK)
     GROUP BY [OldName]  
   DELETE FROM #IndexRenames WHERE EXISTS (SELECT * FROM #IndexRenameDedupe dd WITH (NOLOCK) WHERE [OriginalName] = [OldName] AND [ValidNewName] <> [NewName])
+
+  -- Every index rename and drop this run will make is known from here on, and none has run yet.
+  IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
+     AND EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name]) WHERE st.is_tracked_by_cdc = 1)
+    EXEC SchemaSmith.CdcIndexGuard @DropIndexesRemovedFromProduct = @DropIndexesRemovedFromProduct, @DropUnknownIndexes = @DropUnknownIndexes
   
   RAISERROR('Handle Renamed Indexes And Unique Constraints', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Renaming ' + [OldName] + ' to ' + [NewName] + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -1302,6 +1331,7 @@ BEGIN TRY
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Collect Existing XML Index Definitions', 10, 100) WITH NOWAIT
+  {{CollectSelectiveXmlIndexes}}
   IF OBJECT_ID('tempdb..#ExistingXmlIndexes') IS NOT NULL DROP TABLE #ExistingXmlIndexes
   SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(i.[Name] COLLATE DATABASE_DEFAULT AS NVARCHAR(500)),
          IndexScript = 'CREATE ' + CASE WHEN i.using_xml_index_id IS NULL THEN 'PRIMARY ' ELSE '' END +
@@ -1316,6 +1346,7 @@ BEGIN TRY
     JOIN sys.xml_indexes i ON i.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
     JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
     WHERE t.NewTable = 0
+      AND NOT EXISTS (SELECT 1 FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id)
 
   RAISERROR('Detect Xml Index Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#XmlIndexChanges') IS NOT NULL DROP TABLE #XmlIndexChanges
@@ -1457,6 +1488,37 @@ BEGIN TRY
       WHERE EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND id.[IsClustered] = 1)
         AND NOT EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND [xIndexName] = [IndexName])
   
+  -- A system-versioned table's primary key cannot be dropped while versioning is on (13557, which reaches the log only
+  -- as "Could not drop constraint"). Both the drops below and the clustered-conflict drop after the column changes take
+  -- one off when a key column changes, so versioning is suspended first. The history table it pairs with is recorded on
+  -- the table in an extended property: a history table can have any name, and re-enabling with the wrong one would start
+  -- an empty history. The column changes are mirrored onto the history table further down, and
+  -- MissingIndexesAndConstraintsQuench turns versioning back on once the key exists again. Recorded in the database
+  -- rather than in this run, so a run that fails part-way is resumed by the next one.
+  RAISERROR('Suspend System Versioning On Temporal Tables Losing Their Primary Key', 10, 100) WITH NOWAIT
+  IF SchemaSmith.fn_ServerMajorVersion() >= 13
+  BEGIN
+    SET @v_SQL = NULL
+    EXEC sp_executesql N'SELECT @out = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
+         ''RAISERROR(''''  Suspending system versioning on '' + T.[Schema] + ''.'' + T.[Name] + '''''', 10, 100) WITH NOWAIT;'' + CHAR(13) + CHAR(10) +
+         ''EXEC sys.sp_addextendedproperty N''''SchemaSmith_SuspendedHistory'''', N'''''' + REPLACE(QUOTENAME(SCHEMA_NAME(h.[schema_id])) + ''.'' + QUOTENAME(h.[name]), '''''''', '''''''''''') +
+         '''''', N''''SCHEMA'''', N'''''' + REPLACE(SCHEMA_NAME(st.[schema_id]), '''''''', '''''''''''') + '''''', N''''TABLE'''', N'''''' + REPLACE(st.[name], '''''''', '''''''''''') + '''''';'' + CHAR(13) + CHAR(10) +
+         ''ALTER TABLE '' + T.[Schema] + ''.'' + T.[Name] + '' SET (SYSTEM_VERSIONING = OFF);'' AS NVARCHAR(MAX))
+    FROM #Tables T WITH (NOLOCK)
+    JOIN sys.tables st ON st.[object_id] = OBJECT_ID(T.[Schema] + ''.'' + T.[Name]) AND st.temporal_type = 2
+    JOIN sys.tables h ON h.[object_id] = st.history_table_id
+    WHERE T.IsTemporal = 1
+      AND (EXISTS (SELECT * FROM #IndexesToDrop di WITH (NOLOCK)
+                     JOIN sys.indexes si ON si.[object_id] = st.[object_id] AND si.[name] = di.[IndexName] COLLATE DATABASE_DEFAULT AND si.is_primary_key = 1
+                    WHERE di.[Schema] = T.[Schema] AND di.[TableName] = T.[Name])
+           OR (EXISTS (SELECT * FROM #Indexes i WITH (NOLOCK)
+                        WHERE i.[Schema] = T.[Schema] AND i.[TableName] = T.[Name] AND i.[Clustered] = 1
+                          AND NOT EXISTS (SELECT * FROM sys.indexes x WHERE x.[object_id] = st.[object_id] AND x.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) COLLATE DATABASE_DEFAULT))
+               AND EXISTS (SELECT * FROM sys.indexes pk WHERE pk.[object_id] = st.[object_id] AND pk.is_primary_key = 1 AND pk.[type] IN (1, 5))))
+    FOR XML PATH(''''), TYPE).value(''.'', ''NVARCHAR(MAX)''), 1, 2, '''')', N'@out NVARCHAR(MAX) OUTPUT', @out = @v_SQL OUTPUT
+    IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  END
+
   RAISERROR('Drop Referencing Foreign Keys When Dropping Unique Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping foreign Key ' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '.' + OBJECT_NAME(fk.parent_object_id) + '.' + fk.[name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'IF OBJECT_ID(''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''') IS NOT NULL ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + ' DROP CONSTRAINT ' + QUOTENAME(fk.[name]) + ';' AS NVARCHAR(MAX))
@@ -1600,11 +1662,11 @@ BEGIN TRY
   -- A declared CdcFilegroup the newest capture instance is not on is a rotation reason too (#417): it can only be
   -- honoured by a new instance, and a new instance is exactly what a column change already creates. The same
   -- ceiling applies, for the same reason. So is a declared CdcSupportsNetChanges the newest instance does not have (#426):
-  -- SQL Server fixes it per capture instance and cannot alter it in place.
+  -- SQL Server fixes it per capture instance and cannot alter it in place. And so is a declared CdcIndexName the newest
+  -- instance does not identify rows by: the index may be created by this deploy, and CdcQuench runs after it exists.
   -- TableQuench owns #CdcRotate: the rotation itself runs in SchemaSmith.CdcQuench, after every column exists.
   IF OBJECT_ID('tempdb..#CdcRotate') IS NULL
-    CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256), [TableName] NVARCHAR(256), OldCaptureInstance NVARCHAR(256),
-                             NewFilegroup NVARCHAR(256), NewNetChanges BIT, Reason NVARCHAR(20))
+    {{CdcRotateTable}}
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   BEGIN
     DECLARE @v_DefaultFilegroup SYSNAME = (SELECT [name] FROM sys.filegroups WHERE is_default = 1)
@@ -1619,43 +1681,50 @@ BEGIN TRY
            SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) AS DeclaredFilegroup,
            newest.supports_net_changes AS NewestNetChanges,
            t.CdcSupportsNetChanges AS DeclaredNetChanges,
+           newest.index_name AS NewestIndexName,
+           SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName) AS DeclaredIndexName,
            ColumnChange = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
                                               OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1)
                                             THEN 1 ELSE 0 END)
       INTO #CdcCandidates
       FROM #Tables t WITH (NOLOCK)
       JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name, ct.supports_net_changes
+      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name, ct.supports_net_changes, ct.index_name
                      FROM cdc.change_tables ct WITH (NOLOCK)
                     WHERE ct.source_object_id = st.[object_id]
                     ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
       WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
 
     -- Unset means unmanaged: only a DECLARED filegroup can mismatch.
-    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, NewNetChanges, Reason)
+    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, NewNetChanges, NewIndexName, Reason)
       SELECT [Schema], [Name], NewestInstance,
              -- A rotation keeps the filegroup it is not told to change: the declared one, else where the old
              -- instance already is. Omitting it (the pre-#417 behaviour) moved a DBA-placed instance to the default.
              COALESCE(DeclaredFilegroup, NewestFilegroupRaw),
              -- The same for net changes: the declared value, else the old instance's own (#426).
              COALESCE(DeclaredNetChanges, NewestNetChanges),
+             -- And the index rows are identified by: the declared one, else the old instance's own.
+             COALESCE(DeclaredIndexName, NewestIndexName),
              CASE WHEN ColumnChange = 1 THEN 'column'
                   WHEN DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup THEN 'filegroup'
-                  ELSE 'netchanges' END
+                  WHEN DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges THEN 'netchanges'
+                  ELSE 'index' END
         FROM #CdcCandidates
        WHERE Instances = 1
          AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup)
-              OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges))
+              OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges)
+              OR (DeclaredIndexName IS NOT NULL AND DeclaredIndexName <> ISNULL(NewestIndexName, '')))
 
     DECLARE @v_CdcAtCeiling NVARCHAR(MAX) =
       STUFF((SELECT ', ' + [Schema] + '.' + [Name]
                FROM #CdcCandidates
               WHERE Instances >= 2
                 AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup)
-                     OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges))
+                     OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges)
+                     OR (DeclaredIndexName IS NOT NULL AND DeclaredIndexName <> ISNULL(NewestIndexName, '')))
                FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_CdcAtCeiling IS NOT NULL
-      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column, CdcFilegroup or CdcSupportsNetChanges change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
+      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column, CdcFilegroup, CdcSupportsNetChanges or CdcIndexName change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
   END
 
   RAISERROR('Swap Columns Requiring Data-Preserving Replacement', 10, 100) WITH NOWAIT
@@ -2182,6 +2251,57 @@ BEGIN TRY
         WHERE [MustDropAndRecreate] = 0
           AND [MustSwapColumn] = 0
           AND [DropOnly] = 0
+
+  -- With versioning suspended, a column change reaches the current table only, and versioning cannot come back on until
+  -- the history table matches it by name, type, collation and nullability (probed: nullability is checked too). Make it
+  -- match: drop what the current table no longer has, add what it gained, and restate what differs.
+  RAISERROR('Mirror Column Changes Onto The History Tables Of Suspended Temporal Tables', 10, 100) WITH NOWAIT
+  IF OBJECT_ID('tempdb..#SuspendedTemporal') IS NOT NULL DROP TABLE #SuspendedTemporal
+  SELECT [CurrentId] = ep.major_id, [HistoryName] = CAST(ep.[value] AS NVARCHAR(600)),
+         [HistoryId] = OBJECT_ID(CAST(ep.[value] AS NVARCHAR(600)))
+    INTO #SuspendedTemporal
+    FROM sys.extended_properties ep
+    JOIN #Tables T WITH (NOLOCK) ON OBJECT_ID(T.[Schema] + '.' + T.[Name]) = ep.major_id
+    WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.[name] = N'SchemaSmith_SuspendedHistory'
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(x.Stmt AS NVARCHAR(MAX))
+                           FROM (SELECT 1 AS Ord, 'ALTER TABLE ' + s.HistoryName + ' DROP COLUMN ' + QUOTENAME(hc.[name]) + ';' AS Stmt
+                                   FROM #SuspendedTemporal s WITH (NOLOCK)
+                                   JOIN sys.columns hc ON hc.[object_id] = s.HistoryId
+                                   WHERE NOT EXISTS (SELECT * FROM sys.columns c2 WHERE c2.[object_id] = s.CurrentId AND c2.[name] = hc.[name])
+                                 UNION ALL
+                                 SELECT 2, 'ALTER TABLE ' + s.HistoryName + ' ADD ' + QUOTENAME(cc.[name]) + ' ' + CASE WHEN t.is_user_defined = 1 THEN QUOTENAME(SCHEMA_NAME(t.[schema_id])) + '.' ELSE '' END + QUOTENAME(t.[name]) +
+         CASE WHEN t.is_user_defined = 1 THEN ''
+              WHEN t.[name] IN ('varchar', 'char', 'varbinary', 'binary') THEN '(' + CASE WHEN cc.max_length = -1 THEN 'MAX' ELSE CAST(cc.max_length AS VARCHAR(10)) END + ')'
+              WHEN t.[name] IN ('nvarchar', 'nchar') THEN '(' + CASE WHEN cc.max_length = -1 THEN 'MAX' ELSE CAST(cc.max_length / 2 AS VARCHAR(10)) END + ')'
+              WHEN t.[name] IN ('decimal', 'numeric') THEN '(' + CAST(cc.[precision] AS VARCHAR(10)) + ',' + CAST(cc.scale AS VARCHAR(10)) + ')'
+              WHEN t.[name] IN ('datetime2', 'time', 'datetimeoffset') THEN '(' + CAST(cc.scale AS VARCHAR(10)) + ')'
+              ELSE '' END +
+         CASE WHEN cc.collation_name IS NOT NULL THEN ' COLLATE ' + cc.collation_name ELSE '' END + ' NULL;'
+                                   FROM #SuspendedTemporal s WITH (NOLOCK)
+                                   JOIN sys.columns cc ON cc.[object_id] = s.CurrentId
+                                   JOIN sys.types t ON t.user_type_id = cc.user_type_id
+                                   WHERE NOT EXISTS (SELECT * FROM sys.columns h2 WHERE h2.[object_id] = s.HistoryId AND h2.[name] = cc.[name])
+                                 UNION ALL
+                                 SELECT 3, 'ALTER TABLE ' + s.HistoryName + ' ALTER COLUMN ' + QUOTENAME(cc.[name]) + ' ' + CASE WHEN t.is_user_defined = 1 THEN QUOTENAME(SCHEMA_NAME(t.[schema_id])) + '.' ELSE '' END + QUOTENAME(t.[name]) +
+         CASE WHEN t.is_user_defined = 1 THEN ''
+              WHEN t.[name] IN ('varchar', 'char', 'varbinary', 'binary') THEN '(' + CASE WHEN cc.max_length = -1 THEN 'MAX' ELSE CAST(cc.max_length AS VARCHAR(10)) END + ')'
+              WHEN t.[name] IN ('nvarchar', 'nchar') THEN '(' + CASE WHEN cc.max_length = -1 THEN 'MAX' ELSE CAST(cc.max_length / 2 AS VARCHAR(10)) END + ')'
+              WHEN t.[name] IN ('decimal', 'numeric') THEN '(' + CAST(cc.[precision] AS VARCHAR(10)) + ',' + CAST(cc.scale AS VARCHAR(10)) + ')'
+              WHEN t.[name] IN ('datetime2', 'time', 'datetimeoffset') THEN '(' + CAST(cc.scale AS VARCHAR(10)) + ')'
+              ELSE '' END +
+         CASE WHEN cc.collation_name IS NOT NULL THEN ' COLLATE ' + cc.collation_name ELSE '' END +
+                                        CASE WHEN cc.is_nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END + ';'
+                                   FROM #SuspendedTemporal s WITH (NOLOCK)
+                                   JOIN sys.columns cc ON cc.[object_id] = s.CurrentId
+                                   JOIN sys.types t ON t.user_type_id = cc.user_type_id
+                                   JOIN sys.columns hc ON hc.[object_id] = s.HistoryId AND hc.[name] = cc.[name]
+                                   WHERE cc.user_type_id <> hc.user_type_id OR cc.max_length <> hc.max_length
+                                      OR cc.[precision] <> hc.[precision] OR cc.scale <> hc.scale
+                                      OR ISNULL(cc.collation_name, '') <> ISNULL(hc.collation_name, '')
+                                      OR cc.is_nullable <> hc.is_nullable) x
+                           ORDER BY x.Ord
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Identify Existing Clustered Index Conflicts', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#MissingClusteredIndexTables') IS NOT NULL DROP TABLE #MissingClusteredIndexTables

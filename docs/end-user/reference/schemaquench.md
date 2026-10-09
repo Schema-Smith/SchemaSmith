@@ -244,7 +244,7 @@ With schema templates, a single database can contribute many work units -- one p
 
 ## ContinueOnDatabaseFailure
 
-Failure isolation at the database level applies to all templates -- both regular templates and schema templates. When `ContinueOnDatabaseFailure` is `true` (the default), one database's failure does not abort the product run; SchemaQuench logs the failure, continues processing remaining databases, and exits with code 2 after all work units have completed or failed.
+Failure isolation at the database level applies to all templates -- both regular templates and schema templates. When `ContinueOnDatabaseFailure` is `true` (the default), one database's failure does not abort the product run; SchemaQuench logs the failure, continues processing remaining databases, and exits with code 2 after all work units have completed or failed. Continuing does not make the run complete: after any failure, the product's `After Product` scripts and its `VersionStampScript` are skipped, so the next run is not told this version is deployed. A later `--ResumeQuench` that finishes the failed work runs them.
 
 When `false`, the first database-level failure aborts subsequent iterations. In-flight work units drain naturally -- SchemaQuench does not cancel active database connections because an incomplete transaction is more hazardous than a completed one. The product run exits with code 2.
 
@@ -451,6 +451,8 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 | **Always Encrypted** (`ENCRYPTED WITH`) | SQL Server 2016 | creates the column *unencrypted* + records a downgrade |
 | **Nonclustered columnstore index** | SQL Server 2012 | skips the index + records a downgrade |
 | **Clustered columnstore index** | SQL Server 2014 | skips the index + records a downgrade |
+| **Writable nonclustered columnstore** | SQL Server 2016 | skips the index + records a downgrade. On 2012 and 2014 a nonclustered columnstore index makes its table read-only, so creating it would change what the application can do. An index already on the table is left in place |
+| **Clustered columnstore beside rowstore indexes** | SQL Server 2016 | skips the columnstore index and keeps the rowstore indexes, which carry keys and uniqueness + records a downgrade. SQL Server 2014 refuses the combination. An index already on the table is left in place |
 | **Graph tables** (`NODE` / `EDGE`) | SQL Server 2017 | creates the table with all its declared columns, *without* graph semantics + records a downgrade |
 | **Ledger tables** | SQL Server 2022 | creates an ordinary table + records a downgrade. The direction is deliberate: a ledger table cannot be converted or dropped afterwards, so not creating one is far easier to recover from than creating one by accident |
 | **XML compression** | SQL Server 2022 | creates the table or index without the compression clause + records a downgrade. Nothing an application can observe changes — only the storage saving is lost |
@@ -458,6 +460,10 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 > **Check the manifest before deploying to a pre-2016 target.** Under the default `warn`, a masked column is created unmasked and an Always Encrypted column is created unencrypted — the deploy succeeds and the downgrade is recorded, but the protection is not there. If a silently-unprotected column is worse for you than a failed deployment, set `Target:UnsupportedFeaturePolicy=fail`.
 
 One further case is compatibility-level gated rather than version gated: a `Json`-encoded [data delivery](schema-packages.md#content-encoding) aimed at a below-130 SQL Server target follows the same policy — `warn` skips just that delivery and delivers the rest, `fail` aborts. Re-encode that delivery as `Xml` to deploy it there.
+
+**Two are gated on the server's *edition*.** Before SQL Server 2016 SP1, **Data compression** (`CompressionType` `ROW` or `PAGE`) and **columnstore indexes** need Enterprise or Developer edition; Standard, Web and Express refuse them. There, the table or index is created uncompressed and a columnstore index is skipped, each with a downgrade recorded. From 2016 SP1 every edition has both.
+
+**Full-text statistical semantics** (`STATISTICAL_SEMANTICS` on a full-text column) needs a semantic language statistics database registered on the server; without one, SQL Server refuses the whole full-text index. The index is created without semantic statistics and a downgrade is recorded.
 
 **Three more route through the same policy but are gated on server *state*, not version** — every supported version can do them, if the feature is turned on. **Change Data Capture** and **Change Tracking** need the feature enabled on the database; **FILESTREAM** columns need FILESTREAM enabled on the server *and* a FILESTREAM filegroup on the database. Where the prerequisite is absent, the object is deployed without that aspect and a downgrade is recorded, exactly as a version degrade would be — so a package that assumes CDC is on does not fail, it quietly deploys without it under the default `warn`. Enable the prerequisite, or set `Target:UnsupportedFeaturePolicy=fail`, if that is not what you want.
 

@@ -17,7 +17,7 @@ The `Product.json` file sits at the root of the schema package and is the top-le
 | `Name` | string | | Yes | Product name. Automatically added as a `{{ProductName}}` script token. Used for migration script tracking and version stamping. |
 | `Platform` | string | | Yes | Target platform. Valid values: `"SqlServer"`, `"PostgreSQL"`, `"MySQL"`, `"MariaDb"`. Determines which platform adapter handles deployment, extraction, and the default folder set. |
 | `ValidationScript` | string | | Yes | SQL expression evaluated before quench begins. Must return a truthy value or the quench aborts. Supports token replacement. |
-| `TemplateOrder` | string[] | `[]` | No | Ordered list of template directory names. Templates are quenched in this order. |
+| `TemplateOrder` | string[] | `[]` | No | Ordered list of template directory names. Templates are quenched in this order. Each entry is the name of a folder directly under `Templates/`, matched without regard to case on every OS -- not a path: an entry with a path separator, `.` or `..`, a leading or trailing space, a trailing dot, or any of `< > : " \| ? *` is refused, as is one that matches no folder, by the deploy and by `--Validate`. |
 | `ScriptTokens` | object | `{}` | No | Key-value pairs for `{{TokenName}}` replacement in scripts and SQL properties. See the [Script Tokens Reference](script-tokens.md). |
 | `BaselineValidationScript` | string | | No | SQL expression evaluated after server validation but before template processing. |
 | `VersionStampScript` | string | | No | SQL executed once after all templates complete successfully. Typically records the release version on the server. |
@@ -530,9 +530,10 @@ Each platform's table definition extends the shared properties with engine-speci
 | `Statistics` | array | `[]` | Custom statistics definitions. See [Statistics (SQL Server / PostgreSQL)](#statistics-sql-server--postgresql). |
 | `FullTextIndex` | object or array | `null` | Full-text index on the table -- a single definition, or an array of conditional variants. See [Full-Text Index (SQL Server)](#full-text-index-sql-server). |
 | `UpdateFillFactor` | bool | `false` | When `true`, index fill factors on this table are updated to match JSON definitions during quench. |
-| `EnableCDC` | bool | `false` | When `true`, the table is enabled for change data capture. Changing a tracked table's columns rotates to a new capture instance rather than discarding history -- see [Change Data Capture (SQL Server)](#change-data-capture-sql-server). |
+| `EnableCDC` | bool | | `true` enables change data capture on the table; `false` disables it, which drops its capture instances and their history. Leaving it out leaves the table's CDC as it is, so capture enabled outside the package survives a deploy. Changing a tracked table's columns rotates to a new capture instance rather than discarding history -- see [Change Data Capture (SQL Server)](#change-data-capture-sql-server). |
 | `CdcFilegroup` | string | | The filegroup this table's CDC change table goes on; overrides the template's `CdcFilegroup`. Only meaningful with `EnableCDC` (`--Validate` warns `SS-CDC-001` otherwise). See [Where change tables go](#where-change-tables-go). |
-| `CdcSupportsNetChanges` | bool | | Whether this table's capture instance supports net changes (`@supports_net_changes`); overrides the template's value. `true` needs a primary key. Only meaningful with `EnableCDC` (`--Validate` warns `SS-CDC-001` otherwise). See [Net changes](#net-changes). |
+| `CdcSupportsNetChanges` | bool | | Whether this table's capture instance supports net changes (`@supports_net_changes`); overrides the template's value. `true` needs a primary key, or a `CdcIndexName`. Only meaningful with `EnableCDC` (`--Validate` warns `SS-CDC-001` otherwise). See [Net changes](#net-changes). |
+| `CdcIndexName` | string | | The unique index this table's capture instance identifies rows by (`@index_name`), instead of the primary key. Must name one of the table's declared unique indexes, over `NOT NULL` columns (`--Validate` reports `SS-CDC-002` otherwise). Only meaningful with `EnableCDC` (`SS-CDC-001`). See [Identifying rows](#identifying-rows). |
 | `EnableChangeTracking` | bool | | When `true`, the table is enabled for SQL Server change tracking; `false` disables it; left out, the table's tracking is left as it is. Requires Change Tracking enabled on the database -- see [Change Tracking (SQL Server)](#change-tracking-sql-server). Unrelated to the full-text index option also spelled `ChangeTracking`. |
 | `TrackColumnsUpdated` | bool | `false` | Only meaningful with `EnableChangeTracking`. When `true`, change tracking records **which columns** changed, not merely that the row did, at the cost of extra tracking storage. |
 | `FileGroup` | string | `null` | Filegroup the table is stored on, as a **name only** -- never a file path, so the package stays portable across environments. **Leave it unset and SchemaSmith does not manage placement at all** — the table is created wherever SQL Server would put it, and an existing table is left exactly where it is, including on a filegroup someone placed it on by hand. SchemaSmith does not create filegroups: if the named one does not exist on the target the deploy fails. Moving an existing table to a different filegroup is a rebuild, so a declared name that differs from where the table already lives also fails -- migrate it manually. Removing the property again does not move anything back; it just stops SchemaSmith checking placement. Create filegroups in a migration script, supplying environment-specific paths through [script tokens](script-tokens.md). |
@@ -798,8 +799,9 @@ DDL runs, naming the table:
 
 SQL Server rejects `CREATE INDEX` against a memory-optimized table, so every index is emitted inside the
 `CREATE TABLE` statement. Declare them in the ordinary `Indexes` array and SchemaSmith places them correctly —
-a primary key becomes `PRIMARY KEY NONCLUSTERED`, and an index with a `BucketCount` becomes a `HASH` index.
-`CompressionType` and `XmlCompression` are ignored here; neither applies to a memory-optimized table.
+a primary key becomes `PRIMARY KEY NONCLUSTERED`, a unique constraint a `UNIQUE NONCLUSTERED` constraint, an index
+with a `BucketCount` a `HASH` index, and a `ColumnStore` index a `CLUSTERED COLUMNSTORE` index. `CompressionType` and
+`XmlCompression` are ignored here; neither applies to a memory-optimized table.
 
 ### What is refused
 
@@ -922,6 +924,8 @@ Every entry in the `Indexes` array defines an index or key constraint on the tab
 |---|---|---|---|
 | `IgnoreDuplicateKey` | bool | `false` | `IGNORE_DUP_KEY`. **This changes what your application sees, not how fast it runs.** With it off (the default), inserting a duplicate into a unique index fails the whole statement with error 2601 and nothing is written. With it on, the duplicate row is discarded with a warning and **the rest of the statement succeeds** — so a multi-row `INSERT` containing one duplicate lands the other rows instead of rolling back. Only valid on a unique index or unique constraint. |
 | `PadIndex` | bool | `false` | `PAD_INDEX` — applies `FillFactor` to the intermediate index pages as well as the leaf pages. Has no effect without a `FillFactor`, which is why it is declared alongside it rather than on its own. |
+
+**Index kinds a package cannot declare yet:** spatial indexes, JSON indexes (SQL Server 2025) and selective XML indexes. SchemaTongs leaves them out of the table file and names each one in a warning, and SchemaQuench leaves them alone on deploy -- it neither compares them nor drops them, even with [`DropUnknownIndexes`](configuration.md#dropunknownindexes) on. Create and maintain them with a script in the template's `After` slot.
 
 **On indexed views:** SQL Server rejects `IGNORE_DUP_KEY` on a view index outright ("Cannot define an index on a view with ignore_dup_key index option"), so there is nothing to declare there. `PadIndex` **is** supported on an index inside an `Indexed Views/` definition.
 
@@ -1283,7 +1287,7 @@ Custom statistics definitions in the `Statistics` array. SQL Server uses traditi
 
 Change Data Capture records inserts, updates, and deletes into a *change table* managed by SQL Server, so downstream readers can consume what happened rather than poll for differences. A table opts in with `"EnableCDC": true`. The tracked column set is fixed at the moment CDC is enabled, which is what makes schema change interesting: a capture instance created against three columns keeps capturing those three, whatever you do to the table afterwards. SchemaSmith enables and rotates capture only after every column of the table exists, so an instance covers the whole declared table -- computed columns included, whose captured values are always NULL -- and adding a computed column is a column change like any other.
 
-> **Before you start:** CDC must be enabled on the *database* first (`EXEC sys.sp_cdc_enable_db`). SchemaSmith does not do that for you -- it changes retention, cleanup jobs, and storage for every table in the database, which is not a decision one table's package should make. Declare `EnableCDC` without it and the table still deploys, but capture is reported as downgraded and named in the deploy log rather than skipped in silence.
+> **Before you start:** CDC must be enabled on the *database* first (`EXEC sys.sp_cdc_enable_db`). SchemaSmith does not do that for you -- it changes retention, cleanup jobs, and storage for every table in the database, which is not a decision one table's package should make. A script in the template's `Before` slot can enable it: SchemaSmith checks the database after that slot runs, so the first deploy of a new or restored database is tracked. Declare `EnableCDC` without it and the table still deploys, but capture is reported as downgraded and named in the deploy log rather than skipped in silence.
 
 SQL Server's answer is to allow **two capture instances per table** so a new one can be stood up beside the old, and SchemaSmith uses exactly that. When a deploy changes the columns of a tracked table it:
 
@@ -1297,7 +1301,7 @@ The same rotation happens whenever a tracked table's newest capture instance doe
 
 > **Warning:** Because the old instance occupies one of the two slots, a **second** column change before you drop it has nowhere to rotate to. SchemaSmith refuses that deploy **before touching any column**, naming the tables at the limit and the command to clear them, so nothing is left half-applied. Drop the drained instance and re-run. If a table's newest instance is missing columns while both slots are in use, the deploy warns instead, naming the table.
 
-Setting `EnableCDC` back to `false` disables capture on the table outright, which drops its capture instances and their history. That is a deliberate opt-out rather than a side effect of a schema change.
+Setting `EnableCDC` to `false` disables capture on the table outright, which drops its capture instances and their history. That is a deliberate opt-out rather than a side effect of a schema change, so it takes an explicit `false`: a table that leaves `EnableCDC` out keeps whatever CDC it has, and SchemaTongs writes `EnableCDC` only for a tracked table.
 
 ### Where change tables go
 
@@ -1333,9 +1337,25 @@ A capture instance either supports net changes or it doesn't. With net changes o
 - **Unset keeps SQL Server's usual result.** Off for a table created in the same deploy; SQL Server's own default, which is on when the table has a primary key, when CDC is turned on for a table that already exists.
 - **A rotation keeps it.** When a column or filegroup change rotates a table that declares no `CdcSupportsNetChanges`, the new instance keeps the value of the one it replaces.
 - **Changing it rotates.** SQL Server fixes net changes when a capture instance is created, so a declared value the newest instance doesn't have gets a new capture instance -- the same rotation, with the same rules, as a filegroup change.
-- **`true` needs a primary key.** Net changes identify rows by key, so a table that sets `true` without declaring a primary key fails the deploy before CDC is enabled, naming the table.
+- **`true` needs a key.** Net changes identify rows by key, so a table that sets `true` with neither a declared primary key nor a [`CdcIndexName`](#identifying-rows) fails the deploy before CDC is enabled, naming the table.
 
-SchemaTongs extracts `CdcSupportsNetChanges` from the newest capture instance, and only when it is on and the instance uses the primary key -- so a package whose instances have net changes off gains no new key. An instance set up by hand to use a unique index instead keeps that index when SchemaSmith rotates it.
+SchemaTongs extracts `CdcSupportsNetChanges` from the newest capture instance, and only when it is on -- so a package whose instances have net changes off gains no new key.
+
+### Identifying rows
+
+A capture instance identifies a row by the table's primary key unless it is told to use a unique index instead. Set `CdcIndexName` on the table to choose that index -- for a table with no primary key that needs net changes, or one whose readers key on something other than the primary key:
+
+```jsonc
+{ "Schema": "dbo", "Name": "Orders", "EnableCDC": true, "CdcSupportsNetChanges": true, "CdcIndexName": "UX_Orders_OrderNumber",
+  "Indexes": [ { "Name": "UX_Orders_OrderNumber", "Unique": true, "IndexColumns": "[OrderNumber]" } ] }
+```
+
+- **It must be a declared unique index over `NOT NULL` columns.** That is what SQL Server accepts, so a `CdcIndexName` that names no declared index, a non-unique one, or one with a nullable key column fails the deploy before CDC is enabled, naming the table and the problem. The index may be new in the same deploy: capture is enabled after indexes are created.
+- **Unset keeps the primary key.** With no `CdcIndexName`, SQL Server uses the primary key, and a rotation keeps whatever index the instance it replaces uses -- including one a DBA chose by hand.
+- **Changing it rotates.** A capture instance's index is fixed when it is created, so a declared index the newest instance doesn't use gets a new capture instance -- the same rotation, with the same rules, as a filegroup change.
+- **The index an instance uses stays put.** SQL Server will not drop an index any capture instance identifies rows by, and renaming one leaves the instance naming an index that no longer exists. So a deploy that would drop, rename, or redefine such an index -- the primary key included -- is refused before any index is touched, naming the index and the capture instance. To move off it: set `CdcIndexName` to another unique index and deploy, drain the old instance and drop it, then make the change.
+
+SchemaTongs extracts `CdcIndexName` from the newest capture instance when it uses an index other than the primary key, so a package whose instances use the primary key gains no new key.
 
 ---
 
@@ -1343,7 +1363,7 @@ SchemaTongs extracts `CdcSupportsNetChanges` from the newest capture instance, a
 
 Change tracking answers a narrower question than [Change Data Capture](#change-data-capture-sql-server): *which rows changed since the version you last saw*, rather than a full history of what each change was. It is lighter, and it is the right tool when a downstream reader only needs to re-fetch the rows that moved. A table opts in with `"EnableChangeTracking": true`.
 
-> **Before you start:** Change Tracking must be enabled on the *database* first (`ALTER DATABASE <db> SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON)`). SchemaSmith does not do that for you -- it sets retention and auto-cleanup for every table in the database. Declare `EnableChangeTracking` without it and the table still deploys, but tracking is reported as downgraded and named in the deploy log rather than skipped in silence.
+> **Before you start:** Change Tracking must be enabled on the *database* first (`ALTER DATABASE <db> SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON)`). SchemaSmith does not do that for you -- it sets retention and auto-cleanup for every table in the database. As with CDC, a `Before` script can enable it and the first deploy is tracked. Declare `EnableChangeTracking` without it and the table still deploys, but tracking is reported as downgraded and named in the deploy log rather than skipped in silence.
 
 The table also needs a **primary key** -- SQL Server refuses to enable change tracking without one. SchemaSmith enables tracking after it creates the table's indexes and constraints, so a primary key declared in the same package is already in place.
 

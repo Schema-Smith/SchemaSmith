@@ -5,6 +5,7 @@
 IF OBJECT_ID('SchemaSmith.DegradeUnsupportedFeatures', 'P') IS NOT NULL DROP PROCEDURE SchemaSmith.DegradeUnsupportedFeatures
 GO
 CREATE PROCEDURE SchemaSmith.DegradeUnsupportedFeatures
+  @DeferDatabaseToggles BIT = 0
 AS
 BEGIN
   -- Single choke point for the below-floor emit-guards: sanitize the parsed working set (#Tables / #Columns /
@@ -189,74 +190,36 @@ BEGIN
   -- Columnstore (nonclustered 2012 / clustered 2014) -- drops the unsupported index rows from #Indexes.
   -- Shared with the --IndexOnly path, which calls this proc directly (it has only #Indexes).
   EXEC SchemaSmith.DegradeUnsupportedColumnStore
+  EXEC SchemaSmith.DegradeUnsupportedFullText
 
-  -- Change Data Capture -- gated by a DATABASE-scoped toggle rather than a server version, which is why
-  -- it sits apart from the version blocks above.
-  --
-  -- THIS BLOCK EXISTS BECAUSE ITS ABSENCE WAS A SILENT NO-OP. ModifiedTableQuench wraps its whole
-  -- enable/disable pass in IF EXISTS (... is_cdc_enabled = 1) with no ELSE, so a package declaring
-  -- "EnableCDC": true against a database where CDC is off deployed green, left the table untracked, and
-  -- said nothing anywhere. The user found out when someone asked where the change history went.
-  --
-  -- SchemaSmith deliberately does NOT run sp_cdc_enable_db to fix it up. That call changes retention,
-  -- cleanup jobs and storage for the entire database; enabling it because one table asked would trade a
-  -- silent no-op for a silent side effect on every other table in it. Refusing loudly is the safe half
-  -- of that trade, and it is only safe because this block makes the refusal visible.
-  --
-  -- Clearing EnableCDC afterwards is what makes the later pass's behaviour deliberate rather than
-  -- incidental: it then finds nothing to do because the declaration was withdrawn here and recorded,
-  -- not because a guard happened to skip it.
-  IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
-     AND EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE EnableCDC = 1)
+  -- Table compression where the edition lacks it (SS-053): below SQL Server 2016 SP1, Standard, Web and Express refuse
+  -- DATA_COMPRESSION with 7738. The table is created uncompressed; index compression is handled with the indexes above.
+  IF SchemaSmith.fn_EnterpriseFeaturesUnavailable() = 1
+     AND EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE RTRIM(ISNULL([CompressionType], 'NONE')) IN ('ROW', 'PAGE'))
   BEGIN
     IF @v_policy = 'fail'
     BEGIN
-      SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK) WHERE T.EnableCDC = 1
+      SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK)
+                            WHERE RTRIM(ISNULL(T.[CompressionType], 'NONE')) IN ('ROW', 'PAGE')
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-      SET @v_msg = 'Change Data Capture requires CDC enabled on the database (EXEC sys.sp_cdc_enable_db), ' +
-                   'which SchemaSmith does not do for you because it is database-wide; table(s): ' +
-                   LEFT(@v_list, 1700) + '.'
+      SET @v_msg = 'Data compression requires Enterprise or Developer edition below SQL Server 2016 SP1; table(s): ' +
+                   LEFT(@v_list, 1800) + '.'
       RAISERROR(@v_msg, 16, 1)
     END
     ELSE
     BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT @@SPID, 'CDC (database not enabled)', T.[Schema] + '.' + T.[Name], 'downgraded'
-          FROM #Tables T WITH (NOLOCK) WHERE T.EnableCDC = 1
-      RAISERROR('  CDC skipped: not enabled on this database (EXEC sys.sp_cdc_enable_db to allow it - downgraded)', 10, 100) WITH NOWAIT
-      UPDATE #Tables SET EnableCDC = 0 WHERE EnableCDC = 1
+        SELECT @@SPID, 'data compression (Enterprise edition below SQL Server 2016 SP1)', T.[Schema] + '.' + T.[Name], 'downgraded'
+          FROM #Tables T WITH (NOLOCK) WHERE RTRIM(ISNULL(T.[CompressionType], 'NONE')) IN ('ROW', 'PAGE')
+      RAISERROR('  Table compression skipped (Enterprise edition below SQL Server 2016 SP1 - downgraded)', 10, 100) WITH NOWAIT
+      UPDATE #Tables SET [CompressionType] = 'NONE' WHERE RTRIM(ISNULL([CompressionType], 'NONE')) IN ('ROW', 'PAGE')
     END
   END
 
-
-  -- Table-level Change Tracking -- the second feature gated by a DATABASE-scoped toggle, and written
-  -- this way from the start precisely because the CDC block above had to be retrofitted after shipping
-  -- the silent version of it. Not the full-text CHANGE_TRACKING option, which is unrelated.
-  --
-  -- Same refusal for the same reason: ALTER DATABASE ... SET CHANGE_TRACKING = ON sets retention and
-  -- auto-cleanup for the whole database, so SchemaSmith names the tables that asked instead of
-  -- reconfiguring the database around one declaration.
-  IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_databases WHERE database_id = DB_ID())
-     AND EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE EnableChangeTracking = 1)
-  BEGIN
-    IF @v_policy = 'fail'
-    BEGIN
-      SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK) WHERE T.EnableChangeTracking = 1
-                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-      SET @v_msg = 'Change Tracking requires it enabled on the database (ALTER DATABASE ... SET CHANGE_TRACKING = ON), ' +
-                   'which SchemaSmith does not do for you because it is database-wide; table(s): ' +
-                   LEFT(@v_list, 1700) + '.'
-      RAISERROR(@v_msg, 16, 1)
-    END
-    ELSE
-    BEGIN
-      INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT @@SPID, 'Change Tracking (database not enabled)', T.[Schema] + '.' + T.[Name], 'downgraded'
-          FROM #Tables T WITH (NOLOCK) WHERE T.EnableChangeTracking = 1
-      RAISERROR('  Change Tracking skipped: not enabled on this database (ALTER DATABASE ... SET CHANGE_TRACKING = ON to allow it - downgraded)', 10, 100) WITH NOWAIT
-      UPDATE #Tables SET EnableChangeTracking = NULL WHERE EnableChangeTracking = 1
-    END
-  END
+  -- Change Data Capture and table Change Tracking -- gated by DATABASE-scoped toggles, which a template's Before
+  -- script can turn on. When the template has Before scripts the caller defers these two to just after that slot
+  -- (#432); otherwise they are judged here, so a 'fail' still refuses before anything is created.
+  IF @DeferDatabaseToggles = 0 EXEC SchemaSmith.DegradeDatabaseToggles
 
 
   -- FILESTREAM columns -- the third database-scoped prerequisite, and the only one that degrades to a

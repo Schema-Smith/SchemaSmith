@@ -20,6 +20,11 @@ namespace Schema.UnitTests.Capabilities
         private static readonly HashSet<string> KnownManifestObjectTypes = new()
         {
             "temporal (SQL Server 2016)",
+            "full-text statistical semantics (no semantic database)",
+            "nonclustered columnstore index (writable from SQL Server 2016)",
+            "clustered columnstore beside rowstore indexes (SQL Server 2016)",
+            "data compression (Enterprise edition below SQL Server 2016 SP1)",
+            "columnstore index (Enterprise edition below SQL Server 2016 SP1)",
             "graph table (SQL Server 2017)",
             "ledger table (SQL Server 2022)",
             "XML compression (SQL Server 2022)",

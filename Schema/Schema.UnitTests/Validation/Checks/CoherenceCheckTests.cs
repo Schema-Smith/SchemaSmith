@@ -234,6 +234,51 @@ public class CoherenceCheckTests
         Assert.That(RunOnPg(template).Select(f => f.Code), Has.No.Member("SS-ENUM-001"));
     }
 
+    // The folder is the script folder's own path under the template. Searching the script's full path for
+    // "/Enum Types/" counted a directory above the package, and a same-named subfolder of another folder.
+    [Test]
+    public void AFolderNamedLikeAKindAboveThePackage_DoesNotMakeItsScriptsThatKind()
+    {
+        var template = new Template { Name = "T" };
+        var folder = new TemplateFolder { FolderPath = "Functions", QuenchSlot = TemplateQuenchSlot.Objects };
+        folder.Scripts.Add(new SqlScript { Name = "status", FilePath = "/work/Enum Types/pkg/T/Functions/status.sql" });
+        template.ScriptFolders.Add(folder);
+        template.EnumTypes.Add(new PostgreSqlEnumType { Name = "status" });
+
+        Assert.That(RunOnPg(template).Select(f => f.Code), Has.No.Member("SS-ENUM-001"));
+    }
+
+    [Test]
+    public void ASubfolderNamedLikeAKindInsideAnotherFolder_IsNotThatKind()
+    {
+        var template = PgTemplateWithFolder("Functions/Enum Types", "status");
+        template.EnumTypes.Add(new PostgreSqlEnumType { Name = "status" });
+
+        Assert.That(RunOnPg(template).Select(f => f.Code), Has.No.Member("SS-ENUM-001"));
+    }
+
+    // A schema-qualified file name scripts the same object as the bare one, and the finding names the schema, so
+    // the same name in two schemas does not give two identical findings.
+    [Test]
+    public void ASchemaQualifiedScriptFile_IsMatched_AndTheFindingNamesTheSchema()
+    {
+        var template = PgTemplateWithFolder("Enum Types", "public.status");
+        template.EnumTypes.Add(new PostgreSqlEnumType { Schema = "public", Name = "status" });
+
+        var finding = RunOnPg(template).Single(f => f.Code == "SS-ENUM-001");
+
+        Assert.That(finding.Message, Does.Contain("'public.status'"));
+    }
+
+    [Test]
+    public void AScriptQualifiedWithAnotherSchema_IsADifferentObject()
+    {
+        var template = PgTemplateWithFolder("Enum Types", "sales.status");
+        template.EnumTypes.Add(new PostgreSqlEnumType { Schema = "public", Name = "status" });
+
+        Assert.That(RunOnPg(template).Select(f => f.Code), Has.No.Member("SS-ENUM-001"));
+    }
+
     [Test]
     public void MemoryOptimizedWithFileGroup_IsError()
     {
@@ -1557,6 +1602,62 @@ public class CoherenceCheckTests
         Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-CDC-001"), Is.Empty);
     }
 
+    // CdcIndexName: the same inert warning without EnableCDC, and with it an error for anything SQL Server's
+    // @index_name refuses, which the deploy refuses by name too.
+    [Test]
+    public void CdcIndexNameWithoutEnableCdc_IsAnInertWarning()
+    {
+        var table = CdcIndexTable(enableCdc: null, cdcIndexName: "[UX_Code]");
+
+        var finding = RunFor(table, Platform.SqlServer).Single(f => f.Code == "SS-CDC-001");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Warning));
+            Assert.That(finding.Message, Does.Contain("Orders").And.Contain("CdcIndexName").And.Contain("EnableCDC"));
+        });
+    }
+
+    [TestCase("[UX_Missing]", "which is not one of its declared indexes")]
+    [TestCase("[IX_Plain]", "which is not unique")]
+    [TestCase("[UX_Note]", "which has a nullable key column")]
+    public void CdcIndexName_ThatSqlServerWouldRefuse_IsAnError(string cdcIndexName, string problem)
+    {
+        var table = CdcIndexTable(enableCdc: true, cdcIndexName: cdcIndexName);
+
+        var finding = RunFor(table, Platform.SqlServer).Single(f => f.Code == "SS-CDC-002");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Error));
+            Assert.That(finding.Message, Does.Contain("Orders").And.Contain(cdcIndexName).And.Contain(problem));
+        });
+    }
+
+    [TestCase("[UX_Code]")]
+    [TestCase("UX_Code")]
+    [TestCase("[ux_code]")]
+    [TestCase("[PK_Orders]")]
+    public void CdcIndexName_NamingADeclaredUniqueIndexOverNotNullColumns_IsSilent(string cdcIndexName)
+    {
+        var table = CdcIndexTable(enableCdc: true, cdcIndexName: cdcIndexName);
+
+        Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code.StartsWith("SS-CDC-")), Is.Empty);
+    }
+
+    private static SqlServerTable CdcIndexTable(bool? enableCdc, string cdcIndexName)
+    {
+        var table = new SqlServerTable { Schema = "dbo", Name = "Orders", EnableCDC = enableCdc, CdcIndexName = cdcIndexName };
+        table.Columns.Add(new SqlServerColumn { Name = "[Id]", DataType = "INT" });
+        table.Columns.Add(new SqlServerColumn { Name = "[Code]", DataType = "INT" });
+        table.Columns.Add(new SqlServerColumn { Name = "[Note]", DataType = "INT", Nullable = true });
+        table.Indexes.Add(new SqlServerIndex { Name = "[PK_Orders]", PrimaryKey = true, Unique = true, IndexColumns = "[Id]" });
+        table.Indexes.Add(new SqlServerIndex { Name = "[UX_Code]", Unique = true, IndexColumns = "[Code] DESC" });
+        table.Indexes.Add(new SqlServerIndex { Name = "[IX_Plain]", IndexColumns = "[Code]" });
+        table.Indexes.Add(new SqlServerIndex { Name = "[UX_Note]", Unique = true, IndexColumns = "[Code], [Note]" });
+        return table;
+    }
+
     private static System.Collections.Generic.List<Finding> RunFor(Table table, Platform platform)
     {
         var template = new Template { Name = "Main" };
@@ -1827,4 +1928,79 @@ public class CoherenceCheckTests
 
         Assert.That(RunPg(table).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
     }
+
+    // ---- A foreign-key name reused across tables (SS-FK-006) ----
+    //
+    // MySQL names foreign keys per database and SQL Server per schema, so a second table reusing a name fails the
+    // deploy. MariaDB names them per table from 12.1, so there it fails only on an older server -- a warning, unless
+    // MinimumVersion already rules older servers out. PostgreSQL names them per table on every version.
+
+    private static ForeignKey ParentFk(string name) =>
+        new() { Name = name, Columns = "ParentId", RelatedTable = "Parent", RelatedColumns = "Id" };
+
+    private static Finding[] RunFkReuse(Platform platform, string minimumVersion, params (string Schema, string Table, string Fk)[] tables)
+    {
+        var template = new Template { Name = "T" };
+        foreach (var (schema, name, fk) in tables)
+        {
+            Table table = platform switch
+            {
+                Platform.SqlServer => new SqlServerTable { Name = name, Schema = schema },
+                Platform.PostgreSQL => new PostgreSqlTable { Name = name, Schema = schema },
+                Platform.MariaDb => new MariaDbTable { Name = name },
+                _ => new MySqlTable { Name = name }
+            };
+            table.ForeignKeys.Add(ParentFk(fk));
+            template.Tables.Add(table);
+        }
+        var product = new Product { Name = "Acme", Platform = platform, MinimumVersion = minimumVersion, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg"))
+            .Where(f => f.Code == "SS-FK-006").ToArray();
+    }
+
+    [Test]
+    public void FkNameReusedAcrossTables_OnMySql_IsAnErrorNamingBothTables()
+    {
+        var findings = RunFkReuse(Platform.MySQL, null!, ("", "Orders", "fk_parent"), ("", "Invoices", "`FK_Parent`"));
+
+        Assert.That(findings, Has.Length.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+            Assert.That(findings[0].Message, Does.Contain("Orders").And.Contain("Invoices").And.Contain("fk_parent"));
+        });
+    }
+
+    [TestCase(null, Severity.Warning)]
+    [TestCase("10.6", Severity.Warning)]
+    [TestCase("12.0", Severity.Warning)]
+    public void FkNameReusedAcrossTables_OnMariaDbThatMayBeBelow121_IsAWarning(string minimumVersion, Severity expected)
+    {
+        var findings = RunFkReuse(Platform.MariaDb, minimumVersion, ("", "Orders", "fk_parent"), ("", "Invoices", "fk_parent"));
+
+        Assert.That(findings.Select(f => f.Severity), Is.EqualTo(new[] { expected }));
+        Assert.That(findings[0].Message, Does.Contain("12.1"));
+    }
+
+    [TestCase("12.1")]
+    [TestCase("13.0")]
+    public void FkNameReusedAcrossTables_OnMariaDb121AndLater_IsNotReported(string minimumVersion) =>
+        Assert.That(RunFkReuse(Platform.MariaDb, minimumVersion, ("", "Orders", "fk_parent"), ("", "Invoices", "fk_parent")), Is.Empty);
+
+    [Test]
+    public void FkNameReusedAcrossTables_OnSqlServer_IsAnErrorInTheSameSchemaOnly()
+    {
+        Assert.That(RunFkReuse(Platform.SqlServer, null!, ("dbo", "Orders", "FK_Parent"), ("[dbo]", "Invoices", "[FK_Parent]"))
+            .Select(f => f.Severity), Is.EqualTo(new[] { Severity.Error }));
+        Assert.That(RunFkReuse(Platform.SqlServer, null!, ("dbo", "Orders", "FK_Parent"), ("sales", "Invoices", "FK_Parent")), Is.Empty,
+            "constraint names are per schema on SQL Server");
+    }
+
+    [Test]
+    public void FkNameReusedAcrossTables_OnPostgreSql_IsNotReported() =>
+        Assert.That(RunFkReuse(Platform.PostgreSQL, null!, ("public", "Orders", "fk_parent"), ("public", "Invoices", "fk_parent")), Is.Empty);
+
+    [Test]
+    public void DistinctFkNames_AreNotReported() =>
+        Assert.That(RunFkReuse(Platform.MySQL, null!, ("", "Orders", "fk_orders_parent"), ("", "Invoices", "fk_invoices_parent")), Is.Empty);
 }

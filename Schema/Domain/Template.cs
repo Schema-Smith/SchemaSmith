@@ -455,6 +455,45 @@ namespace Schema.Domain
         // Load() uses it to locate the file, and PackageLoader uses it independently (via
         // TryLoadTemplate) to name a template whose Load() call threw before ever returning a
         // Template instance, so there's no loaded object to read FilePath off of.
+        // Separators, the characters Windows reserves in a file name, and the quote: none can be part of a template
+        // folder name on every supported OS.
+        private static readonly char[] InvalidTemplateNameChars = ['/', '\\', '<', '>', ':', '"', '|', '?', '*'];
+
+        /// <summary>
+        /// The template folder a <c>TemplateOrder</c> entry names. An entry is a folder name under <c>Templates/</c>,
+        /// never a path, and matches that folder whatever its case, so a package loads the same way on every OS. An
+        /// entry that is not a plain name, that matches no folder, or that matches two folders differing only in case
+        /// stops the run. If the folder list cannot be read the entry is used as written, and the missing
+        /// <c>Template.json</c> is reported when it is opened.
+        /// </summary>
+        internal static string ResolveTemplateFolder(Product product, string entry)
+        {
+            if (string.IsNullOrWhiteSpace(entry) || entry.Trim() != entry || entry.EndsWith('.')
+                || entry.IndexOfAny(InvalidTemplateNameChars) >= 0 || entry.Any(char.IsControl))
+                throw new RunFailedException(
+                    $"TemplateOrder entry '{entry}' is not a template folder name. TemplateOrder lists the folders directly under " +
+                    "Templates/ by name: no path separators, no '.' or '..', no leading or trailing space, no trailing dot, " +
+                    "and none of < > : \" | ? *.");
+
+            var templatesRoot = Path.Join(Path.GetDirectoryName(product.FilePath) ?? "", "Templates");
+            var directory = ProductDirectoryWrapper.GetFromFactory();
+            var folders = directory.Exists(templatesRoot)
+                ? (directory.GetDirectories(templatesRoot, "*", SearchOption.TopDirectoryOnly) ?? []).Select(Path.GetFileName).ToList()
+                : [];
+            if (folders.Count == 0 || folders.Contains(entry, StringComparer.Ordinal)) return entry;
+
+            var matches = folders.Where(f => string.Equals(f, entry, StringComparison.OrdinalIgnoreCase)).ToList();
+            return matches.Count switch
+            {
+                1 => matches[0],
+                0 => throw new RunFailedException(
+                    $"TemplateOrder entry '{entry}' matches no folder under Templates/. The folders are: {string.Join(", ", folders.OrderBy(f => f))}."),
+                _ => throw new RunFailedException(
+                    $"TemplateOrder entry '{entry}' matches more than one folder under Templates/, differing only in case: " +
+                    $"{string.Join(", ", matches.OrderBy(f => f, StringComparer.Ordinal))}. Rename one, so the package loads the same way on every OS.")
+            };
+        }
+
         internal static string GetTemplateFilePath(Product product, string templateName)
         {
             var schemaPackagePath = Path.GetDirectoryName(product.FilePath) ?? "";
@@ -492,7 +531,7 @@ namespace Schema.Domain
         /// </param>
         public static Template Load(string templateName, Product product, bool tolerateComponentLoadErrors = false, bool tolerateFileTokenErrors = false, MissingMemberHandling missingMemberHandling = MissingMemberHandling.Error)
         {
-            var templateFilePath = GetTemplateFilePath(product, templateName);
+            var templateFilePath = GetTemplateFilePath(product, ResolveTemplateFolder(product, templateName));
             var templatePath = Path.GetDirectoryName(templateFilePath) ?? "";
 
             var template = JsonHelper.TemplateLoad(templateFilePath, product.Platform, missingMemberHandling);
@@ -1056,7 +1095,7 @@ namespace Schema.Domain
             try
             {
                 var text = ProductFileWrapper.GetFromFactory().ReadAllText(filePath);
-                JToken.Parse(text);
+                JsonText.Parse(text);
                 return true;
             }
             catch

@@ -243,4 +243,69 @@ public class ConfigHelperTests
         var expected = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         Assert.That(ConfigHelper.ResolveLogPath(), Is.EqualTo(expected));
     }
+
+    // A --ConfigFile that does not exist used to run with no settings, or with a same-named file from the tool's own
+    // folder, and say nothing.
+    [Test]
+    public void CheckStartupSettings_ExplicitConfigFileThatDoesNotExist_StopsTheRun_NamingThePath()
+    {
+        var name = $"missing-{Guid.NewGuid():N}.json";
+        _mockEnvironment.CommandLine.Returns($"app.exe --ConfigFile:{name}");
+        var config = ConfigHelper.GetAppSettingsAndUserSecrets("TestApp", _ => { });
+
+        var ex = Assert.Throws<RunFailedException>(() => ConfigHelper.CheckStartupSettings(config, _ => { }));
+
+        Assert.That(ex!.Message, Does.Contain(Path.GetFullPath(name)));
+    }
+
+    [Test]
+    public void CheckStartupSettings_DefaultSettingsFileAbsent_IsNotAnError()
+    {
+        var config = ConfigHelper.GetAppSettingsAndUserSecrets($"NoSuchTool{Guid.NewGuid():N}", _ => { });
+
+        Assert.DoesNotThrow(() => ConfigHelper.CheckStartupSettings(config, _ => { }));
+    }
+
+    [TestCase("LogHygiene:ScrubTokens", "DeployKey", "ScrubTokens")]
+    [TestCase("LogHygiene:ScrubToken:0", "DeployKey", "ScrubToken")]
+    [TestCase("LogHygiene:LogTokens", "no", "LogTokens")]
+    [TestCase("LogHygiene:ApiKey", "true", "ApiKey")]
+    public void CheckStartupSettings_LogHygieneTheToolsCannotRead_WarnsNamingTheKey(string key, string value, string named)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection([new KeyValuePair<string, string>(key, value)]).Build();
+        var warnings = new List<string>();
+
+        ConfigHelper.CheckStartupSettings(config, warnings.Add);
+
+        Assert.That(warnings, Has.Count.EqualTo(1).And.Some.Contains($"LogHygiene:{named} "));
+    }
+
+    [Test]
+    public void CheckStartupSettings_ValidLogHygiene_DoesNotWarn()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+        {
+            ["LogHygiene:LogTokens"] = "False",
+            ["LogHygiene:ScrubTokens:0"] = "DeployKey",
+            ["LogHygiene:ScrubPatterns:0"] = "*Salt*",
+            ["LogHygiene:AllowTokens:0"] = "PublicToken"
+        }).Build();
+        var warnings = new List<string>();
+
+        ConfigHelper.CheckStartupSettings(config, warnings.Add);
+
+        Assert.That(warnings, Is.Empty);
+    }
+
+    [TestCase(null, ".")]
+    [TestCase("", ".")]
+    [TestCase("   ", ".")]
+    [TestCase(" out ", "out")]
+    [TestCase("out", "out")]
+    public void PathSetting_TrimsTheValue_AndTreatsBlankAsTheCurrentDirectory(string value, string expected)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection([new KeyValuePair<string, string>("Product:Path", value)]).Build();
+
+        Assert.That(ConfigHelper.PathSetting(config, "Product:Path"), Is.EqualTo(expected));
+    }
 }

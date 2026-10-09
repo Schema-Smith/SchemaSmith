@@ -81,6 +81,38 @@ public class MergeScriptHelperTests
         Assert.That(xml, Does.Not.Contain("false").IgnoreCase);
     }
 
+    // Numbers went through double: a wide numeric lost its tail digits, and 100.50 became 100.5.
+    [Test]
+    public void JsonPayloadToXml_NumberColumn_KeepsItsLiteralText()
+    {
+        var xml = MergeScriptHelper.JsonPayloadToXml(
+            @"[{""big"":12345678901234567890.123456789,""cents"":100.50,""neg"":-1.5E-7,""n"":42,""doc"":{""x"":1.25,""s"":""7""}}]");
+        Assert.Multiple(() =>
+        {
+            Assert.That(xml, Does.Contain("<c n=\"big\">12345678901234567890.123456789</c>"));
+            Assert.That(xml, Does.Contain("<c n=\"cents\">100.50</c>"));
+            Assert.That(xml, Does.Contain("<c n=\"neg\">-1.5E-7</c>"));
+            Assert.That(xml, Does.Contain("<c n=\"n\">42</c>"));
+            Assert.That(xml, Does.Contain("\"x\": 1.25").And.Contain("\"s\": \"7\""),
+                "a number inside a json column's value is part of that document and stays a number");
+        });
+    }
+
+    // Read with Newtonsoft's defaults, a date-like string became a DateTime and was written back in the host's culture
+    // and time zone: the fraction dropped, an offset shifted, and plain text that looked like a date was rewritten.
+    [Test]
+    public void JsonPayloadToXml_DateLikeStrings_KeepTheirLiteralText()
+    {
+        var xml = MergeScriptHelper.JsonPayloadToXml(
+            @"[{""ts"":""2020-01-02T03:04:05.123456"",""tz"":""2020-01-02T03:04:05+05:00"",""txt"":""2020-01-02 03:04:05""}]");
+        Assert.Multiple(() =>
+        {
+            Assert.That(xml, Does.Contain("<c n=\"ts\">2020-01-02T03:04:05.123456</c>"));
+            Assert.That(xml, Does.Contain("<c n=\"tz\">2020-01-02T03:04:05+05:00</c>"));
+            Assert.That(xml, Does.Contain("<c n=\"txt\">2020-01-02 03:04:05</c>"));
+        });
+    }
+
     [Test]
     public void JsonPayloadToXml_EmptyOrNullPayload_ReturnsEmptyString()
     {
@@ -159,6 +191,23 @@ public class MergeScriptHelperTests
                 Is.GreaterThan(sql.LastIndexOf("INSERT INTO `_ss_merge_keys`", StringComparison.Ordinal)),
                 "The delete must follow every key-collecting insert.");
         });
+    }
+
+    // The chunked path re-serialises the rows it parsed. Read with the default reader, a date-like value became a
+    // DateTime and was sent converted to the host's time zone.
+    [Test]
+    public void BuildChunkedMergeMySql_SendsADateLikeValueExactlyAsDelivered()
+    {
+        const string when = "2026-10-07T12:00:00.000+02:00";
+        var payload = "[" + string.Join(",", Enumerable.Range(0, MergeScriptHelper.MariaDbShredChunkRows + 1)
+            .Select(i => $"{{\"Id\":{i},\"When\":\"{when}\"}}")) + "]";
+        Assert.That(MergeScriptHelper.TryChunkMySqlPayload(false, false, payload, out var rows), Is.True);
+        var columns = new List<MergeScriptHelper.MySqlColumnInfo> { new() { Name = "Id", DataType = "int" } };
+
+        var sql = MergeScriptHelper.BuildChunkedMergeMySql("db", "t", "`Id`, `When`", "jt.`Id`, jt.`When`",
+            "(SELECT 1) AS jt", null, "`Id`", rows, columns, null, null);
+
+        Assert.That(CountOf(sql, when), Is.EqualTo(MergeScriptHelper.MariaDbShredChunkRows + 1));
     }
 
     [Test]

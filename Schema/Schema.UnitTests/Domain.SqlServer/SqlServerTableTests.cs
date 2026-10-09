@@ -42,7 +42,7 @@ namespace Schema.UnitTests.Domain.SqlServer
             Assert.That(table.Statistics, Is.Not.Null.And.Empty);
             Assert.That(table.FullTextIndex, Is.Not.Null.And.Empty);
             Assert.That(table.UpdateFillFactor, Is.False);
-            Assert.That(table.EnableCDC, Is.False);
+            Assert.That(table.EnableCDC, Is.Null, "unset is unmanaged: only an explicit false turns CDC off");
         }
 
         [Test]

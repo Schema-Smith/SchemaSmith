@@ -111,9 +111,9 @@
         //   "Events": "Events"
     },
     "LogHygiene": {
-        // Optional — extra value names to scrub from logs, beyond the built-in sensitive-name list.
-        // Keys are matched case-insensitively against setting and token names.
-        // "ApiKey": true
+        // Optional — extra names whose values are masked in logs, beyond the built-in sensitive-name list.
+        // Names are matched case-insensitively against setting and token names.
+        // "ScrubTokens": [ "ApiKey" ]
     },
     "ScriptTokens": {} // Token values substituted into extracted scripts, e.g. { "MainDB": "AppDb" }.
 }

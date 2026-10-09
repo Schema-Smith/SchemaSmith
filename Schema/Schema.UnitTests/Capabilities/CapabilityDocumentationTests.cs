@@ -52,6 +52,11 @@ public class CapabilityDocumentationTests
         ["SqlServer/always-encrypted"] = "**Always Encrypted**",
         ["SqlServer/columnstore-nonclustered"] = "**Nonclustered columnstore index**",
         ["SqlServer/columnstore-clustered"] = "**Clustered columnstore index**",
+        ["SqlServer/columnstore-nonclustered-writable"] = "**Writable nonclustered columnstore**",
+        ["SqlServer/columnstore-clustered-with-rowstore"] = "**Clustered columnstore beside rowstore indexes**",
+        // Gated on the server's edition, so documented in prose below the table, like FILESTREAM.
+        ["SqlServer/data-compression-edition"] = "**Data compression**",
+        ["SqlServer/columnstore-edition"] = "**columnstore indexes**",
 
         // ---- SQL Server, gated on server or database STATE rather than version ----
         // These three are documented in a prose paragraph rather than the table, because "Requires"
@@ -60,6 +65,7 @@ public class CapabilityDocumentationTests
         ["SqlServer/cdc-database-toggle"] = "**Change Data Capture**",
         ["SqlServer/change-tracking-database-toggle"] = "**Change Tracking**",
         ["SqlServer/filestream-column"] = "**FILESTREAM**",
+        ["SqlServer/fulltext-statistical-semantics"] = "**Full-text statistical semantics**",
 
         // ---- PostgreSQL ----
         ["PostgreSQL/nulls-not-distinct"] = "**`NULLS NOT DISTINCT`**",

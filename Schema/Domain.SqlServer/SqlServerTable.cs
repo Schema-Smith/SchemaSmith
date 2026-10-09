@@ -114,8 +114,11 @@ namespace Schema.Domain.SqlServer
         [SchemaProperty(AuthoredOnly = true)]
         public bool UpdateFillFactor { get; set; }
 
-        [JsonProperty(Order = 107)]
-        public bool EnableCDC { get; set; }
+        // Unset is unmanaged, as EnableChangeTracking: only an explicit false turns CDC off, because disabling it drops the
+        // change table and its history, which no deploy can rebuild. Extraction writes true and never false.
+        [JsonProperty(Order = 107, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(Description = "Enable SQL Server Change Data Capture on this table (needs CDC enabled on the database). false disables it, dropping the change table and its history; leaving it out leaves the table's CDC as it is.")]
+        public bool? EnableCDC { get; set; }
 
         // #417. Where this table's CDC change table goes; overrides the template's CdcFilegroup. Null means
         // unmanaged. A change is honoured by rotating to a new capture instance, never by moving the old one.
@@ -130,6 +133,13 @@ namespace Schema.Domain.SqlServer
         [JsonProperty(Order = 124, NullValueHandling = NullValueHandling.Ignore)]
         [SchemaProperty(Description = "Whether this table's CDC capture instance supports net changes (sp_cdc_enable_table @supports_net_changes); overrides the template's CdcSupportsNetChanges. Only meaningful with EnableCDC, and true needs a primary key. Unset: off for a new table, unchanged on rotation. A change creates a new capture instance; the old one keeps its history.")]
         public bool? CdcSupportsNetChanges { get; set; }
+
+        // Passed to sp_cdc_enable_table as @index_name. Table-level only: an index name means nothing on another table.
+        // Null keeps what SQL Server chooses (the primary key), and a rotation keeps the current instance's index.
+        [JsonProperty(Order = 125, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(MaxLength = 128,
+            Description = "The unique index this table's CDC capture instance identifies rows by (sp_cdc_enable_table @index_name), instead of the primary key. Must name one of this table's declared unique indexes, over NOT NULL columns. Lets CdcSupportsNetChanges be true on a table with no primary key. Only meaningful with EnableCDC. A change creates a new capture instance; the old one keeps its history.")]
+        public string CdcIndexName { get; set; }
 
         // Table-level Change Tracking (#change-tracking). Distinct from the FullTextIndex option spelled
         // WITH CHANGE_TRACKING = AUTO|MANUAL|OFF, which is unrelated and already implemented.

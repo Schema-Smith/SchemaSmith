@@ -9,21 +9,24 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Schema.Domain;
 using Schema.Isolators;
+using Schema.Utility;
 
 namespace SchemaShears;
 
 public static class DropSuppressionStamp
 {
-    private static readonly Dictionary<string, string> CategoryToFlag =
+    // Indexes covers both ways an index leaves a table: one the product no longer declares (owned, and dropped by
+    // default) and one the package never declared (out-of-band).
+    private static readonly Dictionary<string, string[]> CategoryToFlags =
         new(StringComparer.OrdinalIgnoreCase)
         {
-            ["Tables"]             = "DropTablesRemovedFromProduct",
-            ["Columns"]            = "DropColumnsRemovedFromProduct",
-            ["Indexes"]            = "DropUnknownIndexes",
-            ["ForeignKeys"]        = "DropForeignKeysRemovedFromProduct",
-            ["CheckConstraints"]   = "DropCheckConstraintsRemovedFromProduct",
-            ["ExcludeConstraints"] = "DropExcludeConstraintsRemovedFromProduct",
-            ["Statistics"]         = "DropStatisticsRemovedFromProduct",
+            ["Tables"]             = ["DropTablesRemovedFromProduct"],
+            ["Columns"]            = ["DropColumnsRemovedFromProduct"],
+            ["Indexes"]            = ["DropUnknownIndexes", "DropIndexesRemovedFromProduct"],
+            ["ForeignKeys"]        = ["DropForeignKeysRemovedFromProduct"],
+            ["CheckConstraints"]   = ["DropCheckConstraintsRemovedFromProduct"],
+            ["ExcludeConstraints"] = ["DropExcludeConstraintsRemovedFromProduct"],
+            ["Statistics"]         = ["DropStatisticsRemovedFromProduct"],
         };
 
     public static void Apply(string productJsonPath, IReadOnlyCollection<string> allowDrops)
@@ -32,22 +35,23 @@ public static class DropSuppressionStamp
             throw new PatchBuildException($"Product.json not found in patch output: '{productJsonPath}'.");
 
         var unknown = allowDrops
-            .Where(c => !CategoryToFlag.ContainsKey(c))
+            .Where(c => !CategoryToFlags.ContainsKey(c))
             .ToList();
 
         if (unknown.Count > 0)
         {
-            var valid = string.Join(", ", CategoryToFlag.Keys);
+            var valid = string.Join(", ", CategoryToFlags.Keys);
             throw new PatchBuildException(
                 $"Unknown drop category '{unknown[0]}'. Valid categories: {valid}.");
         }
 
-        var json = JObject.Parse(FileWrapper.GetFromFactory().ReadAllText(productJsonPath));
+        var json = JsonText.ParseObject(FileWrapper.GetFromFactory().ReadAllText(productJsonPath));
         var platform = Enum.TryParse<Platform>(json["Platform"]?.Value<string>(), ignoreCase: true, out var p) ? p : Platform.Unknown;
 
-        foreach (var (category, flag) in CategoryToFlag)
+        foreach (var (category, flags) in CategoryToFlags)
         {
-            if (!allowDrops.Contains(category, StringComparer.OrdinalIgnoreCase) && AppliesTo(flag, platform))
+            if (allowDrops.Contains(category, StringComparer.OrdinalIgnoreCase)) continue;
+            foreach (var flag in flags.Where(f => AppliesTo(f, platform)))
                 json[flag] = false;
         }
 

@@ -311,7 +311,13 @@ public class ForgeKindlerTests
         //   passes that add computed and FILESTREAM columns; a capture instance records only the columns that exist).
         // +1 = SchemaSmith.CdcPreflight (#427 -- the template CDC defaults and the capture-instance limit, resolved
         //   before any table or column is created, on every run including a resumed one).
-        Assert.That(sqlServer.Length, Is.EqualTo(44));
+        // +1 = SchemaSmith.DegradeDatabaseToggles (#432 -- the CDC and Change Tracking degrade, split out so it can be
+        //   judged after the Before slot, which can enable either one).
+        // +1 = SchemaSmith.fn_EnterpriseFeaturesUnavailable (SS-053 -- compression and columnstore are Enterprise-only
+        //   below SQL Server 2016 SP1, so the index and table degrades ask the edition as well as the version).
+        // +1 = SchemaSmith.DegradeUnsupportedFullText (SS-054 -- STATISTICAL_SEMANTICS without a registered semantic
+        //   database; called after the full-text parse on both the table and --IndexOnly paths).
+        Assert.That(sqlServer.Length, Is.EqualTo(48));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -492,6 +498,21 @@ public class ForgeKindlerTests
             // The two stamps differ, so switching a database's encoding always re-kindles.
             Assert.That(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, IngestEncoding.Xml),
                 Is.Not.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, IngestEncoding.Json)));
+        });
+    }
+
+    // #CdcRotate is created in three places, and a column added to one copy and not the others failed every deploy.
+    [TestCase("SchemaSmith.TableQuench.sql", true)]
+    [TestCase("SchemaSmith.ModifiedTableQuench.sql", false)]
+    public void ResolveKindleScript_CreatesCdcRotateFromTheOneDefinition(string fileName, bool replaceParseJson)
+    {
+        var raw = ResourceLoader.Load(fileName, Platform.SqlServer);
+        var resolved = ForgeKindler.ResolveKindleScript(fileName, Platform.SqlServer, replaceParseJson, replaceTableDef: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(raw, Does.Not.Contain("CREATE TABLE #CdcRotate"), "the script must take the definition from the token");
+            Assert.That(resolved, Does.Contain(ForgeKindler.SqlServerCdcRotateTable).And.Not.Contain("{{CdcRotateTable}}"));
         });
     }
 

@@ -22,6 +22,7 @@ public static class Program
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;
         var config = ConfigHelper.GetAppSettingsAndUserSecrets("SchemaQuench", LogFactory.GetLogger("ProgressLog").Info);
         CommandLineParser.WarnOnUnrecognizedArguments(KnownArguments, LogFactory.GetLogger("ProgressLog").Warn);
+        ConfigHelper.CheckStartupSettings(config, LogFactory.GetLogger("ProgressLog").Warn);
         SettingsContract.WarnOnUnrecognizedKeys(config, SettingsTool.SchemaQuench, LogFactory.GetLogger("ProgressLog").Warn);
 
         RegisterCheckpointing();

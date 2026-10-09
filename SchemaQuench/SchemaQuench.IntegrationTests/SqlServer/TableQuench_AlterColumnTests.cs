@@ -494,6 +494,66 @@ public class TableQuench_AlterColumnTests : BaseTableQuenchTests
     }
 
 
+    // An unchanged computed column that reads an altered column must come off and go back on, or SQL Server refuses
+    // the ALTER COLUMN (5074). One that reads a different column must be left alone: c reads ab, whose name contains
+    // a's, and matching the expression text used to drop and rebuild it for nothing.
+    [Test]
+    public void TableQuench_ShouldAlterAColumnAnUnchangedComputedColumnReads()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+
+        cmd.CommandText = "SELECT CAST(COLUMNPROPERTY(OBJECT_ID('dbo.ComputedOverAltered'), 'a', 'AllowsNull') AS INT)";
+        Assert.That(cmd.ExecuteScalar(), Is.EqualTo(0), "the ALTER COLUMN on a must have been applied");
+        cmd.CommandText = "SELECT [name] + ':' + CAST(column_id AS VARCHAR(10)) FROM sys.computed_columns WHERE [object_id] = OBJECT_ID('dbo.ComputedOverAltered') ORDER BY [name]";
+        var computed = new System.Collections.Generic.List<string>();
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read()) computed.Add(reader.GetString(0));
+        Assert.That(computed, Has.Count.EqualTo(2), "both computed columns must still exist");
+        Assert.That(computed, Does.Contain("c:5"), "c reads ab, not a, so it must not have been dropped and re-added");
+        conn.Close();
+    }
+
+    [Test]
+    public void TableQuench_ShouldMakeTypedXmlADocument()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+
+        cmd.CommandText = "SELECT CAST(is_xml_document AS INT) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.TypedXmlToDocument') AND [name] = 'Body'";
+        Assert.That(cmd.ExecuteScalar(), Is.EqualTo(1), "a column declared XML(DOCUMENT ...) must be a document column");
+        Assert.That(GetColumnDataType(cmd, "TypedXmlToDocument", "Body"), Is.EqualTo("XML(DOCUMENT [dbo].[AlterXsc])").IgnoreCase);
+        conn.Close();
+    }
+
+    // A type change must not reset a character column's collation: ALTER COLUMN without COLLATE moves it to the
+    // database default, and refuses outright (5074) when the column is indexed.
+    [TestCase("Declared", "Latin1_General_100_CS_AS")]
+    [TestCase("Ignored", "Latin1_General_100_CS_AS")]
+    [TestCase("Indexed", "Latin1_General_100_CS_AS")]
+    [TestCase("DbDefault", null)]
+    public void TableQuench_ShouldKeepCollationWhenTheTypeChanges(string column, string expectedCollation)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+
+        cmd.CommandText = "SELECT CAST(DATABASEPROPERTYEX(DB_NAME(), 'COLLATION') AS VARCHAR(200))";
+        var dbCollation = cmd.ExecuteScalar() as string;
+        Assert.That(dbCollation, Is.Not.EqualTo("Latin1_General_100_CS_AS"), "the test needs a non-default collation");
+
+        Assert.That(GetColumnDataType(cmd, "KeepCollationOnTypeChange", column), Is.EqualTo("VARCHAR(20)"),
+            "the type change must have been applied");
+        cmd.CommandText = "SELECT collation_name FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.KeepCollationOnTypeChange') AND [name] = '" + column + "'";
+        Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo(expectedCollation ?? dbCollation));
+        conn.Close();
+    }
+
     [Test]
     public void TableQuench_ShouldAlterColmnSparseness()
     {
@@ -615,6 +675,14 @@ CREATE TABLE dbo.AddNotForReplicationToExistingColumn (Column1 INT IDENTITY(1,1)
 CREATE TABLE dbo.RemoveNotForReplicationFromExistingColumn (Column1 INT IDENTITY(1,1) NOT FOR REPLICATION NOT NULL, Column2 UNIQUEIDENTIFIER NOT NULL)
 --TableQuench_ShouldModifyColumnCollation
 CREATE TABLE dbo.ModifyColumnCollation (Column1 VARCHAR(10) COLLATE Latin1_General_CS_AS NULL, Column2 VARCHAR(10) NULL, Column3 VARCHAR(10) COLLATE Latin1_General_CS_AS NULL)
+--TableQuench_ShouldKeepCollationWhenTheTypeChanges
+CREATE TABLE dbo.KeepCollationOnTypeChange (Declared VARCHAR(10) COLLATE Latin1_General_100_CS_AS NULL, Ignored VARCHAR(10) COLLATE Latin1_General_100_CS_AS NULL, Indexed VARCHAR(10) COLLATE Latin1_General_100_CS_AS NOT NULL, DbDefault VARCHAR(10) NULL)
+CREATE INDEX IX_KeepCollationOnTypeChange_Indexed ON dbo.KeepCollationOnTypeChange (Indexed)
+--TableQuench_ShouldAlterAColumnAnUnchangedComputedColumnReads
+CREATE TABLE dbo.ComputedOverAltered (Id INT NOT NULL PRIMARY KEY, a NVARCHAR(128) NULL, ab INT NULL, b AS ('x' + [a]), c AS ([ab] * 2) PERSISTED)
+--TableQuench_ShouldMakeTypedXmlADocument
+CREATE XML SCHEMA COLLECTION dbo.AlterXsc AS N'<xsd:schema xmlns:xsd=""http://www.w3.org/2001/XMLSchema""><xsd:element name=""r"" type=""xsd:string""/></xsd:schema>'
+EXEC('CREATE TABLE dbo.TypedXmlToDocument (Id INT NOT NULL, Body XML(CONTENT dbo.AlterXsc) NULL)')
 --TableQuench_ShouldAlterColmnSparseness
 CREATE TABLE dbo.ModifyColmnSparseness (Column1 INT SPARSE NULL, Column2 INT NULL)
 --TableQuench_ShouldAlterColmnDataMasking
@@ -1203,6 +1271,38 @@ CREATE TABLE dbo.ModifyColmnDataMasking (Column1 VARCHAR(100) MASKED WITH (FUNCT
                       "Nullable": true,
                       "Collation": "IGNORE"
                     }
+                ]
+            },
+            {
+                "Schema": "[dbo]",
+                "Name": "[ComputedOverAltered]",
+                "Columns": [
+                    { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                    { "Name": "[a]", "DataType": "NVARCHAR(128)", "Nullable": false },
+                    { "Name": "[ab]", "DataType": "INT", "Nullable": true },
+                    { "Name": "[b]", "DataType": "NVARCHAR(129)", "Nullable": true, "ComputedExpression": "'x'+[a]" },
+                    { "Name": "[c]", "DataType": "INT", "Nullable": true, "ComputedExpression": "[ab]*(2)", "Persisted": true }
+                ]
+            },
+            {
+                "Schema": "[dbo]",
+                "Name": "[TypedXmlToDocument]",
+                "Columns": [
+                    { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                    { "Name": "[Body]", "DataType": "XML(DOCUMENT [dbo].[AlterXsc])", "Nullable": true }
+                ]
+            },
+            {
+                "Schema": "[dbo]",
+                "Name": "[KeepCollationOnTypeChange]",
+                "Columns": [
+                    { "Name": "[Declared]", "DataType": "VARCHAR(20)", "Nullable": true, "Collation": "Latin1_General_100_CS_AS" },
+                    { "Name": "[Ignored]", "DataType": "VARCHAR(20)", "Nullable": true, "Collation": "IGNORE" },
+                    { "Name": "[Indexed]", "DataType": "VARCHAR(20)", "Nullable": false, "Collation": "Latin1_General_100_CS_AS" },
+                    { "Name": "[DbDefault]", "DataType": "VARCHAR(20)", "Nullable": true, "Collation": "" }
+                ],
+                "Indexes": [
+                    { "Name": "[IX_KeepCollationOnTypeChange_Indexed]", "IndexColumns": "[Indexed]" }
                 ]
             },
             {
