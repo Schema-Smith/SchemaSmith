@@ -242,14 +242,14 @@ public class DatabaseQuench
     // until PrepareVersionScriptTokens runs (test-only entry points that bypass Execute).
     private List<KeyValuePair<string, string>> _versionScriptTokens;
 
-    // Per-iteration content built by PrepareIterationContent at the start of Execute(). For schema-
-    // template iterations the script collections are cloned (isolating {{SchemaName}}-substituted
-    // batches from sibling iterations that share the same in-memory Template) and the table / view
-    // JSON carries the substituted schema. For regular templates the collections alias _template's
-    // own collections (preserving the cross-iteration HasBeenQuenched semantics the engine relies on)
-    // and the schema strings stay null so the accessor properties below fall back to _template.<field>
-    // — no substitution, no behavior change. That fall-back also lets test-only entry points that call
-    // the Quench* methods directly (bypassing Execute → PrepareIterationContent) keep working.
+    // Per-iteration content built by PrepareIterationContent at the start of Execute(). Every iteration
+    // gets its own clones of the script collections, because a script's HasBeenQuenched and its
+    // token-substituted batches belong to one database: shared across the databases a regular template
+    // fans out to, a script applied in one was skipped in the rest, and the first database's query-token
+    // values reached them all (#475). Schema-template iterations also carry the substituted schema in the
+    // table / view JSON; for regular templates those strings stay null so the accessor properties below
+    // fall back to _template.<field>, which also lets test-only entry points that call the Quench*
+    // methods directly (bypassing Execute → PrepareIterationContent) keep working.
     private readonly IterationContent _iteration = new();
 
     // Relative paths of scripts in folders skipped by a ShouldApplyExpression this iteration. A
@@ -343,30 +343,17 @@ public class DatabaseQuench
         bool Survives(TemplateFolder f) => !skip.Contains(f);
         List<SqlScript> Scripts(IEnumerable<TemplateFolder> folders) => folders.Where(Survives).SelectMany(f => f.Scripts).ToList();
 
-        if (string.IsNullOrEmpty(_schemaName))
-        {
-            // Regular template: rebuild as freshly-allocated lists that still hold the SAME SqlScript
-            // references (filter, never clone). List identity is not preserved — but it never was, since
-            // the _template.*Scripts accessors allocate a new list per call too — and reference identity
-            // IS, so the cross-iteration HasBeenQuenched dedup the engine relies on keeps working.
-            _iteration.BeforeScripts = Scripts(_template.BeforeFolders);
-            _iteration.ObjectScripts = Scripts(_template.ObjectFolders);
-            _iteration.AfterTablesObjectScripts = Scripts(_template.AfterTablesObjectFolders);
-            _iteration.BetweenTablesAndKeysScripts = Scripts(_template.BetweenTablesAndKeysFolders);
-            _iteration.AfterTableScripts = Scripts(_template.AfterTableFolders);
-            _iteration.TableDataScripts = Scripts(_template.TableDataFolders);
-            _iteration.AfterScripts = Scripts(_template.AfterFolders);
-            return;
-        }
-
-        var schemaNameTokens = new List<KeyValuePair<string, string>> { new("SchemaName", _schemaName) };
-        _iteration.BeforeScripts = CloneAndSubstitute(Scripts(_template.BeforeFolders), schemaNameTokens);
-        _iteration.ObjectScripts = CloneAndSubstitute(Scripts(_template.ObjectFolders), schemaNameTokens);
-        _iteration.AfterTablesObjectScripts = CloneAndSubstitute(Scripts(_template.AfterTablesObjectFolders), schemaNameTokens);
-        _iteration.BetweenTablesAndKeysScripts = CloneAndSubstitute(Scripts(_template.BetweenTablesAndKeysFolders), schemaNameTokens);
-        _iteration.AfterTableScripts = CloneAndSubstitute(Scripts(_template.AfterTableFolders), schemaNameTokens);
-        _iteration.TableDataScripts = CloneAndSubstitute(Scripts(_template.TableDataFolders), schemaNameTokens);
-        _iteration.AfterScripts = CloneAndSubstitute(Scripts(_template.AfterFolders), schemaNameTokens);
+        // Gating runs before any script does, so re-copying from the template loses no progress.
+        var copy = IterationCopier(string.IsNullOrEmpty(_schemaName)
+            ? []
+            : new List<KeyValuePair<string, string>> { new("SchemaName", _schemaName) });
+        _iteration.BeforeScripts = copy(Scripts(_template.BeforeFolders));
+        _iteration.ObjectScripts = copy(Scripts(_template.ObjectFolders));
+        _iteration.AfterTablesObjectScripts = copy(Scripts(_template.AfterTablesObjectFolders));
+        _iteration.BetweenTablesAndKeysScripts = copy(Scripts(_template.BetweenTablesAndKeysFolders));
+        _iteration.AfterTableScripts = copy(Scripts(_template.AfterTableFolders));
+        _iteration.TableDataScripts = copy(Scripts(_template.TableDataFolders));
+        _iteration.AfterScripts = copy(Scripts(_template.AfterFolders));
     }
 
     internal string IterationTableSchema => _iteration.TableSchema ?? _template.TableSchema ?? "";
@@ -1080,9 +1067,9 @@ public class DatabaseQuench
     /// <summary>
     /// Populates the per-iteration script collections and validation-script strings.
     /// <para>
-    /// For <b>regular templates</b>: the iteration fields point directly at the
-    /// shared <c>_template.&lt;slot&gt;Scripts</c> collections — no clone, no
-    /// substitution, behaviour identical to the pre-schema-templates engine.
+    /// For <b>regular templates</b>: every script collection is cloned, with no
+    /// substitution, so each database the template fans out to has its own
+    /// <c>HasBeenQuenched</c> state and its own query-token values (#475).
     /// </para>
     /// <para>
     /// For <b>schema templates</b>: every script collection is deep-cloned so that
@@ -1099,22 +1086,16 @@ public class DatabaseQuench
     {
         if (string.IsNullOrEmpty(_schemaName))
         {
-            // Regular templates intentionally use the existing computed-script accessors (which
-            // allocate a fresh List<SqlScript> per access but share the SqlScript references).
-            // This preserves today's shared-state behavior across parallel iterations — multiple
-            // regular-template DatabaseQuench instances on the same Template observe each other's
-            // mutations to SqlScript.HasBeenQuenched, which is how the engine avoids re-running an
-            // already-applied script on a sibling DB inside the same template. A future refactor
-            // that switches to per-iteration clones for regular templates would silently change
-            // observable script-mutation semantics — don't "fix" the aliasing without explicitly
-            // re-validating the regular-template parallel-DB scenarios.
-            _iteration.BeforeScripts = _template.BeforeScripts;
-            _iteration.ObjectScripts = _template.ObjectScripts;
-            _iteration.AfterTablesObjectScripts = _template.AfterTablesObjectScripts;
-            _iteration.BetweenTablesAndKeysScripts = _template.BetweenTablesAndKeysScripts;
-            _iteration.AfterTableScripts = _template.AfterTableScripts;
-            _iteration.TableDataScripts = _template.TableDataScripts;
-            _iteration.AfterScripts = _template.AfterScripts;
+            // Regular templates copy too: each database a template fans out to runs every script, with
+            // its own query-token values (#475). Nothing to substitute here.
+            var own = IterationCopier([]);
+            _iteration.BeforeScripts = own(_template.BeforeScripts);
+            _iteration.ObjectScripts = own(_template.ObjectScripts);
+            _iteration.AfterTablesObjectScripts = own(_template.AfterTablesObjectScripts);
+            _iteration.BetweenTablesAndKeysScripts = own(_template.BetweenTablesAndKeysScripts);
+            _iteration.AfterTableScripts = own(_template.AfterTableScripts);
+            _iteration.TableDataScripts = own(_template.TableDataScripts);
+            _iteration.AfterScripts = own(_template.AfterScripts);
             _iteration.BaselineValidationScript = _template.BaselineValidationScript;
             _iteration.VersionStampScript = _template.VersionStampScript;
             // _iteration.TableSchema / _iteration.MaterializedViewSchema deliberately left null —
@@ -1132,13 +1113,14 @@ public class DatabaseQuench
             new("SchemaName", _schemaName)
         };
 
-        _iteration.BeforeScripts = CloneAndSubstitute(_template.BeforeScripts, schemaNameTokens);
-        _iteration.ObjectScripts = CloneAndSubstitute(_template.ObjectScripts, schemaNameTokens);
-        _iteration.AfterTablesObjectScripts = CloneAndSubstitute(_template.AfterTablesObjectScripts, schemaNameTokens);
-        _iteration.BetweenTablesAndKeysScripts = CloneAndSubstitute(_template.BetweenTablesAndKeysScripts, schemaNameTokens);
-        _iteration.AfterTableScripts = CloneAndSubstitute(_template.AfterTableScripts, schemaNameTokens);
-        _iteration.TableDataScripts = CloneAndSubstitute(_template.TableDataScripts, schemaNameTokens);
-        _iteration.AfterScripts = CloneAndSubstitute(_template.AfterScripts, schemaNameTokens);
+        var copy = IterationCopier(schemaNameTokens);
+        _iteration.BeforeScripts = copy(_template.BeforeScripts);
+        _iteration.ObjectScripts = copy(_template.ObjectScripts);
+        _iteration.AfterTablesObjectScripts = copy(_template.AfterTablesObjectScripts);
+        _iteration.BetweenTablesAndKeysScripts = copy(_template.BetweenTablesAndKeysScripts);
+        _iteration.AfterTableScripts = copy(_template.AfterTableScripts);
+        _iteration.TableDataScripts = copy(_template.TableDataScripts);
+        _iteration.AfterScripts = copy(_template.AfterScripts);
 
         _iteration.BaselineValidationScript = SqlScript.TokenReplace(
             _template.BaselineValidationScript ?? "", schemaNameTokens, _product.Platform);
@@ -1165,13 +1147,20 @@ public class DatabaseQuench
         _iteration.SequenceSchema = (_template.SequenceSchema ?? "").Replace("{{SchemaName}}", _schemaName);
     }
 
-    private static List<SqlScript> CloneAndSubstitute(
-        List<SqlScript> source, List<KeyValuePair<string, string>> tokens)
+    // This iteration's own copy of each template script, made once and shared by every slot list the script is in.
+    // The Objects folders are also in AfterTablesObjectFolders, and the after-tables pass re-runs only what the first
+    // pass did not apply -- copied per list, every object script ran twice.
+    private static Func<List<SqlScript>, List<SqlScript>> IterationCopier(List<KeyValuePair<string, string>> tokens)
     {
-        var cloned = source.Select(s => s.Clone()).ToList();
-        foreach (var script in cloned)
-            script.ReplaceQueryTokens(tokens);
-        return cloned;
+        var copies = new Dictionary<SqlScript, SqlScript>();
+        return source => source.Select(script =>
+        {
+            if (copies.TryGetValue(script, out var copy)) return copy;
+            copy = script.Clone();
+            copy.ReplaceQueryTokens(tokens);
+            copies[script] = copy;
+            return copy;
+        }).ToList();
     }
 
     /// <summary>
@@ -1224,12 +1213,13 @@ public class DatabaseQuench
 
     private List<SqlScript> SubstituteVersionTokens(List<SqlScript> scripts)
     {
+        // The iteration's scripts are its own copies (IterationCopier), so substitute in place: a copy made here
+        // per list would split a script that is in two slot lists.
         if (scripts == null || !scripts.Any(s => s.Batches.Any(ContainsVersionToken)))
-            return scripts; // no version token present — keep the shared references (aliasing preserved)
-        var cloned = scripts.Select(s => s.Clone()).ToList();
-        foreach (var script in cloned)
+            return scripts;
+        foreach (var script in scripts)
             script.ReplaceQueryTokens(_versionScriptTokens);
-        return cloned;
+        return scripts;
     }
 
     private string SubstituteVersionTokens(string payload) =>
@@ -1354,14 +1344,12 @@ public class DatabaseQuench
     /// <summary>
     /// Resolves the template's <c>&lt;*Query*&gt;</c> tokens against the live silent command and
     /// applies the resolved values to every script in this iteration. <para>
-    /// Regular templates keep today's behavior — the <c>_template.QueryTokens</c> dict is mutated
-    /// in place and the substitution targets the shared script objects. (Idempotent because
-    /// SqlScript.TokenReplace only touches placeholders that still exist in the batch text, so a
-    /// second sibling DB's pass over already-resolved batches is a no-op.)
+    /// Query tokens are resolved into a per-iteration dictionary (NOT the shared
+    /// <c>_template.QueryTokens</c>) and applied to this iteration's own cloned scripts, so each
+    /// database a regular template fans out to gets its own values (#475).
     /// </para>
     /// <para>
-    /// Schema templates take a different path: query tokens are resolved into a per-iteration
-    /// dictionary (NOT the shared <c>_template.QueryTokens</c>), with iteration-scoped tokens
+    /// Schema templates additionally have iteration-scoped tokens
     /// (those whose body references <c>{{SchemaName}}</c> directly or transitively per
     /// <see cref="Template.IsIterationScoped"/>) having <c>{{SchemaName}}</c> substituted in
     /// their bodies first. The resolved per-iteration map is then applied to the cloned
@@ -1372,20 +1360,11 @@ public class DatabaseQuench
     {
         if (_template.QueryTokens.Count == 0) return;
 
-        if (string.IsNullOrEmpty(_schemaName))
-        {
-            // Regular-template path: today's behavior — mutate the shared dict + scripts.
-            SafeProgressLog("  Resolving template query tokens");
-            TokenHelper.ResolveQueryTokens(_template.QueryTokens, _template.NonQueryTokens.ToList(),
-                silentCmd, Path.GetDirectoryName(_template.FilePath), _product.Platform);
-            foreach (var script in _template.ScriptFolders.SelectMany(f => f.Scripts))
-                script.ReplaceQueryTokens(_template.QueryTokens.ToList());
-            return;
-        }
-
-        // Schema-template path: resolve into a per-iteration copy so the next iteration of
-        // the same template starts from the template's pristine <*Query*> bodies.
-        SafeProgressLog("  Resolving template query tokens (per-iteration)");
+        // Resolve into a per-iteration copy so every iteration of the template -- each database of a regular
+        // template, each schema of a schema template -- starts from the template's pristine <*Query*> bodies.
+        // Resolving into the shared dictionary gave every later database the first one's values (#475).
+        var isSchemaIteration = !string.IsNullOrEmpty(_schemaName);
+        SafeProgressLog(isSchemaIteration ? "  Resolving template query tokens (per-iteration)" : "  Resolving template query tokens");
 
         // 1. Build the per-iteration NonQueryTokens list — any iteration-scoped non-query token
         //    body (one containing {{SchemaName}} directly or transitively) needs the substitution
@@ -1394,7 +1373,7 @@ public class DatabaseQuench
         var iterationNonQueryTokens = _template.NonQueryTokens
             .Select(kv =>
             {
-                if (_template.IsIterationScoped(kv.Key) && !string.IsNullOrEmpty(kv.Value))
+                if (isSchemaIteration && _template.IsIterationScoped(kv.Key) && !string.IsNullOrEmpty(kv.Value))
                 {
                     return new KeyValuePair<string, string>(kv.Key,
                         kv.Value.Replace("{{SchemaName}}", _schemaName, StringComparison.OrdinalIgnoreCase));
@@ -1411,7 +1390,7 @@ public class DatabaseQuench
         foreach (var kv in _template.QueryTokens)
         {
             var body = kv.Value;
-            if (_template.IsIterationScoped(kv.Key) && !string.IsNullOrEmpty(body))
+            if (isSchemaIteration && _template.IsIterationScoped(kv.Key) && !string.IsNullOrEmpty(body))
                 body = body.Replace("{{SchemaName}}", _schemaName, StringComparison.OrdinalIgnoreCase);
             iterationQueryTokens[kv.Key] = body;
         }
