@@ -704,7 +704,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// </summary>
     private static IEnumerable<Finding> CheckCdcFilegroup(Table table, string tableLocation)
     {
-        if (table is not SqlServerTable ssTable || ssTable.EnableCDC || string.IsNullOrWhiteSpace(ssTable.CdcFilegroup)) yield break;
+        if (table is not SqlServerTable ssTable || ssTable.EnableCDC == true || string.IsNullOrWhiteSpace(ssTable.CdcFilegroup)) yield break;
 
         yield return new Finding(Severity.Warning, CdcFilegroupInertCode, Category, tableLocation,
             $"Table '{table.Name}' sets CdcFilegroup '{ssTable.CdcFilegroup}' but not EnableCDC, so there is no change " +
@@ -717,7 +717,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// </summary>
     private static IEnumerable<Finding> CheckCdcSupportsNetChanges(Table table, string tableLocation)
     {
-        if (table is not SqlServerTable ssTable || ssTable.EnableCDC || ssTable.CdcSupportsNetChanges is not { } netChanges) yield break;
+        if (table is not SqlServerTable ssTable || ssTable.EnableCDC == true || ssTable.CdcSupportsNetChanges is not { } netChanges) yield break;
 
         yield return new Finding(Severity.Warning, CdcFilegroupInertCode, Category, tableLocation,
             $"Table '{table.Name}' sets CdcSupportsNetChanges {(netChanges ? "true" : "false")} but not EnableCDC, so there " +

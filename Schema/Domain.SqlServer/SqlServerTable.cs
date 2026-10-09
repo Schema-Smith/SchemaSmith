@@ -114,8 +114,11 @@ namespace Schema.Domain.SqlServer
         [SchemaProperty(AuthoredOnly = true)]
         public bool UpdateFillFactor { get; set; }
 
-        [JsonProperty(Order = 107)]
-        public bool EnableCDC { get; set; }
+        // Unset is unmanaged, as EnableChangeTracking: only an explicit false turns CDC off, because disabling it drops the
+        // change table and its history, which no deploy can rebuild. Extraction writes true and never false.
+        [JsonProperty(Order = 107, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(Description = "Enable SQL Server Change Data Capture on this table (needs CDC enabled on the database). false disables it, dropping the change table and its history; leaving it out leaves the table's CDC as it is.")]
+        public bool? EnableCDC { get; set; }
 
         // #417. Where this table's CDC change table goes; overrides the template's CdcFilegroup. Null means
         // unmanaged. A change is honoured by rotating to a new capture instance, never by moving the old one.

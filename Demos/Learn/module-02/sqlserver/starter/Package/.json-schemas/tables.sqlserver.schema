@@ -555,7 +555,8 @@
       "type": "boolean"
     },
     "EnableCDC": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Enable SQL Server Change Data Capture on this table (needs CDC enabled on the database). false disables it, dropping the change table and its history; leaving it out leaves the table's CDC as it is."
     },
     "HistoryTableSchema": {
       "type": "string"

@@ -17,6 +17,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
     public class XmlIngestEquivalenceTests : BaseTableQuenchTests
     {
         // A rich representative model exercising all 8 nested collections the parse shreds.
+        // A second table leaves the nullable flags out: unset must stay NULL on both paths (EnableCDC unset is unmanaged).
         private const string RichModelJson = @"[{
   ""Schema"":""dbo"",""Name"":""XmlEquivTable"",""CompressionType"":""PAGE"",""IsTemporal"":true,
   ""HistoryTableSchema"":""history"",""HistoryTableName"":""XmlEquivTable_Archive"",""HistoryRetentionPeriod"":""5 YEARS"",""FileGroup"":""FG_Test"",""UpdateFillFactor"":false,
@@ -52,6 +53,10 @@ namespace SchemaQuench.IntegrationTests.SqlServer
   ""FullTextIndex"":[
     {""Columns"":""Note LANGUAGE 1033 STATISTICAL_SEMANTICS, Body STATISTICAL_SEMANTICS"",""FullTextCatalog"":""ftCat"",""KeyIndex"":""PK_XmlEquivTable"",""ChangeTracking"":""AUTO"",""StopList"":""SYSTEM""}
   ]
+},
+{
+  ""Schema"":""dbo"",""Name"":""XmlEquivUnset"",
+  ""Columns"":[ {""Name"":""Id"",""DataType"":""INT"",""Nullable"":false} ]
 }]";
 
         // The 8 temp tables both parse scripts produce and every downstream proc consumes. #TableDefinitions

@@ -238,7 +238,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        (SELECT lds.[name] FROM sys.data_spaces lds
          JOIN sys.filegroups lfg ON lfg.data_space_id = lds.data_space_id AND lfg.is_default = 0
         WHERE lds.data_space_id = st.lob_data_space_id) AS [TextImageFileGroup],
-       CASE WHEN st.is_tracked_by_cdc = 1 THEN 'true' ELSE 'false' END AS [EnableCDC],
+       CASE WHEN st.is_tracked_by_cdc = 1 THEN 'true' END AS [EnableCDC],
        @v_CdcFilegroup AS [CdcFilegroup],
        CASE WHEN @v_CdcNetChanges = 1 THEN 'true' END AS [CdcSupportsNetChanges],
        @v_GraphType AS [GraphType],

@@ -48,7 +48,7 @@ BEGIN
         SELECT @@SPID, 'CDC (database not enabled)', T.[Schema] + '.' + T.[Name], 'downgraded'
           FROM #Tables T WITH (NOLOCK) WHERE T.EnableCDC = 1
       RAISERROR('  CDC skipped: not enabled on this database (EXEC sys.sp_cdc_enable_db to allow it - downgraded)', 10, 100) WITH NOWAIT
-      UPDATE #Tables SET EnableCDC = 0 WHERE EnableCDC = 1
+      UPDATE #Tables SET EnableCDC = NULL WHERE EnableCDC = 1
     END
   END
 
