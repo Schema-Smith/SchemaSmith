@@ -184,7 +184,9 @@ public static class ForgeKindler
         // deploy, while a declared-OFF table never converges. Both were observed on a real 2025 server
         // before this was split into two tokens. Deriving both from the same value makes that
         // disagreement impossible by construction.
-        script = script.Replace("{{CdcRotateTable}}", SqlServerCdcRotateTable);
+        script = script.Replace("{{CdcRotateTable}}", SqlServerCdcRotateTable)
+                       .Replace("{{RenderableIndexTypes}}", SqlServerRenderableIndexTypes)
+                       .Replace("{{CollectSelectiveXmlIndexes}}", SqlServerCollectSelectiveXmlIndexes);
 
         var xmlCompressionReadable = serverMajorVersion >= 17;
         script = script.Replace("{{XmlCompressionRead}}",
@@ -335,6 +337,20 @@ public static class ForgeKindler
         "CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(256) COLLATE DATABASE_DEFAULT, " +
         "OldCaptureInstance NVARCHAR(256) COLLATE DATABASE_DEFAULT, NewFilegroup NVARCHAR(256) COLLATE DATABASE_DEFAULT, NewNetChanges BIT, " +
         "NewIndexName NVARCHAR(256) COLLATE DATABASE_DEFAULT, Reason NVARCHAR(20) COLLATE DATABASE_DEFAULT)";
+
+    // The sys.indexes kinds a package can declare: clustered, nonclustered, both columnstores and memory-optimized hash.
+    // Anything else (spatial, JSON, vector) is left out of extraction and of the live scans, which would otherwise
+    // render it as a plain index: an undeployable package, or an index the deploy drops as unknown.
+    public const string SqlServerRenderableIndexTypes = "1, 2, 5, 6, 7";
+
+    // Selective XML indexes cannot be declared yet, and without xml_index_type they read as primary XML indexes. The
+    // column arrived with them (2012 SP1), so a server without it has none to leave out, and the read is dynamic so
+    // the procedure still installs there.
+    internal const string SqlServerCollectSelectiveXmlIndexes =
+        "IF OBJECT_ID('tempdb..#SelectiveXmlIndexes') IS NOT NULL DROP TABLE #SelectiveXmlIndexes\n" +
+        "CREATE TABLE #SelectiveXmlIndexes ([object_id] INT, index_id INT)\n" +
+        "IF COL_LENGTH('sys.xml_indexes', 'xml_index_type') IS NOT NULL\n" +
+        "  EXEC('INSERT #SelectiveXmlIndexes SELECT [object_id], index_id FROM sys.xml_indexes WHERE xml_index_type NOT IN (0, 1)')";
 
     internal readonly record struct KindleScript(string FileName, bool ReplaceParseJson = false, bool ReplaceTableDef = false);
 

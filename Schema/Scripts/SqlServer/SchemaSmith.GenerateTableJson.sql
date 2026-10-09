@@ -65,6 +65,7 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_en
      ORDER BY ct.create_date DESC, ct.[object_id] DESC;',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Net BIT OUTPUT, @p_Idx NVARCHAR(260) OUTPUT',
     @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Net = @v_CdcNetChanges OUTPUT, @p_Idx = @v_CdcIndexName OUTPUT
+{{CollectSelectiveXmlIndexes}}
 SELECT [Line] FROM SchemaSmith.fn_FormatJson(REPLACE(REPLACE(REPLACE((
 SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        QUOTENAME(TABLE_NAME) AS [Name],
@@ -337,6 +338,8 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
           FROM sys.indexes si
           WHERE si.[object_id] = st.[object_id]
             AND NOT EXISTS (SELECT * FROM sys.xml_indexes xi WHERE xi.[object_id] = si.[object_id] AND xi.index_id = si.index_id)
+            -- Kinds a package cannot declare yet (spatial, JSON) are left out, and SchemaTongs warns for each.
+            AND si.[type] IN ({{RenderableIndexTypes}})
             AND is_hypothetical = 0
             AND is_disabled = 0
             AND index_id > 0
@@ -360,6 +363,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
           FROM sys.xml_indexes i
           JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
           WHERE i.[object_id] = st.[object_id]
+            AND NOT EXISTS (SELECT 1 FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id)
           ORDER BY i.[Name]
           FOR JSON AUTO) AS [XmlIndexes],
 	   (SELECT QUOTENAME([Name]) AS [Name],

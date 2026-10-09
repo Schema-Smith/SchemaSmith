@@ -146,6 +146,8 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_en
   EXEC sp_executesql N'SELECT TOP 1 @p_Net = CASE WHEN ct.supports_net_changes = 1 AND i.index_id IS NOT NULL THEN 1 ELSE 0 END, @p_Idx = CASE WHEN i.is_primary_key = 0 THEN QUOTENAME(i.[name]) END FROM cdc.change_tables ct WITH (NOLOCK) LEFT JOIN sys.indexes i ON i.[object_id] = ct.source_object_id AND i.[name] = ct.index_name WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC',
     N'@p_ObjId INT, @p_Net BIT OUTPUT, @p_Idx NVARCHAR(260) OUTPUT', @p_ObjId = @v_ObjectId, @p_Net = @v_CdcNetChanges OUTPUT, @p_Idx = @v_CdcIndexName OUTPUT
 
+{{CollectSelectiveXmlIndexes}}
+
 -- Memory-optimized (Hekaton) is 2014 (major 12); is_memory_optimized / durability_desc are 2014 columns,
 -- staged behind the >= 12 guard (like @v_GraphType/@v_Ledger) and simply 0/NULL below it, where a
 -- memory-optimized table cannot exist. Without this the XML tier (compat-100 / genuine 2014) extracted a
@@ -378,6 +380,8 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
           FROM sys.indexes si
           WHERE si.[object_id] = st.[object_id]
             AND NOT EXISTS (SELECT * FROM sys.xml_indexes xi WHERE xi.[object_id] = si.[object_id] AND xi.index_id = si.index_id)
+            -- Kinds a package cannot declare yet (spatial, JSON) are left out, and SchemaTongs warns for each.
+            AND si.[type] IN ({{RenderableIndexTypes}})
             AND is_hypothetical = 0
             AND is_disabled = 0
             AND index_id > 0
@@ -401,6 +405,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
           FROM sys.xml_indexes i
           JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
           WHERE i.[object_id] = st.[object_id]
+            AND NOT EXISTS (SELECT 1 FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id)
           ORDER BY i.[Name]
           FOR XML PATH('XmlIndexes'), TYPE),
 	   (SELECT 'true' AS [@json:Array],
