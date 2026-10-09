@@ -225,7 +225,7 @@ BEGIN TRY
                                      AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
     LEFT JOIN sys.partitions p ON p.[object_id] = si.[object_id]
                                             AND p.index_id = si.index_id
-    WHERE COALESCE(p.data_compression_desc COLLATE DATABASE_DEFAULT, 'NONE') <> CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END
+    WHERE ISNULL(i.[CompressionType], '') <> 'MIXED' AND COALESCE(p.data_compression_desc COLLATE DATABASE_DEFAULT, 'NONE') <> CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Collect Existing Index Definitions', 10, 100) WITH NOWAIT
