@@ -132,7 +132,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        (SELECT lds.[name] FROM sys.data_spaces lds
          JOIN sys.filegroups lfg ON lfg.data_space_id = lds.data_space_id AND lfg.is_default = 0
         WHERE lds.data_space_id = st.lob_data_space_id) AS [TextImageFileGroup],
-       st.is_tracked_by_cdc AS [EnableCDC],
+       -- Emitted only when tracked, like EnableChangeTracking: an explicit false would turn CDC off on a target where it
+       -- was enabled outside the package.
+       CASE WHEN st.is_tracked_by_cdc = 1 THEN CAST(1 AS BIT) END AS [EnableCDC],
        @v_CdcFilegroup AS [CdcFilegroup],
        CASE WHEN @v_CdcNetChanges = 1 THEN CAST(1 AS BIT) END AS [CdcSupportsNetChanges],
        -- Graph tables (#graph). Emitted only when the table IS one, so no existing package gains a

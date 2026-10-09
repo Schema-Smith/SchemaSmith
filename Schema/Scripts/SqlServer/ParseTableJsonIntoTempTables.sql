@@ -125,7 +125,7 @@
     [FileStreamFileGroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [TextImageFileGroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [UpdateFillFactor] BIT NOT NULL,
-    [EnableCDC] BIT NOT NULL,
+    [EnableCDC] BIT NULL,
     [CdcFilegroup] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [CdcSupportsNetChanges] BIT NULL,
     [EnableChangeTracking] BIT NULL,
@@ -464,7 +464,6 @@
         [Ledger] = RTRIM(ISNULL([Ledger], 'Off')),
         [MemoryOptimized] = ISNULL([MemoryOptimized], 0),
         [Durability] = UPPER(RTRIM(ISNULL(NULLIF([Durability], ''), 'SCHEMA_AND_DATA'))),
-        [EnableCDC] = ISNULL([EnableCDC], 0),
         [TrackColumnsUpdated] = ISNULL([TrackColumnsUpdated], 0),
         [OldName] = SchemaSmith.fn_SafeBracketWrap([OldName]),
         [PreventDrop] = ISNULL([PreventDrop], 0)

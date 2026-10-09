@@ -6,6 +6,10 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **SQL Server: leaving `EnableCDC` out of a table now leaves its Change Data Capture as it is — #469.** It used to mean `false`, so a deploy disabled CDC on any table where it had been turned on outside the package, dropping the capture instances and their change history. `EnableCDC` now works like `EnableChangeTracking`: `true` turns CDC on, `false` turns it off, and leaving it out changes nothing. **A package that relied on leaving it out to turn CDC off must now say `"EnableCDC": false`.** SchemaTongs writes `EnableCDC` only for a tracked table.
+
 ### Added
 
 - **`--Validate` reports a foreign-key name used on two tables (`SS-FK-006`).** MySQL names foreign keys per database and SQL Server per schema, so the second one fails the deploy: an error. MariaDB names them per table from 12.1, so there it is a warning, unless the product's `MinimumVersion` is 12.1 or later.

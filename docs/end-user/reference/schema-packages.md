@@ -530,7 +530,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | `Statistics` | array | `[]` | Custom statistics definitions. See [Statistics (SQL Server / PostgreSQL)](#statistics-sql-server--postgresql). |
 | `FullTextIndex` | object or array | `null` | Full-text index on the table -- a single definition, or an array of conditional variants. See [Full-Text Index (SQL Server)](#full-text-index-sql-server). |
 | `UpdateFillFactor` | bool | `false` | When `true`, index fill factors on this table are updated to match JSON definitions during quench. |
-| `EnableCDC` | bool | `false` | When `true`, the table is enabled for change data capture. Changing a tracked table's columns rotates to a new capture instance rather than discarding history -- see [Change Data Capture (SQL Server)](#change-data-capture-sql-server). |
+| `EnableCDC` | bool | | `true` enables change data capture on the table; `false` disables it, which drops its capture instances and their history. Leaving it out leaves the table's CDC as it is, so capture enabled outside the package survives a deploy. Changing a tracked table's columns rotates to a new capture instance rather than discarding history -- see [Change Data Capture (SQL Server)](#change-data-capture-sql-server). |
 | `CdcFilegroup` | string | | The filegroup this table's CDC change table goes on; overrides the template's `CdcFilegroup`. Only meaningful with `EnableCDC` (`--Validate` warns `SS-CDC-001` otherwise). See [Where change tables go](#where-change-tables-go). |
 | `CdcSupportsNetChanges` | bool | | Whether this table's capture instance supports net changes (`@supports_net_changes`); overrides the template's value. `true` needs a primary key. Only meaningful with `EnableCDC` (`--Validate` warns `SS-CDC-001` otherwise). See [Net changes](#net-changes). |
 | `EnableChangeTracking` | bool | | When `true`, the table is enabled for SQL Server change tracking; `false` disables it; left out, the table's tracking is left as it is. Requires Change Tracking enabled on the database -- see [Change Tracking (SQL Server)](#change-tracking-sql-server). Unrelated to the full-text index option also spelled `ChangeTracking`. |
@@ -1297,7 +1297,7 @@ The same rotation happens whenever a tracked table's newest capture instance doe
 
 > **Warning:** Because the old instance occupies one of the two slots, a **second** column change before you drop it has nowhere to rotate to. SchemaSmith refuses that deploy **before touching any column**, naming the tables at the limit and the command to clear them, so nothing is left half-applied. Drop the drained instance and re-run. If a table's newest instance is missing columns while both slots are in use, the deploy warns instead, naming the table.
 
-Setting `EnableCDC` back to `false` disables capture on the table outright, which drops its capture instances and their history. That is a deliberate opt-out rather than a side effect of a schema change.
+Setting `EnableCDC` to `false` disables capture on the table outright, which drops its capture instances and their history. That is a deliberate opt-out rather than a side effect of a schema change, so it takes an explicit `false`: a table that leaves `EnableCDC` out keeps whatever CDC it has, and SchemaTongs writes `EnableCDC` only for a tracked table.
 
 ### Where change tables go
 
