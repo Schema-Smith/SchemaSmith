@@ -1713,9 +1713,8 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
     // next run, which is exactly today's behaviour.
     // Owned by the session, not by ModifiedTableQuench: that procedure decides the CDC rotations, and CdcQuench applies
     // them later, once every column exists (#420). A temp table created inside a procedure dies when it returns.
-    private const string SqlServerCdcRotateTable = @"IF OBJECT_ID('tempdb..#CdcRotate') IS NOT NULL DROP TABLE #CdcRotate
-CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(256) COLLATE DATABASE_DEFAULT, OldCaptureInstance NVARCHAR(256) COLLATE DATABASE_DEFAULT,
-                         NewFilegroup NVARCHAR(256) COLLATE DATABASE_DEFAULT, NewNetChanges BIT, Reason NVARCHAR(20) COLLATE DATABASE_DEFAULT)";
+    private const string SqlServerCdcRotateTable = "IF OBJECT_ID('tempdb..#CdcRotate') IS NOT NULL DROP TABLE #CdcRotate\n"
+                                                   + ForgeKindler.SqlServerCdcRotateTable;
 
     // Runs before anything is created, on every run including a resumed one: neutralizes (or, under 'fail', refuses) what
     // the detected version cannot support (#425), then resolves the template's CDC defaults and refuses a change the

@@ -532,7 +532,8 @@ Each platform's table definition extends the shared properties with engine-speci
 | `UpdateFillFactor` | bool | `false` | When `true`, index fill factors on this table are updated to match JSON definitions during quench. |
 | `EnableCDC` | bool | | `true` enables change data capture on the table; `false` disables it, which drops its capture instances and their history. Leaving it out leaves the table's CDC as it is, so capture enabled outside the package survives a deploy. Changing a tracked table's columns rotates to a new capture instance rather than discarding history -- see [Change Data Capture (SQL Server)](#change-data-capture-sql-server). |
 | `CdcFilegroup` | string | | The filegroup this table's CDC change table goes on; overrides the template's `CdcFilegroup`. Only meaningful with `EnableCDC` (`--Validate` warns `SS-CDC-001` otherwise). See [Where change tables go](#where-change-tables-go). |
-| `CdcSupportsNetChanges` | bool | | Whether this table's capture instance supports net changes (`@supports_net_changes`); overrides the template's value. `true` needs a primary key. Only meaningful with `EnableCDC` (`--Validate` warns `SS-CDC-001` otherwise). See [Net changes](#net-changes). |
+| `CdcSupportsNetChanges` | bool | | Whether this table's capture instance supports net changes (`@supports_net_changes`); overrides the template's value. `true` needs a primary key, or a `CdcIndexName`. Only meaningful with `EnableCDC` (`--Validate` warns `SS-CDC-001` otherwise). See [Net changes](#net-changes). |
+| `CdcIndexName` | string | | The unique index this table's capture instance identifies rows by (`@index_name`), instead of the primary key. Must name one of the table's declared unique indexes, over `NOT NULL` columns (`--Validate` reports `SS-CDC-002` otherwise). Only meaningful with `EnableCDC` (`SS-CDC-001`). See [Identifying rows](#identifying-rows). |
 | `EnableChangeTracking` | bool | | When `true`, the table is enabled for SQL Server change tracking; `false` disables it; left out, the table's tracking is left as it is. Requires Change Tracking enabled on the database -- see [Change Tracking (SQL Server)](#change-tracking-sql-server). Unrelated to the full-text index option also spelled `ChangeTracking`. |
 | `TrackColumnsUpdated` | bool | `false` | Only meaningful with `EnableChangeTracking`. When `true`, change tracking records **which columns** changed, not merely that the row did, at the cost of extra tracking storage. |
 | `FileGroup` | string | `null` | Filegroup the table is stored on, as a **name only** -- never a file path, so the package stays portable across environments. **Leave it unset and SchemaSmith does not manage placement at all** — the table is created wherever SQL Server would put it, and an existing table is left exactly where it is, including on a filegroup someone placed it on by hand. SchemaSmith does not create filegroups: if the named one does not exist on the target the deploy fails. Moving an existing table to a different filegroup is a rebuild, so a declared name that differs from where the table already lives also fails -- migrate it manually. Removing the property again does not move anything back; it just stops SchemaSmith checking placement. Create filegroups in a migration script, supplying environment-specific paths through [script tokens](script-tokens.md). |
@@ -1333,9 +1334,25 @@ A capture instance either supports net changes or it doesn't. With net changes o
 - **Unset keeps SQL Server's usual result.** Off for a table created in the same deploy; SQL Server's own default, which is on when the table has a primary key, when CDC is turned on for a table that already exists.
 - **A rotation keeps it.** When a column or filegroup change rotates a table that declares no `CdcSupportsNetChanges`, the new instance keeps the value of the one it replaces.
 - **Changing it rotates.** SQL Server fixes net changes when a capture instance is created, so a declared value the newest instance doesn't have gets a new capture instance -- the same rotation, with the same rules, as a filegroup change.
-- **`true` needs a primary key.** Net changes identify rows by key, so a table that sets `true` without declaring a primary key fails the deploy before CDC is enabled, naming the table.
+- **`true` needs a key.** Net changes identify rows by key, so a table that sets `true` with neither a declared primary key nor a [`CdcIndexName`](#identifying-rows) fails the deploy before CDC is enabled, naming the table.
 
-SchemaTongs extracts `CdcSupportsNetChanges` from the newest capture instance, and only when it is on and the instance uses the primary key -- so a package whose instances have net changes off gains no new key. An instance set up by hand to use a unique index instead keeps that index when SchemaSmith rotates it.
+SchemaTongs extracts `CdcSupportsNetChanges` from the newest capture instance, and only when it is on -- so a package whose instances have net changes off gains no new key.
+
+### Identifying rows
+
+A capture instance identifies a row by the table's primary key unless it is told to use a unique index instead. Set `CdcIndexName` on the table to choose that index -- for a table with no primary key that needs net changes, or one whose readers key on something other than the primary key:
+
+```jsonc
+{ "Schema": "dbo", "Name": "Orders", "EnableCDC": true, "CdcSupportsNetChanges": true, "CdcIndexName": "UX_Orders_OrderNumber",
+  "Indexes": [ { "Name": "UX_Orders_OrderNumber", "Unique": true, "IndexColumns": "[OrderNumber]" } ] }
+```
+
+- **It must be a declared unique index over `NOT NULL` columns.** That is what SQL Server accepts, so a `CdcIndexName` that names no declared index, a non-unique one, or one with a nullable key column fails the deploy before CDC is enabled, naming the table and the problem. The index may be new in the same deploy: capture is enabled after indexes are created.
+- **Unset keeps the primary key.** With no `CdcIndexName`, SQL Server uses the primary key, and a rotation keeps whatever index the instance it replaces uses -- including one a DBA chose by hand.
+- **Changing it rotates.** A capture instance's index is fixed when it is created, so a declared index the newest instance doesn't use gets a new capture instance -- the same rotation, with the same rules, as a filegroup change.
+- **The index an instance uses stays put.** SQL Server will not drop an index any capture instance identifies rows by, and renaming one leaves the instance naming an index that no longer exists. So a deploy that would drop, rename, or redefine such an index -- the primary key included -- is refused before any index is touched, naming the index and the capture instance. To move off it: set `CdcIndexName` to another unique index and deploy, drain the old instance and drop it, then make the change.
+
+SchemaTongs extracts `CdcIndexName` from the newest capture instance when it uses an index other than the primary key, so a package whose instances use the primary key gains no new key.
 
 ---
 

@@ -1602,6 +1602,62 @@ public class CoherenceCheckTests
         Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-CDC-001"), Is.Empty);
     }
 
+    // CdcIndexName: the same inert warning without EnableCDC, and with it an error for anything SQL Server's
+    // @index_name refuses, which the deploy refuses by name too.
+    [Test]
+    public void CdcIndexNameWithoutEnableCdc_IsAnInertWarning()
+    {
+        var table = CdcIndexTable(enableCdc: null, cdcIndexName: "[UX_Code]");
+
+        var finding = RunFor(table, Platform.SqlServer).Single(f => f.Code == "SS-CDC-001");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Warning));
+            Assert.That(finding.Message, Does.Contain("Orders").And.Contain("CdcIndexName").And.Contain("EnableCDC"));
+        });
+    }
+
+    [TestCase("[UX_Missing]", "which is not one of its declared indexes")]
+    [TestCase("[IX_Plain]", "which is not unique")]
+    [TestCase("[UX_Note]", "which has a nullable key column")]
+    public void CdcIndexName_ThatSqlServerWouldRefuse_IsAnError(string cdcIndexName, string problem)
+    {
+        var table = CdcIndexTable(enableCdc: true, cdcIndexName: cdcIndexName);
+
+        var finding = RunFor(table, Platform.SqlServer).Single(f => f.Code == "SS-CDC-002");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Error));
+            Assert.That(finding.Message, Does.Contain("Orders").And.Contain(cdcIndexName).And.Contain(problem));
+        });
+    }
+
+    [TestCase("[UX_Code]")]
+    [TestCase("UX_Code")]
+    [TestCase("[ux_code]")]
+    [TestCase("[PK_Orders]")]
+    public void CdcIndexName_NamingADeclaredUniqueIndexOverNotNullColumns_IsSilent(string cdcIndexName)
+    {
+        var table = CdcIndexTable(enableCdc: true, cdcIndexName: cdcIndexName);
+
+        Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code.StartsWith("SS-CDC-")), Is.Empty);
+    }
+
+    private static SqlServerTable CdcIndexTable(bool? enableCdc, string cdcIndexName)
+    {
+        var table = new SqlServerTable { Schema = "dbo", Name = "Orders", EnableCDC = enableCdc, CdcIndexName = cdcIndexName };
+        table.Columns.Add(new SqlServerColumn { Name = "[Id]", DataType = "INT" });
+        table.Columns.Add(new SqlServerColumn { Name = "[Code]", DataType = "INT" });
+        table.Columns.Add(new SqlServerColumn { Name = "[Note]", DataType = "INT", Nullable = true });
+        table.Indexes.Add(new SqlServerIndex { Name = "[PK_Orders]", PrimaryKey = true, Unique = true, IndexColumns = "[Id]" });
+        table.Indexes.Add(new SqlServerIndex { Name = "[UX_Code]", Unique = true, IndexColumns = "[Code] DESC" });
+        table.Indexes.Add(new SqlServerIndex { Name = "[IX_Plain]", IndexColumns = "[Code]" });
+        table.Indexes.Add(new SqlServerIndex { Name = "[UX_Note]", Unique = true, IndexColumns = "[Code], [Note]" });
+        return table;
+    }
+
     private static System.Collections.Generic.List<Finding> RunFor(Table table, Platform platform)
     {
         var template = new Template { Name = "Main" };

@@ -184,6 +184,8 @@ public static class ForgeKindler
         // deploy, while a declared-OFF table never converges. Both were observed on a real 2025 server
         // before this was split into two tokens. Deriving both from the same value makes that
         // disagreement impossible by construction.
+        script = script.Replace("{{CdcRotateTable}}", SqlServerCdcRotateTable);
+
         var xmlCompressionReadable = serverMajorVersion >= 17;
         script = script.Replace("{{XmlCompressionRead}}",
                             xmlCompressionReadable ? "p.xml_compression" : "CONVERT(BIT, NULL)")
@@ -326,6 +328,14 @@ public static class ForgeKindler
     /// (ComputeKindleStamp) iterate this list, so the deployed text and the hashed text can
     /// never drift.
     /// </summary>
+    // The CDC rotations ModifiedTableQuench decides and CdcQuench applies. A temp table created inside a procedure dies
+    // when it returns, so whoever runs both creates it first: TableQuench, the deploy session, or ModifiedTableQuench
+    // when called on its own. One definition for all three, kindled in as {{CdcRotateTable}}.
+    internal const string SqlServerCdcRotateTable =
+        "CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(256) COLLATE DATABASE_DEFAULT, " +
+        "OldCaptureInstance NVARCHAR(256) COLLATE DATABASE_DEFAULT, NewFilegroup NVARCHAR(256) COLLATE DATABASE_DEFAULT, NewNetChanges BIT, " +
+        "NewIndexName NVARCHAR(256) COLLATE DATABASE_DEFAULT, Reason NVARCHAR(20) COLLATE DATABASE_DEFAULT)";
+
     internal readonly record struct KindleScript(string FileName, bool ReplaceParseJson = false, bool ReplaceTableDef = false);
 
     internal static KindleScript[] GetKindlingScripts(Platform platform, IngestEncoding encoding = IngestEncoding.Json)
@@ -384,6 +394,8 @@ public static class ForgeKindler
                 // per object PER DATABASE -- 328 lines of rare-attribute validation were being compiled on
                 // every first deploy to every database for a feature set most packages never touch.
                 new("SchemaSmith.ValidateDeclaredTableAttributes.sql"),
+                // Must precede ModifiedTableQuench, which CALLs it, for the same compile-cost reason.
+                new("SchemaSmith.CdcIndexGuard.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 new("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"),
                 // Must follow MissingIndexesAndConstraintsQuench: enabling change tracking requires a

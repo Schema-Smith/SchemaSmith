@@ -13,6 +13,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 ### Added
 
 - **`--Validate` reports a foreign-key name used on two tables (`SS-FK-006`).** MySQL names foreign keys per database and SQL Server per schema, so the second one fails the deploy: an error. MariaDB names them per table from 12.1, so there it is a warning, unless the product's `MinimumVersion` is 12.1 or later.
+- **SQL Server CDC can identify rows by a unique index (`CdcIndexName`).** Set it on a table and SchemaSmith passes it to `sp_cdc_enable_table` as `@index_name`, so a table with no primary key can have net changes, and a capture instance a DBA set up on a unique index round-trips: SchemaTongs extracts `CdcIndexName` when the newest instance uses an index other than the primary key, along with its net changes. A declared index the newest instance does not use rotates to a new capture instance, like a `CdcFilegroup` change; one that is not a declared unique index over `NOT NULL` columns is refused by name before CDC is enabled. `--Validate` reports it as `SS-CDC-002`, and `SS-CDC-001` now also warns when it is set without `EnableCDC`. A rotation that declares no index keeps the one the old instance used, with or without net changes. — #470
 
 ### Changed
 
@@ -46,6 +47,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **DataTongs broke text values containing `},{` when writing extracted JSON — #463.** Rows were split onto separate lines wherever `},{` appeared, including inside strings, so a SQL Server or PostgreSQL column holding `[{"a":1},{"b":2}]` produced a file that was not valid JSON. Line breaks now go between rows only; files without such values are written exactly as before.
 - **XML data delivery rounded wide numeric values — #465.** Converting extracted JSON to XML read numbers as doubles, so `12345678901234567890.123456789` lost its trailing digits. Each number is now carried as its literal text.
 - **DataTongs could match rows on a key that was not unique across the table — #466.** With no primary key, the merge key could come from a PostgreSQL partial or SQL Server filtered unique index, so rows sharing its value were merged into one: silently below PostgreSQL 15, and as a failed redelivery on 15+. A PostgreSQL expression index gave an empty or partial key, and `INCLUDE` columns were treated as key columns, so a changed included value inserted a duplicate. Only a unique index over the whole table is now used, and only its key columns.
+- **A deploy that would drop, rename or redefine an index a CDC capture instance uses is refused before any index is touched (SQL Server).** SQL Server refuses the drop itself, but only part-way through the index work, and it allows a rename that leaves the instance naming an index that is gone and free to be dropped. The refusal names the index and the capture instance, and how to move off it. — #470
 
 ## [v2.7.1](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) — 2026-10-01
 

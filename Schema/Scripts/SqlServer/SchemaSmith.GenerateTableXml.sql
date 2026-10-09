@@ -140,11 +140,11 @@ DECLARE @v_CdcFilegroup NVARCHAR(260) = NULL
 IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   EXEC sp_executesql N'SELECT @p_Fg = CASE WHEN fg.is_default = 0 THEN QUOTENAME(fg.[name]) END FROM (SELECT TOP 1 ct.filegroup_name FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest JOIN sys.filegroups fg ON fg.[name] = newest.filegroup_name',
     N'@p_ObjId INT, @p_Fg NVARCHAR(260) OUTPUT', @p_ObjId = @v_ObjectId, @p_Fg = @v_CdcFilegroup OUTPUT
--- #426. Net changes from the newest capture instance, emitted only when ON (see the JSON twin).
-DECLARE @v_CdcNetChanges BIT = NULL
+-- #426. Net changes and CdcIndexName from the newest capture instance (see the JSON twin).
+DECLARE @v_CdcNetChanges BIT = NULL, @v_CdcIndexName NVARCHAR(260) = NULL
 IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
-  EXEC sp_executesql N'SELECT TOP 1 @p_Net = CASE WHEN ct.supports_net_changes = 1 AND EXISTS (SELECT 1 FROM sys.indexes i WHERE i.[object_id] = ct.source_object_id AND i.[name] = ct.index_name AND i.is_primary_key = 1) THEN 1 ELSE 0 END FROM cdc.change_tables ct WITH (NOLOCK) WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC',
-    N'@p_ObjId INT, @p_Net BIT OUTPUT', @p_ObjId = @v_ObjectId, @p_Net = @v_CdcNetChanges OUTPUT
+  EXEC sp_executesql N'SELECT TOP 1 @p_Net = CASE WHEN ct.supports_net_changes = 1 AND i.index_id IS NOT NULL THEN 1 ELSE 0 END, @p_Idx = CASE WHEN i.is_primary_key = 0 THEN QUOTENAME(i.[name]) END FROM cdc.change_tables ct WITH (NOLOCK) LEFT JOIN sys.indexes i ON i.[object_id] = ct.source_object_id AND i.[name] = ct.index_name WHERE ct.source_object_id = @p_ObjId ORDER BY ct.create_date DESC, ct.[object_id] DESC',
+    N'@p_ObjId INT, @p_Net BIT OUTPUT, @p_Idx NVARCHAR(260) OUTPUT', @p_ObjId = @v_ObjectId, @p_Net = @v_CdcNetChanges OUTPUT, @p_Idx = @v_CdcIndexName OUTPUT
 
 -- Memory-optimized (Hekaton) is 2014 (major 12); is_memory_optimized / durability_desc are 2014 columns,
 -- staged behind the >= 12 guard (like @v_GraphType/@v_Ledger) and simply 0/NULL below it, where a
@@ -240,6 +240,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        CASE WHEN st.is_tracked_by_cdc = 1 THEN 'true' END AS [EnableCDC],
        @v_CdcFilegroup AS [CdcFilegroup],
        CASE WHEN @v_CdcNetChanges = 1 THEN 'true' END AS [CdcSupportsNetChanges],
+       @v_CdcIndexName AS [CdcIndexName],
        @v_GraphType AS [GraphType],
        @v_Ledger AS [Ledger],
        -- Memory-optimized round-trip (#J1/#8): emit only when true, matching the JSON twin. Read into
