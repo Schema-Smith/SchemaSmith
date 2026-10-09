@@ -490,6 +490,65 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
 ]
 """;
 
+    // SS-055. A memory-optimized table built by hand -- a hash primary key, a unique constraint, a unique index, a range
+    // index and a clustered columnstore -- must deploy from its own extraction and then redeploy as a no-op. The inline
+    // builder wrote the columnstore as NONCLUSTERED (), a syntax error, and wrote the unique constraint as an index.
+    [Test]
+    public void AHandBuiltMemoryOptimizedTable_DeploysFromItsOwnExtraction_AndRedeploysUnchanged()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var table = $"MOHand_{uid}";
+        var product = $"MOHandProduct_{uid}";
+
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            cmd.CommandText = $@"CREATE TABLE dbo.{table} (
+                Id INT NOT NULL CONSTRAINT PK_{table} PRIMARY KEY NONCLUSTERED HASH WITH (BUCKET_COUNT = 64),
+                Code INT NOT NULL, Ref INT NOT NULL, Val INT NULL,
+                CONSTRAINT UQ_{table}_Code UNIQUE NONCLUSTERED (Code),
+                INDEX UX_{table}_Ref UNIQUE NONCLUSTERED (Ref),
+                INDEX IX_{table}_Val NONCLUSTERED (Val),
+                INDEX CCI_{table} CLUSTERED COLUMNSTORE) WITH (MEMORY_OPTIMIZED = ON)";
+            cmd.ExecuteNonQuery();
+            var built = IndexShape(cmd, table);
+            var package = "[" + GenerateTableJsonText(cmd, table) + "]";
+
+            cmd.CommandText = $"DROP TABLE dbo.{table}";
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, package, productName: product);
+            Assert.That(IndexShape(cmd, table), Is.EqualTo(built), "the first deploy of the extraction must create the same indexes");
+
+            RunTableQuenchProc(cmd, package, productName: product);
+            Assert.That(IndexShape(cmd, table), Is.EqualTo(built), "and the redeploy must find nothing to change");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS [dbo].[{table}];";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // Each index as name:kind:unique:constraint, in name order.
+    private static string IndexShape(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"SELECT STRING_AGG(CONCAT(i.[name] COLLATE DATABASE_DEFAULT, ':', i.type_desc COLLATE DATABASE_DEFAULT, ':', i.is_unique, ':', i.is_unique_constraint | i.is_primary_key), ';')
+                                    WITHIN GROUP (ORDER BY i.[name])
+                               FROM sys.indexes i WHERE i.[object_id] = OBJECT_ID('dbo.{table}') AND i.index_id > 0";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    private static string GenerateTableJsonText(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJson @p_Schema = 'dbo', @p_Table = '{table}'";
+        using var reader = cmd.ExecuteReader();
+        var json = string.Empty;
+        while (reader.Read()) json += $"{reader.GetString(0)}\r\n";
+        return json;
+    }
+
     private static SqlServerTable GenerateTable(IDbCommand cmd, string table)
     {
         cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJson @p_Schema = 'dbo', @p_Table = '{table}'";
