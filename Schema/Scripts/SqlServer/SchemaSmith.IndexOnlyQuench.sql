@@ -275,6 +275,8 @@ BEGIN TRY
                                      AND si.index_id > 0
                                      AND is_hypothetical = 0
                                      AND is_disabled = 0
+                                     -- A kind a package cannot declare is neither compared nor dropped. XML (3) has its own scan.
+                                     AND si.[type] IN (3, {{RenderableIndexTypes}})
     LEFT JOIN sys.partitions p  ON p.[object_id] = si.[object_id]
                                              AND p.index_id = si.index_id
     CROSS APPLY (SELECT [WithOptions] =
@@ -353,6 +355,7 @@ BEGIN TRY
   END
 
   RAISERROR('Collect Existing XML Index Definitions', 10, 100) WITH NOWAIT
+  {{CollectSelectiveXmlIndexes}}
   DROP TABLE IF EXISTS #ExistingXmlIndexes
   SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(i.[Name] COLLATE DATABASE_DEFAULT AS NVARCHAR(500)),
          IndexScript = 'CREATE ' + CASE WHEN i.xml_index_type = 0 THEN 'PRIMARY ' ELSE '' END + 
@@ -367,6 +370,7 @@ BEGIN TRY
     JOIN sys.xml_indexes i ON i.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
     JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
     WHERE t.MissingTable = 0
+      AND NOT EXISTS (SELECT 1 FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id)
 
   RAISERROR('Detect Xml Index Changes', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #XmlIndexChanges
