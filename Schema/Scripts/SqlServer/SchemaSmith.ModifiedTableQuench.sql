@@ -144,7 +144,8 @@ BEGIN TRY
                  OR UPPER(RTRIM(ISNULL(t.[Durability], 'SCHEMA_AND_DATA'))) <> 'SCHEMA_AND_DATA'
                  OR ISNULL(t.[MemoryOptimized], 0) = 1
                  OR t.[CdcFilegroup] IS NOT NULL
-                 OR (t.[EnableCDC] = 1 AND t.[CdcSupportsNetChanges] = 1))
+                 OR (t.[EnableCDC] = 1 AND t.[CdcSupportsNetChanges] = 1)
+                 OR (t.[EnableCDC] = 1 AND t.[CdcIndexName] IS NOT NULL))
     SET @v_NeedsAttributeValidation = 1
 
   -- Deployed side. Version-composed because the catalog columns arrive in different releases and naming one
@@ -1304,6 +1305,11 @@ BEGIN TRY
     FROM #IndexRenames ir WITH (NOLOCK)
     GROUP BY [OldName]  
   DELETE FROM #IndexRenames WHERE EXISTS (SELECT * FROM #IndexRenameDedupe dd WITH (NOLOCK) WHERE [OriginalName] = [OldName] AND [ValidNewName] <> [NewName])
+
+  -- Every index rename and drop this run will make is known from here on, and none has run yet.
+  IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
+     AND EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name]) WHERE st.is_tracked_by_cdc = 1)
+    EXEC SchemaSmith.CdcIndexGuard @DropIndexesRemovedFromProduct = @DropIndexesRemovedFromProduct, @DropUnknownIndexes = @DropUnknownIndexes
   
   RAISERROR('Handle Renamed Indexes And Unique Constraints', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Renaming ' + [OldName] + ' to ' + [NewName] + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -1651,11 +1657,11 @@ BEGIN TRY
   -- A declared CdcFilegroup the newest capture instance is not on is a rotation reason too (#417): it can only be
   -- honoured by a new instance, and a new instance is exactly what a column change already creates. The same
   -- ceiling applies, for the same reason. So is a declared CdcSupportsNetChanges the newest instance does not have (#426):
-  -- SQL Server fixes it per capture instance and cannot alter it in place.
+  -- SQL Server fixes it per capture instance and cannot alter it in place. And so is a declared CdcIndexName the newest
+  -- instance does not identify rows by: the index may be created by this deploy, and CdcQuench runs after it exists.
   -- TableQuench owns #CdcRotate: the rotation itself runs in SchemaSmith.CdcQuench, after every column exists.
   IF OBJECT_ID('tempdb..#CdcRotate') IS NULL
-    CREATE TABLE #CdcRotate ([Schema] NVARCHAR(256) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(256) COLLATE DATABASE_DEFAULT, OldCaptureInstance NVARCHAR(256) COLLATE DATABASE_DEFAULT,
-                             NewFilegroup NVARCHAR(256) COLLATE DATABASE_DEFAULT, NewNetChanges BIT, Reason NVARCHAR(20) COLLATE DATABASE_DEFAULT)
+    {{CdcRotateTable}}
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   BEGIN
     DECLARE @v_DefaultFilegroup SYSNAME = (SELECT [name] FROM sys.filegroups WHERE is_default = 1)
@@ -1670,43 +1676,50 @@ BEGIN TRY
            SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) AS DeclaredFilegroup,
            newest.supports_net_changes AS NewestNetChanges,
            t.CdcSupportsNetChanges AS DeclaredNetChanges,
+           newest.index_name AS NewestIndexName,
+           SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName) AS DeclaredIndexName,
            ColumnChange = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
                                               OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1)
                                             THEN 1 ELSE 0 END)
       INTO #CdcCandidates
       FROM #Tables t WITH (NOLOCK)
       JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name, ct.supports_net_changes
+      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name, ct.supports_net_changes, ct.index_name
                      FROM cdc.change_tables ct WITH (NOLOCK)
                     WHERE ct.source_object_id = st.[object_id]
                     ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
       WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
 
     -- Unset means unmanaged: only a DECLARED filegroup can mismatch.
-    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, NewNetChanges, Reason)
+    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, NewNetChanges, NewIndexName, Reason)
       SELECT [Schema], [Name], NewestInstance,
              -- A rotation keeps the filegroup it is not told to change: the declared one, else where the old
              -- instance already is. Omitting it (the pre-#417 behaviour) moved a DBA-placed instance to the default.
              COALESCE(DeclaredFilegroup, NewestFilegroupRaw),
              -- The same for net changes: the declared value, else the old instance's own (#426).
              COALESCE(DeclaredNetChanges, NewestNetChanges),
+             -- And the index rows are identified by: the declared one, else the old instance's own.
+             COALESCE(DeclaredIndexName, NewestIndexName),
              CASE WHEN ColumnChange = 1 THEN 'column'
                   WHEN DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup THEN 'filegroup'
-                  ELSE 'netchanges' END
+                  WHEN DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges THEN 'netchanges'
+                  ELSE 'index' END
         FROM #CdcCandidates
        WHERE Instances = 1
          AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup)
-              OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges))
+              OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges)
+              OR (DeclaredIndexName IS NOT NULL AND DeclaredIndexName <> ISNULL(NewestIndexName, '')))
 
     DECLARE @v_CdcAtCeiling NVARCHAR(MAX) =
       STUFF((SELECT ', ' + [Schema] + '.' + [Name]
                FROM #CdcCandidates
               WHERE Instances >= 2
                 AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup)
-                     OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges))
+                     OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges)
+                     OR (DeclaredIndexName IS NOT NULL AND DeclaredIndexName <> ISNULL(NewestIndexName, '')))
                FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_CdcAtCeiling IS NOT NULL
-      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column, CdcFilegroup or CdcSupportsNetChanges change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
+      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column, CdcFilegroup, CdcSupportsNetChanges or CdcIndexName change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
   END
 
   RAISERROR('Swap Columns Requiring Data-Preserving Replacement', 10, 100) WITH NOWAIT

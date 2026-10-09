@@ -828,9 +828,10 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcOnDefa
     }
 
     // #426: net changes round-trip from the newest capture instance, and only when ON -- OFF is what an unset value
-    // deploys, so an existing CDC package re-extracts unchanged.
+    // deploys, so an existing CDC package re-extracts unchanged. CdcIndexName round-trips when the instance identifies
+    // rows by a unique index, and only then: the primary key is what an unset value deploys.
     [Test]
-    public void ShouldExtractCdcSupportsNetChanges_OnlyWhenOn()
+    public void ShouldExtractCdcSupportsNetChanges_OnlyWhenOn_AndCdcIndexName_OnlyOffThePrimaryKey()
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
         conn.Open();
@@ -844,22 +845,29 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNetOff
 CREATE TABLE dbo.CdcNetUixTest (Id INT NOT NULL, Val INT NULL);
 CREATE UNIQUE INDEX UX_CdcNetUixTest ON dbo.CdcNetUixTest (Id);
 EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNetUixTest', @role_name = NULL, @supports_net_changes = 1, @index_name = N'UX_CdcNetUixTest';
+CREATE TABLE dbo.CdcIdxOnlyTest (Id INT NOT NULL PRIMARY KEY, Code INT NOT NULL, Val INT NULL);
+CREATE UNIQUE INDEX UX_CdcIdxOnlyTest ON dbo.CdcIdxOnlyTest (Code);
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcIdxOnlyTest', @role_name = NULL, @supports_net_changes = 0, @index_name = N'UX_CdcIdxOnlyTest';
 ";
         cmd.ExecuteNonQuery();
 
         var on = GenerateTable(cmd, "dbo", "CdcNetOnTest");
         var offJson = GenerateTableJson(cmd, "dbo", "CdcNetOffTest");
-        var uniqueIndexJson = GenerateTableJson(cmd, "dbo", "CdcNetUixTest");
+        var uniqueIndex = GenerateTable(cmd, "dbo", "CdcNetUixTest");
+        var indexOnly = GenerateTable(cmd, "dbo", "CdcIdxOnlyTest");
 
         Assert.Multiple(() =>
         {
             Assert.That(on.CdcSupportsNetChanges, Is.True);
+            Assert.That(on.CdcIndexName, Is.Null, "an instance on the primary key must not gain a CdcIndexName");
             Assert.That(offJson, Does.Contain("EnableCDC"));
             Assert.That(offJson, Does.Not.Contain("CdcSupportsNetChanges"), "an instance with net changes off must not gain a key");
-            // A package cannot declare the unique index, and a declaration without a primary key is refused, so
-            // extracting it would produce a package that cannot be redeployed.
-            Assert.That(uniqueIndexJson, Does.Contain("EnableCDC"));
-            Assert.That(uniqueIndexJson, Does.Not.Contain("CdcSupportsNetChanges"), "net changes on a unique index must not be extracted");
+            Assert.That(offJson, Does.Not.Contain("CdcIndexName"));
+            // Net changes on a unique index with no primary key: both are needed to redeploy it.
+            Assert.That(uniqueIndex.CdcIndexName, Is.EqualTo("[UX_CdcNetUixTest]"));
+            Assert.That(uniqueIndex.CdcSupportsNetChanges, Is.True);
+            Assert.That(indexOnly.CdcIndexName, Is.EqualTo("[UX_CdcIdxOnlyTest]"), "the index is extracted without net changes too");
+            Assert.That(indexOnly.CdcSupportsNetChanges, Is.Null);
         });
 
         conn.Close();

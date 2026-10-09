@@ -140,20 +140,46 @@ BEGIN
   END
 
   -- Net changes need a unique key to identify a row: sp_cdc_enable_table refuses @supports_net_changes = 1 on a table
-  -- with no primary key (SchemaSmith passes no @index_name). The key is read from the DECLARED indexes, because a new
+  -- with no primary key unless CdcIndexName names one. The key is read from the DECLARED indexes, because a new
   -- table's primary key is not created until after this runs. Refuse up front rather than fail mid-run (#426).
   IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK)
-              WHERE t.EnableCDC = 1 AND t.CdcSupportsNetChanges = 1
+              WHERE t.EnableCDC = 1 AND t.CdcSupportsNetChanges = 1 AND t.CdcIndexName IS NULL
                 AND NOT EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
                                  WHERE i.[Schema] = t.[Schema] AND i.[TableName] = t.[Name] AND i.[PrimaryKey] = 1))
   BEGIN
     DECLARE @v_NetChangesTable NVARCHAR(1010)
     SELECT TOP 1 @v_NetChangesTable = t.[Schema] + '.' + t.[Name]
       FROM #Tables t WITH (NOLOCK)
-     WHERE t.EnableCDC = 1 AND t.CdcSupportsNetChanges = 1
+     WHERE t.EnableCDC = 1 AND t.CdcSupportsNetChanges = 1 AND t.CdcIndexName IS NULL
        AND NOT EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
                         WHERE i.[Schema] = t.[Schema] AND i.[TableName] = t.[Name] AND i.[PrimaryKey] = 1)
-    RAISERROR('Table %s sets CdcSupportsNetChanges true (on the table or as the template default), but declares no primary key. CDC net changes need one to identify a row. Declare a primary key, or set CdcSupportsNetChanges false.', 16, 1, @v_NetChangesTable)
+    RAISERROR('Table %s sets CdcSupportsNetChanges true (on the table or as the template default), but declares no primary key. CDC net changes need one to identify a row. Declare a primary key, name a unique index in CdcIndexName, or set CdcSupportsNetChanges false.', 16, 1, @v_NetChangesTable)
+  END
+
+  -- CdcIndexName is passed as @index_name, which SQL Server accepts only for a unique index over NOT NULL columns
+  -- (22838). Checked against the DECLARED indexes and columns, since the index may be created by this deploy, and
+  -- refused by name here rather than by sp_cdc_enable_table after every other table change has been made.
+  IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) WHERE t.EnableCDC = 1 AND t.CdcIndexName IS NOT NULL)
+  BEGIN
+    DECLARE @v_CdcIdxTable NVARCHAR(1010), @v_CdcIdxName NVARCHAR(500), @v_CdcIdxProblem NVARCHAR(200)
+    SELECT TOP 1 @v_CdcIdxTable = t.[Schema] + '.' + t.[Name], @v_CdcIdxName = SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName),
+                 @v_CdcIdxProblem = p.Problem
+      FROM #Tables t WITH (NOLOCK)
+      OUTER APPLY (SELECT TOP 1 i.* FROM #Indexes i WITH (NOLOCK)
+                    WHERE i.[Schema] = t.[Schema] AND i.[TableName] = t.[Name]
+                      AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName)) i
+      CROSS APPLY (SELECT Problem =
+                     CASE WHEN i.[IndexName] IS NULL THEN 'which is not one of its declared indexes'
+                          WHEN i.[Unique] = 0 AND i.[PrimaryKey] = 0 AND i.[UniqueConstraint] = 0 THEN 'which is not unique'
+                          WHEN i.[PrimaryKey] = 0
+                               AND EXISTS (SELECT 1 FROM SchemaSmith.fn_SplitList(i.[IndexColumns], ',') k
+                                             JOIN #Columns c WITH (NOLOCK) ON c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name]
+                                                                         AND c.[ColumnName] = SchemaSmith.fn_SafeBracketWrap(CASE WHEN RTRIM(k.[value]) LIKE '% DESC' THEN LEFT(RTRIM(k.[value]), LEN(RTRIM(k.[value])) - 5) ELSE k.[value] END)
+                                            WHERE c.[Nullable] = 1)
+                          THEN 'which has a nullable key column' END) p
+     WHERE t.EnableCDC = 1 AND t.CdcIndexName IS NOT NULL AND p.Problem IS NOT NULL
+    IF @v_CdcIdxTable IS NOT NULL
+      RAISERROR('Table %s names CdcIndexName %s, %s. CDC identifies rows by a unique index over NOT NULL columns. Name one of the table''s declared unique indexes, or remove CdcIndexName to use the primary key.', 16, 1, @v_CdcIdxTable, @v_CdcIdxName, @v_CdcIdxProblem)
   END
 
   -- Partition placement (#partitioning, K1) -- ADOPT AND VERIFY, the other half of the create-side apply.

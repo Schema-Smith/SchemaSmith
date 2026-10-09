@@ -51,16 +51,20 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_en
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Fg NVARCHAR(260) OUTPUT',
     @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Fg = @v_CdcFilegroup OUTPUT
 -- #426. Net changes from the newest capture instance, emitted only when ON: off is what an unset value deploys, so
--- a package whose instances have it off gains no key. Only on the primary key: a package cannot declare the unique index
--- an instance may use instead, and a declaration without a primary key is refused.
-DECLARE @v_CdcNetChanges BIT = NULL
+-- a package whose instances have it off gains no key. CdcIndexName only when the instance identifies rows by an index
+-- other than the primary key, which is what an unset value deploys. Both need the index to still exist, since a
+-- declaration naming a missing one is refused.
+DECLARE @v_CdcNetChanges BIT = NULL, @v_CdcIndexName NVARCHAR(260) = NULL
 IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   EXEC sp_executesql N'
-    SELECT TOP 1 @p_Net = CASE WHEN ct.supports_net_changes = 1 AND EXISTS (SELECT 1 FROM sys.indexes i WHERE i.[object_id] = ct.source_object_id AND i.[name] = ct.index_name AND i.is_primary_key = 1) THEN 1 ELSE 0 END FROM cdc.change_tables ct WITH (NOLOCK)
+    SELECT TOP 1 @p_Net = CASE WHEN ct.supports_net_changes = 1 AND i.index_id IS NOT NULL THEN 1 ELSE 0 END,
+                 @p_Idx = CASE WHEN i.is_primary_key = 0 THEN QUOTENAME(i.[name]) END
+      FROM cdc.change_tables ct WITH (NOLOCK)
+      LEFT JOIN sys.indexes i ON i.[object_id] = ct.source_object_id AND i.[name] = ct.index_name
      WHERE ct.source_object_id = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table))
      ORDER BY ct.create_date DESC, ct.[object_id] DESC;',
-    N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Net BIT OUTPUT',
-    @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Net = @v_CdcNetChanges OUTPUT
+    N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Net BIT OUTPUT, @p_Idx NVARCHAR(260) OUTPUT',
+    @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Net = @v_CdcNetChanges OUTPUT, @p_Idx = @v_CdcIndexName OUTPUT
 SELECT [Line] FROM SchemaSmith.fn_FormatJson(REPLACE(REPLACE(REPLACE((
 SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        QUOTENAME(TABLE_NAME) AS [Name],
@@ -137,6 +141,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        CASE WHEN st.is_tracked_by_cdc = 1 THEN CAST(1 AS BIT) END AS [EnableCDC],
        @v_CdcFilegroup AS [CdcFilegroup],
        CASE WHEN @v_CdcNetChanges = 1 THEN CAST(1 AS BIT) END AS [CdcSupportsNetChanges],
+       @v_CdcIndexName AS [CdcIndexName],
        -- Graph tables (#graph). Emitted only when the table IS one, so no existing package gains a
        -- "GraphType": "None" on every table. is_node/is_edge are 2017+, which the JSON tier requires.
        CASE WHEN st.is_node = 1 THEN 'Node' WHEN st.is_edge = 1 THEN 'Edge' END AS [GraphType],

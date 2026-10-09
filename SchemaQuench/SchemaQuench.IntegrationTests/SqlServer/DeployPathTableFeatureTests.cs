@@ -336,6 +336,125 @@ public class DeployPathTableFeatureTests
         });
     }
 
+    // CdcIndexName is passed as @index_name, so net changes can identify rows by a unique index on a table with no
+    // primary key -- a declaration that was refused before it existed. The XML ingest parses it separately.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void CdcIndexName_LetsNetChangesIdentifyRowsByAUniqueIndex_WithNoPrimaryKey(bool xmlIngest)
+    {
+        RunScenario("DeployCdcIdx", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false, netChanges: true, primaryKey: false, uniqueIndex: true,
+                            cdcIndexName: "[IX_DeployProbe]"));
+            Assert.That(NewestInstanceIndex(cmd), Is.EqualTo("IX_DeployProbe"), "the instance must identify rows by the declared index");
+            Assert.That(NewestInstanceNetChanges(cmd), Is.True, "with net changes on");
+        }, xmlIngest: xmlIngest);
+    }
+
+    // A CdcIndexName the newest instance does not use rotates, after the index exists: here it is declared in the same
+    // deploy. Once rotated, the next deploy finds nothing to change.
+    [Test]
+    public void CdcIndexName_ChangedToAnotherIndex_RotatesOntoIt_AndThenConverges()
+    {
+        RunScenario("DeployCdcIdxRot", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+            Assert.That(NewestInstanceIndex(cmd), Is.EqualTo("PK_DeployProbe"), "precondition: SQL Server chose the primary key");
+
+            var declared = CdcTable(enableCdc: true, extraColumn: false, altUniqueIndexColumn: "[Id]", cdcIndexName: "[UX_DeployProbe]");
+            deploy(declared);
+            Assert.That(InstanceCount(cmd), Is.EqualTo(2), "a declared index the instance does not use rotates to a new instance");
+            Assert.That(NewestInstanceIndex(cmd), Is.EqualTo("UX_DeployProbe"), "and the new instance uses it");
+
+            deploy(declared);
+            Assert.That(InstanceCount(cmd), Is.EqualTo(2), "once it is used, the next deploy must not rotate again");
+        });
+    }
+
+    [Test]
+    public void CdcIndexName_ChangedWhileBothInstancesAreInUse_IsRefusedBeforeAnythingChanges()
+    {
+        RunScenario("DeployCdcIdxCeil", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+            deploy(CdcTable(enableCdc: true, extraColumn: true));
+            Assert.That(InstanceCount(cmd), Is.EqualTo(2), "precondition: both capture-instance slots are in use");
+
+            _nextDeployFails = true;
+            deploy(CdcTable(enableCdc: true, extraColumn: true, altUniqueIndexColumn: "[Id]", cdcIndexName: "[UX_DeployProbe]"));
+            var logged = _progressLog.ReceivedCalls().Concat(_errorLog.ReceivedCalls())
+                .Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "");
+            Assert.That(logged.Any(m => m.Contains("CDC capture-instance limit reached") && m.Contains("CdcIndexName")), Is.True,
+                "refused by the limit's own message");
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'UX_DeployProbe'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "refused before the index was created");
+        });
+    }
+
+    [TestCase("[UX_Missing]", null, "which is not one of its declared indexes")]
+    [TestCase("[UX_DeployProbe]", "[A]", "which has a nullable key column")]
+    public void CdcIndexName_ThatSqlServerWouldRefuse_IsRefusedByName_BeforeCdcIsEnabled(string cdcIndexName, string altColumn, string problem)
+    {
+        RunScenario("DeployCdcIdxBad", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false, altUniqueIndexColumn: altColumn, cdcIndexName: cdcIndexName));
+            var logged = _progressLog.ReceivedCalls().Concat(_errorLog.ReceivedCalls())
+                .Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "");
+            Assert.That(logged.Any(m => m.Contains("names CdcIndexName " + cdcIndexName.Trim('[', ']')) && m.Contains(problem)), Is.True,
+                "the deploy must refuse by name, not fail inside sp_cdc_enable_table");
+            Assert.That(IsTrackedByCdc(cmd), Is.False, "refused before CDC was enabled");
+        }, expectFailure: true);
+    }
+
+    // SQL Server will not drop an index a capture instance uses, but only says so when the DROP runs, part-way through
+    // the index work. It does allow a rename, leaving the instance naming an index that is gone and free to be dropped.
+    // Both are refused before any index is touched.
+    [TestCase("rename")]
+    [TestCase("change")]
+    public void AnIndexACaptureInstanceUses_IsRefusedBeforeItIsDroppedOrRenamed(string what)
+    {
+        RunScenario("DeployCdcIdxKeep", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+
+            _nextDeployFails = true;
+            deploy(what == "rename"
+                ? CdcTable(enableCdc: true, extraColumn: false, primaryKeyName: "[PK_DeployProbe_Renamed]")
+                : CdcTable(enableCdc: true, extraColumn: false, primaryKeyColumns: "[Id] DESC"));
+            var logged = _progressLog.ReceivedCalls().Concat(_errorLog.ReceivedCalls())
+                .Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "");
+            Assert.That(logged.Any(m => m.Contains("CDC identifies rows by an index this deploy would drop or rename")
+                                        && m.Contains($"[PK_DeployProbe] ({(what == "rename" ? "renamed" : "dropped")}, named by dbo_DeployProbe)")), Is.True,
+                "refused by its own message, naming the index, what would happen to it, and the capture instance");
+            if (what == "rename")
+                Assert.That(logged.Any(m => m.Contains("[PK_DeployProbe] (dropped")), Is.False, "a rename is not a drop");
+            cmd.CommandText = "SELECT is_descending_key FROM sys.index_columns ic JOIN sys.indexes i ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id "
+                              + "WHERE i.[object_id] = OBJECT_ID('dbo.DeployProbe') AND i.[name] = 'PK_DeployProbe'";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(false), "the index must be left as it was, under its own name");
+        });
+    }
+
+    // A new clustered index displaces the existing one whatever its name, even when the package no longer declares it
+    // and is not set to drop it -- so the clustered index a capture instance uses is refused there too.
+    [Test]
+    public void ANewClusteredIndex_DisplacingTheOneACaptureInstanceUses_IsRefusedFirst()
+    {
+        RunScenario("DeployCdcIdxCx", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            deploy(CdcTable(enableCdc: true, extraColumn: false));
+
+            _nextDeployFails = true;
+            deploy(CdcTable(enableCdc: true, extraColumn: false, primaryKey: false, clusteredIndexColumn: "[A]",
+                            tableExtra: "\"DropIndexesRemovedFromProduct\": false,"));
+            var logged = _progressLog.ReceivedCalls().Concat(_errorLog.ReceivedCalls())
+                .Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "");
+            Assert.That(logged.Any(m => m.Contains("[PK_DeployProbe] (dropped, named by dbo_DeployProbe)")), Is.True,
+                "refused by its own message before the clustered index is displaced");
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'PK_DeployProbe'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the primary key must still be there");
+        });
+    }
+
     // The XML ingest (compatibility level below 130) is a separate batch with its own copy of every preflight step.
     [Test]
     public void ACdcTable_OnTheXmlIngestPath_GetsTheTemplateDefaultAndRotates()
@@ -402,9 +521,13 @@ public class DeployPathTableFeatureTests
         """;
 
     private static string CdcTable(bool? enableCdc, bool extraColumn, bool? netChanges = null, bool primaryKey = true,
-                                   bool extraColumnC = false, bool uniqueIndex = false) => $$"""
-        { "Schema": "[dbo]", "Name": "[DeployProbe]", {{(enableCdc is { } cdc ? $"\"EnableCDC\": {(cdc ? "true" : "false")}," : "")}}
+                                   bool extraColumnC = false, bool uniqueIndex = false, string cdcIndexName = null,
+                                   string altUniqueIndexColumn = null, string primaryKeyName = "[PK_DeployProbe]",
+                                   string primaryKeyColumns = "[Id]", string clusteredIndexColumn = null,
+                                   string tableExtra = "") => $$"""
+        { "Schema": "[dbo]", "Name": "[DeployProbe]", {{tableExtra}} {{(enableCdc is { } cdc ? $"\"EnableCDC\": {(cdc ? "true" : "false")}," : "")}}
           {{(netChanges is { } nc ? $"\"CdcSupportsNetChanges\": {(nc ? "true" : "false")}," : "")}}
+          {{(cdcIndexName != null ? $"\"CdcIndexName\": \"{cdcIndexName}\"," : "")}}
           "Columns": [
             { "Name": "[Id]", "DataType": "INT", "Nullable": false },
             { "Name": "[A]", "DataType": "INT", "Nullable": true },
@@ -412,8 +535,10 @@ public class DeployPathTableFeatureTests
             {{(extraColumnC ? """{ "Name": "[C]", "DataType": "INT", "Nullable": true },""" : "")}}
             { "Name": "[Twice]", "DataType": "INT", "Nullable": true, "ComputedExpression": "[A] * 2" }
           ],
-          "Indexes": [ {{(primaryKey
-              ? """{ "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" }"""
+          "Indexes": [ {{(clusteredIndexColumn != null ? $"{{ \"Name\": \"[CX_DeployProbe]\", \"IndexColumns\": \"{clusteredIndexColumn}\", \"Clustered\": true }}," : "")}}
+                       {{(altUniqueIndexColumn != null ? $"{{ \"Name\": \"[UX_DeployProbe]\", \"IndexColumns\": \"{altUniqueIndexColumn}\", \"Unique\": true }}," : "")}}
+                       {{(primaryKey
+              ? $"{{ \"Name\": \"{primaryKeyName}\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"{primaryKeyColumns}\" }}"
               : uniqueIndex
                   ? """{ "Name": "[IX_DeployProbe]", "IndexColumns": "[Id]", "Unique": true }"""
                   : """{ "Name": "[IX_DeployProbe]", "IndexColumns": "[Id]" }""")}} ] }
@@ -521,6 +646,13 @@ public class DeployPathTableFeatureTests
         cmd.CommandText = @"SELECT TOP 1 supports_net_changes FROM cdc.change_tables
                             WHERE source_object_id = OBJECT_ID('dbo.DeployProbe') ORDER BY create_date DESC, [object_id] DESC";
         return Convert.ToBoolean(cmd.ExecuteScalar());
+    }
+
+    private static string NewestInstanceIndex(IDbCommand cmd)
+    {
+        cmd.CommandText = @"SELECT TOP 1 index_name FROM cdc.change_tables
+                            WHERE source_object_id = OBJECT_ID('dbo.DeployProbe') ORDER BY create_date DESC, [object_id] DESC";
+        return cmd.ExecuteScalar() as string;
     }
 
     private static int InstanceCount(IDbCommand cmd)
