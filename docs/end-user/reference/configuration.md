@@ -1043,6 +1043,8 @@ Controls whether SchemaQuench drops indexes on managed tables that aren't define
 
 A `false` at any tier is sticky — it locks the effective value to `false` for all lower tiers and cannot be re-enabled by a more-specific setting. Absent inherits from the tier above. A `true` at a lower tier overrides an inherited `true` (or default `false`) but never an ancestor's explicit `false`.
 
+On SQL Server, an index of a kind a package cannot declare (spatial, JSON, selective XML) is never dropped as unknown: nothing could put it back.
+
 The environment tier is new in this release. Previously `DropUnknownIndexes` was settable only in `Product.json` and `Template.json`. It can now be set or suppressed in `SchemaQuench.settings.json` (or via environment variable) as a deployment-wide guardrail.
 
 ```json

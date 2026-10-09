@@ -430,7 +430,7 @@ Extraction carries on past an object it cannot write, and the exit code tells a 
 | Code | Meaning |
 |---|---|
 | `0` | Every object was extracted. |
-| `1` | Finished, but the package is missing something: a script failed validation (saved as `.sqlerror` or removed), an existing `.sqlerror` was skipped with validation off, a module is encrypted (SQL Server), or an object's definition came back empty. The summary counts them under `Skipped` and `Invalid`. |
+| `1` | Finished, but the package is missing something: a script failed validation (saved as `.sqlerror` or removed), an existing `.sqlerror` was skipped with validation off, a module is encrypted (SQL Server), an index is of a kind a package cannot declare yet (SQL Server spatial, JSON and selective XML indexes), or an object's definition came back empty. The summary counts them under `Skipped` and `Invalid`. |
 | `2` | At least one table failed to extract. |
 
 The full table of codes is in [Configuration -- Exit Codes](configuration.md#exit-codes).

@@ -24,9 +24,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
         {
             const string jt = "IdxOnlyEquivJson";
             const string xt = "IdxOnlyEquivXml";
-            var xmlScript = (ResourceLoader.Load("SchemaSmith.IndexOnlyXmlQuench.sql", Platform.SqlServer)
-                             ?? throw new System.Exception("IndexOnlyXmlQuench.sql not found"))
-                            .Replace("SchemaSmith.IndexOnlyQuench", "SchemaSmith.IndexOnlyQuenchXmlTest");
+            var xmlScript = XmlTierIndexOnlyQuench();
 
             using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
             conn.Open();
@@ -57,6 +55,11 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                 Cleanup(conn, jt, xt);
             }
         }
+
+        // The XML-tier procedure, kindled as the product kindles it, under a test name beside the JSON one.
+        internal static string XmlTierIndexOnlyQuench() =>
+            ForgeKindler.ResolveKindleScript("SchemaSmith.IndexOnlyXmlQuench.sql", Platform.SqlServer, replaceParseJson: false, replaceTableDef: false)
+                .Replace("SchemaSmith.IndexOnlyQuench", "SchemaSmith.IndexOnlyQuenchXmlTest");
 
         private static void Cleanup(IDbConnection conn, string jt, string xt) =>
             Exec(conn, $"DROP TABLE IF EXISTS dbo.{jt}; DROP TABLE IF EXISTS dbo.{xt}; " +
