@@ -635,6 +635,11 @@
       "type": "boolean",
       "description": "Whether this table's CDC capture instance supports net changes (sp_cdc_enable_table @supports_net_changes); overrides the template's CdcSupportsNetChanges. Only meaningful with EnableCDC, and true needs a primary key. Unset: off for a new table, unchanged on rotation. A change creates a new capture instance; the old one keeps its history."
     },
+    "CdcIndexName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "The unique index this table's CDC capture instance identifies rows by (sp_cdc_enable_table @index_name), instead of the primary key. Must name one of this table's declared unique indexes, over NOT NULL columns. Lets CdcSupportsNetChanges be true on a table with no primary key. Only meaningful with EnableCDC. A change creates a new capture instance; the old one keeps its history."
+    },
     "Extensions": {
       "type": "object",
       "required": [

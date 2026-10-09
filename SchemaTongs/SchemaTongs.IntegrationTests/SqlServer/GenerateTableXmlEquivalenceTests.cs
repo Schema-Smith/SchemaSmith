@@ -350,7 +350,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'XmlEquivC
     [Test]
     public void GenerateTableXml_CdcSupportsNetChanges_ExtractsSameModelAs_GenerateTableJson()
     {
-        // #426: the legacy XML encoding must carry net changes exactly as the JSON proc does.
+        // #426: the legacy XML encoding must carry net changes and CdcIndexName exactly as the JSON proc does.
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
@@ -367,14 +367,19 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'XmlEquivC
         var jsonModel = (SqlServerTable)PlatformDeserializer.DeserializeTable(GenerateTableJson(cmd, "dbo", "XmlEquivCdcNet"), Platform.SqlServer);
         var xmlModel = (SqlServerTable)PlatformDeserializer.DeserializeTable(
             ModelXmlSerializer.FromIngestXml(GenerateTableXml(cmd, "dbo", "XmlEquivCdcNet")), Platform.SqlServer);
+        var jsonUix = (SqlServerTable)PlatformDeserializer.DeserializeTable(GenerateTableJson(cmd, "dbo", "XmlEquivCdcNetUix"), Platform.SqlServer);
+        var xmlUix = (SqlServerTable)PlatformDeserializer.DeserializeTable(
+            ModelXmlSerializer.FromIngestXml(GenerateTableXml(cmd, "dbo", "XmlEquivCdcNetUix")), Platform.SqlServer);
 
         Assert.Multiple(() =>
         {
             Assert.That(jsonModel.CdcSupportsNetChanges, Is.True);
             Assert.That(xmlModel.CdcSupportsNetChanges, Is.True);
             Assert.That(NormalizeMinusExtensions(xmlModel), Is.EqualTo(NormalizeMinusExtensions(jsonModel)));
-            // Net changes on a unique index rather than the primary key is not extracted by either encoding.
-            Assert.That(ModelXmlSerializer.FromIngestXml(GenerateTableXml(cmd, "dbo", "XmlEquivCdcNetUix")), Does.Not.Contain("CdcSupportsNetChanges"));
+            Assert.That(xmlModel.CdcIndexName, Is.Null);
+            Assert.That(xmlUix.CdcIndexName, Is.EqualTo("[UX_XmlEquivCdcNetUix]"));
+            Assert.That(xmlUix.CdcSupportsNetChanges, Is.True);
+            Assert.That(NormalizeMinusExtensions(xmlUix), Is.EqualTo(NormalizeMinusExtensions(jsonUix)));
         });
 
         conn.Close();

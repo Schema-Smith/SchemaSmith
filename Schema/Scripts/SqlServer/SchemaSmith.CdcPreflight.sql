@@ -28,7 +28,7 @@ BEGIN
     STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name]
              FROM #Tables t WITH (NOLOCK)
              JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-             CROSS APPLY (SELECT TOP 1 ct.filegroup_name, ct.supports_net_changes
+             CROSS APPLY (SELECT TOP 1 ct.filegroup_name, ct.supports_net_changes, ct.index_name
                             FROM cdc.change_tables ct WITH (NOLOCK)
                            WHERE ct.source_object_id = st.[object_id]
                            ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
@@ -36,8 +36,9 @@ BEGIN
               AND (SELECT COUNT(*) FROM cdc.change_tables c WITH (NOLOCK) WHERE c.source_object_id = st.[object_id]) >= 2
               AND (EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1)
                    OR (t.CdcFilegroup IS NOT NULL AND SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) <> ISNULL(newest.filegroup_name, @v_DefaultFilegroup))
-                   OR (t.CdcSupportsNetChanges IS NOT NULL AND t.CdcSupportsNetChanges <> newest.supports_net_changes))
+                   OR (t.CdcSupportsNetChanges IS NOT NULL AND t.CdcSupportsNetChanges <> newest.supports_net_changes)
+                   OR (t.CdcIndexName IS NOT NULL AND SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName) <> ISNULL(newest.index_name, '')))
               FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @v_AtCeiling IS NOT NULL
-    RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this new column, CdcFilegroup or CdcSupportsNetChanges change cannot rotate without discarding change history. Nothing has been changed. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_AtCeiling)
+    RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this new column, CdcFilegroup, CdcSupportsNetChanges or CdcIndexName change cannot rotate without discarding change history. Nothing has been changed. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_AtCeiling)
 END

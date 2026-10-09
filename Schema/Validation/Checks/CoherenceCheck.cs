@@ -46,6 +46,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string VersioningExclusionInertCode = "SS-SV-001";
     private const string MinimumVersionUnresolvableCode = "SS-VER-001";
     private const string CdcFilegroupInertCode = "SS-CDC-001";
+    private const string CdcIndexNameInvalidCode = "SS-CDC-002";
     private const string CompressionConflictCode = "SS-CO-001";
     private const string CompressionLevelInertCode = "SS-CO-002";
     private const string DuplicateEventCode = "SS-EVT-001";
@@ -122,6 +123,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckSystemVersioningExclusions(table, location));
             findings.AddRange(CheckCdcFilegroup(table, location));
             findings.AddRange(CheckCdcSupportsNetChanges(table, location));
+            findings.AddRange(CheckCdcIndexName(table, location));
             findings.AddRange(CheckCompressionOptions(table, location));
             findings.AddRange(CheckPartitionPlacement(table, location));
             findings.AddRange(CheckMyPartitioning(table, location));
@@ -722,6 +724,47 @@ public sealed class CoherenceCheck : ISchemaCheck
         yield return new Finding(Severity.Warning, CdcFilegroupInertCode, Category, tableLocation,
             $"Table '{table.Name}' sets CdcSupportsNetChanges {(netChanges ? "true" : "false")} but not EnableCDC, so there " +
             "is no capture instance to shape and the setting does nothing — set EnableCDC, or drop CdcSupportsNetChanges.");
+    }
+
+    /// <summary>
+    /// <c>CdcIndexName</c> picks the index a capture instance identifies rows by, so without <c>EnableCDC</c> it does
+    /// nothing. With it, SQL Server accepts only a unique index over NOT NULL columns, and the deploy refuses anything
+    /// else; checked against the declared indexes, as the deploy does, since the index may be created by it.
+    /// </summary>
+    private static IEnumerable<Finding> CheckCdcIndexName(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable ssTable || string.IsNullOrWhiteSpace(ssTable.CdcIndexName)) yield break;
+
+        if (ssTable.EnableCDC != true)
+        {
+            yield return new Finding(Severity.Warning, CdcFilegroupInertCode, Category, tableLocation,
+                $"Table '{table.Name}' sets CdcIndexName '{ssTable.CdcIndexName}' but not EnableCDC, so there is no " +
+                "capture instance to identify rows for and the setting does nothing — set EnableCDC, or drop CdcIndexName.");
+            yield break;
+        }
+
+        var problem = CdcIndexProblem(table, NormalizeIdentifier(ssTable.CdcIndexName));
+        if (problem != null)
+            yield return new Finding(Severity.Error, CdcIndexNameInvalidCode, Category, tableLocation,
+                $"Table '{table.Name}' names CdcIndexName '{ssTable.CdcIndexName}', {problem}. CDC identifies rows by a " +
+                "unique index over NOT NULL columns, and the deploy refuses anything else — name one of the table's " +
+                "declared unique indexes, or drop CdcIndexName to use the primary key.");
+    }
+
+    private static string CdcIndexProblem(Table table, string indexName)
+    {
+        var index = table.Indexes.FirstOrDefault(i =>
+            string.Equals(NormalizeIdentifier(i.Name), indexName, StringComparison.OrdinalIgnoreCase));
+        if (index == null) return "which is not one of its declared indexes";
+        if (!index.Unique && !index.PrimaryKey && !index.UniqueConstraint) return "which is not unique";
+        if (index.PrimaryKey) return null;
+
+        var nullableColumns = new HashSet<string>(
+            table.Columns.Where(c => c.Nullable).Select(c => NormalizeIdentifier(c.Name)), StringComparer.OrdinalIgnoreCase);
+        return SplitNames(index.IndexColumns).Select(StripOrderingSuffix)
+            .Any(column => nullableColumns.Contains(NormalizeIdentifier(column)))
+            ? "which has a nullable key column"
+            : null;
     }
 
     /// <summary>
