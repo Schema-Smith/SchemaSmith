@@ -2,7 +2,7 @@
 
 *Terraform for SQL Server, Postgres, MySQL, and MariaDB databases*
 
-> **SchemaSmith v2.7.1 released.** SQL Server table features now actually apply in a SchemaQuench deploy (CDC, Change Tracking, FILESTREAM columns, and the `UnsupportedFeaturePolicy` degrade/`fail` check), and CDC net changes can be declared. [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.1) · [CHANGELOG](https://github.com/Schema-Smith/SchemaSmith/blob/main/CHANGELOG.md)
+> **SchemaSmith v2.7.2 released.** SQL Server fixes: a template deployed to several databases now deploys every script to each of them, CDC is no longer turned off on a table that leaves `EnableCDC` out (a breaking change — see the notes), and deploys to databases in another collation, temporal and computed-column changes, and spatial and memory-optimized indexes now work. [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.2) · [CHANGELOG](https://github.com/Schema-Smith/SchemaSmith/blob/main/CHANGELOG.md)
 
 ![Build](https://github.com/Schema-Smith/SchemaSmith/actions/workflows/continuous-integration.yml/badge.svg)
 [![Latest Release](https://img.shields.io/github/v/release/Schema-Smith/SchemaSmith)](https://github.com/Schema-Smith/SchemaSmith/releases/latest)
