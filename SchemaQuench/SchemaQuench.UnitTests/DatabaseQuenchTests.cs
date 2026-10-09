@@ -693,10 +693,10 @@ public class DatabaseQuenchTests
     }
 
     [Test]
-    public void ApplyFolderGates_RegularTemplate_SurvivingScriptKeepsSameReference()
+    public void ApplyFolderGates_RegularTemplate_SurvivingScriptIsThisIterationsOwnCopy()
     {
-        // Regular template: surviving folder's scripts must remain the SAME SqlScript instances
-        // (filter, not clone) so cross-iteration HasBeenQuenched dedup keeps working.
+        // #475. This pinned the opposite -- the template's own instance -- which is what let a script applied in one
+        // database be skipped in the next. A survivor is this iteration's own copy of the template's script.
         var product = new Product { Name = "P", Platform = Platform.SqlServer };
         var template = new Template { Name = "T" };
         var keep = new TemplateFolder { FolderPath = "keep", QuenchSlot = TemplateQuenchSlot.Before, ShouldApplyExpression = "KEEP" };
@@ -710,7 +710,60 @@ public class DatabaseQuenchTests
 
         quench.ApplyFolderGates(GateCommand(sql => sql.Contains("KEEP") ? 1 : 0));
 
-        Assert.That(quench.IterationBeforeScripts.Single(), Is.SameAs(keepScript));
+        var survivor = quench.IterationBeforeScripts.Single();
+        survivor.HasBeenQuenched = true;
+        Assert.Multiple(() =>
+        {
+            Assert.That(survivor.Name, Is.EqualTo("keep.sql"), "the gate keeps the right script");
+            Assert.That(keepScript.HasBeenQuenched, Is.False, "applying it here must not mark the template's script applied");
+        });
+    }
+
+    // An Objects-slot script is in both the Objects and the after-tables lists, and the after-tables pass re-runs only
+    // what the first pass did not apply: within one iteration both lists must hold the same copy, or it runs twice.
+    [TestCase(null)]
+    [TestCase("tenant_a")]
+    public void AnObjectScript_IsOneCopyAcrossTheIterationsSlotLists(string schemaName)
+    {
+        var product = new Product { Name = "P", Platform = Platform.SqlServer };
+        var template = new Template { Name = "T" };
+        var folder = new TemplateFolder { FolderPath = "o", QuenchSlot = TemplateQuenchSlot.Objects };
+        folder.Scripts.Add(new SqlScript { Name = "proc.sql" });
+        template.ScriptFolders.Add(folder);
+        var quench = new DatabaseQuench("srv", product, template, "db", schemaName,
+            false, "0", false, "0", "1", "1", "1", "1", "1", "1", "0", false, false, null);
+        quench.PrepareIterationContent();
+
+        Assert.That(quench.IterationAfterTablesObjectScripts.Single(), Is.SameAs(quench.IterationObjectScripts.Single()));
+    }
+
+    // #475. Every database a regular template fans out to has its own DatabaseQuench; a script applied by one must
+    // still be pending for the next, and a query-token value written into one must not reach the next.
+    [Test]
+    public void RegularTemplate_EachIterationHasItsOwnScriptState()
+    {
+        var product = new Product { Name = "P", Platform = Platform.SqlServer };
+        var template = new Template { Name = "T" };
+        var folder = new TemplateFolder { FolderPath = "o", QuenchSlot = TemplateQuenchSlot.Objects };
+        var script = new SqlScript { Name = "proc.sql" };
+        script.Batches.Add("SELECT '{{Who}}'");
+        folder.Scripts.Add(script);
+        template.ScriptFolders.Add(folder);
+        var first = RegularQuench(product, template);
+        var second = RegularQuench(product, template);
+        first.PrepareIterationContent();
+        second.PrepareIterationContent();
+
+        first.IterationObjectScripts.Single().HasBeenQuenched = true;
+        first.IterationObjectScripts.Single().ReplaceQueryTokens([new("Who", "db1")]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.IterationObjectScripts.Single().HasBeenQuenched, Is.False, "the second database must still run it");
+            Assert.That(second.IterationObjectScripts.Single().Batches.Single(), Is.EqualTo("SELECT '{{Who}}'"),
+                "the second database must resolve its own token value");
+            Assert.That(script.Batches.Single(), Is.EqualTo("SELECT '{{Who}}'"), "the template keeps its pristine body");
+        });
     }
 
     [Test]
@@ -850,11 +903,10 @@ public class DatabaseQuenchTests
     }
 
     [Test]
-    public void VersionTokens_ScriptBody_NoVersionToken_KeepsSameReference()
+    public void VersionTokens_ScriptBody_NoVersionToken_IsUnchanged()
     {
-        // Conditional-clone: a tokenless script must remain the SAME SqlScript instance so the
-        // regular-template cross-DB HasBeenQuenched dedup (which relies on reference identity) is
-        // preserved bit-for-bit for the common case.
+        // A script with no version token comes through version-token substitution as it was. It used to assert the
+        // template's own instance came through, which is the sharing #475 removed.
         var product = new Product { Name = "P", Platform = Platform.SqlServer };
         var template = new Template { Name = "T" };
         var folder = new TemplateFolder { FolderPath = "b", QuenchSlot = TemplateQuenchSlot.Before };
@@ -868,7 +920,11 @@ public class DatabaseQuenchTests
 
         quench.ApplyVersionScriptTokens();
 
-        Assert.That(quench.IterationBeforeScripts.Single(), Is.SameAs(script));
+        Assert.Multiple(() =>
+        {
+            Assert.That(quench.IterationBeforeScripts.Single().Batches, Is.EqualTo(new[] { "SELECT 1" }));
+            Assert.That(quench.IterationBeforeScripts.Single(), Is.Not.SameAs(script), "the iteration works on its own copy");
+        });
     }
 
     [Test]
