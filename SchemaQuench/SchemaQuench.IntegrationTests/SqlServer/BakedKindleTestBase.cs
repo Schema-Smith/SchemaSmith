@@ -97,15 +97,7 @@ public abstract class BakedKindleTestBase : BaseTableQuenchTests
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-        Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
         foreach (var db in _createdDbs)
-        {
-            cmd.CommandText = $@"
-IF DB_ID('{db}') IS NOT NULL
-  ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{db}];";
-            cmd.ExecuteNonQuery();
-        }
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
     }
 }

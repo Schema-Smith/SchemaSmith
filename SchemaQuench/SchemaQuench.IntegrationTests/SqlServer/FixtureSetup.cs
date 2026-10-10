@@ -276,14 +276,6 @@ CREATE TABLE SchemaSmith.TestLog (Id INT IDENTITY(1,1) NOT NULL, Msg NVARCHAR(20
         conn.Close();
     }
 
-    private static void DropOneDatabase(IDbCommand cmd, string dbName)
-    {
-        Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-        cmd.CommandText = @$"
-IF DB_ID('{dbName}') IS NOT NULL
-  ALTER DATABASE [{dbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{dbName}];
-";
-        cmd.ExecuteNonQuery();
-    }
+    private static void DropOneDatabase(IDbCommand cmd, string dbName) =>
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, dbName);
 }

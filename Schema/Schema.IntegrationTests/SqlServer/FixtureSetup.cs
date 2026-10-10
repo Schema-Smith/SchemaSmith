@@ -69,6 +69,20 @@ public class FixtureSetup
 
         DropStaleTestDatabases();
         CreateTestDatabase();
+
+        // Register cleanup on process exit for when tests are run from other assemblies: NUnit runs this class's
+        // teardown only in its own, so a database created lazily from another assembly would outlive that run.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => Cleanup();
+    }
+
+    private static bool _cleanedUp;
+
+    private static void Cleanup()
+    {
+        if (_cleanedUp || !_initialized) return;
+        _cleanedUp = true;
+        try { new FixtureSetup().DropTestDatabase(); }
+        catch (System.Data.Common.DbException) { /* the process is exiting; nothing can act on a failure */ }
     }
 
     /// <summary>How old a test database must be before this sweep will drop it.</summary>
@@ -147,6 +161,7 @@ END";
     [OneTimeTearDown]
     public void RunAfterAnyTests()
     {
+        _cleanedUp = true;
         DropTestDatabase();
     }
 
@@ -183,15 +198,7 @@ END";
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_masterConnectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-
-        Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-        cmd.CommandText = @$"
-IF DB_ID('{_integrationMainDb}') IS NOT NULL
-  ALTER DATABASE [{_integrationMainDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{_integrationMainDb}];
-";
-        cmd.ExecuteNonQuery();
-
+        TestDatabaseDrop.Drop(cmd, _integrationMainDb);
         conn.Close();
     }
 

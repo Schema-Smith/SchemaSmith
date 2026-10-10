@@ -442,13 +442,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'XmlEquivC
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-        Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-        cmd.CommandText = @$"
-IF DB_ID('{_integrationDb}') IS NOT NULL
-  ALTER DATABASE [{_integrationDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{_integrationDb}];";
-        cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _integrationDb);
         conn.Close();
     }
 }

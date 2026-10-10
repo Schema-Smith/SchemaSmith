@@ -73,10 +73,8 @@ public class CdcDatabaseToggleTests
         try
         {
             _connection.ChangeDatabase("master");
-            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            // One batch, so a CDC or Change Tracking cleanup task cannot take the single-user slot before the DROP.
-            Exec($"IF DB_ID('{_db}') IS NOT NULL BEGIN ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_db}]; END");
+            using var cmd = _connection.CreateCommand();
+            TestDatabaseDrop.Drop(cmd, _db);
         }
         finally
         {
