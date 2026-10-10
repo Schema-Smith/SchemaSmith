@@ -4,7 +4,7 @@ All notable changes to SchemaSmith Community Edition are documented here.
 
 For full release details and download links, see [GitHub Releases](https://github.com/Schema-Smith/SchemaSmith/releases).
 
-## [v2.7.2]
+## [v2.7.2](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.2) — 2026-10-09
 
 ### Breaking Changes
 
