@@ -53,6 +53,11 @@ jobs:
     services:
       postgres:
         image: postgres:16
+        # Authenticated pulls avoid Docker Hub's anonymous rate limit. A fork's pull request gets no secrets, and the
+        # runner skips the login when they are empty, so it pulls anonymously as before rather than failing.
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_USER: testuser
           POSTGRES_PASSWORD: testpass

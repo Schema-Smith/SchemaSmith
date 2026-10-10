@@ -340,6 +340,11 @@ jobs:
     services:
       postgres:
         image: postgres:${{ matrix.pg }}
+        # Authenticated pulls avoid Docker Hub's anonymous rate limit. A fork's pull request gets no secrets, and the
+        # runner skips the login when they are empty, so it pulls anonymously as before rather than failing.
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_USER: ${{ env.TEST_USER }}
           POSTGRES_PASSWORD: ${{ env.TEST_PASSWORD }}
@@ -439,6 +444,11 @@ jobs:
     services:
       mysql:
         image: mysql:${{ matrix.mysql }}
+        # Authenticated pulls avoid Docker Hub's anonymous rate limit. A fork's pull request gets no secrets, and the
+        # runner skips the login when they are empty, so it pulls anonymously as before rather than failing.
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           MYSQL_ROOT_PASSWORD: ${{ env.TEST_PASSWORD }}
           MYSQL_USER: ${{ env.TEST_USER }}
@@ -528,6 +538,11 @@ jobs:
         # MariaDB is a MySQL variant (GetBasePlatform() routes it to the MySQL engine + Scripts/MariaDb
         # overrides).
         image: mariadb:${{ matrix.mariadb }}
+        # Authenticated pulls avoid Docker Hub's anonymous rate limit. A fork's pull request gets no secrets, and the
+        # runner skips the login when they are empty, so it pulls anonymously as before rather than failing.
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           MARIADB_ROOT_PASSWORD: ${{ env.TEST_PASSWORD }}
           MARIADB_USER: ${{ env.TEST_USER }}
@@ -625,6 +640,16 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      # Logs in only where the secrets exist, so a fork's pull request pulls anonymously instead of failing.
+      - name: Log in to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+          fi
+
       - name: Start ${{ matrix.engine }} with lower_case_table_names=1
         run: |
           docker run -d --name lctn1 -p ${{ matrix.port }}:3306 \
@@ -696,6 +721,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Logs in only where the secrets exist, so a fork's pull request pulls anonymously instead of failing.
+      - name: Log in to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+          fi
 
       - name: Compare each floating leg against its expected major
         run: |

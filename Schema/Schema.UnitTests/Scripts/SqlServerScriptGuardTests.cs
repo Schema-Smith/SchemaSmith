@@ -91,10 +91,11 @@ public class SqlServerScriptGuardTests
         {
             var table = Regex.Match(block, @"#\w+").Value;
             var body = block[(block.IndexOf('(') + 1)..^1];
-            foreach (var column in TopLevelItems(body).Select(c => Regex.Replace(c, @"\s+", " ").Trim()))
+            var characterColumns = TopLevelItems(body)
+                .Select(c => Regex.Replace(c, @"\s+", " ").Trim())
+                .Where(c => Regex.IsMatch(c, @"^(?:\[[^\]]+\]|\w+) (?:N?VARCHAR|N?CHAR|SYSNAME|N?TEXT)\b", RegexOptions.IgnoreCase));
+            foreach (var column in characterColumns)
             {
-                if (!Regex.IsMatch(column, @"^(?:\[[^\]]+\]|\w+) (?:N?VARCHAR|N?CHAR|SYSNAME|N?TEXT)\b", RegexOptions.IgnoreCase))
-                    continue;
                 columnsChecked++;
                 if (!Regex.IsMatch(column, @"\bCOLLATE\b", RegexOptions.IgnoreCase))
                     offenders.Add($"{name}: {table} {column}");
