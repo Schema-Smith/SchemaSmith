@@ -87,8 +87,9 @@ public class ReadOnlyTargetKindleTests
             // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
             Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             Exec(master, $"ALTER DATABASE [{db}] SET READ_WRITE WITH ROLLBACK IMMEDIATE");
-            Exec(master, $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec(master, $"DROP DATABASE IF EXISTS [{db}]");
+            using var cmd = master.CreateCommand();
+            cmd.CommandTimeout = 300;
+            TestDatabaseDrop.Drop(cmd, db);
         }
         catch
         {
@@ -194,9 +195,9 @@ public class ReadOnlyTargetKindleTests
         finally
         {
             using var master = OpenMaster();
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            Exec(master, $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec(master, $"DROP DATABASE IF EXISTS [{db}]");
+            using var cmd = master.CreateCommand();
+            cmd.CommandTimeout = 300;
+            TestDatabaseDrop.Drop(cmd, db);
         }
     }
 }

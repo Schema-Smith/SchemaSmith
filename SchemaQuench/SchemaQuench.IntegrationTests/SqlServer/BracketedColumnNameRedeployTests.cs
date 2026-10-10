@@ -148,12 +148,7 @@ public class BracketedColumnNameRedeployTests
                 try
                 {
                     conn.ChangeDatabase("master");
-                    // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-                    Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-                    cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN "
-                                      + $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; "
-                                      + $"DROP DATABASE [{db}]; END";
-                    cmd.ExecuteNonQuery();
+                    Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
                 }
                 // Typed rather than bare: a teardown drop can legitimately fail if the engine refuses it
                 // (DbException) or the connection is no longer usable (InvalidOperationException). Anything

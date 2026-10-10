@@ -171,15 +171,7 @@ DELETE FROM dbo.fleet_registry;";
             conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 120;
-            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            cmd.CommandText = $@"
-IF DB_ID('{ControlDb}') IS NOT NULL
-BEGIN
-    ALTER DATABASE [{ControlDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-    DROP DATABASE [{ControlDb}];
-END";
-            cmd.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, ControlDb);
             conn.Close();
         }
         catch (System.Data.Common.DbException)

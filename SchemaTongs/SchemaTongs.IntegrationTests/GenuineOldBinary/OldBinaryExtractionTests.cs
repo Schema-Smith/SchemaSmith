@@ -59,9 +59,8 @@ public class OldBinaryExtractionTests
         try
         {
             using var conn = Open("master");
-            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            Exec(conn, $"IF DB_ID('{_db}') IS NOT NULL BEGIN ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_db}]; END");
+            using var cmd = conn.CreateCommand();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _db);
         }
         catch (System.Data.Common.DbException) { /* best-effort cleanup */ }
         try { if (Directory.Exists(_productPath)) Directory.Delete(_productPath, true); }

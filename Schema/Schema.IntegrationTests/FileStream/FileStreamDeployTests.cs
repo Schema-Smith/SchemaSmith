@@ -88,10 +88,9 @@ public class FileStreamDeployTests
             if (_db != null && Environment.GetEnvironmentVariable("FS_KEEP_DB") == null)
             {
                 _connection.ChangeDatabase("master");
-                // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-                Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-                Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-                Exec($"DROP DATABASE IF EXISTS [{_db}]");
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandTimeout = 300;
+                Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _db);
             }
         }
         finally

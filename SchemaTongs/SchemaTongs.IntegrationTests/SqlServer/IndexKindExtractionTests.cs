@@ -60,10 +60,11 @@ public class IndexKindExtractionTests
     {
         try
         {
-            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            Master($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Master($"DROP DATABASE IF EXISTS [{_db}]");
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_masterConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 300;
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _db);
         }
         catch (DbException) { /* teardown must not mask an assertion */ }
 

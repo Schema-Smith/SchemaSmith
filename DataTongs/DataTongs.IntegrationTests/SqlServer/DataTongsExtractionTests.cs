@@ -139,10 +139,7 @@ INSERT INTO [dbo].[Src] VALUES
         {
             _connection.ChangeDatabase(_integrationDb);
             using var master = _connection.CreateCommand();
-            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            master.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-            master.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(master, db);
         }
     }
 
@@ -196,9 +193,7 @@ WHERE CAST(d.[f] AS VARBINARY(8)) = CAST(s.[f] AS VARBINARY(8)) AND CAST(d.[r] A
         {
             _connection.ChangeDatabase(_integrationDb);
             using var master = _connection.CreateCommand();
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            master.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-            master.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(master, db);
         }
     }
 
@@ -508,13 +503,7 @@ INSERT INTO [dbo].[LegacyTypes] ([Id], [ImageData], [NTextData], [TextData], [Ge
         conn.Open();
         using var cmd = conn.CreateCommand();
 
-        Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-        cmd.CommandText = $@"
-IF DB_ID('{_integrationDb}') IS NOT NULL
-    ALTER DATABASE [{_integrationDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{_integrationDb}];
-";
-        cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _integrationDb);
         conn.Close();
     }
 

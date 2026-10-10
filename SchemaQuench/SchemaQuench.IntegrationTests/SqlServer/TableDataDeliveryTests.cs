@@ -259,10 +259,7 @@ public class TableDataDeliveryTests
         {
             _connection.ChangeDatabase(_testDb);
             using var master = _connection.CreateCommand();
-            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            master.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-            master.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(master, db);
         }
     }
 
@@ -365,9 +362,7 @@ public class TableDataDeliveryTests
             _connection.ChangeDatabase(_testDb);
             using (var master = _connection.CreateCommand())
             {
-                Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-                master.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-                master.ExecuteNonQuery();
+                Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(master, db);
             }
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
         }

@@ -75,10 +75,9 @@ public class FileStreamDegradeTests
         try
         {
             _connection.ChangeDatabase("master");
-            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec($"DROP DATABASE IF EXISTS [{_db}]");
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandTimeout = 300;
+            TestDatabaseDrop.Drop(cmd, _db);
         }
         finally
         {

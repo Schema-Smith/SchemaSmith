@@ -42,16 +42,13 @@ public class RegularTemplateFanOutTests
     public void DropDatabases()
     {
         if (!_databasesCreated) return;
-        // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-        Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
         using var conn = OpenMaster();
         using var cmd = conn.CreateCommand();
         try
         {
             foreach (var db in Databases)
             {
-                cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-                cmd.ExecuteNonQuery();
+                Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
             }
         }
         catch (DbException) { /* best-effort cleanup */ }

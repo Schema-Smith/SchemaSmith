@@ -122,17 +122,9 @@ public class FixtureSetup
                     if (IsOlderThanCutoff(name)) stale.Add(name);
                 }
 
-            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             foreach (var db in stale)
             {
-                cmd.CommandText = $@"
-IF DB_ID('{db}') IS NOT NULL
-BEGIN
-    ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-    DROP DATABASE [{db}];
-END";
-                try { cmd.ExecuteNonQuery(); } catch (DbException) { /* in use by a live run; leave it */ }
+                try { TestDatabaseDrop.Drop(cmd, db); } catch (DbException) { /* in use by a live run; leave it */ }
             }
         }
         catch (DbException)

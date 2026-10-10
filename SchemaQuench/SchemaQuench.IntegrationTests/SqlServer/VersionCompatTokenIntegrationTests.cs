@@ -159,15 +159,7 @@ public class VersionCompatTokenIntegrationTests
             conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 0;
-            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            cmd.CommandText = $@"
-IF DB_ID('{databaseName}') IS NOT NULL
-BEGIN
-    ALTER DATABASE [{databaseName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-    DROP DATABASE [{databaseName}];
-END";
-            cmd.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, databaseName);
             conn.Close();
         }
         catch

@@ -131,9 +131,7 @@ END");
         try
         {
             conn.ChangeDatabase("master");
-            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            Exec(cmd, $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE IF EXISTS [{db}];");
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
         }
         catch { /* best-effort cleanup */ }
     }
