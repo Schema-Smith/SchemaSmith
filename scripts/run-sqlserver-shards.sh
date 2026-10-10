@@ -57,12 +57,16 @@ run() {
 q1="$(copy_build shard1)"; q2="$(copy_build shard2)"; q3="$(copy_build shard3)"
 started=$SECONDS
 run quench-heavy "$q1" "($heavy)" &
-run quench-rest "$q2" "$not_heavy&FullyQualifiedName!~.TableQuench_" &
+# Balanced by measured time (local, 2026-10-10): heavy ~590s; rest + SchemaTongs + DataTongs ~650s; TableQuench + Schema
+# ~635s. The slowest process sets the wall time, so rebalance here when a suite grows.
+(
+  run quench-rest "$q2" "$not_heavy&FullyQualifiedName!~.TableQuench_"
+  run schematongs SchemaTongs/SchemaTongs.IntegrationTests/SchemaTongs.IntegrationTests.csproj "FullyQualifiedName!~.__none__"
+  run datatongs DataTongs/DataTongs.IntegrationTests/DataTongs.IntegrationTests.csproj "FullyQualifiedName!~.__none__"
+) &
 (
   run quench-tablequench "$q3" "$table_quench"
   run schema Schema/Schema.IntegrationTests/Schema.IntegrationTests.csproj "FullyQualifiedName!~.__none__"
-  run schematongs SchemaTongs/SchemaTongs.IntegrationTests/SchemaTongs.IntegrationTests.csproj "FullyQualifiedName!~.__none__"
-  run datatongs DataTongs/DataTongs.IntegrationTests/DataTongs.IntegrationTests.csproj "FullyQualifiedName!~.__none__"
 ) &
 wait
 echo "SQL Server shards: $((SECONDS - started))s wall; results in $results"
