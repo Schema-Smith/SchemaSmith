@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Linq;
 using NSubstitute;
 using NUnit.Framework;
 using Schema.Domain;
@@ -71,7 +72,21 @@ public class ChangeAuditReaderTests
         ChangeAuditReader.DiscardStale(platform, cmd);
 
         Assert.That(executed, Has.Count.EqualTo(1));
-        Assert.That(executed[0], Does.StartWith("DELETE FROM").And.Contains("ChangeAudit").And.EndsWith($"= {sessionFunction}"));
+        Assert.That(executed[0], Does.Contain("DELETE FROM").And.Contains("ChangeAudit").And.EndsWith($"= {sessionFunction}"));
+    }
+
+    // On SQL Server a missing table is not an exception the reader can catch: the table connection turns the error into an
+    // info message that the run logs as a failure. The delete is skipped when the table is not there.
+    [Test]
+    public void DiscardStale_SqlServer_ChecksTheTableExistsBeforeDeleting()
+    {
+        var cmd = Substitute.For<IDbCommand>();
+        var executed = new List<string>();
+        cmd.When(c => c.ExecuteNonQuery()).Do(_ => executed.Add(cmd.CommandText));
+
+        ChangeAuditReader.DiscardStale(Platform.SqlServer, cmd);
+
+        Assert.That(executed.Single(), Does.StartWith("IF OBJECT_ID(N'SchemaSmith.ChangeAudit', N'U') IS NOT NULL DELETE FROM"));
     }
 
     [Test]

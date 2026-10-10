@@ -33,7 +33,11 @@ public static class ChangeAuditReader
         try
         {
             command.Parameters.Clear();
-            command.CommandText = sql.Delete;
+            // SQL Server's table connection reports user errors as info messages, which the run logs as errors, instead
+            // of throwing -- so the missing table is checked for rather than caught.
+            command.CommandText = platform.GetBasePlatform() == Platform.SqlServer
+                ? $"IF OBJECT_ID(N'SchemaSmith.ChangeAudit', N'U') IS NOT NULL {sql.Delete}"
+                : sql.Delete;
             command.ExecuteNonQuery();
         }
         catch (DbException)
