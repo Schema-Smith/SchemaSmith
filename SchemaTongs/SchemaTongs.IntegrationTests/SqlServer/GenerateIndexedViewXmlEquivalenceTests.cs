@@ -2,6 +2,7 @@
 
 using System;
 using System.Data;
+using System.Data.Common;
 using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -21,29 +22,22 @@ namespace SchemaTongs.IntegrationTests.SqlServer;
 [TestFixture]
 public class GenerateIndexedViewXmlEquivalenceTests
 {
-    private string _integrationDb = "";
-    private string _connectionString;
+    // Runs on the Schema suite's shared kindled database, isolated by a fixture-owned schema. That database is
+    // kindled with the JSON encoding, so GenerateIndexedViewJson is already there; the XML twin is not, and is
+    // installed here.
+    private readonly string _p = "ivx_" + Guid.NewGuid().ToString("N")[..8];
     private string _testConnectionString;
 
     [OneTimeSetUp]
     public void OneTimeSetup()
     {
-        var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-        var connProps = ConnectionString.ReadProperties(config, "SqlServer:ConnectionProperties");
-        _connectionString = ConnectionString.Build(Platform.SqlServer, config["SqlServer:Server"], "master", config["SqlServer:User"], config["SqlServer:Password"], config["SqlServer:Port"], connProps);
-        _integrationDb = $"GenIvXml_Test_{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid().ToString()[..8]}";
-        _testConnectionString = ConnectionString.Build(Platform.SqlServer, config["SqlServer:Server"], _integrationDb, config["SqlServer:User"], config["SqlServer:Password"], config["SqlServer:Port"], connProps);
+        _testConnectionString = Schema.IntegrationTests.SqlServer.FixtureSetup.GetMainDbConnectionString();
 
-        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}];";
-        cmd.ExecuteNonQuery();
 
-        conn.ChangeDatabase(_integrationDb);
-        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
-
-        ForgeKindler.KindleOneFile(cmd, "SchemaSmith.GenerateIndexedViewJson.sql", Platform.SqlServer);
+        Schema.IntegrationTests.SqlServer.TestSchemaDrop.Drop(cmd, _p);
         ForgeKindler.KindleOneFile(cmd, "SchemaSmith.GenerateIndexedViewXml.sql", Platform.SqlServer);
 
         conn.Close();
@@ -57,19 +51,19 @@ public class GenerateIndexedViewXmlEquivalenceTests
         using var cmd = conn.CreateCommand();
 
         // CREATE SCHEMA / CREATE VIEW must each be the only statement in their batch — issue separately.
-        Exec(cmd, "EXEC('CREATE SCHEMA [Test]')");
-        Exec(cmd, "CREATE TABLE Test.SourceTable (Id INT NOT NULL, Name VARCHAR(100) NOT NULL, Amount DECIMAL(10,2) NOT NULL)");
-        Exec(cmd, "CREATE UNIQUE CLUSTERED INDEX UDX_SourceTable ON Test.SourceTable (Id)");
-        Exec(cmd, @"CREATE VIEW Test.vTestSummary WITH SCHEMABINDING AS
+        Exec(cmd, $"EXEC('CREATE SCHEMA [{_p}]')");
+        Exec(cmd, $"CREATE TABLE [{_p}].SourceTable (Id INT NOT NULL, Name VARCHAR(100) NOT NULL, Amount DECIMAL(10,2) NOT NULL)");
+        Exec(cmd, $"CREATE UNIQUE CLUSTERED INDEX UDX_SourceTable ON [{_p}].SourceTable (Id)");
+        Exec(cmd, $@"CREATE VIEW [{_p}].vTestSummary WITH SCHEMABINDING AS
 SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount
-FROM Test.SourceTable
+FROM [{_p}].SourceTable
 GROUP BY Id, Name");
-        Exec(cmd, "CREATE UNIQUE CLUSTERED INDEX [IX_vTestSummary_Id] ON Test.vTestSummary (Id)");
-        Exec(cmd, "CREATE NONCLUSTERED INDEX [IX_vTestSummary_Name] ON Test.vTestSummary (Name) WITH (FILLFACTOR = 90)");
+        Exec(cmd, $"CREATE UNIQUE CLUSTERED INDEX [IX_vTestSummary_Id] ON [{_p}].vTestSummary (Id)");
+        Exec(cmd, $"CREATE NONCLUSTERED INDEX [IX_vTestSummary_Name] ON [{_p}].vTestSummary (Name) WITH (FILLFACTOR = 90)");
 
-        var jsonView = JsonConvert.DeserializeObject<SqlServerIndexedView>(GenerateIndexedView(cmd, "GenerateIndexedViewJson", "Test", "vTestSummary"))!;
+        var jsonView = JsonConvert.DeserializeObject<SqlServerIndexedView>(GenerateIndexedView(cmd, "GenerateIndexedViewJson", _p, "vTestSummary"))!;
         var xmlView = JsonConvert.DeserializeObject<SqlServerIndexedView>(
-            ModelXmlSerializer.FromIngestXml(GenerateIndexedView(cmd, "GenerateIndexedViewXml", "Test", "vTestSummary")))!;
+            ModelXmlSerializer.FromIngestXml(GenerateIndexedView(cmd, "GenerateIndexedViewXml", _p, "vTestSummary")))!;
 
         Assert.That(Normalize(xmlView), Is.EqualTo(Normalize(jsonView)));
 
@@ -119,10 +113,14 @@ GROUP BY Id, Name");
     [OneTimeTearDown]
     public void TearDown()
     {
-        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _integrationDb);
-        conn.Close();
+        try
+        {
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            Schema.IntegrationTests.SqlServer.TestSchemaDrop.Drop(cmd, _p);
+            conn.Close();
+        }
+        catch (DbException) { /* best-effort cleanup must not mask a test result */ }
     }
 }
