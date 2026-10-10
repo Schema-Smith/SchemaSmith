@@ -78,7 +78,7 @@ def walk(node, assembly, fixtures, setups):
 def load(paths):
     files = []
     for p in paths:
-        files += sorted(glob.glob(os.path.join(p, "*.xml"))) if os.path.isdir(p) else [p]
+        files += sorted(glob.glob(os.path.join(p, "**", "*.xml"), recursive=True)) if os.path.isdir(p) else [p]
     fixtures, setups, assemblies = [], [], []
     for f in files:
         root = ET.parse(f).getroot()

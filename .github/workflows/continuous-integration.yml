@@ -294,11 +294,9 @@ jobs:
           # genuinely version-specific XML defect is the genuine-binary sweep's job, against real
           # 2008R2-2016 binaries where the below-cliff path actually matters.
           SS_COMPAT_LEG: ${{ matrix.ss == '2019' && 'true' || 'skip' }}
-        run: |
-          dotnet test Schema/Schema.IntegrationTests/Schema.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=SqlServer" --logger trx --results-directory TestResults
-          dotnet test SchemaQuench/SchemaQuench.IntegrationTests/SchemaQuench.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=SqlServer" --logger trx --results-directory TestResults
-          dotnet test SchemaTongs/SchemaTongs.IntegrationTests/SchemaTongs.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=SqlServer" --logger trx --results-directory TestResults
-          dotnet test DataTongs/DataTongs.IntegrationTests/DataTongs.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=SqlServer" --logger trx --results-directory TestResults
+        # Three concurrent test processes against the one server: most SQL Server test time is under an
+        # in-process lock that NUnit workers cannot overlap, and separate processes can. Same job, same minutes.
+        run: bash scripts/run-sqlserver-shards.sh TestResults -- --settings coverage.runsettings --collect "XPlat Code Coverage"
 
       - name: Suite Time Summary
         if: ${{ !cancelled() && hashFiles('TestResults/nunit/*.xml') != '' }}
