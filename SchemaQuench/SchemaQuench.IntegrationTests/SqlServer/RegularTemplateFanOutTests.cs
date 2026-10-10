@@ -42,6 +42,8 @@ public class RegularTemplateFanOutTests
     public void DropDatabases()
     {
         if (!_databasesCreated) return;
+        // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+        Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
         using var conn = OpenMaster();
         using var cmd = conn.CreateCommand();
         try

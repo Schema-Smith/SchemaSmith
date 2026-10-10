@@ -826,6 +826,8 @@ SELECT 'IDX|' + s.name COLLATE DATABASE_DEFAULT + '.' + t.name COLLATE DATABASE_
     {
         try
         {
+            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
             conn.Open();
             using var cmd = conn.CreateCommand();

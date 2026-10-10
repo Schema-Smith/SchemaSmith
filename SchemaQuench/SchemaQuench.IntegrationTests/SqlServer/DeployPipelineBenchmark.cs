@@ -117,6 +117,8 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             finally
             {
                 conn.ChangeDatabase("master");
+                // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+                Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
                 cmd.CommandText = $"IF DB_ID('{_benchDb}') IS NOT NULL BEGIN ALTER DATABASE [{_benchDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_benchDb}]; END";
                 cmd.ExecuteNonQuery();
             }
@@ -202,6 +204,7 @@ SELECT [Label], [ms] FROM (
             finally
             {
                 conn.ChangeDatabase("master");
+                Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
                 cmd.CommandText = $"IF DB_ID('{_benchDb}') IS NOT NULL BEGIN ALTER DATABASE [{_benchDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_benchDb}]; END";
                 cmd.ExecuteNonQuery();
             }

@@ -248,6 +248,8 @@ public class ExpressionChurnAcrossVersionsTests
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_masterConnectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
+        // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+        Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
         foreach (var db in _createdDbs)
         {
             // Classic guard, not DROP DATABASE IF EXISTS (2016 syntax): this runs against 2008 R2.

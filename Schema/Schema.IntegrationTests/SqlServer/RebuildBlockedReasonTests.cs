@@ -75,6 +75,8 @@ public class RebuildBlockedReasonTests
             try
             {
                 _connection.ChangeDatabase("master");
+                // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+                Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
                 // Retried on deadlock. This fixture enables CDC and Change Tracking, both of which write
                 // server-wide replication metadata, so tearing its database down collides with any sibling
                 // fixture doing DDL at the same moment. Seen once in a full concurrent gate: every assembly

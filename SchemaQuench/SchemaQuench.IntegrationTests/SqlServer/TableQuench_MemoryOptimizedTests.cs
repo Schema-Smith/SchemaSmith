@@ -60,6 +60,8 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
             using var conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
             conn.Open();
             using var cmd = conn.CreateCommand();
+            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             cmd.CommandText = $"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE IF EXISTS [{_db}]";
             cmd.ExecuteNonQuery();
         }

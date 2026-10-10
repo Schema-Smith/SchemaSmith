@@ -171,6 +171,8 @@ DELETE FROM dbo.fleet_registry;";
             conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 120;
+            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             cmd.CommandText = $@"
 IF DB_ID('{ControlDb}') IS NOT NULL
 BEGIN

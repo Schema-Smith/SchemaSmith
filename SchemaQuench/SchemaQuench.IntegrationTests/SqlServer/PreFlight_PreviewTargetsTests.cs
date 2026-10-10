@@ -379,6 +379,8 @@ public class PreFlight_PreviewTargetsTests
             conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 0;
+            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             cmd.CommandText = $@"
 IF DB_ID('{databaseName}') IS NOT NULL
 BEGIN

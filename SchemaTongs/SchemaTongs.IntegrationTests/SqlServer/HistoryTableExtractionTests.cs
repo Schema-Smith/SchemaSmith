@@ -99,6 +99,8 @@ public class HistoryTableExtractionTests
             {
                 try { Run(cmd, "ALTER TABLE dbo.Versioned SET (SYSTEM_VERSIONING = OFF)"); } catch (DbException) { /* best effort */ }
             });
+            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             Master($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
             Master($"DROP DATABASE IF EXISTS [{_db}]");
         }

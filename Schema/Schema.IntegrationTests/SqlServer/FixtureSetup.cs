@@ -106,6 +106,8 @@ public class FixtureSetup
                     if (IsOlderThanCutoff(name)) stale.Add(name);
                 }
 
+            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             foreach (var db in stale)
             {
                 cmd.CommandText = $@"
@@ -182,6 +184,7 @@ END";
         conn.Open();
         using var cmd = conn.CreateCommand();
 
+        Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
         cmd.CommandText = @$"
 IF DB_ID('{_integrationMainDb}') IS NOT NULL
   ALTER DATABASE [{_integrationMainDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;

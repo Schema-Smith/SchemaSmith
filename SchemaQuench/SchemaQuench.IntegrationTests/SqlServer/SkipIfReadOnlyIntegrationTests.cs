@@ -42,6 +42,8 @@ public class SkipIfReadOnlyIntegrationTests
     [OneTimeSetUp]
     public void CreateProbeDatabase()
     {
+        // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+        Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
         ExecuteOnMaster($@"
 IF DB_ID('{ProbeDb}') IS NOT NULL
 BEGIN

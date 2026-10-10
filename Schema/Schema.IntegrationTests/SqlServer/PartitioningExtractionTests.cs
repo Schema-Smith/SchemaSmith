@@ -72,6 +72,8 @@ public class PartitioningExtractionTests
         try
         {
             _connection.ChangeDatabase("master");
+            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
             Exec($"DROP DATABASE IF EXISTS [{_db}]");
         }
@@ -197,6 +199,7 @@ public class PartitioningExtractionTests
         finally
         {
             _connection.ChangeDatabase("master");
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             Exec($"ALTER DATABASE [{xmlDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
             Exec($"DROP DATABASE IF EXISTS [{xmlDb}]");
             _connection.ChangeDatabase(_db);

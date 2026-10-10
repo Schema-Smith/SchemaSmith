@@ -104,6 +104,8 @@ public class DeployPathFileStreamTests
                 try
                 {
                     conn.ChangeDatabase("master");
+                    // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+                    Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
                     cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
                     cmd.ExecuteNonQuery();
                 }
