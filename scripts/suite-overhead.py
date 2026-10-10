@@ -7,10 +7,14 @@ fixture's duration includes its OneTimeSetUp and OneTimeTearDown, and a namespac
 so each level's duration minus its children's is what it spent outside them. TRX cannot show this: it records only
 test cases.
 
+With parallel fixtures a fixture's first test can wait for a worker, and that wait reads as setup. For clean
+numbers run one engine with one worker: `dotnet test ... --filter Category=<engine> -- NUnit.NumberOfTestWorkers=1`.
+
 Usage: suite-overhead.py <xml file or directory>... [--top N] [--markdown]
 """
 import argparse
 import collections
+import datetime
 import glob
 import os
 import sys
@@ -28,6 +32,17 @@ def duration(node):
     return float(node.get("duration") or 0)
 
 
+def stamp(node, attr):
+    value = node.get(attr)
+    if not value:
+        return None
+    value = value.rstrip("Z")
+    if "." in value:
+        head, frac = value.split(".", 1)
+        value = f"{head}.{frac[:6]}"
+    return datetime.datetime.fromisoformat(value)
+
+
 def walk(node, assembly, fixtures, setups):
     """Collect each TestFixture's time and each namespace/SetUpFixture level's time outside its children."""
     children = [c for c in node if c.tag in ("test-suite", "test-case")]
@@ -36,9 +51,18 @@ def walk(node, assembly, fixtures, setups):
         cases = list(node.iter("test-case"))
         ran = [c for c in cases if c.get("result") != "Skipped"]
         in_tests = sum(duration(c) for c in cases)
+        # Setup is the fixture's start to its first test's start, teardown its last test's end to its own end. The
+        # rest of its span is time between tests -- with parallel fixtures, mostly waiting for a worker or a lock,
+        # which is not setup and must not be reported as it.
+        starts = [s for s in (stamp(c, "start-time") for c in cases) if s]
+        ends = [e for e in (stamp(c, "end-time") for c in cases) if e]
+        f_start, f_end = stamp(node, "start-time"), stamp(node, "end-time")
+        setup = (min(starts) - f_start).total_seconds() if starts and f_start else 0.0
+        teardown = (f_end - max(ends)).total_seconds() if ends and f_end else 0.0
         fixtures.append({
             "assembly": assembly, "name": node.get("fullname"), "engine": engine_of(node.get("fullname") or ""),
             "wall": duration(node), "tests": in_tests, "count": len(ran),
+            "setup": max(setup, 0.0), "teardown": max(teardown, 0.0),
         })
         return
     if kind in ("SetUpFixture", "TestSuite") and node.get("fullname"):
@@ -79,35 +103,37 @@ def report(fixtures, setups, assemblies, top, md):
     for name, wall in assemblies:
         say(f"| {name} | {wall:.0f}s |" if md else f"  {name:40s} {wall:8.0f}s")
     say("")
-    by = collections.defaultdict(lambda: {"wall": 0.0, "tests": 0.0, "count": 0, "fixtures": 0})
+    by = collections.defaultdict(lambda: {"wall": 0.0, "tests": 0.0, "count": 0, "fixtures": 0, "setup": 0.0, "teardown": 0.0})
     for f in fixtures:
         b = by[f["engine"]]
         b["wall"] += f["wall"]; b["tests"] += f["tests"]; b["count"] += f["count"]; b["fixtures"] += 1
+        b["setup"] += f["setup"]; b["teardown"] += f["teardown"]
     level = collections.defaultdict(float)
     for s in setups:
         level[s["engine"]] += s["outside"]
     if md:
-        say("| Engine | Fixtures | Tests | In tests | Fixture setup/teardown | Engine-level setup | Per test |")
-        say("|---|---:|---:|---:|---:|---:|---:|")
+        say("| Engine | Fixtures | Tests | In tests | Fixture setup | Fixture teardown | Between tests | Engine-level setup | Per test |")
+        say("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     else:
-        say(f"  {'engine':10s} {'fixtures':>8s} {'tests':>6s} {'in tests':>10s} {'fixture s/t':>12s} {'engine setup':>13s} {'per test':>9s}")
+        say(f"  {'engine':10s} {'fixtures':>8s} {'tests':>6s} {'in tests':>9s} {'setup':>8s} {'teardown':>9s} {'between':>8s} {'engine setup':>13s} {'per test':>9s}")
     for e in sorted(by, key=lambda k: -by[k]["wall"]):
         b = by[e]
-        overhead = b["wall"] - b["tests"]
+        between = max(b["wall"] - b["tests"] - b["setup"] - b["teardown"], 0.0)
         per = b["tests"] / b["count"] if b["count"] else 0
-        row = (e, b["fixtures"], b["count"], b["tests"], overhead, level.get(e, 0.0), per)
-        say("| %s | %d | %d | %.0fs | %.0fs | %.0fs | %.2fs |" % row if md
-            else "  %-10s %8d %6d %9.0fs %11.0fs %12.0fs %8.2fs" % row)
+        row = (e, b["fixtures"], b["count"], b["tests"], b["setup"], b["teardown"], between, level.get(e, 0.0), per)
+        say("| %s | %d | %d | %.0fs | %.0fs | %.0fs | %.0fs | %.0fs | %.2fs |" % row if md
+            else "  %-10s %8d %6d %8.0fs %7.0fs %8.0fs %7.0fs %12.0fs %8.2fs" % row)
     say("")
-    worst = sorted(fixtures, key=lambda f: -(f["wall"] - f["tests"]))[:top]
-    say(f"### Top {top} fixtures by setup/teardown" if md else f"Top {top} fixtures by setup/teardown:")
+    worst = sorted(fixtures, key=lambda f: -(f["setup"] + f["teardown"]))[:top]
+    say(f"### Top {top} fixtures by setup + teardown" if md else f"Top {top} fixtures by setup + teardown:")
     if md:
-        say("| Fixture | Engine | Setup/teardown | In tests | Tests |")
-        say("|---|---|---:|---:|---:|")
+        say("| Fixture | Engine | Setup | Teardown | In tests | Tests |")
+        say("|---|---|---:|---:|---:|---:|")
     for f in worst:
         short = f["name"].split(".")[-1]
-        row = (short, f["engine"], f["wall"] - f["tests"], f["tests"], f["count"])
-        say("| %s | %s | %.1fs | %.1fs | %d |" % row if md else "  %-50s %-10s %7.1fs setup/teardown %7.1fs in %3d tests" % row)
+        row = (short, f["engine"], f["setup"], f["teardown"], f["tests"], f["count"])
+        say("| %s | %s | %.1fs | %.1fs | %.1fs | %d |" % row if md
+            else "  %-46s %-10s setup %6.1fs  teardown %5.1fs  %7.1fs in %3d tests" % row)
     return "\n".join(out)
 
 
