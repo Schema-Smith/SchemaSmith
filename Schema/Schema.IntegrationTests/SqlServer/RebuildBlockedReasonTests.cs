@@ -64,7 +64,7 @@ public class RebuildBlockedReasonTests
 
         // Mirrors SchemaQuench.IntegrationTests.SqlServer.FixtureSetup: enabled from inside the database,
         // after kindling, which is the sequence already proven in CI.
-        Exec("EXEC sys.sp_cdc_enable_db");
+        ExecWithDeadlockRetry("EXEC sys.sp_cdc_enable_db");
     }
 
     [OneTimeTearDown]
@@ -105,7 +105,7 @@ public class RebuildBlockedReasonTests
     }
 
     /// <summary>
-    /// Teardown-only. Matches on the deadlock TEXT rather than an error number: SQL Server wraps 1205
+    /// For teardown and the CDC enables, which write server-wide job metadata. Matches on the deadlock TEXT rather than an error number: SQL Server wraps 1205
     /// inside other errors on some paths (a CDC enable reports it under 22832), so a number check can
     /// miss it. After the retries it runs once unguarded, so a genuine failure surfaces with its real
     /// error rather than a synthesized one.
@@ -207,7 +207,7 @@ CREATE TABLE dbo.TemporalRebuildGuard (
     public void CdcTrackedTable_IsBlocked_AndTheReasonNamesChangeDataCapture()
     {
         Exec("CREATE TABLE dbo.CdcRebuildGuard (Id INT NOT NULL PRIMARY KEY, Val NVARCHAR(50) NULL)");
-        Exec("EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'CdcRebuildGuard', @role_name = NULL");
+        ExecWithDeadlockRetry("EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'CdcRebuildGuard', @role_name = NULL");
 
         var reason = BlockedReason("CdcRebuildGuard");
 

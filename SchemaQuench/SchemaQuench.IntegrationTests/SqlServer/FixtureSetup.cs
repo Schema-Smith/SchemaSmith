@@ -168,8 +168,7 @@ CREATE DATABASE [{_integrationMainDb}] COLLATE {collation};
         conn.ChangeDatabase(_integrationMainDb);
         ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
 
-        cmd.CommandText = "EXEC sys.sp_cdc_enable_db";
-        cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.SqlServerDeadlockRetry.Execute(cmd, "EXEC sys.sp_cdc_enable_db");
 
         cmd.CommandText = @"
 CREATE TYPE [Flag] FROM BIT NOT NULL
