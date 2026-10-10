@@ -38,8 +38,14 @@ public class TableDataDeliveryTests
     [SetUp]
     public void SetUp()
     {
-        _testDb = Schema.IntegrationTests.SqlServer.FixtureSetup.MainDb;
-        _connection = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(Schema.IntegrationTests.SqlServer.FixtureSetup.GetMainDbConnectionString());
+        // This suite's own kindled main database. The Schema suite's FixtureSetup would build and kindle a second one in
+        // this process, which only that suite's teardown drops.
+        var config = FactoryContainer.Resolve<IConfigurationRoot>();
+        _testDb = config["ScriptTokens:MainDB"]!;
+        var connProps = ConnectionString.ReadProperties(config, "Target:ConnectionProperties");
+        _connection = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
+            ConnectionString.Build(Platform.SqlServer, config["Target:Server"], _testDb,
+                config["Target:User"], config["Target:Password"], config["Target:Port"], connProps));
         _connection.Open();
         _testTableName = $"_test_data_{Guid.NewGuid():N}".Substring(0, 30);
 
