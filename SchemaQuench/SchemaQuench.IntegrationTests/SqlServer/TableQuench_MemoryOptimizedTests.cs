@@ -2,6 +2,7 @@
 
 using System;
 using System.Data;
+using System.Text;
 using Microsoft.Data.SqlClient;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -544,9 +545,9 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
     {
         cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJson @p_Schema = 'dbo', @p_Table = '{table}'";
         using var reader = cmd.ExecuteReader();
-        var json = string.Empty;
-        while (reader.Read()) json += $"{reader.GetString(0)}\r\n";
-        return json;
+        var json = new StringBuilder();
+        while (reader.Read()) json.Append(reader.GetString(0)).Append("\r\n");
+        return json.ToString();
     }
 
     private static SqlServerTable GenerateTable(IDbCommand cmd, string table)
