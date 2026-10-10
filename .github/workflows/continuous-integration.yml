@@ -101,6 +101,10 @@ jobs:
         # and would otherwise never run them (that gap let SS-STALE-001 schema staleness go undetected).
         run: dotnet test SchemaQuench/SchemaQuench.IntegrationTests/SchemaQuench.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=Validate" --logger trx --results-directory TestResults
 
+      - name: Suite Time Summary
+        if: ${{ !cancelled() && hashFiles('TestResults/nunit/*.xml') != '' }}
+        run: python3 scripts/suite-overhead.py TestResults/nunit --markdown >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload Test Results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ always() }}
@@ -296,6 +300,10 @@ jobs:
           dotnet test SchemaTongs/SchemaTongs.IntegrationTests/SchemaTongs.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=SqlServer" --logger trx --results-directory TestResults
           dotnet test DataTongs/DataTongs.IntegrationTests/DataTongs.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=SqlServer" --logger trx --results-directory TestResults
 
+      - name: Suite Time Summary
+        if: ${{ !cancelled() && hashFiles('TestResults/nunit/*.xml') != '' }}
+        run: python3 scripts/suite-overhead.py TestResults/nunit --markdown >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload Test Results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ always() }}
@@ -404,6 +412,10 @@ jobs:
           dotnet test SchemaTongs/SchemaTongs.IntegrationTests/SchemaTongs.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=PostgreSQL" --logger trx --results-directory TestResults
           dotnet test DataTongs/DataTongs.IntegrationTests/DataTongs.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=PostgreSQL" --logger trx --results-directory TestResults
 
+      - name: Suite Time Summary
+        if: ${{ !cancelled() && hashFiles('TestResults/nunit/*.xml') != '' }}
+        run: python3 scripts/suite-overhead.py TestResults/nunit --markdown >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload Test Results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ always() }}
@@ -487,6 +499,10 @@ jobs:
           dotnet test SchemaQuench/SchemaQuench.IntegrationTests/SchemaQuench.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=MySQL" --logger trx --results-directory TestResults
           dotnet test SchemaTongs/SchemaTongs.IntegrationTests/SchemaTongs.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=MySQL" --logger trx --results-directory TestResults
           dotnet test DataTongs/DataTongs.IntegrationTests/DataTongs.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=MySQL" --logger trx --results-directory TestResults
+
+      - name: Suite Time Summary
+        if: ${{ !cancelled() && hashFiles('TestResults/nunit/*.xml') != '' }}
+        run: python3 scripts/suite-overhead.py TestResults/nunit --markdown >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Test Results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -586,6 +602,10 @@ jobs:
           dotnet test SchemaTongs/SchemaTongs.IntegrationTests/SchemaTongs.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=MariaDb" --logger trx --results-directory TestResults
           dotnet test DataTongs/DataTongs.IntegrationTests/DataTongs.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=MariaDb" --logger trx --results-directory TestResults
 
+      - name: Suite Time Summary
+        if: ${{ !cancelled() && hashFiles('TestResults/nunit/*.xml') != '' }}
+        run: python3 scripts/suite-overhead.py TestResults/nunit --markdown >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload Test Results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ always() }}
@@ -673,9 +693,13 @@ jobs:
       - name: Run ${{ matrix.engine }} Integration Tests
         run: |
           for p in Schema/Schema.IntegrationTests SchemaQuench/SchemaQuench.IntegrationTests SchemaTongs/SchemaTongs.IntegrationTests DataTongs/DataTongs.IntegrationTests; do
-            dotnet test "$p/$(basename "$p").csproj" --no-build -c Debug --filter "Category=${{ matrix.category }}" --logger trx --results-directory TestResults || FAILED=1
+            dotnet test "$p/$(basename "$p").csproj" --no-build -c Debug --filter "Category=${{ matrix.category }}" --logger trx --results-directory TestResults -- NUnit.TestOutputXml=nunit NUnit.OutputXmlFolderMode=RelativeToResultDirectory || FAILED=1
           done
           exit ${FAILED:-0}
+
+      - name: Suite Time Summary
+        if: ${{ !cancelled() && hashFiles('TestResults/nunit/*.xml') != '' }}
+        run: python3 scripts/suite-overhead.py TestResults/nunit --markdown >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Test Results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

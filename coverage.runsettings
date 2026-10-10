@@ -18,4 +18,10 @@
       </DataCollector>
     </DataCollectors>
   </DataCollectionRunSettings>
+  <!-- NUnit's own result XML beside the TRX, in TestResults/nunit. Unlike TRX it times every fixture including its
+       one-time setup and teardown; scripts/suite-overhead.py turns that into the job's suite-time summary. -->
+  <NUnit>
+    <TestOutputXml>nunit</TestOutputXml>
+    <OutputXmlFolderMode>RelativeToResultDirectory</OutputXmlFolderMode>
+  </NUnit>
 </RunSettings>
