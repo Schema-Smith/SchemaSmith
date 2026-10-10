@@ -17,6 +17,9 @@ public static class ConfigHelper
     {
         var logRepository = LogManager.GetRepository(Assembly.GetEntryAssembly() ?? Assembly.GetCallingAssembly());
         GlobalContext.Properties["LogPath"] = ResolveLogPath();
+        // Closes the appenders a previous configuration opened. A tool configures once per process, but a test
+        // process runs Main many times, and the old file appenders kept the log files locked against the new ones.
+        logRepository.ResetConfiguration();
         try
         {
             using var configStream = ResourceLoader.Load("Log4Net.config").ToStream();
