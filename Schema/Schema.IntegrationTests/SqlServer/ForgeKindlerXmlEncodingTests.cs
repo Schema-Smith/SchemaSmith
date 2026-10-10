@@ -115,42 +115,47 @@ public class ForgeKindlerXmlEncodingTests
         // B2: the legacy-tier extract must preserve object ExtendedProperties. EP names are arbitrary
         // sysname (a name with a space cannot be an XML element name), so the proc emits them attribute-
         // encoded and FromIngestXml rebuilds the dict. Prove the round trip on a real compat-100 database.
-        var db = CreateCompat100Database("XmlEP100");
+        var db = SharedCompat100XmlDb();
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
         conn.Open();
         using var cmd = conn.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, forceReKindle: true, IngestEncoding.Xml);
-
-        cmd.CommandText = @"
+        try
+        {
+            cmd.CommandText = @"
 CREATE TABLE dbo.WidgetEP ([Id] INT NOT NULL CONSTRAINT PK_WidgetEP PRIMARY KEY, [Amount] DECIMAL(10,2) NULL);
 CREATE INDEX IX_WidgetEP_Amount ON dbo.WidgetEP ([Amount]);
 EXEC sys.sp_addextendedproperty @name=N'OwningTeam', @value=N'Billing', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'TABLE', @level1name=N'WidgetEP';
 EXEC sys.sp_addextendedproperty @name=N'My Note', @value=N'a & b < c', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'TABLE', @level1name=N'WidgetEP';
 EXEC sys.sp_addextendedproperty @name=N'Classification', @value=N'Financial', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'TABLE', @level1name=N'WidgetEP', @level2type=N'COLUMN', @level2name=N'Amount';
 EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'TABLE', @level1name=N'WidgetEP', @level2type=N'INDEX', @level2name=N'IX_WidgetEP_Amount';";
-        cmd.ExecuteNonQuery();
+            cmd.ExecuteNonQuery();
 
-        // FOR XML PATH (no TYPE) returns the document in 2033-char chunks across rows; concatenate them
-        // (ExecuteScalar would read only the first chunk and truncate a larger document).
-        cmd.CommandText = "EXEC SchemaSmith.GenerateTableXml @p_Schema='dbo', @p_Table='WidgetEP'";
-        var sb = new System.Text.StringBuilder();
-        using (var reader = cmd.ExecuteReader())
-            while (reader.Read())
-                sb.Append(reader.GetValue(0)?.ToString());
-        var xml = sb.ToString();
-        Assert.That(xml, Does.Contain("</Table>"), "GenerateTableXml must return a complete table document");
+            // FOR XML PATH (no TYPE) returns the document in 2033-char chunks across rows; concatenate them
+            // (ExecuteScalar would read only the first chunk and truncate a larger document).
+            cmd.CommandText = "EXEC SchemaSmith.GenerateTableXml @p_Schema='dbo', @p_Table='WidgetEP'";
+            var sb = new System.Text.StringBuilder();
+            using (var reader = cmd.ExecuteReader())
+                while (reader.Read())
+                    sb.Append(reader.GetValue(0)?.ToString());
+            var xml = sb.ToString();
+            Assert.That(xml, Does.Contain("</Table>"), "GenerateTableXml must return a complete table document");
 
-        var table = PlatformDeserializer.DeserializeTable(ModelXmlSerializer.FromIngestXml(xml), Platform.SqlServer);
+            var table = PlatformDeserializer.DeserializeTable(ModelXmlSerializer.FromIngestXml(xml), Platform.SqlServer);
 
-        static JToken Eps(DynamicBase o) => ((JObject)o.Extensions)?["ExtendedProperties"];
-        Assert.Multiple(() =>
+            static JToken Eps(DynamicBase o) => ((JObject)o.Extensions)?["ExtendedProperties"];
+            Assert.Multiple(() =>
+            {
+                var tableEps = Eps(table);
+                Assert.That((string)tableEps["OwningTeam"], Is.EqualTo("Billing"), "table EP");
+                Assert.That((string)tableEps["My Note"], Is.EqualTo("a & b < c"), "table EP with a spaced name + special-char value");
+                Assert.That((string)Eps(table.Columns.Single(c => c.Name == "[Amount]"))["Classification"], Is.EqualTo("Financial"), "column EP");
+                Assert.That((string)Eps(table.Indexes.Single(i => i.Name == "[IX_WidgetEP_Amount]"))["IdxNote"], Is.EqualTo("hot"), "index EP");
+            });
+        }
+        finally
         {
-            var tableEps = Eps(table);
-            Assert.That((string)tableEps["OwningTeam"], Is.EqualTo("Billing"), "table EP");
-            Assert.That((string)tableEps["My Note"], Is.EqualTo("a & b < c"), "table EP with a spaced name + special-char value");
-            Assert.That((string)Eps(table.Columns.Single(c => c.Name == "[Amount]"))["Classification"], Is.EqualTo("Financial"), "column EP");
-            Assert.That((string)Eps(table.Indexes.Single(i => i.Name == "[IX_WidgetEP_Amount]"))["IdxNote"], Is.EqualTo("hot"), "index EP");
-        });
+            DropTables(cmd, "dbo.WidgetEP");
+        }
 
         conn.Close();
     }
@@ -161,36 +166,41 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
         // The XML twin is easy to miss: it is a separate, hand-maintained copy of
         // BootstrapTableQuench's logic (OPENJSON-free), and a rename left out of it would be invisible
         // on a modern server (JSON encoding masks it) and silently wrong only below the compat cliff.
-        var db = CreateCompat100Database("BootstrapXmlColRename100");
+        var db = SharedCompat100XmlDb();
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
         conn.Open();
         using var cmd = conn.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, forceReKindle: true, IngestEncoding.Xml);
+        try
+        {
+            cmd.CommandText = "CREATE TABLE dbo.XmlColRenameTest ([Id] INT IDENTITY(1,1) PRIMARY KEY, [OldCol] VARCHAR(50) NOT NULL DEFAULT '0')";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "INSERT INTO dbo.XmlColRenameTest ([OldCol]) VALUES ('distinguishing-value')";
+            cmd.ExecuteNonQuery();
 
-        cmd.CommandText = "CREATE TABLE dbo.XmlColRenameTest ([Id] INT IDENTITY(1,1) PRIMARY KEY, [OldCol] VARCHAR(50) NOT NULL DEFAULT '0')";
-        cmd.ExecuteNonQuery();
-        cmd.CommandText = "INSERT INTO dbo.XmlColRenameTest ([OldCol]) VALUES ('distinguishing-value')";
-        cmd.ExecuteNonQuery();
+            var json = "{\"Schema\": \"[dbo]\", \"Name\": \"[XmlColRenameTest]\","
+                + "\"Columns\": ["
+                + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false},"
+                + "{\"Name\": \"[Value]\", \"DataType\": \"VARCHAR(50)\", \"Nullable\": false, \"Default\": \"'0'\", \"OldName\": \"[OldCol]\"}"
+                + "],"
+                + "\"Indexes\": [{\"Name\": \"[PK_XmlColRenameTest]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"}]"
+                + "}";
+            var xml = ModelXmlSerializer.ToIngestXmlObject(json, "Table");
+            cmd.CommandText = $"DECLARE @x XML = N'{xml.Replace("'", "''")}'; EXEC SchemaSmith.BootstrapTableQuench @TableDefinitions = @x;";
+            cmd.ExecuteNonQuery();
 
-        var json = "{\"Schema\": \"[dbo]\", \"Name\": \"[XmlColRenameTest]\","
-            + "\"Columns\": ["
-            + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false},"
-            + "{\"Name\": \"[Value]\", \"DataType\": \"VARCHAR(50)\", \"Nullable\": false, \"Default\": \"'0'\", \"OldName\": \"[OldCol]\"}"
-            + "],"
-            + "\"Indexes\": [{\"Name\": \"[PK_XmlColRenameTest]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"}]"
-            + "}";
-        var xml = ModelXmlSerializer.ToIngestXmlObject(json, "Table");
-        cmd.CommandText = $"DECLARE @x XML = N'{xml.Replace("'", "''")}'; EXEC SchemaSmith.BootstrapTableQuench @TableDefinitions = @x;";
-        cmd.ExecuteNonQuery();
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.XmlColRenameTest') AND name = 'Value'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "Renamed column must exist under the new name.");
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.XmlColRenameTest') AND name = 'OldCol'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "Old column name must be gone after rename.");
 
-        cmd.CommandText = "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.XmlColRenameTest') AND name = 'Value'";
-        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "Renamed column must exist under the new name.");
-        cmd.CommandText = "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.XmlColRenameTest') AND name = 'OldCol'";
-        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "Old column name must be gone after rename.");
-
-        cmd.CommandText = "SELECT [Value] FROM dbo.XmlColRenameTest WHERE [Id] = 1";
-        Assert.That(cmd.ExecuteScalar(), Is.EqualTo("distinguishing-value"),
-            "The pre-existing row's value must survive the rename under the XML-ingest twin, not read back as the column's DEFAULT.");
+            cmd.CommandText = "SELECT [Value] FROM dbo.XmlColRenameTest WHERE [Id] = 1";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo("distinguishing-value"),
+                "The pre-existing row's value must survive the rename under the XML-ingest twin, not read back as the column's DEFAULT.");
+        }
+        finally
+        {
+            DropTables(cmd, "dbo.XmlColRenameTest");
+        }
 
         conn.Close();
     }
@@ -198,36 +208,68 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
     [Test]
     public void BootstrapTableXmlQuench_TableRename_AtCompatibilityLevel100_DataSurvives()
     {
-        var db = CreateCompat100Database("BootstrapXmlTblRename100");
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            cmd.CommandText = "CREATE TABLE dbo.XmlTblRenameTestOld ([Id] INT IDENTITY(1,1) PRIMARY KEY, [Value] VARCHAR(50) NOT NULL DEFAULT '0')";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "INSERT INTO dbo.XmlTblRenameTestOld ([Value]) VALUES ('distinguishing-value')";
+            cmd.ExecuteNonQuery();
+
+            var json = "{\"Schema\": \"[dbo]\", \"Name\": \"[XmlTblRenameTest]\", \"OldName\": \"[XmlTblRenameTestOld]\","
+                + "\"Columns\": ["
+                + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false},"
+                + "{\"Name\": \"[Value]\", \"DataType\": \"VARCHAR(50)\", \"Nullable\": false, \"Default\": \"'0'\"}"
+                + "],"
+                + "\"Indexes\": [{\"Name\": \"[PK_XmlTblRenameTest]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"}]"
+                + "}";
+            var xml = ModelXmlSerializer.ToIngestXmlObject(json, "Table");
+            cmd.CommandText = $"DECLARE @x XML = N'{xml.Replace("'", "''")}'; EXEC SchemaSmith.BootstrapTableQuench @TableDefinitions = @x;";
+            cmd.ExecuteNonQuery();
+
+            Assert.That(ObjectExists(cmd, "dbo.XmlTblRenameTest", "U"), Is.True, "Renamed table must exist under the new name.");
+            Assert.That(ObjectExists(cmd, "dbo.XmlTblRenameTestOld", "U"), Is.False, "Old table name must be gone after rename.");
+
+            cmd.CommandText = "SELECT [Value] FROM dbo.XmlTblRenameTest WHERE [Id] = 1";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo("distinguishing-value"),
+                "The old table's row must survive the rename under the XML-ingest twin, not be orphaned under an empty new table.");
+        }
+        finally
+        {
+            DropTables(cmd, "dbo.XmlTblRenameTest", "dbo.XmlTblRenameTestOld");
+        }
+
+        conn.Close();
+    }
+
+    // Tests that only need "a compat-100 database the XML kindle has run in" share one, created and kindled on
+    // first use (same arguments the per-test code used) and dropped with the rest in OneTimeTearDown. Each such
+    // test owns uniquely named objects and drops them itself. The fresh-kindle tests above keep their own.
+    private string _sharedCompat100XmlDb;
+
+    private string SharedCompat100XmlDb()
+    {
+        if (_sharedCompat100XmlDb != null) return _sharedCompat100XmlDb;
+        var db = CreateCompat100Database("SharedXml100");
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
         conn.Open();
         using var cmd = conn.CreateCommand();
         ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, forceReKindle: true, IngestEncoding.Xml);
-
-        cmd.CommandText = "CREATE TABLE dbo.XmlTblRenameTestOld ([Id] INT IDENTITY(1,1) PRIMARY KEY, [Value] VARCHAR(50) NOT NULL DEFAULT '0')";
-        cmd.ExecuteNonQuery();
-        cmd.CommandText = "INSERT INTO dbo.XmlTblRenameTestOld ([Value]) VALUES ('distinguishing-value')";
-        cmd.ExecuteNonQuery();
-
-        var json = "{\"Schema\": \"[dbo]\", \"Name\": \"[XmlTblRenameTest]\", \"OldName\": \"[XmlTblRenameTestOld]\","
-            + "\"Columns\": ["
-            + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false},"
-            + "{\"Name\": \"[Value]\", \"DataType\": \"VARCHAR(50)\", \"Nullable\": false, \"Default\": \"'0'\"}"
-            + "],"
-            + "\"Indexes\": [{\"Name\": \"[PK_XmlTblRenameTest]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"}]"
-            + "}";
-        var xml = ModelXmlSerializer.ToIngestXmlObject(json, "Table");
-        cmd.CommandText = $"DECLARE @x XML = N'{xml.Replace("'", "''")}'; EXEC SchemaSmith.BootstrapTableQuench @TableDefinitions = @x;";
-        cmd.ExecuteNonQuery();
-
-        Assert.That(ObjectExists(cmd, "dbo.XmlTblRenameTest", "U"), Is.True, "Renamed table must exist under the new name.");
-        Assert.That(ObjectExists(cmd, "dbo.XmlTblRenameTestOld", "U"), Is.False, "Old table name must be gone after rename.");
-
-        cmd.CommandText = "SELECT [Value] FROM dbo.XmlTblRenameTest WHERE [Id] = 1";
-        Assert.That(cmd.ExecuteScalar(), Is.EqualTo("distinguishing-value"),
-            "The old table's row must survive the rename under the XML-ingest twin, not be orphaned under an empty new table.");
-
         conn.Close();
+        return _sharedCompat100XmlDb = db;
+    }
+
+    private static void DropTables(IDbCommand cmd, params string[] tables)
+    {
+        foreach (var table in tables)
+        {
+            cmd.CommandText = $"IF OBJECT_ID('{table}', 'U') IS NOT NULL DROP TABLE {table}";
+            try { cmd.ExecuteNonQuery(); }
+            catch (System.Data.Common.DbException) { /* cleanup must not mask the test's own failure */ }
+        }
     }
 
     private static bool ObjectExists(IDbCommand cmd, string name, string type)

@@ -37,61 +37,52 @@ public class VersionCompatTokenIntegrationTests
     [Test]
     public void CompatLevel100OnModernBinary_SeparatesSyntaxGatingFromFeatureGating()
     {
-        var compat100Db = "vctdb_c100_" + Guid.NewGuid().ToString("N")[..8];
-        DropTransientDb(compat100Db);
-        CreateDatabaseAtCompatLevel(compat100Db, 100);
+        var compat100Db = SharedCompat100Db();
 
-        try
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+
+        // The footgun premise, straight from detection: a modern binary hosting a compat-100 database.
+        var info = TargetVersionDetector.Detect(cmd, Platform.SqlServer, compat100Db);
+        Assert.Multiple(() =>
         {
-            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
+            Assert.That(info.CompatibilityLevel, Is.EqualTo(100),
+                "The database is at compatibility level 100.");
+            Assert.That(info.ServerComparable, Is.GreaterThanOrEqualTo(13),
+                "The sandbox binary is modern (>= SQL Server 2016), so version-gating and syntax-gating disagree.");
+        });
 
-            // The footgun premise, straight from detection: a modern binary hosting a compat-100 database.
-            var info = TargetVersionDetector.Detect(cmd, Platform.SqlServer, compat100Db);
-            Assert.Multiple(() =>
-            {
-                Assert.That(info.CompatibilityLevel, Is.EqualTo(100),
-                    "The database is at compatibility level 100.");
-                Assert.That(info.ServerComparable, Is.GreaterThanOrEqualTo(13),
-                    "The sandbox binary is modern (>= SQL Server 2016), so version-gating and syntax-gating disagree.");
-            });
-
-            var product = new Product { Name = "P", Platform = Platform.SqlServer };
-            var template = new Template { Name = "T" };
-            // Syntax gate: false at compat 100 (OPENJSON/STRING_AGG would parse-error there).
-            var syntaxGate = new TemplateFolder
-            {
-                FolderPath = "syntax",
-                QuenchSlot = TemplateQuenchSlot.Before,
-                ShouldApplyExpression = "SELECT CASE WHEN {{CompatibilityLevel}} >= 130 THEN 1 ELSE 0 END"
-            };
-            syntaxGate.Scripts.Add(new SqlScript { Name = "syntax.sql" });
-            // Feature gate: true on the modern binary.
-            var featureGate = new TemplateFolder
-            {
-                FolderPath = "feature",
-                QuenchSlot = TemplateQuenchSlot.Before,
-                ShouldApplyExpression = "SELECT CASE WHEN {{ServerMajorVersion}} >= 13 THEN 1 ELSE 0 END"
-            };
-            featureGate.Scripts.Add(new SqlScript { Name = "feature.sql" });
-            template.ScriptFolders.Add(syntaxGate);
-            template.ScriptFolders.Add(featureGate);
-
-            var quench = new DatabaseQuench("srv", product, template, compat100Db,
-                false, "0", false, "0", "1", "1", "1", "1", "1", "1", "0", false, false, null);
-            quench.PrepareIterationContent();
-            quench.PrepareVersionScriptTokens(info.ServerComparable, info.CompatibilityLevel);
-
-            quench.ApplyFolderGates(cmd);
-
-            Assert.That(quench.IterationBeforeScripts.Select(s => s.Name), Is.EqualTo(new[] { "feature.sql" }),
-                "The compat-130 syntax gate must skip (100 >= 130 is false) while the version-13 feature gate applies.");
-        }
-        finally
+        var product = new Product { Name = "P", Platform = Platform.SqlServer };
+        var template = new Template { Name = "T" };
+        // Syntax gate: false at compat 100 (OPENJSON/STRING_AGG would parse-error there).
+        var syntaxGate = new TemplateFolder
         {
-            DropTransientDb(compat100Db);
-        }
+            FolderPath = "syntax",
+            QuenchSlot = TemplateQuenchSlot.Before,
+            ShouldApplyExpression = "SELECT CASE WHEN {{CompatibilityLevel}} >= 130 THEN 1 ELSE 0 END"
+        };
+        syntaxGate.Scripts.Add(new SqlScript { Name = "syntax.sql" });
+        // Feature gate: true on the modern binary.
+        var featureGate = new TemplateFolder
+        {
+            FolderPath = "feature",
+            QuenchSlot = TemplateQuenchSlot.Before,
+            ShouldApplyExpression = "SELECT CASE WHEN {{ServerMajorVersion}} >= 13 THEN 1 ELSE 0 END"
+        };
+        featureGate.Scripts.Add(new SqlScript { Name = "feature.sql" });
+        template.ScriptFolders.Add(syntaxGate);
+        template.ScriptFolders.Add(featureGate);
+
+        var quench = new DatabaseQuench("srv", product, template, compat100Db,
+            false, "0", false, "0", "1", "1", "1", "1", "1", "1", "0", false, false, null);
+        quench.PrepareIterationContent();
+        quench.PrepareVersionScriptTokens(info.ServerComparable, info.CompatibilityLevel);
+
+        quench.ApplyFolderGates(cmd);
+
+        Assert.That(quench.IterationBeforeScripts.Select(s => s.Name), Is.EqualTo(new[] { "feature.sql" }),
+            "The compat-130 syntax gate must skip (100 >= 130 is false) while the version-13 feature gate applies.");
     }
 
     [Test]
@@ -99,45 +90,56 @@ public class VersionCompatTokenIntegrationTests
     {
         // A2 end-to-end: the XML twin is shreddable with XQuery on a compat-100 database, where the JSON
         // sibling's OPENJSON path parse-errors — the exact gap the twins close for legacy-tier authors.
-        var compat100Db = "vctxml_c100_" + Guid.NewGuid().ToString("N")[..8];
-        DropTransientDb(compat100Db);
-        CreateDatabaseAtCompatLevel(compat100Db, 100);
+        var compat100Db = SharedCompat100Db();
 
-        try
+        var template = new Template { TableSchema = "[{\"Name\":\"[Orders]\"}]" };
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(compat100Db); // OPENJSON's parse depends on THIS database's compatibility level
+
+        using (var xmlCmd = conn.CreateCommand())
         {
-            var template = new Template { TableSchema = "[{\"Name\":\"[Orders]\"}]" };
-
-            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
-            conn.Open();
-            conn.ChangeDatabase(compat100Db); // OPENJSON's parse depends on THIS database's compatibility level
-
-            using (var xmlCmd = conn.CreateCommand())
-            {
-                xmlCmd.CommandText =
-                    "SELECT q.x.value('(/Tables/Table/Name)[1]','nvarchar(200)') FROM (SELECT CAST(@x AS xml) AS x) q";
-                var p = xmlCmd.CreateParameter();
-                p.ParameterName = "@x";
-                p.Value = template.TableXml;
-                xmlCmd.Parameters.Add(p);
-                Assert.That(xmlCmd.ExecuteScalar()?.ToString(), Is.EqualTo("[Orders]"),
-                    "The {{TableXml}} twin must shred with .value()/.nodes() at compatibility level 100.");
-            }
-
-            using (var jsonCmd = conn.CreateCommand())
-            {
-                jsonCmd.CommandText = "SELECT [value] FROM OPENJSON(@j)";
-                var p = jsonCmd.CreateParameter();
-                p.ParameterName = "@j";
-                p.Value = template.TableSchema;
-                jsonCmd.Parameters.Add(p);
-                Assert.That(() => jsonCmd.ExecuteScalar(), Throws.InstanceOf<SqlException>(),
-                    "OPENJSON must parse-error at compatibility level 100 — the reason the XML twin exists.");
-            }
+            xmlCmd.CommandText =
+                "SELECT q.x.value('(/Tables/Table/Name)[1]','nvarchar(200)') FROM (SELECT CAST(@x AS xml) AS x) q";
+            var p = xmlCmd.CreateParameter();
+            p.ParameterName = "@x";
+            p.Value = template.TableXml;
+            xmlCmd.Parameters.Add(p);
+            Assert.That(xmlCmd.ExecuteScalar()?.ToString(), Is.EqualTo("[Orders]"),
+                "The {{TableXml}} twin must shred with .value()/.nodes() at compatibility level 100.");
         }
-        finally
+
+        using (var jsonCmd = conn.CreateCommand())
         {
-            DropTransientDb(compat100Db);
+            jsonCmd.CommandText = "SELECT [value] FROM OPENJSON(@j)";
+            var p = jsonCmd.CreateParameter();
+            p.ParameterName = "@j";
+            p.Value = template.TableSchema;
+            jsonCmd.Parameters.Add(p);
+            Assert.That(() => jsonCmd.ExecuteScalar(), Throws.InstanceOf<SqlException>(),
+                "OPENJSON must parse-error at compatibility level 100 — the reason the XML twin exists.");
         }
+    }
+
+    // Both tests need only "a database at compatibility level 100" and create no objects in it, so they share
+    // one, created on first use and dropped once the fixture finishes.
+    private string _sharedCompat100Db;
+
+    private string SharedCompat100Db()
+    {
+        if (_sharedCompat100Db != null) return _sharedCompat100Db;
+        var db = "vctdb_c100_" + Guid.NewGuid().ToString("N")[..8];
+        DropTransientDb(db);
+        CreateDatabaseAtCompatLevel(db, 100);
+        return _sharedCompat100Db = db;
+    }
+
+    [OneTimeTearDown]
+    public void DropSharedDatabases()
+    {
+        if (_sharedCompat100Db != null)
+            DropTransientDb(_sharedCompat100Db);
     }
 
     private void CreateDatabaseAtCompatLevel(string databaseName, int compatLevel)

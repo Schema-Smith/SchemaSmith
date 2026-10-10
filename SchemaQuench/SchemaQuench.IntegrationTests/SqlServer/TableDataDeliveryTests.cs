@@ -211,12 +211,7 @@ public class TableDataDeliveryTests
     {
         // B1 legacy-tier proof: XML delivery must apply on a compatibility-level-100 database, where the
         // JSON/OPENJSON path parse-errors.
-        var db = "vctdd_c100_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-        using (var master = _connection.CreateCommand())
-        {
-            master.CommandText = $"CREATE DATABASE [{db}]; ALTER DATABASE [{db}] SET COMPATIBILITY_LEVEL = 100;";
-            master.ExecuteNonQuery();
-        }
+        var db = SharedCompat100Db();
         try
         {
             _connection.ChangeDatabase(db);
@@ -258,8 +253,7 @@ public class TableDataDeliveryTests
         finally
         {
             _connection.ChangeDatabase(_testDb);
-            using var master = _connection.CreateCommand();
-            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(master, db);
+            DropTableInSharedDb(db);
         }
     }
 
@@ -269,7 +263,7 @@ public class TableDataDeliveryTests
         // At compatibility level 100 there is no OPENJSON, so a JSON delivery used to be skipped. It is now converted to
         // the XML shape and delivered through the XML merge: the same values sent both ways must land identically, with
         // nothing skipped or downgraded. Exercises the real MergeScriptHelperAdapter + real SQL execution.
-        var db = "vctdd_s2_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var db = SharedCompat100Db();
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
         const string amount = "1234567890123456789012345678.1234567890";
@@ -282,11 +276,6 @@ public class TableDataDeliveryTests
             + "<c n=\"dto\">2024-03-05T10:11:12.1234567+05:30</c><c n=\"bin\">3q2+7wA=</c><c n=\"flag\">1</c><c n=\"shape\">POINT (1 2)</c><c n=\"shape.STSrid\">4326</c>"
             + "<c n=\"uid\">6F9619FF-8B86-D011-B42D-00C04FC964FF</c><c n=\"notes\">[{\"a\":1},{\"b\":2}]</c></row></rows>");
 
-        using (var master = _connection.CreateCommand())
-        {
-            master.CommandText = $"CREATE DATABASE [{db}]; ALTER DATABASE [{db}] SET COMPATIBILITY_LEVEL = 100;";
-            master.ExecuteNonQuery();
-        }
         try
         {
             _connection.ChangeDatabase(db);
@@ -360,12 +349,47 @@ public class TableDataDeliveryTests
         finally
         {
             _connection.ChangeDatabase(_testDb);
-            using (var master = _connection.CreateCommand())
-            {
-                Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(master, db);
-            }
+            DropTableInSharedDb(db);
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
         }
+    }
+
+    // The two compat-100 tests need only a database at that level, so they share one, created on first use and dropped
+    // once the fixture finishes. Each creates its table under the per-test _testTableName and drops it on the way out.
+    private string _sharedCompat100Db;
+
+    private string SharedCompat100Db()
+    {
+        if (_sharedCompat100Db != null) return _sharedCompat100Db;
+        var db = "vctdd_c100_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        using (var master = _connection.CreateCommand())
+        {
+            master.CommandText = $"CREATE DATABASE [{db}]; ALTER DATABASE [{db}] SET COMPATIBILITY_LEVEL = 100;";
+            master.ExecuteNonQuery();
+        }
+        return _sharedCompat100Db = db;
+    }
+
+    private void DropTableInSharedDb(string db)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"DROP TABLE IF EXISTS [{db}].[dbo].[{_testTableName}]";
+        try { command.ExecuteNonQuery(); }
+        catch (System.Data.Common.DbException) { /* cleanup must not mask the test's own failure */ }
+    }
+
+    [OneTimeTearDown]
+    public void DropSharedDatabases()
+    {
+        if (_sharedCompat100Db == null) return;
+        var config = FactoryContainer.Resolve<IConfigurationRoot>();
+        var connProps = ConnectionString.ReadProperties(config, "Target:ConnectionProperties");
+        using var connection = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
+            ConnectionString.Build(Platform.SqlServer, config["Target:Server"], "master",
+                config["Target:User"], config["Target:Password"], config["Target:Port"], connProps));
+        connection.Open();
+        using var master = connection.CreateCommand();
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(master, _sharedCompat100Db);
     }
 
     [Test]
