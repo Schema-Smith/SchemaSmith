@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading;
 using log4net;
 using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json.Linq;
 using NSubstitute;
 using NUnit.Framework;
 using Schema.DataAccess;
@@ -485,6 +486,30 @@ public class DeployPathTableFeatureTests
         }, templateExtra: ", \"CdcSupportsNetChanges\": true", xmlIngest: true);
     }
 
+    // A deploy that dies part-way leaves its session's ChangeAudit rows behind, and SQL Server recycles session ids, so
+    // the next deploy to get that id read them as its own and put them in its summary. Seeding every likely id makes
+    // the reuse certain.
+    [Test]
+    public void ChangeAuditRowsLeftByAnotherSession_AreNotReportedAsThisDeploysChanges()
+    {
+        RunScenario("DeployStaleAudit", setupDatabase: null, (deploy, db, cmd) =>
+        {
+            cmd.CommandText = "INSERT SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) "
+                              + "SELECT TOP (2000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), 'table', 'dbo.PhantomFromAnotherSession', 'created' "
+                              + "FROM sys.all_columns a CROSS JOIN sys.all_columns b";
+            cmd.ExecuteNonQuery();
+
+            deploy(CdcTable(enableCdc: null, extraColumn: false));
+
+            var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+            var reported = ((JArray)summary.SelectToken("objectChanges.details") ?? [])
+                .Select(d => (string)d["objectName"]).ToList();
+            Assert.That(reported, Has.Some.Contains("DeployProbe"), "precondition: the summary carries this deploy's own changes");
+            Assert.That(reported, Has.None.Contains("PhantomFromAnotherSession"),
+                "rows another session left behind must not be reported as this deploy's changes");
+        });
+    }
+
     [Test]
     public void AChangeTrackingTable_IsTracked_ByARealDeploy()
     {
@@ -646,12 +671,8 @@ public class DeployPathTableFeatureTests
     {
         try
         {
-            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             cmd.Connection!.ChangeDatabase("master");
-            cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN "
-                              + $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-            cmd.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
         }
         catch (DbException) { /* best-effort cleanup */ }
         catch (InvalidOperationException) { /* connection already unusable */ }

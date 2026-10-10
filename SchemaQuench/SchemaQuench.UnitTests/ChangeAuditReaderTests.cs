@@ -56,6 +56,34 @@ public class ChangeAuditReaderTests
         Assert.That(rows, Is.Null);
     }
 
+    // A recycled session id carries the rows of the session that last had it; deleting only this session's rows before
+    // the work unit writes any is what keeps them out of its summary.
+    [TestCase(Platform.SqlServer, "@@SPID")]
+    [TestCase(Platform.PostgreSQL, "pg_backend_pid()")]
+    [TestCase(Platform.MySQL, "CONNECTION_ID()")]
+    [TestCase(Platform.MariaDb, "CONNECTION_ID()")]
+    public void DiscardStale_DeletesOnlyThisSessionsRows(Platform platform, string sessionFunction)
+    {
+        var cmd = Substitute.For<IDbCommand>();
+        var executed = new List<string>();
+        cmd.When(c => c.ExecuteNonQuery()).Do(_ => executed.Add(cmd.CommandText));
+
+        ChangeAuditReader.DiscardStale(platform, cmd);
+
+        Assert.That(executed, Has.Count.EqualTo(1));
+        Assert.That(executed[0], Does.StartWith("DELETE FROM").And.Contains("ChangeAudit").And.EndsWith($"= {sessionFunction}"));
+    }
+
+    [Test]
+    public void DiscardStale_MissingAuditTable_DoesNotThrow()
+    {
+        // Before the first kindle the table does not exist, and then there is nothing stale to discard.
+        var cmd = Substitute.For<IDbCommand>();
+        cmd.When(c => c.ExecuteNonQuery()).Do(_ => throw new TestDbException("Invalid object name 'SchemaSmith.ChangeAudit'."));
+
+        Assert.DoesNotThrow(() => ChangeAuditReader.DiscardStale(Platform.SqlServer, cmd));
+    }
+
     private sealed class TestDbException : DbException
     {
         public TestDbException(string message) : base(message) { }

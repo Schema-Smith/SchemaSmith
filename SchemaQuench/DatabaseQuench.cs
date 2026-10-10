@@ -559,6 +559,7 @@ public class DatabaseQuench
                 var effectiveTableCmd = tableCommand ?? command;
                 var effectiveObjectsCmd = objectsCommand ?? command;
                 var effectiveSilentCmd = silentCommand ?? command;
+                if (ChangeAudit != null) ChangeAuditReader.DiscardStale(_product.Platform, effectiveTableCmd);
 
                 // Detect the target version ONCE, up front (the connection is open) and BEFORE folder gates,
                 // since a folder ShouldApplyExpression may reference the version tokens (A1). One unified
