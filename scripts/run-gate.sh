@@ -12,10 +12,13 @@ for p in Schema/Schema.UnitTests SchemaQuench/SchemaQuench.UnitTests SchemaTongs
          Schema/Schema.IntegrationTests DataTongs/DataTongs.IntegrationTests \
          SchemaTongs/SchemaTongs.IntegrationTests SchemaQuench/SchemaQuench.IntegrationTests; do
   n="$(basename "$p")"
-  dotnet test "$p/$n.csproj" --no-build --results-directory "$results" --logger "trx;LogFileName=$n.trx" 2>&1 \
+  # NUnit's result XML as well (in $results/nunit): it times each fixture including its one-time setup and teardown.
+  dotnet test "$p/$n.csproj" --no-build --results-directory "$results" --logger "trx;LogFileName=$n.trx" \
+    -- NUnit.TestOutputXml=nunit NUnit.OutputXmlFolderMode=RelativeToResultDirectory 2>&1 \
     | grep -E "^(Passed!|Failed!)|^  Failed "
   # The grep would otherwise decide the script's exit status, and a red run would read as green.
   [ "${PIPESTATUS[0]}" -eq 0 ] || status=1
 done
 echo "TRX results: $results"
+"$(command -v python3 || command -v python)" scripts/suite-overhead.py "$results/nunit"
 exit $status
