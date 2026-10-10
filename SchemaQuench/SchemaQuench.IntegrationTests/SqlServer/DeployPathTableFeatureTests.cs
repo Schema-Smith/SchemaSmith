@@ -37,6 +37,22 @@ public class DeployPathTableFeatureTests
     private string _beforeScript;
     private bool _nextDeployFails;
 
+    // A new database costs CREATE DATABASE, sp_cdc_enable_db, a full kindle and a cold plan compile on the first
+    // deploy -- most of a scenario. Scenarios differ only in the database setup, the policy and the ingest encoding the
+    // forge was kindled with, so one database per combination is reused, and each scenario starts by removing what
+    // the previous one left (ResetProbe).
+    private readonly Dictionary<(string Setup, string Policy, bool XmlIngest), string> _sharedDatabases = new();
+
+    [OneTimeTearDown]
+    public void DropSharedDatabases()
+    {
+        if (_sharedDatabases.Count == 0) return;
+        using var conn = OpenMaster();
+        using var cmd = conn.CreateCommand();
+        foreach (var db in _sharedDatabases.Values) DropDatabase(cmd, db);
+        _sharedDatabases.Clear();
+    }
+
     [Test]
     public void ACdcTable_IsEnabledRotatedAndDisabled_ByARealDeploy()
     {
@@ -168,7 +184,7 @@ public class DeployPathTableFeatureTests
             deploy(CdcTable(enableCdc: true, extraColumn: false));
             Assert.That(IsTrackedByCdc(cmd), Is.True, "the first deploy must track the table once the Before script has enabled CDC");
             _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("CDC skipped")));
-        }, policy: policy);
+        }, policy: policy, freshDatabase: true);
     }
 
     [TestCase("warn")]
@@ -188,7 +204,7 @@ public class DeployPathTableFeatureTests
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1),
                 "the first deploy must track the table once the Before script has enabled Change Tracking");
             _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("Change Tracking skipped")));
-        }, policy: policy);
+        }, policy: policy, freshDatabase: true);
     }
 
     // Deferring the judgement past the Before slot must not lose it: a Before script that leaves CDC off still
@@ -544,34 +560,43 @@ public class DeployPathTableFeatureTests
                   : """{ "Name": "[IX_DeployProbe]", "IndexColumns": "[Id]" }""")}} ] }
         """;
 
+    // freshDatabase: the scenario reconfigures the database itself (a Before script that enables CDC or Change
+    // Tracking), so a shared one would carry that into the next scenario.
     private void RunScenario(string prefix, string setupDatabase, Action<Action<string>, string, IDbCommand> body,
                              string templateExtra = "", bool expectFailure = false, string policy = "warn", bool xmlIngest = false,
-                             bool expectIncomplete = false)
+                             bool expectIncomplete = false, bool freshDatabase = false)
     {
-        var db = prefix + "_" + Guid.NewGuid().ToString("N")[..12];
         var tempDir = Path.Join(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
+        var key = (setupDatabase ?? "", policy, xmlIngest);
 
         lock (FactoryContainer.SharedLockObject)
         {
             SetupSharedMocks();
             var config = FactoryContainer.Resolve<IConfigurationRoot>();
-            var connProps = ConnectionString.ReadProperties(config, "Target:ConnectionProperties");
-            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
-                ConnectionString.Build(Platform.SqlServer, config["Target:Server"], "master",
-                    config["Target:User"], config["Target:Password"], config["Target:Port"], connProps));
-            conn.Open();
+            using var conn = OpenMaster();
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 300;
             var savedPath = config["SchemaPackagePath"];
             var savedEncoding = config["Target:CompatEncoding"];
+            var shared = !freshDatabase && _sharedDatabases.ContainsKey(key);
+            var db = shared ? _sharedDatabases[key] : prefix + "_" + Guid.NewGuid().ToString("N")[..12];
 
             try
             {
-                cmd.CommandText = $"CREATE DATABASE [{db}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
-                cmd.ExecuteNonQuery();
-                conn.ChangeDatabase(db);
-                if (setupDatabase != null) ExecuteWithDeadlockRetry(cmd, setupDatabase);
-                ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, policy: policy);
+                if (shared)
+                {
+                    conn.ChangeDatabase(db);
+                    ResetProbe(cmd);
+                }
+                else
+                {
+                    cmd.CommandText = $"CREATE DATABASE [{db}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
+                    cmd.ExecuteNonQuery();
+                    if (!freshDatabase) _sharedDatabases[key] = db;
+                    conn.ChangeDatabase(db);
+                    if (setupDatabase != null) ExecuteWithDeadlockRetry(cmd, setupDatabase);
+                    ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, policy: policy);
+                }
                 config["SchemaPackagePath"] = tempDir;
                 // The encoding is chosen during version detection, which SkipKindlingForge also skips.
                 if (xmlIngest) config["Target:CompatEncoding"] = "legacy";
@@ -596,15 +621,7 @@ public class DeployPathTableFeatureTests
             {
                 config["SchemaPackagePath"] = savedPath;
                 config["Target:CompatEncoding"] = savedEncoding;
-                try
-                {
-                    conn.ChangeDatabase("master");
-                    cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN "
-                                      + $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-                    cmd.ExecuteNonQuery();
-                }
-                catch (DbException) { /* best-effort cleanup */ }
-                catch (InvalidOperationException) { /* connection already unusable */ }
+                if (freshDatabase) DropDatabase(cmd, db);
                 conn.Close();
                 LogFactory.Clear();
                 FactoryContainer.Unregister<IEnvironment>();
@@ -613,6 +630,48 @@ public class DeployPathTableFeatureTests
             }
         }
     }
+
+    private static IDbConnection OpenMaster()
+    {
+        var config = FactoryContainer.Resolve<IConfigurationRoot>();
+        var connProps = ConnectionString.ReadProperties(config, "Target:ConnectionProperties");
+        var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
+            ConnectionString.Build(Platform.SqlServer, config["Target:Server"], "master",
+                config["Target:User"], config["Target:Password"], config["Target:Port"], connProps));
+        conn.Open();
+        return conn;
+    }
+
+    private static void DropDatabase(IDbCommand cmd, string db)
+    {
+        try
+        {
+            cmd.Connection!.ChangeDatabase("master");
+            cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN "
+                              + $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
+            cmd.ExecuteNonQuery();
+        }
+        catch (DbException) { /* best-effort cleanup */ }
+        catch (InvalidOperationException) { /* connection already unusable */ }
+    }
+
+    // Everything a scenario can leave in a shared database: the probe table with its capture instances, Change Tracking
+    // and history table, and SchemaSmith's own per-object state, so the next scenario deploys as if into a new one.
+    // Run at the start rather than the end, so a scenario that failed half-way cannot leak into the next.
+    private static void ResetProbe(IDbCommand cmd) => ExecuteWithDeadlockRetry(cmd, """
+        IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND is_tracked_by_cdc = 1)
+            EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'DeployProbe', @capture_instance = N'all';
+        IF EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe'))
+            ALTER TABLE dbo.DeployProbe DISABLE CHANGE_TRACKING;
+        IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND temporal_type = 2)
+            ALTER TABLE dbo.DeployProbe SET (SYSTEM_VERSIONING = OFF);
+        IF OBJECT_ID('dbo.DeployProbe') IS NOT NULL DROP TABLE dbo.DeployProbe;
+        IF OBJECT_ID('dbo.DeployProbe_Archive') IS NOT NULL DROP TABLE dbo.DeployProbe_Archive;
+        DELETE SchemaSmith.ChangeAudit;
+        DELETE SchemaSmith.ExpressionMap;
+        DELETE SchemaSmith.ProductOwnership;
+        DELETE SchemaSmith.CompletedMigrationScripts;
+        """);
 
     // sp_cdc_enable_db writes database-wide replication metadata and can be chosen as a deadlock victim against a
     // sibling fixture's DDL; retrying is what the CDC fixture does for the same reason.
