@@ -17,10 +17,11 @@ BEGIN
                     'ALTER TABLE  "' || fk."TableSchema" || '"."' || fk."TableName" || '" ADD CONSTRAINT "' || fk."Name" || '" FOREIGN KEY (' || "SchemaSmith"."QuoteColumnList"(fk."Columns") || ')' ||
                     ' REFERENCES "' || fk."RelatedTableSchema" || '"."' || fk."RelatedTable" || '" (' || "SchemaSmith"."QuoteColumnList"(fk."RelatedColumns") || ')' ||
                     CASE WHEN NULLIF(fk."MatchType", '') IS NOT NULL THEN ' MATCH ' || fk."MatchType" ELSE '' END ||
-                    CASE WHEN fk."Deferrable" THEN ' DEFERRABLE' ELSE '' END ||
-                    CASE WHEN fk."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE '' END ||
+                    -- The referential actions precede DEFERRABLE in the grammar; after it they are a syntax error.
                     CASE WHEN NULLIF(fk."DeleteAction", '') IS NOT NULL THEN ' ON DELETE ' || fk."DeleteAction" ELSE '' END ||
-                    CASE WHEN NULLIF(fk."UpdateAction", '') IS NOT NULL THEN ' ON UPDATE ' || fk."UpdateAction" ELSE '' END || ';' || CHR(10) ||
+                    CASE WHEN NULLIF(fk."UpdateAction", '') IS NOT NULL THEN ' ON UPDATE ' || fk."UpdateAction" ELSE '' END ||
+                    CASE WHEN fk."Deferrable" THEN ' DEFERRABLE' ELSE '' END ||
+                    CASE WHEN fk."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE '' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name" || ''', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_fks fk
