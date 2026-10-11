@@ -1790,6 +1790,7 @@ SELECT c.column_name, c.udt_name
         var columns = GetColumnInfoMySql(cmd, databaseName, tableName, excludeAutoIncrement: false, jsonKeys);
         mySqlServerVersionNum = RowSourceVersionNumMySql(cmd, mySqlServerVersionNum);
         var jsonSource = BuildJsonRowSourceMySql(columns, mySqlServerVersionNum);
+        tableData = QuoteDecimalNumbersMySql(tableData, mySqlServerVersionNum, columns);
 
         if (string.IsNullOrEmpty(insertColumns))
             throw new InvalidOperationException($"No columns found for table `{databaseName}`.`{tableName}` (or all columns are auto-increment/generated).");
@@ -2053,6 +2054,72 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     }
 
     internal static string JsonArrayOf(IEnumerable<string> rows) => "[" + string.Join(",", rows) + "]";
+
+    // MySQL's JSON parser reads a number with a fraction as a double, so a DECIMAL with more digits than a double holds
+    // arrived rounded however JSON_TABLE declared it; a JSON string converts exactly. This writes the numbers under the
+    // named keys of each row object as strings, by text, so nothing else in the payload -- nested documents, string
+    // contents, spacing -- changes. MariaDB keeps the digits either way.
+    internal static string QuoteRowNumbers(string json, ISet<string> keys)
+    {
+        if (json == null || keys.Count == 0) return json;
+        var sb = new StringBuilder(json.Length + 64);
+        var depth = 0;
+        var keyStart = -1;
+        string lastString = null, valueKey = null;
+        for (var i = 0; i < json.Length; i++)
+        {
+            var ch = json[i];
+            if (keyStart >= 0)
+            {
+                sb.Append(ch);
+                if (ch == '\\' && i + 1 < json.Length) sb.Append(json[++i]);
+                else if (ch == '"')
+                {
+                    lastString = json.Substring(keyStart, i - keyStart);
+                    keyStart = -1;
+                }
+                continue;
+            }
+            switch (ch)
+            {
+                case '"':
+                    keyStart = i + 1;
+                    valueKey = null;
+                    sb.Append(ch);
+                    continue;
+                case '{' or '[':
+                    depth++;
+                    valueKey = null;
+                    break;
+                case '}' or ']':
+                    depth--;
+                    valueKey = null;
+                    break;
+                case ',':
+                    valueKey = null;
+                    break;
+                case ':':
+                    valueKey = depth == 2 ? lastString : null;
+                    break;
+                case '-' or (>= '0' and <= '9') when valueKey != null && keys.Contains(valueKey):
+                    var end = i;
+                    while (end < json.Length && "+-.eE0123456789".Contains(json[end])) end++;
+                    sb.Append('"').Append(json, i, end - i).Append('"');
+                    i = end - 1;
+                    valueKey = null;
+                    continue;
+            }
+            sb.Append(ch);
+        }
+        return sb.ToString();
+    }
+
+    internal static string QuoteDecimalNumbersMySql(string tableData, int versionNum, List<MySqlColumnInfo> columns)
+    {
+        if (IsMariaDbVersionNum(versionNum)) return tableData;
+        var decimals = columns.Where(c => c.DataType is "decimal" or "numeric").Select(c => c.Name).ToHashSet();
+        return QuoteRowNumbers(tableData, decimals);
+    }
 
     internal static string EscapeMySqlPayload(string json) =>
         (json ?? "[]").Replace("\\", "\\\\").Replace("'", "''");

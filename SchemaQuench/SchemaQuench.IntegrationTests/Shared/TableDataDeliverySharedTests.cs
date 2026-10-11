@@ -316,6 +316,38 @@ public abstract class TableDataDeliverySharedTests
         }
     }
 
+    // MySQL's JSON parser reads a JSON number as a double, so a DECIMAL with more digits than a double carries arrived
+    // rounded (12345678901234567000.000000000000000000), silently. Delivery hands such a column its value as a string.
+    [Test]
+    public void DeliverTableData_KeepsADecimalWiderThanADouble()
+    {
+        var table = $"t_dec_{Guid.NewGuid():N}".Substring(0, 20);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (code VARCHAR(20) NOT NULL PRIMARY KEY, wide DECIMAL(38,18) NULL, "
+                                  + "doc JSON NULL)";
+            command.ExecuteNonQuery();
+
+            var script = BuildMergeScript(command, _testDb, table,
+                @"[{""code"":""D1"",""wide"":12345678901234567890.123456789012345678,""doc"":{""wide"":1.5}},{""code"":""D2"",""wide"":-0.000000000000000001,""doc"":null}]",
+                "`code`", mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            ExecuteScript(command, script);
+
+            command.CommandText = $"SELECT CAST(wide AS CHAR) FROM `{_testDb}`.`{table}` WHERE code = 'D1'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("12345678901234567890.123456789012345678"));
+            command.CommandText = $"SELECT CAST(wide AS CHAR) FROM `{_testDb}`.`{table}` WHERE code = 'D2'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("-0.000000000000000001"));
+            command.CommandText = $"SELECT JSON_EXTRACT(doc, '$.wide') FROM `{_testDb}`.`{table}` WHERE code = 'D1'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1.5"), "a nested key of the same name is not a column");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void DeliverTableData_ReplaceType_ReplacesExistingRows()
     {

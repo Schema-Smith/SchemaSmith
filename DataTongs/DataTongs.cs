@@ -813,7 +813,8 @@ SELECT JSON_AGG(ROW_TO_JSON(tbl))
             columns = columns.Where(c => selected.Contains(c.Name)).ToList();
         }
 
-        var jsonObjectArgs = columns.Select(c => FormatColumnForJsonObject(c)).ToList();
+        var isMariaDb = IsMariaDb(cmd);
+        var jsonObjectArgs = columns.Select(c => FormatColumnForJsonObject(c, quoteDecimals: !isMariaDb)).ToList();
         var jsonObjectClause = string.Join(",\n            ", jsonObjectArgs);
         var whereClause = string.IsNullOrWhiteSpace(filter) ? "" : $"WHERE {filter}";
 
@@ -822,7 +823,7 @@ SELECT JSON_AGG(ROW_TO_JSON(tbl))
         // MariaDB's JSON_ARRAYAGG is built on GROUP_CONCAT and is cut off at group_concat_max_len (1 MiB by default)
         // with only a warning, which left a large table's extracted JSON unterminated. So on every MariaDB version,
         // not just the 10.2-10.4 GROUP_CONCAT fallback, raise it to the max_allowed_packet ceiling first.
-        if (IsMariaDb(cmd))
+        if (isMariaDb)
         {
             cmd.CommandText = "SET SESSION group_concat_max_len = 1073741824";
             cmd.ExecuteNonQuery();
@@ -1010,7 +1011,7 @@ ORDER BY c.ORDINAL_POSITION;";
         return columns;
     }
 
-    internal static string FormatColumnForJsonObject(ColumnInfo column)
+    internal static string FormatColumnForJsonObject(ColumnInfo column, bool quoteDecimals = false)
     {
         var quotedName = $"'{column.Name.Replace("'", "''")}'";
         var columnRef = $"`{Identifier.EscapeDelimited(column.Name, Platform.MySQL)}`";
@@ -1035,6 +1036,8 @@ ORDER BY c.ORDINAL_POSITION;";
                 // into an untyped destination column.
                 => $"{quotedName}, ST_AsText({columnRef}), '{column.Name.Replace("'", "''")}.STSrid', ST_SRID({columnRef})",
             "bit" => $"{quotedName}, CAST({columnRef} AS UNSIGNED)",
+            // As a string: MySQL reads a JSON number back as a double, so delivery would round a DECIMAL wider than one.
+            "decimal" or "numeric" when quoteDecimals => $"{quotedName}, CAST({columnRef} AS CHAR)",
             // MariaDB's JSON_OBJECT writes a ZEROFILL number with its padding (MDEV-30962) -- 00007, which is not JSON,
             // so delivery failed parsing the file. Adding zero yields the plain number.
             _ when column.ZeroFill => $"{quotedName}, {columnRef} + 0",

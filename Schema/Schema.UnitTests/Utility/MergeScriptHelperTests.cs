@@ -3081,6 +3081,29 @@ public class MergeScriptHelperTests
     public void MariaDbJsonTableMisreadsStrings_ByVersion(string version, bool expected)
         => Assert.That(MergeScriptHelper.MariaDbJsonTableMisreadsStrings(version), Is.EqualTo(expected));
 
+    [Test]
+    public void QuoteRowNumbers_QuotesOnlyTheNamedRowKeys()
+    {
+        var keys = new HashSet<string> { "d", "e" };
+        Assert.That(MergeScriptHelper.QuoteRowNumbers(
+                @"[{""d"":1.25,""e"":-3E+2,""n"":4.5,""j"":{""d"":7.5},""s"":""d"",""x"":null},{""d"":null, ""e"" : 12}]", keys),
+            Is.EqualTo(@"[{""d"":""1.25"",""e"":""-3E+2"",""n"":4.5,""j"":{""d"":7.5},""s"":""d"",""x"":null},{""d"":null, ""e"" : ""12""}]"));
+    }
+
+    [Test]
+    public void QuoteRowNumbers_LeavesStringsThatLookLikeKeysAlone()
+    {
+        const string json = @"[{""s"":""\""d\"":1.5"",""d"":""already""}]";
+        Assert.That(MergeScriptHelper.QuoteRowNumbers(json, new HashSet<string> { "d" }), Is.EqualTo(json));
+    }
+
+    [Test]
+    public void QuoteRowNumbers_NoKeysOrNullIsUnchanged()
+    {
+        Assert.That(MergeScriptHelper.QuoteRowNumbers(@"[{""d"":1.5}]", new HashSet<string>()), Is.EqualTo(@"[{""d"":1.5}]"));
+        Assert.That(MergeScriptHelper.QuoteRowNumbers(null, new HashSet<string> { "d" }), Is.Null);
+    }
+
     [TestCase(1002, true)]
     [TestCase(1300, true)]
     [TestCase(904, false)]

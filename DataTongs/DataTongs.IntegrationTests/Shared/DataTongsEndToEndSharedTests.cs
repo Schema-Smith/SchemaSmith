@@ -298,19 +298,30 @@ public abstract class DataTongsEndToEndSharedTests
                 CREATE TABLE `{_testDb}`.`{tableName}` (
                     id INT PRIMARY KEY,
                     price DECIMAL(10,4) NOT NULL,
-                    quantity DECIMAL(15,6)
+                    quantity DECIMAL(15,6),
+                    wide DECIMAL(38,18)
                 )";
             command.ExecuteNonQuery();
 
             command.CommandText = $@"
                 INSERT INTO `{_testDb}`.`{tableName}` VALUES
-                (1, 123.4567, 9999.123456),
-                (2, 0.0001, 0.000001)";
+                (1, 123.4567, 9999.123456, 12345678901234567890.123456789012345678),
+                (2, 0.0001, 0.000001, NULL)";
             command.ExecuteNonQuery();
 
             // Extract
             var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, tableName);
             var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, tableName, "`id`", null);
+
+            // The file as written must carry the digits for a plain JSON_TABLE read, which is all a tokenized script does.
+            command.CommandText = "SELECT CAST(d AS CHAR) FROM JSON_TABLE(@p, '$[*]' COLUMNS (id INT PATH '$.id', d DECIMAL(38,18) PATH '$.wide')) jt WHERE id = 1";
+            var payload = command.CreateParameter();
+            payload.ParameterName = "@p";
+            payload.Value = json;
+            command.Parameters.Add(payload);
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("12345678901234567890.123456789012345678"),
+                "the extracted file must carry a wide DECIMAL losslessly: " + json);
+            command.Parameters.Clear();
 
             // Clear and re-insert via script (Insert: mergeUpdate=false, mergeDelete=false)
             command.CommandText = $"DELETE FROM `{_testDb}`.`{tableName}`";
@@ -333,6 +344,11 @@ public abstract class DataTongsEndToEndSharedTests
             Assert.That(reader.Read(), Is.True);
             Assert.That(reader.GetDecimal(0), Is.EqualTo(123.4567m));
             Assert.That(reader.GetDecimal(1), Is.EqualTo(9999.123456m));
+            reader.Close();
+
+            // More digits than a double carries: MySQL's JSON parser rounds a JSON number to one.
+            command.CommandText = $"SELECT CAST(wide AS CHAR) FROM `{_testDb}`.`{tableName}` WHERE id = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("12345678901234567890.123456789012345678"));
         }
         finally
         {

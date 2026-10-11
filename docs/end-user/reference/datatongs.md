@@ -338,6 +338,7 @@ DataTongs detects column types and applies the correct extraction and restoratio
 - **Generated / virtual columns** -- auto-excluded.
 - **Spatial types** -- basic support via WKT.
 - **TEXT / BLOB families** -- supported through string and binary literals.
+- **DECIMAL / NUMERIC** -- written as JSON strings (`"12345678901234567890.123456789012345678"`). MySQL reads a JSON number back as a double, so a value with more digits than a double holds would be rounded on delivery. A file that carries a decimal as a number -- one written by hand, by another tool or by an earlier DataTongs -- is converted the same way when SchemaQuench delivers it.
 
 When a column is excluded from extraction, DataTongs logs a warning naming the table, the column, and the underlying type so you know exactly what was skipped.
 
