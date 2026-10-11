@@ -698,7 +698,6 @@ SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('GEOGRAPHY', 'GEOMETRY')
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
-    AND sc.is_rowguidcol = 0
     AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
 ";
         return cmd.ExecuteScalar()?.ToString();
@@ -973,8 +972,8 @@ SELECT CAST((
         }
     }
 
-    // Column roster for XML extraction: identical filters to GetSelectColumnsSqlServer (exclude computed,
-    // rowguid, and the delivery-unsupported sql_variant/rowversion/timestamp), ordered by name.
+    // Column roster for XML extraction: identical filters to GetSelectColumnsSqlServer (exclude computed
+    // and the delivery-unsupported sql_variant/rowversion/timestamp), ordered by name.
     internal static List<ColumnInfo> GetSqlServerColumnInfo(IDbCommand cmd, string tableSchema, string tableName)
     {
         cmd.CommandText = $@"
@@ -985,7 +984,6 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
-    AND sc.is_rowguidcol = 0
     AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
   ORDER BY c.COLUMN_NAME";
 

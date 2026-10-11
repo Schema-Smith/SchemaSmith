@@ -422,7 +422,6 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE,
                                                  AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
-    AND sc.is_rowguidcol = 0
     {SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
   ORDER BY c.COLUMN_NAME
 ";
@@ -1015,7 +1014,6 @@ WHEN MATCHED AND ({updateCompare}) THEN
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
-    AND sc.is_rowguidcol = 0
     {SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
 ";
         if (belowCliff)
@@ -1030,7 +1028,7 @@ WHEN MATCHED AND ({updateCompare}) THEN
 
     // B1: builds the XML-shred SELECT column list for a SQL Server data-delivery MERGE source. Assembled
     // in C# from GetColumnMetadata (whose column set matches GetJsonSelectColumns exactly — same
-    // computed/rowguid/unsupported-type exclusions and data-key filter), so the emitted Source exposes
+    // computed/unsupported-type exclusions and data-key filter), so the emitted Source exposes
     // exactly the columns the MERGE's insert/update/match clauses reference. The delivery XML shape is
     // <rows><row><c n="ColName">value</c>…</row></rows>; each column is shredded with
     // Src.n.value('(c[@n="ColName"]/text())[1]', <type>). NULL = absent <c>.
@@ -1149,7 +1147,6 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
-    AND sc.is_rowguidcol = 0
     {SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
 ";
         if (belowCliff)
@@ -1184,7 +1181,6 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND ident.[Name] IS NULL
     AND cc.[name] IS NULL
-    AND sc.is_rowguidcol = 0
     {SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
 ";
         if (belowCliff)

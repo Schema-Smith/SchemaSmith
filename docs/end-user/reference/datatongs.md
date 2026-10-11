@@ -320,7 +320,8 @@ DataTongs detects column types and applies the correct extraction and restoratio
 - **Geometry** -- extracted as WKT (basic support; restoration may need manual adjustment for complex cases).
 - **HierarchyID** -- canonical string round-trip.
 - **XML / NTEXT / TEXT / IMAGE** -- mapped through the OPENJSON layer with type-appropriate cast for change detection.
-- **Auto-excluded:** `sql_variant`, `rowversion` / `timestamp`, ROWGUIDCOL columns. A warning is logged for each skipped column.
+- **ROWGUIDCOL columns** -- extracted and delivered like any other column, so a row keeps its GUID rather than taking a new one from the column's default.
+- **Auto-excluded:** `sql_variant`, `rowversion` / `timestamp`. A warning is logged for each skipped column.
 
 ### PostgreSQL
 
