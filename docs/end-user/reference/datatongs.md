@@ -201,7 +201,7 @@ MySQL doesn't have a `MERGE` statement. DataTongs generates the appropriate idio
 - **Insert + Update + Delete** -- `INSERT ... ON DUPLICATE KEY UPDATE` followed by `DELETE WHERE NOT EXISTS` to remove rows not present in the source data
 
 ```sql
-INSERT INTO `northwind`.`shippers` (`company_name`, `phone`, `shipper_id`) VALUES
+INSERT INTO `shippers` (`company_name`, `phone`, `shipper_id`) VALUES
   ('Speedy Express',   '(503) 555-9831', 1),
   ('United Package',   '(503) 555-3199', 2),
   ('Federal Shipping', '(503) 555-9931', 3)
@@ -210,7 +210,7 @@ ON DUPLICATE KEY UPDATE
   `phone`        = VALUES(`phone`);
 ```
 
-The MySQL generator infers the right idiom from `MergeUpdate` and `MergeDelete`.
+The MySQL generator infers the right idiom from `MergeUpdate` and `MergeDelete`. Tables are named without their database, so a script writes into the database it is deployed to, not the one the data came from.
 
 ---
 

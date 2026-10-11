@@ -3014,17 +3014,14 @@ public class MergeScriptHelperTests
         Assert.That(result, Does.Contain("{{public.test_table.tabledata}}"));
     }
 
-    [Test]
-    public void BuildMergeScript_MySQL_DestSchemaOverride_IgnoredOrThrows()
+    // The destination qualifier on MySQL: null keeps the database the catalog was read from (delivery builds its script
+    // in the target); "" names the table alone, so a script written now writes into whatever database it is deployed
+    // to; a name qualifies with that database.
+    [TestCase(null, "`testdb`.`testtable`", TestName = "BuildMergeScript_MySQL_NoOverride_KeepsTheCatalogDatabase")]
+    [TestCase("", "INTO `testtable`", TestName = "BuildMergeScript_MySQL_EmptyOverride_NamesTheTableAlone")]
+    [TestCase("other", "`other`.`testtable`", TestName = "BuildMergeScript_MySQL_Override_QualifiesWithIt")]
+    public void BuildMergeScript_MySQL_DestinationQualifier(string destOverride, string expected)
     {
-        // MySQL has no schema-template fan-out (no schema-inside-database concept), so the
-        // override is meaningless on MySQL. Two acceptable behaviors:
-        //   (a) silently ignore the override (the caller upstream is supposed to gate this
-        //       on platform, but defense in depth never hurts), or
-        //   (b) throw an explicit ArgumentException.
-        // We pick (a) for symmetry with MergeScriptHelper's existing tolerance of edge
-        // platform combinations, and to keep the call sites simple. The destination ref
-        // stays on the source database name on MySQL.
         var cmd = CreateMySqlMockCommand(new MySqlColumnDef[]
         {
             new("id", "int", null, 10L, 0L, null, "int", "", null)
@@ -3032,15 +3029,14 @@ public class MergeScriptHelperTests
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.MySQL, cmd,
             "testdb", "testtable", "[]", "`id`",
-            mergeUpdate: false, mergeDelete: false, disableTriggers: false,
+            mergeUpdate: true, mergeDelete: true, disableTriggers: false,
             tokenizeScripts: false, mergeFilter: null,
             disableRules: false, updateDescendents: true,
-            destSchemaOverride: "{{SchemaName}}");
+            destSchemaOverride: destOverride);
 
-        Assert.That(result, Does.Contain("`testdb`.`testtable`"),
-            "MySQL must keep using the source database name; the override is a no-op.");
-        Assert.That(result, Does.Not.Contain("{{SchemaName}}"),
-            "MySQL output must not leak the engine token into the script body.");
+        Assert.That(result, Does.Contain(expected));
+        if (destOverride != null)
+            Assert.That(result, Does.Not.Contain("`testdb`."), "no reference may keep the catalog database: " + result);
     }
 
     #endregion

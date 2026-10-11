@@ -479,6 +479,67 @@ public abstract class ConfigureDataDeliverySharedTests
         }
     }
 
+    // Every generated MySQL/MariaDB script named the SOURCE database (INSERT INTO `src`.`t`), so a package deployed to a
+    // database of another name -- dev, test and prod on one server -- wrote its rows back into the source, silently. The
+    // script names the table alone now, and runs in whatever database it is deployed to.
+    [Test]
+    public void GeneratedScript_WritesIntoTheDatabaseItIsDeployedTo()
+    {
+        EnsureDbConnection();
+        using var command = _connection.CreateCommand();
+        if (Platform == Platform.MySQL && TargetVersionDetector.Detect(command, Platform, _testDb).ServerComparable is > 0 and < 800)
+            Assert.Ignore("DataTongs writes no merge script below MySQL 8.0, by design.");
+
+        var tableName = $"qual_{Guid.NewGuid():N}".Substring(0, 20);
+        var otherDb = $"qualdst_{Guid.NewGuid():N}".Substring(0, 24);
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, name VARCHAR(20)); " +
+                              $"INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, 'a'), (2, 'b'); " +
+                              $"CREATE DATABASE `{otherDb}`; CREATE TABLE `{otherDb}`.`{tableName}` (id INT PRIMARY KEY, name VARCHAR(20))";
+        command.ExecuteNonQuery();
+        try
+        {
+            var scriptDir = Path.Join(Path.GetTempPath(), $"qualscripts_{Guid.NewGuid():N}");
+            lock (FactoryContainer.SharedLockObject)
+            {
+                FactoryContainer.Unregister<IMergeScriptHelper>();
+                ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+                using var configScope = IsolatedConfigScope.Create();
+                var config = configScope.Config;
+                config["Source:Server"] = config[$"{ConfigPrefix}:Server"] ?? "127.0.0.1";
+                config["Source:Port"] = config[$"{ConfigPrefix}:Port"];
+                config["Source:User"] = config[$"{ConfigPrefix}:User"];
+                config["Source:Password"] = config[$"{ConfigPrefix}:Password"];
+                config["Source:Database"] = _testDb;
+                config["Tables:0:Name"] = tableName;
+                config["ShouldCast:OutputContentFiles"] = "false";
+                config["ShouldCast:OutputScripts"] = "true";
+                config["ShouldCast:TokenizeScripts"] = "false";
+                config["ScriptPath"] = scriptDir;
+                _dataTongs.CastData();
+            }
+
+            var script = File.ReadAllText(Directory.GetFiles(scriptDir).Single());
+            Assert.That(script, Does.Not.Contain($"`{_testDb}`"), "the script must not name the source database");
+
+            command.CommandText = $"USE `{otherDb}`";
+            command.ExecuteNonQuery();
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT COUNT(*) FROM `{otherDb}`.`{tableName}`";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(2), "the rows land in the database the script runs in");
+        }
+        finally
+        {
+            command.CommandText = $"USE `{_testDb}`; DROP DATABASE IF EXISTS `{otherDb}`; DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     // The generated merge script carries the same zone, so running it on a session in another zone lands the
     // TIMESTAMP values unchanged and gives the session its own zone back.
     [Test]

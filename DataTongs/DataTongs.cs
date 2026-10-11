@@ -478,7 +478,8 @@ public class DataTongs
                 }
 
                 RefuseUndeliverableScripts(extractAsXml, _platform, tokenizeScripts);
-                var destSchemaOverride = schemaTemplateMode ? "{{SchemaName}}" : null;
+                // A MySQL/MariaDB script names the table alone, so it writes into the database it is deployed to.
+                var destSchemaOverride = schemaTemplateMode ? "{{SchemaName}}" : _platform.GetBasePlatform() == Platform.MySQL ? "" : null;
                 var mergeSQL = MergeScriptHelper.BuildMergeScript(_platform, cmd, querySchema, tableName, tableData,
                     keyColumns, mergeUpdate, mergeDelete, disableTriggers, tokenizeScripts, table.Filter,
                     disableRules, updateDescendents, destSchemaOverride, pgServerVersionNum, mySqlServerVersionNum,

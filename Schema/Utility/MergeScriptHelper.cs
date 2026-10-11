@@ -790,8 +790,9 @@ WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
                 mergeUpdate, mergeDelete, disableTriggers, tokenizeScripts, mergeFilter, dataKeys, destSchemaOverride, isXml, contentFileToken),
             Platform.PostgreSQL => BuildMergeScriptPostgreSql(cmd, schemaOrDb, tableName, updateDescendents, tableData, keyColumns,
                 mergeUpdate, mergeDelete, disableTriggers, disableRules, tokenizeScripts, mergeFilter, dataKeys, destSchemaOverride, pgServerVersionNum, isXml, contentFileToken),
-            Platform.MySQL => BuildMergeScriptMySql(cmd, schemaOrDb, tableName, mySqlTableData, keyColumns,
+            Platform.MySQL => RequalifyMySql(BuildMergeScriptMySql(cmd, schemaOrDb, tableName, mySqlTableData, keyColumns,
                 mergeUpdate, mergeDelete, tokenizeScripts, mergeFilter, dataKeys, mySqlServerVersionNum, contentFileToken),
+                schemaOrDb, tableName, destSchemaOverride),
             _ => throw new ArgumentException($"Unsupported platform: {platform}", nameof(platform))
         };
     }
@@ -1851,6 +1852,17 @@ SELECT c.column_name, c.udt_name
         var columns = GetColumnInfoMySql(cmd, databaseName, tableName, excludeAutoIncrement: false, jsonKeys: jsonKeys);
         return string.Join(",", columns.Select(c =>
             c.IsJson ? $"J[`{c.Name}`]" : $"`{c.Name}`"));
+    }
+
+    // The MySQL builders name the database they read the catalog from. A script written to run elsewhere -- DataTongs',
+    // deployed to whatever database the package targets -- passes an override: empty names the table alone, so the
+    // script runs in the database it is deployed to; anything else names that database instead.
+    private static string RequalifyMySql(string script, string databaseName, string tableName, string destOverride)
+    {
+        if (destOverride == null) return script;
+        var qualified = $"`{databaseName.Trim().Trim('`')}`.`{tableName.Trim().Trim('`')}`";
+        var target = destOverride.Trim().Trim('`');
+        return script.Replace(qualified, target.Length == 0 ? $"`{tableName.Trim().Trim('`')}`" : $"`{target}`.`{tableName.Trim().Trim('`')}`");
     }
 
     private static string BuildMergeScriptMySql(IDbCommand cmd, string databaseName, string tableName,
