@@ -74,8 +74,18 @@ public class AuthenticationPluginTests
     {
         if (Convert.ToInt64(Scalar("SELECT COUNT(*) FROM information_schema.PLUGINS WHERE PLUGIN_NAME = 'ed25519' AND PLUGIN_STATUS = 'ACTIVE'")) == 0)
             Exec("INSTALL SONAME 'auth_ed25519'");
-        ConnectsAs("ed25519", "ss_auth_ed25519", "Ed25519!Probe",
-            "CREATE USER ss_auth_ed25519@'%' IDENTIFIED VIA ed25519 USING PASSWORD('Ed25519!Probe')");
+        var version = VersionHelper.ParsePatchComparable(Scalar("SELECT VERSION()")?.ToString(), Platform.MariaDb) ?? 0;
+        string createUser;
+        if (version >= 100400)
+            createUser = "CREATE USER ss_auth_ed25519@'%' IDENTIFIED VIA ed25519 USING PASSWORD('Ed25519!Probe')";
+        else
+        {
+            // Before 10.4 the plugin takes only the hash, from its ed25519_password() function, which must be created.
+            if (Convert.ToInt64(Scalar("SELECT COUNT(*) FROM mysql.func WHERE name = 'ed25519_password'")) == 0)
+                Exec("CREATE FUNCTION ed25519_password RETURNS STRING SONAME 'auth_ed25519.so'");
+            createUser = $"CREATE USER ss_auth_ed25519@'%' IDENTIFIED VIA ed25519 USING '{Scalar("SELECT CAST(ed25519_password('Ed25519!Probe') AS CHAR)")}'";
+        }
+        ConnectsAs("ed25519", "ss_auth_ed25519", "Ed25519!Probe", createUser);
     }
 
     [Test]
