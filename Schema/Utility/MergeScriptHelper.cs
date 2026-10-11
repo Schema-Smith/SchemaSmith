@@ -1811,7 +1811,7 @@ SELECT c.column_name, c.udt_name
                     mergeUpdate ? updateColumns : null, keyColumns, payloadRows, columns, stringKeys, mergeFilter);
 
             var upsert = mergeUpdate
-                ? BuildUpsertStatementMySql(databaseName, tableName, insertColumns, selectExpressions, jsonSource, updateColumns, tableData, keyColumns, tokenizeScripts, contentFileToken)
+                ? BuildUpsertStatementMySql(databaseName, tableName, insertColumns, selectExpressions, jsonSource + "\n" + BuildChangedRowsFilterMySql(databaseName, tableName, columns), updateColumns, tableData, keyColumns, tokenizeScripts, contentFileToken)
                 : BuildInsertStatementMySql(databaseName, tableName, insertColumns, selectExpressions, jsonSource, tableData, tokenizeScripts, contentFileToken);
             var delete = BuildDeleteStatementMySql(databaseName, tableName, jsonSource, keyColumns, mergeFilter, stringKeys);
             return upsert + "\n" + delete;
@@ -1822,7 +1822,7 @@ SELECT c.column_name, c.udt_name
             if (chunked)
                 return BuildChunkedMergeMySql(databaseName, tableName, insertColumns, selectExpressions, jsonSource,
                     updateColumns, keyColumns, payloadRows, columns, null, null);
-            return BuildUpsertStatementMySql(databaseName, tableName, insertColumns, selectExpressions, jsonSource, updateColumns, tableData, keyColumns, tokenizeScripts, contentFileToken);
+            return BuildUpsertStatementMySql(databaseName, tableName, insertColumns, selectExpressions, jsonSource + "\n" + BuildChangedRowsFilterMySql(databaseName, tableName, columns), updateColumns, tableData, keyColumns, tokenizeScripts, contentFileToken);
         }
         if (chunked)
             return BuildChunkedMergeMySql(databaseName, tableName, insertColumns, selectExpressions, jsonSource,
@@ -2190,6 +2190,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
             if (updateColumns != null)
             {
                 sb.AppendLine();
+                sb.AppendLine(BuildChangedRowsFilterMySql(databaseName, tableName, columns));
                 sb.Append(BuildUpsertClauseMySql(databaseName, tableName, insertColumns, updateColumns, keyColNames));
             }
             sb.AppendLine(";");
@@ -2410,14 +2411,40 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         return string.Join(", ", columns.Select(BuildSingleSelectExpressionMySql));
     }
 
-    internal static string BuildSingleSelectExpressionMySql(MySqlColumnInfo c)
+    internal static string BuildSingleSelectExpressionMySql(MySqlColumnInfo c) => BuildSingleSelectExpressionMySql(c, "");
+
+    private static string BuildSingleSelectExpressionMySql(MySqlColumnInfo c, string qualifier)
     {
-        if (IsGeometryTypeMySql(c.DataType)) return $"ST_GeomFromText(`{c.Name}`, COALESCE(`{c.Name}.STSrid`, 0))";
-        if (IsBinaryTypeMySql(c.DataType)) return $"FROM_BASE64(`{c.Name}`)";
+        if (IsGeometryTypeMySql(c.DataType)) return $"ST_GeomFromText({qualifier}`{c.Name}`, COALESCE({qualifier}`{c.Name}.STSrid`, 0))";
+        if (IsBinaryTypeMySql(c.DataType)) return $"FROM_BASE64({qualifier}`{c.Name}`)";
         // BIT is delivered as its number; read as text (the shred below MariaDB 10.6), '165' would be stored as
         // its character codes.
-        if (c.DataType.Equals("bit", StringComparison.OrdinalIgnoreCase)) return $"CAST(`{c.Name}` AS UNSIGNED)";
-        return $"`{c.Name}`";
+        if (c.DataType.Equals("bit", StringComparison.OrdinalIgnoreCase)) return $"CAST({qualifier}`{c.Name}` AS UNSIGNED)";
+        return $"{qualifier}`{c.Name}`";
+    }
+
+    private static readonly HashSet<string> MySqlTextTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "char", "varchar", "tinytext", "text", "mediumtext", "longtext", "enum", "set"
+    };
+
+    // An upsert that touches a row without changing it still fires that row's AFTER UPDATE triggers: on MySQL always,
+    // on MariaDB from 10.11.17 and 11.4.11 (MDEV-33083). So rows already present exactly as delivered are left out. Text
+    // is compared as utf8mb4 bytes, because a case-insensitive or PAD SPACE collation would call a real change equal,
+    // and a missed change is worse than an unneeded update; JSON is compared as documents, as the update clause does.
+    private static string BuildChangedRowsFilterMySql(string databaseName, string tableName, List<MySqlColumnInfo> columns)
+    {
+        var matches = columns.Select(c =>
+        {
+            var live = $"_ss_live.`{c.Name}`";
+            var delivered = BuildSingleSelectExpressionMySql(c, "jt.");
+            if (c.IsJson) return $"JSON_EXTRACT({live}, '$') <=> JSON_EXTRACT({delivered}, '$')";
+            if (MySqlTextTypes.Contains(c.DataType))
+                return $"CAST(CONVERT({live} USING utf8mb4) AS BINARY) <=> CAST(CONVERT({delivered} USING utf8mb4) AS BINARY)";
+            return $"{live} <=> {delivered}";
+        });
+        return $"WHERE NOT EXISTS (SELECT 1 FROM `{databaseName}`.`{tableName}` _ss_live\n" +
+               $"                  WHERE {string.Join("\n                    AND ", matches)})";
     }
 
     private static List<string> ParseKeyColumnsMySql(string keyColumns)

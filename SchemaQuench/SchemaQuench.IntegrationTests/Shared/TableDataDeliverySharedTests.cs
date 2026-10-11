@@ -197,6 +197,91 @@ public abstract class TableDataDeliverySharedTests
         }
     }
 
+    // An upsert touching a row it does not change still fires AFTER UPDATE triggers: MySQL always, MariaDB from 10.11.17
+    // and 11.4.11 (MDEV-33083). Delivery leaves unchanged rows out of the upsert, so a redeploy of the same data fires
+    // nothing. Compared byte for byte, so a change a case-insensitive or PAD SPACE collation calls equal is still applied.
+    [TestCase(false, TestName = "DeliverTableData_UnchangedRows_FireNoUpdateTrigger_Upsert")]
+    [TestCase(true, TestName = "DeliverTableData_UnchangedRows_FireNoUpdateTrigger_UpsertAndDelete")]
+    public void DeliverTableData_UnchangedRows_FireNoUpdateTrigger(bool mergeDelete)
+    {
+        var table = $"t_trg_{Guid.NewGuid():N}".Substring(0, 20);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            CreateTriggeredTable(command, table);
+            const string data = @"[{""code"":""A"",""name"":""same"",""doc"":{""k"":1},""num"":1.5,""at"":""2024-01-02 03:04:05""},{""code"":""B"",""name"":null,""doc"":null,""num"":null,""at"":null}]";
+            Deliver(command, table, data, mergeDelete);
+            Assert.That(UpdatesLogged(command, table), Is.EqualTo(0), "the first delivery only inserts");
+
+            Deliver(command, table, data, mergeDelete);
+            Assert.That(UpdatesLogged(command, table), Is.EqualTo(0), "redelivering identical rows must not touch them");
+            Assert.That(Count(command, table), Is.EqualTo(2));
+
+            Deliver(command, table, data.Replace(@"""name"":""same""", @"""name"":""changed"""), mergeDelete);
+            Assert.That(UpdatesLogged(command, table), Is.EqualTo(1), "a changed row is still updated");
+        }
+        finally
+        {
+            DropTriggeredTable(command, table);
+        }
+    }
+
+    [TestCase(@"""SAME""", "53414D45", TestName = "DeliverTableData_CaseOnlyChange_IsApplied")]
+    [TestCase(@"""same """, "73616D6520", TestName = "DeliverTableData_TrailingSpaceChange_IsApplied")]
+    public void DeliverTableData_ChangeACollationCallsEqual_IsApplied(string newName, string expectedHex)
+    {
+        var table = $"t_trg_{Guid.NewGuid():N}".Substring(0, 20);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            CreateTriggeredTable(command, table);
+            Deliver(command, table, @"[{""code"":""A"",""name"":""same""}]", mergeDelete: false);
+            Deliver(command, table, @"[{""code"":""A"",""name"":" + newName + "}]", mergeDelete: false);
+
+            command.CommandText = $"SELECT HEX(name) FROM `{_testDb}`.`{table}` WHERE code = 'A'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo(expectedHex));
+        }
+        finally
+        {
+            DropTriggeredTable(command, table);
+        }
+    }
+
+    private void CreateTriggeredTable(IDbCommand command, string table)
+    {
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (code VARCHAR(20) NOT NULL PRIMARY KEY, "
+                              + "name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL, doc JSON NULL, "
+                              + "num DECIMAL(10,2) NULL, at DATETIME NULL)";
+        command.ExecuteNonQuery();
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}_log` (n INT)";
+        command.ExecuteNonQuery();
+        command.CommandText = $"CREATE TRIGGER `{_testDb}`.`{table}_au` AFTER UPDATE ON `{_testDb}`.`{table}` "
+                              + $"FOR EACH ROW INSERT INTO `{_testDb}`.`{table}_log` VALUES (1)";
+        command.ExecuteNonQuery();
+    }
+
+    private void DropTriggeredTable(IDbCommand command, string table)
+    {
+        command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`, `{_testDb}`.`{table}_log`";
+        command.ExecuteNonQuery();
+    }
+
+    private void Deliver(IDbCommand command, string table, string data, bool mergeDelete) =>
+        ExecuteScript(command, BuildMergeScript(command, _testDb, table, data, "`code`",
+            mergeUpdate: true, mergeDelete: mergeDelete, disableTriggers: false, tokenizeScripts: false, mergeFilter: null));
+
+    private int UpdatesLogged(IDbCommand command, string table)
+    {
+        command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{table}_log`";
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    private int Count(IDbCommand command, string table)
+    {
+        command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{table}`";
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
     [Test]
     public void DeliverTableData_ReplaceType_ReplacesExistingRows()
     {
