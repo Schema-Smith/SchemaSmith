@@ -56,6 +56,8 @@ public class SchemaBoundExtractionTests
             Run(cmd, "CREATE TABLE dbo.SbSource (Id INT NOT NULL PRIMARY KEY, Label VARCHAR(50) NOT NULL)");
             Run(cmd, "CREATE VIEW dbo.SbBoundView WITH SCHEMABINDING AS SELECT Id, Label FROM dbo.SbSource");
             Run(cmd, "CREATE VIEW dbo.SbPlainView AS SELECT Id, Label FROM dbo.SbSource");
+            Run(cmd, "CREATE VIEW dbo.SbIndexedView WITH SCHEMABINDING AS SELECT Id, Label FROM dbo.SbSource");
+            Run(cmd, "CREATE UNIQUE CLUSTERED INDEX CIX_SbIndexedView ON dbo.SbIndexedView (Id)");
             Run(cmd, "CREATE FUNCTION dbo.SbBoundFunc (@Id INT) RETURNS INT WITH SCHEMABINDING "
                      + "AS BEGIN RETURN (SELECT COUNT(*) FROM dbo.SbSource WHERE Id = @Id) END");
             Run(cmd, "CREATE FUNCTION dbo.SbPlainFunc (@Id INT) RETURNS INT AS BEGIN RETURN @Id END");
@@ -169,6 +171,26 @@ public class SchemaBoundExtractionTests
                 "and must not be swept into the schema-bound folder.\nSchemaBound Views: " + boundViews);
             Assert.That(FilesIn(TemplateDir("Functions")), Does.Contain("SbPlainFunc"),
                 "same for an ordinary function");
+        });
+    }
+
+    // An indexed view is also schema-bound, and was written twice: as a script in SchemaBound Views and as JSON in
+    // Indexed Views. The deploy then created it from one and failed on the other ("There is already an object named").
+    [Test]
+    public void AnIndexedView_IsExtractedOnceAsAnIndexedView()
+    {
+        Extract();
+
+        var boundViews = FilesIn(TemplateDir("SchemaBound Views"));
+        var indexedViews = Directory.Exists(TemplateDir("Indexed Views"))
+            ? string.Join(";", Directory.GetFiles(TemplateDir("Indexed Views"), "*.json"))
+            : "<folder absent>";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(indexedViews, Does.Contain("SbIndexedView"), "Indexed Views: " + indexedViews);
+            Assert.That(boundViews, Does.Not.Contain("SbIndexedView"), "SchemaBound Views: " + boundViews);
+            Assert.That(boundViews, Does.Contain("SbBoundView"), "an ordinary schema-bound view still goes there");
         });
     }
 

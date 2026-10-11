@@ -1657,7 +1657,10 @@ SELECT s.name AS SchemaName, o.name AS ObjectName, CONVERT(BIT, ISNULL(sm.is_sch
  WHERE o.type = 'V'
    AND o.is_ms_shipped = 0
    AND s.name <> 'SchemaSmith'
-   AND o.name NOT LIKE 'MSSQL[_]DroppedLedgerView[_]%'" + LedgerViewFilter() + @"
+   AND o.name NOT LIKE 'MSSQL[_]DroppedLedgerView[_]%'" + LedgerViewFilter() +
+            // An indexed view is extracted as Indexed Views JSON; scripting it here as well created it twice.
+            (_includeIndexedViews ? @"
+   AND ISNULL(OBJECTPROPERTY(o.object_id, 'IsIndexed'), 0) = 0" : "") + @"
  ORDER BY s.name, o.name";
 
         var views = new List<(string Schema, string Name, bool SchemaBound)>();
