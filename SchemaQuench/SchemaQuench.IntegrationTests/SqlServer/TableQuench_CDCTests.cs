@@ -25,6 +25,17 @@ public class TableQuench_CDCTests : BaseTableQuenchTests
     private void ExecuteWithDeadlockRetry(IDbCommand cmd)
     {
         var sql = cmd.CommandText;
+        // A deadlock rolls back only the statement it hits, so re-running the whole batch repeats DDL that already
+        // succeeded and fails with "There is already an object named ...". Everything before the CDC enable runs once;
+        // only the enable onward is retried.
+        var enableAt = sql.IndexOf("EXEC sys.sp_cdc_enable_table", StringComparison.OrdinalIgnoreCase);
+        if (enableAt > 0 && sql[..enableAt].Trim().Length > 0)
+        {
+            cmd.CommandText = sql[..enableAt];
+            cmd.ExecuteNonQuery();
+            sql = sql[enableAt..];
+            cmd.CommandText = sql;
+        }
         for (var attempt = 0; attempt < 5; attempt++)
         {
             try
@@ -248,11 +259,8 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCAddCol
 
         try
         {
-            // IDEMPOTENT SETUP, and it is load-bearing: this batch runs under ExecuteWithDeadlockRetry, and
-            // sp_cdc_enable_table is deadlock-prone against the CDC scan job. A retry after the CREATE has
-            // already succeeded re-runs the whole batch and fails with "There is already an object named
-            // 'CDCDropColTest'" -- which is what this test did in CI, intermittently and for years, and it
-            // reads like a product failure rather than a retried batch.
+            // sp_cdc_enable_table is deadlock-prone against the CDC scan job; ExecuteWithDeadlockRetry runs the CREATE
+            // once and retries only the enable. The drop clears a table a killed earlier run left behind.
             DropCdcTestTable(cmd);
 
             cmd.CommandText = @"
