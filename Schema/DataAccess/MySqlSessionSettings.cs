@@ -59,7 +59,9 @@ public static class MySqlSessionSettings
     /// </summary>
     public static IDisposable UseExplicitTimestampDefaults(IDbCommand command, Action readOnly)
     {
-        command.CommandText = "SELECT @@SESSION.explicit_defaults_for_timestamp";
+        // Unscoped: where the variable is global-only (MariaDB 10.2-10.3) even reading @@SESSION fails with 1238, outside
+        // the catch below, and that failed every deploy there. Unscoped reads the session value where one exists.
+        command.CommandText = "SELECT @@explicit_defaults_for_timestamp";
         if (command.ExecuteScalar()?.ToString() is "1" or "ON") return null;
         try
         {
