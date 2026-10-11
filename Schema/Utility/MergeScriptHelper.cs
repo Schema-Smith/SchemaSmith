@@ -85,6 +85,15 @@ public static class MergeScriptHelper
     // SQL Server types that cannot be represented in JSON or compared reliably
     internal const string SqlServerUnsupportedTypeFilter = "AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')";
 
+    // Graph node and edge tables (2017+) carry internal columns that cannot be selected or inserted: hidden ones
+    // (graph_id_..., from_id_...) and visible pseudo columns ($node_id_..., $from_id_...). sys.columns.graph_type would
+    // name them but does not exist before 2017, and naming it fails the query there; COLUMNPROPERTY and OBJECTPROPERTYEX
+    // return NULL for a property a version does not know. A hidden temporal period column goes too -- it cannot be
+    // inserted either.
+    public const string SqlServerGraphColumnFilter =
+        "AND ISNULL(COLUMNPROPERTY(sc.[object_id], sc.[name], 'IsHidden'), 0) = 0 " +
+        "AND NOT (sc.[name] LIKE '$%' AND (OBJECTPROPERTYEX(sc.[object_id], 'IsNode') = 1 OR OBJECTPROPERTYEX(sc.[object_id], 'IsEdge') = 1)) ";
+
     // PostgreSQL types that cannot be represented in JSON or compared reliably.
     // Note: 'point' and 'polygon' are NOT excluded — they overlap with PostGIS types.
     internal const string PostgreSqlUnsupportedTypeFilter =
@@ -422,7 +431,7 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE,
                                                  AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
-    {SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
+    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
   ORDER BY c.COLUMN_NAME
 ";
         var results = new List<MergeColumnInfo>();
@@ -1014,7 +1023,7 @@ WHEN MATCHED AND ({updateCompare}) THEN
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
-    {SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
+    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
 ";
         if (belowCliff)
         {
@@ -1121,7 +1130,7 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
-    {SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
+    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
 ";
         if (belowCliff)
         {
@@ -1147,7 +1156,7 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
-    {SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
+    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
 ";
         if (belowCliff)
         {
@@ -1181,7 +1190,7 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND ident.[Name] IS NULL
     AND cc.[name] IS NULL
-    {SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
+    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
 ";
         if (belowCliff)
         {

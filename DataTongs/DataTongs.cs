@@ -324,9 +324,18 @@ public class DataTongs
                 // of re-deriving it, so filename and token can never disagree.
                 var contentFileToken = $"{encodedDisplayName}.tabledata";
 
-                if (!TableExists(cmd, querySchema, tableName))
+                var (exists, isGraphEdge) = SourceTableState(cmd, querySchema, tableName);
+                if (!exists)
                 {
                     SkipTable($"  Table {displayName} does not exist in source database. Skipping table.");
+                    continue;
+                }
+
+                if (isGraphEdge)
+                {
+                    Incomplete = true;
+                    _progressLog.Warn($"  Table {displayName} is a graph edge table. Its $from_id and $to_id name rows of other node " +
+                                      "tables by internal id, which delivery cannot translate, so it is not extracted. Skipping table.");
                     continue;
                 }
 
@@ -629,6 +638,17 @@ public class DataTongs
 
     #region Table Existence Checks
 
+    // One query on SQL Server: whether the table exists, and whether it is a graph edge table (2017+;
+    // OBJECTPROPERTYEX returns NULL for the property on older versions).
+    private (bool Exists, bool IsGraphEdge) SourceTableState(IDbCommand cmd, string schemaOrDb, string tableName)
+    {
+        if (_platform.GetBasePlatform() != Platform.SqlServer) return (TableExists(cmd, schemaOrDb, tableName), false);
+        var name = $"{schemaOrDb.Replace("'", "''")}.{tableName.Replace("'", "''")}";
+        cmd.CommandText = $"SELECT CASE WHEN OBJECT_ID('{name}') IS NULL THEN 0 WHEN OBJECTPROPERTYEX(OBJECT_ID('{name}'), 'IsEdge') = 1 THEN 2 ELSE 1 END";
+        var state = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
+        return (state > 0, state == 2);
+    }
+
     internal bool TableExists(IDbCommand cmd, string schemaOrDb, string tableName)
     {
         return _platform.GetBasePlatform() switch
@@ -698,7 +718,7 @@ SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('GEOGRAPHY', 'GEOMETRY')
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
-    AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
+    {MergeScriptHelper.SqlServerGraphColumnFilter}AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
 ";
         return cmd.ExecuteScalar()?.ToString();
     }
@@ -984,7 +1004,7 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE
                                                  AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
-    AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
+    {MergeScriptHelper.SqlServerGraphColumnFilter}AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
   ORDER BY c.COLUMN_NAME";
 
         var columns = new List<ColumnInfo>();
