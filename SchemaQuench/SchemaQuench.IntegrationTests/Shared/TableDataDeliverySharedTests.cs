@@ -1149,8 +1149,8 @@ public abstract class TableDataDeliverySharedTests
         {
             using var command = _connection.CreateCommand();
             var table = $"_test_emp_{Guid.NewGuid():N}".Substring(0, 30);
-            var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-            var checkpointDir = Path.Combine(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
+            var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            var checkpointDir = Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
             var savedConfig = FactoryContainer.Resolve<IConfigurationRoot>();
             try
             {
@@ -1164,11 +1164,11 @@ public abstract class TableDataDeliverySharedTests
                 command.ExecuteNonQuery();
 
                 Directory.CreateDirectory(tempDir);
-                File.WriteAllText(Path.Combine(tempDir, "Template.json"), "{}");
+                File.WriteAllText(Path.Join(tempDir, "Template.json"), "{}");
                 const string data = @"[{""id"":3,""name"":""Carol"",""boss_id"":2},{""id"":2,""name"":""Bob"",""boss_id"":1},{""id"":1,""name"":""Alice"",""boss_id"":null}]";
-                File.WriteAllText(Path.Combine(tempDir, "emp.tabledata"), data);
+                File.WriteAllText(Path.Join(tempDir, "emp.tabledata"), data);
 
-                var template = new Template { Name = "SelfReferenceTest", FilePath = Path.Combine(tempDir, "Template.json") };
+                var template = new Template { Name = "SelfReferenceTest", FilePath = Path.Join(tempDir, "Template.json") };
                 template.Tables.Add(new MySqlTable
                 {
                     Name = table,
@@ -1188,7 +1188,7 @@ public abstract class TableDataDeliverySharedTests
                     var quench = new DatabaseQuench("127.0.0.1", new Product { Name = "TestProduct", Platform = Platform }, template, _testDb,
                         suppressKindling: false, whatIfOnly: "0", runScriptsTwice: false,
                         dropRemovedTables: "0", dropRemovedColumns: "0", dropRemovedForeignKeys: "0", dropRemovedCheckConstraints: "0", dropRemovedExcludeConstraints: "0", dropRemovedStatistics: "0", dropRemovedIndexes: "0", dropUnknownIndexes: false, updateTables: false,
-                        deliverData: true, checkpointing: new FileCheckpointManager(Path.Combine(checkpointDir, Guid.NewGuid().ToString("N"))));
+                        deliverData: true, checkpointing: new FileCheckpointManager(Path.Join(checkpointDir, Guid.NewGuid().ToString("N"))));
                     quench.Execute();
                     return quench.QuenchSuccessful;
                 }
@@ -1211,7 +1211,7 @@ public abstract class TableDataDeliverySharedTests
                 Assert.That(Deploy(), Is.True);
                 Assert.That(UpdatesLogged(), Is.EqualTo(0), "redelivering unchanged data must not touch the rows");
 
-                File.WriteAllText(Path.Combine(tempDir, "emp.tabledata"), data.Replace(@"""boss_id"":2", @"""boss_id"":1"));
+                File.WriteAllText(Path.Join(tempDir, "emp.tabledata"), data.Replace(@"""boss_id"":2", @"""boss_id"":1"));
                 Assert.That(Deploy(), Is.True);
                 Assert.That(Bosses(), Is.EqualTo("1:-,2:1,3:1"));
                 Assert.That(UpdatesLogged(), Is.EqualTo(1), "only the changed row is updated");
