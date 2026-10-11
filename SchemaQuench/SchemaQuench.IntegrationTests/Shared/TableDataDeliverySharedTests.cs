@@ -163,6 +163,40 @@ public abstract class TableDataDeliverySharedTests
         }
     }
 
+    private const string Backslash = "\\";
+
+    // A payload written by a tool that escapes non-BMP characters carries \ud83d\ude00 rather than the character.
+    // MariaDB up to 10.11.11 and 11.4.5 turns any 4-byte character into '?' in JSON_UNQUOTE (MDEV-35614), escaped or
+    // not; the delivery row sources read strings through JSON_TABLE and JSON_VALUE, which are unaffected. This pins
+    // that they stay that way (checked against 11.4.4, where JSON_UNQUOTE of the same payload returns 3F).
+    [Test]
+    public void DeliverTableData_KeepsAnEscapedFourByteCharacter()
+    {
+        var table = $"t_esc_{Guid.NewGuid():N}".Substring(0, 20);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (code VARCHAR(20) NOT NULL PRIMARY KEY, "
+                                  + "name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL)";
+            command.ExecuteNonQuery();
+
+            var payload = "[{\"code\":\"E2\",\"name\":\"" + Backslash + "ud83d" + Backslash + "ude00\"}]";
+            var script = BuildMergeScript(command, _testDb, table, payload, "`code`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            Assert.That(script, Does.Contain(Backslash + Backslash + "ud83d"), "the payload must reach the server still escaped");
+            ExecuteScript(command, script);
+
+            command.CommandText = $"SELECT HEX(name) FROM `{_testDb}`.`{table}` WHERE code = 'E2'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("F09F9880"),
+                "an escaped surrogate pair must be stored as the UTF-8 of the character it encodes");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void DeliverTableData_ReplaceType_ReplacesExistingRows()
     {
