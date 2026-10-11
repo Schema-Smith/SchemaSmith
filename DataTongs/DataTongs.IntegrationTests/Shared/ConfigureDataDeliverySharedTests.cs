@@ -422,6 +422,63 @@ public abstract class ConfigureDataDeliverySharedTests
         }
     }
 
+    // A tokenized MySQL/MariaDB script reads its content file with JSON_TABLE at deploy time, so with DeliveryEncoding
+    // Xml every generated script failed to deploy ("Invalid JSON text"). The script is refused by name and the run fails;
+    // the content file, which delivers fine through DataDelivery, is still written. With ConfigureDataDelivery the table
+    // gets no script at all, so the same run succeeds.
+    [TestCase(false, 2, TestName = "XmlWithTokenizedScripts_WritesNoScriptAndFails")]
+    [TestCase(true, 0, TestName = "XmlWithConfigureDataDelivery_StillSucceeds")]
+    public void XmlOnMySqlFamily(bool configureDataDelivery, int expectedExitCode)
+    {
+        EnsureDbConnection();
+        var tableName = $"xmls_{Guid.NewGuid():N}".Substring(0, 20);
+        using (var create = _connection.CreateCommand())
+        {
+            create.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, name VARCHAR(20)); INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, 'a')";
+            create.ExecuteNonQuery();
+        }
+        var templateRoot = CreateTemplateStructure();
+        var tableDataDir = Path.Join(templateRoot, "TableData");
+        var scriptDir = Path.Join(templateRoot, "MigrationScripts");
+        File.WriteAllText(Path.Join(templateRoot, "Tables", $"{tableName}.json"),
+            $$"""{ "Name": "{{tableName}}", "Columns": [ { "Name": "id", "DataType": "int" }, { "Name": "name", "DataType": "varchar(20)" } ] }""");
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Unregister<IMergeScriptHelper>();
+            ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+            using var configScope = IsolatedConfigScope.Create();
+            var config = configScope.Config;
+            config["Source:Server"] = config[$"{ConfigPrefix}:Server"] ?? "127.0.0.1";
+            config["Source:Port"] = config[$"{ConfigPrefix}:Port"];
+            config["Source:User"] = config[$"{ConfigPrefix}:User"];
+            config["Source:Password"] = config[$"{ConfigPrefix}:Password"];
+            config["Source:Database"] = _testDb;
+            config["Tables:0:Name"] = tableName;
+            config["ShouldCast:OutputContentFiles"] = "true";
+            config["ShouldCast:OutputScripts"] = "true";
+            config["ShouldCast:DeliveryEncoding"] = "Xml";
+            config["ShouldCast:ConfigureDataDelivery"] = configureDataDelivery ? "true" : "false";
+            config["ContentPath"] = tableDataDir;
+            config["ScriptPath"] = scriptDir;
+
+            _dataTongs.CastData();
+        }
+
+        try
+        {
+            Assert.That(_dataTongs.ExitCode, Is.EqualTo(expectedExitCode));
+            Assert.That(Directory.Exists(scriptDir) ? Directory.GetFiles(scriptDir) : [], Is.Empty, "no script written");
+            Assert.That(Directory.GetFiles(tableDataDir), Has.Length.EqualTo(1), "the content file is still written");
+        }
+        finally
+        {
+            using var drop = _connection.CreateCommand();
+            drop.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            drop.ExecuteNonQuery();
+        }
+    }
+
     // The generated merge script carries the same zone, so running it on a session in another zone lands the
     // TIMESTAMP values unchanged and gives the session its own zone back.
     [Test]

@@ -43,6 +43,18 @@ public class DataTongs
     // engines extract Json unless asked for Xml.
     private const int JsonExtractionSqlServerMajor = 14;
 
+    // A tokenized MySQL/MariaDB script reads its content file with JSON_TABLE when it is deployed, and nothing converts
+    // an Xml file on that path, so every script failed with "Invalid JSON text". The content files themselves deliver
+    // through DataDelivery, which converts Xml to JSON first; and an untokenized script embeds converted data.
+    internal static void RefuseUndeliverableScripts(bool extractAsXml, Platform platform, bool tokenizeScripts)
+    {
+        if (extractAsXml && tokenizeScripts && platform.GetBasePlatform() == Platform.MySQL)
+            throw new InvalidOperationException(
+                "DeliveryEncoding is Xml, but MySQL and MariaDB merge scripts read their content file with JSON_TABLE, so " +
+                "tokenized scripts cannot deploy an Xml file. Use DeliveryEncoding Json, or set ShouldCast:TokenizeScripts " +
+                "to false to embed the data in each script.");
+    }
+
     internal static bool ChooseXmlDeliveryEncoding(string deliveryEncoding, Platform platform, TargetVersionInfo sqlServerSource)
     {
         if (!string.IsNullOrWhiteSpace(deliveryEncoding))
@@ -456,6 +468,7 @@ public class DataTongs
                     }
                 }
 
+                RefuseUndeliverableScripts(extractAsXml, _platform, tokenizeScripts);
                 var destSchemaOverride = schemaTemplateMode ? "{{SchemaName}}" : null;
                 var mergeSQL = MergeScriptHelper.BuildMergeScript(_platform, cmd, querySchema, tableName, tableData,
                     keyColumns, mergeUpdate, mergeDelete, disableTriggers, tokenizeScripts, table.Filter,

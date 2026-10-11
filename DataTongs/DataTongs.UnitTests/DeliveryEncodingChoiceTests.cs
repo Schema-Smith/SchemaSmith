@@ -48,6 +48,24 @@ public class DeliveryEncodingChoiceTests
     public void ExplicitJson_UndetectableSource_IsTakenAtItsWord()
         => Assert.That(global::DataTongs.DataTongs.ChooseXmlDeliveryEncoding("Json", Platform.SqlServer, null), Is.False);
 
+    // A tokenized MySQL/MariaDB script reads its content file with JSON_TABLE at deploy time, so over an Xml file every
+    // script failed with "Invalid JSON text". Refused up front instead.
+    [TestCase(Platform.MySQL)]
+    [TestCase(Platform.MariaDb)]
+    public void XmlWithTokenizedScripts_OnMySqlFamily_IsRefusedByName(Platform platform)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            global::DataTongs.DataTongs.RefuseUndeliverableScripts(extractAsXml: true, platform, tokenizeScripts: true));
+        Assert.That(ex!.Message, Does.Contain("DeliveryEncoding").And.Contain("TokenizeScripts"));
+    }
+
+    [TestCase(Platform.MySQL, true, false)]
+    [TestCase(Platform.MySQL, false, true)]
+    [TestCase(Platform.SqlServer, true, true)]
+    [TestCase(Platform.PostgreSQL, true, true)]
+    public void OtherCombinations_AreAllowed(Platform platform, bool xml, bool tokenize)
+        => Assert.DoesNotThrow(() => global::DataTongs.DataTongs.RefuseUndeliverableScripts(xml, platform, tokenize));
+
     [TestCase(Platform.PostgreSQL)]
     [TestCase(Platform.MySQL)]
     public void OtherEngines_StayJson_UnlessAskedForXml(Platform platform)
