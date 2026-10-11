@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Text;
 using Microsoft.Data.SqlClient;
@@ -63,6 +64,83 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
             Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _db);
         }
         catch (SqlException) { /* teardown must not mask an assertion */ }
+    }
+
+    // SQL Server refuses MERGE on a memory-optimized table in every mode, so delivery to one always failed. It now takes
+    // separate UPDATE, INSERT and DELETE statements, with the SNAPSHOT hint a memory-optimized table needs inside an
+    // explicit transaction -- run here both ways.
+    [TestCase(false, TestName = "Delivery_ToAMemoryOptimizedTable_Merges")]
+    [TestCase(true, TestName = "Delivery_ToAMemoryOptimizedTable_MergesInsideATransaction")]
+    public void Delivery_ToAMemoryOptimizedTable(bool inTransaction)
+    {
+        var table = $"MoData_{Guid.NewGuid():N}"[..20];
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = $"CREATE TABLE dbo.[{table}] (Id INT NOT NULL PRIMARY KEY NONCLUSTERED, V NVARCHAR(20) NULL) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_AND_DATA);";
+        cmd.ExecuteNonQuery();
+        try
+        {
+            cmd.CommandText = $"INSERT dbo.[{table}] (Id, V) VALUES (1, 'a'), (9, 'z');";
+            cmd.ExecuteNonQuery();
+
+            var script = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd, "dbo", table,
+                @"[{""Id"":1,""V"":""b""},{""Id"":2,""V"":""c""}]", "[Id]",
+                mergeUpdate: true, mergeDelete: true, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            using (var tx = inTransaction ? conn.BeginTransaction() : null)
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = script;
+                cmd.ExecuteNonQuery();
+                tx?.Commit();
+                cmd.Transaction = null;
+            }
+
+            cmd.CommandText = $"SELECT STRING_AGG(CONCAT(Id, ':', V), ',') WITHIN GROUP (ORDER BY Id) FROM dbo.[{table}]";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("1:b,2:c"));
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS dbo.[{table}]";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // An append-only ledger table refuses UPDATE and DELETE, so a merge carrying either failed. Delivery to one inserts
+    // the rows it lacks and reports, without changing them, the rows that differ or would have been deleted.
+    [Test]
+    public void Delivery_ToAnAppendOnlyLedgerTable_InsertsAndWarns()
+    {
+        var table = $"LedgerData_{Guid.NewGuid():N}"[..24];
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = "SELECT CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(50)), 4) AS INT)";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) < 16) Assert.Ignore("Ledger tables need SQL Server 2022.");
+        cmd.CommandText = $"CREATE TABLE dbo.[{table}] (Id INT NOT NULL PRIMARY KEY, V NVARCHAR(20) NULL) WITH (LEDGER = ON (APPEND_ONLY = ON));";
+        cmd.ExecuteNonQuery();
+        var messages = new List<string>();
+        conn.InfoMessage += (_, e) => messages.Add(e.Message);
+        try
+        {
+            cmd.CommandText = $"INSERT dbo.[{table}] (Id, V) VALUES (1, 'a'), (9, 'z');";
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd, "dbo", table,
+                @"[{""Id"":1,""V"":""b""},{""Id"":2,""V"":""c""}]", "[Id]",
+                mergeUpdate: true, mergeDelete: true, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = $"SELECT STRING_AGG(CONCAT(Id, ':', V), ',') WITHIN GROUP (ORDER BY Id) FROM dbo.[{table}]";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("1:a,2:c,9:z"), "new rows inserted, existing rows untouched");
+            Assert.That(string.Join("\n", messages), Does.Contain(table).And.Contain("append-only"),
+                "the rows left unchanged are reported: " + string.Join(" | ", messages));
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS dbo.[{table}]";
+            cmd.ExecuteNonQuery();
+        }
     }
 
     private SqlConnection Open()

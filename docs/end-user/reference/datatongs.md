@@ -321,6 +321,8 @@ DataTongs detects column types and applies the correct extraction and restoratio
 - **HierarchyID** -- canonical string round-trip.
 - **XML / NTEXT / TEXT / IMAGE** -- mapped through the OPENJSON layer with type-appropriate cast for change detection.
 - **ROWGUIDCOL columns** -- extracted and delivered like any other column, so a row keeps its GUID rather than taking a new one from the column's default.
+- **Memory-optimized tables** -- SQL Server refuses `MERGE` on them, so delivery to one runs the same work as separate `UPDATE`, `INSERT` and `DELETE` statements. The result is the same.
+- **Append-only ledger tables** (SQL Server 2022+) -- refuse `UPDATE` and `DELETE`, so delivery only inserts the rows the table lacks. Rows that differ from what is delivered, or that a delete would have removed, are left as they are and counted in a message naming the table.
 - **Graph tables** (SQL Server 2017+) -- a node table's own columns are extracted and delivered, and the target assigns each row its `$node_id`. An edge table is skipped with a warning and the run exits `1`: its `$from_id` and `$to_id` name rows of other tables by internal id, which a delivery cannot translate.
 - **Auto-excluded:** `sql_variant`, `rowversion` / `timestamp`. A warning is logged for each skipped column.
 

@@ -905,8 +905,11 @@ SELECT STRING_AGG('-- Column ""' || c.column_name || '"" skipped: ' || c.udt_nam
             : GetJsonSelectColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys);
         // IDENTITY_INSERT must be ON only when tabledata provides values for an identity column.
         // NeedsIdentityInsertSqlServer returns true whenever ANY identity column exists; filter by data keys.
-        var identityInsert = NeedsIdentityInsertSqlServer(cmd, tableSchema, tableName)
+        var targetFlags = SqlServerTargetFlags(cmd, tableSchema, tableName);
+        var identityInsert = (targetFlags & 1) != 0
                              && IdentityColumnInJsonKeysSqlServer(cmd, tableSchema, tableName, jsonKeys);
+        var memoryOptimized = (targetFlags & 2) != 0;
+        var appendOnlyLedger = (targetFlags & 4) != 0;
         var jsonColumns = isXml ? null : GetJsonColumnDefinitionsSqlServer(cmd, tableSchema, tableName, jsonKeys);
 
         // Content-file token: DataTongs passes the exact key it wrote alongside the .tabledata filename
@@ -922,22 +925,24 @@ SELECT STRING_AGG('-- Column ""' || c.column_name || '"" skipped: ' || c.udt_nam
         // B1: the row source is the only thing that differs by encoding. XML shreds the payload with
         // .nodes()/.value() (works at every compat level); JSON uses OPENJSON (compat 130+). The MERGE
         // tail (match/update/insert/delete/identity/triggers) below is identical for both.
-        var (declareLine, rowSource) = isXml
+        var (declareLine, sourceSelect) = isXml
             // XML data type methods (.nodes()/.value()) require QUOTED_IDENTIFIER ON; emit it so the script
             // is self-sufficient regardless of the executing session's setting (verified on SQL Server 2008 R2).
             ? ($"SET QUOTED_IDENTIFIER ON;\r\n\r\nDECLARE @v_xml XML = '{contentValue}';",
-               $@"USING (
-  SELECT {selectColumns}
-    FROM @v_xml.nodes('/rows/row') AS Src(n)
-) AS Source")
+               $@"  SELECT {selectColumns}
+    FROM @v_xml.nodes('/rows/row') AS Src(n)")
             : ($"DECLARE @v_json NVARCHAR(MAX) = '{contentValue}';",
-               $@"USING (
-  SELECT {selectColumns}
+               $@"  SELECT {selectColumns}
     FROM OPENJSON(@v_json)
     WITH (
 {jsonColumns}
-    )
-) AS Source");
+    )");
+        var rowSource = $"USING (\r\n{sourceSelect}\r\n) AS Source";
+
+        if (memoryOptimized || appendOnlyLedger)
+            return (string.IsNullOrEmpty(unsupportedComments) ? "" : unsupportedComments + "\r\n") +
+                   BuildSeparateStatementsSqlServer(cmd, tableSchema, tableName, destSchema, declareLine, sourceSelect, keyColumns,
+                       mergeUpdate, mergeDelete, mergeFilter, jsonKeys, identityInsert, disableTriggers, memoryOptimized, appendOnlyLedger);
 
         var mergeSQL = (string.IsNullOrEmpty(unsupportedComments) ? "" : unsupportedComments + "\r\n") + $@"
 {declareLine}
@@ -952,28 +957,11 @@ ON {matchColumns}
         if (mergeUpdate)
         {
             var updateColumns = GetUpdateColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys);
-            // NULL-safe inequality: fires update when exactly one side is NULL, or when both are non-NULL but differ.
-            // The original "NOT (T = S OR (both NULL))" form falls into three-valued-logic NULL for the asymmetric cases.
-            static string NullSafeNotEqual(string tExpr, string sExpr) =>
-                $"((({tExpr}) IS NULL AND ({sExpr}) IS NOT NULL) OR (({tExpr}) IS NOT NULL AND ({sExpr}) IS NULL) OR ({tExpr}) <> ({sExpr}))";
-            var updateCompare = string.Join(" OR ",
-                updateColumns!.Split(',').Select(c => c.StartsWith("G[")
-                    ? NullSafeNotEqual($"Target.{c.Substring(1)}.ToString()", $"Source.{c.Substring(1)}.ToString()")
-                    : c.StartsWith("X[") || c.StartsWith("N[")
-                        ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS NVARCHAR(MAX))", $"CAST(Source.{c.Substring(1)} AS NVARCHAR(MAX))")
-                        : c.StartsWith("T[")
-                            ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS VARCHAR(MAX))", $"CAST(Source.{c.Substring(1)} AS VARCHAR(MAX))")
-                            : c.StartsWith("I[")
-                                ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS VARBINARY(MAX))", $"CAST(Source.{c.Substring(1)} AS VARBINARY(MAX))")
-                                : c.StartsWith("D[")
-                                    ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS NVARCHAR(50))", $"CAST(Source.{c.Substring(1)} AS NVARCHAR(50))")
-                                    : NullSafeNotEqual($"Target.{c}", $"Source.{c}")));
-
             mergeSQL += $"""
 
-WHEN MATCHED AND ({updateCompare}) THEN
+WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
   UPDATE SET
-{string.Join(",\r\n", updateColumns.Split(',').Select(c => $"        {c.Replace("G[", "[").Replace("X[", "[").Replace("N[", "[").Replace("T[", "[").Replace("I[", "[").Replace("D[", "[")} = Source.{c.Replace("G[", "[").Replace("X[", "[").Replace("N[", "[").Replace("T[", "[").Replace("I[", "[").Replace("D[", "[")}"))}
+{BuildUpdateAssignmentsSqlServer(updateColumns)}
 """;
         }
 
@@ -999,6 +987,80 @@ WHEN MATCHED AND ({updateCompare}) THEN
 
         mergeSQL += $";\r\n{(identityInsert ? $"SET IDENTITY_INSERT [{destSchema}].[{tableName}] OFF;\r\n" : "")}{(disableTriggers ? $"ALTER TABLE [{destSchema}].[{tableName}] ENABLE TRIGGER ALL;\r\n" : "")}";
         return mergeSQL;
+    }
+
+    // NULL-safe inequality: fires update when exactly one side is NULL, or when both are non-NULL but differ.
+    // The original "NOT (T = S OR (both NULL))" form falls into three-valued-logic NULL for the asymmetric cases.
+    private static string BuildUpdateCompareSqlServer(string updateColumns)
+    {
+        static string NullSafeNotEqual(string tExpr, string sExpr) =>
+            $"((({tExpr}) IS NULL AND ({sExpr}) IS NOT NULL) OR (({tExpr}) IS NOT NULL AND ({sExpr}) IS NULL) OR ({tExpr}) <> ({sExpr}))";
+        return string.Join(" OR ",
+            updateColumns!.Split(',').Select(c => c.StartsWith("G[")
+                ? NullSafeNotEqual($"Target.{c.Substring(1)}.ToString()", $"Source.{c.Substring(1)}.ToString()")
+                : c.StartsWith("X[") || c.StartsWith("N[")
+                    ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS NVARCHAR(MAX))", $"CAST(Source.{c.Substring(1)} AS NVARCHAR(MAX))")
+                    : c.StartsWith("T[")
+                        ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS VARCHAR(MAX))", $"CAST(Source.{c.Substring(1)} AS VARCHAR(MAX))")
+                        : c.StartsWith("I[")
+                            ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS VARBINARY(MAX))", $"CAST(Source.{c.Substring(1)} AS VARBINARY(MAX))")
+                            : c.StartsWith("D[")
+                                ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS NVARCHAR(50))", $"CAST(Source.{c.Substring(1)} AS NVARCHAR(50))")
+                                : NullSafeNotEqual($"Target.{c}", $"Source.{c}")));
+    }
+
+    private static string BuildUpdateAssignmentsSqlServer(string updateColumns)
+    {
+        static string Plain(string c) => c.Replace("G[", "[").Replace("X[", "[").Replace("N[", "[").Replace("T[", "[").Replace("I[", "[").Replace("D[", "[");
+        return string.Join(",\r\n", updateColumns.Split(',').Select(c => $"        {Plain(c)} = Source.{Plain(c)}"));
+    }
+
+    // SQL Server refuses MERGE outright on a memory-optimized table, and UPDATE and DELETE on an append-only ledger table,
+    // so those take the same work as separate statements over a staged copy of the source rows. A memory-optimized table
+    // needs the SNAPSHOT hint to be read inside an explicit transaction. An append-only table only gains the rows it lacks;
+    // the rows that differ, or would have been deleted, are counted in a message and left as they are.
+    private static string BuildSeparateStatementsSqlServer(IDbCommand cmd, string tableSchema, string tableName, string destSchema,
+        string declareLine, string sourceSelect, string keyColumns, bool mergeUpdate, bool mergeDelete, string mergeFilter,
+        HashSet<string> jsonKeys, bool identityInsert, bool disableTriggers, bool memoryOptimized, bool appendOnlyLedger)
+    {
+        var target = $"[{destSchema}].[{tableName}]";
+        var matchColumns = BuildSqlServerMatchColumns(keyColumns);
+        var hint = memoryOptimized ? " WITH (SNAPSHOT)" : "";
+        var filter = string.IsNullOrWhiteSpace(mergeFilter) ? "" : $" AND ({mergeFilter})";
+        var sb = new StringBuilder();
+        sb.Append($"\r\n{declareLine}\r\n\r\n");
+        if (disableTriggers) sb.Append($"ALTER TABLE {target} DISABLE TRIGGER ALL;\r\n");
+        if (identityInsert) sb.Append($"SET IDENTITY_INSERT {target} ON;\r\n");
+        sb.Append($"IF OBJECT_ID('tempdb..#v_ss_Source') IS NOT NULL DROP TABLE #v_ss_Source;\r\n");
+        sb.Append($"SELECT * INTO #v_ss_Source FROM (\r\n{sourceSelect}\r\n) AS Source;\r\n\r\n");
+
+        if (mergeUpdate)
+        {
+            // A memory-optimized table refuses an UPDATE that names a primary key column, even to its own value.
+            var keys = keyColumns.Split(',').Select(k => $"[{k.Trim().TrimStart('*').Trim('[', ']')}]").ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var updateColumns = string.Join(",", GetUpdateColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys)!.Split(',')
+                .Where(c => !keys.Contains(c.Substring(c.IndexOf('[')))));
+            var compare = BuildUpdateCompareSqlServer(updateColumns);
+            sb.Append(appendOnlyLedger
+                ? $"DECLARE @v_ss_Differ INT = (SELECT COUNT(*) FROM #v_ss_Source AS Source JOIN {target} AS Target ON {matchColumns} WHERE ({compare}));\r\n" +
+                  $"IF @v_ss_Differ > 0 RAISERROR('%d delivered rows differ from rows already in the append-only ledger table {target.Replace("'", "''")}, which cannot be updated; they were left as they are.', 10, 1, @v_ss_Differ) WITH NOWAIT;\r\n\r\n"
+                : $"UPDATE Target SET\r\n{BuildUpdateAssignmentsSqlServer(updateColumns)}\r\n  FROM {target} AS Target{hint}\r\n  JOIN #v_ss_Source AS Source ON {matchColumns}\r\n WHERE ({compare});\r\n\r\n");
+        }
+
+        var insertColumns = GetInsertColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys);
+        sb.Append($"INSERT INTO {target} (\r\n {insertColumns}\r\n)\r\nSELECT {insertColumns!.Replace("[", "Source.[")}\r\n  FROM #v_ss_Source AS Source\r\n" +
+                  $" WHERE NOT EXISTS (SELECT 1 FROM {target} AS Target{hint} WHERE {matchColumns});\r\n\r\n");
+
+        if (mergeDelete)
+            sb.Append(appendOnlyLedger
+                ? $"DECLARE @v_ss_Stale INT = (SELECT COUNT(*) FROM {target} AS Target WHERE NOT EXISTS (SELECT 1 FROM #v_ss_Source AS Source WHERE {matchColumns}){filter});\r\n" +
+                  $"IF @v_ss_Stale > 0 RAISERROR('%d rows of the append-only ledger table {target.Replace("'", "''")} are not in the delivered data, and cannot be deleted; they were left as they are.', 10, 1, @v_ss_Stale) WITH NOWAIT;\r\n\r\n"
+                : $"DELETE Target FROM {target} AS Target{hint}\r\n WHERE NOT EXISTS (SELECT 1 FROM #v_ss_Source AS Source WHERE {matchColumns}){filter};\r\n\r\n");
+
+        sb.Append("DROP TABLE #v_ss_Source;\r\n");
+        if (identityInsert) sb.Append($"SET IDENTITY_INSERT {target} OFF;\r\n");
+        if (disableTriggers) sb.Append($"ALTER TABLE {target} ENABLE TRIGGER ALL;\r\n");
+        return sb.ToString();
     }
 
     private static string BuildSqlServerMatchColumns(string keyColumns)
@@ -1070,13 +1132,29 @@ WHEN MATCHED AND ({updateCompare}) THEN
     }
 
     private static bool NeedsIdentityInsertSqlServer(IDbCommand cmd, string tableSchema, string tableName)
+        => (SqlServerTargetFlags(cmd, tableSchema, tableName) & 1) != 0;
+
+    // 1: an identity column. 2: memory-optimized (OBJECTPROPERTY returns NULL before 2014). 4: an append-only ledger
+    // table -- sys.tables.ledger_type is a 2022 column, so the text naming it is only compiled there. One round trip,
+    // because the merge builder's catalog reads are a fixed sequence.
+    private static int SqlServerTargetFlags(IDbCommand cmd, string tableSchema, string tableName)
     {
         BindIdentifierParameters(cmd, ("@objname", $"{tableSchema}.{tableName}"));
         cmd.CommandText = $@"
-SELECT CAST(CASE WHEN EXISTS (SELECT * FROM sys.identity_columns WHERE [object_id] = OBJECT_ID(@objname))
-                 THEN 1 ELSE 0 END AS BIT)
+DECLARE @v_ss_ledger INT = 0;
+IF CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(50)), 4) AS INT) >= 16
+    EXEC sp_executesql N'SELECT @l = ledger_type FROM sys.tables WHERE [object_id] = OBJECT_ID(@o)',
+         N'@o NVARCHAR(776), @l INT OUTPUT', @o = @objname, @l = @v_ss_ledger OUTPUT;
+SELECT CASE WHEN EXISTS (SELECT * FROM sys.identity_columns WHERE [object_id] = OBJECT_ID(@objname)) THEN 1 ELSE 0 END
+     + CASE WHEN OBJECTPROPERTY(OBJECT_ID(@objname), 'TableIsMemoryOptimized') = 1 THEN 2 ELSE 0 END
+     + CASE WHEN @v_ss_ledger = 3 THEN 4 ELSE 0 END
 ";
-        return cmd.ExecuteScalar() as bool? ?? false;
+        return cmd.ExecuteScalar() switch
+        {
+            bool b => b ? 1 : 0,
+            int i => i,
+            var other => int.TryParse(other?.ToString(), out var n) ? n : 0
+        };
     }
 
     private static bool IdentityColumnInJsonKeysSqlServer(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys)
