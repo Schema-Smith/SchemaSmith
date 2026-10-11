@@ -520,11 +520,22 @@ BEGIN TRY
         OR ISNULL(cc.is_persisted, 0) <> ISNULL(c.[Persisted], 0))
         OR sc.is_sparse <> [Sparse]
         OR sc.is_column_set <> [IsColumnSet]
+        OR (c.[PaddingApplies] = 1 AND c.[AnsiPadding] IS NOT NULL AND sc.is_ansi_padded <> c.[AnsiPadding])
         OR ISNULL(cm.ExistingMaskFn, '') COLLATE DATABASE_DEFAULT <> [DataMaskFunction]
         OR ([Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') <> [Collation])
         OR ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> [EncryptionType]
         OR (ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> 'NONE' AND (ISNULL(cm.ExistingEncAlgo, '') COLLATE DATABASE_DEFAULT <> [EncryptionAlgorithm] OR ISNULL(cm.ExistingEncKeyDb, '') COLLATE DATABASE_DEFAULT <> [EncryptionKey]))
   
+  -- ALTER COLUMN pads a char/varchar/binary/varbinary column whatever the session's ANSI_PADDING, so a column declared
+  -- unpadded is replaced instead: added under ANSI_PADDING OFF, copied, and swapped in. A change carried by
+  -- SpecialColumnScript (ADD/DROP MASKED, ROWGUIDCOL) is not a redefinition and stays in place.
+  UPDATE cc
+     SET MustSwapColumn = 1
+    FROM #ColumnChanges cc
+    JOIN #Columns c WITH (NOLOCK) ON c.[Schema] = cc.[Schema] AND c.[TableName] = cc.[TableName] AND c.[ColumnName] = cc.[ColumnName]
+    WHERE c.[PaddingApplies] = 1 AND c.[AnsiPadding] = 0
+      AND cc.MustDropAndRecreate = 0 AND cc.DropOnly = 0 AND RTRIM(cc.[SpecialColumnScript]) = ''
+
   RAISERROR('Detect Computed Columns Impacted by Other Column Changes', 10, 100) WITH NOWAIT
   INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly])
     -- An unchanged computed column that reads a column being altered has to come off first: SQL Server refuses the
@@ -1728,13 +1739,16 @@ BEGIN TRY
   END
 
   RAISERROR('Swap Columns Requiring Data-Preserving Replacement', 10, 100) WITH NOWAIT
-  DECLARE @v_SwapSchema NVARCHAR(256), @v_SwapTable NVARCHAR(256), @v_SwapColumn NVARCHAR(256), @v_SwapColumnScript NVARCHAR(MAX)
+  DECLARE @v_SwapSchema NVARCHAR(256), @v_SwapTable NVARCHAR(256), @v_SwapColumn NVARCHAR(256), @v_SwapColumnScript NVARCHAR(MAX), @v_SwapPaddingOff BIT
   DECLARE swap_cursor CURSOR LOCAL FAST_FORWARD FOR
-    SELECT cc.[Schema], cc.[TableName], SchemaSmith.fn_StripBracketWrapping(cc.ColumnName), cc.ColumnScript
+    SELECT cc.[Schema], cc.[TableName], SchemaSmith.fn_StripBracketWrapping(cc.ColumnName), cc.ColumnScript,
+           CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
+                                           WHERE c.[Schema] = cc.[Schema] AND c.[TableName] = cc.[TableName] AND c.[ColumnName] = cc.[ColumnName]
+                                             AND c.[PaddingApplies] = 1 AND c.[AnsiPadding] = 0) THEN 1 ELSE 0 END)
       FROM #ColumnChanges cc WITH (NOLOCK)
       WHERE cc.MustSwapColumn = 1
   OPEN swap_cursor
-  FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript
+  FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript, @v_SwapPaddingOff
   WHILE @@FETCH_STATUS = 0
   BEGIN
     DECLARE @v_TempColName NVARCHAR(256) = @v_SwapColumn + '_swap_temp'
@@ -1753,14 +1767,26 @@ BEGIN TRY
       -- Non-encrypted swap: add as NULL, copy data, then enforce NOT NULL if needed
       -- Each step must execute separately so SQL Server can resolve column names after ADD
       -- Step 1: Add temp column as NULL (can't add NOT NULL to non-empty table without default)
+      -- An unpadded NOT NULL replacement takes a temporary default instead, because step 3's ALTER COLUMN would pad it.
+      DECLARE @v_SwapDefaultName NVARCHAR(256) = QUOTENAME(LEFT('DF_SchemaSmith_PadSwap_' + @v_TempColName, 128))
+      DECLARE @v_SwapNotNullOff BIT = CASE WHEN @v_SwapPaddingOff = 1 AND @v_SwapColumnScript LIKE '%NOT NULL%' THEN 1 ELSE 0 END
       SET @v_SQL = 'RAISERROR(''  Swapping column ' + @v_SwapSchema + '.' + @v_SwapTable + '.' + QUOTENAME(@v_SwapColumn) + ' (data-preserving replacement)'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                   'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' ADD ' + QUOTENAME(@v_TempColName) + ' ' + @v_SwapDataType + ' NULL;'
+                   CASE WHEN @v_SwapPaddingOff = 1 THEN 'SET ANSI_PADDING OFF;' + CHAR(13) + CHAR(10) ELSE '' END +
+                   'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' ADD ' + QUOTENAME(@v_TempColName) + ' ' + @v_SwapDataType +
+                   CASE WHEN @v_SwapNotNullOff = 1
+                        THEN ' NOT NULL CONSTRAINT ' + @v_SwapDefaultName + ' DEFAULT ' + CASE WHEN @v_SwapDataType LIKE '%BINARY%' THEN '0x' ELSE '''''' END
+                        ELSE ' NULL' END + ';'
       IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
       -- Step 2: Copy data from original to temp
       SET @v_SQL = 'UPDATE ' + @v_SwapSchema + '.' + @v_SwapTable + ' SET ' + QUOTENAME(@v_TempColName) + ' = ' + QUOTENAME(@v_SwapColumn) + ';'
       IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
       -- Step 3: If original was NOT NULL, enforce it on the temp column now that data is copied
-      IF @v_SwapColumnScript LIKE '%NOT NULL%'
+      IF @v_SwapNotNullOff = 1
+      BEGIN
+        SET @v_SQL = 'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' DROP CONSTRAINT ' + @v_SwapDefaultName + ';'
+        IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+      END
+      ELSE IF @v_SwapColumnScript LIKE '%NOT NULL%'
       BEGIN
         SET @v_SQL = 'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' ALTER COLUMN ' + QUOTENAME(@v_TempColName) + ' ' + @v_SwapColumnScript + ';'
         IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
@@ -1772,7 +1798,7 @@ BEGIN TRY
     -- Step 5: Rename temp to original
     SET @v_SQL = 'EXEC sp_rename ''' + SchemaSmith.fn_StripBracketWrapping(@v_SwapSchema) + '.' + SchemaSmith.fn_StripBracketWrapping(@v_SwapTable) + '.' + QUOTENAME(@v_TempColName) + ''', ''' + @v_SwapColumn + ''', ''COLUMN'';'
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-    FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript
+    FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript, @v_SwapPaddingOff
   END
   CLOSE swap_cursor
   DEALLOCATE swap_cursor

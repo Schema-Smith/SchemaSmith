@@ -105,7 +105,14 @@
          -- engine's to derive unless the author states one, and only an explicit value may narrow it.
          [NullableDeclared] = c.[Nullable],
          c.[Default], c.[CheckExpression], c.[ComputedExpression], [Persisted] = ISNULL(c.[Persisted], 0),
-         [Sparse] = ISNULL(c.[Sparse], 0), [FileStream] = ISNULL(c.[FileStream], 0), [IsColumnSet] = ISNULL(c.[IsColumnSet], 0), [BackfillExistingRows] = ISNULL(c.[BackfillExistingRows], 0), [Collation] = RTRIM(ISNULL(c.[Collation], '')), [DataMaskFunction] = RTRIM(ISNULL(c.[DataMaskFunction], '')),
+         [Sparse] = ISNULL(c.[Sparse], 0), [FileStream] = ISNULL(c.[FileStream], 0), [IsColumnSet] = ISNULL(c.[IsColumnSet], 0), [BackfillExistingRows] = ISNULL(c.[BackfillExistingRows], 0), [AnsiPadding] = c.[AnsiPadding],
+         -- See the JSON twin for PaddingApplies.
+         [PaddingApplies] = CONVERT(BIT, CASE WHEN RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND ISNULL(c.[IsColumnSet], 0) = 0 AND ISNULL(c.[FileStream], 0) = 0 AND ISNULL(c.[EncryptionType], 'NONE') = 'NONE'
+                                               AND EXISTS (SELECT 1 FROM sys.types ty
+                                                            WHERE ty.user_type_id = TYPE_ID(RTRIM(LEFT(SchemaSmith.fn_NormalizeDataType(c.[DataType]), CHARINDEX('(', SchemaSmith.fn_NormalizeDataType(c.[DataType]) + '(') - 1)))
+                                                              AND TYPE_NAME(ty.system_type_id) IN ('char', 'varchar', 'binary', 'varbinary'))
+                                              THEN 1 ELSE 0 END),
+         [Collation] = RTRIM(ISNULL(c.[Collation], '')), [DataMaskFunction] = RTRIM(ISNULL(c.[DataMaskFunction], '')),
          [EncryptionType] = ISNULL(c.[EncryptionType], 'NONE'), [EncryptionKey] = RTRIM(ISNULL(c.[EncryptionKey], '')), [EncryptionAlgorithm] = RTRIM(ISNULL(c.[EncryptionAlgorithm], '')),
          [OldName] = SchemaSmith.fn_SafeBracketWrap(c.[OldName]),
          CONVERT(BIT, CASE WHEN (RTRIM(ISNULL([ComputedExpression], '')) <> '' OR NOT EXISTS (SELECT * FROM #Tables x WHERE x.[Name] = t.[Name] AND x.[Schema] = t.[Schema] AND x.NewTable = 1))
@@ -153,6 +160,7 @@
       [FileStream] = CONVERT(BIT, CASE LOWER(col.value('(FileStream/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [IsColumnSet] = CONVERT(BIT, CASE LOWER(col.value('(IsColumnSet/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [BackfillExistingRows] = CONVERT(BIT, CASE LOWER(col.value('(BackfillExistingRows/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
+      [AnsiPadding] = CONVERT(BIT, CASE LOWER(col.value('(AnsiPadding/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [Collation] = col.value('(Collation/text())[1]', 'NVARCHAR(500)'),
       [DataMaskFunction] = col.value('(DataMaskFunction/text())[1]', 'NVARCHAR(500)'),
       [EncryptionType] = col.value('(EncryptionType/text())[1]', 'NVARCHAR(100)'),

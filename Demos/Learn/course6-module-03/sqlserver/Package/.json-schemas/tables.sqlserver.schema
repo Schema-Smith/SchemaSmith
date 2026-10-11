@@ -74,6 +74,10 @@
           "FileStream": {
             "type": "boolean"
           },
+          "AnsiPadding": {
+            "type": "boolean",
+            "description": "SQL Server only, for char, varchar, binary and varbinary columns. false creates the column under SET ANSI_PADDING OFF, so trailing blanks (or trailing zeros) are trimmed on insert; true pads it as usual. Leaving it out leaves an existing column's padding as it is."
+          },
           "Extensions": {
             "type": "object",
             "required": [

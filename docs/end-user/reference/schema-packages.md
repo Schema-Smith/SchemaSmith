@@ -691,7 +691,7 @@ Types this affects in practice: MariaDB `UUID` (10.7+), MySQL `VECTOR` (9.0+), S
 
 ### SQL Server column extras
 
-`CheckExpression`, `ComputedExpression`, `Persisted`, `Sparse`, `IsColumnSet`, `Collation`, `DataMaskFunction`, `FileStream` (see [FILESTREAM (SQL Server)](#filestream-sql-server)). Identity is part of the `DataType` string (`INT IDENTITY(1,1)`); `ROWGUIDCOL` likewise (`UNIQUEIDENTIFIER ROWGUIDCOL`).
+`CheckExpression`, `ComputedExpression`, `Persisted`, `Sparse`, `IsColumnSet`, `Collation`, `DataMaskFunction`, `AnsiPadding`, `FileStream` (see [FILESTREAM (SQL Server)](#filestream-sql-server)). Identity is part of the `DataType` string (`INT IDENTITY(1,1)`); `ROWGUIDCOL` likewise (`UNIQUEIDENTIFIER ROWGUIDCOL`).
 
 `IsColumnSet: true` declares `COLUMN_SET FOR ALL_SPARSE_COLUMNS` -- an XML column that aggregates the table's sparse columns. Available at the SQL Server 2008 floor, alongside `Sparse`. Adding a column set and the sparse columns it aggregates together in one deploy always works, whether the table is new or already exists. **Known limitation:** converting an *already-deployed* plain column into a column set in the same deploy that also introduces a brand-new sparse column is not supported -- the new sparse column commits before the conversion runs, and SQL Server refuses a column set on a table that already has a sparse column. The conversion works on its own (no new sparse columns in the same deploy, and none pre-existing on the table); combined with a new sparse column, it fails with SQL Server's own error.
 
@@ -703,6 +703,19 @@ default" authorable. It requires `Default`; without one there is no value to app
 
 > **Note:** This is a SQL Server difference, not a general one. PostgreSQL, MySQL and MariaDB backfill the default
 > on `ADD COLUMN` already, so the setting exists only here.
+
+`AnsiPadding: false` creates a `char`, `varchar`, `binary` or `varbinary` column under `SET ANSI_PADDING OFF`, so
+trailing blanks (trailing zeros in a binary column) are trimmed when a value is stored. SchemaTongs writes it for each
+such column it finds unpadded and leaves it out otherwise. Leaving it out leaves an existing column's padding as it
+is, and creates a new column padded; `true` pads a column that is currently unpadded. It is ignored on every other
+type: `nchar` and `nvarchar` are always padded, and the rest have nothing to pad.
+
+SQL Server pads a column whenever it is altered, so a change to a column declared `AnsiPadding: false` -- its length,
+type, nullability or collation -- replaces it rather than altering it: a new column is added unpadded, the data is
+copied across, and the old one is dropped. Its defaults and indexes are put back by the same deploy, and it moves
+to the end of the table, as an identity removal does.
+
+> **Note:** Microsoft has deprecated `ANSI_PADDING OFF`. Use it to keep a legacy column as it is, not for new design.
 
 ### PostgreSQL column extras
 

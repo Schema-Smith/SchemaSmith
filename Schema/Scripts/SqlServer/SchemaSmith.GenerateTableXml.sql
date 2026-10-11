@@ -287,6 +287,10 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                        CASE WHEN sc.is_sparse = 1 THEN 'true' ELSE 'false' END AS [Sparse],
                        -- FILESTREAM round-trip -- emitted only when set.
                        CASE WHEN sc.is_filestream = 1 THEN 'true' END AS [FileStream],
+                       -- Written only for an unpadded column, as the JSON twin.
+                       CASE WHEN sc.is_ansi_padded = 0 AND TYPE_NAME(sc.system_type_id) IN ('char', 'varchar', 'binary', 'varbinary')
+                                 AND cc.[object_id] IS NULL AND cm.EncryptionType IS NULL
+                            THEN 'false' END AS [AnsiPadding],
                        CASE WHEN sc.is_column_set = 1 THEN 'true' ELSE 'false' END AS [IsColumnSet],
                        ISNULL(NULLIF(sc.collation_name, @v_DatabaseCollation), '') AS [Collation],
                        ISNULL(cm.MaskingFunction, '') COLLATE DATABASE_DEFAULT AS DataMaskFunction,

@@ -123,6 +123,18 @@ public class SourceCompatEncodingExtractionTests
             Assert.That(types["[Frag]"], Is.EqualTo("XML([dbo].[Xsc])"), $"The {encoding} extraction of a CONTENT column.");
         }
 
+        // ----- ANSI_PADDING: an unpadded char/varchar/binary/varbinary column writes AnsiPadding false; nothing else does. -----
+        foreach (var (encoding, path) in new[] { ("modern", modernPath), ("legacy", legacyPath) })
+        {
+            var padding = JObject.Parse(ReadTableFile(path, "Unpadded"))["Columns"]!
+                .ToDictionary(c => (string)c["Name"]!, c => c["AnsiPadding"]?.ToString());
+            Assert.That(padding["[Off]"], Is.EqualTo("False"), $"The {encoding} extraction of an unpadded varchar.");
+            Assert.That(padding["[OffBin]"], Is.EqualTo("False"), $"The {encoding} extraction of an unpadded binary.");
+            Assert.That(padding["[Wide]"], Is.Null, $"The {encoding} extraction must not write AnsiPadding on nvarchar, which is always padded.");
+            Assert.That(padding["[Num]"], Is.Null, $"The {encoding} extraction must not write AnsiPadding on a non-character type.");
+            Assert.That(padding["[On]"], Is.Null, $"The {encoding} extraction must not write AnsiPadding on a padded column.");
+        }
+
         // ----- Correctness: every emitted table + indexed view is model-equal minus Extensions. -----
         var modernFiles = ReadPackageObjects(modernPath);
         var legacyFiles = ReadPackageObjects(legacyPath);
@@ -297,6 +309,8 @@ CREATE TABLE dbo.Rich (
 
         Exec(cmd, @"CREATE XML SCHEMA COLLECTION dbo.Xsc AS N'<xsd:schema xmlns:xsd=""http://www.w3.org/2001/XMLSchema""><xsd:element name=""r"" type=""xsd:string""/></xsd:schema>'");
         Exec(cmd, "CREATE TABLE dbo.XmlDocs (Id INT NOT NULL PRIMARY KEY, Doc XML(DOCUMENT dbo.Xsc) NULL, Frag XML(CONTENT dbo.Xsc) NULL)");
+        Exec(cmd, "EXEC('SET ANSI_PADDING OFF; CREATE TABLE dbo.Unpadded (Id INT NOT NULL PRIMARY KEY, [Off] VARCHAR(10) NULL, OffBin BINARY(4) NULL, Wide NVARCHAR(10) NULL, Num INT NULL)')");
+        Exec(cmd, "ALTER TABLE dbo.Unpadded ADD [On] VARCHAR(10) NULL");
 
         // Extended property → captured in Extensions on BOTH the JSON and (post-B2) the XML path; the test
         // asserts each extraction carries it.

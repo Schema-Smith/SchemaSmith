@@ -224,6 +224,10 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                        -- FILESTREAM round-trip. Emitted only when set, so no existing package gains
                        -- a false on every column. Both catalog columns predate the 2008 floor.
                        CASE WHEN sc.is_filestream = 1 THEN CAST(1 AS BIT) END AS [FileStream],
+                       -- Written only for an unpadded column: an omitted AnsiPadding leaves the column unmanaged.
+                       CASE WHEN sc.is_ansi_padded = 0 AND TYPE_NAME(sc.system_type_id) IN ('char', 'varchar', 'binary', 'varbinary')
+                                 AND cc.[object_id] IS NULL AND sc.encryption_type IS NULL
+                            THEN CAST(0 AS BIT) END AS [AnsiPadding],
                        sc.is_column_set AS [IsColumnSet],
                        ISNULL(NULLIF(sc.collation_name, @v_DatabaseCollation), '') AS [Collation],
                        ISNULL(mc.masking_function, '') COLLATE DATABASE_DEFAULT AS DataMaskFunction,
