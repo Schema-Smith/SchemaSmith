@@ -633,20 +633,13 @@ jobs:
     needs: [build-and-unit-tests, sweep-record]
     strategy:
       fail-fast: false
+      # MySQL on every run; MariaDB on merges to main only. The two share the name-folding helpers, and on its first run
+      # the MariaDB leg found nothing the MySQL one did not -- but MySQL 8.0 reimplemented lower_case_table_names in its
+      # data dictionary and MariaDB did not, so MariaDB is still checked before anything ships.
       matrix:
-        include:
-          - engine: MySQL
-            version: '8.0'
-            image: mysql
-            category: MySQL
-            port: 3306
-            prefix: MYSQL
-          - engine: MariaDB
-            version: '11.4'
-            image: mariadb
-            category: MariaDb
-            port: 3317
-            prefix: MARIADB
+        include: ${{ fromJSON(github.event_name == 'pull_request'
+          && '[{"engine":"MySQL","version":"8.0","image":"mysql","category":"MySQL","port":3306,"prefix":"MYSQL"}]'
+          || '[{"engine":"MySQL","version":"8.0","image":"mysql","category":"MySQL","port":3306,"prefix":"MYSQL"},{"engine":"MariaDB","version":"11.4","image":"mariadb","category":"MariaDb","port":3317,"prefix":"MARIADB"}]') }}
     permissions:
       contents: read
       checks: write

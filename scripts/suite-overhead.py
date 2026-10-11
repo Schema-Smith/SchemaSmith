@@ -93,47 +93,60 @@ def load(paths):
 
 
 def report(fixtures, setups, assemblies, top, md):
+    """Only what the XML measures reliably: each test's duration and each fixture's END. A fixture's start is stamped
+    when it is dispatched, not when its setup begins, so per-fixture setup is not reported; setup appears only as the
+    remainder of an assembly's wall time."""
     out = []
     say = out.append
-    say("## Suite time: inside tests vs. fixture setup and teardown" if md else "Suite time: inside tests vs. fixture setup and teardown")
+    say("## Suite time" if md else "Suite time")
     say("")
+    per_asm = collections.defaultdict(lambda: {"tests": 0.0, "teardown": 0.0, "count": 0})
+    for f in fixtures:
+        a = per_asm[f["assembly"]]
+        a["tests"] += f["tests"]; a["teardown"] += f["teardown"]; a["count"] += f["count"]
     if md:
-        say("| Assembly | Wall |")
-        say("|---|---:|")
+        say("| Assembly | Wall | In tests | Fixture teardown | Setup and other | Tests |")
+        say("|---|---:|---:|---:|---:|---:|")
+    else:
+        say(f"  {'assembly':38s} {'wall':>7s} {'in tests':>9s} {'teardown':>9s} {'setup+other':>12s} {'tests':>6s}")
+    parallel = False
     for name, wall in assemblies:
-        say(f"| {name} | {wall:.0f}s |" if md else f"  {name:40s} {wall:8.0f}s")
+        a = per_asm.get(name, {"tests": 0.0, "teardown": 0.0, "count": 0})
+        rest = wall - a["tests"] - a["teardown"]
+        if rest < 0:
+            parallel = True
+        rest_text = f"{rest:.0f}s" if rest >= 0 else "overlap"
+        row = (name, wall, a["tests"], a["teardown"], rest_text, a["count"])
+        say("| %s | %.0fs | %.0fs | %.0fs | %s | %d |" % row if md else "  %-38s %6.0fs %8.0fs %8.0fs %12s %6d" % row)
     say("")
-    by = collections.defaultdict(lambda: {"wall": 0.0, "tests": 0.0, "count": 0, "fixtures": 0, "setup": 0.0, "teardown": 0.0})
+    say("Setup and other = wall - in tests - teardown: fixture setup, engine-level setup and the gaps between tests."
+        + (" \"overlap\": tests ran in parallel, so their durations add up to more than the wall time." if parallel else ""))
+    say("")
+    by = collections.defaultdict(lambda: {"tests": 0.0, "count": 0, "fixtures": 0, "teardown": 0.0})
     for f in fixtures:
         b = by[f["engine"]]
-        b["wall"] += f["wall"]; b["tests"] += f["tests"]; b["count"] += f["count"]; b["fixtures"] += 1
-        b["setup"] += f["setup"]; b["teardown"] += f["teardown"]
-    level = collections.defaultdict(float)
-    for s in setups:
-        level[s["engine"]] += s["outside"]
+        b["tests"] += f["tests"]; b["count"] += f["count"]; b["fixtures"] += 1; b["teardown"] += f["teardown"]
     if md:
-        say("| Engine | Fixtures | Tests | In tests | Fixture setup | Fixture teardown | Between tests | Engine-level setup | Per test |")
-        say("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+        say("| Engine | Fixtures | Tests | In tests | Fixture teardown | Per test |")
+        say("|---|---:|---:|---:|---:|---:|")
     else:
-        say(f"  {'engine':10s} {'fixtures':>8s} {'tests':>6s} {'in tests':>9s} {'setup':>8s} {'teardown':>9s} {'between':>8s} {'engine setup':>13s} {'per test':>9s}")
-    for e in sorted(by, key=lambda k: -by[k]["wall"]):
+        say(f"  {'engine':10s} {'fixtures':>8s} {'tests':>6s} {'in tests':>9s} {'teardown':>9s} {'per test':>9s}")
+    for e in sorted(by, key=lambda k: -by[k]["tests"]):
         b = by[e]
-        between = max(b["wall"] - b["tests"] - b["setup"] - b["teardown"], 0.0)
         per = b["tests"] / b["count"] if b["count"] else 0
-        row = (e, b["fixtures"], b["count"], b["tests"], b["setup"], b["teardown"], between, level.get(e, 0.0), per)
-        say("| %s | %d | %d | %.0fs | %.0fs | %.0fs | %.0fs | %.0fs | %.2fs |" % row if md
-            else "  %-10s %8d %6d %8.0fs %7.0fs %8.0fs %7.0fs %12.0fs %8.2fs" % row)
+        row = (e, b["fixtures"], b["count"], b["tests"], b["teardown"], per)
+        say("| %s | %d | %d | %.0fs | %.0fs | %.2fs |" % row if md else "  %-10s %8d %6d %8.0fs %8.0fs %8.2fs" % row)
     say("")
-    worst = sorted(fixtures, key=lambda f: -(f["setup"] + f["teardown"]))[:top]
-    say(f"### Top {top} fixtures by setup + teardown" if md else f"Top {top} fixtures by setup + teardown:")
+    worst = sorted(fixtures, key=lambda f: -(f["tests"] + f["teardown"]))[:top]
+    say(f"### Top {top} fixtures by time in tests + teardown" if md else f"Top {top} fixtures by time in tests + teardown:")
     if md:
-        say("| Fixture | Engine | Setup | Teardown | In tests | Tests |")
+        say("| Fixture | Engine | Total | In tests | Teardown | Tests |")
         say("|---|---|---:|---:|---:|---:|")
     for f in worst:
         short = f["name"].split(".")[-1]
-        row = (short, f["engine"], f["setup"], f["teardown"], f["tests"], f["count"])
+        row = (short, f["engine"], f["tests"] + f["teardown"], f["tests"], f["teardown"], f["count"])
         say("| %s | %s | %.1fs | %.1fs | %.1fs | %d |" % row if md
-            else "  %-46s %-10s setup %6.1fs  teardown %5.1fs  %7.1fs in %3d tests" % row)
+            else "  %-46s %-10s %7.1fs  (in tests %6.1fs, teardown %5.1fs, %3d tests)" % row)
     return "\n".join(out)
 
 

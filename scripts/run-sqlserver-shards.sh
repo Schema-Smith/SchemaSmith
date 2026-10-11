@@ -37,12 +37,24 @@ copy_build() {
 }
 
 status_dir="$results/.status"; mkdir -p "$status_dir"
+
+packages="$(dotnet nuget locals global-packages --list | sed 's/^global-packages: //' | tr -d '')"
+coverlet_version="$(grep -o 'coverlet.collector" Version="[^"]*"' Directory.Packages.props | grep -o '[0-9][0-9.]*')"
+collector_dir="${packages%/}/coverlet.collector/$coverlet_version/build/netstandard2.0"
+command -v cygpath >/dev/null && collector_dir="$(cygpath -u "$collector_dir")"
+if [ ! -d "$collector_dir" ]; then
+  echo "WARNING: coverage collector not found at $collector_dir -- the copied-binary processes will report no coverage"
+  collector_dir=""
+fi
 run() {
   local name=$1 target=$2 filter=$3 tmp="$results/.tmp/$1"
   mkdir -p "$tmp"
   local start=$SECONDS
   local build=()
   [[ "$target" == *.csproj ]] && build=(--no-build -c Debug)
+  # A copied .dll is not a project, so dotnet test cannot find the coverage collector, which lives in the NuGet cache,
+  # not the build output: without this the collector is "not found" and that process reports no coverage at all.
+  [[ "$target" == *.dll && -n "$collector_dir" ]] && build=(--test-adapter-path "$(native "$collector_dir")")
   TMP="$(native "$tmp")" TEMP="$(native "$tmp")" TMPDIR="$tmp" \
     dotnet test "$target" "${build[@]}" --filter "Category=SqlServer&$filter" --results-directory "$results" \
       --logger "trx;LogFileName=$name.trx" "${extra[@]}" \
