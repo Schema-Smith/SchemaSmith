@@ -21,7 +21,7 @@ internal static class DeferredMergeBuilder
         string schemaOrDb, string tableName, string tableData, string keyColumns,
         bool disableTriggers, List<string> deferredColumns,
         bool disableRules = false, bool updateDescendents = false, int pgServerVersionNum = 0,
-        string contentEncoding = "Json")
+        string contentEncoding = "Json", bool insertMissingOnly = false)
     {
         var isXml = string.Equals(contentEncoding, "Xml", StringComparison.OrdinalIgnoreCase);
 
@@ -35,7 +35,7 @@ internal static class DeferredMergeBuilder
             // converted to JSON once, up front, and shredded through the same unchanged JSON row source
             // BuildMySql already uses for a hand-authored JSON payload.
             var mySqlTableData = isXml ? MergeScriptHelper.XmlPayloadToJson(tableData) : tableData;
-            return BuildMySql(cmd, schemaOrDb, tableName, mySqlTableData, deferredColumns);
+            return BuildMySql(cmd, schemaOrDb, tableName, mySqlTableData, deferredColumns, keyColumns, insertMissingOnly);
         }
 
         throw new ArgumentException($"Unsupported platform: {platform}", nameof(platform));
@@ -329,7 +329,7 @@ internal static class DeferredMergeBuilder
     // read DATETIME/TIME without their fraction, passed BIT as text, dropped a geometry's SRID and did not
     // escape backslashes in the payload.
     private static string BuildMySql(IDbCommand cmd, string schemaOrDb, string tableName, string tableData,
-        List<string> deferredColumns)
+        List<string> deferredColumns, string keyColumns = null, bool insertMissingOnly = false)
     {
         var db = schemaOrDb.Trim().Trim('`');
         var table = tableName.Trim().Trim('`');
@@ -374,7 +374,7 @@ internal static class DeferredMergeBuilder
             sb.AppendLine($"INSERT INTO `{db}`.`{table}` ({columnList})");
             sb.AppendLine($"SELECT {selectExpressions}");
             sb.AppendLine($"FROM {jsonSource}");
-            sb.AppendLine(onDuplicate);
+            sb.AppendLine(insertMissingOnly ? MergeScriptHelper.BuildMissingRowsFilterMySql(db, table, columns, keyColumns) + ";" : onDuplicate);
             if (chunked) sb.AppendLine();
         }
         return sb.ToString();

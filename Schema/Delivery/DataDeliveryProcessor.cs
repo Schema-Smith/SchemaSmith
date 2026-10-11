@@ -168,7 +168,10 @@ public class DataDeliveryProcessor : IDataDelivery
 
         foreach (var table in tablesToDeliver.ToList())
         {
-            tableEdges[table] = DataDeliveryHelper.ClassifyFKEdges(table, deliverySet, platform);
+            var (requiredDeps, deferred) = DataDeliveryHelper.ClassifyFKEdges(table, deliverySet, platform);
+            deferred.AddRange(DataDeliveryHelper.SelfReferencingNullableColumns(table, platform)
+                .Where(c => !deferred.Contains(c, StringComparer.OrdinalIgnoreCase)));
+            tableEdges[table] = (requiredDeps, deferred);
             var tableKey = DataDeliveryHelper.GetTableKey(table, platform);
 
             foreach (var (index, delivery) in appliedByTable[table])
@@ -463,11 +466,15 @@ public class DataDeliveryProcessor : IDataDelivery
     internal static string BuildDeferredMergeScript(DataDeliveryContext context, string schemaOrDb,
         IDeliverableTable table, DataDelivery delivery, DeliveryContent content, string keyColumns, List<string> deferredColumns)
     {
+        // A table deferred only for its own self-reference needs pass 1 to add the rows it lacks, nothing more: pass 2
+        // merges every row, so touching existing rows here would rewrite (and re-trigger) them on every deploy.
+        var selfReferences = DataDeliveryHelper.SelfReferencingNullableColumns(table, context.Platform);
+        var insertMissingOnly = deferredColumns.All(c => selfReferences.Contains(c, StringComparer.OrdinalIgnoreCase));
         return DeferredMergeBuilder.Build(context.ScriptHelper, context.Command, context.Platform,
             schemaOrDb, table.Name, content.Data, keyColumns,
             delivery.MergeDisableTriggers, deferredColumns,
             delivery.MergeDisableRules, delivery.MergeUpdateDescendents,
-            context.PostgreSqlServerVersionNum, content.Encoding);
+            context.PostgreSqlServerVersionNum, content.Encoding, insertMissingOnly);
     }
 
     /// <summary>

@@ -136,6 +136,26 @@ internal static class DataDeliveryHelper
             .ToList();
     }
 
+    // InnoDB checks a foreign key row by row, so a MySQL or MariaDB table referencing itself fails on a child listed
+    // before its parent; SQL Server and PostgreSQL check at the end of the statement. A nullable self-reference is
+    // deferred there like a cycle edge. A NOT NULL one has nothing to defer to and is left to the engine.
+    internal static List<string> SelfReferencingNullableColumns(IDeliverableTable table, string platform)
+    {
+        var columns = new List<string>();
+        if (!IsMySQL(platform)) return columns;
+        var tableName = TrimIdentifierQuotes(table.Name, platform);
+        foreach (var fk in table.DeliverableForeignKeys)
+        {
+            if (!TrimIdentifierQuotes(fk.RelatedTable, platform).Equals(tableName, StringComparison.OrdinalIgnoreCase)) continue;
+            var fkColumns = ParseFKColumnNames(fk.Columns, platform);
+            var allNullable = fkColumns.All(name => table.DeliverableColumns.Any(c =>
+                TrimIdentifierQuotes(c.Name, platform).Equals(name, StringComparison.OrdinalIgnoreCase) && c.Nullable));
+            if (!allNullable) continue;
+            columns.AddRange(fkColumns.Where(name => !columns.Contains(name, StringComparer.OrdinalIgnoreCase)));
+        }
+        return columns;
+    }
+
     internal static string TrimIdentifierQuotes(string value, string platform)
     {
         if (string.IsNullOrEmpty(value))

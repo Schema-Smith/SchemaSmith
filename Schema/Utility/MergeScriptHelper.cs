@@ -2533,6 +2533,15 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     // on MariaDB from 10.11.17 and 11.4.11 (MDEV-33083). So rows already present exactly as delivered are left out. Text
     // is compared as utf8mb4 bytes, because a case-insensitive or PAD SPACE collation would call a real change equal,
     // and a missed change is worse than an unneeded update; JSON is compared as documents, as the update clause does.
+    // Rows whose key is not in the target yet, for an insert that must not touch the rows already there.
+    internal static string BuildMissingRowsFilterMySql(string databaseName, string tableName, List<MySqlColumnInfo> columns, string keyColumns)
+    {
+        var keys = ParseKeyColumnsMySql(keyColumns);
+        var matches = columns.Where(c => keys.Contains(c.Name, StringComparer.OrdinalIgnoreCase))
+            .Select(c => $"_ss_live.`{c.Name}` <=> {BuildSingleSelectExpressionMySql(c, "jt.")}");
+        return $"WHERE NOT EXISTS (SELECT 1 FROM `{databaseName}`.`{tableName}` _ss_live WHERE {string.Join(" AND ", matches)})";
+    }
+
     private static string BuildChangedRowsFilterMySql(string databaseName, string tableName, List<MySqlColumnInfo> columns)
     {
         var matches = columns.Select(c =>

@@ -1137,6 +1137,96 @@ public abstract class TableDataDeliverySharedTests
         }
     }
 
+    // InnoDB checks a foreign key row by row, so a self-referencing table whose payload lists a child before its parent
+    // could not be delivered into an empty table. The self-reference is deferred: pass 1 inserts the missing rows with it
+    // NULL and leaves existing rows alone, pass 2 merges as usual -- so a redeploy of unchanged data still touches nothing.
+    [Test]
+    public void DeliverTableData_ViaQuench_DeliversASelfReferencingTable()
+    {
+        if (!SupportsDataDelivery)
+            Assert.Ignore("Data delivery requires MySQL 8.0; skipped below the floor.");
+        lock (FactoryContainer.SharedLockObject)
+        {
+            using var command = _connection.CreateCommand();
+            var table = $"_test_emp_{Guid.NewGuid():N}".Substring(0, 30);
+            var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            var checkpointDir = Path.Combine(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
+            var savedConfig = FactoryContainer.Resolve<IConfigurationRoot>();
+            try
+            {
+                command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (id INT PRIMARY KEY, name VARCHAR(50) NOT NULL, boss_id INT NULL, "
+                                      + $"CONSTRAINT fk_{table}_boss FOREIGN KEY (boss_id) REFERENCES `{table}` (id))";
+                command.ExecuteNonQuery();
+                command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}_log` (n INT)";
+                command.ExecuteNonQuery();
+                command.CommandText = $"CREATE TRIGGER `{_testDb}`.`{table}_au` AFTER UPDATE ON `{_testDb}`.`{table}` "
+                                      + $"FOR EACH ROW INSERT INTO `{_testDb}`.`{table}_log` VALUES (1)";
+                command.ExecuteNonQuery();
+
+                Directory.CreateDirectory(tempDir);
+                File.WriteAllText(Path.Combine(tempDir, "Template.json"), "{}");
+                const string data = @"[{""id"":3,""name"":""Carol"",""boss_id"":2},{""id"":2,""name"":""Bob"",""boss_id"":1},{""id"":1,""name"":""Alice"",""boss_id"":null}]";
+                File.WriteAllText(Path.Combine(tempDir, "emp.tabledata"), data);
+
+                var template = new Template { Name = "SelfReferenceTest", FilePath = Path.Combine(tempDir, "Template.json") };
+                template.Tables.Add(new MySqlTable
+                {
+                    Name = table,
+                    DataDelivery = [new DataDelivery { MergeType = "Insert/Update", ContentFile = "emp.tabledata" }],
+                    Columns =
+                    [
+                        new Column { Name = "id", DataType = "INT" },
+                        new Column { Name = "name", DataType = "VARCHAR(50)" },
+                        new Column { Name = "boss_id", DataType = "INT", Nullable = true }
+                    ],
+                    ForeignKeys = [new MySqlForeignKey { Name = $"fk_{table}_boss", Columns = "`boss_id`", RelatedTable = table, RelatedColumns = "`id`" }]
+                });
+                RegisterTargetConfig();
+
+                bool Deploy()
+                {
+                    var quench = new DatabaseQuench("127.0.0.1", new Product { Name = "TestProduct", Platform = Platform }, template, _testDb,
+                        suppressKindling: false, whatIfOnly: "0", runScriptsTwice: false,
+                        dropRemovedTables: "0", dropRemovedColumns: "0", dropRemovedForeignKeys: "0", dropRemovedCheckConstraints: "0", dropRemovedExcludeConstraints: "0", dropRemovedStatistics: "0", dropRemovedIndexes: "0", dropUnknownIndexes: false, updateTables: false,
+                        deliverData: true, checkpointing: new FileCheckpointManager(Path.Combine(checkpointDir, Guid.NewGuid().ToString("N"))));
+                    quench.Execute();
+                    return quench.QuenchSuccessful;
+                }
+                string Bosses()
+                {
+                    command.CommandText = $"SELECT GROUP_CONCAT(CONCAT(id, ':', COALESCE(boss_id, '-')) ORDER BY id) FROM `{_testDb}`.`{table}`";
+                    return command.ExecuteScalar()?.ToString();
+                }
+                int UpdatesLogged()
+                {
+                    command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{table}_log`";
+                    return Convert.ToInt32(command.ExecuteScalar());
+                }
+
+                Assert.That(Deploy(), Is.True, "a child listed before its parent must deliver into an empty table");
+                Assert.That(Bosses(), Is.EqualTo("1:-,2:1,3:2"));
+
+                command.CommandText = $"DELETE FROM `{_testDb}`.`{table}_log`";
+                command.ExecuteNonQuery();
+                Assert.That(Deploy(), Is.True);
+                Assert.That(UpdatesLogged(), Is.EqualTo(0), "redelivering unchanged data must not touch the rows");
+
+                File.WriteAllText(Path.Combine(tempDir, "emp.tabledata"), data.Replace(@"""boss_id"":2", @"""boss_id"":1"));
+                Assert.That(Deploy(), Is.True);
+                Assert.That(Bosses(), Is.EqualTo("1:-,2:1,3:1"));
+                Assert.That(UpdatesLogged(), Is.EqualTo(1), "only the changed row is updated");
+            }
+            finally
+            {
+                command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`, `{_testDb}`.`{table}_log`";
+                command.ExecuteNonQuery();
+                FactoryContainer.Register<IConfigurationRoot>(savedConfig);
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+                if (Directory.Exists(checkpointDir)) Directory.Delete(checkpointDir, true);
+            }
+        }
+    }
+
     // A mixed-case parent must still be found where the server folds table names and reports them in lowercase.
     // WhatIf must refuse it too: a preview that passes where the deploy aborts is the wrong preview.
     [TestCase("_test_rparent_", "0")]

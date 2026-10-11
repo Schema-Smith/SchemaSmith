@@ -283,7 +283,7 @@ When enabled, DataTongs wraps each generated script with platform-appropriate tr
 
 When enabled, the script updates existing rows whose data has changed. When disabled, the script only inserts new rows and (on MERGE platforms, if `MergeDelete` is on) deletes missing rows -- existing rows are left untouched regardless of whether their data differs.
 
-On MySQL and MariaDB a row already present exactly as delivered is left out of the upsert altogether. That matters for triggers: `INSERT ... ON DUPLICATE KEY UPDATE` fires a row's `AFTER UPDATE` trigger even when it changes nothing (always on MySQL; on MariaDB from 10.11.17 and 11.4.11), so without this every redeploy of unchanged data would fire it for every row. Text is compared byte for byte, so a change that only a case-insensitive collation would call equal is still applied. One exception: a table whose rows reference each other in a foreign-key cycle is delivered in two passes, which really do update each row twice, so its triggers fire on every delivery.
+On MySQL and MariaDB a row already present exactly as delivered is left out of the upsert altogether. That matters for triggers: `INSERT ... ON DUPLICATE KEY UPDATE` fires a row's `AFTER UPDATE` trigger even when it changes nothing (always on MySQL; on MariaDB from 10.11.17 and 11.4.11), so without this every redeploy of unchanged data would fire it for every row. Text is compared byte for byte, so a change that only a case-insensitive collation would call equal is still applied. One exception: a table in a foreign-key cycle with another table is delivered in two passes, which really do update each row twice, so its triggers fire on every delivery. A table that only references itself is not affected.
 
 ### MergeDelete
 
