@@ -33,6 +33,42 @@ public class TableQuench_TemporalTables : BaseTableQuenchTests
         conn.Close();
     }
 
+    // A temporal table's period columns are the engine's; a package declares the table temporal without listing them.
+    // The drop-by-absence pass exempted them by name (ValidFrom/ValidTo), so a table with its own period names had
+    // them dropped -- which the engine refuses -- and the deploy failed. They are exempt by being period columns.
+    [Test]
+    public void TableQuench_KeepsCustomNamedPeriodColumns()
+    {
+        var table = $"TemporalCustom_{Guid.NewGuid():N}"[..28];
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = $@"CREATE TABLE dbo.[{table}] (Id INT NOT NULL PRIMARY KEY, V INT NULL,
+  SysStart DATETIME2(2) GENERATED ALWAYS AS ROW START HIDDEN NOT NULL,
+  SysEnd DATETIME2(2) GENERATED ALWAYS AS ROW END HIDDEN NOT NULL,
+  PERIOD FOR SYSTEM_TIME (SysStart, SysEnd))
+WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.[{table}_Hist]));";
+        cmd.ExecuteNonQuery();
+        try
+        {
+            RunTableQuenchProc(cmd, $$"""
+[ { "Schema": "[dbo]", "Name": "[{{table}}]", "IsTemporal": true,
+    "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[V]", "DataType": "INT", "Nullable": true } ],
+    "Indexes": [ { "Name": "[PK_{{table}}]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]" } ] } ]
+""");
+
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.[{table}]') AND name IN ('SysStart', 'SysEnd')";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(2), "the period columns must survive the deploy");
+        }
+        finally
+        {
+            cmd.CommandText = $"IF OBJECT_ID('dbo.[{table}]') IS NOT NULL BEGIN ALTER TABLE dbo.[{table}] SET (SYSTEM_VERSIONING = OFF); DROP TABLE dbo.[{table}]; DROP TABLE dbo.[{table}_Hist]; END";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void TableQuench_ShouldRemoveTemporalTracking()
     {

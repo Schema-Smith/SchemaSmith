@@ -595,7 +595,9 @@ BEGIN TRY
                           WHERE c.[Schema] = t.[Schema]
                             AND c.[TableName] = t.[Name]
                             AND c.[ColumnName] COLLATE DATABASE_DEFAULT = QUOTENAME(COLUMN_NAME))
-        AND NOT (t.IsTemporal = 1 AND COLUMN_NAME IN ('ValidFrom', 'ValidTo'))
+        -- A temporal table's period columns belong to the engine whatever they are called; keying this on the names
+        -- ValidFrom/ValidTo dropped custom-named ones, which the engine refuses. COLUMNPROPERTY is NULL before 2016.
+        AND NOT (t.IsTemporal = 1 AND COLUMNPROPERTY(OBJECT_ID(QUOTENAME(TABLE_SCHEMA) + '.' + QUOTENAME(TABLE_NAME)), COLUMN_NAME, 'GeneratedAlwaysType') IN (1, 2))
         AND NOT EXISTS (SELECT 1 FROM #EngineOwnedColumns g WITH (NOLOCK)
                          WHERE g.TableSchema = TABLE_SCHEMA AND g.TableName = TABLE_NAME
                            AND g.ColumnName = COLUMN_NAME)
