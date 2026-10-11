@@ -31,7 +31,6 @@ function Get-Sha([string]$name) {
     throw "SHA256 for $name not found in SHA256SUMS"
 }
 $shaX64   = Get-Sha "SchemaSmith-$Version-win-x64.zip"
-$shaArm64 = Get-Sha "SchemaSmith-$Version-win-arm64.zip"
 
 # Render manifest templates (UTF-8, no BOM — winget-pkgs convention).
 $here = Split-Path -Parent $PSCommandPath
@@ -41,8 +40,7 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 Get-ChildItem $here -Filter 'SchemaSmith.SchemaSmith*.yaml' | ForEach-Object {
     $text = ([System.IO.File]::ReadAllText($_.FullName)).
         Replace('__VERSION__',   $Version).
-        Replace('__SHA_X64__',   $shaX64).
-        Replace('__SHA_ARM64__', $shaArm64)
+        Replace('__SHA_X64__',   $shaX64)
     [System.IO.File]::WriteAllText((Join-Path $out $_.Name), $text, $utf8NoBom)
 }
 Write-Host "Rendered manifests -> $out"
