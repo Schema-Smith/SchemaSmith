@@ -1788,6 +1788,7 @@ SELECT c.column_name, c.udt_name
         // gated out of automatic data delivery upstream (DataDeliveryProcessor) -- BuildJsonRowSourceMySql
         // throws NotSupportedException there so the gate has a single source of truth.
         var columns = GetColumnInfoMySql(cmd, databaseName, tableName, excludeAutoIncrement: false, jsonKeys);
+        mySqlServerVersionNum = RowSourceVersionNumMySql(cmd, mySqlServerVersionNum);
         var jsonSource = BuildJsonRowSourceMySql(columns, mySqlServerVersionNum);
 
         if (string.IsNullOrEmpty(insertColumns))
@@ -2258,6 +2259,39 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
 
     internal static bool MySqlFamilyHasJsonTable(int versionNum)
         => versionNum == 0 || (IsMariaDbVersionNum(versionNum) ? versionNum >= 1006 : versionNum >= 800);
+
+    // MariaDB's JSON_TABLE stored string escapes (\", \\, \n) literally until 10.6.20, 10.11.10, 11.2.6, 11.4.4 and
+    // 11.6.2 (MDEV-27412), and before 10.6.9 could not return a JSON column's sub-document (MDEV-25875). Delivery on those
+    // patches shreds with the recursive CTE used below 10.6, which reads strings through JSON_VALUE. Lines that reached
+    // end of life unfixed (10.7-10.10, 11.0, 11.1, 11.3, 11.5) count as affected throughout.
+    internal static bool MariaDbJsonTableMisreadsStrings(string serverVersion)
+    {
+        if (serverVersion == null || !serverVersion.Contains("MariaDB", StringComparison.OrdinalIgnoreCase)) return false;
+        var v = VersionHelper.ParsePatchComparable(serverVersion, Platform.MySQL);
+        return v switch
+        {
+            null or < 100600 => false,  // no JSON_TABLE: already the CTE shred
+            < 100620 => true,           // 10.6.0-10.6.19
+            < 100700 => false,          // 10.6.20+
+            < 101110 => true,           // 10.7-10.10, 10.11.0-10.11.9
+            < 110000 => false,          // 10.11.10+
+            < 110206 => true,           // 11.0, 11.1, 11.2.0-11.2.5
+            < 110404 => v >= 110300,    // 11.3, 11.4.0-11.4.3
+            < 110500 => false,          // 11.4.4+
+            < 110602 => true,           // 11.5, 11.6.0-11.6.1
+            _ => false
+        };
+    }
+
+    // The comparable the row source is chosen by: a MariaDB patch whose JSON_TABLE misreads strings is shredded as
+    // 10.5 is. Asks the server only inside the 10.6-11.6 band, where a patch can decide it.
+    internal static int RowSourceVersionNumMySql(IDbCommand cmd, int versionNum)
+    {
+        if (versionNum is < 1006 or > 1106) return versionNum;
+        cmd.Parameters.Clear();
+        cmd.CommandText = "SELECT VERSION()";
+        return MariaDbJsonTableMisreadsStrings(cmd.ExecuteScalar()?.ToString()) ? 1005 : versionNum;
+    }
 
     internal static string BuildJsonRowSourceMySql(List<MySqlColumnInfo> columns, int versionNum)
     {

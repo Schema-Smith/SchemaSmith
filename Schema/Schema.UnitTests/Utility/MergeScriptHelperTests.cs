@@ -3059,6 +3059,28 @@ public class MergeScriptHelperTests
     public void MySqlFamilyHasJsonTable_ByVersionNum(int versionNum, bool expected)
         => Assert.That(MergeScriptHelper.MySqlFamilyHasJsonTable(versionNum), Is.EqualTo(expected));
 
+    // MariaDB's JSON_TABLE kept string escapes literally until 10.6.20, 10.11.10, 11.2.6, 11.4.4 and 11.6.2 (MDEV-27412).
+    [TestCase("10.5.29-MariaDB", false, TestName = "JsonTableMisreadsStrings_10_5_HasNoJsonTable")]
+    [TestCase("10.6.8-MariaDB", true, TestName = "JsonTableMisreadsStrings_10_6_8")]
+    [TestCase("10.6.19-MariaDB-log", true, TestName = "JsonTableMisreadsStrings_10_6_19")]
+    [TestCase("10.6.20-MariaDB", false, TestName = "JsonTableMisreadsStrings_10_6_20")]
+    [TestCase("10.9.8-MariaDB", true, TestName = "JsonTableMisreadsStrings_10_9")]
+    [TestCase("10.11.9-MariaDB", true, TestName = "JsonTableMisreadsStrings_10_11_9")]
+    [TestCase("10.11.10-MariaDB", false, TestName = "JsonTableMisreadsStrings_10_11_10")]
+    [TestCase("11.1.6-MariaDB", true, TestName = "JsonTableMisreadsStrings_11_1")]
+    [TestCase("11.2.5-MariaDB", true, TestName = "JsonTableMisreadsStrings_11_2_5")]
+    [TestCase("11.2.6-MariaDB", false, TestName = "JsonTableMisreadsStrings_11_2_6")]
+    [TestCase("11.3.2-MariaDB", true, TestName = "JsonTableMisreadsStrings_11_3")]
+    [TestCase("11.4.3-MariaDB-ubu2404", true, TestName = "JsonTableMisreadsStrings_11_4_3")]
+    [TestCase("11.4.4-MariaDB-ubu2404", false, TestName = "JsonTableMisreadsStrings_11_4_4")]
+    [TestCase("11.5.2-MariaDB", true, TestName = "JsonTableMisreadsStrings_11_5")]
+    [TestCase("11.6.1-MariaDB", true, TestName = "JsonTableMisreadsStrings_11_6_1")]
+    [TestCase("11.6.2-MariaDB", false, TestName = "JsonTableMisreadsStrings_11_6_2")]
+    [TestCase("11.8.3-MariaDB", false, TestName = "JsonTableMisreadsStrings_11_8")]
+    [TestCase("8.0.36", false, TestName = "JsonTableMisreadsStrings_MySql")]
+    public void MariaDbJsonTableMisreadsStrings_ByVersion(string version, bool expected)
+        => Assert.That(MergeScriptHelper.MariaDbJsonTableMisreadsStrings(version), Is.EqualTo(expected));
+
     [TestCase(1002, true)]
     [TestCase(1300, true)]
     [TestCase(904, false)]

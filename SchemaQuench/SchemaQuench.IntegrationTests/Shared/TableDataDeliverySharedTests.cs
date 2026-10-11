@@ -282,6 +282,40 @@ public abstract class TableDataDeliverySharedTests
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
+    // MariaDB's JSON_TABLE stored string escapes literally until 10.6.20, 10.11.10, 11.2.6, 11.4.4 and 11.6.2
+    // (MDEV-27412), and before 10.6.9 could not return a JSON column's sub-document (MDEV-25875). Delivery on those
+    // patches uses the recursive-CTE shred. Asserted on stored bytes, on every leg; only those patches need the routing.
+    [Test]
+    public void DeliverTableData_KeepsEscapedCharactersAndSubDocuments()
+    {
+        var table = $"t_esc_{Guid.NewGuid():N}".Substring(0, 20);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (code VARCHAR(20) NOT NULL PRIMARY KEY, "
+                                  + "name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, doc JSON NULL)";
+            command.ExecuteNonQuery();
+
+            // name is a\"b\\c\nd once JSON-decoded: a, quote, b, backslash, c, newline, d.
+            var payload = "[{\"code\":\"E3\",\"name\":\"a" + Backslash + "\"b" + Backslash + Backslash + "c" + Backslash + "nd\","
+                          + "\"doc\":{\"a\":{\"b\":1}}}]";
+            var script = BuildMergeScript(command, _testDb, table, payload, "`code`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            ExecuteScript(command, script);
+
+            command.CommandText = $"SELECT HEX(name) FROM `{_testDb}`.`{table}` WHERE code = 'E3'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("6122625C630A64"),
+                "the stored bytes must be the decoded string: a, quote, b, backslash, c, newline, d");
+            command.CommandText = $"SELECT JSON_EXTRACT(doc, '$.a.b') FROM `{_testDb}`.`{table}` WHERE code = 'E3'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1"), "the JSON column must keep its sub-document");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void DeliverTableData_ReplaceType_ReplacesExistingRows()
     {

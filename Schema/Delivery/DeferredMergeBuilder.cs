@@ -339,7 +339,7 @@ internal static class DeferredMergeBuilder
         // is safe here.
         cmd.Parameters.Clear();
         cmd.CommandText = "SELECT SchemaSmith_ServerVersionNum()";
-        var versionNum = Convert.ToInt32(cmd.ExecuteScalar());
+        var versionNum = MergeScriptHelper.RowSourceVersionNumMySql(cmd, Convert.ToInt32(cmd.ExecuteScalar()));
 
         var columns = MergeScriptHelper.GetColumnInfoMySql(cmd, db, table, excludeAutoIncrement: false);
         if (columns.Count == 0)
