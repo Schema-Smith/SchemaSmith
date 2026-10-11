@@ -591,6 +591,10 @@ CREATE TABLE ""{Schema}"".""{tableName}"" (""Id"" INT NOT NULL, ""Code"" INT NUL
         conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
+        // The override steers SchemaSmith's gate, not the engine: DROP EXPRESSION exists only on a real 13 or later.
+        cmd.CommandText = "SHOW server_version_num";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) < 130000)
+            Assert.Ignore("Dropping a generation expression needs a real PostgreSQL 13 or later.");
         try
         {
             CreateGeneratedTable(cmd, tableName);
