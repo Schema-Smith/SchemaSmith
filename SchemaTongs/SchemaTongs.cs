@@ -3142,9 +3142,9 @@ SELECT TABLE_NAME
                 createStatement = reader.GetString(1); // "Create Table" column carries the CREATE SEQUENCE DDL
             }
 
-            // SHOW CREATE SEQUENCE emits a plain CREATE SEQUENCE; rewrap as CREATE OR REPLACE so the
-            // extracted script is idempotent on re-run, matching every other scripted-object folder here.
-            var script = createStatement.Replace("CREATE SEQUENCE", "CREATE OR REPLACE SEQUENCE");
+            // The script runs on every deploy, so it must leave an existing sequence where it is: CREATE OR REPLACE
+            // reset it to its START value each time, and NEXTVAL handed out numbers it had already given.
+            var script = createStatement.Replace("CREATE SEQUENCE", "CREATE SEQUENCE IF NOT EXISTS");
 
             var fileName = ResolveOutputPath(castPath, EncodeFullName(name, ".sql"));
             script = RewriteSqlBodyForSchemaTemplate(script, fileName);

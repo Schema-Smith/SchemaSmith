@@ -325,6 +325,58 @@ public abstract class SchemaTongsSharedTests
         }
     }
 
+    // A sequence script runs on every deploy. Extracted as CREATE OR REPLACE SEQUENCE, each deploy reset the sequence to
+    // its START value, so NEXTVAL handed out numbers it had already given (verified on released 2.7.1). The extracted
+    // script must leave an existing sequence where it is.
+    [Test]
+    public void ShouldCastSequencesThatSurviveARedeploy()
+    {
+        if (Platform != Platform.MariaDb) Assert.Ignore("Sequences are MariaDB-only in the MySQL family.");
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "CREATE OR REPLACE SEQUENCE TestSeq START WITH 100 INCREMENT BY 1";
+        cmd.ExecuteNonQuery();
+
+        string script = null;
+        var file = Substitute.For<IFile>();
+        file.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("Sequences") && s.EndsWithIgnoringCase("TestSeq.sql")), Arg.Any<string>()))
+            .Do(ci => script = ci.ArgAt<string>(1));
+        try
+        {
+            lock (FactoryContainer.SharedLockObject)
+            {
+                LogFactory.Register("ErrorLog", Substitute.For<ILog>());
+                LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+                FactoryContainer.Register(Substitute.For<IEnvironment>());
+                FactoryContainer.Register(file);
+                FactoryContainer.Register(Substitute.For<IDirectory>());
+                SetupConfig();
+                new SchemaTongs(Platform).CastTemplate();
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+            }
+            Assert.That(script, Is.Not.Null, "the sequence must be extracted");
+
+            cmd.CommandText = "SELECT NEXTVAL(TestSeq)";
+            Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(100));
+            cmd.CommandText = "SELECT NEXTVAL(TestSeq)";
+            cmd.ExecuteScalar();
+            for (var deploy = 0; deploy < 2; deploy++)
+            {
+                cmd.CommandText = script;
+                cmd.ExecuteNonQuery();
+            }
+            cmd.CommandText = "SELECT NEXTVAL(TestSeq)";
+            Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(102), "running the extracted script must not reset the sequence: " + script);
+        }
+        finally
+        {
+            cmd.CommandText = "DROP SEQUENCE IF EXISTS TestSeq";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void ShouldExtractMultipleObjectTypes()
     {
