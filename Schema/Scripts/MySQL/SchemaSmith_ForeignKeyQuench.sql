@@ -128,10 +128,10 @@ BEGIN
         CAST(e.ConstraintName AS BINARY) != CAST(SchemaSmith_StripBacktickWrapping(f.KeyName) AS BINARY)
         -- Or different referenced table
         OR e.ReferencedTableKey != f.RelatedTableKey
-        -- Or different delete action
-        OR CAST(e.DeleteRule AS BINARY) != CAST(COALESCE(f.DeleteAction, 'NO ACTION') AS BINARY)
-        -- Or different update action
-        OR CAST(e.UpdateRule AS BINARY) != CAST(COALESCE(f.UpdateAction, 'NO ACTION') AS BINARY)
+        -- Or different delete or update action. InnoDB has one rule under two names: an unstated rule reads RESTRICT on
+        -- MariaDB and MySQL 5.7 and NO ACTION on MySQL 8.0, so the two compare equal or the key churned every deploy.
+        OR CAST(REPLACE(UPPER(TRIM(e.DeleteRule)), 'RESTRICT', 'NO ACTION') AS BINARY) != CAST(REPLACE(UPPER(TRIM(COALESCE(f.DeleteAction, 'NO ACTION'))), 'RESTRICT', 'NO ACTION') AS BINARY)
+        OR CAST(REPLACE(UPPER(TRIM(e.UpdateRule)), 'RESTRICT', 'NO ACTION') AS BINARY) != CAST(REPLACE(UPPER(TRIM(COALESCE(f.UpdateAction, 'NO ACTION'))), 'RESTRICT', 'NO ACTION') AS BINARY)
         -- Or different columns (aggregate comparison handles composite FKs;
         -- REPLACE strips backticks from comma-separated column lists like `Col1`,`Col2`)
         -- (column names compare case-insensitively, as the engine does)

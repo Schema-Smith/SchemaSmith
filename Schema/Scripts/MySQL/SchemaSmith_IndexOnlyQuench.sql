@@ -440,9 +440,8 @@ BEGIN
           OR CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
           -- Or uniqueness differs
           OR i.IsUnique != (snap.NonUnique = 0)
-          -- Or index type differs (BTREE vs HASH)
-          OR (CAST(UPPER(COALESCE(i.IndexType, 'BTREE')) AS BINARY) != CAST(UPPER(snap.IndexType) AS BINARY)
-              AND NOT (CAST(UPPER(COALESCE(i.IndexType, 'BTREE')) AS BINARY) = CAST('BTREE' AS BINARY) AND CAST(UPPER(snap.IndexType) AS BINARY) = CAST('BTREE' AS BINARY)))
+          -- Or the kind differs, by the rule ModifiedTableQuench uses too
+          OR SchemaSmith_IndexTypesMatch(i.IndexType, snap.IndexType, p_DatabaseName, i.TableName) = 0
           -- Or visibility differs (FULLTEXT indexes don't support INVISIBLE, skip them). Below the
           -- invisible-index floor (MySQL 8.0 / MariaDB 10.6) the keyword can't be emitted, so a declared
           -- invisible index is stored visible; ignore the visibility difference there or it churns every run.
@@ -863,7 +862,7 @@ BEGIN
                       ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
                       ' (', i.IndexColumns, ')',
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
-                           WHEN UPPER(i.IndexType) = 'BTREE' THEN ' USING BTREE'
+                           WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
                       CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
                            THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
@@ -918,7 +917,7 @@ BEGIN
                               i.IndexName,
                               ' (', i.IndexColumns, ')',
                               CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
-                                   WHEN UPPER(i.IndexType) = 'BTREE' THEN ' USING BTREE'
+                                   WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                                    ELSE '' END,
                               CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
                                    THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')

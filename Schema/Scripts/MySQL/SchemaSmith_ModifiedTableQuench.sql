@@ -3541,6 +3541,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           OR CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
           -- Or uniqueness differs
           OR i.IsUnique != (snap.NonUnique = 0)
+          -- Or the kind differs (BTREE, HASH, SPATIAL). This detector never compared it, so a real change of kind
+          -- was not applied; SchemaSmith_IndexTypesMatch is also what IndexOnlyQuench uses.
+          OR SchemaSmith_IndexTypesMatch(i.IndexType, snap.IndexType, p_DatabaseName, i.TableName) = 0
           -- Or visibility differs (FULLTEXT indexes don't support INVISIBLE, skip them). Below the
           -- invisible-index floor (MySQL 8.0 / MariaDB 10.6) the keyword can't be emitted, so a declared
           -- invisible index is stored visible; ignore the visibility difference there or it churns every run.

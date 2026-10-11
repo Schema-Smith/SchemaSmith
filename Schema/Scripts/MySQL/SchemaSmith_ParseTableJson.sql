@@ -375,6 +375,92 @@ BEGIN
         END
     WHERE DataType IS NOT NULL;
 
+    -- More synonyms, measured the same way (MySQL 8.0.45 and MariaDB 11.4.12 agree except where noted):
+    --     REAL -> double (float under REAL_AS_FLOAT)   DOUBLE PRECISION -> double   FLOAT4 -> float   FLOAT8 -> double
+    --     INT1 -> tinyint  INT2 -> smallint  INT3, MIDDLEINT -> mediumint  INT4 -> int  INT8 -> bigint
+    --     LONG, LONG VARCHAR -> mediumtext   LONG VARBINARY -> mediumblob
+    --     GEOMETRYCOLLECTION -> geomcollection on MySQL 8.0+; MariaDB and 5.7 report geometrycollection
+    -- Only the keyword is rewritten, by the same keyword-then-rest split as above. The national types
+    -- (NVARCHAR, NCHAR, NATIONAL CHAR/VARCHAR, NCHAR VARCHAR) report varchar/char in utf8mb3, so they fold to
+    -- VARCHAR/CHAR AND take that character set when none is declared: comparing them as plain VARCHAR would
+    -- call a latin1 column equal to a declared NVARCHAR one.
+    UPDATE _SchemaSmith_Columns
+    SET CharacterSet = 'utf8mb3'
+    WHERE (CharacterSet IS NULL OR TRIM(CharacterSet) = '')
+      AND (UPPER(TRIM(DataType)) LIKE 'NATIONAL %' OR UPPER(TRIM(DataType)) LIKE 'NVARCHAR%' OR UPPER(TRIM(DataType)) LIKE 'NCHAR%');
+
+    UPDATE _SchemaSmith_Columns
+    SET DataType =
+        CASE
+            WHEN UPPER(TRIM(DataType)) LIKE 'DOUBLE PRECISION%' THEN CONCAT('DOUBLE', SUBSTRING(TRIM(DataType), LENGTH('DOUBLE PRECISION') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'LONG VARBINARY%' THEN CONCAT('MEDIUMBLOB', SUBSTRING(TRIM(DataType), LENGTH('LONG VARBINARY') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'LONG VARCHAR%' THEN CONCAT('MEDIUMTEXT', SUBSTRING(TRIM(DataType), LENGTH('LONG VARCHAR') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NATIONAL CHARACTER VARYING%' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NATIONAL CHARACTER VARYING') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NATIONAL CHAR VARYING%' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NATIONAL CHAR VARYING') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NATIONAL VARCHAR%' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NATIONAL VARCHAR') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NATIONAL CHARACTER%' THEN CONCAT('CHAR', SUBSTRING(TRIM(DataType), LENGTH('NATIONAL CHARACTER') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NATIONAL CHAR%' THEN CONCAT('CHAR', SUBSTRING(TRIM(DataType), LENGTH('NATIONAL CHAR') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NCHAR VARCHAR%' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NCHAR VARCHAR') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NCHAR VARYING%' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NCHAR VARYING') + 1))
+            ELSE
+                CASE UPPER(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(DataType), '(', 1), ' ', 1))
+                    WHEN 'REAL' THEN CONCAT(IF(@@SESSION.sql_mode LIKE '%REAL_AS_FLOAT%', 'FLOAT', 'DOUBLE'), SUBSTRING(TRIM(DataType), LENGTH('REAL') + 1))
+                    WHEN 'FLOAT4' THEN CONCAT('FLOAT', SUBSTRING(TRIM(DataType), LENGTH('FLOAT4') + 1))
+                    WHEN 'FLOAT8' THEN CONCAT('DOUBLE', SUBSTRING(TRIM(DataType), LENGTH('FLOAT8') + 1))
+                    WHEN 'INT1' THEN CONCAT('TINYINT', SUBSTRING(TRIM(DataType), LENGTH('INT1') + 1))
+                    WHEN 'INT2' THEN CONCAT('SMALLINT', SUBSTRING(TRIM(DataType), LENGTH('INT2') + 1))
+                    WHEN 'INT3' THEN CONCAT('MEDIUMINT', SUBSTRING(TRIM(DataType), LENGTH('INT3') + 1))
+                    WHEN 'MIDDLEINT' THEN CONCAT('MEDIUMINT', SUBSTRING(TRIM(DataType), LENGTH('MIDDLEINT') + 1))
+                    WHEN 'INT4' THEN CONCAT('INT', SUBSTRING(TRIM(DataType), LENGTH('INT4') + 1))
+                    WHEN 'INT8' THEN CONCAT('BIGINT', SUBSTRING(TRIM(DataType), LENGTH('INT8') + 1))
+                    WHEN 'LONG' THEN CONCAT('MEDIUMTEXT', SUBSTRING(TRIM(DataType), LENGTH('LONG') + 1))
+                    WHEN 'NVARCHAR' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NVARCHAR') + 1))
+                    WHEN 'NCHAR' THEN CONCAT('CHAR', SUBSTRING(TRIM(DataType), LENGTH('NCHAR') + 1))
+                    WHEN 'GEOMETRYCOLLECTION' THEN
+                        IF(VERSION() NOT LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 800,
+                           CONCAT('GEOMCOLLECTION', SUBSTRING(TRIM(DataType), LENGTH('GEOMETRYCOLLECTION') + 1)), DataType)
+                    WHEN 'GEOMCOLLECTION' THEN
+                        IF(VERSION() NOT LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 800,
+                           DataType, CONCAT('GEOMETRYCOLLECTION', SUBSTRING(TRIM(DataType), LENGTH('GEOMCOLLECTION') + 1)))
+                    ELSE DataType
+                END
+        END
+    WHERE DataType IS NOT NULL;
+
+    -- utf8 is utf8mb3. MySQL 8.0.30 and MariaDB 10.6.1 report it, and its collations, under the mb3 name
+    -- (utf8mb3_general_ci); earlier servers under utf8 (utf8_general_ci), and each lists only its own form in
+    -- COLLATIONS (checked on 8.0.28, 8.0.45, 10.5.29 and 11.4.12). Declared names are written the way this server
+    -- reports them, so a package in either form compares equal on both kinds of server.
+    SET @ss_utf8_is_mb3 = (SELECT COUNT(*) FROM information_schema.COLLATIONS WHERE COLLATION_NAME = 'utf8mb3_general_ci');
+    UPDATE _SchemaSmith_Columns
+    SET CharacterSet = CASE WHEN @ss_utf8_is_mb3 > 0 AND LOWER(TRIM(CharacterSet)) = 'utf8' THEN 'utf8mb3'
+                            WHEN @ss_utf8_is_mb3 = 0 AND LOWER(TRIM(CharacterSet)) = 'utf8mb3' THEN 'utf8'
+                            ELSE CharacterSet END,
+        Collation = CASE WHEN @ss_utf8_is_mb3 > 0 AND LEFT(LOWER(TRIM(Collation)), 5) = 'utf8_' THEN CONCAT('utf8mb3_', SUBSTRING(TRIM(Collation), 6))
+                         WHEN @ss_utf8_is_mb3 = 0 AND LEFT(LOWER(TRIM(Collation)), 8) = 'utf8mb3_' THEN CONCAT('utf8_', SUBSTRING(TRIM(Collation), 9))
+                         ELSE Collation END
+    WHERE CharacterSet IS NOT NULL OR Collation IS NOT NULL;
+    UPDATE _SchemaSmith_Tables
+    SET CharacterSet = CASE WHEN @ss_utf8_is_mb3 > 0 AND LOWER(TRIM(CharacterSet)) = 'utf8' THEN 'utf8mb3'
+                            WHEN @ss_utf8_is_mb3 = 0 AND LOWER(TRIM(CharacterSet)) = 'utf8mb3' THEN 'utf8'
+                            ELSE CharacterSet END,
+        Collation = CASE WHEN @ss_utf8_is_mb3 > 0 AND LEFT(LOWER(TRIM(Collation)), 5) = 'utf8_' THEN CONCAT('utf8mb3_', SUBSTRING(TRIM(Collation), 6))
+                         WHEN @ss_utf8_is_mb3 = 0 AND LEFT(LOWER(TRIM(Collation)), 8) = 'utf8mb3_' THEN CONCAT('utf8_', SUBSTRING(TRIM(Collation), 9))
+                         ELSE Collation END
+    WHERE CharacterSet IS NOT NULL OR Collation IS NOT NULL;
+
+    -- A bare length-taking type takes its default length, which is what the catalog reports.
+    UPDATE _SchemaSmith_Columns
+    SET DataType =
+        CASE UPPER(TRIM(DataType))
+            WHEN 'DECIMAL' THEN 'DECIMAL(10,0)'
+            WHEN 'CHAR' THEN 'CHAR(1)'
+            WHEN 'BIT' THEN 'BIT(1)'
+            WHEN 'BINARY' THEN 'BINARY(1)'
+            ELSE DataType
+        END
+    WHERE DataType IS NOT NULL;
+
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Identify new columns');
 
     -- Snapshot existing columns (same optimizer workaround as tables)
@@ -687,6 +773,12 @@ BEGIN
     UPDATE _SchemaSmith_Indexes
        SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
            IndexKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(IndexName));
+
+    -- A prefix as long as its column indexes the whole column, and is reported with no prefix; written that way
+    -- it compares equal instead of being rebuilt on every deploy.
+    UPDATE _SchemaSmith_Indexes
+       SET IndexColumns = SchemaSmith_StripFullLengthPrefixes(IndexColumns, TableName)
+     WHERE LOCATE('(', IndexColumns) > 0;
 
     -- MySQL: AUTO_INCREMENT column must be indexed. When it's not the first column
     -- in a composite PK, we need a separate KEY clause in the CREATE TABLE statement.

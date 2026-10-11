@@ -725,6 +725,8 @@ to the end of the table, as an identity removal does.
 
 `GenerationExpression`, `CharacterSet`, `Collation`, `Comment`, and `AutoIncrement` (bool) for an `AUTO_INCREMENT` column -- or spell it in `DataType` (`INT AUTO_INCREMENT`).
 
+`DataType` accepts the engine's synonyms, and a column declared with one is not changed again on the next deploy: `INTEGER`, `BOOL`/`BOOLEAN`, `DEC`/`NUMERIC`/`FIXED`, `REAL`, `DOUBLE PRECISION`, `FLOAT4`/`FLOAT8`, `INT1`-`INT8`, `MIDDLEINT`, `LONG`/`LONG VARCHAR`/`LONG VARBINARY`, `CHARACTER`/`CHARACTER VARYING`, and the national types (`NVARCHAR`, `NCHAR`, `NATIONAL CHAR`/`VARCHAR`), which mean `utf8mb3` unless the column declares a `CharacterSet`. A bare `DECIMAL`, `CHAR`, `BIT` or `BINARY` means its default length (`DECIMAL(10,0)`, length 1). `GEOMETRYCOLLECTION` and `GEOMCOLLECTION` are the same type.
+
 A column that sets `CharacterSet` to the table's character set and leaves `Collation` out gets the table's collation, as it would in `CREATE TABLE`. One in a different character set gets that set's default collation, which varies by engine version, so give it a `Collation` (`--Validate` reports `SS-COL-002`).
 
 `Invisible` (bool) hides a column from `SELECT *` and from an `INSERT` that names no column list; it is still readable when named explicitly. Requires MySQL 8.0.23 or MariaDB 10.3 -- below those the column deploys visible, per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation).

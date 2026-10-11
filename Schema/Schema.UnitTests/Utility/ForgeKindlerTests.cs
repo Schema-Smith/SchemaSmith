@@ -486,7 +486,9 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_CheckTableJoin (the MariaDB-only table predicate for CHECK_CONSTRAINTS joins, as a
         //   string because MySQL's CHECK_CONSTRAINTS has no TABLE_NAME).
         // +1 = SchemaSmith_InnodbName (InnoDB's filename-encoded name, for the placement reads).
-        Assert.That(mysql.Length, Is.EqualTo(72));
+        // +1 = SchemaSmith_IndexTypesMatch (the one declared-vs-live index-kind rule both index detectors use).
+        // +1 = SchemaSmith_StripFullLengthPrefixes (a key-part prefix as long as its column is the whole column).
+        Assert.That(mysql.Length, Is.EqualTo(74));
     }
 
     [Test]

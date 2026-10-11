@@ -560,7 +560,11 @@ public static class ForgeKindler
                 // period gate above it; calls SchemaSmith_ServerVersionNum, kindled earlier.
                 new("SchemaSmith_SupportsSystemVersioning.sql"),
                 new("SchemaSmith_NormalizeIndexColumns.sql"),
+                // The one declared-vs-live index-kind rule both index-change detectors call.
+                new("SchemaSmith_IndexTypesMatch.sql"),
                 new("SchemaSmith_IndexHasFunctionalKeyPart.sql"),
+                // Calls IndexHasFunctionalKeyPart, above; read by ParseTableJson.
+                new("SchemaSmith_StripFullLengthPrefixes.sql"),
                 new("SchemaSmith_NormalizeCheckExpression.sql"),
                 // #242: the authored-vs-canonical decision and the pass that records it.
                 new("SchemaSmith_ExpressionMapUnchanged.sql"),
