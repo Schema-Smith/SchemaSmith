@@ -12,6 +12,8 @@ DROP FUNCTION IF EXISTS SchemaSmith_InnodbName//
 -- digits and '_' stay as they are; anything else becomes '@' and its four-digit UTF-16 code. That is exact for ASCII
 -- punctuation and spaces. MySQL spells some non-ASCII letters with shorter codes, so such a name can still miss --
 -- which reads back as no placement, as it did before.
+-- With lower_case_table_names 1 or 2 InnoDB stores the name folded to lower case, and the readers compare it exactly
+-- (a plain case-insensitive match would confuse `T` with `t` where the server keeps them apart), so it is folded first.
 CREATE FUNCTION SchemaSmith_InnodbName(p_Name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
 RETURNS VARCHAR(400) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC NO SQL
@@ -20,6 +22,9 @@ BEGIN
     DECLARE v_i INT DEFAULT 1;
     DECLARE v_c VARCHAR(4) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_a INT;
+    IF @@lower_case_table_names <> 0 THEN
+        SET p_Name = LOWER(p_Name);
+    END IF;
     WHILE v_i <= CHAR_LENGTH(p_Name) DO
         SET v_c = SUBSTRING(p_Name, v_i, 1);
         -- ASCII() reads the first byte, so a multi-byte character can never pass for a letter here.
