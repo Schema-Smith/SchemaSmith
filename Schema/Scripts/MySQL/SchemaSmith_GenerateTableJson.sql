@@ -303,6 +303,9 @@ BEGIN
             WHERE s.TABLE_SCHEMA = p_Schema
               AND s.TABLE_NAME = p_Table
               AND s.INDEX_TYPE != 'FULLTEXT'
+              -- A period column is left out of Columns, so an index must not name it either: the package would not
+              -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
+              AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
             GROUP BY s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
         ) idx_subquery;
     ELSE
@@ -330,6 +333,9 @@ BEGIN
             WHERE s.TABLE_SCHEMA = p_Schema
               AND s.TABLE_NAME = p_Table
               AND s.INDEX_TYPE != 'FULLTEXT'
+              -- A period column is left out of Columns, so an index must not name it either: the package would not
+              -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
+              AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
             GROUP BY s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
         ) idx_subquery;
     END IF;
