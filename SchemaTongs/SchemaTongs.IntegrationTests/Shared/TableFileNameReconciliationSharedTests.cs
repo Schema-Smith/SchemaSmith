@@ -86,9 +86,12 @@ public abstract class TableFileNameReconciliationSharedTests
                 tongs.CastTemplate();
 
                 var tablesDir = Path.Join(_tempProductPath, "Templates", TemplateName, "Tables");
-                Assert.That(File.Exists(Path.Join(tablesDir, "TestTable.json")), Is.True,
-                    "MySQL table must be emitted schema-less as TestTable.json.");
-                Assert.That(File.Exists(Path.Join(tablesDir, ".TestTable.json")), Is.False,
+                // The server decides the case: with lower_case_table_names=1 it stores the table as testtable, and on a
+                // case-sensitive filesystem File.Exists("TestTable.json") misses the file it wrote.
+                var files = Directory.GetFiles(tablesDir).Select(Path.GetFileName).ToList();
+                Assert.That(files, Has.Some.Matches<string>(f => string.Equals(f, "TestTable.json", StringComparison.OrdinalIgnoreCase)),
+                    "MySQL table must be emitted schema-less as TestTable.json: " + string.Join(", ", files));
+                Assert.That(files, Has.None.StartsWith("."),
                     "MySQL table file must not carry a leading-dot (empty-schema) prefix.");
 
                 var ctx = new ValidationContext(
