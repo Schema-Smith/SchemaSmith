@@ -166,9 +166,11 @@ namespace SchemaQuench.IntegrationTests.SqlServer
 
                     if (policy == "warn")
                     {
-                        Assert.That(environment.ReceivedCalls().Any(c => c.GetMethodInfo().Name == "Exit"
-                                                                         && (int)c.GetArguments()[0] != 0), Is.False,
-                            "a warn-policy deploy below the floor must succeed; errors logged: " + logged);
+                        // The deploy finishes, but the downgraded feature is not in place, so it exits 1 -- never higher.
+                        var exits = environment.ReceivedCalls().Where(c => c.GetMethodInfo().Name == "Exit")
+                            .Select(c => (int)c.GetArguments()[0]).ToList();
+                        Assert.That(exits, Is.EqualTo(new[] { 1 }),
+                            "a warn-policy deploy below the floor must finish, exiting 1 for the downgrade; errors logged: " + logged);
                         progress.Received().Info(Arg.Is<string>(m => m.Contains("Temporal tracking skipped")));
                     }
                     else
