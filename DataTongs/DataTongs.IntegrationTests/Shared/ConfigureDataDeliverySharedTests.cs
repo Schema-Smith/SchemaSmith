@@ -429,6 +429,9 @@ public abstract class ConfigureDataDeliverySharedTests
     {
         EnsureDbConnection();
         using var command = _connection.CreateCommand();
+        // By design DataTongs writes no merge script below MySQL 8.0 (no JSON_TABLE); there is nothing here to run.
+        if (Platform == Platform.MySQL && TargetVersionDetector.Detect(command, Platform, _testDb).ServerComparable is > 0 and < 800)
+            Assert.Ignore("DataTongs writes no merge script below MySQL 8.0, by design.");
 
         var tableName = $"tzs_{Guid.NewGuid():N}".Substring(0, 20);
         command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, ts TIMESTAMP NULL)";

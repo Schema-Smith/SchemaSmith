@@ -182,6 +182,11 @@ public abstract class ParseAlteringSqlModeSharedTests
         {
             File.WriteAllText(Path.Join(tempDir, "data.tabledata"), json);
             using var command = Command();
+            var serverVersion = TargetVersionDetector.Detect(command, Platform, _testDb).ServerComparable;
+            // By design: below MySQL 8.0 automatic delivery is skipped (no JSON_TABLE, no recursive CTE). MariaDB
+            // 10.2-10.5 still deliver, through the recursive-CTE shred.
+            if (Platform == Platform.MySQL && serverVersion is > 0 and < 800)
+                Assert.Ignore("Automatic data delivery is skipped below MySQL 8.0, by design.");
             var table = new Table
             {
                 Name = tableName,
@@ -203,7 +208,7 @@ public abstract class ParseAlteringSqlModeSharedTests
                 DatabaseName = _testDb,
                 // As a real deploy does: the version picks the shred. Left at 0 it reads as "has JSON_TABLE", which
                 // MySQL 5.7 and MariaDB 10.2-10.5 do not.
-                MySqlServerVersionNum = TargetVersionDetector.Detect(command, Platform, _testDb).ServerComparable,
+                MySqlServerVersionNum = serverVersion,
                 TemplateRootPath = tempDir,
                 ScriptHelper = new MergeScriptHelperAdapter(Platform),
                 ReadFileContent = File.ReadAllText,
