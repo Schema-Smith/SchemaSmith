@@ -451,6 +451,26 @@ BEGIN
       AND (c.Collation IS NULL OR TRIM(c.Collation) = '')
       AND UPPER(TRIM(c.DataType)) REGEXP '^(VARCHAR|CHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|ENUM|SET)';
 
+    -- MariaDB 11.x collations that belong to no one character set (uca1400_ai_ci: listed with a NULL CHARACTER_SET_NAME)
+    -- are stored under the character set's full name, utf8mb4_uca1400_ai_ci. Declared that way, the table or column is
+    -- written with the full name here, in the character set it ends up in.
+    UPDATE _SchemaSmith_Tables t
+    SET t.Collation = CONCAT(COALESCE(NULLIF(TRIM(t.CharacterSet), ''),
+                                      (SELECT DEFAULT_CHARACTER_SET_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = p_DatabaseName LIMIT 1)),
+                             '_', TRIM(t.Collation))
+    WHERE EXISTS (SELECT 1 FROM information_schema.COLLATIONS co WHERE co.COLLATION_NAME = TRIM(t.Collation) AND co.CHARACTER_SET_NAME IS NULL);
+    UPDATE _SchemaSmith_Columns c
+      JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+    SET c.Collation = CONCAT(COALESCE(NULLIF(TRIM(c.CharacterSet), ''),
+                                      NULLIF(TRIM(t.CharacterSet), ''),
+                                      (SELECT co.CHARACTER_SET_NAME FROM information_schema.COLLATIONS co WHERE co.COLLATION_NAME = TRIM(t.Collation) LIMIT 1),
+                                      (SELECT co.CHARACTER_SET_NAME FROM information_schema.TABLES it
+                                         JOIN information_schema.COLLATIONS co ON co.COLLATION_NAME = it.TABLE_COLLATION
+                                        WHERE it.TABLE_SCHEMA = p_DatabaseName AND it.TABLE_NAME = SchemaSmith_StripBacktickWrapping(c.TableName) LIMIT 1),
+                                      (SELECT DEFAULT_CHARACTER_SET_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = p_DatabaseName LIMIT 1)),
+                             '_', TRIM(c.Collation))
+    WHERE EXISTS (SELECT 1 FROM information_schema.COLLATIONS co WHERE co.COLLATION_NAME = TRIM(c.Collation) AND co.CHARACTER_SET_NAME IS NULL);
+
     -- utf8 is utf8mb3. MySQL 8.0.30 and MariaDB 10.6.1 report it, and its collations, under the mb3 name
     -- (utf8mb3_general_ci); earlier servers under utf8 (utf8_general_ci), and each lists only its own form in
     -- COLLATIONS (checked on 8.0.28, 8.0.45, 10.5.29 and 11.4.12). Declared names are written the way this server

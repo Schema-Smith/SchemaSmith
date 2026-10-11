@@ -67,7 +67,8 @@ BEGIN
         -- CHARACTER SET utf8mb4 on its RETURNS -- see that script for what happened when it did not.
         -- A catalog COLUMN against a literal is safe whatever the collations, because the column is
         -- IMPLICIT and wins, which is why nothing else here needs anything.
-        'PageCompressed', CASE WHEN SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'PAGE_COMPRESSED') = '1'
+        -- MariaDB accepts and reports PAGE_COMPRESSED=1, ='ON' and =YES alike.
+        'PageCompressed', CASE WHEN UPPER(SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'PAGE_COMPRESSED')) IN ('1', 'ON', 'YES')
                                THEN TRUE ELSE NULL END,
         'PageCompressionLevel', SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'PAGE_COMPRESSION_LEVEL'),
         -- At-rest encryption, same CREATE_OPTIONS family as the compression four above. MySQL records
@@ -125,7 +126,8 @@ BEGIN
         -- every MySQL package, whose schema does not declare it and would reject it. #408
         JSON_REMOVE(JSON_OBJECT(
             'Name', SchemaSmith_QuoteIdentifier(c.COLUMN_NAME),
-            'DataType', c.COLUMN_TYPE,
+            -- Without MariaDB's /* mariadb-5.3 */ storage-format note, which is not part of the type.
+            'DataType', TRIM(REPLACE(c.COLUMN_TYPE, ' /* mariadb-5.3 */', '')),
             'Nullable', CASE WHEN c.IS_NULLABLE = 'YES' THEN TRUE ELSE FALSE END,
             -- SchemaSmith_NormalizeColumnDefault folds MariaDB's divergent COLUMN_DEFAULT reporting
             -- (literal 'NULL' marker, quoted string values, current_timestamp() with parens) to the

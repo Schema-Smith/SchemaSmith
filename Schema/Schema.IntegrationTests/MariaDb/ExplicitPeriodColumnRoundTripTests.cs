@@ -61,6 +61,35 @@ public class ExplicitPeriodColumnRoundTripTests
         Assert.That(Scalar($"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{_target}'"), Is.EqualTo(1));
     }
 
+    // A temporal column still in MariaDB's pre-10.0 storage format reports `datetime(3) /* mariadb-5.3 */`. Extraction
+    // copied the note into the package and the compare never matched it, so the column was rebuilt every deploy. The
+    // old format is a global setting, so it is switched off only for the one CREATE.
+    [Test]
+    [NonParallelizable]
+    public void AnOldFormatTemporalColumn_ExtractsAndRedeploysWithoutChange()
+    {
+        var table = $"old53_{Guid.NewGuid():N}"[..20];
+        try
+        {
+            Exec("SET @ss_saved = @@GLOBAL.mysql56_temporal_format");
+            Exec("SET GLOBAL mysql56_temporal_format = OFF");
+            try { Exec($"CREATE TABLE `{table}` (id INT NOT NULL PRIMARY KEY, d DATETIME(3) NULL)"); }
+            finally { Exec("SET GLOBAL mysql56_temporal_format = @ss_saved"); }
+
+            var json = Extract(table);
+            Assert.That(json, Does.Not.Contain("mariadb-5.3"), json);
+
+            Exec($"DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()");
+            Exec($"CALL SchemaSmith_TableQuench('OldFormatProduct', '{_testDb}', '{json.Replace("'", "''")}', 0, 0, 0)");
+            Assert.That(Scalar($"SELECT COUNT(*) FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ObjectName LIKE '{table}%'"), Is.EqualTo(0),
+                "the extract deployed back onto its own table must change nothing");
+        }
+        finally
+        {
+            Exec($"DROP TABLE IF EXISTS `{table}`");
+        }
+    }
+
     private string Extract(string tableName)
     {
         using var cmd = _connection.CreateCommand();

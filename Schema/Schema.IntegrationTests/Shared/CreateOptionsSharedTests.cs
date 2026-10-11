@@ -210,6 +210,21 @@ public abstract class CreateOptionsSharedTests
         });
     }
 
+    // MariaDB accepts PAGE_COMPRESSED=1, ='ON' and =YES, and reports whichever was written. Extraction read only 1, so
+    // a table created the other ways extracted uncompressed and a redeploy built it without compression.
+    [TestCase("1", TestName = "PageCompressed_WrittenAs1_Extracts")]
+    [TestCase("'ON'", TestName = "PageCompressed_WrittenAsOn_Extracts")]
+    [TestCase("YES", TestName = "PageCompressed_WrittenAsYes_Extracts")]
+    public void PageCompressed_InAnySpelling_Extracts(string value)
+    {
+        if (!IsMariaDb)
+            Assert.Ignore("PAGE_COMPRESSED is MariaDB-only; MySQL spells this COMPRESSION.");
+
+        Exec($"CREATE TABLE `{TestDb}`.`{TableName}` (id INT PRIMARY KEY) PAGE_COMPRESSED={value}");
+
+        Assert.That(ExtractedJson(), Does.Match("\"PageCompressed\": (1|true)"), ExtractedJson());
+    }
+
     [Test]
     public void ATableDeclaringNone_ExtractsWithoutAnyOfThem()
     {

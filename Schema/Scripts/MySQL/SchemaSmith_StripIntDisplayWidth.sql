@@ -34,6 +34,10 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    -- MariaDB reports a temporal column still in the pre-10.0 storage format with a trailing /* mariadb-5.3 */
+    -- comment in COLUMN_TYPE. It is not part of the type, and a column created from the package never has it.
+    SET p_DataType = TRIM(REPLACE(REPLACE(p_DataType, ' /* mariadb-5.3 */', ''), ' /* MARIADB-5.3 */', ''));
+
     SET v_Paren = LOCATE('(', p_DataType);
     IF v_Paren = 0 THEN
         RETURN p_DataType;

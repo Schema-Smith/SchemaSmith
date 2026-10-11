@@ -327,6 +327,50 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
         }
     }
 
+    // MariaDB 11.x has collations that belong to no one character set (uca1400_ai_ci); a column or table declared with
+    // one is stored under the full name (utf8mb4_uca1400_ai_ci), so the declaration never matched it.
+    [Test]
+    public void ACharsetIndependentCollation_DoesNotChurn()
+    {
+        if (Platform.ToString() != "MariaDb") Assert.Ignore("Charset-independent collations are MariaDB's.");
+        using var probeConn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        probeConn.Open();
+        using (var probe = probeConn.CreateCommand())
+        {
+            probe.CommandText = "SELECT COUNT(*) FROM information_schema.COLLATIONS WHERE COLLATION_NAME = 'uca1400_ai_ci' AND CHARACTER_SET_NAME IS NULL";
+            if (Convert.ToInt32(probe.ExecuteScalar()) == 0) Assert.Ignore("This MariaDB has no uca1400_ai_ci.");
+        }
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var table = $"UcaTable_{uid}";
+        var defs = $$"""
+[
+  {
+    "Name": "{{table}}", "CharacterSet": "utf8mb4", "Collation": "uca1400_ai_ci",
+    "Columns": [
+      { "Name": "`Id`",  "DataType": "int", "Nullable": false },
+      { "Name": "`Val`", "DataType": "varchar(10)", "Nullable": true, "Collation": "uca1400_as_cs" }
+    ],
+    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`" } ]
+  }
+]
+""";
+        using var cmd = probeConn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            RunTableQuenchProc(cmd, defs, productName: $"UcaProduct_{uid}");
+            ClearChangeAudit(cmd);
+            RunTableQuenchProc(cmd, defs, productName: $"UcaProduct_{uid}");
+
+            cmd.CommandText = $"SELECT GROUP_CONCAT(CONCAT(ObjectType, ' ', ObjectName, ' ', ActionType)) FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ObjectName LIKE '{table}%'";
+            Assert.That(cmd.ExecuteScalar()?.ToString() ?? "", Is.Empty);
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+    }
+
     private static string TableWithColumnType(string table, string dataType) => $$"""
 [
   {
