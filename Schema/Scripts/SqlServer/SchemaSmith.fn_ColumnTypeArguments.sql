@@ -33,15 +33,18 @@ CREATE FUNCTION SchemaSmith.fn_ColumnTypeArguments
 RETURNS NVARCHAR(450)
 AS
 BEGIN
-  RETURN CASE WHEN @p_UserType LIKE '%CHAR' OR @p_UserType LIKE '%BINARY'
+  -- UPPER because sys.types names are lower case and a case-sensitive database compares them as written. The names
+  -- are exact: an alias type (dbo.ShortChar) carries its own width, and SQL Server refuses one stated with it.
+  DECLARE @type NVARCHAR(128) = UPPER(@p_UserType)
+  RETURN CASE WHEN @type IN ('CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR', 'BINARY', 'VARBINARY')
               THEN '(' + CASE WHEN @p_CharacterMaxLength = -1 THEN 'MAX' ELSE CONVERT(NVARCHAR(20), @p_CharacterMaxLength) END + ')'
-              WHEN @p_UserType IN ('NUMERIC', 'DECIMAL')
+              WHEN @type IN ('NUMERIC', 'DECIMAL')
               THEN  '(' + CONVERT(NVARCHAR(20), @p_NumericPrecision) + ', ' + CONVERT(NVARCHAR(20), @p_NumericScale) + ')'
-              WHEN @p_UserType IN ('TIME', 'DATETIME2', 'DATETIMEOFFSET')
+              WHEN @type IN ('TIME', 'DATETIME2', 'DATETIMEOFFSET')
               THEN  '(' + CONVERT(NVARCHAR(20), @p_DateTimePrecision) + ')'
-              WHEN @p_UserType = 'XML' AND @p_XmlSchemaCollection IS NOT NULL
+              WHEN @type = 'XML' AND @p_XmlSchemaCollection IS NOT NULL
               THEN  '(' + @p_XmlSchemaCollection + ')'
-              WHEN @p_UserType = 'UNIQUEIDENTIFIER' AND @p_IsRowGuidCol = 1
+              WHEN @type = 'UNIQUEIDENTIFIER' AND @p_IsRowGuidCol = 1
               THEN  ' ROWGUIDCOL'
               ELSE '' END
 END

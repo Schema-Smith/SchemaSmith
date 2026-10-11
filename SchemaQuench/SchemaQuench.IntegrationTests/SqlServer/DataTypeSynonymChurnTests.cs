@@ -35,6 +35,28 @@ public class DataTypeSynonymChurnTests : BaseTableQuenchTests
     // Kept as a guard on the fold: ROWVERSION was the ONE mapping SQL Server already had, spread over
     // three inline REPLACE calls. Folding them into the function must not lose it.
     [TestCase("ROWVERSION", TestName = "Synonym_ROWVERSION_StillDoesNotChurn")]             // -> timestamp
+    [TestCase("CHAR VARYING(5)", TestName = "Synonym_CHAR_VARYING_DoesNotChurn")]          // -> varchar(5)
+    [TestCase("NATIONAL CHAR(5)", TestName = "Synonym_NATIONAL_CHAR_DoesNotChurn")]        // -> nchar(5)
+    [TestCase("NATIONAL CHAR VARYING(5)", TestName = "Synonym_NATIONAL_CHAR_VARYING_DoesNotChurn")] // -> nvarchar(5)
+    [TestCase("NCHAR VARYING(5)", TestName = "Synonym_NCHAR_VARYING_DoesNotChurn")]        // -> nvarchar(5)
+    [TestCase("NATIONAL TEXT", TestName = "Synonym_NATIONAL_TEXT_DoesNotChurn")]           // -> ntext
+    // A length, precision or scale left to its default is reported spelled out.
+    [TestCase("CHAR", TestName = "Default_CHAR_DoesNotChurn")]                             // -> char(1)
+    [TestCase("VARCHAR", TestName = "Default_VARCHAR_DoesNotChurn")]                       // -> varchar(1)
+    [TestCase("NCHAR", TestName = "Default_NCHAR_DoesNotChurn")]                           // -> nchar(1)
+    [TestCase("NVARCHAR", TestName = "Default_NVARCHAR_DoesNotChurn")]                     // -> nvarchar(1)
+    [TestCase("BINARY", TestName = "Default_BINARY_DoesNotChurn")]                         // -> binary(1)
+    [TestCase("VARBINARY", TestName = "Default_VARBINARY_DoesNotChurn")]                   // -> varbinary(1)
+    [TestCase("CHARACTER VARYING", TestName = "Default_CHARACTER_VARYING_DoesNotChurn")]   // -> varchar(1)
+    [TestCase("DECIMAL", TestName = "Default_DECIMAL_DoesNotChurn")]                       // -> decimal(18,0)
+    [TestCase("DECIMAL(10)", TestName = "Default_DECIMAL_Scale_DoesNotChurn")]             // -> decimal(10,0)
+    [TestCase("NUMERIC", TestName = "Default_NUMERIC_DoesNotChurn")]                       // -> numeric(18,0)
+    [TestCase("NUMERIC ( 12 )", TestName = "Default_NUMERIC_Scale_DoesNotChurn")]          // -> numeric(12,0)
+    [TestCase("DEC(9)", TestName = "Default_DEC_Scale_DoesNotChurn")]                      // -> decimal(9,0)
+    [TestCase("FLOAT(24)", TestName = "Float24_DoesNotChurn")]                             // -> real
+    [TestCase("FLOAT(1)", TestName = "Float1_DoesNotChurn")]                               // -> real
+    [TestCase("FLOAT(53)", TestName = "Float53_DoesNotChurn")]                             // -> float
+    [TestCase("FLOAT(25)", TestName = "Float25_DoesNotChurn")]                             // -> float
     public void ColumnDeclaredWithASynonym_IsNotRewrittenOnRedeploy(string synonym)
     {
         var uid = Guid.NewGuid().ToString("N")[..8];
@@ -105,6 +127,43 @@ public class DataTypeSynonymChurnTests : BaseTableQuenchTests
         finally
         {
             DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    // An alias type whose name ends in CHAR was rendered with its base type's width (SHORTCHAR(10)), so it never
+    // compared equal to its declaration -- and extracted that way, it could not be deployed at all.
+    [Test]
+    public void ColumnDeclaredWithAnAliasType_IsNotRewrittenOnRedeploy()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"AliasProduct_{uid}";
+        var table = $"AliasTable_{uid}";
+        var alias = $"Short{uid}Char";
+        var defs = TableWithColumnType(table, alias);
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = $"CREATE TYPE dbo.{alias} FROM varchar(10)";
+        cmd.ExecuteNonQuery();
+
+        try
+        {
+            RunTableQuenchProc(cmd, defs, productName: product);
+            ClearChangeAudit(cmd);
+            RunTableQuenchProc(cmd, defs, productName: product);
+
+            Assert.That(ColumnChangesRecorded(cmd, table), Is.EqualTo(0),
+                $"a column declared with the alias type {alias} was altered on a redeploy of an unchanged declaration");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+            cmd.CommandText = $"DROP TYPE dbo.{alias}";
+            cmd.ExecuteNonQuery();
         }
         conn.Close();
     }
