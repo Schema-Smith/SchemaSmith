@@ -264,7 +264,11 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     -- are is_hidden = 0). sys.columns.graph_type is the discriminator: non-null for
                     -- exactly these, null for every user column -- including one merely NAMED like
                     -- them. 2017+, which the JSON ingest tier already requires (STRING_AGG).
-                    AND sc.graph_type IS NULL) x
+                    AND sc.graph_type IS NULL
+                    -- and every hidden column: what remains of one after GENERATED ALWAYS and graph is a dropped
+                    -- ledger column (2022), kept hidden by the engine; extracted, it came back visible on deploy.
+                    -- COLUMNPROPERTY is NULL where IsHidden is unknown (before 2016).
+                    AND ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0) x
           -- Column sequence: 'Name' (default) or 'Physical', the table's own order. The ordinal is looked up
           -- rather than projected: this is SELECT * over the derived table, so adding ORDINAL_POSITION to it
           -- would write the ordinal into the package file. The lookup only runs when Physical is asked for.

@@ -320,6 +320,10 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     AND ISNULL(cm.GeneratedAlwaysType, 0) = 0
                     -- and the graph pseudo-columns staged above (empty below 2017).
                     AND NOT EXISTS (SELECT 1 FROM #GraphCols g WITH (NOLOCK) WHERE g.[column_id] = sc.column_id)
+                    -- and every hidden column: what remains of one after GENERATED ALWAYS and graph is a dropped
+                    -- ledger column (2022), kept hidden by the engine; extracted, it came back visible on deploy.
+                    -- COLUMNPROPERTY is NULL where IsHidden is unknown (before 2016).
+                    AND ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0
                   -- Column sequence: 'Name' (default) or 'Physical', as GenerateTableJSON orders it.
                   ORDER BY CASE WHEN @p_ObjectOrder = 'Physical' THEN c.ORDINAL_POSITION END,
                            CASE WHEN @p_ObjectOrder = 'Physical' THEN NULL ELSE c.COLUMN_NAME END

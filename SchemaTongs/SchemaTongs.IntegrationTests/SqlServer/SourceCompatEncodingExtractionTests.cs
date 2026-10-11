@@ -37,6 +37,7 @@ public class SourceCompatEncodingExtractionTests
     private const string ProductName = "SourceEncodingProduct";
     private const string ExtendedPropertyValue = "A rich table";
     private const string CollatedColumnCollation = "Latin1_General_100_CS_AS";
+    private bool _ledgerTable;
 
     private string _integrationDb = "";
     private string _connectionString;
@@ -122,6 +123,14 @@ public class SourceCompatEncodingExtractionTests
                 $"The {encoding} extraction must keep DOCUMENT, or a redeploy accepts fragments the column refused.");
             Assert.That(types["[Frag]"], Is.EqualTo("XML([dbo].[Xsc])"), $"The {encoding} extraction of a CONTENT column.");
         }
+
+        // ----- Ledger (2022+): a dropped ledger column stays in the table, hidden; extracting it re-created it visible. -----
+        if (_ledgerTable)
+            foreach (var (encoding, path) in new[] { ("modern", modernPath), ("legacy", legacyPath) })
+            {
+                var names = JObject.Parse(ReadTableFile(path, "LedgerDropped"))["Columns"]!.Select(c => (string)c["Name"]!).ToList();
+                Assert.That(names, Is.EquivalentTo(new[] { "[Id]", "[V]" }), $"The {encoding} extraction of a ledger table with a dropped column.");
+            }
 
         // ----- ANSI_PADDING: an unpadded char/varchar/binary/varbinary column writes AnsiPadding false; nothing else does. -----
         foreach (var (encoding, path) in new[] { ("modern", modernPath), ("legacy", legacyPath) })
@@ -309,6 +318,13 @@ CREATE TABLE dbo.Rich (
 
         Exec(cmd, @"CREATE XML SCHEMA COLLECTION dbo.Xsc AS N'<xsd:schema xmlns:xsd=""http://www.w3.org/2001/XMLSchema""><xsd:element name=""r"" type=""xsd:string""/></xsd:schema>'");
         Exec(cmd, "CREATE TABLE dbo.XmlDocs (Id INT NOT NULL PRIMARY KEY, Doc XML(DOCUMENT dbo.Xsc) NULL, Frag XML(CONTENT dbo.Xsc) NULL)");
+        cmd.CommandText = "SELECT CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(50)), 4) AS INT)";
+        _ledgerTable = Convert.ToInt32(cmd.ExecuteScalar()) >= 16;
+        if (_ledgerTable)
+        {
+            Exec(cmd, "CREATE TABLE dbo.LedgerDropped (Id INT NOT NULL PRIMARY KEY, V INT NULL, Gone INT NULL) WITH (LEDGER = ON (APPEND_ONLY = ON))");
+            Exec(cmd, "ALTER TABLE dbo.LedgerDropped DROP COLUMN Gone");
+        }
         Exec(cmd, "EXEC('SET ANSI_PADDING OFF; CREATE TABLE dbo.Unpadded (Id INT NOT NULL PRIMARY KEY, [Off] VARCHAR(10) NULL, OffBin BINARY(4) NULL, Wide NVARCHAR(10) NULL, Num INT NULL)')");
         Exec(cmd, "ALTER TABLE dbo.Unpadded ADD [On] VARCHAR(10) NULL");
 
