@@ -176,7 +176,35 @@ public sealed class JsonSchemaCheck : ISchemaCheck
     }
 
     private static JsonSchema LoadNJsonSchema(JObject committed) =>
-        JsonSchema.FromJsonAsync(committed.ToString()).GetAwaiter().GetResult();
+        JsonSchema.FromJsonAsync(WithEnforceableRequiredUnless(committed).ToString()).GetAwaiter().GetResult();
+
+    private const string RequiredUnlessMarker = "x-requiredUnless";
+
+    // The generator states "P is required unless U is true" as allOf/if/else, which editors understand and NJsonSchema
+    // does not evaluate -- so the rule was never applied. Each such entry is replaced, in this in-memory copy only, by
+    // the same rule as anyOf (P present, or U true), marked so a failure is reported as the one missing property.
+    private static JObject WithEnforceableRequiredUnless(JObject schema)
+    {
+        var copy = (JObject)schema.DeepClone();
+        foreach (var allOf in copy.Descendants().OfType<JProperty>().Where(p => p.Name == "allOf").Select(p => p.Value).OfType<JArray>().ToList())
+            for (var i = 0; i < allOf.Count; i++)
+            {
+                if (allOf[i] is not JObject entry || entry["else"]?["required"] is not JArray { Count: 1 } elseRequired
+                    || entry["if"]?["required"] is not JArray { Count: 1 } ifRequired) continue;
+                var property = (string)elseRequired[0];
+                var unless = (string)ifRequired[0];
+                if (entry["if"]?["properties"]?[unless]?["const"] is not JValue { Type: JTokenType.Boolean } flag || !(bool)flag) continue;
+                allOf[i] = new JObject
+                {
+                    [RequiredUnlessMarker] = new JArray(property, unless),
+                    ["anyOf"] = new JArray(
+                        new JObject { ["required"] = new JArray(property) },
+                        new JObject { ["properties"] = new JObject { [unless] = new JObject { ["enum"] = new JArray(true) } },
+                                      ["required"] = new JArray(unless) })
+                };
+            }
+        return copy;
+    }
 
     private static ICollection<ValidationError> SafeValidate(JsonSchema schema, string jsonText)
     {
@@ -211,7 +239,11 @@ public sealed class JsonSchemaCheck : ISchemaCheck
     {
         foreach (var error in errors)
         {
-            if (error is ChildSchemaValidationError child)
+            if (error.Kind == ValidationErrorKind.NotAnyOf && RequiredUnless(error) != null)
+            {
+                yield return error;
+            }
+            else if (error is ChildSchemaValidationError child)
             {
                 foreach (var leaf in FlattenErrors(child.Errors.Values.SelectMany(v => v)))
                     yield return leaf;
@@ -223,13 +255,24 @@ public sealed class JsonSchemaCheck : ISchemaCheck
         }
     }
 
-    private static string RenderMessage(ValidationError error) => error.Kind switch
+    private static string[] RequiredUnless(ValidationError error) =>
+        error.Schema?.ExtensionData != null && error.Schema.ExtensionData.TryGetValue(RequiredUnlessMarker, out var names)
+            ? (names as IEnumerable<object>)?.Select(n => n?.ToString()).ToArray()
+            : null;
+
+    private static string RenderMessage(ValidationError error)
     {
-        ValidationErrorKind.NoAdditionalPropertiesAllowed => $"unexpected property '{error.Property}' at {error.Path}",
-        ValidationErrorKind.PropertyRequired => $"missing required property '{error.Property}' at {error.Path}",
-        ValidationErrorKind.NotInEnumeration => $"value for '{error.Property}' not in allowed enumeration at {error.Path}",
-        _ => $"{error.Kind} on property '{error.Property}' at {error.Path}"
-    };
+        if (RequiredUnless(error) is [var property, var unless])
+            return $"missing required property '{property}' at {error.Path} (required unless {unless} is true)";
+
+        return error.Kind switch
+        {
+            ValidationErrorKind.NoAdditionalPropertiesAllowed => $"unexpected property '{error.Property}' at {error.Path}",
+            ValidationErrorKind.PropertyRequired => $"missing required property '{error.Property}' at {error.Path}",
+            ValidationErrorKind.NotInEnumeration => $"value for '{error.Property}' not in allowed enumeration at {error.Path}",
+            _ => $"{error.Kind} on property '{error.Property}' at {error.Path}"
+        };
+    }
 
     private static bool IsUnderJsonSchemasDir(string path) =>
         path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)

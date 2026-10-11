@@ -74,6 +74,8 @@ A complete `DataTongs.settings.json`:
 | `Source:Database` | string | _(required)_ | Source database to extract data from. |
 | `Source:ConnectionProperties` | object | `{}` | Arbitrary key-value pairs appended to the connection string. Platform-specific keys -- see the [Configuration Reference](configuration.md#connection-configuration). |
 
+Each connection key falls back to its `Target:` twin when the `Source:` key is absent -- `Server`, `Port`, `User`, `Password`, `IntegratedSecurity`, and `ConnectionProperties` -- so one settings file can point SchemaQuench and DataTongs at the same server. `Source:CompatEncoding` falls back to `Target:CompatEncoding` the same way.
+
 The `--ConnectionString` switch bypasses all `Source` settings and passes the provided value directly to the platform-appropriate driver. `Source:Platform` is still required so the right script generator is used.
 
 ### Output paths

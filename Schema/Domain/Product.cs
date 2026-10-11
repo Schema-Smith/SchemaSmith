@@ -188,6 +188,11 @@ namespace Schema.Domain
             var tokenErrors = TokenHelper.ResolveFileTokens(product.ScriptTokens, schemaPackagePath, product.Platform, tolerateFileTokenErrors);
             foreach (var tokenError in tokenErrors)
                 product.FileTokenErrors.Add(new FileTokenError(product.FilePath, tokenError));
+            TokenHelper.RefuseCaseCollidingTokens(product.ScriptTokens.Keys, $"Product.json ({productFilePath})");
+            var reserved = product.ScriptTokens.Keys.FirstOrDefault(k => k.Equals("ProductName", StringComparison.OrdinalIgnoreCase));
+            if (reserved != null)
+                throw new InvalidOperationException($"Product.json ({productFilePath}) declares a script token '{reserved}'. " +
+                    "ProductName is reserved: it always holds the product's Name. Rename the token.");
             product.ScriptTokens.Add("ProductName", product.Name);
 
             product.InstanceLoad();

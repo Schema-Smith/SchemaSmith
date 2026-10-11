@@ -35,6 +35,18 @@ public static class TokenHelper
     // file is returned in the errors list instead of aborting the load; the token keeps its
     // original unresolved "<*File*>..." literal, which is harmless on the validate-only path since
     // nothing downstream executes it.
+    /// <summary>
+    /// Refuses two token names in one scope that differ only in case. A token is matched case-insensitively, so such a
+    /// pair is one token with two values.
+    /// </summary>
+    public static void RefuseCaseCollidingTokens(IEnumerable<string> names, string scope)
+    {
+        var collision = names.GroupBy(n => n, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
+        if (collision == null) return;
+        throw new InvalidOperationException($"{scope} declares script tokens {string.Join(" and ", collision.Select(n => $"'{n}'"))}, " +
+            "which differ only in case. Token names are matched case-insensitively, so they are the same token -- rename or remove one.");
+    }
+
     public static List<string> ResolveFileTokens(Dictionary<string, string> tokens, string basePath, Platform platform, bool tolerateErrors = false)
     {
         // PostgreSQL BYTEA needs an E-string-escaped hex literal with an explicit cast; SQL Server VARBINARY and
@@ -50,7 +62,7 @@ public static class TokenHelper
         ResolveFileTokensByTag(tokens, basePath, tokenErrors, BinaryFileTag, binaryPrefix, binarySuffix, fileName => BitConverter.ToString(ProductFileWrapper.GetFromFactory().ReadAllBytes(fileName)).Replace("-", ""));
         ResolveFileTokensByTag(tokens, basePath, tokenErrors, QueryFileTag, QueryTag, "", fileName => ProductFileWrapper.GetFromFactory().ReadAllText(fileName));
         if (tokenErrors.Count == 0 || tolerateErrors) return tokenErrors;
-        throw new Exception(string.Join("\r\n", tokenErrors));
+        throw new InvalidOperationException(string.Join("\r\n", tokenErrors));
     }
 
     public static void ResolveSpecificTableTokens(Dictionary<string, string> tokens, IList<Table> tables, Platform platform)
@@ -84,7 +96,7 @@ public static class TokenHelper
             }
         }
         if (tokenErrors.Count == 0) return;
-        throw new Exception(string.Join("\r\n", tokenErrors));
+        throw new InvalidOperationException(string.Join("\r\n", tokenErrors));
     }
 
     public static void ResolveSpecificMaterializedViewTokens(
@@ -120,7 +132,7 @@ public static class TokenHelper
             }
         }
         if (tokenErrors.Count == 0) return;
-        throw new Exception(string.Join("\r\n", tokenErrors));
+        throw new InvalidOperationException(string.Join("\r\n", tokenErrors));
     }
 
     public static void ResolveSpecificIndexedViewTokens(
@@ -156,7 +168,7 @@ public static class TokenHelper
             }
         }
         if (tokenErrors.Count == 0) return;
-        throw new Exception(string.Join("\r\n", tokenErrors));
+        throw new InvalidOperationException(string.Join("\r\n", tokenErrors));
     }
 
     private static SqlServerIndexedView FindIndexedView(

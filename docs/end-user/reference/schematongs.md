@@ -198,6 +198,8 @@ The platform-specific `ShouldCast` flags are simply ignored when they don't appl
 | `Source:Database` | string | _(required)_ | Name of the database to extract from. |
 | `Source:ConnectionProperties` | object | `{}` | Arbitrary key-value pairs appended to the connection string. Platform-specific keys -- see the [Configuration Reference](configuration.md#connection-configuration). |
 
+Each connection key falls back to its `Target:` twin when the `Source:` key is absent -- `Server`, `Port`, `User`, `Password`, `IntegratedSecurity`, and `ConnectionProperties` -- so one settings file can point SchemaQuench and SchemaTongs at the same server.
+
 The `--ConnectionString` switch bypasses all `Source` settings entirely. When provided, `Server`, `Port`, `User`, `Password`, `Database`, and `ConnectionProperties` are all ignored. `Source:Platform` is still required so the right adapter can claim the connection.
 
 ### Product output

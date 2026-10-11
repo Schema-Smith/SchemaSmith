@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using log4net;
 using NSubstitute;
 using Schema.Domain;
@@ -397,6 +398,104 @@ namespace Schema.UnitTests.Domain
                 Template.Load("Main", MakeProduct(Platform.SqlServer)));
             Assert.That(ex!.Message, Does.Contain("CreateSchemaIfMissing"));
             Assert.That(ex.Message, Does.Contain("SchemaIdentificationScript"));
+        }
+
+        // Token names match case-insensitively, so Foo and foo in one scope are one token with two values. That failed
+        // with "An item with the same key has already been added", naming neither token nor template.
+        [Test]
+        public void TokensDifferingOnlyInCase_InOneTemplate_AreRefusedByName()
+        {
+            var (templateFile, tablesPath) = Paths();
+            var json = @"{ ""Name"": ""Main"", ""ScriptTokens"": { ""Foo"": ""a"", ""foo"": ""b"" } }";
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(json);
+            _mockDirectory.Exists(tablesPath).Returns(false);
+            _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
+
+            var ex = Assert.Throws<InvalidOperationException>(() => Template.Load("Main", MakeProduct(Platform.SqlServer)));
+            Assert.That(ex!.Message, Does.Contain("'Foo'").And.Contain("'foo'").And.Contain("Main"));
+        }
+
+        // The deploy hands the procedures the serialized model, which concatenated RelatedTableSchema with the whole
+        // RelatedTable -- REFERENCES [dbo].[sales.Customer] -- so a schema-qualified RelatedTable never deployed.
+        [Test]
+        public void ASchemaQualifiedRelatedTable_ReachesTheDeploySplit()
+        {
+            var (templateFile, tablesPath) = Paths();
+            var tableFile = Path.Join(tablesPath, "dbo.Orders.json");
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(@"{ ""Name"": ""Main"" }");
+            _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
+            _mockDirectory.Exists(tablesPath).Returns(true);
+            _mockDirectory.GetFiles(tablesPath, "*.json", SearchOption.AllDirectories).Returns([tableFile]);
+            _mockFile.Exists(tableFile).Returns(true);
+            _mockFile.ReadAllText(tableFile).Returns(@"{ ""Schema"": ""dbo"", ""Name"": ""Orders"",
+                ""Columns"": [ { ""Name"": ""CustomerId"", ""DataType"": ""INT"" } ],
+                ""ForeignKeys"": [ { ""Name"": ""FK_Orders_Customer"", ""Columns"": ""CustomerId"", ""RelatedTable"": ""sales.Customer"", ""RelatedColumns"": ""Id"" } ] }");
+
+            var template = Template.Load("Main", MakeProduct(Platform.SqlServer));
+
+            var fk = Newtonsoft.Json.Linq.JArray.Parse(template.TableSchema)[0]["ForeignKeys"]![0]!;
+            Assert.That(((string)fk["RelatedTableSchema"], (string)fk["RelatedTable"]), Is.EqualTo(("sales", "Customer")));
+        }
+
+        // The walk stopped following a body once it named {{SchemaName}}, so a cycle through such a body loaded clean.
+        [Test]
+        public void ATokenCycle_ThroughABodyNamingSchemaName_IsRefused()
+        {
+            var (templateFile, tablesPath) = Paths();
+            var json = @"{ ""Name"": ""Main"", ""ScriptTokens"": { ""A"": ""{{SchemaName}}{{B}}"", ""B"": ""{{A}}"" } }";
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(json);
+            _mockDirectory.Exists(tablesPath).Returns(false);
+            _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
+
+            var ex = Assert.Throws<InvalidOperationException>(() => Template.Load("Main", MakeProduct(Platform.SqlServer)));
+            Assert.That(ex!.Message, Does.Contain("Cycle"));
+        }
+
+        // The template takes precedence over the product, and a token is matched case-insensitively -- so a template foo
+        // overrides a product Foo rather than failing the load.
+        [Test]
+        public void ATemplateToken_OverridesAProductTokenDifferingOnlyInCase()
+        {
+            var (templateFile, tablesPath) = Paths();
+            var json = @"{ ""Name"": ""Main"", ""ScriptTokens"": { ""foo"": ""template"" } }";
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(json);
+            _mockDirectory.Exists(tablesPath).Returns(false);
+            _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
+            var product = MakeProduct(Platform.SqlServer);
+            product.ScriptTokens["Foo"] = "product";
+
+            var template = Template.Load("Main", product);
+
+            var values = template.NonQueryTokens.Where(t => t.Key.Equals("foo", StringComparison.OrdinalIgnoreCase)).Select(t => t.Value);
+            Assert.That(values, Is.EqualTo(new[] { "template" }));
+        }
+
+        // On MySQL and MariaDB the legacy alias is migrated away before the rules run, so a template that plainly
+        // carried a SchemaIdentificationScript was told it had none. A schema is a database there.
+        [TestCase(Platform.MySQL)]
+        [TestCase(Platform.MariaDb)]
+        public void CreateSchemaIfMissing_OnTheMySqlFamily_NamesTheRealCause(Platform platform)
+        {
+            var (templateFile, tablesPath) = Paths();
+            var json = @"{
+                ""Name"": ""Main"",
+                ""SchemaIdentificationScript"": ""SELECT 'tenant1'"",
+                ""CreateSchemaIfMissing"": true
+            }";
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(json);
+            _mockDirectory.Exists(tablesPath).Returns(false);
+            _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
+
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                Template.Load("Main", MakeProduct(platform)));
+            Assert.That(ex!.Message, Does.Not.Contain("has no SchemaIdentificationScript"));
+            Assert.That(ex.Message, Does.Contain("CreateSchemaIfMissing"));
+            Assert.That(ex.Message, Does.Contain("database"));
         }
 
         // -------------------------------------------------------------------

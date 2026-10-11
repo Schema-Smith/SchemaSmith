@@ -130,7 +130,7 @@ public class TokenHelperTests
         lock (FactoryContainer.SharedLockObject)
         {
             FactoryContainer.Register(mockFileWrapper);
-            var ex = Assert.Throws<Exception>(() => TokenHelper.ResolveFileTokens(tokens, basePath, Platform.SqlServer));
+            var ex = Assert.Throws<InvalidOperationException>(() => TokenHelper.ResolveFileTokens(tokens, basePath, Platform.SqlServer));
             Assert.That(ex.Message, Does.Contain("missing file"));
             FactoryContainer.Clear();
         }
@@ -421,7 +421,7 @@ public class TokenHelperTests
             CreateSqlServerTable("dbo", "MyTable")
         };
 
-        var ex = Assert.Throws<Exception>(() => TokenHelper.ResolveSpecificTableTokens(tokens, tables, Platform.SqlServer));
+        var ex = Assert.Throws<InvalidOperationException>(() => TokenHelper.ResolveSpecificTableTokens(tokens, tables, Platform.SqlServer));
         Assert.That(ex.Message, Does.Contain("missing table"));
     }
 
@@ -437,7 +437,7 @@ public class TokenHelperTests
             CreateSqlServerTable("dbo", "MyTable")
         };
 
-        var ex = Assert.Throws<Exception>(() => TokenHelper.ResolveSpecificTableTokens(tokens, tables, Platform.SqlServer));
+        var ex = Assert.Throws<InvalidOperationException>(() => TokenHelper.ResolveSpecificTableTokens(tokens, tables, Platform.SqlServer));
         Assert.That(ex.Message, Does.Contain("No table name was provided"));
     }
 
@@ -471,7 +471,7 @@ public class TokenHelperTests
         };
         var tables = new List<Table> { CreateSqlServerTable("dbo", "MyTable") };
 
-        var ex = Assert.Throws<Exception>(() => TokenHelper.ResolveSpecificTableTokens(tokens, tables, Platform.SqlServer));
+        var ex = Assert.Throws<InvalidOperationException>(() => TokenHelper.ResolveSpecificTableTokens(tokens, tables, Platform.SqlServer));
         Assert.That(ex.Message, Does.Contain("missing table"));
     }
 
@@ -552,7 +552,7 @@ public class TokenHelperTests
         {
             { "MyView", "<*SpecificMaterializedView*>nonexistent" }
         };
-        Assert.Throws<Exception>(() =>
+        Assert.Throws<InvalidOperationException>(() =>
             TokenHelper.ResolveSpecificMaterializedViewTokens(tokens, []));
     }
 
@@ -563,7 +563,7 @@ public class TokenHelperTests
         {
             { "MyView", "<*SpecificMaterializedView*>" }
         };
-        var ex = Assert.Throws<Exception>(() =>
+        var ex = Assert.Throws<InvalidOperationException>(() =>
             TokenHelper.ResolveSpecificMaterializedViewTokens(tokens, []));
         Assert.That(ex.Message, Does.Contain("No view name was provided"));
     }
@@ -653,7 +653,7 @@ public class TokenHelperTests
         {
             { "MyView", "<*SpecificIndexedView*>dbo.vNonExistent" }
         };
-        Assert.Throws<Exception>(() =>
+        Assert.Throws<InvalidOperationException>(() =>
             TokenHelper.ResolveSpecificIndexedViewTokens(tokens, []));
     }
 
@@ -664,7 +664,7 @@ public class TokenHelperTests
         {
             { "MyView", "<*SpecificIndexedView*>" }
         };
-        var ex = Assert.Throws<Exception>(() =>
+        var ex = Assert.Throws<InvalidOperationException>(() =>
             TokenHelper.ResolveSpecificIndexedViewTokens(tokens, []));
         Assert.That(ex.Message, Does.Contain("No view name was provided"));
     }

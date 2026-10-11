@@ -428,6 +428,8 @@ public class CoherenceCheckTests
     // The deploy trims Mode on every engine, so a padded THRESHOLD is THRESHOLD -- the check must read it the same way.
     [TestCase(" THRESHOLD")]
     [TestCase("threshold ")]
+    [TestCase("THRESHOLD\t")]
+    [TestCase("\r\nthreshold")]
     public void PaddedThresholdMode_WithoutAThreshold_IsSsTbl001(string mode)
     {
         Assert.That(RunOn(OrderWith(new RebuildPolicy { Mode = mode })).Select(f => f.Code), Does.Contain("SS-TBL-001"));
@@ -435,10 +437,21 @@ public class CoherenceCheckTests
 
     [TestCase(" THRESHOLD")]
     [TestCase("threshold ")]
+    [TestCase("THRESHOLD\t")]
+    [TestCase("\r\nthreshold")]
     public void PaddedThresholdMode_WithAThreshold_IsClean(string mode)
     {
         Assert.That(RunOn(OrderWith(new RebuildPolicy { Mode = mode, Threshold = 50 }))
             .Where(f => f.Code is "SS-TBL-001" or "SS-TBL-002").Select(f => f.Message), Is.Empty);
+    }
+
+    // The table's policy reaches the deploy re-serialised from the model, and the deploy's SQL trims spaces only, so a
+    // tab left on Mode read as no known mode there -- while the schema pattern accepted it. Trimmed at the model.
+    [Test]
+    public void AWhitespacePaddedMode_ReachesTheDeployTrimmed()
+    {
+        var policy = Newtonsoft.Json.JsonConvert.DeserializeObject<RebuildPolicy>("{\"Mode\": \"THRESHOLD\t\", \"Threshold\": 5}")!;
+        Assert.That(Newtonsoft.Json.Linq.JObject.FromObject(policy)["Mode"]!.ToString(), Is.EqualTo("THRESHOLD"));
     }
 
     [Test]
@@ -944,6 +957,67 @@ public class CoherenceCheckTests
         var findings = new CoherenceCheck().Run(ctx).ToList();
 
         Assert.That(findings, Is.Empty);
+    }
+
+    // The target was split at the first dot even inside delimiters, so `order.detail` resolved as table `detail` in a
+    // schema `order and was reported missing.
+    [Test]
+    public void AForeignKeyToADelimitedNameContainingADot_Resolves()
+    {
+        var table = new MySqlTable
+        {
+            Name = "`order.detail`",
+            Columns = { new MySqlColumn { Name = "id", DataType = "int" }, new MySqlColumn { Name = "parent_id", DataType = "int", Nullable = true } },
+            Indexes = { new MySqlIndex { Name = "PRIMARY", PrimaryKey = true, Unique = true, IndexColumns = "`id`" } },
+            ForeignKeys = { new MySqlForeignKey { Name = "fk_parent", Columns = "parent_id", RelatedTable = "`order.detail`", RelatedColumns = "id" } }
+        };
+
+        Assert.That(RunOnMy(table).Where(f => f.Code.StartsWith("SS-FK")).Select(f => f.Message), Is.Empty);
+    }
+
+    // SchemaTongs writes a MySQL prefix index as `Email`(20); the length is not part of the column's name, and an
+    // extracted package failed its own validation on every prefix index.
+    [TestCase("`Email`(20)")]
+    [TestCase("Email(20)")]
+    [TestCase("`Email` (20) DESC")]
+    public void MySqlPrefixKeyPart_NamesItsColumn(string keyPart)
+    {
+        var table = new MySqlTable
+        {
+            Name = "customer",
+            Columns = { new MySqlColumn { Name = "Email", DataType = "varchar(100)" } },
+            Indexes = { new MySqlIndex { Name = "ix_email", IndexColumns = keyPart } }
+        };
+
+        Assert.That(RunOnMy(table).Where(f => f.Code == "SS-IDX-001").Select(f => f.Message), Is.Empty);
+    }
+
+    [Test]
+    public void MySqlPrefixKeyPart_OnAMissingColumn_IsStillFlagged()
+    {
+        var table = new MySqlTable
+        {
+            Name = "customer",
+            Columns = { new MySqlColumn { Name = "Email", DataType = "varchar(100)" } },
+            Indexes = { new MySqlIndex { Name = "ix_mail", IndexColumns = "`Mail`(20)" } }
+        };
+
+        Assert.That(RunOnMy(table).Count(f => f.Code == "SS-IDX-001"), Is.EqualTo(1));
+    }
+
+    // Only MySQL and MariaDB have prefix key parts; on SQL Server `Email(20)` deploys as an error, so it is not a column.
+    [Test]
+    public void APrefixKeyPartOnSqlServer_IsFlagged()
+    {
+        var table = new SqlServerTable
+        {
+            Name = "Customer",
+            Schema = "dbo",
+            Columns = { new SqlServerColumn { Name = "Email", DataType = "varchar(100)" } },
+            Indexes = { new SqlServerIndex { Name = "IX_Email", IndexColumns = "Email(20)" } }
+        };
+
+        Assert.That(RunOn(table).Count(f => f.Code == "SS-IDX-001"), Is.EqualTo(1));
     }
 
     [Test]

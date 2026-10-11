@@ -309,8 +309,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static IEnumerable<Finding> CheckRebuildPolicy(RebuildPolicy policy, string owner, string location)
     {
         if (policy == null) yield break;
-        // Spaces only, as the deploy trims on every engine.
-        var isThreshold = string.Equals(policy.Mode?.Trim(' '), "THRESHOLD", StringComparison.OrdinalIgnoreCase);
+        // Any whitespace, as the model trims it before the deploy sees it.
+        var isThreshold = string.Equals(policy.Mode?.Trim(), "THRESHOLD", StringComparison.OrdinalIgnoreCase);
 
         if (isThreshold && policy.Threshold is not >= 1)
             yield return new Finding(Severity.Error, RebuildThresholdCode, Category, location,
@@ -373,7 +373,9 @@ public sealed class CoherenceCheck : ISchemaCheck
         var location = $"{tableLocation} / Index '{index.Name}'";
         var localColumnNames = ColumnNames(table);
 
+        var hasPrefixKeyParts = table is MySqlTable;
         foreach (var column in SplitNames(index.IndexColumns).Select(StripOrderingSuffix)
+                     .Select(column => hasPrefixKeyParts ? StripPrefixLength(column) : column)
                      .Where(column => !IsExpressionKeyPart(column))
                      .Where(column => !localColumnNames.Contains(NormalizeIdentifier(column))))
             yield return new Finding(Severity.Error, IndexColumnCode, Category, location,
@@ -395,11 +397,15 @@ public sealed class CoherenceCheck : ISchemaCheck
         var relatedTableSchema = (fk as IDeliverableForeignKey)?.RelatedTableSchema;
         var hasExplicitSchemaProperty = !string.IsNullOrEmpty(relatedTableSchema);
 
-        var rawRelatedTable = fk.RelatedTable ?? "";
-        var dotIndex = rawRelatedTable.IndexOf('.');
-        var hasDotPrefix = dotIndex > 0;
-        var prefixSchema = hasDotPrefix ? rawRelatedTable[..dotIndex] : null;
-        var name = IdentityKey(hasDotPrefix ? rawRelatedTable[(dotIndex + 1)..] : rawRelatedTable);
+        // A dot inside a delimited name (`order.detail`) is part of the name, not a schema separator.
+        var platform = owningTable switch
+        {
+            MySqlTable => Platform.MySQL,
+            PostgreSqlTable => Platform.PostgreSQL,
+            _ => Platform.SqlServer
+        };
+        var (prefixSchema, unqualified) = Identifier.SplitQualifiedName(fk.RelatedTable ?? "", platform);
+        var name = IdentityKey(unqualified);
 
         var schema = hasExplicitSchemaProperty ? relatedTableSchema
             : prefixSchema ?? NormalizedSchema(owningTable);
@@ -1039,6 +1045,16 @@ public sealed class CoherenceCheck : ISchemaCheck
         if (column.EndsWith(" ASC", StringComparison.OrdinalIgnoreCase))
             return column[..^4].TrimEnd();
         return column;
+    }
+
+    // A MySQL/MariaDB prefix key part -- `Email`(20) -- names the column before its length, as extraction writes it.
+    private static string StripPrefixLength(string column)
+    {
+        if (!column.EndsWith(')')) return column;
+        var open = column.LastIndexOf('(');
+        var length = open > 0 ? column[(open + 1)..^1].Trim() : "";
+        if (length.Length == 0 || !length.All(char.IsAsciiDigit)) return column;
+        return column[..open].TrimEnd();
     }
 
     // A functional/expression key part starts with '(' rather than a backtick — extraction always

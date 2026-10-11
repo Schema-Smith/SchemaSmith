@@ -75,7 +75,7 @@ public static class SettingsContract
             SettingsKeys.BottleneckThresholdMs, SettingsKeys.TrackRunOnceMigrations,
             SettingsKeys.PruneObsoleteMigrationTracking,
             SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.ScriptTokens,
-            SettingsKeys.ExitNonZeroOnWarning
+            SettingsKeys.LogHygiene, SettingsKeys.ExitNonZeroOnWarning
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.SchemaTongs)).Concat(
@@ -85,19 +85,21 @@ public static class SettingsContract
             SettingsKeys.ProductKeys.ObjectOrder, SettingsKeys.ProductKeys.PreserveExistingOrder,
             SettingsKeys.TemplateKeys.Name, SettingsKeys.TemplateKeys.SchemaIdentificationScript,
             SettingsKeys.OrphanHandling.Mode, SettingsKeys.FolderMapping, SettingsKeys.LogHygiene,
-            SettingsKeys.ScriptTokens, SettingsKeys.ExitNonZeroOnWarning
+            SettingsKeys.ExitNonZeroOnWarning
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.DataTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.DataTongs)).Concat(
         [
             SettingsKeys.ContentPath, SettingsKeys.ScriptPath, SettingsKeys.TemplatePath,
-            SettingsKeys.TablesToExtract, SettingsKeys.ScriptTokens, SettingsKeys.ExitNonZeroOnWarning
+            SettingsKeys.TablesToExtract, SettingsKeys.CompatEncoding, SettingsKeys.LogHygiene,
+            SettingsKeys.ExitNonZeroOnWarning
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaShears] = new(
         [
             SettingsKeys.SourcePath, SettingsKeys.ManifestPath, SettingsKeys.AlwaysIncludePath,
-            SettingsKeys.OutputPath, SettingsKeys.Zip, SettingsKeys.AllowDrops, SettingsKeys.ExitNonZeroOnWarning
+            SettingsKeys.OutputPath, SettingsKeys.Zip, SettingsKeys.AllowDrops, SettingsKeys.LogHygiene,
+            SettingsKeys.ExitNonZeroOnWarning
         ], StringComparer.OrdinalIgnoreCase)
     };
 
@@ -117,7 +119,10 @@ public static class SettingsContract
         SettingsKeys.Source.Port, SettingsKeys.Source.Platform, SettingsKeys.Source.Database,
         SettingsKeys.Source.Schema, SettingsKeys.Source.IntegratedSecurity,
         SettingsKeys.Source.ConnectionProperties, SettingsKeys.SourceCompatEncoding,
-        SettingsKeys.Target.Platform
+        SettingsKeys.Target.Platform,
+        // Each Source:* connection key falls back to its Target:* twin when absent.
+        SettingsKeys.Target.Server, SettingsKeys.Target.User, SettingsKeys.Target.Password, SettingsKeys.Target.Port,
+        SettingsKeys.Target.IntegratedSecurity, SettingsKeys.Target.ConnectionProperties
     ];
 
     // Only the keys the given tool actually reads. Handing both tools the whole set made the contract

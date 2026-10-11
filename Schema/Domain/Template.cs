@@ -552,10 +552,13 @@ namespace Schema.Domain
             foreach (var tokenError in tokenErrors)
                 template.FileTokenErrors.Add(new FileTokenError(template.FilePath, tokenError));
 
-            // Merge template and product script tokens — template takes precedence
+            TokenHelper.RefuseCaseCollidingTokens(template.ScriptTokens.Keys, $"Template '{template.Name}' ({template.FilePath})");
+
+            // Merge template and product script tokens — template takes precedence, matched as tokens are: ignoring case
+            var templateTokenNames = new HashSet<string>(template.ScriptTokens.Keys, StringComparer.OrdinalIgnoreCase);
             var scriptTokens = template.ScriptTokens
                 .Concat(product.ScriptTokens.Concat(product.QueryTokens)
-                    .Where(st => !template.ScriptTokens.ContainsKey(st.Key)))
+                    .Where(st => !templateTokenNames.Contains(st.Key)))
                 .ToDictionary(k => k.Key, v => v.Value);
 
             template.InstanceLoad(scriptTokens, product.Platform, tolerateComponentLoadErrors);
@@ -1122,6 +1125,14 @@ namespace Schema.Domain
             // distinct warn path for this field on regular templates — the schema-only-field
             // warn surface (see WarnIfSchemaOnlyFieldsSetOnRegularTemplate) deliberately omits
             // CreateSchemaIfMissing for that reason.
+            // Ahead of the generic rule: on MySQL and MariaDB the legacy alias has already been migrated away, so that
+            // rule would tell a template which plainly carries a SchemaIdentificationScript that it has none.
+            if (CreateSchemaIfMissing && Product?.Platform.GetBasePlatform() == Platform.MySQL)
+                throw new InvalidOperationException(
+                    $"Template '{Name}' (file: {FilePath}) sets CreateSchemaIfMissing=true, which does not apply on " +
+                    $"{Product.Platform}: a schema is a database there, and templates do not fan out per schema. " +
+                    $"Remove CreateSchemaIfMissing; use DatabaseIdentificationScript to target tenant databases.");
+
             if (CreateSchemaIfMissing && !IsSchemaTemplate)
                 throw new InvalidOperationException(
                     $"Template '{Name}' (file: {FilePath}) sets CreateSchemaIfMissing=true but " +
@@ -1284,23 +1295,21 @@ namespace Schema.Domain
                     if (body != null && body.Contains(SchemaDefaultResolver.SchemaNameToken))
                         scope = TokenScope.Iteration;
 
-                    if (scope != TokenScope.Iteration && body != null)
+                    // Every reference is walked even once the scope is known to be Iteration: stopping there would
+                    // leave a cycle through this body undetected.
+                    if (body != null)
                     {
                         foreach (var referenced in TokenHelper.GetTokensFromString(body))
                         {
                             if (referenced.Equals("SchemaName", StringComparison.OrdinalIgnoreCase))
                             {
                                 scope = TokenScope.Iteration;
-                                break;
+                                continue;
                             }
                             // Only walk references that resolve to tokens we own — unknown names
                             // (product-level, built-in) cannot be iteration-scoped from our perspective.
-                            if (!allBodies.ContainsKey(referenced)) continue;
-                            if (Walk(referenced) == TokenScope.Iteration)
-                            {
+                            if (allBodies.ContainsKey(referenced) && Walk(referenced) == TokenScope.Iteration)
                                 scope = TokenScope.Iteration;
-                                break;
-                            }
                         }
                     }
 
