@@ -574,6 +574,8 @@ public static class ForgeKindler
                 // supported engine rewrites it, so a literal compare would be engine-specific.
                 new("SchemaSmith_NormalizePartitionExpression.sql"),
                 new("SchemaSmith_UpperDataType.sql"),
+                // Read by ParseTableJson: ENUM/SET members lose trailing spaces at CREATE.
+                new("SchemaSmith_TrimEnumMembers.sql"),
                 new("SchemaSmith_StripIntDisplayWidth.sql"),
                 new("SchemaSmith_NormalizeColumnDefault.sql"),
                 // The DESIRED-side twin of the line above, so both sides of the default comparison fold

@@ -427,6 +427,30 @@ BEGIN
         END
     WHERE DataType IS NOT NULL;
 
+    -- ENUM/SET members lose trailing spaces when the column is created.
+    UPDATE _SchemaSmith_Columns
+    SET DataType = SchemaSmith_TrimEnumMembers(DataType)
+    WHERE UPPER(TRIM(DataType)) LIKE 'ENUM%' OR UPPER(TRIM(DataType)) LIKE 'SET%';
+
+    -- The BINARY attribute on a character type (VARCHAR(10) BINARY) is the character set's _bin collation, and is
+    -- stored and reported as that: the attribute is not in the reported type. It is written that way here, in the
+    -- character set the column ends up in -- its own, else its table's (declared, else as deployed), else the
+    -- database's. An explicit Collation wins, as the engine lets it.
+    UPDATE _SchemaSmith_Columns c
+      JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+    SET c.Collation = CONCAT(COALESCE(NULLIF(TRIM(c.CharacterSet), ''),
+                                      NULLIF(TRIM(t.CharacterSet), ''),
+                                      (SELECT co.CHARACTER_SET_NAME FROM information_schema.COLLATIONS co WHERE co.COLLATION_NAME = TRIM(t.Collation) LIMIT 1),
+                                      (SELECT co.CHARACTER_SET_NAME FROM information_schema.TABLES it
+                                         JOIN information_schema.COLLATIONS co ON co.COLLATION_NAME = it.TABLE_COLLATION
+                                        WHERE it.TABLE_SCHEMA = p_DatabaseName AND it.TABLE_NAME = SchemaSmith_StripBacktickWrapping(c.TableName) LIMIT 1),
+                                      (SELECT DEFAULT_CHARACTER_SET_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = p_DatabaseName LIMIT 1)),
+                             '_bin'),
+        c.DataType = TRIM(LEFT(TRIM(c.DataType), CHAR_LENGTH(TRIM(c.DataType)) - CHAR_LENGTH('BINARY')))
+    WHERE UPPER(TRIM(c.DataType)) LIKE '% BINARY'
+      AND (c.Collation IS NULL OR TRIM(c.Collation) = '')
+      AND UPPER(TRIM(c.DataType)) REGEXP '^(VARCHAR|CHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|ENUM|SET)';
+
     -- utf8 is utf8mb3. MySQL 8.0.30 and MariaDB 10.6.1 report it, and its collations, under the mb3 name
     -- (utf8mb3_general_ci); earlier servers under utf8 (utf8_general_ci), and each lists only its own form in
     -- COLLATIONS (checked on 8.0.28, 8.0.45, 10.5.29 and 11.4.12). Declared names are written the way this server

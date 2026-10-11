@@ -488,7 +488,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_InnodbName (InnoDB's filename-encoded name, for the placement reads).
         // +1 = SchemaSmith_IndexTypesMatch (the one declared-vs-live index-kind rule both index detectors use).
         // +1 = SchemaSmith_StripFullLengthPrefixes (a key-part prefix as long as its column is the whole column).
-        Assert.That(mysql.Length, Is.EqualTo(74));
+        // +1 = SchemaSmith_TrimEnumMembers (ENUM/SET members lose trailing spaces when the column is created).
+        Assert.That(mysql.Length, Is.EqualTo(75));
     }
 
     [Test]

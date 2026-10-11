@@ -35,6 +35,12 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
     [TestCase("BOOLEAN", TestName = "Synonym_BOOLEAN_DoesNotChurn")]              // -> tinyint(1)
     [TestCase("CHARACTER VARYING(50)", TestName = "Synonym_CHARACTER_VARYING_DoesNotChurn")] // -> varchar(50)
     [TestCase("CHARACTER(10)", TestName = "Synonym_CHARACTER_DoesNotChurn")]      // -> char(10)
+    [TestCase("ENUM('a ','b')", TestName = "Enum_TrailingSpaceMember_DoesNotChurn")] // -> enum('a','b')
+    [TestCase("SET('x ','it''s ')", TestName = "Set_TrailingSpaceMember_DoesNotChurn")] // -> set('x','it''s')
+    [TestCase("VARCHAR(10) BINARY", TestName = "Attribute_VARCHAR_BINARY_DoesNotChurn")] // -> varchar(10) <charset>_bin
+    [TestCase("CHAR(5) BINARY", TestName = "Attribute_CHAR_BINARY_DoesNotChurn")]
+    [TestCase("TEXT BINARY", TestName = "Attribute_TEXT_BINARY_DoesNotChurn")]
+    [TestCase("ENUM('a','b') BINARY", TestName = "Attribute_ENUM_BINARY_DoesNotChurn")]
     [TestCase("REAL", TestName = "Synonym_REAL_DoesNotChurn")]                 // -> double (float under REAL_AS_FLOAT)
     [TestCase("DOUBLE PRECISION", TestName = "Synonym_DOUBLE_PRECISION_DoesNotChurn")] // -> double
     [TestCase("FLOAT4", TestName = "Synonym_FLOAT4_DoesNotChurn")]             // -> float
@@ -293,6 +299,31 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
         {
             DropTable(cmd, child);
             DropTable(cmd, parent);
+        }
+    }
+
+    // The BINARY attribute is a collation, so declaring it over a column that is not binary-collated is a real change.
+    [Test]
+    public void TheBinaryAttributeOverACaseInsensitiveColumn_IsStillChanged()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var table = $"BinTable_{uid}";
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            cmd.CommandText = $"CREATE TABLE `{_mainDb}`.`{table}` (`Id` int NOT NULL PRIMARY KEY, `Val` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL) DEFAULT CHARSET=utf8mb4";
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, TableWithColumnType(table, "VARCHAR(10) BINARY"), productName: $"BinProduct_{uid}");
+
+            cmd.CommandText = $"SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND COLUMN_NAME = 'Val'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("utf8mb4_bin"));
+        }
+        finally
+        {
+            DropTable(cmd, table);
         }
     }
 
