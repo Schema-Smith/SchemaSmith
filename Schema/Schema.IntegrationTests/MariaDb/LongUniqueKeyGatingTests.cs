@@ -124,6 +124,11 @@ public class LongUniqueKeyGatingTests
     [Test]
     public void At104_ALongUniqueKey_IsCreated()
     {
+        // The override steers SchemaSmith's gate, not the engine: only a real 10.4 or later can build the key.
+        var version = Scalar("SELECT CAST(SUBSTRING_INDEX(VERSION(), '.', 1) AS UNSIGNED) * 10000 "
+                             + "+ CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(VERSION(), '.', 2), '.', -1) AS UNSIGNED) * 100");
+        if (version < 100400)
+            Assert.Ignore("A long unique key needs a real MariaDB 10.4 or later.");
         Exec("SET @schemasmith_version_override = 1004");
 
         Deploy();

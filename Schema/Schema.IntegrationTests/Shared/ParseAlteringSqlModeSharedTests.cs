@@ -201,12 +201,16 @@ public abstract class ParseAlteringSqlModeSharedTests
                 Platform = "MySQL",
                 Command = command,
                 DatabaseName = _testDb,
+                // As a real deploy does: the version picks the shred. Left at 0 it reads as "has JSON_TABLE", which
+                // MySQL 5.7 and MariaDB 10.2-10.5 do not.
+                MySqlServerVersionNum = TargetVersionDetector.Detect(command, Platform, _testDb).ServerComparable,
                 TemplateRootPath = tempDir,
                 ScriptHelper = new MergeScriptHelperAdapter(Platform),
                 ReadFileContent = File.ReadAllText,
                 ExecuteScript = (_, sql) => { command.CommandText = sql; command.ExecuteNonQuery(); },
                 ProgressLog = _ => { },
-                ProgressLogError = _ => { }
+                // Shown with a failing test, so "delivery failed" comes with the engine's reason.
+                ProgressLogError = m => TestContext.Out.WriteLine("delivery error: " + m)
             });
         }
         finally
