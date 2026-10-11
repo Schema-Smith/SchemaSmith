@@ -308,7 +308,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
 
             // TEXT must be read as TEXT in JSON_TABLE, not an oversized CHAR that MariaDB rejects.
             // (MariaDB 10.2-10.5 uses the recursive-CTE shred instead of JSON_TABLE.)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`Notes` LONGTEXT PATH '$.Notes'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain("`Notes` LONGTEXT CHARACTER SET utf8mb4 PATH '$.Notes'"));
 
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
                          .Where(b => !string.IsNullOrWhiteSpace(b)))
@@ -384,8 +384,8 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         if (UsesJsonTable)
         {
             Assert.That(script, Does.Contain("JSON_TABLE("));
-            Assert.That(script, Does.Contain("`first_name` VARCHAR(45) PATH '$.first_name'"));
-            Assert.That(script, Does.Contain("`last_name` VARCHAR(45) PATH '$.last_name'"));
+            Assert.That(script, Does.Contain("`first_name` VARCHAR(45) CHARACTER SET utf8mb4 PATH '$.first_name'"));
+            Assert.That(script, Does.Contain("`last_name` VARCHAR(45) CHARACTER SET utf8mb4 PATH '$.last_name'"));
         }
         else
         {
@@ -410,7 +410,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
 
         // Assert
         Assert.That(script, Does.Contain($"INSERT IGNORE INTO `{_testDb}`.`country`"));
-        if (UsesJsonTable) Assert.That(script, Does.Contain("`country` VARCHAR(50) PATH '$.country'"));
+        if (UsesJsonTable) Assert.That(script, Does.Contain("`country` VARCHAR(50) CHARACTER SET utf8mb4 PATH '$.country'"));
         // AUTO_INCREMENT columns are included to preserve original IDs
         Assert.That(script, Does.Contain("`country_id`"));
     }
@@ -506,7 +506,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
                 tableData, "`id`", true, false, false, false, null!);
 
             // JSON_TABLE should read geometry as TEXT (WKT string)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`location` LONGTEXT PATH '$.location'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain("`location` LONGTEXT CHARACTER SET utf8mb4 PATH '$.location'"));
 
             // JSON_TABLE must also read the "<col>.STSrid" companion the extractors emit beside the WKT
             if (UsesJsonTable)
@@ -595,7 +595,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
                 tableData, "`id`", true, false, false, false, null!);
 
             // JSON_TABLE should read blob as TEXT (Base64 string)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`picture` LONGTEXT PATH '$.picture'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain("`picture` LONGTEXT CHARACTER SET utf8mb4 PATH '$.picture'"));
 
             // SELECT should convert Base64 back to binary
             Assert.That(script, Does.Contain("FROM_BASE64(`picture`)"));

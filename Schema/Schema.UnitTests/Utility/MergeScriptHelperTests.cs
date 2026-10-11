@@ -1380,7 +1380,7 @@ public class MergeScriptHelperTests
         Assert.That(result, Does.Contain("`int_col` INT PATH '$.int_col'"));
         Assert.That(result, Does.Contain("`dec_col` DECIMAL(10,2) PATH '$.dec_col'"));
         Assert.That(result, Does.Contain("`dt_col` DATETIME(6) PATH '$.dt_col'"));
-        Assert.That(result, Does.Contain("`vc_col` VARCHAR(100) PATH '$.vc_col'"));
+        Assert.That(result, Does.Contain("`vc_col` VARCHAR(100) CHARACTER SET utf8mb4 PATH '$.vc_col'"));
         Assert.That(result, Does.Contain("`json_col` JSON PATH '$.json_col'"));
     }
 
@@ -1398,7 +1398,7 @@ public class MergeScriptHelperTests
             tokenizeScripts: false, mergeFilter: null);
 
         Assert.That(result, Does.Contain("FROM_BASE64(`data`)"));
-        Assert.That(result, Does.Contain("`data` LONGTEXT PATH '$.data'"));
+        Assert.That(result, Does.Contain("`data` LONGTEXT CHARACTER SET utf8mb4 PATH '$.data'"));
     }
 
     [Test]
@@ -2692,8 +2692,8 @@ public class MergeScriptHelperTests
         var result = MergeScriptHelper.GetJsonColumnDefinitions(Platform.MySQL, cmd, "testdb", "test_table");
 
         Assert.That(result, Does.Contain("`id` INT PATH '$.id'"));
-        Assert.That(result, Does.Contain("`name` VARCHAR(100) PATH '$.name'"));
-        Assert.That(result, Does.Contain("`location` LONGTEXT PATH '$.location'"));
+        Assert.That(result, Does.Contain("`name` VARCHAR(100) CHARACTER SET utf8mb4 PATH '$.name'"));
+        Assert.That(result, Does.Contain("`location` LONGTEXT CHARACTER SET utf8mb4 PATH '$.location'"));
     }
 
     [Test]

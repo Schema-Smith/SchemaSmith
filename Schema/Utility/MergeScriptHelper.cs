@@ -2317,7 +2317,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
             var jsonPath = col.Name.Contains(' ') || col.Name.Contains('.') || col.Name.Contains('-')
                 ? $"$.\"{col.Name}\""
                 : $"$.{col.Name}";
-            definitions.Add($"`{col.Name}` {mysqlType} PATH '{jsonPath}'");
+            definitions.Add($"`{col.Name}` {WithJsonTableCharset(mysqlType)} PATH '{jsonPath}'");
             // Geometry carries a "<col>.STSrid" companion beside its WKT; declare it so the SELECT can
             // rebuild the value in its own reference system. Absent in pre-companion packages -> NULL.
             if (IsGeometryTypeMySql(col.DataType))
@@ -2325,6 +2325,14 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         }
         return string.Join(",\n    ", definitions);
     }
+
+    // A JSON_TABLE text column with no charset is utf8mb4 on MySQL and on MariaDB up to 11.4.12, but takes the
+    // database's default from 11.4.13 (and on 11.8, 12.3, 13): in a latin1 database a 4-byte character arrived as '?'.
+    private static string WithJsonTableCharset(string jsonTableType) =>
+        jsonTableType.StartsWith("CHAR", StringComparison.Ordinal) || jsonTableType.StartsWith("VARCHAR", StringComparison.Ordinal)
+            || jsonTableType == "LONGTEXT"
+            ? jsonTableType + " CHARACTER SET utf8mb4"
+            : jsonTableType;
 
     private static string GetMySqlTypeForJsonTable(MySqlColumnInfo col)
     {
