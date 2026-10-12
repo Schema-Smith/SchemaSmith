@@ -163,3 +163,82 @@ jobs:
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: Update to ${{ needs.version.outputs.version }}
           allow_empty_commits: false
+
+  action-repo:
+    # Mirror the composite action into Schema-Smith/schemasmith-deploy, the repository the GitHub Marketplace
+    # listing is published from. The action's code stays here (action.yml, action/); the mirror gets the same
+    # files, a tag matching this release, and a DRAFT release. Marketplace publishing cannot be done by API:
+    # the "Publish this Action to the GitHub Marketplace" checkbox is only on the release form, so the job
+    # opens an issue in the mirror, assigned to the release owner, with the draft release to finish.
+    # Skipped when ACTION_REPO_TOKEN (fine-grained PAT: contents + issues write on schemasmith-deploy) is absent.
+    runs-on: ubuntu-latest
+    needs: version
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Gate on ACTION_REPO_TOKEN
+        id: gate
+        env:
+          HAS: ${{ secrets.ACTION_REPO_TOKEN != '' }}
+        run: echo "has=$HAS" >> "$GITHUB_OUTPUT"
+
+      - name: Mirror the action, tag, draft the release, open the reminder
+        if: steps.gate.outputs.has == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.ACTION_REPO_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          SOURCE_RELEASE_URL: ${{ github.event.release.html_url }}
+          MIRROR: Schema-Smith/schemasmith-deploy
+          ASSIGNEE: drzacharysmith68
+        run: |
+          set -euo pipefail
+          src="$PWD"
+          git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${MIRROR}.git" "$RUNNER_TEMP/mirror"
+          cd "$RUNNER_TEMP/mirror"
+          git config user.name "SchemaSmith Contributors"
+          git config user.email "support@schemasmith.com"
+
+          rm -rf action
+          cp "$src/action.yml" action.yml
+          cp -r "$src/action" action
+          cp "$src/LICENSE" LICENSE
+          # The README's examples pin the action tag; move them to this release.
+          sed -i -E "s#(Schema-Smith/schemasmith-deploy@)v[0-9]+\.[0-9]+\.[0-9]+#\1${TAG}#g" README.md
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Mirror already matches ${TAG}; tagging the current commit."
+          else
+            git commit --quiet -m "Publish SchemaSmith Deploy ${TAG}"
+            git push --quiet origin HEAD:main
+          fi
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q .; then
+            echo "Tag ${TAG} already exists in the mirror; leaving it."
+          else
+            git tag "${TAG}"
+            git push --quiet origin "${TAG}"
+          fi
+
+          if gh release view "${TAG}" -R "${MIRROR}" >/dev/null 2>&1; then
+            draft_url="$(gh release view "${TAG}" -R "${MIRROR}" --json url --jq .url)"
+          else
+            draft_url="$(gh release create "${TAG}" -R "${MIRROR}" --draft \
+              --title "SchemaSmith Deploy ${TAG}" \
+              --notes "Runs SchemaQuench from SchemaSmith ${TAG}. Release notes: ${SOURCE_RELEASE_URL}")"
+          fi
+
+          body="$(printf '%s\n' \
+            "The mirror is updated and tagged \`${TAG}\`; the Marketplace step is the one thing that needs a person." \
+            "" \
+            "1. Open the draft release: ${draft_url}" \
+            "2. Tick **Publish this Action to the GitHub Marketplace** and publish the release." \
+            "3. Check https://github.com/marketplace/actions/schemasmith-deploy shows ${TAG}, then close this issue.")"
+          gh issue create -R "${MIRROR}" --title "Publish SchemaSmith Deploy ${TAG} to the GitHub Marketplace" \
+            --assignee "${ASSIGNEE}" --body "${body}" >/dev/null
+
+          {
+            echo "### SchemaSmith Deploy ${TAG}"
+            echo "Mirror updated and tagged. **Finish the Marketplace publish by hand:** ${draft_url}"
+          } >> "$GITHUB_STEP_SUMMARY"
