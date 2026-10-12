@@ -20,8 +20,7 @@ namespace Schema.IntegrationTests.MySQL;
 /// @schemasmith_version_override = 507 (which forces SchemaSmith_SupportsCheckConstraints() -> 0 on a
 /// non-MariaDB server), mirroring the PostgreSQL version-override gating tests. The genuine MySQL 5.7 /
 /// MariaDB 10.2 end-to-end behavior is validated out-of-band against the throwaway floor containers.
-/// MariaDB is intentionally not exercised here: it reports CHECK support regardless of the version
-/// override (VERSION() LIKE '%MariaDB%'), so the degrade path is MySQL-only by construction.
+/// MariaDB's threshold (10.2.22) is covered by MariaDb/CheckConstraintGatingTests.
 /// </summary>
 [Category("MySQL")]
 [Category("Integration")]
