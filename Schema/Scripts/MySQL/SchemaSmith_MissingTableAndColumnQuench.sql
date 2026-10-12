@@ -865,6 +865,11 @@ BEGIN
                     END IF;
                     SET v_NoPunchHole = 1;
                 END;
+                -- Tests stand in for a filesystem without hole punching (every CI server has it) by raising the
+                -- engine's own error, so the path below is the one a real 4029 takes.
+                IF @schemasmith_no_punch_hole_override = 1 AND v_CompressionClause <> '' THEN
+                    SIGNAL SQLSTATE 'HY000' SET MYSQL_ERRNO = 4029, MESSAGE_TEXT = 'Punch hole not supported (simulated)';
+                END IF;
                 EXECUTE stmt;
             END;
             IF v_NoPunchHole = 1 THEN

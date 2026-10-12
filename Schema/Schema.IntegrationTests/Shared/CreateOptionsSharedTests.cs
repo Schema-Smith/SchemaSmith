@@ -68,7 +68,11 @@ public abstract class CreateOptionsSharedTests
     }
 
     [SetUp]
-    public void DropTestTable() => Exec($"DROP TABLE IF EXISTS `{TestDb}`.`{TableName}`");
+    public void DropTestTable()
+    {
+        Exec("SET @schemasmith_no_punch_hole_override = NULL");
+        Exec($"DROP TABLE IF EXISTS `{TestDb}`.`{TableName}`");
+    }
 
     private string CreateOptions() => ScalarStr(
         $"SELECT COALESCE(CREATE_OPTIONS, '') FROM INFORMATION_SCHEMA.TABLES "
@@ -130,12 +134,14 @@ public abstract class CreateOptionsSharedTests
         return _canPunchHoles.Value;
     }
 
+    // A server that can punch holes (every CI container) is made to refuse COMPRESSION the way one that cannot does,
+    // with the engine's own error 4029, so the degrade runs everywhere.
     private void RequireServerWithoutHolePunching()
     {
         if (IsMariaDb)
             Assert.Ignore("MariaDB has no COMPRESSION table option at any version; it spells this PAGE_COMPRESSED.");
         if (ServerCanPunchHoles())
-            Assert.Ignore("This server can punch holes, so COMPRESSION applies; run against a Windows data directory to exercise the degrade.");
+            Exec("SET @schemasmith_no_punch_hole_override = 1");
     }
 
     private long TableCount() => Convert.ToInt64(ScalarStr(
