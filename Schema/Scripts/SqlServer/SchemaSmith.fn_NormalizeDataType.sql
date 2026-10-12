@@ -80,7 +80,7 @@ BEGIN
   DECLARE @after NVARCHAR(MAX) = CASE WHEN @args IS NULL THEN @rest ELSE SUBSTRING(@rest, CHARINDEX(')', @rest) + 1, LEN(@rest)) END
   SET @after = CASE WHEN @after = '' THEN '' ELSE ' ' + LTRIM(@after) END
 
-  RETURN CASE
+  DECLARE @r NVARCHAR(MAX) = CASE
     WHEN UPPER(@name) IN ('CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR', 'BINARY', 'VARBINARY') AND @args IS NULL
          THEN @name + '(1)' + @after
     WHEN UPPER(@name) IN ('DECIMAL', 'NUMERIC') AND @args IS NULL
@@ -93,5 +93,13 @@ BEGIN
                    ELSE @t END
     ELSE @t
   END
+
+  -- System type names are keywords and match in any case, but an alias type or an XML schema collection is an object,
+  -- which a case-sensitive database finds only as it was created. So only system types are upper-cased.
+  RETURN CASE WHEN UPPER(@name) = 'XML' THEN 'XML' + SUBSTRING(@r, 4, LEN(@r))
+              WHEN EXISTS (SELECT 1 FROM sys.types
+                            WHERE is_user_defined = 1 AND user_type_id = TYPE_ID(LEFT(@r, PATINDEX('%[( ]%', @r + ' ') - 1)))
+                   THEN @r
+              ELSE UPPER(@r) END
 END
 GO

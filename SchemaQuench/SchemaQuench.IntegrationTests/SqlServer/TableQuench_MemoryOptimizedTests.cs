@@ -620,7 +620,7 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
 
     private static string GenerateTableJsonText(IDbCommand cmd, string table)
     {
-        cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJson @p_Schema = 'dbo', @p_Table = '{table}'";
+        cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
         using var reader = cmd.ExecuteReader();
         var json = new StringBuilder();
         while (reader.Read()) json.Append(reader.GetString(0)).Append("\r\n");
@@ -629,7 +629,7 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
 
     private static SqlServerTable GenerateTable(IDbCommand cmd, string table)
     {
-        cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJson @p_Schema = 'dbo', @p_Table = '{table}'";
+        cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
         using var reader = cmd.ExecuteReader();
         var json = string.Empty;
         while (reader.Read()) json += $"{reader.GetString(0)}\r\n";

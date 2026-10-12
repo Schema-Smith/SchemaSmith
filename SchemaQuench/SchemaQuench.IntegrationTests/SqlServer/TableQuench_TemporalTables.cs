@@ -155,7 +155,7 @@ CREATE TABLE [dbo].[MyUpdatedTeporalTable]
    [Somedata] VARCHAR(500) NOT NULL, 
    CONSTRAINT [PK_MyUpdatedTeporalTable] PRIMARY KEY NONCLUSTERED  ([Id])
   )
-INSERT [dbo].[MyUpdatedTeporalTable] ([Id], [SomeData]) VALUES(1, 'xx'), (2, 'yy')
+INSERT [dbo].[MyUpdatedTeporalTable] ([Id], [Somedata]) VALUES(1, 'xx'), (2, 'yy')
 --ShouldAlterTemporalTable
 CREATE TABLE [dbo].[MyAlteredTemporalTable] 
   ([Id] INT NOT NULL, 

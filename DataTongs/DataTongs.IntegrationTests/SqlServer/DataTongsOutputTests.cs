@@ -229,7 +229,7 @@ INSERT INTO [dbo].[{tableName}] VALUES (1, 'Original');
         conn.Open();
         using var cmd = conn.CreateCommand();
 
-        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}];";
+        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
         cmd.ExecuteNonQuery();
 
         conn.ChangeDatabase(_integrationDb);

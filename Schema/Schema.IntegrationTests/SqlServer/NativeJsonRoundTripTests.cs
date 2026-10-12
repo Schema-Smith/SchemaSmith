@@ -157,7 +157,7 @@ public class NativeJsonRoundTripTests
     {
         Deploy(Package("JsonExtract"));
 
-        var extracted = ReadAll("EXEC SchemaSmith.GenerateTableJson @p_Schema = 'dbo', @p_Table = 'JsonExtract'");
+        var extracted = ReadAll("EXEC SchemaSmith.GenerateTableJSON @p_Schema = 'dbo', @p_Table = 'JsonExtract'");
 
         Assert.That(extracted, Does.Contain("\"DataType\": \"json\"").IgnoreCase,
             "extraction re-derives the type string from the catalog rather than echoing what was "

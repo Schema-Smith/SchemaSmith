@@ -69,10 +69,10 @@ BEGIN TRY
                                                        ELSE SchemaSmith.fn_SafeBracketWrap([value])
                                                        END AS NVARCHAR(MAX)), ',') 
                              FROM STRING_SPLIT(i.[IndexColumns], ',') 
-                             WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+                             WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [IncludeColumns] = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY SchemaSmith.fn_SafeBracketWrap([value]))
                                FROM STRING_SPLIT(i.[IncludeColumns], ',') 
-                               WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+                               WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0),
          i.[ShouldApplyExpression], i.[VariantName]
     INTO #Indexes
@@ -138,7 +138,7 @@ BEGIN TRY
   DROP TABLE IF EXISTS #Statistics
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [StatisticName] = SchemaSmith.fn_SafeBracketWrap(s.[StatisticName]), [SampleSize] = ISNULL(s.[SampleSize], 0), s.[FilterExpression],
-         [Columns] = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',') FROM STRING_SPLIT(s.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+         [Columns] = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',') FROM STRING_SPLIT(s.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          s.[ShouldApplyExpression], s.[VariantName]
     INTO #Statistics
     FROM #TableDefinitions t WITH (NOLOCK)
@@ -182,7 +182,7 @@ BEGIN TRY
                                                         THEN SchemaSmith.fn_SafeBracketWrapFullTextColumn(LEFT(RTRIM([value]), CHARINDEX(' STATISTICAL_SEMANTICS', RTRIM([value])) - 1)) +
                                                              ' STATISTICAL_SEMANTICS'
                                                    ELSE SchemaSmith.fn_SafeBracketWrapFullTextColumn([value])
-                                                   END AS NVARCHAR(MAX)), ',') FROM STRING_SPLIT(f.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+                                                   END AS NVARCHAR(MAX)), ',') FROM STRING_SPLIT(f.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          f.[ShouldApplyExpression], f.[VariantName]
     INTO #FullTextIndexes
     FROM #TableDefinitions t WITH (NOLOCK)

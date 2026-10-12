@@ -708,15 +708,15 @@ SELECT EXISTS (
     private static string GetSelectColumnsSqlServer(IDbCommand cmd, string tableSchema, string tableName)
     {
         cmd.CommandText = $@"
-SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('GEOGRAPHY', 'GEOMETRY')
+SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '].STSrid AS [' + c.COLUMN_NAME + '.STSrid]'
-                       WHEN c.DATA_TYPE = 'HIERARCHYID'
+                       WHEN c.DATA_TYPE = 'hierarchyid'
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + ']'
                        ELSE '[' + c.COLUMN_NAME + ']' END, ',') WITHIN GROUP (ORDER BY c.COLUMN_NAME)
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
     {MergeScriptHelper.SqlServerGraphColumnFilter}AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
@@ -1000,9 +1000,9 @@ SELECT CAST((
         cmd.CommandText = $@"
 SELECT c.COLUMN_NAME, c.DATA_TYPE
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
     {MergeScriptHelper.SqlServerGraphColumnFilter}AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')

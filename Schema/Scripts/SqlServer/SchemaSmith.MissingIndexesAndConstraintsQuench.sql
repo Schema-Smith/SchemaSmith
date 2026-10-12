@@ -30,18 +30,18 @@ BEGIN TRY
                       AND c.COLUMN_NAME = SchemaSmith.fn_StripBracketWrapping(#Columns.[ColumnName]))
 
   RAISERROR('Add New Computed Columns', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding ' + CAST(ColumnCount AS NVARCHAR(100)) + ' new column(s) to ' + T.[Schema] + '.' + T.[Name] +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding ' + CAST(ColumnCount AS NVARCHAR(100)) + ' new column(s) to ' + t.[Schema] + '.' + t.[Name] +
                                   CASE WHEN RTRIM(ISNULL(VariantList, '')) <> '' THEN ' (variant: ' + VariantList + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' ADD ' + ScriptColumns + ';' AS NVARCHAR(MAX))
-                           FROM (SELECT T.[Schema], T.[Name],
-                                        ScriptColumns = STUFF((SELECT ', ' + CAST(c.[ColumnScript] AS NVARCHAR(MAX)) FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) <> '' ORDER BY c.[ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
-                                        ColumnCount = (SELECT COUNT(*) FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) <> ''),
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' ADD ' + ScriptColumns + ';' AS NVARCHAR(MAX))
+                           FROM (SELECT t.[Schema], t.[Name],
+                                        ScriptColumns = STUFF((SELECT ', ' + CAST(c.[ColumnScript] AS NVARCHAR(MAX)) FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) <> '' ORDER BY c.[ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
+                                        ColumnCount = (SELECT COUNT(*) FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) <> ''),
                                         VariantList = STUFF((SELECT ', ' + CAST(REPLACE(RTRIM(c.[VariantName]), '''', '''''') AS NVARCHAR(MAX))
-                                                               FROM #Columns C WITH (NOLOCK)
-                                                               WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) <> ''
+                                                               FROM #Columns c WITH (NOLOCK)
+                                                               WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) <> ''
                                                                  AND RTRIM(ISNULL(c.[VariantName], '')) <> '' FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-                                   FROM #Tables T WITH (NOLOCK)
-                                   WHERE EXISTS (SELECT * FROM #Columns c WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) <> '')) T
+                                   FROM #Tables t WITH (NOLOCK)
+                                   WHERE EXISTS (SELECT * FROM #Columns c WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) <> '')) t
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
@@ -220,13 +220,13 @@ BEGIN TRY
   -- exists again, with the history table recorded when it was suspended and the data checked against it. The tables this
   -- covers are excluded from the step after, which would otherwise add a second pair of period columns.
   RAISERROR('Resume System Versioning Suspended For A Primary Key Rebuild', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Resuming system versioning on ' + T.[Schema] + '.' + T.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' + CAST(ep.[value] AS NVARCHAR(600)) + ', DATA_CONSISTENCY_CHECK = ON));' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Resuming system versioning on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' + CAST(ep.[value] AS NVARCHAR(600)) + ', DATA_CONSISTENCY_CHECK = ON));' + CHAR(13) + CHAR(10) +
                                   'EXEC sys.sp_dropextendedproperty N''SchemaSmith_SuspendedHistory'', N''SCHEMA'', N''' + REPLACE(SCHEMA_NAME(o.[schema_id]), '''', '''''') + ''', N''TABLE'', N''' + REPLACE(o.[name], '''', '''''') + ''';' AS NVARCHAR(MAX))
-                           FROM #Tables T WITH (NOLOCK)
-                           JOIN sys.objects o ON o.[object_id] = OBJECT_ID(T.[Schema] + '.' + T.[Name])
+                           FROM #Tables t WITH (NOLOCK)
+                           JOIN sys.objects o ON o.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
                            JOIN sys.extended_properties ep ON ep.class = 1 AND ep.major_id = o.[object_id] AND ep.minor_id = 0 AND ep.[name] = N'SchemaSmith_SuspendedHistory'
-                           WHERE T.IsTemporal = 1
+                           WHERE t.IsTemporal = 1
                              AND OBJECTPROPERTY(o.[object_id], 'TableTemporalType') = 0
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
@@ -237,15 +237,15 @@ BEGIN TRY
   -- default, so an IsTemporal-only package (HistoryTableSchema/Name both NULL) emits byte-for-byte the same
   -- ALTER as before this change. HistoryRetentionPeriod arrives already normalized to a canonical
   -- plural-unit form from the parse step (fn_NormalizeTemporalRetentionPeriod), so it is used as-is.
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Turn ON Temporal Tracking for ' + T.[Schema] + '.' + T.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' ADD [ValidFrom] DATETIME2(7) GENERATED ALWAYS AS ROW START NOT NULL DEFAULT ''0001-01-01 00:00:00.0000000'', ' +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Turn ON Temporal Tracking for ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' ADD [ValidFrom] DATETIME2(7) GENERATED ALWAYS AS ROW START NOT NULL DEFAULT ''0001-01-01 00:00:00.0000000'', ' +
                                                                                       '[ValidTo] DATETIME2(7) GENERATED ALWAYS AS ROW END NOT NULL DEFAULT ''9999-12-31 23:59:59.9999999'', ' +
                                                                                       'PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo);' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' +
-                                       ISNULL(T.[HistoryTableSchema], T.[Schema]) + '.' + QUOTENAME(ISNULL(SchemaSmith.fn_StripBracketWrapping(T.[HistoryTableName]), SchemaSmith.fn_StripBracketWrapping(T.[Name]) + '_Hist')) +
-                                       CASE WHEN RTRIM(ISNULL(T.[HistoryRetentionPeriod], '')) <> '' THEN ', HISTORY_RETENTION_PERIOD = ' + T.[HistoryRetentionPeriod] ELSE '' END +
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' +
+                                       ISNULL(t.[HistoryTableSchema], t.[Schema]) + '.' + QUOTENAME(ISNULL(SchemaSmith.fn_StripBracketWrapping(t.[HistoryTableName]), SchemaSmith.fn_StripBracketWrapping(t.[Name]) + '_Hist')) +
+                                       CASE WHEN RTRIM(ISNULL(t.[HistoryRetentionPeriod], '')) <> '' THEN ', HISTORY_RETENTION_PERIOD = ' + t.[HistoryRetentionPeriod] ELSE '' END +
                                        '));' AS NVARCHAR(MAX))
-                           FROM #Tables T WITH (NOLOCK)
+                           FROM #Tables t WITH (NOLOCK)
                            WHERE t.IsTemporal = 1
                              AND OBJECTPROPERTY(OBJECT_ID([Schema] + '.' + [Name]), 'TableTemporalType') = 0
                              AND NOT EXISTS (SELECT * FROM sys.extended_properties ep
@@ -265,12 +265,12 @@ BEGIN TRY
   -- (0/NULL pre-2016, where DegradeUnsupportedFeatures has already forced IsTemporal off).
   RAISERROR('Reconcile history table for already-versioned temporal tables', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' +
-                                       ISNULL(T.[HistoryTableSchema], T.[Schema]) + '.' + QUOTENAME(ISNULL(SchemaSmith.fn_StripBracketWrapping(T.[HistoryTableName]), SchemaSmith.fn_StripBracketWrapping(T.[Name]) + '_Hist')) +
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' +
+                                       ISNULL(t.[HistoryTableSchema], t.[Schema]) + '.' + QUOTENAME(ISNULL(SchemaSmith.fn_StripBracketWrapping(t.[HistoryTableName]), SchemaSmith.fn_StripBracketWrapping(t.[Name]) + '_Hist')) +
                                        '));' AS NVARCHAR(MAX))
-                           FROM #Tables T WITH (NOLOCK)
-                           WHERE T.IsTemporal = 1
-                             AND OBJECTPROPERTY(OBJECT_ID(T.[Schema] + '.' + T.[Name]), 'TableTemporalType') = 2
+                           FROM #Tables t WITH (NOLOCK)
+                           WHERE t.IsTemporal = 1
+                             AND OBJECTPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name]), 'TableTemporalType') = 2
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
@@ -303,7 +303,7 @@ BEGIN TRY
   IF SchemaSmith.fn_ServerMajorVersion() >= 14
     EXEC sp_executesql N'
       INSERT INTO #LiveTemporalRetention ([Schema], [Name], LiveRetentionText)
-      SELECT T.[Schema], T.[Name],
+      SELECT t.[Schema], t.[Name],
              CASE mt.history_retention_period_unit_desc
                WHEN ''INFINITE'' THEN ''INFINITE''
                WHEN ''DAY'' THEN CAST(mt.history_retention_period AS NVARCHAR(10)) + '' DAYS''
@@ -312,28 +312,28 @@ BEGIN TRY
                WHEN ''YEAR'' THEN CAST(mt.history_retention_period AS NVARCHAR(10)) + '' YEARS''
                ELSE CONVERT(NVARCHAR(50), CONVERT(INT, ''Unrecognized SYSTEM_VERSIONING retention unit: '' + ISNULL(mt.history_retention_period_unit_desc, CONVERT(NVARCHAR(20), mt.history_retention_period_unit))))
              END
-        FROM #Tables T WITH (NOLOCK)
-        JOIN sys.tables mt ON mt.[object_id] = OBJECT_ID(T.[Schema] + ''.'' + T.[Name]) AND mt.temporal_type = 2'
+        FROM #Tables t WITH (NOLOCK)
+        JOIN sys.tables mt ON mt.[object_id] = OBJECT_ID(t.[Schema] + ''.'' + t.[Name]) AND mt.temporal_type = 2'
 
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Updating history retention period for ' + T.[Schema] + '.' + T.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_RETENTION_PERIOD = ' +
-                                       ISNULL(T.[HistoryRetentionPeriod], 'INFINITE') + '));' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''temporal'', ''' + T.[Schema] + '.' + T.[Name] + ' (retention)'', ''changed'');' AS NVARCHAR(MAX))
-                           FROM #Tables T WITH (NOLOCK)
-                           JOIN #LiveTemporalRetention L WITH (NOLOCK) ON L.[Schema] = T.[Schema] AND L.[Name] = T.[Name]
-                           WHERE T.IsTemporal = 1
-                             AND ISNULL(T.[HistoryRetentionPeriod], 'INFINITE') <> L.LiveRetentionText
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Updating history retention period for ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_RETENTION_PERIOD = ' +
+                                       ISNULL(t.[HistoryRetentionPeriod], 'INFINITE') + '));' + CHAR(13) + CHAR(10) +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''temporal'', ''' + t.[Schema] + '.' + t.[Name] + ' (retention)'', ''changed'');' AS NVARCHAR(MAX))
+                           FROM #Tables t WITH (NOLOCK)
+                           JOIN #LiveTemporalRetention L WITH (NOLOCK) ON L.[Schema] = t.[Schema] AND L.[Name] = t.[Name]
+                           WHERE t.IsTemporal = 1
+                             AND ISNULL(t.[HistoryRetentionPeriod], 'INFINITE') <> L.LiveRetentionText
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   -- #363: WhatIf twin of the embedded 'temporal'/'changed' audit above; same predicate.
   IF @WhatIf = 1
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-      SELECT @@SPID, 'temporal', T.[Schema] + '.' + T.[Name] + ' (retention)', 'wouldChange'
-        FROM #Tables T WITH (NOLOCK)
-        JOIN #LiveTemporalRetention L WITH (NOLOCK) ON L.[Schema] = T.[Schema] AND L.[Name] = T.[Name]
-        WHERE T.IsTemporal = 1
-          AND ISNULL(T.[HistoryRetentionPeriod], 'INFINITE') <> L.LiveRetentionText
+      SELECT @@SPID, 'temporal', t.[Schema] + '.' + t.[Name] + ' (retention)', 'wouldChange'
+        FROM #Tables t WITH (NOLOCK)
+        JOIN #LiveTemporalRetention L WITH (NOLOCK) ON L.[Schema] = t.[Schema] AND L.[Name] = t.[Name]
+        WHERE t.IsTemporal = 1
+          AND ISNULL(t.[HistoryRetentionPeriod], 'INFINITE') <> L.LiveRetentionText
 
   RAISERROR('Add missing ProductName extended property to indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +

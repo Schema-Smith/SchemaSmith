@@ -54,7 +54,7 @@
     },
     {
       "Name": "[Name]",
-      "DataType": "NAME",
+      "DataType": "Name",
       "ShouldApplyExpression": "",
       "OldName": "",
       "Collation": "",

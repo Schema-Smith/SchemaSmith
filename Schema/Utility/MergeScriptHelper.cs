@@ -1076,14 +1076,14 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
     {
         var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
-        const string aggExpr = @"CASE WHEN c.DATA_TYPE IN ('GEOGRAPHY', 'GEOMETRY')
-                       THEN CASE WHEN c.DATA_TYPE = 'GEOGRAPHY' THEN 'geography' ELSE 'geometry' END + '::STGeomFromText([' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '.STSrid]) AS [' + c.COLUMN_NAME + ']'
+        const string aggExpr = @"CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
+                       THEN CASE WHEN c.DATA_TYPE = 'geography' THEN 'geography' ELSE 'geometry' END + '::STGeomFromText([' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '.STSrid]) AS [' + c.COLUMN_NAME + ']'
                        ELSE '[' + c.COLUMN_NAME + ']' END";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
     {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
@@ -1185,28 +1185,31 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
         var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         const string aggExpr = @"'           [' + c.COLUMN_NAME + '] ' +
-                  REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(USER_TYPE), 'HIERARCHYID', 'NVARCHAR(4000)'), 'GEOGRAPHY', 'NVARCHAR(4000)'), 'GEOMETRY', 'NVARCHAR(4000)'), 'DATETIMEOFFSET', 'NVARCHAR(50)'), 'NTEXT', 'NVARCHAR(MAX)'), 'TEXT', 'VARCHAR(MAX)'), 'IMAGE', 'VARBINARY(MAX)') +
-                      CASE WHEN USER_TYPE LIKE '%CHAR' OR USER_TYPE LIKE '%BINARY'
+                  CASE UPPER(USER_TYPE) WHEN 'HIERARCHYID' THEN 'NVARCHAR(4000)' WHEN 'GEOGRAPHY' THEN 'NVARCHAR(4000)'
+                                        WHEN 'GEOMETRY' THEN 'NVARCHAR(4000)' WHEN 'DATETIMEOFFSET' THEN 'NVARCHAR(50)'
+                                        WHEN 'NTEXT' THEN 'NVARCHAR(MAX)' WHEN 'TEXT' THEN 'VARCHAR(MAX)' WHEN 'IMAGE' THEN 'VARBINARY(MAX)'
+                                        ELSE USER_TYPE END +
+                      CASE WHEN UPPER(USER_TYPE) IN ('CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR', 'BINARY', 'VARBINARY')
                            THEN '(' + CASE WHEN CHARACTER_MAXIMUM_LENGTH = -1 THEN 'MAX' ELSE CONVERT(NVARCHAR(20), CHARACTER_MAXIMUM_LENGTH) END + ')'
-                                           WHEN USER_TYPE IN ('NUMERIC', 'DECIMAL')
+                                           WHEN UPPER(USER_TYPE) IN ('NUMERIC', 'DECIMAL')
                                            THEN '(' + CONVERT(NVARCHAR(20), NUMERIC_PRECISION) + ', ' + CONVERT(NVARCHAR(20), NUMERIC_SCALE) + ')'
-                                           WHEN USER_TYPE = 'DATETIME2'
+                                           WHEN UPPER(USER_TYPE) = 'DATETIME2'
                                            THEN '(' + CONVERT(NVARCHAR(20), DATETIME_PRECISION) + ')'
-                                           WHEN USER_TYPE = 'XML' AND sc.xml_collection_id <> 0
+                                           WHEN UPPER(USER_TYPE) = 'XML' AND sc.xml_collection_id <> 0
                                            THEN '([' + SCHEMA_NAME(xc.[schema_id]) + '].[' + xc.[name] + '])'
                                            ELSE '' END +
-                      CASE WHEN USER_TYPE IN ('GEOGRAPHY', 'GEOMETRY') THEN ', [' + c.COLUMN_NAME + '.STSrid] INT' ELSE '' END";
+                      CASE WHEN UPPER(USER_TYPE) IN ('GEOGRAPHY', 'GEOMETRY') THEN ', [' + c.COLUMN_NAME + '.STSrid] INT' ELSE '' END";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
   JOIN (SELECT CASE WHEN SCHEMA_NAME(st.[schema_id]) IN ('sys', 'dbo')
                     THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END + st.[name] AS USER_TYPE, st.user_type_id
           FROM sys.types st) st ON st.user_type_id = sc.user_type_id
   LEFT JOIN sys.xml_schema_collections xc ON xc.xml_collection_id = sc.xml_collection_id
   LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
-                                                    AND ident.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
+                                                    AND ident.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
     {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
@@ -1228,11 +1231,11 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
         var aggExpr = "'        [' + c.COLUMN_NAME + ']'";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
-                                                    AND ident.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
+                                                    AND ident.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
     {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
@@ -1251,21 +1254,21 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
     {
         var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
-        const string aggExpr = @"CASE WHEN c.DATA_TYPE IN ('GEOGRAPHY', 'GEOMETRY') THEN 'G'
-                       WHEN c.DATA_TYPE = 'DATETIMEOFFSET' THEN 'D'
-                       WHEN c.DATA_TYPE = 'XML' THEN 'X'
-                       WHEN c.DATA_TYPE = 'NTEXT' THEN 'N'
-                       WHEN c.DATA_TYPE = 'TEXT' THEN 'T'
-                       WHEN c.DATA_TYPE = 'IMAGE' THEN 'I'
+        const string aggExpr = @"CASE WHEN c.DATA_TYPE IN ('geography', 'geometry') THEN 'G'
+                       WHEN c.DATA_TYPE = 'datetimeoffset' THEN 'D'
+                       WHEN c.DATA_TYPE = 'xml' THEN 'X'
+                       WHEN c.DATA_TYPE = 'ntext' THEN 'N'
+                       WHEN c.DATA_TYPE = 'text' THEN 'T'
+                       WHEN c.DATA_TYPE = 'image' THEN 'I'
                        ELSE '' END +
                   '[' + c.COLUMN_NAME + ']'";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
-                                                    AND ident.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
+                                                    AND ident.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND ident.[Name] IS NULL
     AND cc.[name] IS NULL

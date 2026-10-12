@@ -671,7 +671,7 @@ public class SchemaTongsTests
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @$"
-CREATE DATABASE [{_integrationDb}];
+CREATE DATABASE [{_integrationDb}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};
 ";
         cmd.ExecuteNonQuery();
 

@@ -109,7 +109,7 @@ public class PartitioningExtractionTests
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandTimeout = 300;
-        cmd.CommandText = $"EXEC SchemaSmith.GenerateTable{(xml ? "Xml" : "Json")} @p_Schema = '{schema}', @p_Table = '{table}'";
+        cmd.CommandText = $"EXEC SchemaSmith.GenerateTable{(xml ? "Xml" : "JSON")} @p_Schema = '{schema}', @p_Table = '{table}'";
         using var reader = cmd.ExecuteReader();
         var sb = new StringBuilder();
         while (reader.Read())

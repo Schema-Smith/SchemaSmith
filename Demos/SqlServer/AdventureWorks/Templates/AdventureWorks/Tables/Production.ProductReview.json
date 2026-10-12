@@ -120,7 +120,7 @@
     },
     {
       "Name": "[ReviewerName]",
-      "DataType": "NAME",
+      "DataType": "Name",
       "ShouldApplyExpression": "",
       "OldName": "",
       "Collation": "",

@@ -28,7 +28,7 @@ BEGIN
   BEGIN
     IF @v_policy = 'fail'
     BEGIN
-      SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK) WHERE T.IsTemporal = 1
+      SET @v_list = STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name] FROM #Tables t WITH (NOLOCK) WHERE t.IsTemporal = 1
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'System-versioned temporal (SYSTEM_VERSIONING) requires SQL Server 2016 (detected major ' +
                    CONVERT(NVARCHAR(10), @v_major) + '); table(s): ' + LEFT(@v_list, 1800) + '.'
@@ -37,8 +37,8 @@ BEGIN
     ELSE
     BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT @@SPID, 'temporal (SQL Server 2016)', T.[Schema] + '.' + T.[Name], 'downgraded'
-          FROM #Tables T WITH (NOLOCK) WHERE T.IsTemporal = 1
+        SELECT @@SPID, 'temporal (SQL Server 2016)', t.[Schema] + '.' + t.[Name], 'downgraded'
+          FROM #Tables t WITH (NOLOCK) WHERE t.IsTemporal = 1
       RAISERROR('  Temporal tracking skipped (requires SQL Server 2016 - downgraded)', 10, 100) WITH NOWAIT
       UPDATE #Tables SET IsTemporal = 0 WHERE IsTemporal = 1
     END
@@ -51,8 +51,8 @@ BEGIN
   -- neither reading is more correct than the other, so guessing would be worse than stopping.
   IF EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE ISNULL([Ledger], 'Off') <> 'Off' AND IsTemporal = 1)
   BEGIN
-    SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK)
-                          WHERE ISNULL(T.[Ledger], 'Off') <> 'Off' AND T.IsTemporal = 1
+    SET @v_list = STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name] FROM #Tables t WITH (NOLOCK)
+                          WHERE ISNULL(t.[Ledger], 'Off') <> 'Off' AND t.IsTemporal = 1
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     SET @v_msg = 'Ledger and IsTemporal cannot both be declared on the same table -- a ledger table manages its own history, and SQL Server reports it as non-temporal; table(s): ' + LEFT(@v_list, 1700) + '.'
     RAISERROR(@v_msg, 16, 1)
@@ -66,7 +66,7 @@ BEGIN
   BEGIN
     IF @v_policy = 'fail'
     BEGIN
-      SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK) WHERE T.[GraphType] IN ('Node', 'Edge')
+      SET @v_list = STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name] FROM #Tables t WITH (NOLOCK) WHERE t.[GraphType] IN ('Node', 'Edge')
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'Graph tables (AS NODE / AS EDGE) require SQL Server 2017 (detected major ' +
                    CONVERT(NVARCHAR(10), @v_major) + '); table(s): ' + LEFT(@v_list, 1800) + '.'
@@ -75,8 +75,8 @@ BEGIN
     ELSE
     BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT @@SPID, 'graph table (SQL Server 2017)', T.[Schema] + '.' + T.[Name], 'downgraded'
-          FROM #Tables T WITH (NOLOCK) WHERE T.[GraphType] IN ('Node', 'Edge')
+        SELECT @@SPID, 'graph table (SQL Server 2017)', t.[Schema] + '.' + t.[Name], 'downgraded'
+          FROM #Tables t WITH (NOLOCK) WHERE t.[GraphType] IN ('Node', 'Edge')
       RAISERROR('  Graph node/edge skipped: requires SQL Server 2017 - the table deploys as an ordinary table (downgraded)', 10, 100) WITH NOWAIT
       UPDATE #Tables SET [GraphType] = 'None' WHERE [GraphType] IN ('Node', 'Edge')
     END
@@ -94,7 +94,7 @@ BEGIN
   BEGIN
     IF @v_policy = 'fail'
     BEGIN
-      SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK) WHERE ISNULL(T.[XmlCompression], 0) = 1
+      SET @v_list = STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name] FROM #Tables t WITH (NOLOCK) WHERE ISNULL(t.[XmlCompression], 0) = 1
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'XML_COMPRESSION requires SQL Server 2022 (detected major ' +
                    CONVERT(NVARCHAR(10), @v_major) + '); object(s): ' + LEFT(ISNULL(@v_list, '(indexes only)'), 1800) + '.'
@@ -103,8 +103,8 @@ BEGIN
     ELSE
     BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT @@SPID, 'XML compression (SQL Server 2022)', T.[Schema] + '.' + T.[Name], 'downgraded'
-          FROM #Tables T WITH (NOLOCK) WHERE ISNULL(T.[XmlCompression], 0) = 1
+        SELECT @@SPID, 'XML compression (SQL Server 2022)', t.[Schema] + '.' + t.[Name], 'downgraded'
+          FROM #Tables t WITH (NOLOCK) WHERE ISNULL(t.[XmlCompression], 0) = 1
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'XML compression (SQL Server 2022)', I.[Schema] + '.' + I.[TableName] + '.' + I.[IndexName], 'downgraded'
           FROM #Indexes I WITH (NOLOCK) WHERE ISNULL(I.[XmlCompression], 0) = 1
@@ -125,7 +125,7 @@ BEGIN
   BEGIN
     IF @v_policy = 'fail'
     BEGIN
-      SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK) WHERE ISNULL(T.[Ledger], 'Off') <> 'Off'
+      SET @v_list = STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name] FROM #Tables t WITH (NOLOCK) WHERE ISNULL(t.[Ledger], 'Off') <> 'Off'
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'Ledger tables require SQL Server 2022 (detected major ' +
                    CONVERT(NVARCHAR(10), @v_major) + '); table(s): ' + LEFT(@v_list, 1800) + '.'
@@ -134,8 +134,8 @@ BEGIN
     ELSE
     BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT @@SPID, 'ledger table (SQL Server 2022)', T.[Schema] + '.' + T.[Name], 'downgraded'
-          FROM #Tables T WITH (NOLOCK) WHERE ISNULL(T.[Ledger], 'Off') <> 'Off'
+        SELECT @@SPID, 'ledger table (SQL Server 2022)', t.[Schema] + '.' + t.[Name], 'downgraded'
+          FROM #Tables t WITH (NOLOCK) WHERE ISNULL(t.[Ledger], 'Off') <> 'Off'
       RAISERROR('  Ledger skipped: requires SQL Server 2022 - the table deploys as an ordinary table (downgraded)', 10, 100) WITH NOWAIT
       UPDATE #Tables SET [Ledger] = 'Off' WHERE ISNULL([Ledger], 'Off') <> 'Off'
     END
@@ -199,8 +199,8 @@ BEGIN
   BEGIN
     IF @v_policy = 'fail'
     BEGIN
-      SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK)
-                            WHERE RTRIM(ISNULL(T.[CompressionType], 'NONE')) IN ('ROW', 'PAGE')
+      SET @v_list = STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name] FROM #Tables t WITH (NOLOCK)
+                            WHERE RTRIM(ISNULL(t.[CompressionType], 'NONE')) IN ('ROW', 'PAGE')
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'Data compression requires Enterprise or Developer edition below SQL Server 2016 SP1; table(s): ' +
                    LEFT(@v_list, 1800) + '.'
@@ -209,8 +209,8 @@ BEGIN
     ELSE
     BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT @@SPID, 'data compression (Enterprise edition below SQL Server 2016 SP1)', T.[Schema] + '.' + T.[Name], 'downgraded'
-          FROM #Tables T WITH (NOLOCK) WHERE RTRIM(ISNULL(T.[CompressionType], 'NONE')) IN ('ROW', 'PAGE')
+        SELECT @@SPID, 'data compression (Enterprise edition below SQL Server 2016 SP1)', t.[Schema] + '.' + t.[Name], 'downgraded'
+          FROM #Tables t WITH (NOLOCK) WHERE RTRIM(ISNULL(t.[CompressionType], 'NONE')) IN ('ROW', 'PAGE')
       RAISERROR('  Table compression skipped (Enterprise edition below SQL Server 2016 SP1 - downgraded)', 10, 100) WITH NOWAIT
       UPDATE #Tables SET [CompressionType] = 'NONE' WHERE RTRIM(ISNULL([CompressionType], 'NONE')) IN ('ROW', 'PAGE')
     END
@@ -241,8 +241,8 @@ BEGIN
   BEGIN
     IF @v_policy = 'fail'
     BEGIN
-      SET @v_list = STUFF((SELECT ', ' + C.[Schema] + '.' + C.[TableName] + '.' + C.[ColumnName]
-                             FROM #Columns C WITH (NOLOCK) WHERE C.[FileStream] = 1
+      SET @v_list = STUFF((SELECT ', ' + c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName]
+                             FROM #Columns c WITH (NOLOCK) WHERE c.[FileStream] = 1
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'FILESTREAM requires it enabled on the server and a FILESTREAM filegroup on the database, ' +
                    'neither of which SchemaSmith creates for you; column(s): ' + LEFT(@v_list, 1700) + '.'
@@ -252,8 +252,8 @@ BEGIN
     BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'FILESTREAM (server or filegroup not available)',
-               C.[Schema] + '.' + C.[TableName] + '.' + C.[ColumnName], 'downgraded'
-          FROM #Columns C WITH (NOLOCK) WHERE C.[FileStream] = 1
+               c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName], 'downgraded'
+          FROM #Columns c WITH (NOLOCK) WHERE c.[FileStream] = 1
       RAISERROR('  FILESTREAM skipped: not enabled on this server, or the database has no FILESTREAM filegroup. The column(s) deploy as plain VARBINARY(MAX) - downgraded', 10, 100) WITH NOWAIT
       UPDATE #Columns
         SET [ColumnScript] = REPLACE([ColumnScript], ' FILESTREAM', ''), [FileStream] = 0

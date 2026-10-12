@@ -376,8 +376,8 @@ public class DataTongsTests
         var result = dt.GetSelectColumns(cmd, "dbo", "Shapes");
         Assert.That(result, Does.Contain("Shape"));
         // Verify the query checks for both GEOGRAPHY and GEOMETRY
-        Assert.That(cmd.CommandText, Does.Contain("'GEOGRAPHY'"));
-        Assert.That(cmd.CommandText, Does.Contain("'GEOMETRY'"));
+        Assert.That(cmd.CommandText, Does.Contain("'geography'"));
+        Assert.That(cmd.CommandText, Does.Contain("'geometry'"));
     }
 
     // SQL Server has always paired a spatial column's WKT with an [Col.STSrid] companion, and the shred
@@ -418,7 +418,7 @@ public class DataTongsTests
         var result = dt.GetSelectColumns(cmd, "dbo", "OrgChart");
         Assert.That(result, Does.Contain("OrgNode"));
         // Verify the query contains the HIERARCHYID case
-        Assert.That(cmd.CommandText, Does.Contain("'HIERARCHYID'"));
+        Assert.That(cmd.CommandText, Does.Contain("'hierarchyid'"));
     }
 
     [Test]
@@ -430,7 +430,7 @@ public class DataTongsTests
 
         dt.GetSelectColumns(cmd, "dbo", "TestTable");
         // Verify the HIERARCHYID branch uses .ToString()
-        Assert.That(cmd.CommandText, Does.Contain("HIERARCHYID"));
+        Assert.That(cmd.CommandText, Does.Contain("hierarchyid"));
         Assert.That(cmd.CommandText, Does.Contain(".ToString()"));
     }
 

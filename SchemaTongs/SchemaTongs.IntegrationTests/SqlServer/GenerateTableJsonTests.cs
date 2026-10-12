@@ -151,7 +151,7 @@ CREATE TABLE dbo.TestFullTextIndex (
     CONSTRAINT [PK_TestFullTextIndex] PRIMARY KEY NONCLUSTERED (MyInt)
 )
 
-CREATE FULLTEXT INDEX ON dbo.TestFullTextIndex (MyString) KEY INDEX PK_TestFullTextIndex ON FT_Catalog WITH CHANGE_TRACKING = AUTO, STOPLIST = SL_TEST
+CREATE FULLTEXT INDEX ON dbo.TestFullTextIndex (MyString) KEY INDEX PK_TestFullTextIndex ON FT_Catalog WITH CHANGE_TRACKING = AUTO, STOPLIST = SL_Test
 ";
         cmd.ExecuteNonQuery();
         var result = GenerateTable(cmd, "dbo", "TestFullTextIndex");
@@ -369,7 +369,7 @@ EXEC sys.sp_addextendedproperty 'Description', 'An integer column', 'SCHEMA', [d
         AssertColumnProperties(result.Columns[5], "MyDateTime2", "DATETIME2(4)", true, null, null);
         AssertColumnProperties(result.Columns[6], "MyDecimal", "DECIMAL(10, 2)", false, null, null);
         AssertColumnProperties(result.Columns[7], "MyDecimalWithDefault", "DECIMAL(12, 4)", false, "3.14", null);
-        AssertColumnProperties(result.Columns[8], "MyFlag", "TEST.FLAG", false, null, null);
+        AssertColumnProperties(result.Columns[8], "MyFlag", "Test.Flag", false, null, null);
         AssertColumnProperties(result.Columns[9], "MyFloat", "FLOAT", true, null, null);
         AssertColumnProperties(result.Columns[10], "MyIdentity", "INT IDENTITY(13, 2)", false, null, null);
         AssertColumnProperties(result.Columns[11], "MyInt", "INT", true, null, null);
@@ -976,7 +976,7 @@ ALTER TABLE dbo.TestPartitionedMixed REBUILD PARTITION = 2 WITH (DATA_COMPRESSIO
 
     private string GenerateTableJson(IDbCommand cmd, string schema, string table)
     {
-        cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJson @p_Schema = '{schema}', @p_Table = '{table}'";
+        cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = '{schema}', @p_Table = '{table}'";
         using var reader = cmd.ExecuteReader();
 
         var tableJson = string.Empty;
@@ -1005,7 +1005,7 @@ ALTER TABLE dbo.TestPartitionedMixed REBUILD PARTITION = 2 WITH (DATA_COMPRESSIO
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @$"
-CREATE DATABASE [{_integrationDb}];
+CREATE DATABASE [{_integrationDb}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};
 ";
         cmd.ExecuteNonQuery();
 

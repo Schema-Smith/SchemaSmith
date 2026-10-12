@@ -48,10 +48,10 @@ BEGIN TRY
     FROM #Tables t WITH (NOLOCK)
 
   RAISERROR('Turn off Temporal Tracking for tables no longer defined temporal', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Turn OFF Temporal Tracking for ' + T.[Schema] + '.' + T.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' SET (SYSTEM_VERSIONING = OFF);' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' DROP PERIOD FOR SYSTEM_TIME;' AS NVARCHAR(MAX))
-                           FROM #Tables T WITH (NOLOCK)
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Turn OFF Temporal Tracking for ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = OFF);' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' DROP PERIOD FOR SYSTEM_TIME;' AS NVARCHAR(MAX))
+                           FROM #Tables t WITH (NOLOCK)
                            WHERE t.IsTemporal = 0
                              AND OBJECTPROPERTY(OBJECT_ID([Schema] + '.' + [Name]), 'TableTemporalType') = 2
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -413,13 +413,13 @@ BEGIN TRY
               THEN 'AS (' + ComputedExpression + ')' + CASE WHEN c.[Persisted] = 1 THEN ' PERSISTED' ELSE '' END
                                                     + CASE WHEN c.[Persisted] = 1 AND c.[NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END
               -- Otherwise we need to build the column definition
-              ELSE REPLACE(REPLACE(UPPER(LEFT([DataType], COALESCE(NULLIF(CHARINDEX('IDENTITY', [DataType]), 0), LEN([DataType]) + 1) - 1)), 'ROWGUIDCOL', ''), 'NOT FOR REPLICATION', '') +
+              ELSE REPLACE(REPLACE(LEFT([DataType], COALESCE(NULLIF(CHARINDEX('IDENTITY', [DataType]), 0), LEN([DataType]) + 1) - 1), 'ROWGUIDCOL', ''), 'NOT FOR REPLICATION', '') +
                    -- ALTER COLUMN without COLLATE resets a character column to the database default, and fails (5074) when
                    -- the column is indexed, so a character column always names its collation: the declared one, the
                    -- database default for an empty declaration, or the live one under IGNORE.
                    CASE WHEN [Collation] NOT IN ('IGNORE', '') THEN ' COLLATE ' + [Collation]
                         WHEN NOT EXISTS (SELECT 1 FROM sys.types ty
-                                          WHERE ty.user_type_id = TYPE_ID(RTRIM(LEFT([DataType], CHARINDEX('(', [DataType] + '(') - 1)))
+                                          WHERE ty.user_type_id = ISNULL(TYPE_ID(RTRIM(LEFT([DataType], CHARINDEX('(', [DataType] + '(') - 1))), TYPE_ID(LOWER(RTRIM(LEFT([DataType], CHARINDEX('(', [DataType] + '(') - 1)))))
                                             AND ty.collation_name IS NOT NULL) THEN ''
                         WHEN [Collation] = 'IGNORE' THEN ' COLLATE ' + ISNULL(ic.COLLATION_NAME, @v_DatabaseCollation)
                         ELSE ' COLLATE ' + @v_DatabaseCollation END +
@@ -466,10 +466,10 @@ BEGIN TRY
                    THEN 1 ELSE 0 END AS BIT) AS MustSwapColumn,
          CAST(0 AS BIT) AS DropOnly
     INTO #ColumnChanges
-    FROM #Tables T WITH (NOLOCK)
-    JOIN #Columns c WITH (NOLOCK) ON C.[Schema] = T.[Schema] 
-                                 AND C.[TableName] = T.[Name]
-                                 AND C.[NewColumn] = 0
+    FROM #Tables t WITH (NOLOCK)
+    JOIN #Columns c WITH (NOLOCK) ON c.[Schema] = t.[Schema] 
+                                 AND c.[TableName] = t.[Name]
+                                 AND c.[NewColumn] = 0
     -- The declared side is compared in the bracket-wrapped form the working set already stores, by
     -- wrapping the catalog's name instead of stripping ours. Calling a scalar function on the join
     -- predicate evaluates it per row and keeps the statement on a serial plan; wrapping the other side
@@ -480,9 +480,9 @@ BEGIN TRY
     -- take TEMPDB's collation while a catalog name carries the DATABASE's. The old form compared two
     -- database-collated values (the function returns one), so without this the change would work
     -- wherever those two collations happen to agree and fail where they do not.
-    JOIN INFORMATION_SCHEMA.COLUMNS ic ON C.[Schema] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.TABLE_SCHEMA)
-                                                     AND C.[TableName] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.TABLE_NAME)
-                                                     AND C.[ColumnName] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.COLUMN_NAME)
+    JOIN INFORMATION_SCHEMA.COLUMNS ic ON c.[Schema] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.TABLE_SCHEMA)
+                                                     AND c.[TableName] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.TABLE_NAME)
+                                                     AND c.[ColumnName] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.COLUMN_NAME)
     JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(ic.TABLE_SCHEMA + '.' + ic.TABLE_NAME) AND sc.[name] = ic.COLUMN_NAME
     JOIN (SELECT CASE WHEN SCHEMA_NAME(st.[schema_id]) IN ('sys', 'dbo')
                       THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END + st.[name] AS USER_TYPE, st.user_type_id
@@ -490,7 +490,7 @@ BEGIN TRY
     LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
                                                       AND ident.[object_id] = OBJECT_ID(TABLE_SCHEMA + '.' + TABLE_NAME)
     LEFT JOIN sys.computed_columns cc ON c.ColumnName COLLATE DATABASE_DEFAULT = QUOTENAME(cc.[name])
-                                                   AND cc.[object_id] = OBJECT_ID(C.[Schema] + '.' + C.[TableName])
+                                                   AND cc.[object_id] = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
     LEFT JOIN #ColMeta cm ON cm.[object_id] = sc.[object_id] AND cm.column_id = sc.column_id
     WHERE t.NewTable = 0
       -- A computed column's type is derived from its expression and cannot be stated in DDL, so a declared DataType
@@ -1513,19 +1513,19 @@ BEGIN TRY
   BEGIN
     SET @v_SQL = NULL
     EXEC sp_executesql N'SELECT @out = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-         ''RAISERROR(''''  Suspending system versioning on '' + T.[Schema] + ''.'' + T.[Name] + '''''', 10, 100) WITH NOWAIT;'' + CHAR(13) + CHAR(10) +
+         ''RAISERROR(''''  Suspending system versioning on '' + t.[Schema] + ''.'' + t.[Name] + '''''', 10, 100) WITH NOWAIT;'' + CHAR(13) + CHAR(10) +
          ''EXEC sys.sp_addextendedproperty N''''SchemaSmith_SuspendedHistory'''', N'''''' + REPLACE(QUOTENAME(SCHEMA_NAME(h.[schema_id])) + ''.'' + QUOTENAME(h.[name]), '''''''', '''''''''''') +
          '''''', N''''SCHEMA'''', N'''''' + REPLACE(SCHEMA_NAME(st.[schema_id]), '''''''', '''''''''''') + '''''', N''''TABLE'''', N'''''' + REPLACE(st.[name], '''''''', '''''''''''') + '''''';'' + CHAR(13) + CHAR(10) +
-         ''ALTER TABLE '' + T.[Schema] + ''.'' + T.[Name] + '' SET (SYSTEM_VERSIONING = OFF);'' AS NVARCHAR(MAX))
-    FROM #Tables T WITH (NOLOCK)
-    JOIN sys.tables st ON st.[object_id] = OBJECT_ID(T.[Schema] + ''.'' + T.[Name]) AND st.temporal_type = 2
+         ''ALTER TABLE '' + t.[Schema] + ''.'' + t.[Name] + '' SET (SYSTEM_VERSIONING = OFF);'' AS NVARCHAR(MAX))
+    FROM #Tables t WITH (NOLOCK)
+    JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + ''.'' + t.[Name]) AND st.temporal_type = 2
     JOIN sys.tables h ON h.[object_id] = st.history_table_id
-    WHERE T.IsTemporal = 1
+    WHERE t.IsTemporal = 1
       AND (EXISTS (SELECT * FROM #IndexesToDrop di WITH (NOLOCK)
                      JOIN sys.indexes si ON si.[object_id] = st.[object_id] AND si.[name] = di.[IndexName] COLLATE DATABASE_DEFAULT AND si.is_primary_key = 1
-                    WHERE di.[Schema] = T.[Schema] AND di.[TableName] = T.[Name])
+                    WHERE di.[Schema] = t.[Schema] AND di.[TableName] = t.[Name])
            OR (EXISTS (SELECT * FROM #Indexes i WITH (NOLOCK)
-                        WHERE i.[Schema] = T.[Schema] AND i.[TableName] = T.[Name] AND i.[Clustered] = 1
+                        WHERE i.[Schema] = t.[Schema] AND i.[TableName] = t.[Name] AND i.[Clustered] = 1
                           AND NOT EXISTS (SELECT * FROM sys.indexes x WHERE x.[object_id] = st.[object_id] AND x.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) COLLATE DATABASE_DEFAULT))
                AND EXISTS (SELECT * FROM sys.indexes pk WHERE pk.[object_id] = st.[object_id] AND pk.is_primary_key = 1 AND pk.[type] IN (1, 5))))
     FOR XML PATH(''''), TYPE).value(''.'', ''NVARCHAR(MAX)''), 1, 2, '''')', N'@out NVARCHAR(MAX) OUTPUT', @out = @v_SQL OUTPUT
@@ -1806,14 +1806,14 @@ BEGIN TRY
   DEALLOCATE swap_cursor
 
   RAISERROR('Drop Modified Computed Columns', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping columns from ' + T.[Schema] + '.' + T.[Name] + ' (' + MessageColumns + ')'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' DROP ' + ScriptColumns + ';' AS NVARCHAR(MAX))
-                           FROM (SELECT T.[Schema], T.[Name],
-                                        ScriptColumns = STUFF((SELECT ', ' + 'COLUMN ' + [ColumnName] FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = T.[Schema] AND cc.[TableName] = T.[Name] AND cc.MustDropAndRecreate = 1 AND cc.MustSwapColumn = 0 ORDER BY cc.[ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
-                                        MessageColumns = STUFF((SELECT ', ' + [ColumnName] FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = T.[Schema] AND cc.[TableName] = T.[Name] AND cc.MustDropAndRecreate = 1 AND cc.MustSwapColumn = 0 ORDER BY cc.[ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-                                   FROM #Tables T WITH (NOLOCK)
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping columns from ' + t.[Schema] + '.' + t.[Name] + ' (' + MessageColumns + ')'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' DROP ' + ScriptColumns + ';' AS NVARCHAR(MAX))
+                           FROM (SELECT t.[Schema], t.[Name],
+                                        ScriptColumns = STUFF((SELECT ', ' + 'COLUMN ' + [ColumnName] FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.MustDropAndRecreate = 1 AND cc.MustSwapColumn = 0 ORDER BY cc.[ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
+                                        MessageColumns = STUFF((SELECT ', ' + [ColumnName] FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.MustDropAndRecreate = 1 AND cc.MustSwapColumn = 0 ORDER BY cc.[ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+                                   FROM #Tables t WITH (NOLOCK)
                                    WHERE NewTable = 0
-                                     AND EXISTS (SELECT * FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = T.[Schema] AND cc.[TableName] = T.[Name] AND cc.MustDropAndRecreate = 1 AND cc.MustSwapColumn = 0)) T
+                                     AND EXISTS (SELECT * FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.MustDropAndRecreate = 1 AND cc.MustSwapColumn = 0)) t
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
   
@@ -1838,38 +1838,38 @@ BEGIN TRY
   END
 
   RAISERROR('Drop Columns No Longer Part of The Product Definition', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping columns from ' + T.[Schema] + '.' + T.[Name] + ' (' + MessageColumns + ')'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' DROP ' + ScriptColumns + ';' AS NVARCHAR(MAX))
-                           FROM (SELECT T.[Schema], T.[Name],
-                                        ScriptColumns = STUFF((SELECT ', ' + 'COLUMN ' + [ColumnName] FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = T.[Schema] AND cc.[TableName] = T.[Name] AND cc.DropOnly = 1 ORDER BY [ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
-                                        MessageColumns = STUFF((SELECT ', ' + [ColumnName] FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = T.[Schema] AND cc.[TableName] = T.[Name] AND cc.DropOnly = 1 ORDER BY [ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-                                   FROM #Tables T WITH (NOLOCK)
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping columns from ' + t.[Schema] + '.' + t.[Name] + ' (' + MessageColumns + ')'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' DROP ' + ScriptColumns + ';' AS NVARCHAR(MAX))
+                           FROM (SELECT t.[Schema], t.[Name],
+                                        ScriptColumns = STUFF((SELECT ', ' + 'COLUMN ' + [ColumnName] FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.DropOnly = 1 ORDER BY [ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
+                                        MessageColumns = STUFF((SELECT ', ' + [ColumnName] FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.DropOnly = 1 ORDER BY [ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+                                   FROM #Tables t WITH (NOLOCK)
                                    WHERE NewTable = 0
                                      AND @DropColumnsRemovedFromProduct = 1
-                                     AND ISNULL(T.[DropColumnsRemovedFromProduct], 1) = 1
-                                     AND EXISTS (SELECT * FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = T.[Schema] AND cc.[TableName] = T.[Name] AND cc.DropOnly = 1)) T
+                                     AND ISNULL(t.[DropColumnsRemovedFromProduct], 1) = 1
+                                     AND EXISTS (SELECT * FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.DropOnly = 1)) t
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Detect Default Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#DefaultChanges') IS NOT NULL DROP TABLE #DefaultChanges
-  SELECT C.[Schema], C.[TableName], C.[ColumnName],
+  SELECT c.[Schema], c.[TableName], c.[ColumnName],
          [DefaultName] = (SELECT [Name]
                           FROM sys.default_constraints dc
                           WHERE dc.parent_object_id = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
-                            AND COL_NAME(dc.parent_object_id, dc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(C.[ColumnName]))
+                            AND COL_NAME(dc.parent_object_id, dc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]))
   INTO #DefaultChanges
-  FROM #Tables T WITH (NOLOCK)
-           JOIN #Columns c WITH (NOLOCK) ON C.[Schema] = T.[Schema]
-      AND C.[TableName] = T.[Name]
-      AND C.[NewColumn] = 0
-           JOIN INFORMATION_SCHEMA.COLUMNS ic ON ic.TABLE_SCHEMA = SchemaSmith.fn_StripBracketWrapping(C.[Schema])
-      AND ic.TABLE_NAME = SchemaSmith.fn_StripBracketWrapping(C.[TableName])
-      AND ic.COLUMN_NAME = SchemaSmith.fn_StripBracketWrapping(C.[ColumnName])
+  FROM #Tables t WITH (NOLOCK)
+           JOIN #Columns c WITH (NOLOCK) ON c.[Schema] = t.[Schema]
+      AND c.[TableName] = t.[Name]
+      AND c.[NewColumn] = 0
+           JOIN INFORMATION_SCHEMA.COLUMNS ic ON ic.TABLE_SCHEMA = SchemaSmith.fn_StripBracketWrapping(c.[Schema])
+      AND ic.TABLE_NAME = SchemaSmith.fn_StripBracketWrapping(c.[TableName])
+      AND ic.COLUMN_NAME = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
   WHERE t.NewTable = 0
     AND SchemaSmith.fn_StripParenWrapping(ic.COLUMN_DEFAULT) <> ISNULL(c.[Default], 'NULL')
     -- #242: the texts differ, but a reframed default always differs. Ask what was actually applied.
-    AND SchemaSmith.fn_ExpressionMapUnchanged(C.[Schema], C.[TableName], 'COLUMN', C.[ColumnName], 'default',
+    AND SchemaSmith.fn_ExpressionMapUnchanged(c.[Schema], c.[TableName], 'COLUMN', c.[ColumnName], 'default',
           c.[Default], ISNULL(ic.COLUMN_DEFAULT, '')) = 0
 
   -- Truly new physical columns were added previously, now we need to determine which columns need to be added back due change from computed to physical columns
@@ -1970,19 +1970,19 @@ BEGIN TRY
 
   RAISERROR('Add Missing Physical Columns', 10, 100) WITH NOWAIT
   -- Need to do this a second time for the edge case of replacing a computed column with a physical column
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding ' + CAST(ColumnCount AS NVARCHAR(100)) + ' new columns to ' + T.[Schema] + '.' + T.[Name] +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding ' + CAST(ColumnCount AS NVARCHAR(100)) + ' new columns to ' + t.[Schema] + '.' + t.[Name] +
                                   CASE WHEN RTRIM(ISNULL(VariantList, '')) <> '' THEN ' (variant: ' + VariantList + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' ADD ' + ColumnScripts + ';' AS NVARCHAR(MAX))
-                           FROM (SELECT T.[Schema], T.[Name],
-                                        ColumnScripts = STUFF((SELECT ', ' + CAST([ColumnScript] AS NVARCHAR(MAX)) FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '' ORDER BY c.[ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
-                                        ColumnCount = (SELECT COUNT(*) FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = ''),
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' ADD ' + ColumnScripts + ';' AS NVARCHAR(MAX))
+                           FROM (SELECT t.[Schema], t.[Name],
+                                        ColumnScripts = STUFF((SELECT ', ' + CAST([ColumnScript] AS NVARCHAR(MAX)) FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '' ORDER BY c.[ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
+                                        ColumnCount = (SELECT COUNT(*) FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = ''),
                                         VariantList = STUFF((SELECT ', ' + CAST(REPLACE(RTRIM(c.[VariantName]), '''', '''''') AS NVARCHAR(MAX))
-                                                               FROM #Columns C WITH (NOLOCK)
-                                                               WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = ''
+                                                               FROM #Columns c WITH (NOLOCK)
+                                                               WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = ''
                                                                  AND RTRIM(ISNULL(c.[VariantName], '')) <> '' FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-                                   FROM #Tables T WITH (NOLOCK)
+                                   FROM #Tables t WITH (NOLOCK)
                                    WHERE NewTable = 0
-                                     AND EXISTS (SELECT * FROM #Columns c WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '')) T
+                                     AND EXISTS (SELECT * FROM #Columns c WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '')) t
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
@@ -2289,7 +2289,7 @@ BEGIN TRY
          [HistoryId] = OBJECT_ID(CAST(ep.[value] AS NVARCHAR(600)))
     INTO #SuspendedTemporal
     FROM sys.extended_properties ep
-    JOIN #Tables T WITH (NOLOCK) ON OBJECT_ID(T.[Schema] + '.' + T.[Name]) = ep.major_id
+    JOIN #Tables t WITH (NOLOCK) ON OBJECT_ID(t.[Schema] + '.' + t.[Name]) = ep.major_id
     WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.[name] = N'SchemaSmith_SuspendedHistory'
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(x.Stmt AS NVARCHAR(MAX))
                            FROM (SELECT 1 AS Ord, 'ALTER TABLE ' + s.HistoryName + ' DROP COLUMN ' + QUOTENAME(hc.[name]) + ';' AS Stmt

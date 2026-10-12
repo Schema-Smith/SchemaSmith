@@ -186,7 +186,7 @@ public class ReadOnlyTargetKindleTests
             {
                 ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, allowReadOnlyTarget: true);
 
-                cmd.CommandText = "SELECT COUNT(*) FROM sys.objects WHERE name = 'GenerateTableJson' AND type = 'P'";
+                cmd.CommandText = "SELECT COUNT(*) FROM sys.objects WHERE name = 'GenerateTableJSON' AND type = 'P'";
                 Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1),
                     "a writable target must still be kindled -- allowReadOnlyTarget relaxes what happens "
                     + "on a read-only target, it does not turn kindling off");

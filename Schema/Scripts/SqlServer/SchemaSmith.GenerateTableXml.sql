@@ -267,7 +267,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        '' AS [OldName],
        (SELECT 'true' AS [@json:Array],
                        QUOTENAME(c.COLUMN_NAME) AS [Name],
-                       UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+                       CASE WHEN ut.is_user_defined = 1 THEN USER_TYPE ELSE UPPER(USER_TYPE) END + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
                                                CASE WHEN sc.xml_collection_id <> 0
                                                     THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                     END,
@@ -276,7 +276,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                                THEN ' IDENTITY(' + CONVERT(NVARCHAR(20), ic.seed_value) + ', ' + CONVERT(NVARCHAR(20), ic.increment_value) + ')' +
                                                     CASE WHEN ic.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
                                                ELSE '' END AS [DataType],
-                       CASE WHEN c.IS_NULLABLE = 'Yes' THEN 'true' ELSE 'false' END AS [Nullable],
+                       CASE WHEN c.IS_NULLABLE = 'YES' THEN 'true' ELSE 'false' END AS [Nullable],
 		               NULLIF(SchemaSmith.fn_StripParenWrapping(COLUMN_DEFAULT), 'NULL') AS [Default],
                        (SELECT SchemaSmith.fn_StripParenWrapping([definition])
                           FROM sys.check_constraints
@@ -305,7 +305,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                   FROM INFORMATION_SCHEMA.COLUMNS c
                   JOIN sys.columns sc ON sc.[object_id] = st.[object_id] AND sc.[name] = c.COLUMN_NAME
                   JOIN (SELECT CASE WHEN SCHEMA_NAME(typ.[schema_id]) IN ('sys', 'dbo')
-                                    THEN '' ELSE SCHEMA_NAME(typ.[schema_id]) + '.' END + typ.[name] AS USER_TYPE, typ.user_type_id
+                                    THEN '' ELSE SCHEMA_NAME(typ.[schema_id]) + '.' END + typ.[name] AS USER_TYPE, typ.user_type_id, typ.is_user_defined
                           FROM sys.types typ) ut ON ut.user_type_id = sc.user_type_id
                   LEFT JOIN sys.computed_columns cc ON cc.[object_id] = st.[object_id]
                                                                  AND cc.[name] = c.COLUMN_NAME

@@ -480,16 +480,16 @@ public class TableQuench_AlterColumnTests : BaseTableQuenchTests
         
         cmd.CommandText = "SELECT CAST(DATABASEPROPERTYEX(DB_NAME(), 'COLLATION') AS VARCHAR(200))";
         var dbCollation = cmd.ExecuteScalar() as string;
-        Assert.That(dbCollation, Is.Not.EqualTo("Latin1_General_CS_AS"));
+        Assert.That(dbCollation, Is.Not.EqualTo("Latin1_General_100_CS_AS"));
 
         cmd.CommandText = "SELECT COLLATION_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'ModifyColumnCollation' AND COLUMN_NAME = 'Column1'";
         Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo(dbCollation));
 
         cmd.CommandText = "SELECT COLLATION_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'ModifyColumnCollation' AND COLUMN_NAME = 'Column2'";
-        Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("Latin1_General_CS_AS"));
+        Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("Latin1_General_100_CS_AS"));
 
         cmd.CommandText = "SELECT COLLATION_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'ModifyColumnCollation' AND COLUMN_NAME = 'Column3'";
-        Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("Latin1_General_CS_AS"));
+        Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("Latin1_General_100_CS_AS"));
         conn.Close();
     }
 
@@ -674,7 +674,7 @@ CREATE TABLE dbo.AddNotForReplicationToExistingColumn (Column1 INT IDENTITY(1,1)
 --TableQuench_ShouldRemoveNotForReplicationFromExistingColumn
 CREATE TABLE dbo.RemoveNotForReplicationFromExistingColumn (Column1 INT IDENTITY(1,1) NOT FOR REPLICATION NOT NULL, Column2 UNIQUEIDENTIFIER NOT NULL)
 --TableQuench_ShouldModifyColumnCollation
-CREATE TABLE dbo.ModifyColumnCollation (Column1 VARCHAR(10) COLLATE Latin1_General_CS_AS NULL, Column2 VARCHAR(10) NULL, Column3 VARCHAR(10) COLLATE Latin1_General_CS_AS NULL)
+CREATE TABLE dbo.ModifyColumnCollation (Column1 VARCHAR(10) COLLATE Latin1_General_100_CS_AS NULL, Column2 VARCHAR(10) NULL, Column3 VARCHAR(10) COLLATE Latin1_General_100_CS_AS NULL)
 --TableQuench_ShouldKeepCollationWhenTheTypeChanges
 CREATE TABLE dbo.KeepCollationOnTypeChange (Declared VARCHAR(10) COLLATE Latin1_General_100_CS_AS NULL, Ignored VARCHAR(10) COLLATE Latin1_General_100_CS_AS NULL, Indexed VARCHAR(10) COLLATE Latin1_General_100_CS_AS NOT NULL, DbDefault VARCHAR(10) NULL)
 CREATE INDEX IX_KeepCollationOnTypeChange_Indexed ON dbo.KeepCollationOnTypeChange (Indexed)
@@ -1157,7 +1157,7 @@ CREATE TABLE dbo.ModifyColmnDataMasking (Column1 VARCHAR(100) MASKED WITH (FUNCT
                     },
                     {
                       "Name": "[Column3]",
-                      "DataType": "XML([MANUINSTRUCTIONSSCHEMACOLLECTION])",
+                      "DataType": "XML([ManuInstructionsSchemaCollection])",
                       "Nullable": true
                     }
                 ],
@@ -1263,7 +1263,7 @@ CREATE TABLE dbo.ModifyColmnDataMasking (Column1 VARCHAR(100) MASKED WITH (FUNCT
                       "Name": "[Column2]",
                       "DataType": "VARCHAR(10)",
                       "Nullable": true,
-                      "Collation": "Latin1_General_CS_AS"
+                      "Collation": "Latin1_General_100_CS_AS"
                     },
                     {
                       "Name": "[Column3]",

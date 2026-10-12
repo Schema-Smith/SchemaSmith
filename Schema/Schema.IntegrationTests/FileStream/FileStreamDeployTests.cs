@@ -208,7 +208,7 @@ public class FileStreamDeployTests
         cmd.CommandTimeout = 300;
         cmd.CommandText = _encoding == IngestEncoding.Xml
             ? "EXEC SchemaSmith.GenerateTableXml @p_Schema = 'dbo', @p_Table = 'FsRoundTrip'"
-            : "EXEC SchemaSmith.GenerateTableJson @p_Schema = 'dbo', @p_Table = 'FsRoundTrip'";
+            : "EXEC SchemaSmith.GenerateTableJSON @p_Schema = 'dbo', @p_Table = 'FsRoundTrip'";
         var json = cmd.ExecuteScalar() as string ?? "";
 
         Assert.Multiple(() =>
@@ -323,7 +323,7 @@ public class FileStreamDeployTests
         cmd.CommandTimeout = 300;
         cmd.CommandText = _encoding == IngestEncoding.Xml
             ? $"EXEC SchemaSmith.GenerateTableXml @p_Schema = 'dbo', @p_Table = '{table}'"
-            : $"EXEC SchemaSmith.GenerateTableJson @p_Schema = 'dbo', @p_Table = '{table}'";
+            : $"EXEC SchemaSmith.GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
         using var reader = cmd.ExecuteReader();
         var sb = new System.Text.StringBuilder();
         while (reader.Read())

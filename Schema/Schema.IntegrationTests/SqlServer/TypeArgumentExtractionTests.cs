@@ -75,7 +75,7 @@ public class TypeArgumentExtractionTests
             Assert.That(types["[Code]"], Is.EqualTo("NCHAR(3)"), json);
             Assert.That(types["[Stamp]"], Is.EqualTo("DATETIME2(3)"), json);
             Assert.That(types["[Blob]"], Is.EqualTo("VARBINARY(MAX)"), json);
-            Assert.That(types["[Alias]"], Is.EqualTo("SHORTCHAR"), "an alias type carries its own width and takes none\n" + json);
+            Assert.That(types["[Alias]"], Is.EqualTo("ShortChar"), "an alias type is written as created, with no width\n" + json);
         });
     }
 

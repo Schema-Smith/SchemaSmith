@@ -1995,7 +1995,7 @@ public class MergeScriptHelperTests
             tokenizeScripts: false, mergeFilter: null);
 
         // Inspect the generated SQL queries. The first call sets up GetJsonSelectColumns
-        // which should contain IN ('GEOGRAPHY', 'GEOMETRY')
+        // which should contain IN ('geography', 'geometry')
         var commandTexts = cmd2.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == "set_CommandText")
             .Select(c => c.GetArguments()[0]?.ToString())
@@ -2003,8 +2003,8 @@ public class MergeScriptHelperTests
             .ToList();
 
         // Second query is GetJsonSelectColumns (first is GetUnsupportedColumnComments) - should contain both types
-        Assert.That(commandTexts[1], Does.Contain("'GEOGRAPHY'"));
-        Assert.That(commandTexts[1], Does.Contain("'GEOMETRY'"));
+        Assert.That(commandTexts[1], Does.Contain("'geography'"));
+        Assert.That(commandTexts[1], Does.Contain("'geometry'"));
     }
 
     [Test]
@@ -2024,8 +2024,8 @@ public class MergeScriptHelperTests
 
         // Fifth query is GetUpdateColumns - should check for both GEOGRAPHY and GEOMETRY
         var updateQuery = commandTexts[4];
-        Assert.That(updateQuery, Does.Contain("'GEOGRAPHY'"));
-        Assert.That(updateQuery, Does.Contain("'GEOMETRY'"));
+        Assert.That(updateQuery, Does.Contain("'geography'"));
+        Assert.That(updateQuery, Does.Contain("'geometry'"));
     }
 
     [Test]
@@ -2092,7 +2092,7 @@ public class MergeScriptHelperTests
             .ToList();
 
         var updateQuery = commandTexts[4];
-        Assert.That(updateQuery, Does.Contain("'DATETIMEOFFSET'"));
+        Assert.That(updateQuery, Does.Contain("'datetimeoffset'"));
         Assert.That(updateQuery, Does.Contain("'D'"));
     }
 

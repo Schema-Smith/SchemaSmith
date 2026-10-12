@@ -422,7 +422,7 @@ WHERE CAST(d.[f] AS VARBINARY(8)) = CAST(s.[f] AS VARBINARY(8)) AND CAST(d.[r] A
         conn.Open();
         using var cmd = conn.CreateCommand();
 
-        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}];";
+        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
         cmd.ExecuteNonQuery();
 
         conn.ChangeDatabase(_integrationDb);
