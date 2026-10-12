@@ -83,8 +83,16 @@ public abstract class WhatIfParityTestsSharedTests
                     "the real v2 deploy must create a foreign key, or this test proves nothing about them");
                 Assert.That(applied, Has.Some.Matches<string>(c => c.EndsWith("|dropped")),
                     "the real v2 deploy must drop something, or this test proves nothing about drops");
-                Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith("dataDelivery|") && c.EndsWith("|delivered")),
-                    "the real v2 deploy must record its data delivery");
+                cmd.CommandText = "SELECT VERSION()";
+                var server = cmd.ExecuteScalar()?.ToString() ?? "";
+                var deliverySkipped = Platform == Platform.MySQL && !server.Contains("MariaDB", StringComparison.OrdinalIgnoreCase)
+                    && Schema.Utility.VersionHelper.ParsePatchComparable(server, Platform) < 80000;
+                if (deliverySkipped)
+                    Assert.That(applied, Has.None.Matches<string>(c => c.StartsWith("dataDelivery|")),
+                        "below MySQL 8.0 automatic delivery is skipped as a downgrade, never reported as delivered");
+                else
+                    Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith("dataDelivery|") && c.EndsWith("|delivered")),
+                        "the real v2 deploy must record its data delivery");
                 foreach (var action in new[] { "|dropped", "|created" })
                     Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith("index|") && c.Contains("IX_WhatIfChild_Name") && c.EndsWith(action)),
                         $"the real v2 deploy must record the changed index as {action.TrimStart('|')}");
@@ -95,8 +103,8 @@ public abstract class WhatIfParityTestsSharedTests
                     foreach (var kind in new[] { "sequence|", "domain" })
                         Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith(kind)),
                             $"the real v2 deploy must record its {kind.TrimEnd('|')} changes");
-                Assert.That(WouldDeliver(whatIfLogs), Has.Count.EqualTo(1),
-                    "the WhatIf summary's wouldDeliver must list the JSON delivery the console announces");
+                Assert.That(WouldDeliver(whatIfLogs), Has.Count.EqualTo(deliverySkipped ? 0 : 1),
+                    "the WhatIf summary's wouldDeliver must list the JSON delivery the console announces, and none the real run skips");
 
                 // Scripts: WhatIf's wouldApply must name every script the real run ran, by file.
                 var previewedScripts = WouldApply(whatIfLogs);

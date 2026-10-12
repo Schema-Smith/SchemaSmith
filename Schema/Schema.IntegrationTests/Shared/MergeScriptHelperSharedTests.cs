@@ -33,9 +33,10 @@ public abstract class MergeScriptHelperSharedTests
     private string _testDb = null!;
     private int _serverVersionNum;
 
-    // JSON_TABLE exists on MySQL 8.0+ / MariaDB 10.6+; below that (MariaDB 10.2-10.5) the merge shreds
-    // @json_data with a recursive CTE instead. 0 = unknown (defaults to JSON_TABLE).
-    private bool UsesJsonTable => _serverVersionNum == 0 || (_serverVersionNum >= 1000 ? _serverVersionNum >= 1006 : _serverVersionNum >= 800);
+    // The row source the product picks: JSON_TABLE on MySQL 8.0+ and MariaDB 10.6+, except the MariaDB patches whose
+    // JSON_TABLE misreads strings, which shred with the recursive CTE used below 10.6.
+    private int _rowSourceVersionNum;
+    private bool UsesJsonTable => MergeScriptHelper.MySqlFamilyHasJsonTable(_rowSourceVersionNum);
 
     // JSON columns are distinguishable from longtext only on MySQL and MariaDB >= 10.4.3 (implicit json_valid
     // CHECK). On MariaDB 10.2-10.4.2 a JSON column is stored as plain longtext with no marker, so it is
@@ -52,6 +53,7 @@ public abstract class MergeScriptHelperSharedTests
         using var versionCmd = _connection.CreateCommand();
         versionCmd.CommandText = "SELECT SchemaSmith_ServerVersionNum()";
         _serverVersionNum = Convert.ToInt32(versionCmd.ExecuteScalar());
+        _rowSourceVersionNum = MergeScriptHelper.RowSourceVersionNumMySql(versionCmd, _serverVersionNum);
     }
 
     // Routes every test's merge build through the detected server version (major*100+minor). Below MySQL 8.0

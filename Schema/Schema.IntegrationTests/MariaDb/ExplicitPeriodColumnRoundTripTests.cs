@@ -1,4 +1,4 @@
-// Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
+﻿// Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
 using System.Data;
@@ -45,6 +45,9 @@ public class ExplicitPeriodColumnRoundTripTests
     [Test]
     public void AnExtractedTableWithExplicitPeriodColumns_Deploys()
     {
+        if (Schema.Utility.VersionHelper.ParsePatchComparable(Version(), Platform.MariaDb) < 100304)
+            Assert.Ignore("System versioning arrived in MariaDB 10.3.4.");
+
         Exec($@"CREATE TABLE `{_source}` (id INT NOT NULL, v INT NULL,
   rs TIMESTAMP(6) GENERATED ALWAYS AS ROW START, re TIMESTAMP(6) GENERATED ALWAYS AS ROW END,
   PERIOD FOR SYSTEM_TIME (rs, re), PRIMARY KEY (id, re)) WITH SYSTEM VERSIONING");
@@ -106,6 +109,13 @@ public class ExplicitPeriodColumnRoundTripTests
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private string Version()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT VERSION()";
+        return cmd.ExecuteScalar()?.ToString();
     }
 
     private long Scalar(string sql)

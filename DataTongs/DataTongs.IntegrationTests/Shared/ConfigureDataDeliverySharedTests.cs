@@ -467,6 +467,12 @@ public abstract class ConfigureDataDeliverySharedTests
 
         try
         {
+            // Below MySQL 8.0 DataTongs writes no merge script for any encoding and warns instead, so there is no Xml
+            // script to refuse.
+            using (var version = _connection.CreateCommand())
+                if (!configureDataDelivery && Platform == Platform.MySQL
+                    && TargetVersionDetector.Detect(version, Platform, _testDb).ServerComparable is > 0 and < 800)
+                    expectedExitCode = 1;
             Assert.That(_dataTongs.ExitCode, Is.EqualTo(expectedExitCode));
             Assert.That(Directory.Exists(scriptDir) ? Directory.GetFiles(scriptDir) : [], Is.Empty, "no script written");
             Assert.That(Directory.GetFiles(tableDataDir), Has.Length.EqualTo(1), "the content file is still written");
@@ -523,6 +529,10 @@ public abstract class ConfigureDataDeliverySharedTests
 
             command.CommandText = $"USE `{otherDb}`";
             command.ExecuteNonQuery();
+            // Below MariaDB 10.6 the script reads its rows through SchemaSmith's helper functions, which SchemaQuench
+            // installs in every database it deploys to; this stands in for that deploy.
+            if (script.Contains("SchemaSmith_"))
+                ForgeKindler.KindleTheForge(command, Platform);
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
             {
                 if (string.IsNullOrWhiteSpace(batch)) continue;
