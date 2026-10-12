@@ -309,10 +309,13 @@ BEGIN
     SELECT STRING_AGG('RAISE NOTICE ''  Dropping ' || CASE WHEN "IsConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''';' || CHR(10) ||
                       CASE WHEN "IsConstraint"
                            THEN 'ALTER TABLE "' || ti."TableSchema" || '"."' || ti."TableName" || '" DROP CONSTRAINT IF EXISTS "' || ti."IndexName" || '" CASCADE;'
-                           ELSE 'DROP INDEX IF EXISTS "' || ti."TableSchema" || '"."' || ti."IndexName" || '";' END, CHR(10))
+                           ELSE 'DROP INDEX IF EXISTS "' || ti."TableSchema" || '"."' || ti."IndexName" || '";' END || CHR(10) ||
+                      'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN "IsConstraint" THEN 'constraint' ELSE 'index' END || ''', ''' ||
+                      ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''', ''dropped'');', CHR(10))
       INTO sql_script
       FROM temp_indexes_to_drop ti;
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+    IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
     RAISE NOTICE 'Fixup Any Modified Index Fill Factors';
     SELECT STRING_AGG('RAISE NOTICE ''  Modify Fillfactor for ' || ti."TableSchema" || '.' || ti."Name" || ''';' || CHR(10) ||
@@ -379,7 +382,9 @@ BEGIN
                               -- (verified live on 16).
                               CASE WHEN COALESCE(ti."Tablespace", '') <> '' THEN ' TABLESPACE "' || ti."Tablespace" || '"' ELSE '' END ||
                               CASE WHEN NULLIF(ti."FilterExpression", '') IS NOT NULL THEN ' WHERE ' || ti."FilterExpression" ELSE '' END || ';'
-                           END, CHR(10))
+                           END || CHR(10) ||
+                      'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'constraint' ELSE 'index' END || ''', ''' ||
+                      ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || ''', ''created'');', CHR(10))
       INTO sql_script
       FROM temp_indexes ti
       WHERE NOT EXISTS (SELECT *
@@ -389,8 +394,14 @@ BEGIN
                                           AND tc.relname = ti."TableName"
                                           AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                           JOIN pg_class i ON i.oid = idx.indexrelid
-                          WHERE i.relname = ti."Name");
+                          WHERE i.relname = ti."Name")
+         -- Under WhatIf a modified index was not really dropped above, but the real run re-creates it.
+         OR (p_WhatIf AND EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                                   WHERE a."SessionId" = pg_backend_pid() AND a."ActionType" = 'wouldDrop'
+                                     AND a."ObjectType" IN ('index', 'constraint')
+                                     AND a."ObjectName" = ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name"));
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+    IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
 
     RAISE NOTICE 'Fixup Table Cluster';

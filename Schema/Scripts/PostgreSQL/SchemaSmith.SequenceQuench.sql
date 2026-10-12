@@ -85,6 +85,7 @@ BEGIN
                        JOIN pg_namespace n ON n.oid = c.relnamespace
                       WHERE c.relname = s."Name" AND n.nspname = s."Schema" AND c.relkind = 'S');
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- Converge the ones that exist. Every clause below is emitted only when it actually differs, so an
   -- unchanged sequence produces no statement at all rather than a no-op ALTER on every deploy.
@@ -129,6 +130,7 @@ BEGIN
       OR q.seqcache <> s."Cache"
       OR q.seqcycle <> s."Cycle";
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- Persistence is its own statement (ALTER SEQUENCE ... SET LOGGED / UNLOGGED, PostgreSQL 15+). Only a declared
   -- value is converged, so a package that leaves it out never touches an existing sequence.
@@ -145,4 +147,5 @@ BEGIN
      AND "SchemaSmith"."ServerVersionNum"() >= 15
      AND (s."PersistenceType" = 'unlogged') <> (c.relpersistence = 'u');
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 END $$;

@@ -165,6 +165,15 @@ BEGIN
     WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
       AND s.SEQ_IN_INDEX = 1;
 
+    -- Under WhatIf a modified index was not really dropped, but the real run re-creates it, so an index this session
+    -- previewed as dropped counts as missing.
+    IF p_WhatIf = 1 THEN
+        DELETE s FROM _SchemaSmith_IdxExistPostDrop s
+          JOIN SchemaSmith_ChangeAudit a
+            ON a.SessionId = CONNECTION_ID() AND a.ActionType = 'wouldDrop' AND a.ObjectType = 'index'
+           AND CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(s.TableName, '.', s.IndexName);
+    END IF;
+
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing indexes');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)

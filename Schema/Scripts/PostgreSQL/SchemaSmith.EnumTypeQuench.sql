@@ -66,6 +66,7 @@ BEGIN
                        JOIN pg_namespace n ON n.oid = ty.typnamespace
                       WHERE ty.typname = t."Name" AND n.nspname = t."Schema" AND ty.typtype = 'e');
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- Add values the package has and the type does not, positioned so the declared ORDER is honoured.
   -- Order is not cosmetic: PostgreSQL sorts and compares enum values by declared position, so appending
@@ -104,6 +105,7 @@ BEGIN
                               WHERE ty.typname = t."Name" AND n.nspname = t."Schema"
                                 AND e.enumlabel = u.val)) m;
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- A value the server has and the package no longer lists. PostgreSQL cannot remove one without
   -- recreating the type, which would mean dropping every column using it -- so this is REPORTED, loudly
@@ -119,10 +121,8 @@ BEGIN
   LOOP
     RAISE WARNING 'Enum type %.% has value ''%'' which the package no longer declares. PostgreSQL cannot remove an enum value without recreating the type (and dropping every column that uses it), so it is left in place — remove it by hand, or restore it to the package.',
       bad."Schema", bad."Name", bad.val;
-    IF NOT p_WhatIf THEN
-      INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
-        VALUES (pg_backend_pid(), 'enum value', bad."Schema" || '.' || bad."Name" || '.' || bad.val, 'wouldDrop');
-    END IF;
+    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+      VALUES (pg_backend_pid(), 'enum value', bad."Schema" || '.' || bad."Name" || '.' || bad.val, 'wouldDrop');
   END LOOP;
 
   -- A pure REORDER of existing values: the values present on BOTH sides appear in a different relative order
@@ -147,9 +147,7 @@ BEGIN
   LOOP
     RAISE WARNING 'Enum type %.% declares its values in a different order than the server has. PostgreSQL sorts and compares enum values by declared position, so the order is behavioural — but it cannot be changed without recreating the type (and dropping every column that uses it), so it is left as-is. Recreate the type by hand to reorder.',
       bad."Schema", bad."Name";
-    IF NOT p_WhatIf THEN
-      INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
-        VALUES (pg_backend_pid(), 'enum type', bad."Schema" || '.' || bad."Name", 'wouldModify');
-    END IF;
+    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+      VALUES (pg_backend_pid(), 'enum type', bad."Schema" || '.' || bad."Name", 'wouldModify');
   END LOOP;
 END $$;

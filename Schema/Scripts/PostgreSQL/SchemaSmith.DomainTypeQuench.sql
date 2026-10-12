@@ -87,6 +87,7 @@ BEGIN
                        JOIN pg_namespace n ON n.oid = ty.typnamespace
                       WHERE ty.typtype = 'd' AND ty.typname = t."Name" AND n.nspname = t."Schema");
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- REFUSE a base-type change before anything else is altered. There is no ALTER DOMAIN ... TYPE, so the
   -- only way to deliver this is to drop the domain -- which drops every column that uses it. Refusing by
@@ -196,6 +197,7 @@ BEGIN
             JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
            WHERE COALESCE(t."Default", '') <> COALESCE(PG_GET_EXPR(ty.typdefaultbin, 0), '')) s;
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- Constraints, converged as a set.
   --
@@ -218,6 +220,7 @@ BEGIN
    WHERE NOT EXISTS (SELECT 1 FROM pg_constraint c
                       WHERE c.contypid = ty.oid AND c.contype = 'c' AND c.conname = ck."ConstraintName");
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- A constraint whose NAME is unchanged but whose EXPRESSION was edited. Both passes around this one key
   -- on the name alone -- "Add Missing" skips a name that exists, "Drop Removed" skips a name that is still
@@ -294,6 +297,7 @@ BEGIN
     EXECUTE 'DROP DOMAIN IF EXISTS pg_temp._ss_domain_check_probe CASCADE';
   END LOOP;
   CALL "SchemaSmith"."ExecuteOrDebug"(NULLIF(sql_script, ''), p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(NULLIF(sql_script, '')); END IF;
 
   -- A constraint the package no longer declares is DROPPED, which is the one place this type differs from
   -- the enum -- and safely so: it removes a rule, not data, and nothing depends on it.
@@ -310,4 +314,5 @@ BEGIN
    WHERE NOT EXISTS (SELECT 1 FROM temp_domain_checks ck
                       WHERE ck."Schema" = t."Schema" AND ck."Name" = t."Name" AND ck."ConstraintName" = c.conname);
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 END $$;

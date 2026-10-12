@@ -445,6 +445,7 @@ public static class ForgeKindler
                 // expression stops reading as a change. Kindled like the other bootstrap tables.
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith.ExecuteOrDebug.sql"),
+                new("SchemaSmith.RecordWouldChanges.sql"),
                 new("SchemaSmith.QuoteColumnList.sql"),
                 new("SchemaSmith.QuoteIndexColumnList.sql"),
                 new("SchemaSmith.QuoteName.sql"),

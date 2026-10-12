@@ -57,20 +57,17 @@ public abstract class WhatIfParityTestsSharedTests
 
                 WritePackage(tempDir, version: 1);
                 RunSchemaQuench(LogDirFor(tempDir, "v1"), whatIf: false);
-                _environment.DidNotReceive().Exit(2);
-                _environment.DidNotReceive().Exit(3);
+                AssertRunSucceeded("the v1 deploy");
 
                 WritePackage(tempDir, version: 2);
                 var whatIfLogs = LogDirFor(tempDir, "whatif");
                 RunSchemaQuench(whatIfLogs, whatIf: true);
-                _environment.DidNotReceive().Exit(2);
-                _environment.DidNotReceive().Exit(3);
+                AssertRunSucceeded("the v2 WhatIf");
                 Assert.That(TableExists(cmd, "WhatIfNew"), Is.False, "WhatIf must not create the table v2 adds");
 
                 var realLogs = LogDirFor(tempDir, "real");
                 RunSchemaQuench(realLogs, whatIf: false);
-                _environment.DidNotReceive().Exit(2);
-                _environment.DidNotReceive().Exit(3);
+                AssertRunSucceeded("the v2 deploy");
 
                 var previewed = Changes(whatIfLogs, expectedMode: "WhatIf");
                 var applied = Changes(realLogs, expectedMode: "Quench");
@@ -82,6 +79,13 @@ public abstract class WhatIfParityTestsSharedTests
                     "the real v2 deploy must drop something, or this test proves nothing about drops");
                 Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith("dataDelivery|") && c.EndsWith("|delivered")),
                     "the real v2 deploy must record its data delivery");
+                foreach (var action in new[] { "|dropped", "|created" })
+                    Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith("index|") && c.Contains("IX_WhatIfChild_Name") && c.EndsWith(action)),
+                        $"the real v2 deploy must record the changed index as {action.TrimStart('|')}");
+                if (Platform == Platform.PostgreSQL)
+                    foreach (var kind in new[] { "sequence|", "domain" })
+                        Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith(kind)),
+                            $"the real v2 deploy must record its {kind.TrimEnd('|')} changes");
                 Assert.That(WouldDeliver(whatIfLogs), Has.Count.EqualTo(1),
                     "the WhatIf summary's wouldDeliver must list the JSON delivery the console announces");
 
@@ -215,6 +219,8 @@ public abstract class WhatIfParityTestsSharedTests
             }
             """);
 
+        if (Platform == Platform.PostgreSQL) WritePostgreSqlTypes(templateDir, version);
+
         var productBeforeDir = Path.Join(dir, "ProductBefore");
         Directory.CreateDirectory(productBeforeDir);
         File.WriteAllText(Path.Join(productBeforeDir, "WhatIfProductBefore.sql"), "SELECT 1");
@@ -240,12 +246,13 @@ public abstract class WhatIfParityTestsSharedTests
         WriteTable(tablesDir, "WhatIfParent", [Column("Id", IntType, false)], [PrimaryKey("WhatIfParent")],
             dataDelivery: "{ \"ContentFile\": \"Tables/WhatIfParent.tabledata\", \"MergeType\": \"Insert\" }");
 
-        // v2: a widened column, an added column and index, the old index, FK and CHECK removed, a new table with
-        // its own foreign key, and a table removed from the product.
+        // v2: a widened column, an added column and index, an index whose columns change, the FK and CHECK
+        // removed, a new table with its own foreign key, and a table removed from the product.
         WriteTable(tablesDir, "WhatIfChild",
             [Column("Id", IntType, false), Column("ParentId", IntType, false), Column("Name", StringType(100), true),
              Column("Extra", IntType, true)],
-            [PrimaryKey("WhatIfChild"), Index("IX_WhatIfChild_Extra", "Extra")]);
+            [PrimaryKey("WhatIfChild"), Index("IX_WhatIfChild_Extra", "Extra"),
+             Index("IX_WhatIfChild_Name", $"{Quote("Name")},{Quote("Id")}")]);
         WriteTable(tablesDir, "WhatIfNew",
             [Column("Id", IntType, false), Column("ParentId", IntType, false)],
             [PrimaryKey("WhatIfNew")],
@@ -271,6 +278,34 @@ public abstract class WhatIfParityTestsSharedTests
         File.WriteAllText(Path.Join(dir, $"{table}.json"), json);
     }
 
+    // Sequences, domains and enum types are quenched by their own procedures, before the tables.
+    // v2 changes each kind and adds a new one, so every create and modify path is compared.
+    private static void WritePostgreSqlTypes(string templateDir, int version)
+    {
+        string Folder(string name)
+        {
+            var path = Path.Join(templateDir, name);
+            if (Directory.Exists(path)) Directory.Delete(path, true);
+            Directory.CreateDirectory(path);
+            return path;
+        }
+
+        var sequences = Folder("Sequences");
+        var domains = Folder("Domain Types");
+        var enums = Folder("Enum Types");
+        File.WriteAllText(Path.Join(sequences, "WhatIfSeq.json"),
+            $$"""{ "Schema": "public", "Name": "WhatIfSeq", "Increment": {{(version == 1 ? 1 : 5)}} }""");
+        File.WriteAllText(Path.Join(domains, "WhatIfDomain.json"), version == 1
+            ? """{ "Schema": "public", "Name": "WhatIfDomain", "DataType": "integer" }"""
+            : """{ "Schema": "public", "Name": "WhatIfDomain", "DataType": "integer", "NotNull": true, "CheckConstraints": [ { "Name": "WhatIfDomain_Positive", "Expression": "VALUE > 0" } ] }""");
+        File.WriteAllText(Path.Join(enums, "WhatIfMood.json"), version == 1
+            ? """{ "Schema": "public", "Name": "WhatIfMood", "Values": [ "happy", "sad" ] }"""
+            : """{ "Schema": "public", "Name": "WhatIfMood", "Values": [ "happy", "sad", "meh" ] }""");
+        if (version == 1) return;
+        File.WriteAllText(Path.Join(sequences, "WhatIfSeq2.json"), """{ "Schema": "public", "Name": "WhatIfSeq2" }""");
+        File.WriteAllText(Path.Join(domains, "WhatIfDomain2.json"), """{ "Schema": "public", "Name": "WhatIfDomain2", "DataType": "text" }""");
+    }
+
     private string View(string name, string value) => Platform switch
     {
         Platform.SqlServer => $"CREATE OR ALTER VIEW dbo.{name} AS SELECT {value} AS Answer",
@@ -284,8 +319,8 @@ public abstract class WhatIfParityTestsSharedTests
     private string PrimaryKey(string table) =>
         $"{{ \"Name\": \"{Quote($"PK_{table}")}\", \"PrimaryKey\": true, \"Unique\": true, \"IndexColumns\": \"{Quote("Id")}\" }}";
 
-    private string Index(string name, string column) =>
-        $"{{ \"Name\": \"{Quote(name)}\", \"PrimaryKey\": false, \"Unique\": false, \"IndexColumns\": \"{Quote(column)}\" }}";
+    private string Index(string name, string columns) =>
+        $"{{ \"Name\": \"{Quote(name)}\", \"PrimaryKey\": false, \"Unique\": false, \"IndexColumns\": \"{(columns.Contains(',') ? columns : Quote(columns))}\" }}";
 
     private string ForeignKey(string name, string column)
     {
@@ -358,6 +393,16 @@ public abstract class WhatIfParityTestsSharedTests
 
     private void Cleanup(IDbCommand cmd)
     {
+        if (Platform == Platform.PostgreSQL)
+        {
+            cmd.CommandText = """
+                DROP SEQUENCE IF EXISTS public."WhatIfSeq", public."WhatIfSeq2";
+                DROP DOMAIN IF EXISTS public."WhatIfDomain", public."WhatIfDomain2" CASCADE;
+                DROP TYPE IF EXISTS public."WhatIfMood" CASCADE;
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
         foreach (var view in new[] { "WhatIfPlainView", "WhatIfTokenView" })
         {
             cmd.CommandText = Platform switch
@@ -405,6 +450,17 @@ public abstract class WhatIfParityTestsSharedTests
         FactoryContainer.Register(_environment);
         LogFactory.Register("ErrorLog", _errorLog);
         LogFactory.Register("ProgressLog", _progressLog);
+    }
+
+    private void AssertRunSucceeded(string run)
+    {
+        var exits = _environment.ReceivedCalls().Where(c => c.GetMethodInfo().Name == "Exit")
+            .Select(c => (int)c.GetArguments()[0]).ToList();
+        var errors = _errorLog.ReceivedCalls().Concat(_progressLog.ReceivedCalls())
+            .Where(c => c.GetMethodInfo().Name == "Error").Select(c => c.GetArguments()[0]?.ToString());
+        Assert.That(exits, Has.None.GreaterThanOrEqualTo(2),
+            $"{run} failed:{Environment.NewLine}  {string.Join(Environment.NewLine + "  ", errors)}");
+        _errorLog.ClearReceivedCalls();
     }
 
     // Switches reach CommandLineParser through the IEnvironment isolator, not Main's args.

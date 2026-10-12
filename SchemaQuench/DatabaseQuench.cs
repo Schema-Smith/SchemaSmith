@@ -678,7 +678,7 @@ public class DatabaseQuench
                 if (_product.Platform == Platform.PostgreSQL && _template.DomainTypes.Count > 0)
                 {
                     var domainTypeSw = Stopwatch.StartNew();
-                    _checkpointing.Track(DbScope, "DomainTypeQuench", () => QuenchDomainTypes(command));
+                    _checkpointing.Track(DbScope, "DomainTypeQuench", () => QuenchDomainTypes(effectiveTableCmd));
                     domainTypeSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "DomainTypeQuench", domainTypeSw.ElapsedMilliseconds, 0);
                 }
@@ -689,7 +689,7 @@ public class DatabaseQuench
                 if (_product.Platform == Platform.PostgreSQL && _template.EnumTypes.Count > 0)
                 {
                     var enumTypeSw = Stopwatch.StartNew();
-                    _checkpointing.Track(DbScope, "EnumTypeQuench", () => QuenchEnumTypes(command));
+                    _checkpointing.Track(DbScope, "EnumTypeQuench", () => QuenchEnumTypes(effectiveTableCmd));
                     enumTypeSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "EnumTypeQuench", enumTypeSw.ElapsedMilliseconds, 0);
                 }
@@ -699,7 +699,7 @@ public class DatabaseQuench
                 if (_product.Platform == Platform.PostgreSQL && _template.Sequences.Count > 0)
                 {
                     var sequenceSw = Stopwatch.StartNew();
-                    _checkpointing.Track(DbScope, "SequenceQuench", () => QuenchSequences(command));
+                    _checkpointing.Track(DbScope, "SequenceQuench", () => QuenchSequences(effectiveTableCmd));
                     sequenceSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "SequenceQuench", sequenceSw.ElapsedMilliseconds, 0);
                 }

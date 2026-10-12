@@ -179,7 +179,12 @@ BEGIN
                                         AND tc.relname = ti."TableName"
                                         AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                         JOIN pg_class i ON i.oid = idx.indexrelid
-                        WHERE i.relname = ti."Name");
+                        WHERE i.relname = ti."Name")
+       -- Under WhatIf a modified index was not really dropped, but the real run re-creates it.
+       OR (p_WhatIf AND EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                                 WHERE a."SessionId" = pg_backend_pid() AND a."ActionType" = 'wouldDrop'
+                                   AND a."ObjectType" IN ('index', 'constraint')
+                                   AND a."ObjectName" = ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name"));
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
   -- #363: WhatIf twin of the embedded 'index'/'constraint' 'created' audit above; same predicate.
@@ -195,7 +200,12 @@ BEGIN
                                             AND tc.relname = ti."TableName"
                                             AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                             JOIN pg_class i ON i.oid = idx.indexrelid
-                            WHERE i.relname = ti."Name");
+                            WHERE i.relname = ti."Name")
+           -- Under WhatIf a modified index was not really dropped, but the real run re-creates it.
+           OR (p_WhatIf AND EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                                     WHERE a."SessionId" = pg_backend_pid() AND a."ActionType" = 'wouldDrop'
+                                       AND a."ObjectType" IN ('index', 'constraint')
+                                       AND a."ObjectName" = ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name"));
   END IF;
 
   RAISE NOTICE 'Fixup Table Cluster';

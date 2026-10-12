@@ -242,6 +242,7 @@ Where the counts are the summary, `details[]` is the itemized list — one row p
 - **`constraint`** — includes exclude constraints (PostgreSQL), which land in the generic constraint type.
 - **`dataDelivery`** — a table's `DataDelivery` that ran (`delivered`), or under `WhatIf` would run (`wouldDeliver`). The name is the table's, with ` [variant]` when the delivery names one.
 - **`database`** and **`schema`** — a database or schema created because its `TemplateTargets` entry or template sets `CreateIfMissing` (`created`, or `wouldCreate` under `WhatIf`).
+- **`sequence`**, **`domain type`**, **`domain constraint`**, **`enum type`** and **`enum value`** — PostgreSQL sequences, domains and enum types. An enum value the package no longer declares, or a changed value order, is recorded as `wouldDrop` / `wouldModify` even on a real run, because PostgreSQL cannot apply it without recreating the type.
 
 These appear as `details[]` rows with their real `objectType` and `action` even though no top-level count field aggregates them — the detail is preserved even where the summary doesn't bucket it.
 
