@@ -169,6 +169,18 @@ public class FileStreamDeployTests
         });
     }
 
+    // The FILESTREAM column is added by its own pass, after the table; that pass records the column it adds.
+    [Test]
+    public void AFileStreamColumn_IsRecordedAsCreated()
+    {
+        ScalarString("DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID; SELECT ''");
+        Deploy(Package("FsAudit", "\"UniqueConstraint\": true"));
+
+        Assert.That(ScalarString("SELECT TOP 1 ActionType FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID "
+                                 + "AND ObjectType = 'column' AND ObjectName = '[dbo].[FsAudit].[Doc]'"),
+            Is.EqualTo("created"), "the change audit must record the FILESTREAM column the deploy added");
+    }
+
     [Test]
     public void AFileStreamColumn_IsIdempotent()
     {

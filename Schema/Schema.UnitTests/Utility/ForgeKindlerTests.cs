@@ -329,7 +329,8 @@ public class ForgeKindlerTests
         //   below SQL Server 2016 SP1, so the index and table degrades ask the edition as well as the version).
         // +1 = SchemaSmith.DegradeUnsupportedFullText (STATISTICAL_SEMANTICS without a registered semantic
         //   database; called after the full-text parse on both the table and --IndexOnly paths).
-        Assert.That(sqlServer.Length, Is.EqualTo(48));
+        // +1 = SchemaSmith.RecordWouldChanges (WhatIf writes the change rows a quench script carries, as previews).
+        Assert.That(sqlServer.Length, Is.EqualTo(49));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns

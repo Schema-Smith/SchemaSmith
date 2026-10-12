@@ -61,8 +61,14 @@ public abstract class WhatIfParityTestsSharedTests
 
                 WritePackage(tempDir, version: 2);
                 var whatIfLogs = LogDirFor(tempDir, "whatif");
+                _progressLog.ClearReceivedCalls();
                 RunSchemaQuench(whatIfLogs, whatIf: true);
                 AssertRunSucceeded("the v2 WhatIf");
+                var auditLines = _progressLog.ReceivedCalls().Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "")
+                    .Where(line => line.Contains("ChangeAudit")).ToList();
+                Assert.That(auditLines, Is.Empty,
+                    "the WhatIf console must not show the change rows a quench records, since WhatIf does not write them:"
+                    + Environment.NewLine + string.Join(Environment.NewLine, auditLines.Take(5)));
                 Assert.That(TableExists(cmd, "WhatIfNew"), Is.False, "WhatIf must not create the table v2 adds");
 
                 var realLogs = LogDirFor(tempDir, "real");
@@ -82,6 +88,9 @@ public abstract class WhatIfParityTestsSharedTests
                 foreach (var action in new[] { "|dropped", "|created" })
                     Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith("index|") && c.Contains("IX_WhatIfChild_Name") && c.EndsWith(action)),
                         $"the real v2 deploy must record the changed index as {action.TrimStart('|')}");
+                if (Platform == Platform.SqlServer)
+                    foreach (var row in new[] { "temporal|[dbo].[WhatIfParent]|created", "constraint|[dbo].[WhatIfChild].[Extra] (check)|created" })
+                        Assert.That(applied, Does.Contain(row), $"the real v2 deploy must record {row}");
                 if (Platform == Platform.PostgreSQL)
                     foreach (var kind in new[] { "sequence|", "domain" })
                         Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith(kind)),
@@ -244,13 +253,14 @@ public abstract class WhatIfParityTestsSharedTests
         // v2 also delivers rows into the parent, through a JSON DataDelivery.
         File.WriteAllText(Path.Join(tablesDir, "WhatIfParent.tabledata"), "[{\"Id\":1},{\"Id\":2}]");
         WriteTable(tablesDir, "WhatIfParent", [Column("Id", IntType, false)], [PrimaryKey("WhatIfParent")],
-            dataDelivery: "{ \"ContentFile\": \"Tables/WhatIfParent.tabledata\", \"MergeType\": \"Insert\" }");
+            dataDelivery: "{ \"ContentFile\": \"Tables/WhatIfParent.tabledata\", \"MergeType\": \"Insert\" }",
+            temporal: Platform == Platform.SqlServer);
 
         // v2: a widened column, an added column and index, an index whose columns change, the FK and CHECK
         // removed, a new table with its own foreign key, and a table removed from the product.
         WriteTable(tablesDir, "WhatIfChild",
             [Column("Id", IntType, false), Column("ParentId", IntType, false), Column("Name", StringType(100), true),
-             Column("Extra", IntType, true)],
+             Platform == Platform.SqlServer ? Column("Extra", IntType, true, check: "[Extra] > 0") : Column("Extra", IntType, true)],
             [PrimaryKey("WhatIfChild"), Index("IX_WhatIfChild_Extra", "Extra"),
              Index("IX_WhatIfChild_Name", $"{Quote("Name")},{Quote("Id")}")]);
         WriteTable(tablesDir, "WhatIfNew",
@@ -260,7 +270,7 @@ public abstract class WhatIfParityTestsSharedTests
     }
 
     private void WriteTable(string dir, string table, string[] columns, string[] indexes,
-        string[] foreignKeys = null, string[] checks = null, string dataDelivery = null)
+        string[] foreignKeys = null, string[] checks = null, string dataDelivery = null, bool temporal = false)
     {
         var schema = Platform switch
         {
@@ -274,6 +284,7 @@ public abstract class WhatIfParityTestsSharedTests
                    + $" \"ForeignKeys\": [ {string.Join(", ", foreignKeys ?? [])} ],"
                    + $" \"CheckConstraints\": [ {string.Join(", ", checks ?? [])} ]"
                    + (dataDelivery == null ? "" : $", \"DataDelivery\": {dataDelivery}")
+                   + (temporal ? ", \"IsTemporal\": true" : "")
                    + " }";
         File.WriteAllText(Path.Join(dir, $"{table}.json"), json);
     }
@@ -313,8 +324,9 @@ public abstract class WhatIfParityTestsSharedTests
         _ => $"CREATE OR REPLACE VIEW `{name}` AS SELECT {value} AS Answer"
     };
 
-    private string Column(string name, string type, bool nullable) =>
-        $"{{ \"Name\": \"{Quote(name)}\", \"DataType\": \"{type}\", \"Nullable\": {(nullable ? "true" : "false")} }}";
+    private string Column(string name, string type, bool nullable, string check = null) =>
+        $"{{ \"Name\": \"{Quote(name)}\", \"DataType\": \"{type}\", \"Nullable\": {(nullable ? "true" : "false")}"
+        + (check == null ? "" : $", \"CheckExpression\": \"{check}\"") + " }";
 
     private string PrimaryKey(string table) =>
         $"{{ \"Name\": \"{Quote($"PK_{table}")}\", \"PrimaryKey\": true, \"Unique\": true, \"IndexColumns\": \"{Quote("Id")}\" }}";
@@ -393,6 +405,16 @@ public abstract class WhatIfParityTestsSharedTests
 
     private void Cleanup(IDbCommand cmd)
     {
+        if (Platform == Platform.SqlServer)
+        {
+            cmd.CommandText = """
+                IF OBJECTPROPERTY(OBJECT_ID('dbo.WhatIfParent'), 'TableTemporalType') = 2
+                  ALTER TABLE dbo.WhatIfParent SET (SYSTEM_VERSIONING = OFF);
+                IF OBJECT_ID('dbo.WhatIfParent_Hist') IS NOT NULL DROP TABLE dbo.WhatIfParent_Hist;
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
         if (Platform == Platform.PostgreSQL)
         {
             cmd.CommandText = """

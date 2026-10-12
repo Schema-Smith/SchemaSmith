@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
 using NUnit.Framework;
 using Schema.DataAccess;
@@ -97,13 +98,50 @@ public class ChangeTrackingDeployTests
         }]
         """;
 
-    private void Deploy(string tableJson)
+    private void Deploy(string tableJson, bool whatIf = false)
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandTimeout = 300;
         cmd.CommandText = "EXEC SchemaSmith.TableQuench @ProductName = 'CtTest', "
-                          + $"@TableDefinitions = N'{tableJson.Replace("'", "''")}'";
+                          + $"@TableDefinitions = N'{tableJson.Replace("'", "''")}', @WhatIf = {(whatIf ? 1 : 0)}";
         cmd.ExecuteNonQuery();
+    }
+
+    // The change rows this session recorded for change tracking, drained so the next read starts empty.
+    private List<string> DrainChangeTrackingAudit()
+    {
+        var rows = new List<string>();
+        using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT ObjectType + '|' + ObjectName + '|' + ActionType FROM SchemaSmith.ChangeAudit "
+                              + "WHERE SessionId = @@SPID AND ObjectType = 'changeTracking' ORDER BY Id";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) rows.Add(reader.GetString(0));
+        }
+        Exec("DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID");
+        return rows;
+    }
+
+    // Each change is recorded, and WhatIf records the same change as a preview.
+    [Test]
+    public void ChangeTrackingChanges_AreRecorded_TheSameUnderWhatIfAsInARealRun()
+    {
+        DrainChangeTrackingAudit();
+        Deploy(Json("CtAudit", ", \"EnableChangeTracking\": true"));
+        Assert.That(DrainChangeTrackingAudit(), Is.EqualTo(new[] { "changeTracking|[dbo].[CtAudit]|created" }),
+            "enabling change tracking must be recorded");
+
+        var reset = Json("CtAudit", ", \"EnableChangeTracking\": true, \"TrackColumnsUpdated\": true");
+        Deploy(reset, whatIf: true);
+        Assert.That(DrainChangeTrackingAudit(), Is.EqualTo(new[] { "changeTracking|[dbo].[CtAudit]|wouldModify" }),
+            "WhatIf must record the reset it would make");
+        Deploy(reset);
+        Assert.That(DrainChangeTrackingAudit(), Is.EqualTo(new[] { "changeTracking|[dbo].[CtAudit]|modified" }),
+            "the reset must be recorded");
+
+        Deploy(Json("CtAudit", ", \"EnableChangeTracking\": false"));
+        Assert.That(DrainChangeTrackingAudit(), Is.EqualTo(new[] { "changeTracking|[dbo].[CtAudit]|dropped" }),
+            "disabling change tracking must be recorded");
     }
 
     private int TrackedCount(string table) =>

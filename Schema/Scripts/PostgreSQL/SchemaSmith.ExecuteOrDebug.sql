@@ -14,7 +14,8 @@ DECLARE
 BEGIN
     IF NULLIF(p_Script, '') IS NOT NULL THEN
         IF p_WhatIf THEN
-            RAISE NOTICE '%', p_Script;
+            -- The script's own change rows are not written under WhatIf, so they are not shown either.
+            RAISE NOTICE '%', regexp_replace(p_Script, 'INSERT INTO "SchemaSmith"\."ChangeAudit".*?''\);', '', 'g');
         ELSE
             code_block := '
 D' || 'O $' || '$

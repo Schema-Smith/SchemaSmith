@@ -252,7 +252,8 @@ BEGIN TRY
                                   'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' +
                                        ISNULL(t.[HistoryTableSchema], t.[Schema]) + '.' + QUOTENAME(ISNULL(SchemaSmith.fn_StripBracketWrapping(t.[HistoryTableName]), SchemaSmith.fn_StripBracketWrapping(t.[Name]) + '_Hist')) +
                                        CASE WHEN RTRIM(ISNULL(t.[HistoryRetentionPeriod], '')) <> '' THEN ', HISTORY_RETENTION_PERIOD = ' + t.[HistoryRetentionPeriod] ELSE '' END +
-                                       '));' AS NVARCHAR(MAX))
+                                       '));' + CHAR(13) + CHAR(10) +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''temporal'', ''' + REPLACE(t.[Schema] + '.' + t.[Name], '''', '''''') + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #Tables t WITH (NOLOCK)
                            WHERE t.IsTemporal = 1
                              AND OBJECTPROPERTY(OBJECT_ID([Schema] + '.' + [Name]), 'TableTemporalType') = 0
@@ -260,7 +261,7 @@ BEGIN TRY
                                               WHERE ep.class = 1 AND ep.major_id = OBJECT_ID([Schema] + '.' + [Name])
                                                 AND ep.minor_id = 0 AND ep.[name] = N'SchemaSmith_SuspendedHistory')
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
 
   -- #depth-gap: re-declaring HISTORY_TABLE on an already-versioned table needs no live-state pre-check --
   -- verified against a live SQL Server: re-issuing the SAME history table is a silent no-op (no error, no
@@ -437,7 +438,8 @@ BEGIN TRY
                               AND sc.[name] = SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName]))
 
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding check constrain to column ' + c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ADD CHECK (' + c.[CheckExpression] + ');' AS NVARCHAR(MAX))
+                                  'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ADD CHECK (' + c.[CheckExpression] + ');' + CHAR(13) + CHAR(10) +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', ''' + REPLACE(c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ' (check)', '''', '''''') + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #Columns c WITH (NOLOCK)
                            WHERE RTRIM(ISNULL(c.[CheckExpression], '')) <> ''
                              AND NOT EXISTS (SELECT *
@@ -445,7 +447,7 @@ BEGIN TRY
                                                WHERE sc.[parent_object_id] = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
                                                  AND COL_NAME(sc.parent_object_id, sc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
   
   RAISERROR('Add Missing FullText Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding fulltext index on ' + fi.[Schema] + '.' + fi.[TableName] + CASE WHEN RTRIM(ISNULL(fi.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(fi.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +

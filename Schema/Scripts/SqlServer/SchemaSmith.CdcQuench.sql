@@ -29,10 +29,12 @@ BEGIN TRY
                 CASE WHEN t.CdcSupportsNetChanges IS NOT NULL THEN ', @supports_net_changes = ' + CASE WHEN t.CdcSupportsNetChanges = 1 THEN '1' ELSE '0' END
                      WHEN t.NewTable = 1 THEN ', @supports_net_changes = 0'
                      ELSE '' END +
-                ISNULL(', @index_name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName), '''', '''''') + '''', '') + ';' + CHAR(13) + CHAR(10)
+                ISNULL(', @index_name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName), '''', '''''') + '''', '') + ';' + CHAR(13) + CHAR(10) +
+                'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE(t.[Schema] + '.' + t.[Name], '''', '''''') + ''', ''created'');' + CHAR(13) + CHAR(10)
            WHEN t.EnableCDC = 0 AND st.is_tracked_by_cdc = 1
            THEN 'RAISERROR(''  Disable CDC on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                'EXEC sys.sp_cdc_disable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @capture_instance = N''' + ct.capture_instance + ''';' + CHAR(13) + CHAR(10)
+                'EXEC sys.sp_cdc_disable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @capture_instance = N''' + ct.capture_instance + ''';' + CHAR(13) + CHAR(10) +
+                'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE(t.[Schema] + '.' + t.[Name], '''', '''''') + ''', ''dropped'');' + CHAR(13) + CHAR(10)
            ELSE '' END
       FROM #Tables t WITH (NOLOCK)
       JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
@@ -41,7 +43,7 @@ BEGIN TRY
          OR (t.EnableCDC = 0 AND st.is_tracked_by_cdc = 1)
     IF @v_SQL <> ''
     BEGIN
-      IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+      IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
     END
   END
 
@@ -102,12 +104,13 @@ BEGIN TRY
       CASE WHEN r.NewIndexName IS NOT NULL
                 AND EXISTS (SELECT 1 FROM sys.indexes i WHERE i.[object_id] = OBJECT_ID(r.[Schema] + '.' + r.[TableName]) AND i.[name] = r.NewIndexName)
            THEN ', @index_name = N''' + REPLACE(r.NewIndexName, '''', '''''') + ''''
-           ELSE '' END + ';' + CHAR(13) + CHAR(10)
+           ELSE '' END + ';' + CHAR(13) + CHAR(10) +
+      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE(r.[Schema] + '.' + r.[TableName], '''', '''''') + ''', ''modified'');' + CHAR(13) + CHAR(10)
       FROM #CdcRotate r WITH (NOLOCK)
       CROSS APPLY (SELECT SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + '_' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) AS BaseName) b
     IF @v_SQL <> ''
     BEGIN
-      IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+      IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
     END
   END
   SET NOCOUNT OFF

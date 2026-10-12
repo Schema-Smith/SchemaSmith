@@ -592,6 +592,7 @@ Product scripts run against the administrative connection, outside the per-datab
 See exactly what SchemaQuench would do before it touches a single table. Set `WhatIfONLY` to `true` to perform a dry run. In WhatIf mode:
 
 - **Validation scripts** execute normally (server validation, baseline validation).
+- **SchemaSmith's own helper schema** is installed or updated on the target, as on a real run, so WhatIf needs the same permissions. None of your objects change.
 - **Table quench procedures** run with `@WhatIf = 1`, generating the SQL that would be executed and logging it without applying changes.
 - **Migration scripts** show detailed status for each script:
   - `Would APPLY: {script}` for scripts that haven't yet been tracked.

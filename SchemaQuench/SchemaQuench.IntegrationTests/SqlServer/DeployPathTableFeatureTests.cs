@@ -64,12 +64,14 @@ public class DeployPathTableFeatureTests
             Assert.That(IsTrackedByCdc(cmd), Is.True, "a new EnableCDC table must be tracked after a real deploy");
             Assert.That(NewestInstanceColumns(cmd), Is.EqualTo(new[] { "A", "Id", "Twice" }),
                 "the capture instance must cover every declared column, computed ones included");
+            Assert.That(CdcChanges(), Is.EqualTo(new[] { "created" }), "the summary must record CDC being enabled");
 
             // 2. A column change rotates to an instance that includes the new column.
             deploy(CdcTable(enableCdc: true, extraColumn: true));
             Assert.That(NewestInstanceColumns(cmd), Is.EqualTo(new[] { "A", "B", "Id", "Twice" }),
                 "a column change must rotate to a capture instance that includes the new column");
             Assert.That(InstanceCount(cmd), Is.EqualTo(2), "rotation keeps the old instance for the operator to drain");
+            Assert.That(CdcChanges(), Is.EqualTo(new[] { "modified" }), "the summary must record the rotation");
 
             // 3. Leaving EnableCDC out leaves the table's CDC as it is: no disable, no rotation. It used to be disabled,
             //    losing the change table and its history, which nothing could rebuild.
@@ -80,7 +82,18 @@ public class DeployPathTableFeatureTests
             // 4. Only an explicit false turns it off.
             deploy(CdcTable(enableCdc: false, extraColumn: true));
             Assert.That(IsTrackedByCdc(cmd), Is.False, "EnableCDC false must disable CDC on the table");
+            // One row per capture instance: the rotation left two, and each is disabled.
+            Assert.That(CdcChanges(), Is.EqualTo(new[] { "dropped", "dropped" }), "the summary must record CDC being disabled");
         });
+    }
+
+    // The CDC change rows the last deploy's summary recorded for the probe table.
+    private static List<string> CdcChanges()
+    {
+        var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+        return ((JArray)summary.SelectToken("objectChanges.details") ?? [])
+            .Where(d => (string)d["objectType"] == "changeDataCapture" && ((string)d["objectName"]).Contains("DeployProbe"))
+            .Select(d => (string)d["action"]).ToList();
     }
 
     // #426. SQL Server defaults @supports_net_changes to ON once the table has a primary key, and since the #420 move a
