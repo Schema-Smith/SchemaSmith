@@ -245,6 +245,31 @@ BEGIN
         WHERE t."Schema" = c.table_schema
           AND t."Name" = c.table_name;
 
+    -- A package from an earlier release can spell a column's type or collation the way extraction used to: an
+    -- extension type without its modifier (public.geometry), an array of a public type unqualified (e[]), a collation
+    -- by its bare name. Each names what the live column already has, so it takes the live spelling instead of reading
+    -- as a change that would strip the modifier. Built-in types are left alone: varchar over a live varchar(20) is a
+    -- real change.
+    UPDATE temp_columns tc
+       SET "DataType" = ec."DataType"
+      FROM temp_existing_columns ec
+      JOIN pg_attribute a ON a.attrelid = TO_REGCLASS(QUOTE_IDENT(ec."TableSchema") || '.' || QUOTE_IDENT(ec."TableName"))
+                         AND a.attname = ec."ColumnName" AND NOT a.attisdropped
+      JOIN pg_type lt ON lt.oid = a.atttypid
+     WHERE tc."TableSchema" = ec."TableSchema" AND tc."TableName" = ec."TableName" AND tc."Name" = ec."ColumnName"
+       AND tc."DataType" IS DISTINCT FROM ec."DataType"
+       AND POSITION('(' IN tc."DataType") = 0
+       AND lt.typnamespace <> 'pg_catalog'::REGNAMESPACE
+       AND TO_REGTYPE(tc."DataType") = a.atttypid;
+
+    UPDATE temp_columns tc
+       SET "Collation" = ec."Collation"
+      FROM temp_existing_columns ec
+     WHERE tc."TableSchema" = ec."TableSchema" AND tc."TableName" = ec."TableName" AND tc."Name" = ec."ColumnName"
+       AND COALESCE(tc."Collation", '') <> '' AND tc."Collation" IS DISTINCT FROM ec."Collation"
+       AND POSITION('"."' IN tc."Collation") = 0
+       AND ec."Collation" LIKE '%.' || "SchemaSmith"."QuoteName"(BTRIM(tc."Collation", '"'));
+
     ------------------------------------------------------------------------------------------------
     -- THE REBUILD DECISION POINT.
     --

@@ -152,6 +152,18 @@ BEGIN
     END IF;
   END LOOP;
 
+  -- A collation declared by its bare name, as earlier releases extracted it, names the one the domain already has.
+  UPDATE temp_domain_types t
+     SET "Collation" = x.deployed
+    FROM pg_type ty
+    JOIN pg_namespace n ON n.oid = ty.typnamespace
+    JOIN pg_collation co ON co.oid = ty.typcollation
+    JOIN pg_namespace cn ON cn.oid = co.collnamespace
+   CROSS JOIN LATERAL (SELECT "SchemaSmith"."ColumnCollation"(cn.nspname, co.collname) AS deployed) x
+   WHERE ty.typname = t."Name" AND ty.typtype = 'd' AND n.nspname = t."Schema"
+     AND COALESCE(t."Collation", '') <> '' AND POSITION('"."' IN t."Collation") = 0
+     AND co.collname = BTRIM(t."Collation", '"') AND x.deployed <> t."Collation";
+
   -- REFUSE a collation change for the same reason: there is no ALTER DOMAIN ... COLLATE. Only a declared
   -- collation is checked, so a package that leaves it out keeps deploying whatever the domain has.
   FOR bad IN

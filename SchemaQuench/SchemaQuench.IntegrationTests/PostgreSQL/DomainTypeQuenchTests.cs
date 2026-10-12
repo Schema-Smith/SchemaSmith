@@ -319,6 +319,37 @@ public class DomainTypeQuenchTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // Earlier releases extracted a domain's collation outside pg_catalog by its bare name. Read back qualified, that
+    // looked like a collation change, which a domain cannot take, so every redeploy of such a package was refused.
+    [Test]
+    public void DomainType_CollationDeclaredByItsBareName_Redeploys()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var domain = $"dombare_{uid}";
+        var collation = $"ci_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            cmd.CommandText = $"CREATE COLLATION public.\"{collation}\" FROM \"C\"; CREATE DOMAIN public.\"{domain}\" AS text COLLATE public.\"{collation}\"";
+            cmd.ExecuteNonQuery();
+
+            Assert.DoesNotThrow(() => RunDomainTypeQuench(cmd, DomainWithCollation(domain, collation)),
+                "the bare name of the collation the domain already has must not be refused");
+            var ex = Assert.Throws<Npgsql.PostgresException>(() => RunDomainTypeQuench(cmd, DomainWithCollation(domain, "POSIX")));
+            Assert.That(ex!.MessageText, Does.Contain("collation"), "a real collation change is still refused");
+        }
+        finally
+        {
+            DropDomain(cmd, domain);
+            cmd.CommandText = $"DROP COLLATION IF EXISTS public.\"{collation}\"";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     private static string DomainWithCollation(string name, string collation) => $$"""
 [
   { "Schema": "public", "Name": "{{name}}", "DataType": "text", "NotNull": false, "Collation": "{{collation}}" }
