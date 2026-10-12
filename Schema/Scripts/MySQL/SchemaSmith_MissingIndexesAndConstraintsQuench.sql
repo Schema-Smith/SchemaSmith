@@ -172,16 +172,23 @@ BEGIN
         IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, IndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    -- Both lists hold the package's spelling and this one the catalog's, which differ in case on a server that folds
+    -- names, so they meet through the declared index's keys.
     DELETE s FROM _SchemaSmith_IdxExistPostDrop s
-      JOIN _SchemaSmith_DeferredIndexSwaps d ON d.TableName = s.TableName AND d.IndexName = s.IndexName;
+      JOIN _SchemaSmith_Indexes i ON i.TableKey = s.TableKey AND i.IndexKey = s.IndexKey
+      JOIN _SchemaSmith_DeferredIndexSwaps d
+        ON d.TableName = CONVERT(SchemaSmith_StripBacktickWrapping(i.TableName) USING utf8mb4) COLLATE utf8mb4_bin
+       AND d.IndexName = CONVERT(SchemaSmith_StripBacktickWrapping(i.IndexName) USING utf8mb4) COLLATE utf8mb4_bin;
 
     -- Under WhatIf a modified index was not really dropped, but the real run re-creates it, so an index this session
     -- previewed as dropped counts as missing.
     IF p_WhatIf = 1 THEN
         DELETE s FROM _SchemaSmith_IdxExistPostDrop s
+          JOIN _SchemaSmith_Indexes i ON i.TableKey = s.TableKey AND i.IndexKey = s.IndexKey
           JOIN SchemaSmith_ChangeAudit a
             ON a.SessionId = CONNECTION_ID() AND a.ActionType = 'wouldDrop' AND a.ObjectType = 'index'
-           AND CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(s.TableName, '.', s.IndexName);
+           AND CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin
+               = CONVERT(CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)) USING utf8mb4) COLLATE utf8mb4_bin;
     END IF;
 
     IF p_WhatIf = 1 THEN
