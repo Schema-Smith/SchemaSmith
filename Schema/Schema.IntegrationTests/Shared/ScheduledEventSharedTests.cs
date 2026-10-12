@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Linq;
 using System.Data;
 using NUnit.Framework;
 using Schema.DataAccess;
@@ -113,6 +114,33 @@ public abstract class ScheduledEventSharedTests
 
     private long AuditCount(string action) => Scalar(
         $"SELECT COUNT(*) FROM SchemaSmith_ChangeAudit WHERE ActionType = '{action}' AND ObjectName LIKE '%{EventName}%'");
+
+    // MySQL 8.4 deprecates DISABLE ON SLAVE (warning 1287) and 8.0 does not accept DISABLE ON REPLICA, so the declared
+    // SLAVE spelling is emitted as REPLICA from 8.4 only; MariaDB accepts SLAVE on every version. The statement is read
+    // as the procedure returns it, since 8.0 would refuse the 8.4 spelling.
+    [TestCase(800)]
+    [TestCase(804)]
+    public void DisableOnSlave_IsSpelledForTheServerVersion(int version)
+    {
+        var statements = new System.Collections.Generic.List<string>();
+        try
+        {
+            Exec($"SET @schemasmith_version_override = {version}");
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = $"CALL SchemaSmith_EventQuench('EventProduct', '{MainDb}', '{EventJson(status: "DISABLE ON SLAVE").Replace("'", "''")}', 0, 0, 'Main')";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                if (!reader.IsDBNull(0)) statements.Add(reader.GetString(0));
+        }
+        finally
+        {
+            Exec("SET @schemasmith_version_override = NULL");
+        }
+
+        var create = statements.Single(st => st.StartsWith("CREATE EVENT", StringComparison.OrdinalIgnoreCase));
+        var expected = Platform == Platform.MySQL && version >= 804 ? "DISABLE ON REPLICA" : "DISABLE ON SLAVE";
+        Assert.That(create, Does.Contain(expected), create);
+    }
 
     [Test]
     public void ADeclaredEvent_IsCreated()
