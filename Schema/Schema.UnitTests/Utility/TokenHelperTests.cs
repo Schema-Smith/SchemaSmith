@@ -700,6 +700,20 @@ public class TokenHelperTests
 
     #region Platform-Specific DropTempTables Tests
 
+    // The sweep runs before every query token on every supported SQL Server version, but CI's oldest SQL Server is 2017,
+    // where STRING_AGG (2017) and DROP TABLE IF EXISTS (2016) both exist, so an integration test cannot see either
+    // creep back in. On 2008 R2 to 2016 they failed every query token.
+    [Test]
+    public void GetDropTempTablesScript_SqlServer_UsesNothingNewerThan2008()
+    {
+        var script = TokenHelper.GetDropTempTablesScript(Platform.SqlServer).ToUpperInvariant();
+        Assert.Multiple(() =>
+        {
+            Assert.That(script, Does.Not.Contain("STRING_AGG"));
+            Assert.That(script, Does.Not.Contain("IF EXISTS"));
+        });
+    }
+
     [Test]
     public void GetDropTempTablesScript_SqlServer_ContainsTempdb()
     {
