@@ -841,6 +841,7 @@ public class DatabaseQuench
                                 ProgressLog = SafeProgressLog,
                                 ProgressLogError = SafeProgressLogError,
                                 RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded"),
+                                RecordDelivery = RecordDataDelivery,
                                 WhatIf = IsWhatIf,
                                 PostgreSqlServerVersionNum = _postgreSqlServerVersionNum,
                                 MySqlServerVersionNum = _mySqlServerVersionNum,
@@ -971,6 +972,7 @@ public class DatabaseQuench
                             ProgressLog = SafeProgressLog,
                             ProgressLogError = SafeProgressLogError,
                             RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded"),
+                            RecordDelivery = RecordDataDelivery,
                             WhatIf = true
                         });
                     }
@@ -2823,6 +2825,17 @@ SET NOCOUNT ON
         }
         foreach (var line in WhatIfConsoleFormatter.Render(entries, WhatIfConsoleDetail))
             SafeProgressLog(line);
+    }
+
+    private void RecordDataDelivery(string label)
+    {
+        if (IsWhatIf)
+        {
+            WhatIf?.Record(WhatIfCategory.Deliver, LogPrefix, label);
+            ChangeAudit?.Record("dataDelivery", label, "wouldDeliver");
+        }
+        else
+            ChangeAudit?.Record("dataDelivery", label, "delivered");
     }
 
     private void WhatIfLogTableDataScripts(List<SqlScript> scripts)

@@ -207,7 +207,7 @@ Empty on a clean run. Each entry mirrors the failure triage roll-up exactly — 
 | --- | --- |
 | `wouldApply[]` | Changes the run would apply: `scope`, `script`. |
 | `wouldSkip[]` | Changes it would skip. |
-| `wouldDeliver[]` | Data-delivery scripts it would deliver. |
+| `wouldDeliver[]` | Data it would deliver: a `Table Data` script's path, or a table's `DataDelivery` as the table's name (with ` [variant]` when the delivery names one). |
 
 ## objectChanges — what actually changed
 
@@ -240,6 +240,7 @@ Where the counts are the summary, `details[]` is the itemized list — one row p
 - **`xmlIndex`** — an XML index created (SQL Server).
 - **`fullTextIndex`** — a full-text index created or dropped (SQL Server, MySQL, MariaDB).
 - **`constraint`** — includes exclude constraints (PostgreSQL), which land in the generic constraint type.
+- **`dataDelivery`** — a table's `DataDelivery` that ran (`delivered`), or under `WhatIf` would run (`wouldDeliver`). The name is the table's, with ` [variant]` when the delivery names one.
 
 These appear as `details[]` rows with their real `objectType` and `action` even though no top-level count field aggregates them — the detail is preserved even where the summary doesn't bucket it.
 

@@ -369,7 +369,10 @@ public class DataDeliveryProcessor : IDataDelivery
         if (context.WhatIf)
         {
             foreach (var (_, delivery) in appliedDeliveries)
+            {
                 log($"    Would DELIVER: {tableKey}{VariantSuffix(delivery)}");
+                context.RecordDelivery?.Invoke($"{tableKey}{VariantSuffix(delivery)}");
+            }
             delivered.Add(tableKey);
             return;
         }
@@ -407,6 +410,7 @@ public class DataDeliveryProcessor : IDataDelivery
                 pendingArtifacts.Remove(artifactKey);   // pass-1 succeeded — clear any earlier deferred artifact
                 pass2Units.Add((table, index, delivery, deferredColumns));
                 deliverySucceeded.Add(deliveryKey);
+                context.RecordDelivery?.Invoke($"{tableKey}{VariantSuffix(delivery)}");
             }
             else
             {
@@ -430,6 +434,7 @@ public class DataDeliveryProcessor : IDataDelivery
                 }
                 pendingArtifacts.Remove(artifactKey);   // delivery succeeded — clear any earlier deferred artifact
                 deliverySucceeded.Add(deliveryKey);
+                context.RecordDelivery?.Invoke($"{tableKey}{VariantSuffix(delivery)}");
             }
         }
 

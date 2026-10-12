@@ -80,6 +80,10 @@ public abstract class WhatIfParityTestsSharedTests
                     "the real v2 deploy must create a foreign key, or this test proves nothing about them");
                 Assert.That(applied, Has.Some.Matches<string>(c => c.EndsWith("|dropped")),
                     "the real v2 deploy must drop something, or this test proves nothing about drops");
+                Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith("dataDelivery|") && c.EndsWith("|delivered")),
+                    "the real v2 deploy must record its data delivery");
+                Assert.That(WouldDeliver(whatIfLogs), Has.Count.EqualTo(1),
+                    "the WhatIf summary's wouldDeliver must list the JSON delivery the console announces");
 
                 var onlyPreviewed = Difference(previewed, applied);
                 var onlyApplied = Difference(applied, previewed);
@@ -132,8 +136,15 @@ public abstract class WhatIfParityTestsSharedTests
         "wouldCreate" => "created",
         "wouldModify" => "modified",
         "wouldDrop" => "dropped",
+        "wouldDeliver" => "delivered",
         _ => action
     };
+
+    private static List<string> WouldDeliver(string logDir)
+    {
+        var summary = JObject.Parse(File.ReadAllText(Path.Join(logDir, "SchemaQuench - Summary.json")));
+        return ((JArray)summary.SelectToken("whatIf.wouldDeliver") ?? []).Select(e => (string)e["script"]).ToList();
+    }
 
     // Multiset difference: a change listed twice on one side and once on the other is a disagreement.
     private static List<string> Difference(List<string> left, List<string> right)
@@ -178,8 +189,6 @@ public abstract class WhatIfParityTestsSharedTests
             }
             """);
 
-        WriteTable(tablesDir, "WhatIfParent", [Column("Id", IntType, false)], [PrimaryKey("WhatIfParent")]);
-
         if (version == 1)
         {
             WriteTable(tablesDir, "WhatIfChild",
@@ -188,8 +197,14 @@ public abstract class WhatIfParityTestsSharedTests
                 foreignKeys: [ForeignKey("FK_WhatIfChild_Parent", "ParentId")],
                 checks: [Check("CK_WhatIfChild_Ids", $"{ColumnRef("Id")} <> {ColumnRef("ParentId")}")]);
             WriteTable(tablesDir, "WhatIfGone", [Column("Id", IntType, false)], [PrimaryKey("WhatIfGone")]);
+            WriteTable(tablesDir, "WhatIfParent", [Column("Id", IntType, false)], [PrimaryKey("WhatIfParent")]);
             return;
         }
+
+        // v2 also delivers rows into the parent, through a JSON DataDelivery.
+        File.WriteAllText(Path.Join(tablesDir, "WhatIfParent.tabledata"), "[{\"Id\":1},{\"Id\":2}]");
+        WriteTable(tablesDir, "WhatIfParent", [Column("Id", IntType, false)], [PrimaryKey("WhatIfParent")],
+            dataDelivery: "{ \"ContentFile\": \"Tables/WhatIfParent.tabledata\", \"MergeType\": \"Insert\" }");
 
         // v2: a widened column, an added column and index, the old index, FK and CHECK removed, a new table with
         // its own foreign key, and a table removed from the product.
@@ -204,7 +219,7 @@ public abstract class WhatIfParityTestsSharedTests
     }
 
     private void WriteTable(string dir, string table, string[] columns, string[] indexes,
-        string[] foreignKeys = null, string[] checks = null)
+        string[] foreignKeys = null, string[] checks = null, string dataDelivery = null)
     {
         var schema = Platform switch
         {
@@ -216,7 +231,9 @@ public abstract class WhatIfParityTestsSharedTests
                    + $" \"Columns\": [ {string.Join(", ", columns)} ],"
                    + $" \"Indexes\": [ {string.Join(", ", indexes)} ],"
                    + $" \"ForeignKeys\": [ {string.Join(", ", foreignKeys ?? [])} ],"
-                   + $" \"CheckConstraints\": [ {string.Join(", ", checks ?? [])} ] }}";
+                   + $" \"CheckConstraints\": [ {string.Join(", ", checks ?? [])} ]"
+                   + (dataDelivery == null ? "" : $", \"DataDelivery\": {dataDelivery}")
+                   + " }";
         File.WriteAllText(Path.Join(dir, $"{table}.json"), json);
     }
 
