@@ -206,15 +206,18 @@ for f in "${FLOORS[@]}"; do
   for proj in "${PROJS[@]}"; do
     out=$(env $PORT_ENV $SSL_ENV dotnet test "$proj" -c Release --no-build \
             --filter "TestCategory=$category" 2>&1)
+    rc=$?
     summary=$(echo "$out" | grep -aE '^(Passed!|Failed!)' | tail -1)
 
     # A missing summary is a failure, not a pass: a filter that selects nothing prints no "Passed!" line.
-    if echo "$summary" | grep -q '^Passed!'; then
+    # So is a non-zero exit under a "Passed!" summary: a fixture's one-time teardown error is not counted as a
+    # test failure, but it fails the run, and CI reads the exit code.
+    if [ "$rc" -eq 0 ] && echo "$summary" | grep -q '^Passed!'; then
       echo "  $(basename "$proj" .csproj): $summary"
     else
       FAILED=1
-      echo "  $(basename "$proj" .csproj): ${summary:-NO RESULT}"
-      echo "$out" | grep -aE '  Failed [A-Za-z]|Error occurred while kindling|Unknown column|Unknown system variable|error in your SQL syntax' | head -8 | sed 's/^/    /'
+      echo "  $(basename "$proj" .csproj): ${summary:-NO RESULT} (exit $rc)"
+      echo "$out" | grep -aE '  Failed [A-Za-z]|Error occurred while kindling|Unknown column|Unknown system variable|error in your SQL syntax|TearDown failed|SetUp failed' | head -8 | sed 's/^/    /'
     fi
   done
 

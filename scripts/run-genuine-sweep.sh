@@ -57,7 +57,10 @@ for port in 14330 14331 14332 14333; do
   dotnet test Schema/Schema.IntegrationTests/Schema.IntegrationTests.csproj --no-build \
     --filter "FullyQualifiedName~GenuineOldBinary" 2>&1 | tee "/tmp/ss-sweep-$port.log" \
     | grep -E "^(Passed!|Failed!|No test)|^  (Failed|Skipped) "
+  rc=${PIPESTATUS[0]}
   summary="$(grep -E "^(Passed!|Failed!)" "/tmp/ss-sweep-$port.log" | head -1 | sed "s/ - Duration.*//")"
+  # A fixture's one-time teardown error fails the run under a "Passed!" summary; the record must show it.
+  [ "$rc" -ne 0 ] && summary="FAILED (exit $rc): ${summary:-NO RESULT}"
   expected="7 passed / 4 skipped"; [ "$port" = "14330" ] && expected="6 passed / 5 skipped"
   SWEEP_ROWS="${SWEEP_ROWS}| SQL Server $(version_for "$port") @ $port | ${summary:-NO RESULT} | $expected |
 "

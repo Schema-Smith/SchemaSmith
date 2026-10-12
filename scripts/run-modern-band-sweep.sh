@@ -183,6 +183,8 @@ for band in $BANDS; do
   SmithySettings_SqlServer__User=sa SmithySettings_SqlServer__Password="$PASSWORD" \
   dotnet test SchemaSmith.sln --filter "Category=SqlServer" 2>&1 \
     | tee "/tmp/ss-band-$port.log" | grep -E "^(Passed!|Failed!|No test)|^  Failed "
+  # A fixture's one-time teardown error fails the run without counting as a failed test.
+  band_rc=${PIPESTATUS[0]}
 
   # Every assembly, not just the first. `head -1` recorded whichever finished first, so a passing
   # Schema.IntegrationTests masked 464 failed SchemaQuench tests in the very same band -- and the row
@@ -203,8 +205,8 @@ for band in $BANDS; do
     summary="NO RESULT"
   elif [ "$band_assemblies" -lt "$EXPECTED_ASSEMBLIES" ]; then
     summary="INCOMPLETE - only $band_assemblies of $EXPECTED_ASSEMBLIES assemblies finished ($band_failed failed, $band_passed passed)"
-  elif [ "$band_failed" -gt 0 ]; then
-    summary="Failed! - $band_failed failed, $band_passed passed across $band_assemblies assemblies"
+  elif [ "$band_failed" -gt 0 ] || [ "$band_rc" -ne 0 ]; then
+    summary="Failed! - $band_failed failed, $band_passed passed across $band_assemblies assemblies (exit $band_rc)"
   else
     summary="Passed! - 0 failed, $band_passed passed across $band_assemblies assemblies"
   fi
