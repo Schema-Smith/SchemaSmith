@@ -82,7 +82,7 @@ public class FixtureSetup
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 120;
 
-            cmd.CommandText = "SELECT datname FROM pg_database WHERE datname ~ '^(TestMain|TestSecondary)_[0-9]{8}_'";
+            cmd.CommandText = "SELECT datname FROM pg_database WHERE datname ~ '^(TestMain|TestSecondary)_Test_[0-9]{8}_'";
             var stale = new List<string>();
             using (var reader = cmd.ExecuteReader())
                 while (reader.Read())
