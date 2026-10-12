@@ -168,6 +168,47 @@ public class DataTypeSynonymChurnTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // An alias type whose name starts with a system type's (Varchar50, Char_YN) was read as that system type with
+    // the rest of its name as trailing text, giving VARCHAR(1) 50: invalid DDL on every deploy.
+    [TestCase("Varchar", "varchar(50)")]
+    [TestCase("Char_", "char(1)")]
+    [TestCase("Decimal", "decimal(10, 2)")]
+    [TestCase("Binary", "binary(16)")]
+    public void ColumnDeclaredWithAnAliasNamedLikeASystemType_DeploysAndIsNotRewritten(string prefix, string baseType)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"AliasPrefixProduct_{uid}";
+        var table = $"AliasPrefixTable_{uid}";
+        var alias = $"{prefix}0{uid}";
+        var defs = TableWithColumnType(table, alias);
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = $"CREATE TYPE dbo.{alias} FROM {baseType}";
+        cmd.ExecuteNonQuery();
+
+        try
+        {
+            RunTableQuenchProc(cmd, defs, productName: product);
+            Assert.That(DeployedTypeName(cmd, table, "Val"), Is.EqualTo(alias), "the column must be created with the alias type");
+
+            ClearChangeAudit(cmd);
+            RunTableQuenchProc(cmd, defs, productName: product);
+            Assert.That(ColumnChangesRecorded(cmd, table), Is.EqualTo(0),
+                $"a column declared with the alias type {alias} was altered on a redeploy of an unchanged declaration");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+            cmd.CommandText = $"DROP TYPE dbo.{alias}";
+            cmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+
     private static string TableWithColumnType(string table, string dataType) => $$"""
 [
   {

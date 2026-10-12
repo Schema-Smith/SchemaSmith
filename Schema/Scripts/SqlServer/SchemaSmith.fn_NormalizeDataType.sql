@@ -74,6 +74,8 @@ BEGIN
   -- n = 24 and as float above. Each is the same column in DDL, so this changes nothing the engine creates. Whatever
   -- follows the type (IDENTITY, ROWGUIDCOL) is carried through.
   DECLARE @name NVARCHAR(128) = LEFT(@t, PATINDEX('%[^A-Za-z]%', @t + ' ') - 1)
+  -- A name that runs on past its letters (Varchar50, Char_YN) is an alias type, not a system type with arguments.
+  IF SUBSTRING(@t, LEN(@name) + 1, 1) NOT IN ('', ' ', '(') SET @name = ''
   DECLARE @rest NVARCHAR(MAX) = LTRIM(SUBSTRING(@t, LEN(@name) + 1, LEN(@t)))
   DECLARE @args NVARCHAR(MAX) = CASE WHEN LEFT(@rest, 1) = '(' AND CHARINDEX(')', @rest) > 0
                                      THEN LTRIM(RTRIM(SUBSTRING(@rest, 2, CHARINDEX(')', @rest) - 2))) END
