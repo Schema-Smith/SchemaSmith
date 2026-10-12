@@ -165,6 +165,16 @@ BEGIN
     WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
       AND s.SEQ_IN_INDEX = 1;
 
+    -- A modified index a foreign key needs was left in place by ModifiedTableQuench and is replaced below in one ALTER,
+    -- so it counts as missing. The table exists only when ModifiedTableQuench ran in this session.
+    CREATE TEMPORARY TABLE IF NOT EXISTS _SchemaSmith_DeferredIndexSwaps (
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableName, IndexName)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    DELETE s FROM _SchemaSmith_IdxExistPostDrop s
+      JOIN _SchemaSmith_DeferredIndexSwaps d ON d.TableName = s.TableName AND d.IndexName = s.IndexName;
+
     -- Under WhatIf a modified index was not really dropped, but the real run re-creates it, so an index this session
     -- previewed as dropped counts as missing.
     IF p_WhatIf = 1 THEN
@@ -228,21 +238,25 @@ BEGIN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing indexes');
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateIdxStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_CreateIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_CreateIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT, IsSwap TINYINT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         -- Detection reads the post-drop snapshot _SchemaSmith_IdxExistPostDrop (taken after ModifiedTableQuench's
         -- modified-index drops) so a just-dropped modified index is correctly seen as missing here and recreated.
-        INSERT INTO _SchemaSmith_CreateIdxStmts (LogMsg, Stmt, AuditName)
+        INSERT INTO _SchemaSmith_CreateIdxStmts (LogMsg, Stmt, AuditName, IsSwap)
         SELECT
             CONCAT('  Create index: ', SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName),
                 CASE WHEN COALESCE(i.VariantName, '') <> '' THEN CONCAT(' (variant: ', i.VariantName, ')') ELSE '' END),
             CONCAT(
-                'CREATE ',
+                CASE WHEN d.IndexName IS NOT NULL
+                     THEN CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
+                                 ' DROP INDEX ', i.IndexName, ', ADD ')
+                     ELSE 'CREATE ' END,
                 CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL '
                      WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE '
                      ELSE '' END,
                 'INDEX ', i.IndexName,
-                ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
+                CASE WHEN d.IndexName IS NOT NULL THEN ''
+                     ELSE CONCAT(' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName) END,
                 ' (', i.IndexColumns, ')',
                 CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                      WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
@@ -252,8 +266,12 @@ BEGIN
                      ELSE '' END,
                 CASE WHEN i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1 THEN SchemaSmith_IndexInvisibleClause() ELSE '' END
             ),
-            CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName))
+            CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)),
+            d.IndexName IS NOT NULL
         FROM _SchemaSmith_Indexes i
+        LEFT JOIN _SchemaSmith_DeferredIndexSwaps d
+               ON d.TableName = CONVERT(SchemaSmith_StripBacktickWrapping(i.TableName) USING utf8mb4) COLLATE utf8mb4_bin
+              AND d.IndexName = CONVERT(SchemaSmith_StripBacktickWrapping(i.IndexName) USING utf8mb4) COLLATE utf8mb4_bin
         WHERE i.IsPrimaryKey = 0
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
@@ -269,17 +287,32 @@ BEGIN
 
         SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts);
         WHILE @ss_id IS NOT NULL DO
-            SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_CreateIdxStmts WHERE RowId = @ss_id;
+            SELECT LogMsg, Stmt, AuditName, IsSwap INTO @ss_log, @exec_sql, @ss_auditname, @ss_swap FROM _SchemaSmith_CreateIdxStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
             PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
-            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created');
+            SET @ss_fk_needs_index := 0;
+            BEGIN
+                -- Only a swap can raise this: its new definition no longer serves the key. The index is kept as it is,
+                -- and a later deploy changes it once the key no longer needs it.
+                DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                EXECUTE stmt;
+            END;
+            IF @ss_fk_needs_index = 1 THEN
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_auditname, ' unchanged: a foreign key needs its current columns'));
+            ELSE
+                -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
+                IF @ss_swap = 1 THEN
+                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
+                END IF;
+                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created');
+            END IF;
             DEALLOCATE PREPARE stmt;
             SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts WHERE RowId > @ss_id);
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateIdxStmts;
     END IF;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DeferredIndexSwaps;
 
     -- =========================================================================
     -- STEP 3.5: Drop modified check constraints (table-level AND column-level)

@@ -3559,7 +3559,15 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           OR (CAST(COALESCE(snap.IndexComment, '') AS BINARY) != CAST(COALESCE(i.Comment, '') AS BINARY))
       );
 
-    -- Drop modified indexes (they'll be recreated later)
+    -- Drop modified indexes (they'll be recreated later). One a foreign key needs cannot be dropped on its own (1553), so
+    -- it is listed here instead and MissingIndexesAndConstraintsQuench replaces it in a single ALTER, which MySQL checks
+    -- against the key only once both the drop and the add are done.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DeferredIndexSwaps;
+    CREATE TEMPORARY TABLE _SchemaSmith_DeferredIndexSwaps (
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableName, IndexName)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop and recreate modified indexes');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -3574,22 +3582,34 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop and recreate modified indexes');
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropModIdxStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_DropModIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_DropModIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT,
+                                                             TableName VARCHAR(128) COLLATE utf8mb4_bin, IndexName VARCHAR(128) COLLATE utf8mb4_bin)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_DropModIdxStmts (LogMsg, Stmt, AuditName)
+        INSERT INTO _SchemaSmith_DropModIdxStmts (LogMsg, Stmt, AuditName, TableName, IndexName)
         SELECT
             CONCAT('  Drop and recreate index: ', TableName, '.', IndexName),
             CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
-            CONCAT(TableName, '.', IndexName)
+            CONCAT(TableName, '.', IndexName), TableName, IndexName
         FROM _SchemaSmith_ModifiedIndexes;
 
         SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModIdxStmts);
         WHILE @ss_id IS NOT NULL DO
-            SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_DropModIdxStmts WHERE RowId = @ss_id;
+            SELECT LogMsg, Stmt, AuditName, TableName, IndexName INTO @ss_log, @exec_sql, @ss_auditname, @ss_tbl, @ss_idx
+              FROM _SchemaSmith_DropModIdxStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
             PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
+            SET @ss_fk_needs_index := 0;
+            BEGIN
+                DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                EXECUTE stmt;
+            END;
+            IF @ss_fk_needs_index = 1 THEN
+                INSERT INTO _SchemaSmith_DeferredIndexSwaps (TableName, IndexName) VALUES (@ss_tbl, @ss_idx);
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('    A foreign key needs ', @ss_auditname, ': it is replaced in one statement when it is recreated'));
+            ELSE
+                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
+            END IF;
             DEALLOCATE PREPARE stmt;
             SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModIdxStmts WHERE RowId > @ss_id);
         END WHILE;
