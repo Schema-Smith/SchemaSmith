@@ -338,6 +338,34 @@ public class ValidateAndHandleScriptTests
         }
     }
 
+    // An object whose definition comes back empty is left out of the package, so the run reports itself incomplete
+    // (exit 1) as it does for an encrypted module.
+    [Test]
+    public void AnObjectWhoseDefinitionComesBackEmpty_IsSkipped_AndTheRunExitsOne()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var tongs = CreateTongs(Platform.MySQL, validateScripts: false);
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            typeof(SchemaTongs).GetField("_objectsToCast", flags)!.SetValue(tongs, Array.Empty<string>());
+            typeof(SchemaTongs).GetField("_templatePath", flags)!.SetValue(tongs, "template");
+
+            var command = Substitute.For<IDbCommand>();
+            var reader = Substitute.For<IDataReader>();
+            reader.Read().Returns(true, false);
+            reader.GetString(0).Returns("nightly_cleanup");
+            command.ExecuteReader().Returns(reader);
+            command.ExecuteScalar().Returns("{}");
+
+            typeof(SchemaTongs).GetMethod("ScriptMySqlEvents", flags)!.Invoke(tongs, new object[] { command, "salesdb" });
+
+            Assert.That(tongs.ExitCode, Is.EqualTo(1));
+            _progressLog.Received().Error(Arg.Is<string>(s => s.Contains("No json returned for event nightly_cleanup")));
+
+            CleanUp();
+        }
+    }
+
     // An encrypted module cannot be scripted by anyone. It is skipped with a warning, and the run reports itself
     // incomplete (exit 1) because the package will not contain it.
     [Test]
