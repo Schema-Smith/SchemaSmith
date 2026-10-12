@@ -286,7 +286,7 @@ BEGIN TRY
          ISNULL(c.[NewColumn], 0),
          CONVERT(BIT, CASE WHEN c.[PaddingApplies] = 1 AND c.[AnsiPadding] = 0 THEN 1 ELSE 0 END),
          CASE WHEN c.[PaddingApplies] = 1 AND ISNULL(c.[AnsiPadding], 1) = 1
-              THEN c.[ColumnName] + ' ' + UPPER(SchemaSmith.fn_NormalizeDataType(c.[DataType])) +
+              THEN c.[ColumnName] + ' ' + SchemaSmith.fn_NormalizeDataType(c.[DataType]) +
                    CASE WHEN RTRIM(ISNULL(c.[Collation], '')) NOT IN ('IGNORE', '') THEN ' COLLATE ' + c.[Collation] ELSE '' END +
                    CASE WHEN ISNULL(c.[Sparse], 0) = 1 THEN ' SPARSE' ELSE '' END +
                    CASE WHEN ISNULL(c.[Nullable], 0) = 1 THEN ' NULL' ELSE ' NOT NULL' END

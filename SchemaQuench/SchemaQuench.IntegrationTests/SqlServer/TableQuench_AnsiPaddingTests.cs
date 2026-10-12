@@ -46,6 +46,32 @@ public class TableQuench_AnsiPaddingTests : BaseTableQuenchTests
         }, table);
     }
 
+    // The padded columns of a new table holding an unpadded one are re-padded after the CREATE. That step upper-cased
+    // the type, so on a case-sensitive database an alias type was not found and the deploy failed half done.
+    [Test]
+    public void NewTable_RepadsAColumnOfAnAliasType()
+    {
+        var table = Unique("PadAlias");
+        var alias = $"Code{Guid.NewGuid().ToString("N")[..8]}";
+        WithConnection(cmd =>
+        {
+            Exec(cmd, $"CREATE TYPE dbo.{alias} FROM varchar(10)");
+            try
+            {
+                RunTableQuenchProc(cmd, Table(table,
+                    Col("Off", "VARCHAR(10)", padding: false),
+                    Col("Aliased", alias)));
+
+                Assert.That(IsPadded(cmd, table, "Off"), Is.False);
+                Assert.That(IsPadded(cmd, table, "Aliased"), Is.True, "the alias-typed column must be padded again after the create");
+            }
+            finally
+            {
+                Exec(cmd, $"IF OBJECT_ID('dbo.[{table}]') IS NOT NULL DROP TABLE dbo.[{table}]; DROP TYPE dbo.{alias}");
+            }
+        }, table);
+    }
+
     [Test]
     public void NewColumnOnAnExistingTable_GetsItsDeclaredPadding()
     {
