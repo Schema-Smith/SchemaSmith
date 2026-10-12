@@ -668,7 +668,10 @@ public class DeployPathTableFeatureTests
                 {
                     WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript);
                     _environment.ClearReceivedCalls();
+                    var reportBase = Path.Join(tempDir, "summary");
+                    if (expectIncomplete) _environment.CommandLine.Returns($"SchemaQuench.exe --report:{reportBase}");
                     Program.Main(xmlIngest ? [] : ["SkipKindlingForge"]);
+                    if (expectIncomplete) _environment.CommandLine.Returns("");
                     var fails = expectFailure || _nextDeployFails;
                     _nextDeployFails = false;
                     if (fails) _environment.Received().Exit(Arg.Is<int>(code => code != 0));
@@ -676,6 +679,9 @@ public class DeployPathTableFeatureTests
                     {
                         _environment.Received(1).Exit(1);
                         _environment.DidNotReceive().Exit(Arg.Is<int>(code => code > 1));
+                        var summary = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(reportBase + ".json"));
+                        Assert.That(summary.SelectToken("run.outcome")?.ToString(), Is.EqualTo("Incomplete"),
+                            "a run that downgraded a feature must say Incomplete in its summary, not only in its exit code");
                     }
                     else _environment.DidNotReceive().Exit(Arg.Is<int>(code => code != 0));
                 }, db, cmd);
