@@ -3,17 +3,25 @@ name: chocolatey-publish
 on:
   release:
     types: [published]
+  # Re-packs and re-pushes an existing release, e.g. to resubmit a version moderation sent back.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to package (for example v2.7.2)
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: chocolatey-publish-${{ github.event.release.tag_name }}
+  group: chocolatey-publish-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -22,8 +30,7 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $tag = "${{ github.event.release.tag_name }}"
-          $version = $tag.TrimStart("v")
+          $version = $env:TAG.TrimStart("v")
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "Packaging schemasmith version: $version"
 
@@ -33,11 +40,10 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          $tag = "${{ github.event.release.tag_name }}"
           $asset = "SchemaSmith-$version-win-x64.zip"
-          gh release download $tag --pattern $asset --repo ${{ github.repository }}
+          gh release download $env:TAG --pattern $asset --repo ${{ github.repository }}
           if (-not (Test-Path $asset)) {
-            Write-Error "Bundle ZIP $asset not found in release $tag"
+            Write-Error "Bundle ZIP $asset not found in release $env:TAG"
             exit 1
           }
           Write-Host "Downloaded: $asset"
@@ -52,13 +58,29 @@ jobs:
           Write-Host "Tools directory contents:"
           Get-ChildItem $toolsDir | ForEach-Object { Write-Host "  $($_.Name)" }
 
-      - name: Stamp version in nuspec
+      - name: Stamp version and checksums
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          $nuspec = "packaging/chocolatey/schemasmith/schemasmith.nuspec"
-          (Get-Content $nuspec) -replace '__VERSION__', $version | Set-Content $nuspec
-          Write-Host "Stamped version $version in $nuspec"
+          $packageDir = "packaging/chocolatey/schemasmith"
+          $toolsDir = "$packageDir/tools"
+          $exes = Get-ChildItem $toolsDir -Filter *.exe | Sort-Object Name
+          if ($exes.Count -eq 0) { Write-Error "No binaries in $toolsDir"; exit 1 }
+          $checksums = ($exes | ForEach-Object {
+            "  {0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          }) -join "`r`n"
+          $nuspec = "$packageDir/schemasmith.nuspec"
+          $verification = "$toolsDir/VERIFICATION.txt"
+          foreach ($file in @($nuspec, $verification)) {
+            $text = [IO.File]::ReadAllText($file)
+            $text = $text.Replace('__VERSION__', $version).Replace('__CHECKSUMS__', $checksums)
+            [IO.File]::WriteAllText($file, $text)
+          }
+          # A placeholder that reaches the moderators fails the review, so refuse to pack one.
+          $left = Select-String -Path $nuspec, $verification -Pattern '__[A-Z]+__'
+          if ($left) { $left | ForEach-Object { Write-Host $_ }; Write-Error "Unfilled placeholder in the package"; exit 1 }
+          Write-Host "Stamped $version and $($exes.Count) checksums"
+          Get-Content $verification
 
       - name: Pack Chocolatey package
         shell: pwsh
