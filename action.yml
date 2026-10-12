@@ -1,3 +1,4 @@
+# Metadata for the SchemaSmith Deploy composite action; the runtime logic lives in action/schemasmith-deploy.sh.
 name: 'SchemaSmith Deploy'
 description: 'State-based schema deployment for SQL Server, PostgreSQL, MySQL and MariaDB (runs SchemaQuench).'
 branding:
