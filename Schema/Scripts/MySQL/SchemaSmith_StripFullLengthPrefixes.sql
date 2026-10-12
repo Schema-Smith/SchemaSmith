@@ -41,7 +41,9 @@ BEGIN
                     AND (UPPER(REPLACE(c.DataType, ' ', '')) LIKE CONCAT('VARCHAR(', v_len, ')%')
                       OR UPPER(REPLACE(c.DataType, ' ', '')) LIKE CONCAT('CHAR(', v_len, ')%')
                       OR UPPER(REPLACE(c.DataType, ' ', '')) LIKE CONCAT('VARBINARY(', v_len, ')%')
-                      OR UPPER(REPLACE(c.DataType, ' ', '')) LIKE CONCAT('BINARY(', v_len, ')%'))) THEN
+                      OR UPPER(REPLACE(c.DataType, ' ', '')) LIKE CONCAT('BINARY(', v_len, ')%')
+                      -- MySQL 5.7 stores a BTREE key on a POINT as the whole 25-byte value, reported as prefix 25.
+                      OR (UPPER(TRIM(c.DataType)) = 'POINT' AND v_len = '25'))) THEN
         SET v_part = CONCAT(TRIM(LEFT(v_part, v_open - 1)), SUBSTRING(v_part, LOCATE(')', v_part, v_open) + 1));
       END IF;
     END IF;

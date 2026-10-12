@@ -284,7 +284,7 @@ BEGIN
                 'IndexColumns', GROUP_CONCAT(
                     CASE WHEN s.COLUMN_NAME IS NOT NULL THEN
                         CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME),
-                            CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
+                            CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')) THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
                             CASE WHEN s.COLLATION = 'D' THEN ' DESC' ELSE '' END
                         )
                     ELSE
@@ -321,7 +321,7 @@ BEGIN
                 'IndexType', s.INDEX_TYPE,
                 'IndexColumns', GROUP_CONCAT(
                     CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME),
-                        CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
+                        CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')) THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
                         CASE WHEN s.COLLATION = 'D' THEN ' DESC' ELSE '' END
                     )
                     ORDER BY s.SEQ_IN_INDEX

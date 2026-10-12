@@ -165,7 +165,8 @@ BEGIN
                    CASE WHEN s.COLUMN_NAME IS NOT NULL THEN
                        CONCAT('`', s.COLUMN_NAME, '`',
                               -- SPATIAL's SUB_PART is a phantom internal value (always 32), not a declared prefix; exclude it or spatial indexes never converge
-                              IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL', CONCAT('(', s.SUB_PART, ')'), ''),
+                              -- MySQL 5.7 gives a BTREE key on a POINT column an implicit 25-byte prefix, the whole value: no prefix either
+                              IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')), CONCAT('(', s.SUB_PART, ')'), ''),
                               CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    ELSE
                        CONCAT('(', REGEXP_REPLACE(
@@ -189,7 +190,7 @@ BEGIN
                CONVERT(MAX(s.INDEX_TYPE) USING utf8mb4),
                GROUP_CONCAT(
                    CONCAT('`', s.COLUMN_NAME, '`',
-                          IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL', CONCAT('(', s.SUB_PART, ')'), ''),
+                          IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')), CONCAT('(', s.SUB_PART, ')'), ''),
                           CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','

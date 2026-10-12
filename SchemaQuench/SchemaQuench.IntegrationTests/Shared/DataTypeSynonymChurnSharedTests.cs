@@ -140,7 +140,8 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
             RunTableQuenchProc(cmd, TableWithColumnType(table, "NVARCHAR(10)"), productName: $"NatProduct_{uid}");
 
             cmd.CommandText = $"SELECT CHARACTER_SET_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND COLUMN_NAME = 'Val'";
-            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("utf8mb3"));
+            // MySQL before 8.0.30 and MariaDB before 10.6.1 name the same character set utf8.
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.AnyOf("utf8mb3", "utf8"), "the latin1 column must take the national character set");
         }
         finally
         {
@@ -191,10 +192,21 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
     [TestCase("varchar(10)", "`Val`", "HASH", false, null, TestName = "Index_HashOnInnoDB_DoesNotChurn")]
     [TestCase("varchar(10)", "`Val`(10)", "BTREE", false, null, TestName = "Index_FullLengthPrefix_DoesNotChurn")]
     [TestCase("point", "`Val`", "BTREE", false, "MySQL", TestName = "Index_BtreeOnGeometry_DoesNotChurn")]
+    // MySQL 5.7 stores a BTREE key on a POINT as prefix 25, the whole value, so a package extracted there may say so.
+    [TestCase("point", "`Val`(25)", "BTREE", false, "MySQL", TestName = "Index_BtreeOnGeometry_WithItsImplicitPrefix_DoesNotChurn")]
     [TestCase("text", "`Val`", "BTREE", true, "MariaDb", TestName = "Index_UniqueOnText_DoesNotChurn")]
     public void IndexDeclaredInAnotherSpelling_IsNotRebuiltOnRedeploy(string columnType, string indexColumns, string indexType, bool unique, string onlyOn)
     {
         if (onlyOn != null && Platform.ToString() != onlyOn) Assert.Ignore($"Only meaningful on {onlyOn}.");
+        if (indexColumns.EndsWith("(25)") && columnType == "point")
+        {
+            using var probe = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+            probe.Open();
+            using var versionCmd = probe.CreateCommand();
+            versionCmd.CommandText = "SELECT VERSION()";
+            if (Schema.Utility.VersionHelper.ParsePatchComparable(versionCmd.ExecuteScalar()?.ToString(), Platform) >= 80000)
+                Assert.Ignore("Only MySQL 5.7 gives a POINT key an implicit prefix.");
+        }
         if (unique && columnType == "text")
         {
             using var probe = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
