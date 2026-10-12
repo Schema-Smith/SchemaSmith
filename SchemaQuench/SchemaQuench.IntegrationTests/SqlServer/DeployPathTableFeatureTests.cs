@@ -155,6 +155,26 @@ public class DeployPathTableFeatureTests
         }, expectFailure: true);
     }
 
+    // "RelatedTable": "sales.Customer" was placed whole behind the default schema ([dbo].[sales.Customer]) and the deploy
+    // failed. A full deploy, not the procedure alone, because the prefix is read when the package loads.
+    [Test]
+    public void AForeignKeyWithASchemaQualifiedRelatedTable_ReferencesThatSchema()
+    {
+        const string setup = "EXEC('CREATE SCHEMA sales'); CREATE TABLE sales.Customer ([Id] INT NOT NULL CONSTRAINT [PK_Customer] PRIMARY KEY);";
+        RunScenario("DeployFkSchema", setup, (deploy, db, cmd) =>
+        {
+            deploy("""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                               { "Name": "[CustomerId]", "DataType": "INT", "Nullable": true } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ],
+                  "ForeignKeys": [ { "Name": "[FK_DeployProbe_Customer]", "Columns": "[CustomerId]", "RelatedTable": "sales.Customer", "RelatedColumns": "[Id]" } ] }
+                """);
+            cmd.CommandText = "SELECT OBJECT_SCHEMA_NAME(referenced_object_id) + '.' + OBJECT_NAME(referenced_object_id) FROM sys.foreign_keys WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("sales.Customer"));
+        }, freshDatabase: true);
+    }
+
     [Test]
     public void CdcDeclaredOnADatabaseWithoutCdc_IsRecordedAsDowngraded_ByARealDeploy()
     {
