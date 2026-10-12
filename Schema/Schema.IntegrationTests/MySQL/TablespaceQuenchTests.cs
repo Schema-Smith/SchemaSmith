@@ -81,6 +81,13 @@ public class TablespaceQuenchTests
         cmd.ExecuteNonQuery();
     }
 
+    private string Scalar(string sql)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = sql;
+        return cmd.ExecuteScalar()?.ToString();
+    }
+
     private void DropTablespaceIfExists(string name)
     {
         try
@@ -160,6 +167,28 @@ public class TablespaceQuenchTests
         Assert.That(ExtractedJson(), Does.Contain("innodb_system"), ExtractedJson());
         Assert.DoesNotThrow(() => Deploy(", \"Tablespace\": \"innodb_system\""),
             "redeploying the same placement must not be refused as a move");
+    }
+
+    // With innodb_file_per_table OFF every new table lands in the system tablespace without asking for it, and space 0
+    // alone cannot tell that from an explicit placement. Reading it as innodb_system wrote that placement into every
+    // extracted table, which a deploy elsewhere then pinned into the shared system tablespace.
+    [Test]
+    [NonParallelizable]
+    public void ATableInTheSystemTablespaceOnlyByDefault_ExtractsWithNoPlacement()
+    {
+        const string table = "ts_implicit_system";
+        var original = Scalar("SELECT @@GLOBAL.innodb_file_per_table");
+        try
+        {
+            Exec("SET GLOBAL innodb_file_per_table = 0");
+            Deploy("", table: table);
+            Assert.That(ExtractedJson(table), Does.Not.Contain("innodb_system"), ExtractedJson(table));
+        }
+        finally
+        {
+            Exec($"SET GLOBAL innodb_file_per_table = {(original is "1" or "ON" ? 1 : 0)}");
+            Exec($"DROP TABLE IF EXISTS `{_testDb}`.`{table}`");
+        }
     }
 
     [Test]

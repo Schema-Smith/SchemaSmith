@@ -102,6 +102,26 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // Members are trimmed with their quoting intact. A backslash-escaped quote is part of the member: reading it as the
+    // member's end lost everything after it, and the column's DDL then failed to parse.
+    [TestCase(@"ENUM('it\'s ','b')", @"ENUM('it\'s','b')")]
+    [TestCase(@"ENUM('a\\ ','b')", @"ENUM('a\\','b')")]
+    [TestCase("SET('x ','it''s ')", "SET('x','it''s')")]
+    public void TrimEnumMembers_KeepsEscapedQuotesInsideTheirMember(string declared, string expected)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT SchemaSmith_TrimEnumMembers(@p)";
+        var p = cmd.CreateParameter();
+        p.ParameterName = "@p";
+        p.Value = declared;
+        cmd.Parameters.Add(p);
+
+        Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo(expected));
+    }
+
     // A national type implies utf8mb3, so folding NVARCHAR to VARCHAR must keep that: a latin1 column declared NVARCHAR is
     // a real difference, and comparing it equal would be a missed change, worse than the churn the fold removes.
     [Test]

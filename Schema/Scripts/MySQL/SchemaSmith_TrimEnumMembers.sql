@@ -32,6 +32,10 @@ BEGIN
     IF v_inQuote = 0 THEN
       SET v_out = CONCAT(v_out, v_ch);
       IF v_ch = '''' THEN SET v_inQuote = 1, v_member = ''; END IF;
+    ELSEIF v_ch = '\\' THEN
+      -- A backslash escape is part of the member, whatever it escapes (a quote or another backslash).
+      SET v_member = CONCAT(v_member, v_ch, SUBSTRING(p_DataType, v_i + 1, 1));
+      SET v_i = v_i + 1;
     ELSEIF v_ch = '''' AND SUBSTRING(p_DataType, v_i + 1, 1) = '''' THEN
       SET v_member = CONCAT(v_member, '''''');
       SET v_i = v_i + 1;

@@ -60,9 +60,12 @@ BEGIN
         -- Session variables, not routine params, inside the dynamic SQL string: a prepared statement cannot reference
         -- IN/local routine variables directly, only session (@-prefixed) ones.
         SET @ss_tts_name = CONCAT(SchemaSmith_InnodbName(p_Schema), '/', SchemaSmith_InnodbName(p_Table));
+        -- Space 0 is the system tablespace. With innodb_file_per_table OFF every new table lands there unasked, which
+        -- space 0 cannot tell from an explicit placement, so it reads as one only when file-per-table is on.
+        SET @ss_tts_system = IF(@@GLOBAL.innodb_file_per_table = 1, 1, 0);
         SET @ss_tts_out = NULL;
         -- CONCAT, not ||, which is logical OR unless PIPES_AS_CONCAT is set. Embedded literals are doubled quotes.
-        SET @ss_tts_sql = CONCAT('SELECT CASE WHEN it.SPACE = 0 THEN ''innodb_system'' ELSE ts.NAME END INTO @ss_tts_out
+        SET @ss_tts_sql = CONCAT('SELECT CASE WHEN it.SPACE = 0 AND @ss_tts_system = 1 THEN ''innodb_system'' WHEN it.SPACE = 0 THEN NULL ELSE ts.NAME END INTO @ss_tts_out
 FROM INFORMATION_SCHEMA.', IF(SchemaSmith_ServerVersionNum() < 800, 'INNODB_SYS_TABLES', 'INNODB_TABLES'), ' it
 LEFT JOIN INFORMATION_SCHEMA.', IF(SchemaSmith_ServerVersionNum() < 800, 'INNODB_SYS_TABLESPACES', 'INNODB_TABLESPACES'), ' ts ON ts.SPACE = it.SPACE
 WHERE it.NAME = @ss_tts_name
