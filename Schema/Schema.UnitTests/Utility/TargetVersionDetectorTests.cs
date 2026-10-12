@@ -49,7 +49,7 @@ namespace Schema.UnitTests.Utility
         {
             var cmd = CommandReturning("8.0.36");
 
-            var ex = Assert.Throws<Exception>(() => TargetVersionDetector.Detect(cmd, Platform.MariaDb));
+            var ex = Assert.Throws<RunFailedException>(() => TargetVersionDetector.Detect(cmd, Platform.MariaDb));
             Assert.That(ex!.Message, Does.Contain("does not appear to be MariaDB"));
         }
 
@@ -58,7 +58,7 @@ namespace Schema.UnitTests.Utility
         {
             var cmd = CommandReturning("11.4.2-MariaDB");
 
-            var ex = Assert.Throws<Exception>(() => TargetVersionDetector.Detect(cmd, Platform.MySQL));
+            var ex = Assert.Throws<RunFailedException>(() => TargetVersionDetector.Detect(cmd, Platform.MySQL));
             Assert.That(ex!.Message, Does.Contain("appears to be MariaDB"));
         }
 
@@ -67,7 +67,7 @@ namespace Schema.UnitTests.Utility
         {
             var cmd = CommandReturning(null);
 
-            var ex = Assert.Throws<Exception>(() => TargetVersionDetector.Detect(cmd, Platform.PostgreSQL));
+            var ex = Assert.Throws<RunFailedException>(() => TargetVersionDetector.Detect(cmd, Platform.PostgreSQL));
             Assert.That(ex!.Message, Does.Contain("Unable to determine"));
         }
 
@@ -75,7 +75,7 @@ namespace Schema.UnitTests.Utility
         public void Detect_Throws_WhenScalarUnparseable()
         {
             var cmd = CommandReturning("garbage");
-            var ex = Assert.Throws<Exception>(() => TargetVersionDetector.Detect(cmd, Platform.SqlServer));
+            var ex = Assert.Throws<RunFailedException>(() => TargetVersionDetector.Detect(cmd, Platform.SqlServer));
             Assert.That(ex!.Message, Does.Contain("Unable to determine"));
         }
 

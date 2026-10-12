@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -49,7 +50,7 @@ public class DataTongs
     internal static void RefuseUndeliverableScripts(bool extractAsXml, Platform platform, bool tokenizeScripts)
     {
         if (extractAsXml && tokenizeScripts && platform.GetBasePlatform() == Platform.MySQL)
-            throw new InvalidOperationException(
+            throw new RunFailedException(
                 "DeliveryEncoding is Xml, but MySQL and MariaDB merge scripts read their content file with JSON_TABLE, so " +
                 "tokenized scripts cannot deploy an Xml file. Use DeliveryEncoding Json, or set ShouldCast:TokenizeScripts " +
                 "to false to embed the data in each script.");
@@ -61,7 +62,7 @@ public class DataTongs
         {
             var xml = deliveryEncoding.Trim().Equals("Xml", StringComparison.OrdinalIgnoreCase);
             if (!xml && platform.GetBasePlatform() == Platform.SqlServer && sqlServerSource is { } source && source.ServerComparable < JsonExtractionSqlServerMajor)
-                throw new InvalidOperationException(
+                throw new RunFailedException(
                     $"DeliveryEncoding is Json, but the source is SQL Server {source.RawVersion}, and the Json extraction " +
                     "needs SQL Server 2017 or later. Set DeliveryEncoding to Xml, or leave it unset to choose automatically.");
             return xml;
@@ -197,7 +198,7 @@ public class DataTongs
 
         if (targetTemplateIsSchemaTemplate && !sourceSchemaSet)
         {
-            throw new InvalidOperationException(
+            throw new RunFailedException(
                 "Target template is a schema template (has SchemaIdentificationScript), but Source.Schema " +
                 "is not set in DataTongs.settings.json. Set Source.Schema to the name of the source schema " +
                 "you are extracting data from (typically a seed-tenant schema), or point DataTongs at a " +
@@ -214,7 +215,7 @@ public class DataTongs
         if (outputScripts) DirectoryWrapper.GetFromFactory().CreateDirectory(scriptPath);
 
         var sourceDb = config[SettingsKeys.Source.Database];
-        if (string.IsNullOrEmpty(sourceDb)) throw new Exception("Source database is required");
+        if (string.IsNullOrEmpty(sourceDb)) throw new RunFailedException("Source database is required. Set Source:Database in DataTongs.settings.json.");
 
         var tables = config.GetSection(SettingsKeys.TablesToExtract)
             .GetChildren()
@@ -239,7 +240,7 @@ public class DataTongs
             {
                 if (tables[i].TableName.Contains('.'))
                 {
-                    throw new InvalidOperationException(
+                    throw new RunFailedException(
                         $"Table names in schema-template mode must be unqualified. " +
                         $"Tables[{i}].Name = \"{tables[i].TableName}\". " +
                         $"Use \"{tables[i].TableName.Split('.').Last()}\" and let Source.Schema specify the source. " +
@@ -261,7 +262,16 @@ public class DataTongs
             return;
         }
 
-        using var sourceConnection = GetConnection(sourceDb);
+        IDbConnection sourceConnection;
+        try
+        {
+            sourceConnection = GetConnection(sourceDb);
+        }
+        catch (DbException e)
+        {
+            throw new RunFailedException($"Unable to connect to the source database {sourceDb}: {e.Message}", e);
+        }
+        using var sourceConnectionScope = sourceConnection;
         var cmd = sourceConnection.CreateCommand();
 
         // The engine floor SchemaQuench checks before a deploy: below it the extraction queries do not run.

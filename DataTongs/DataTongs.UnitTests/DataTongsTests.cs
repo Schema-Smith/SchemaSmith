@@ -621,7 +621,7 @@ public class DataTongsTests
         {
             FactoryContainer.Register<IConfigurationRoot>(config);
 
-            var ex = Assert.Throws<Exception>(() => dt.CastData());
+            var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
             Assert.That(ex.Message, Does.Contain("Source database is required"));
 
             FactoryContainer.Clear();
@@ -640,7 +640,7 @@ public class DataTongsTests
         {
             FactoryContainer.Register<IConfigurationRoot>(config);
 
-            var ex = Assert.Throws<Exception>(() => dt.CastData());
+            var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
             Assert.That(ex.Message, Does.Contain("Source database is required"));
 
             FactoryContainer.Clear();
@@ -1313,6 +1313,53 @@ public class DataTongsTests
                 var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
                 Assert.That(ex!.Message, Does.Contain("5.7.21").And.Contain("5.7.22"));
                 fileWrapper.DidNotReceive().WriteAllText(Arg.Any<string>(), Arg.Any<string>());
+            }
+            finally
+            {
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+            }
+        }
+    }
+
+    #endregion
+
+    #region CastData — source unreachable
+
+    private sealed class FakeDbException(string message) : System.Data.Common.DbException(message);
+
+    // A source that refuses the connection is a settings problem the user fixes, so it ends the run with exit 2 and a
+    // message naming the database, not an unhandled exception and a stack trace.
+    [Test]
+    public void CastData_SourceRefusesTheConnection_FailsTheRunNamingTheDatabase()
+    {
+        var connectionFactory = Substitute.For<IDbConnectionFactory>();
+        var connection = Substitute.For<IDbConnection>();
+        connection.When(c => c.Open()).Do(_ => throw new FakeDbException("Access denied for user"));
+        connectionFactory.GetDbConnection(Arg.Any<string>()).Returns(connection);
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+        {
+            ["Source:Server"] = "localhost",
+            ["Source:Database"] = "salesdb",
+            ["Source:User"] = "user",
+            ["Source:Password"] = "pass",
+            ["Tables:0:Name"] = "users",
+            ["Tables:0:KeyColumns"] = "`id`"
+        }).Build();
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Register<IConfigurationRoot>(config);
+            FactoryContainer.Register<IDbConnectionFactory>(connectionFactory);
+            FactoryContainer.Register(Substitute.For<IDirectory>());
+            FactoryContainer.Register(Substitute.For<IFile>());
+            LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+            try
+            {
+                var dt = new global::DataTongs.DataTongs(Platform.MySQL);
+                var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
+                Assert.That(ex!.Message, Does.Contain("salesdb").And.Contain("Access denied"));
             }
             finally
             {

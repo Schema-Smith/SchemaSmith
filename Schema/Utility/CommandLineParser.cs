@@ -117,7 +117,7 @@ public static class CommandLineParser
         var off = ContainsSwitch("NoEncrypt");
         if (!on && !off) return;
         if (on && off)
-            throw new Exception("Specify only one of -Encrypt / -NoEncrypt.");
+            throw new RunFailedException("Specify only one of -Encrypt / -NoEncrypt.");
 
         var (key, value) = platform.GetBasePlatform() switch
         {

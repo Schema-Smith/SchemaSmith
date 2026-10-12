@@ -259,7 +259,7 @@ public class SchemaTemplateModeTests
             LogFactory.Register("ProgressLog", _progressLog);
 
             var dt = new global::DataTongs.DataTongs(Platform.SqlServer);
-            var ex = Assert.Throws<InvalidOperationException>(() => dt.CastData());
+            var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
             Assert.That(ex.Message, Does.Contain("Source.Schema"),
                 "Error must name the missing setting.");
             Assert.That(ex.Message, Does.Contain("schema template"),
@@ -357,7 +357,7 @@ public class SchemaTemplateModeTests
             LogFactory.Register("ProgressLog", _progressLog);
 
             var dt = new global::DataTongs.DataTongs(Platform.SqlServer);
-            var ex = Assert.Throws<InvalidOperationException>(() => dt.CastData());
+            var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
             Assert.That(ex.Message, Does.Contain("unqualified"),
                 "Error must call out the unqualified-name requirement.");
             Assert.That(ex.Message, Does.Contain($"\"{SourceSchema}.Customers\""),

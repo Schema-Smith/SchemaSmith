@@ -520,7 +520,7 @@ public class CommandLineParserTests
         _mockEnvironment.CommandLine.Returns("app.exe --Encrypt --NoEncrypt");
         var props = new Dictionary<string, string>();
 
-        var ex = Assert.Throws<Exception>(() =>
+        var ex = Assert.Throws<RunFailedException>(() =>
             CommandLineParser.ApplyTransportSecuritySwitch(Platform.SqlServer, props));
         Assert.That(ex.Message, Does.Contain("Encrypt").And.Contain("NoEncrypt"));
     }

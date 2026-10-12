@@ -39,7 +39,7 @@ public class DeliveryEncodingChoiceTests
     [TestCase(13)]
     public void ExplicitJson_OnASourceThatCannotProduceIt_IsRefusedByName(int major)
     {
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.Throws<RunFailedException>(() =>
             global::DataTongs.DataTongs.ChooseXmlDeliveryEncoding("Json", Platform.SqlServer, SqlServer(major, 100)));
         Assert.That(ex!.Message, Does.Contain("DeliveryEncoding").And.Contain("2017"));
     }
@@ -54,7 +54,7 @@ public class DeliveryEncodingChoiceTests
     [TestCase(Platform.MariaDb)]
     public void XmlWithTokenizedScripts_OnMySqlFamily_IsRefusedByName(Platform platform)
     {
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.Throws<RunFailedException>(() =>
             global::DataTongs.DataTongs.RefuseUndeliverableScripts(extractAsXml: true, platform, tokenizeScripts: true));
         Assert.That(ex!.Message, Does.Contain("DeliveryEncoding").And.Contain("TokenizeScripts"));
     }
