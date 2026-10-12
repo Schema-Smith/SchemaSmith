@@ -342,7 +342,7 @@ public abstract class TableCollationDeployTestsSharedTests
 
     /// <summary>
     /// The package is written here rather than committed as a fixture: a committed TestProduct would need
-    /// generated <c>.json-schemas</c> kept in step with the model (DoD #9), and each table exists only to
+    /// generated <c>.json-schemas</c> kept in step with the model, and each table exists only to
     /// carry a few collation states.
     /// </summary>
     private void WritePackage(string dir, string db, string tableName, string tableJson)
