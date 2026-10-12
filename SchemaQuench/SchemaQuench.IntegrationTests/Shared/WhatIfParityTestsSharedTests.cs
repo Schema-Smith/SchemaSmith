@@ -83,10 +83,12 @@ public abstract class WhatIfParityTestsSharedTests
                     "the real v2 deploy must create a foreign key, or this test proves nothing about them");
                 Assert.That(applied, Has.Some.Matches<string>(c => c.EndsWith("|dropped")),
                     "the real v2 deploy must drop something, or this test proves nothing about drops");
-                cmd.CommandText = "SELECT VERSION()";
-                var server = cmd.ExecuteScalar()?.ToString() ?? "";
-                var deliverySkipped = Platform == Platform.MySQL && !server.Contains("MariaDB", StringComparison.OrdinalIgnoreCase)
-                    && Schema.Utility.VersionHelper.ParsePatchComparable(server, Platform) < 80000;
+                var deliverySkipped = false;
+                if (Platform == Platform.MySQL)
+                {
+                    cmd.CommandText = "SELECT VERSION()";
+                    deliverySkipped = Schema.Utility.VersionHelper.ParsePatchComparable(cmd.ExecuteScalar()?.ToString(), Platform) < 80000;
+                }
                 if (deliverySkipped)
                     Assert.That(applied, Has.None.Matches<string>(c => c.StartsWith("dataDelivery|")),
                         "below MySQL 8.0 automatic delivery is skipped as a downgrade, never reported as delivered");
