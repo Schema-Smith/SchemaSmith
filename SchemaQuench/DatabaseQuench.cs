@@ -2721,7 +2721,7 @@ SET NOCOUNT ON
         {
             if (_explicitTimestampDefaultsReadOnlyReported) return;
             _explicitTimestampDefaultsReadOnlyReported = true;
-            SafeProgressLog("  explicit_defaults_for_timestamp is OFF and this server does not let a session change it, so a " +
+            SafeProgressLog("  explicit_defaults_for_timestamp is OFF and this server or account does not let a session change it, so a " +
                             "TIMESTAMP NOT NULL column declared without a default gets one the server chooses. Declare the " +
                             "default, or turn the variable ON in the server configuration.");
         });

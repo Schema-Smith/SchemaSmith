@@ -69,7 +69,8 @@ public static class MySqlSessionSettings
             command.ExecuteNonQuery();
         }
         // 1238: the server reports the variable read-only for a session (MariaDB 10.2-10.3, early 10.4-10.6 patches).
-        catch (MySqlConnector.MySqlException ex) when (ex.Number == 1238)
+        // 1227: MySQL before 8.0.18 lets only an account with SUPER change it, which a managed service's admin user lacks.
+        catch (MySqlConnector.MySqlException ex) when (ex.Number is 1238 or 1227)
         {
             readOnly?.Invoke();
             return null;

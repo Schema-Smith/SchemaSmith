@@ -89,6 +89,38 @@ public abstract class TimestampDefaultsDeploySharedTests
         });
     }
 
+    // MySQL before 8.0.18 lets only an account with SUPER change this variable for its session (1227). An ordinary
+    // deploy account, such as a managed service's admin user, must get the note, not a failed deploy.
+    [Test]
+    public void AnAccountThatCannotSetTheVariable_GetsTheNoteInsteadOfAFailure()
+    {
+        var user = $"ts_limited_{Guid.NewGuid().ToString("N")[..8]}";
+        const string password = "Limited_Pa55word";
+        Exec($"CREATE USER '{user}'@'%' IDENTIFIED BY '{password}'");
+        try
+        {
+            Exec($"GRANT ALL PRIVILEGES ON `{MainDb}`.* TO '{user}'@'%'");
+            var builder = new MySqlConnector.MySqlConnectionStringBuilder(MainConnectionString) { UserID = user, Password = password, Database = MainDb };
+            using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(builder.ConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT VERSION()";
+            var version = cmd.ExecuteScalar()?.ToString() ?? "";
+
+            var noted = false;
+            Assert.DoesNotThrow(() =>
+            {
+                using var scope = MySqlSessionSettings.UseExplicitTimestampDefaults(cmd, () => noted = true);
+            });
+            if (version.StartsWith("5.7"))
+                Assert.That(noted, Is.True, "MySQL 5.7 refuses the change to an account without SUPER, which must be noted");
+        }
+        finally
+        {
+            Exec($"DROP USER IF EXISTS '{user}'@'%'");
+        }
+    }
+
     private bool Deploy()
     {
         var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
