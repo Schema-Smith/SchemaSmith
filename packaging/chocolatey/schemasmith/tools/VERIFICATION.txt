@@ -38,8 +38,22 @@ Trusted Signing certificate. (signtool ships with the Windows SDK; if it
 is not on PATH, look under
 "C:\Program Files (x86)\Windows Kits\10\bin\<version>\x64\".)
 
-You can also recompute the SHA256 of any embedded binary and compare
-against the checksum file attached to the GitHub Release linked above.
+CHECKSUMS
+---------
+
+SHA256 of each binary embedded in this package:
+
+__CHECKSUMS__
+
+To check them against the release:
+
+  1. Download SchemaSmith-__VERSION__-win-x64.zip and SHA256SUMS from the
+     GitHub Release linked above, and confirm the zip's SHA256 matches its
+     line in SHA256SUMS.
+  2. Extract the zip. Each .exe in it has the SHA256 listed above.
+  3. Compute the hash of an installed binary with, for example:
+
+       Get-FileHash "C:\ProgramData\chocolatey\lib\schemasmith\tools\schemaquench.exe" -Algorithm SHA256
 
 LICENSE
 -------
