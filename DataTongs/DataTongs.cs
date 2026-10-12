@@ -653,13 +653,14 @@ public class DataTongs
 
     #region Table Existence Checks
 
-    // One query on SQL Server: whether the table exists, and whether it is a graph edge table (2017+;
-    // OBJECTPROPERTYEX returns NULL for the property on older versions).
+    // One query on SQL Server: whether the table exists, and whether it is a graph edge table (2017+). OBJECTPROPERTYEX's
+    // IsEdge is NULL on 2017, so an edge is a graph table with the visible $edge_id_ pseudo column.
     private (bool Exists, bool IsGraphEdge) SourceTableState(IDbCommand cmd, string schemaOrDb, string tableName)
     {
         if (_platform.GetBasePlatform() != Platform.SqlServer) return (TableExists(cmd, schemaOrDb, tableName), false);
-        var name = $"{schemaOrDb.Replace("'", "''")}.{tableName.Replace("'", "''")}";
-        cmd.CommandText = $"SELECT CASE WHEN OBJECT_ID('{name}') IS NULL THEN 0 WHEN OBJECTPROPERTYEX(OBJECT_ID('{name}'), 'IsEdge') = 1 THEN 2 ELSE 1 END";
+        var id = $"OBJECT_ID('{schemaOrDb.Replace("'", "''")}.{tableName.Replace("'", "''")}')";
+        cmd.CommandText = $"SELECT CASE WHEN {id} IS NULL THEN 0 WHEN {MergeScriptHelper.SqlServerIsGraphTable(id)} " +
+                          $"AND EXISTS (SELECT 1 FROM sys.columns e WHERE e.[object_id] = {id} AND e.[name] LIKE '$edge[_]id[_]%') THEN 2 ELSE 1 END";
         var state = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
         return (state > 0, state == 2);
     }

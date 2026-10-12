@@ -87,12 +87,19 @@ public static class MergeScriptHelper
 
     // Graph node and edge tables (2017+) carry internal columns that cannot be selected or inserted: hidden ones
     // (graph_id_..., from_id_...) and visible pseudo columns ($node_id_..., $from_id_...). sys.columns.graph_type would
-    // name them but does not exist before 2017, and naming it fails the query there; COLUMNPROPERTY and OBJECTPROPERTYEX
-    // return NULL for a property a version does not know. A hidden temporal period column goes too -- it cannot be
-    // inserted either.
+    // name them but does not exist before 2017, and naming it fails the query there. OBJECTPROPERTYEX's IsNode and IsEdge
+    // return NULL on 2017, so a graph table is recognised by the hidden graph_id_ column every one carries. A hidden
+    // temporal period column goes too -- it cannot be inserted either.
     public const string SqlServerGraphColumnFilter =
         "AND ISNULL(COLUMNPROPERTY(sc.[object_id], sc.[name], 'IsHidden'), 0) = 0 " +
-        "AND NOT (sc.[name] LIKE '$%' AND (OBJECTPROPERTYEX(sc.[object_id], 'IsNode') = 1 OR OBJECTPROPERTYEX(sc.[object_id], 'IsEdge') = 1)) ";
+        "AND NOT (sc.[name] LIKE '$%' AND " + SqlServerIsGraphTablePrefix + "sc.[object_id]" + SqlServerIsGraphTableSuffix + ") ";
+
+    public static string SqlServerIsGraphTable(string objectIdExpression) =>
+        SqlServerIsGraphTablePrefix + objectIdExpression + SqlServerIsGraphTableSuffix;
+
+    private const string SqlServerIsGraphTablePrefix = "EXISTS (SELECT 1 FROM sys.columns g WHERE g.[object_id] = ";
+    private const string SqlServerIsGraphTableSuffix =
+        " AND g.[name] LIKE 'graph[_]id[_]%' AND COLUMNPROPERTY(g.[object_id], g.[name], 'IsHidden') = 1)";
 
     // PostgreSQL types that cannot be represented in JSON or compared reliably.
     // Note: 'point' and 'polygon' are NOT excluded — they overlap with PostGIS types.

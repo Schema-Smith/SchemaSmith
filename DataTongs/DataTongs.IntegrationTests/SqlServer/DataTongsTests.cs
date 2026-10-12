@@ -69,34 +69,42 @@ INSERT [dbo].[GEdge] ($from_id, $to_id, [Weight]) SELECT f.$node_id, t.$node_id,
         var file = Substitute.For<IFile>();
         lock (FactoryContainer.SharedLockObject)
         {
-            LogFactory.Register("ErrorLog", errorLog);
-            LogFactory.Register("ProgressLog", progressLog);
-            FactoryContainer.Register(Substitute.For<IEnvironment>());
-            FactoryContainer.Register(file);
-            FactoryContainer.Register(Substitute.For<IDirectory>());
+            try
+            {
+                LogFactory.Register("ErrorLog", errorLog);
+                LogFactory.Register("ProgressLog", progressLog);
+                FactoryContainer.Register(Substitute.For<IEnvironment>());
+                FactoryContainer.Register(file);
+                FactoryContainer.Register(Substitute.For<IDirectory>());
 
-            var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-            config["Source:Server"] = config["SqlServer:Server"] ?? "127.0.0.1";
-            config["Source:Port"] = config["SqlServer:Port"];
-            config["Source:User"] = config["SqlServer:User"];
-            config["Source:Password"] = config["SqlServer:Password"];
-            config["Source:database"] = _integrationDb;
-            foreach (var prop in ConnectionString.ReadProperties(config, "SqlServer:ConnectionProperties"))
-                config[$"Source:ConnectionProperties:{prop.Key}"] = prop.Value;
-            config["Tables:0:Name"] = "dbo.GEdge";
-            config["Tables:1:Name"] = "dbo.GNode";
-            config["ShouldCast:OutputScripts"] = "false";
+                var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+                config["Source:Server"] = config["SqlServer:Server"] ?? "127.0.0.1";
+                config["Source:Port"] = config["SqlServer:Port"];
+                config["Source:User"] = config["SqlServer:User"];
+                config["Source:Password"] = config["SqlServer:Password"];
+                config["Source:database"] = _integrationDb;
+                foreach (var prop in ConnectionString.ReadProperties(config, "SqlServer:ConnectionProperties"))
+                    config[$"Source:ConnectionProperties:{prop.Key}"] = prop.Value;
+                config["Tables:0:Name"] = "dbo.GEdge";
+                config["Tables:1:Name"] = "dbo.GNode";
+                config["ShouldCast:OutputScripts"] = "false";
 
-            var run = new DataTongs(Platform.SqlServer);
-            run.CastData();
+                var run = new DataTongs(Platform.SqlServer);
+                run.CastData();
 
-            file.DidNotReceive().WriteAllText(Arg.Is<string>(s => s.ContainsIgnoringCase("GEdge")), Arg.Any<string>());
-            file.Received(1).WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("dbo.GNode.tabledata")), Arg.Any<string>());
-            progressLog.Received(1).Warn(Arg.Is<string>(s => s.ContainsIgnoringCase("dbo.GEdge") && s.ContainsIgnoringCase("edge")));
-            Assert.That(run.ExitCode, Is.EqualTo(1), "a skipped table leaves the run incomplete");
-
-            FactoryContainer.Clear();
-            LogFactory.Clear();
+                file.DidNotReceive().WriteAllText(Arg.Is<string>(s => s.ContainsIgnoringCase("GEdge")), Arg.Any<string>());
+                file.Received(1).WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("dbo.GNode.tabledata")), Arg.Any<string>());
+                progressLog.Received(1).Warn(Arg.Is<string>(s => s.ContainsIgnoringCase("dbo.GEdge") && s.ContainsIgnoringCase("edge")));
+                Assert.That(run.ExitCode, Is.EqualTo(1), "a skipped table leaves the run incomplete");
+            }
+            finally
+            {
+                // The cached configuration lives in the container: left registered, this test's table list becomes the next test's.
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+                cmd.CommandText = "DROP TABLE IF EXISTS [dbo].[GEdge]; DROP TABLE IF EXISTS [dbo].[GNode]; DROP TABLE IF EXISTS [dbo].[GNodeCopy];";
+                cmd.ExecuteNonQuery();
+            }
         }
     }
 
