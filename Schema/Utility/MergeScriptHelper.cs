@@ -1888,7 +1888,7 @@ SELECT c.column_name, c.udt_name
         var columns = GetColumnInfoMySql(cmd, databaseName, tableName, excludeAutoIncrement: false, jsonKeys);
         mySqlServerVersionNum = RowSourceVersionNumMySql(cmd, mySqlServerVersionNum);
         var jsonSource = BuildJsonRowSourceMySql(columns, mySqlServerVersionNum);
-        tableData = QuoteDecimalNumbersMySql(tableData, mySqlServerVersionNum, columns);
+        tableData = DecodeSurrogateEscapesMySql(QuoteDecimalNumbersMySql(tableData, mySqlServerVersionNum, columns), mySqlServerVersionNum);
 
         if (string.IsNullOrEmpty(insertColumns))
             throw new InvalidOperationException($"No columns found for table `{databaseName}`.`{tableName}` (or all columns are auto-increment/generated).");
@@ -2211,6 +2211,19 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         }
         return sb.ToString();
     }
+
+    // MariaDB 10.2's JSON parser refuses an escaped surrogate pair (😀), so a payload holding one fails to
+    // shred (4038); 10.3 and later accept it. A literal 4-byte character shreds correctly on 10.2, so there each escaped
+    // pair is written as the character it encodes. A lone surrogate is left alone: no version accepts it.
+    internal static string DecodeSurrogateEscapesMySql(string tableData, int versionNum) =>
+        versionNum != 1002 || tableData == null
+            ? tableData
+            : EscapedSurrogatePair.Replace(tableData, m => m.Groups[1].Value + char.ConvertFromUtf32(char.ConvertToUtf32(
+                (char)Convert.ToInt32(m.Groups[2].Value, 16), (char)Convert.ToInt32(m.Groups[3].Value, 16))));
+
+    // An even run of backslashes before \u leaves the \u an escape; an odd run makes it text.
+    private static readonly Regex EscapedSurrogatePair = new(@"(?<!\\)((?:\\\\)*)\\u(d[89ab][0-9a-f]{2})\\u(d[c-f][0-9a-f]{2})",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     internal static string QuoteDecimalNumbersMySql(string tableData, int versionNum, List<MySqlColumnInfo> columns)
     {

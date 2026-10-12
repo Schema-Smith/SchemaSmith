@@ -183,7 +183,10 @@ public abstract class TableDataDeliverySharedTests
             var payload = "[{\"code\":\"E2\",\"name\":\"" + Backslash + "ud83d" + Backslash + "ude00\"}]";
             var script = BuildMergeScript(command, _testDb, table, payload, "`code`",
                 mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
-            Assert.That(script, Does.Contain(Backslash + Backslash + "ud83d"), "the payload must reach the server still escaped");
+            if (Platform == Platform.MariaDb && _serverVersionNum == 1002)
+                Assert.That(script, Does.Contain("\U0001F600"), "MariaDB 10.2 refuses an escaped surrogate pair, so the payload must carry the character");
+            else
+                Assert.That(script, Does.Contain(Backslash + Backslash + "ud83d"), "the payload must reach the server still escaped");
             ExecuteScript(command, script);
 
             command.CommandText = $"SELECT HEX(name) FROM `{_testDb}`.`{table}` WHERE code = 'E2'";

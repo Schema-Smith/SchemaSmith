@@ -3041,6 +3041,18 @@ public class MergeScriptHelperTests
 
     #endregion
 
+    // MariaDB 10.2's JSON parser refuses an escaped surrogate pair, so on 10.2 it is written as the character itself.
+    [TestCase(1002, @"[{""n"":""a😀b""}]", "[{\"n\":\"a\U0001F600b\"}]", TestName = "SurrogateEscapes_10_2_Decoded")]
+    [TestCase(1002, @"[{""n"":""😀""}]", "[{\"n\":\"\U0001F600\"}]", TestName = "SurrogateEscapes_10_2_UpperHexDecoded")]
+    [TestCase(1002, @"[{""n"":""\\ud83d\\ude00""}]", @"[{""n"":""\\ud83d\\ude00""}]", TestName = "SurrogateEscapes_10_2_EscapedBackslashIsText")]
+    [TestCase(1002, @"[{""n"":""\\😀""}]", "[{\"n\":\"\\\\\U0001F600\"}]", TestName = "SurrogateEscapes_10_2_AfterAnEscapedBackslash")]
+    [TestCase(1002, @"[{""n"":""\ud83d""}]", @"[{""n"":""\ud83d""}]", TestName = "SurrogateEscapes_10_2_LoneSurrogateUnchanged")]
+    [TestCase(1002, @"[{""n"":""é""}]", @"[{""n"":""é""}]", TestName = "SurrogateEscapes_10_2_BmpEscapeUnchanged")]
+    [TestCase(1003, @"[{""n"":""😀""}]", @"[{""n"":""😀""}]", TestName = "SurrogateEscapes_10_3_Unchanged")]
+    [TestCase(800, @"[{""n"":""😀""}]", @"[{""n"":""😀""}]", TestName = "SurrogateEscapes_MySql_Unchanged")]
+    public void DecodeSurrogateEscapesMySql_OnlyOnMariaDb10_2(int versionNum, string payload, string expected)
+        => Assert.That(MergeScriptHelper.DecodeSurrogateEscapesMySql(payload, versionNum), Is.EqualTo(expected));
+
     // MySQL went 5.7, 8.x, 9.x, then calendar years from 26: 26.7 reads 2607. Only MariaDB 10.2-10.5 lacks JSON_TABLE.
     [TestCase(0, true)]
     [TestCase(507, false)]
