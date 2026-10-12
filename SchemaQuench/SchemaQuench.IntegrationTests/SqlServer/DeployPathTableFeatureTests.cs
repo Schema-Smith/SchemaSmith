@@ -464,6 +464,31 @@ public class DeployPathTableFeatureTests
         });
     }
 
+    // An index-only template renames and drops indexes in its own procedure, so it needs the same refusal.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AnIndexACaptureInstanceUses_IsRefusedByAnIndexOnlyTemplate(bool xmlIngest)
+    {
+        RunScenario("DeployCdcIdxOnly", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            cmd.CommandText = """
+                CREATE TABLE dbo.DeployProbe (Id INT NOT NULL CONSTRAINT PK_DeployProbe PRIMARY KEY, A INT NULL);
+                EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'DeployProbe', @role_name = NULL;
+                """;
+            cmd.ExecuteNonQuery();
+
+            _nextDeployFails = true;
+            deploy(CdcTable(enableCdc: null, extraColumn: false, primaryKeyName: "[PK_DeployProbe_Renamed]"));
+            var logged = _progressLog.ReceivedCalls().Concat(_errorLog.ReceivedCalls())
+                .Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "");
+            Assert.That(logged.Any(m => m.Contains("CDC identifies rows by an index this deploy would drop or rename")
+                                        && m.Contains("[PK_DeployProbe] (renamed, named by dbo_DeployProbe)")), Is.True,
+                "refused by its own message before the index-only deploy renames the index");
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'PK_DeployProbe'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the index must keep its name");
+        }, templateExtra: ", \"IndexOnlyTableQuenches\": true", xmlIngest: xmlIngest);
+    }
+
     // A new clustered index displaces the existing one whatever its name, even when the package no longer declares it
     // and is not set to drop it -- so the clustered index a capture instance uses is refused there too.
     [Test]
