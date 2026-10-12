@@ -23,6 +23,7 @@ public class RequirePrimaryKeyTests
     private const string Product = "RequirePrimaryKeyProduct";
     private const string TestDb = "ss_require_pk_mysql";
     private IDbConnection _connection = null!;
+    private bool _supported;
 
     [OneTimeSetUp]
     public void OneTimeSetUp()
@@ -31,6 +32,7 @@ public class RequirePrimaryKeyTests
         _connection.Open();
         if (Convert.ToInt32(Scalar("SELECT COUNT(*) FROM performance_schema.global_variables WHERE VARIABLE_NAME = 'sql_require_primary_key'")) == 0)
             Assert.Ignore("sql_require_primary_key arrived in MySQL 8.0.13.");
+        _supported = true;
     }
 
     [SetUp]
@@ -47,7 +49,8 @@ public class RequirePrimaryKeyTests
     {
         try
         {
-            if (_connection is { State: ConnectionState.Open })
+            // Teardown runs after an ignored setup too, and below 8.0.13 the variable cannot even be named.
+            if (_supported && _connection is { State: ConnectionState.Open })
             {
                 Exec("SET SESSION sql_require_primary_key = 0");
                 Exec($"DROP DATABASE IF EXISTS `{TestDb}`");
