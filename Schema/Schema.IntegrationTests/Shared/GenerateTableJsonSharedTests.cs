@@ -99,6 +99,12 @@ public abstract class GenerateTableJsonSharedTests
     public void GenerateTableJSON_BtreeKeyOnAPoint_IsExtractedWithoutAPrefix()
     {
         if (Platform != Platform.MySQL) Assert.Ignore("Only MySQL gives a POINT key an implicit prefix.");
+        using (var versionCmd = _connection.CreateCommand())
+        {
+            versionCmd.CommandText = "SELECT VERSION()";
+            if (VersionHelper.ParsePatchComparable(versionCmd.ExecuteScalar()?.ToString(), Platform) >= 80000)
+                Assert.Ignore("MySQL 8.0 and later refuse a BTREE key on a POINT column.");
+        }
         var table = $"pt_{Guid.NewGuid():N}"[..16];
         using var command = _connection.CreateCommand();
         command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (Id INT PRIMARY KEY, Val POINT NOT NULL, KEY ix_val (Val) USING BTREE)";
