@@ -374,7 +374,8 @@ internal static class DeferredMergeBuilder
             sb.AppendLine($"INSERT INTO `{db}`.`{table}` ({columnList})");
             sb.AppendLine($"SELECT {selectExpressions}");
             sb.AppendLine($"FROM {jsonSource}");
-            sb.AppendLine(insertMissingOnly ? MergeScriptHelper.BuildMissingRowsFilterMySql(db, table, columns, keyColumns) + ";" : onDuplicate);
+            var missingRowsFilter = insertMissingOnly ? MergeScriptHelper.BuildMissingRowsFilterMySql(db, table, columns, keyColumns) : null;
+            sb.AppendLine(missingRowsFilter != null ? missingRowsFilter + ";" : onDuplicate);
             if (chunked) sb.AppendLine();
         }
         return sb.ToString();

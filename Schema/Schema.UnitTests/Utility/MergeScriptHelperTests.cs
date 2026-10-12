@@ -3106,4 +3106,28 @@ public class MergeScriptHelperTests
     [TestCase(2607, false)]   // MySQL 26.7, not MariaDB
     public void IsMariaDbVersionNum_ByVersionNum(int versionNum, bool expected)
         => Assert.That(MergeScriptHelper.IsMariaDbVersionNum(versionNum), Is.EqualTo(expected));
+
+    // The deferred self-reference pass inserts only the rows whose key is missing. With no key column known it has
+    // nothing to match on, and an empty match list produced WHERE NOT EXISTS (... WHERE ), a syntax error.
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("`unknown`")]
+    public void BuildMissingRowsFilterMySql_WithNoKnownKey_IsNull(string keyColumns)
+    {
+        var columns = new List<MergeScriptHelper.MySqlColumnInfo> { new() { Name = "id", DataType = "int", ColumnType = "int" } };
+        Assert.That(MergeScriptHelper.BuildMissingRowsFilterMySql("db", "t", columns, keyColumns), Is.Null);
+    }
+
+    [Test]
+    public void BuildMissingRowsFilterMySql_MatchesOnTheKey()
+    {
+        var columns = new List<MergeScriptHelper.MySqlColumnInfo>
+        {
+            new() { Name = "id", DataType = "int", ColumnType = "int" },
+            new() { Name = "parent_id", DataType = "int", ColumnType = "int" }
+        };
+        var filter = MergeScriptHelper.BuildMissingRowsFilterMySql("db", "t", columns, "`id`");
+        Assert.That(filter, Does.StartWith("WHERE NOT EXISTS (SELECT 1 FROM `db`.`t` _ss_live WHERE _ss_live.`id` <=> "));
+        Assert.That(filter, Does.Not.Contain("parent_id"));
+    }
 }

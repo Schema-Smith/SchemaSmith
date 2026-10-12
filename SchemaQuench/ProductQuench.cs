@@ -743,10 +743,18 @@ public class ProductQuench
         }
 
         using var command = GetCommand(_primaryServer);
-        command.CommandText = "SELECT @@lower_case_table_names";
-        var value = command.ExecuteScalar();
-        _serverFoldsNames = value is not null and not DBNull && Convert.ToInt32(value) != 0;
-        return _serverFoldsNames.Value;
+        try
+        {
+            command.CommandText = "SELECT @@lower_case_table_names";
+            var value = command.ExecuteScalar();
+            _serverFoldsNames = value is not null and not DBNull && Convert.ToInt32(value) != 0;
+            return _serverFoldsNames.Value;
+        }
+        finally
+        {
+            command.Connection?.Close();
+            command.Connection?.Dispose();
+        }
     }
 
     /// <summary>
