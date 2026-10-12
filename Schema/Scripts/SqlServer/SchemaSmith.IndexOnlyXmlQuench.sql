@@ -255,6 +255,8 @@ BEGIN TRY
                                  JOIN sys.columns pc ON pc.[object_id] = pic.[object_id] AND pc.column_id = pic.column_id
                                 WHERE pic.[object_id] = si.[object_id] AND pic.index_id = si.index_id
                                   AND pic.partition_ordinal = 1),
+         -- MIXED declares "leave the compression as it is", so the change comparison reads the live value for it.
+         [LiveCompression] = ISNULL(p.[data_compression_desc], 'NONE') COLLATE DATABASE_DEFAULT,
          IndexScript = 'CREATE ' +
                        CASE WHEN si.is_unique = 1 THEN 'UNIQUE ' ELSE '' END + 
                        CASE WHEN si.[type] IN (1, 5) THEN '' ELSE 'NON' END + 'CLUSTERED ' +
@@ -479,9 +481,9 @@ BEGIN TRY
                                  AND ei.[xTableName] = i.[TableName]
                                  AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
     CROSS APPLY (SELECT [WithOptions] =
-                   CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('NONE', 'ROW', 'PAGE'))
-                             OR (i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
-                        THEN ', DATA_COMPRESSION=' + RTRIM(ISNULL(i.[CompressionType], '')) ELSE '' END +
+                   CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) IN ('NONE', 'ROW', 'PAGE'))
+                             OR (i.[ColumnStore] = 1 AND RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
+                        THEN ', DATA_COMPRESSION=' + RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) ELSE '' END +
                    CASE WHEN i.[IgnoreDuplicateKey] = 1 THEN ', IGNORE_DUP_KEY=ON' ELSE '' END +
                    CASE WHEN i.[PadIndex] = 1 THEN ', PAD_INDEX=ON' ELSE '' END) o
     WHERE EXISTS (SELECT * 
@@ -528,9 +530,9 @@ BEGIN TRY
                                                                        ELSE '' END +
                                                                   -- #242: keyed on the OLD name -- the mapping row was written under the name the index has now.
                                                                   CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', ei.[xIndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si3.filter_definition FROM sys.indexes si3 WHERE si3.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) AND si3.[name] = ei.[xIndexName]))) ELSE '' END +
-                                                                  CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('NONE', 'ROW', 'PAGE'))
-                                                                         OR (i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
-                                                                       THEN ' WITH (DATA_COMPRESSION=' + RTRIM(ISNULL(i.[CompressionType], '')) + ')'
+                                                                  CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) IN ('NONE', 'ROW', 'PAGE'))
+                                                                         OR (i.[ColumnStore] = 1 AND RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
+                                                                       THEN ' WITH (DATA_COMPRESSION=' + RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) + ')'
                                                                        ELSE '' END
 
   -- Remove duplicates from the rename list
@@ -540,6 +542,7 @@ BEGIN TRY
     GROUP BY [OldName]  
   DELETE FROM #IndexRenames WHERE EXISTS (SELECT * FROM #IndexRenameDedupe dd WITH (NOLOCK) WHERE [OriginalName] = [OldName] AND [ValidNewName] <> [NewName])
   
+  -- Read before the renames for the CDC guard below, and again after them for everything else.
   RAISERROR('Collect index level extended properties', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexProperties') IS NOT NULL DROP TABLE #IndexProperties
   SELECT t.[Schema], t.[Name] AS TableName, objname COLLATE DATABASE_DEFAULT AS IndexName, x.[Name] COLLATE DATABASE_DEFAULT AS PropertyName, CONVERT(NVARCHAR(50), x.[value]) COLLATE DATABASE_DEFAULT AS [value]
@@ -592,6 +595,32 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
+  -- Again after the renames: ownership and the drop set read the indexes' current names.
+  RAISERROR('Collect index level extended properties', 10, 100) WITH NOWAIT
+  DELETE FROM #IndexProperties
+  INSERT INTO #IndexProperties
+  SELECT t.[Schema], t.[Name] AS TableName, objname COLLATE DATABASE_DEFAULT AS IndexName, x.[Name] COLLATE DATABASE_DEFAULT AS PropertyName, CONVERT(NVARCHAR(50), x.[value]) COLLATE DATABASE_DEFAULT AS [value]
+    FROM #Tables t WITH (NOLOCK)
+    CROSS APPLY fn_listextendedproperty(default, 'Schema', SchemaSmith.fn_StripBracketWrapping(t.[Schema]), 'Table', SchemaSmith.fn_StripBracketWrapping(t.[Name]), 'Index', default) x
+  WHERE x.[Name] COLLATE DATABASE_DEFAULT = 'ProductName'
+
+  RAISERROR('Identify indexes removed from the product', 10, 100) WITH NOWAIT
+  DELETE FROM #IndexesRemovedFromProduct
+  INSERT INTO #IndexesRemovedFromProduct
+  SELECT xp.[Schema], xp.TableName, xp.IndexName, IsConstraint = CAST(CASE WHEN OBJECT_ID(xp.[Schema] + '.' + xp.IndexName) IS NOT NULL THEN 1 ELSE 0 END AS BIT)
+    FROM #IndexProperties xp
+    WHERE xp.[value] = @ProductName
+      AND NOT EXISTS (SELECT *
+                        FROM #Indexes i WITH (NOLOCK)
+                        WHERE i.[Schema] = xp.[Schema]
+                          AND i.TableName = xp.TableName
+                          AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = xp.IndexName)
+      AND NOT EXISTS (SELECT *
+                        FROM #XmlIndexes i WITH (NOLOCK)
+                        WHERE i.[Schema] = xp.[Schema]
+                          AND i.TableName = xp.TableName
+                          AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = xp.IndexName)
+                      
   RAISERROR('Identify unknown and modified indexes to drop', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexesToDrop') IS NOT NULL DROP TABLE #IndexesToDrop
   -- Indexes removed from the prouduct
