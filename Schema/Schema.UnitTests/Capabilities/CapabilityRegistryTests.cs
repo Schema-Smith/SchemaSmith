@@ -47,6 +47,7 @@ namespace Schema.UnitTests.Capabilities
             "INDEX (invisible, MySQL 8.0 / MariaDB 10.6)",
             "INDEX (descending key part, MySQL 8.0 / MariaDB 10.8)",
             "CHECK constraint (MySQL 8.0.16)",
+            "CHECK constraint (MariaDB 10.2.22)",
             "column (DEFAULT expression, MySQL 8.0.13)",
             "column (invisible, MySQL 8.0.23 / MariaDB 10.3)",
             "column (SRID, MySQL 8.0.3)",
@@ -121,10 +122,12 @@ namespace Schema.UnitTests.Capabilities
         }
 
         [Test]
-        public void MariaDb_HasNoCheckConstraintRow()
+        public void MariaDb_CheckConstraintRow_TurnsOnTheCatalogViewPatch()
         {
-            // CHECK is supported at the MariaDb 10.2 floor, so it never degrades — no MariaDb row.
-            Assert.That(CapabilityRegistry.For(Platform.MariaDb).Any(c => c.Key == "check-constraint"), Is.False);
+            // CHECK predates the floor, but INFORMATION_SCHEMA.CHECK_CONSTRAINTS arrived in 10.2.22, and every read of a
+            // deployed CHECK needs it, so below that CHECK degrades.
+            var row = CapabilityRegistry.For(Platform.MariaDb).Single(c => c.Key == "check-constraint");
+            Assert.That(row.IntroducedInPatchComparable, Is.EqualTo(100222));
         }
 
         [Test]

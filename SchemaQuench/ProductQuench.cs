@@ -345,7 +345,7 @@ public class ProductQuench
         string declaredMinimum)
     {
         return detected
-            .Where(d => !VersionHelper.IsAtLeast(d.Info.ServerComparable, requiredComparable))
+            .Where(d => !VersionHelper.MeetsDeclaredVersion(d.Info, declaredMinimum, requiredComparable))
             .Select(d => $"  {d.Server}: detected version {VersionHelper.DisplayVersion(d.Info)} is below the product's declared MinimumVersion {declaredMinimum}")
             .ToList();
     }

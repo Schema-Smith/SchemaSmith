@@ -565,6 +565,8 @@ public static class ForgeKindler
                 // The one declared-vs-live index-kind rule both index-change detectors call.
                 new("SchemaSmith_IndexTypesMatch.sql"),
                 new("SchemaSmith_IndexHasFunctionalKeyPart.sql"),
+                // Calls IndexHasFunctionalKeyPart, SupportsFunctionalIndex and ServerVersionPatchNum, above.
+                new("SchemaSmith_IndexKeyPartsUnsupported.sql"),
                 // Calls IndexHasFunctionalKeyPart, above; read by ParseTableJson.
                 new("SchemaSmith_StripFullLengthPrefixes.sql"),
                 new("SchemaSmith_NormalizeCheckExpression.sql"),

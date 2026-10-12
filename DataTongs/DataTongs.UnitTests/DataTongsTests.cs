@@ -1271,6 +1271,59 @@ public class DataTongsTests
 
     #endregion
 
+    #region CastData — below-floor source
+
+    // DataTongs used to run against a below-floor source; on MySQL 5.7.21, which lacks JSON_ARRAYAGG, it wrote nothing
+    // and still exited 0. It now refuses the source before extracting, as SchemaQuench refuses a target.
+    [Test]
+    public void CastData_MySqlSourceBelowTheFloor_IsRefusedBeforeExtracting()
+    {
+        var connectionFactory = Substitute.For<IDbConnectionFactory>();
+        var connection = Substitute.For<IDbConnection>();
+        var command = Substitute.For<IDbCommand>();
+        var fileWrapper = Substitute.For<IFile>();
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+        {
+            ["Source:Server"] = "localhost",
+            ["Source:Database"] = "testdb",
+            ["Source:User"] = "user",
+            ["Source:Password"] = "pass",
+            ["ShouldCast:OutputContentFiles"] = "true",
+            ["ShouldCast:OutputScripts"] = "false",
+            ["ContentPath"] = "./content",
+            ["Tables:0:Name"] = "users",
+            ["Tables:0:KeyColumns"] = "`id`"
+        }).Build();
+
+        connectionFactory.GetDbConnection(Arg.Any<string>()).Returns(connection);
+        connection.CreateCommand().Returns(command);
+        command.ExecuteScalar().Returns(_ => command.CommandText?.Contains("VERSION()") == true ? "5.7.21" : null);
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Register<IConfigurationRoot>(config);
+            FactoryContainer.Register<IDbConnectionFactory>(connectionFactory);
+            FactoryContainer.Register(Substitute.For<IDirectory>());
+            FactoryContainer.Register(fileWrapper);
+            LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+            try
+            {
+                var dt = new global::DataTongs.DataTongs(Platform.MySQL);
+                var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
+                Assert.That(ex!.Message, Does.Contain("5.7.21").And.Contain("5.7.22"));
+                fileWrapper.DidNotReceive().WriteAllText(Arg.Any<string>(), Arg.Any<string>());
+            }
+            finally
+            {
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+            }
+        }
+    }
+
+    #endregion
+
     #region CastData — Invalid Key Columns
 
     [Test]

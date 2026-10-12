@@ -97,7 +97,7 @@ namespace Schema.UnitTests.Utility
         [TestCase(Platform.SqlServer, "2008 (major 10)")]
         [TestCase(Platform.PostgreSQL, "12")]
         [TestCase(Platform.MySQL, "5.7.22 / 8.0.23")]
-        [TestCase(Platform.MariaDb, "10.2")]
+        [TestCase(Platform.MariaDb, "10.2.7")]
         public void HardFloorDisplay_MatchesSupportedFloorsTable(Platform platform, string expected)
         {
             Assert.That(VersionHelper.HardFloorDisplay(platform), Is.EqualTo(expected));
@@ -126,6 +126,28 @@ namespace Schema.UnitTests.Utility
             Assert.That(VersionHelper.ParsePatchComparable(raw, platform), Is.EqualTo(expected));
         }
 
+        // A MinimumVersion of 8.0.30 used to read as 800, so any 8.0 server met it.
+        [TestCase("8.0.22", "8.0.30", false)]
+        [TestCase("8.0.30", "8.0.30", true)]
+        [TestCase("8.4.0", "8.0.30", true)]
+        [TestCase("8.0.22", "8.0", true)]
+        [TestCase("5.7.44", "8.0", false)]
+        public void MeetsDeclaredVersion_MySql_ComparesADeclaredPatch(string detected, string declared, bool expected)
+        {
+            var info = new TargetVersionInfo(Platform.MySQL, detected, VersionHelper.ParseDetectedVersion(detected, Platform.MySQL)!.Value);
+            var required = VersionHelper.ParseDeclaredVersion(declared, Platform.MySQL)!.Value;
+            Assert.That(VersionHelper.MeetsDeclaredVersion(info, declared, required), Is.EqualTo(expected));
+        }
+
+        [TestCase("10.6.11-MariaDB", "10.6.12", false)]
+        [TestCase("10.6.12-MariaDB-1:10.6.12+maria~ubu2004", "10.6.12", true)]
+        public void MeetsDeclaredVersion_MariaDb_ComparesADeclaredPatch(string detected, string declared, bool expected)
+        {
+            var info = new TargetVersionInfo(Platform.MariaDb, detected, VersionHelper.ParseDetectedVersion(detected, Platform.MariaDb)!.Value);
+            var required = VersionHelper.ParseDeclaredVersion(declared, Platform.MariaDb)!.Value;
+            Assert.That(VersionHelper.MeetsDeclaredVersion(info, declared, required), Is.EqualTo(expected));
+        }
+
         [TestCase(Platform.SqlServer, "16.0.1000.6")]
         [TestCase(Platform.PostgreSQL, "160004")]
         public void ParsePatchComparable_IsMySqlFamilyOnly(Platform platform, string raw)
@@ -152,7 +174,9 @@ namespace Schema.UnitTests.Utility
         }
 
         [TestCase(Platform.MariaDb, "10.1.48-MariaDB", true)]
-        [TestCase(Platform.MariaDb, "10.2.0-MariaDB", false)]
+        [TestCase(Platform.MariaDb, "10.2.6-MariaDB", true)]
+        [TestCase(Platform.MariaDb, "10.2.7-MariaDB", false)]
+        [TestCase(Platform.MariaDb, "10.2.44-MariaDB-1:10.2.44+maria~bionic", false)]
         [TestCase(Platform.SqlServer, "9.0.5000.0", true)]
         [TestCase(Platform.SqlServer, "10.50.4000.0", false)]
         public void IsBelowFloor_OtherEngines_KeepTheirFloors(Platform platform, string raw, bool expected)

@@ -31,7 +31,7 @@ namespace Schema.Utility
             Platform.SqlServer => 10,     // SQL Server 2008 (below compat 130 the model is ingested/compared as XML)
             Platform.PostgreSQL => 12,    // PostgreSQL 12 (features above 12 — per-column compression + expression statistics (14), NULLS NOT DISTINCT (15) — are degraded per the unsupported-feature policy)
             Platform.MySQL => 507,        // MySQL 5.7 (JSON_TABLE-free JSON_EXTRACT parse; CHECK degrades below 8.0.16; data delivery requires 8.0)
-            Platform.MariaDb => 1002,     // MariaDB 10.2 (recursive-CTE data-delivery shred below 10.6; full support)
+            Platform.MariaDb => 1002,     // MariaDB 10.2.7 (patch floor below; recursive-CTE data-delivery shred below 10.6; full support)
             _ => throw new ArgumentOutOfRangeException(nameof(platform), platform, "No version floor defined for platform")
         };
 
@@ -44,28 +44,45 @@ namespace Schema.Utility
             Platform.SqlServer => "2008 (major 10)",
             Platform.PostgreSQL => "12",
             Platform.MySQL => "5.7.22 / 8.0.23",
-            Platform.MariaDb => "10.2",
+            Platform.MariaDb => "10.2.7",
             _ => HardFloorComparable(platform).ToString()
         };
 
-        // MySQL's floor is a patch on two lines: 5.7.22 (JSON_ARRAYAGG, which DataTongs needs) and 8.0.23 (the 8.0
-        // feature gates key on 800 and fire on earlier patches that lack the feature). MySQL 8.0.0-8.0.22 and
-        // 5.7.0-5.7.21 are refused rather than gated patch by patch.
+        // MySQL's floor is a patch on two lines: 5.7.22 (JSON_ARRAYAGG) and 8.0.23 (the last of the 8.0 features to
+        // arrive). The feature gates turn on their own patches, but the patches below these floors are not certified.
         private const int MySqlFloor57 = 50722;
         private const int MySqlFloor80 = 80023;
+
+        // MariaDB 10.2.7 is the first patch with the JSON type alias the kindled helpers declare; 10.2.6 cannot kindle.
+        private const int MariaDbFloor = 100207;
 
         /// <summary>True when the detected server comparable is below the platform's intrinsic hard floor.</summary>
         public static bool IsBelowFloor(Platform platform, int serverComparable)
             => serverComparable < HardFloorComparable(platform);
 
-        /// <summary>True when the detected server is below the platform's floor, including MySQL's patch floors.</summary>
+        /// <summary>True when the detected server is below the platform's floor, including the MySQL family's patch floors.</summary>
         public static bool IsBelowFloor(TargetVersionInfo info)
         {
-            if (info.Platform != Platform.MySQL)
+            if (info.Platform.GetBasePlatform() != Platform.MySQL)
                 return IsBelowFloor(info.Platform, info.ServerComparable);
 
             var patch = ParsePatchComparable(info.RawVersion, info.Platform) ?? info.ServerComparable * 100;
+            if (info.Platform == Platform.MariaDb)
+                return patch < MariaDbFloor;
             return patch < MySqlFloor57 || (patch >= 80000 && patch < MySqlFloor80);
+        }
+
+        /// <summary>
+        /// True when the detected server meets a declared minimum. On the MySQL family a declared patch
+        /// (<c>8.0.30</c>) is compared patch for patch; otherwise the comparable decides, as it always has.
+        /// </summary>
+        public static bool MeetsDeclaredVersion(TargetVersionInfo info, string declared, int requiredComparable)
+        {
+            if (info.Platform.GetBasePlatform() == Platform.MySQL && !string.IsNullOrWhiteSpace(declared)
+                && declared.Trim().Split('.').Length >= 3
+                && ParsePatchComparable(declared, info.Platform) is { } requiredPatch)
+                return (ParsePatchComparable(info.RawVersion, info.Platform) ?? info.ServerComparable * 100) >= requiredPatch;
+            return IsAtLeast(info.ServerComparable, requiredComparable);
         }
 
         /// <summary>

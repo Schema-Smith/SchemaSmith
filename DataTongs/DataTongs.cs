@@ -264,6 +264,10 @@ public class DataTongs
         using var sourceConnection = GetConnection(sourceDb);
         var cmd = sourceConnection.CreateCommand();
 
+        // The engine floor SchemaQuench checks before a deploy: below it the extraction queries do not run.
+        if (TargetVersionDetector.TryDetect(cmd, _platform, sourceDb) is { } sourceVersion)
+            PreFlightVersionGuard.CheckOrThrow(sourceVersion, $"Source {sourceDb}", sourceDb);
+
         var sqlServerSource = _platform.GetBasePlatform() == Platform.SqlServer
             ? TargetVersionDetector.TryDetect(cmd, _platform, sourceDb)
             : null;

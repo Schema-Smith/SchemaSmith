@@ -89,6 +89,7 @@ public class CapabilityDocumentationTests
         ["MySQL/page-compression"] = "**Page compression**",
 
         // ---- MariaDB (shares three rows with MySQL above; the doc cell names both thresholds) ----
+        ["MariaDb/check-constraint"] = "**CHECK constraints**",
         ["MariaDb/invisible-index"] = "**Invisible index**",
         ["MariaDb/descending-index"] = "**Descending index key parts**",
         ["MariaDb/invisible-column"] = "**Invisible column**",

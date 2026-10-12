@@ -216,7 +216,7 @@ BEGIN
           )
           -- A declared functional index below the floor (see the STEP 0.7 degrade guard above) is
           -- never created -- it is a hard syntax error, not a clause that can be suppressed.
-          AND NOT (SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1 AND SchemaSmith_SupportsFunctionalIndex() = 0);
+          AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
 
         -- #363: WhatIf twin of the ELSE-branch 'index'/'created' audit; same predicate, set-based wouldCreate.
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -233,7 +233,7 @@ BEGIN
               WHERE s.TableKey = i.TableKey
                 AND s.IndexKey = i.IndexKey
           )
-          AND NOT (SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1 AND SchemaSmith_SupportsFunctionalIndex() = 0);
+          AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing indexes');
 
@@ -283,7 +283,7 @@ BEGIN
               WHERE s.TableKey = i.TableKey
                 AND s.IndexKey = i.IndexKey
           )
-          AND NOT (SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1 AND SchemaSmith_SupportsFunctionalIndex() = 0);
+          AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
 
         SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts);
         WHILE @ss_id IS NOT NULL DO
@@ -581,29 +581,30 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
     -- would make this create pass re-emit on every deploy. Degrade via the UnsupportedFeaturePolicy spine
     -- (mirrors the PostgreSQL NULLS-NOT-DISTINCT routing): 'fail' aborts naming the offending constraint(s);
     -- 'warn' (default) skips the emit and records one 'downgraded' manifest row per declared check so the run
-    -- stays idempotent. MariaDB reports support at/above the 10.2 floor, so it never enters this branch.
+    -- stays idempotent. MariaDB enters it below 10.2.22, where the CHECK_CONSTRAINTS view does not exist yet.
     IF SchemaSmith_SupportsCheckConstraints() = 0 THEN
+        SET @ss_check_floor = IF(VERSION() LIKE '%MariaDB%', 'MariaDB 10.2.22', 'MySQL 8.0.16');
         IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail'
            AND EXISTS (SELECT 1 FROM _SchemaSmith_CheckConstraints) THEN
             -- Log the full offending list to the run log first (SIGNAL MESSAGE_TEXT is capped at 128 chars,
             -- so the abort message stays concise + non-truncating and names the detail in the log instead).
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  CHECK constraint unsupported (requires MySQL 8.0.16): ',
+            SELECT CONNECTION_ID(), CONCAT('  CHECK constraint unsupported (requires ', @ss_check_floor, '): ',
                    SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName))
             FROM _SchemaSmith_CheckConstraints c;
             -- Keep < 128 chars: MySQL errors ("Data too long for condition item") on an over-long MESSAGE_TEXT.
-            SET @ss_msg = CONCAT('CHECK constraints require MySQL 8.0.16 (detected ',
-                                 SchemaSmith_ServerVersionNum(), '); see the deploy log for the unsupported check(s).');
+            SET @ss_msg = CONCAT('CHECK constraints require ', @ss_check_floor, ' (detected ',
+                                 VERSION(), '); see the deploy log for the unsupported check(s).');
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         ELSE
             -- Surface the downgrade in the run log too (not only the ChangeAudit manifest), matching this
             -- proc's per-object status-message convention, so a 5.7 deploy visibly reports skipped checks.
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Skipping check constraint (requires MySQL 8.0.16 - downgraded): ',
+            SELECT CONNECTION_ID(), CONCAT('  Skipping check constraint (requires ', @ss_check_floor, ' - downgraded): ',
                    SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName))
             FROM _SchemaSmith_CheckConstraints c;
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-            SELECT CONNECTION_ID(), 'CHECK constraint (MySQL 8.0.16)',
+            SELECT CONNECTION_ID(), IF(VERSION() LIKE '%MariaDB%', 'CHECK constraint (MariaDB 10.2.22)', 'CHECK constraint (MySQL 8.0.16)'),
                    CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName)), 'downgraded'
             FROM _SchemaSmith_CheckConstraints c;
         END IF;
