@@ -600,8 +600,9 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
                    SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName))
             FROM _SchemaSmith_CheckConstraints c;
             -- Keep < 128 chars: MySQL errors ("Data too long for condition item") on an over-long MESSAGE_TEXT.
+            -- Only the number: a packaged MariaDB's VERSION() ('10.2.21-MariaDB-1:10.2.21+maria~bionic') overruns it.
             SET @ss_msg = CONCAT('CHECK constraints require ', @ss_check_floor, ' (detected ',
-                                 VERSION(), '); see the deploy log for the unsupported check(s).');
+                                 SUBSTRING_INDEX(VERSION(), '-', 1), '); see the deploy log for the unsupported check(s).');
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         ELSE
             -- Surface the downgrade in the run log too (not only the ChangeAudit manifest), matching this
