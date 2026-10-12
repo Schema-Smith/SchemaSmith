@@ -167,9 +167,9 @@ This is the correct posture for a patch: deploy what's in scope, leave everythin
 
 ### Enforcement
 
-**Every stamped flag is enforced.** As of v2.2.0, SchemaQuench's drop-control covers every category SchemaShears suppresses: a table absent from the patch is not dropped, and on the tables the patch does include, columns, foreign keys, check constraints, exclude constraints, and statistics that exist in the target but not in the table JSON are preserved -- along with out-of-band indexes (`DropUnknownIndexes` stays `false`). See the per-flag sections in the [SchemaQuench Reference](schemaquench.md#droptablesremovedfromproduct) for exact semantics.
+**Every stamped flag is enforced.** As of v2.2.0, SchemaQuench's drop-control covers every category SchemaShears suppresses: a table absent from the patch is not dropped, and on the tables the patch does include, columns, foreign keys, check constraints, exclude constraints, and statistics that exist in the target but not in the table JSON are preserved -- along with out-of-band indexes (`DropUnknownIndexes` stays `false`) and, since v2.7.2, indexes the product no longer declares (`DropIndexesRemovedFromProduct` stays `false`). See the per-flag sections in the [SchemaQuench Reference](schemaquench.md#droptablesremovedfromproduct) for exact semantics.
 
-The user promise is: _a patch won't drop objects you didn't include_ -- unless you explicitly re-enable a category with `--AllowDrops`.
+The user promise is: _a patch won't drop objects you didn't include_ -- unless you explicitly re-enable a category with `--AllowDrops`, or the target's own SchemaQuench settings turn on one of the two drop settings a patch cannot carry (see below).
 
 ### Selectively re-enabling drops
 

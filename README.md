@@ -127,12 +127,12 @@ Tags: `latest`, `X.Y.Z` (immutable), `X.Y`, `X`. Multi-arch (`linux/amd64` + `li
 
 ## GitHub Action (CI/CD)
 
-Run SchemaQuench in a workflow with the **SchemaSmith Deploy** action — WhatIf on pull requests, deploy on merge:
+Run SchemaQuench in a workflow with the **SchemaSmith Deploy** action ([GitHub Marketplace](https://github.com/marketplace/actions/schemasmith-deploy)) — WhatIf on pull requests, deploy on merge:
 
 ```yaml
 - name: WhatIf on PR
   if: github.event_name == 'pull_request'
-  uses: Schema-Smith/SchemaSmith@v2.7.0
+  uses: Schema-Smith/schemasmith-deploy@v2.7.2
   with:
     mode: whatif
     product-path: ./schema
@@ -142,7 +142,7 @@ Run SchemaQuench in a workflow with the **SchemaSmith Deploy** action — WhatIf
 
 - name: Deploy on merge
   if: github.ref == 'refs/heads/main'
-  uses: Schema-Smith/SchemaSmith@v2.7.0
+  uses: Schema-Smith/schemasmith-deploy@v2.7.2
   with:
     mode: deploy
     product-path: ./schema
@@ -151,7 +151,7 @@ Run SchemaQuench in a workflow with the **SchemaSmith Deploy** action — WhatIf
     password: ${{ secrets.DB_PASSWORD }}
 ```
 
-The action fetches the matching self-contained binary for the runner OS at run time — no runtime install. **Pinning a release tag (`@v2.7.0` above) is recommended for production** — a tag pins both the action and the CLI version it runs; `@main` tracks the latest action instead (the `version` input defaults from the ref).
+The action fetches the matching self-contained binary for the runner OS at run time — no runtime install. **Pinning a release tag (`@v2.7.2` above) is recommended for production** — a tag pins both the action and the CLI version it runs; `@main` tracks the latest action instead (the `version` input defaults from the ref).
 
 - **Inputs:** `version`, `mode` (`deploy` / `whatif` / `validate` / `test-connection` / `preview-targets`), `product-path`, `server`, `user`, `password` (passed via env, never on the command line), `extra-args` (raw `--Key:value` passthrough — port, template/database/schema filters, `Drop*` toggles, connection properties, and more).
 - **Outputs:** `exit-code`, `log-dir`, `summary-path` (the `SchemaQuench - Summary.md`/`.json` — e.g. post a WhatIf summary as a PR comment).

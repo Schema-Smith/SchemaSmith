@@ -329,7 +329,7 @@ When `UpdateTables` is `false`, steps 4 through 16 are skipped entirely. When `I
 
 ## Engine Version Compatibility
 
-SchemaSmith deploys the same package to SQL Server, PostgreSQL, MySQL, and MariaDB — and within each platform, it adapts to the target server's version rather than demanding uniformity. You declare one package; SchemaQuench detects the engine version of each target and does the right thing for that target. When you need to enforce a version floor, declare it once in `Product.json`.
+Each schema package targets a single engine, declared by `Platform` in its `Product.json`, and SchemaQuench adapts the DDL it generates to the version of that engine on each target rather than demanding uniformity. The minimum supported version for every engine is listed in the table below. When you need to enforce a version floor, declare it once in `Product.json`.
 
 ### Supported engine range
 
