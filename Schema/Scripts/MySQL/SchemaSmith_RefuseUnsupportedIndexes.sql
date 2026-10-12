@@ -15,7 +15,9 @@ BEGIN
   -- A long unique key: MariaDB 10.4+ enforces UNIQUE over a column too wide for a B-tree key through a hidden
   -- hash, and extracts it as IndexType HASH. On 10.2 and 10.3 InnoDB turns USING HASH into a B-tree and refuses the key
   -- length (1071 / 1170). Dropping the key would drop the uniqueness, so there is no degrade. MEMORY tables have real
-  -- hash indexes on every version and are excluded.
+  -- hash indexes on every version and are excluded. A key a B-tree can hold is not long: there InnoDB quietly builds
+  -- a B-tree, as it always has, so only a key column used in full that is a TEXT, BLOB or JSON column, or a
+  -- character or binary column wider than a B-tree key (3072 bytes, 768 characters at four bytes each), is refused.
   DECLARE v_List TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
 
   IF VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() < 1004 THEN
@@ -25,7 +27,16 @@ BEGIN
       FROM _SchemaSmith_Indexes i
       LEFT JOIN _SchemaSmith_Tables t ON t.TableKey = i.TableKey
      WHERE i.IsUnique = 1 AND UPPER(i.IndexType) = 'HASH' AND i.ShouldApply = 1
-       AND UPPER(COALESCE(t.Engine, 'InnoDB')) NOT IN ('MEMORY', 'HEAP');
+       AND UPPER(COALESCE(t.Engine, 'InnoDB')) NOT IN ('MEMORY', 'HEAP')
+       AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
+                    WHERE c.TableKey = i.TableKey
+                      AND LOCATE(CONVERT(LOWER(CONCAT('`', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`')) USING utf8mb4) COLLATE utf8mb4_bin,
+                                 CONVERT(LOWER(i.IndexColumns) USING utf8mb4) COLLATE utf8mb4_bin) > 0
+                      AND LOCATE(CONVERT(LOWER(CONCAT('`', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`(')) USING utf8mb4) COLLATE utf8mb4_bin,
+                                 CONVERT(LOWER(i.IndexColumns) USING utf8mb4) COLLATE utf8mb4_bin) = 0
+                      AND (UPPER(c.DataType) REGEXP '^(TINY|MEDIUM|LONG)?(TEXT|BLOB)|^JSON'
+                           OR (UPPER(c.DataType) REGEXP '^(VAR)?(CHAR|BINARY)[[:space:]]*[(][0-9]+'
+                               AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(c.DataType, '(', -1), ')', 1) AS UNSIGNED) > 768)));
 
     IF v_List IS NOT NULL THEN
       INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(),

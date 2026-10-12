@@ -95,6 +95,31 @@ public class LongUniqueKeyGatingTests
         Assert.That(TableCount(), Is.Zero, "a refused deploy must not create the table");
     }
 
+    // A unique HASH key narrow enough for a B-tree deployed below 10.4 before the refusal existed: InnoDB builds a
+    // B-tree for it. It is not a long unique key and must not be refused.
+    [TestCase("VARCHAR(20)")]
+    [TestCase("VARCHAR(768)")]
+    public void Below104_ANarrowUniqueHashKey_IsCreated(string dataType)
+    {
+        Exec("SET @schemasmith_version_override = 1003");
+
+        Assert.DoesNotThrow(() => Deploy(dataType: dataType));
+
+        Assert.That(TableCount(), Is.EqualTo(1));
+        Assert.That(Scalar($"SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{TableName}' AND INDEX_NAME = 'ux_body' AND NON_UNIQUE = 0"),
+            Is.EqualTo(1), "the unique key must be created");
+    }
+
+    [Test]
+    public void Below104_AWideVarcharUniqueHashKey_IsRefused()
+    {
+        Exec("SET @schemasmith_version_override = 1003");
+
+        var ex = Assert.Catch(() => Deploy(dataType: "VARCHAR(2000)"));
+
+        Assert.That(ex!.Message, Does.Contain("MariaDB 10.4").And.Contain("ux_body"));
+    }
+
     [Test]
     public void Below104_AUniqueHashOnAMemoryTable_IsCreated()
     {
