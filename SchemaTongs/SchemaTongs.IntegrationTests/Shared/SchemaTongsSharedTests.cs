@@ -335,6 +335,9 @@ public abstract class SchemaTongsSharedTests
         using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};");
         conn.Open();
         using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT VERSION()";
+        if (VersionHelper.ParsePatchComparable(cmd.ExecuteScalar()?.ToString(), Platform) < 100300)
+            Assert.Ignore("Sequences arrived in MariaDB 10.3.");
         cmd.CommandText = "CREATE OR REPLACE SEQUENCE TestSeq START WITH 100 INCREMENT BY 1";
         cmd.ExecuteNonQuery();
 

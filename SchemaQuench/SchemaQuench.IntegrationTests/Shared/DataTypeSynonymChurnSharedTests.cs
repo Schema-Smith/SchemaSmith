@@ -195,6 +195,15 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
     public void IndexDeclaredInAnotherSpelling_IsNotRebuiltOnRedeploy(string columnType, string indexColumns, string indexType, bool unique, string onlyOn)
     {
         if (onlyOn != null && Platform.ToString() != onlyOn) Assert.Ignore($"Only meaningful on {onlyOn}.");
+        if (unique && columnType == "text")
+        {
+            using var probe = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+            probe.Open();
+            using var versionCmd = probe.CreateCommand();
+            versionCmd.CommandText = "SELECT VERSION()";
+            if (Schema.Utility.VersionHelper.ParsePatchComparable(versionCmd.ExecuteScalar()?.ToString(), Platform) < 100400)
+                Assert.Ignore("A unique key over a whole TEXT column needs MariaDB 10.4's hash enforcement; 10.2 and 10.3 refuse it (1170).");
+        }
         var uid = Guid.NewGuid().ToString("N")[..8];
         var table = $"IdxTable_{uid}";
         var nullable = columnType == "point" ? "false" : "true";
