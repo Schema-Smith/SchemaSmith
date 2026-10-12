@@ -1127,10 +1127,10 @@ namespace Schema.Domain
             // CreateSchemaIfMissing for that reason.
             // Ahead of the generic rule: on MySQL and MariaDB the legacy alias has already been migrated away, so that
             // rule would tell a template which plainly carries a SchemaIdentificationScript that it has none.
-            if (CreateSchemaIfMissing && Product?.Platform.GetBasePlatform() == Platform.MySQL)
+            if (CreateSchemaIfMissing && Product is { } product && product.Platform.GetBasePlatform() == Platform.MySQL)
                 throw new InvalidOperationException(
                     $"Template '{Name}' (file: {FilePath}) sets CreateSchemaIfMissing=true, which does not apply on " +
-                    $"{Product.Platform}: a schema is a database there, and templates do not fan out per schema. " +
+                    $"{product.Platform}: a schema is a database there, and templates do not fan out per schema. " +
                     $"Remove CreateSchemaIfMissing; use DatabaseIdentificationScript to target tenant databases.");
 
             if (CreateSchemaIfMissing && !IsSchemaTemplate)
