@@ -24,23 +24,26 @@ public static class LogScrubber
     // PGPASSWORD=, MYSQL_PWD=). A key must end at the '=', so "MyPasswordHint=" is not one. The keywords take no '=' and
     // match only when a quote follows, since IDENTIFIED BY RANDOM PASSWORD and PASSWORD NULL carry no secret:
     // PostgreSQL's PASSWORD '...', and the MySQL family's IDENTIFIED [WITH plugin] BY [PASSWORD] '...' and REPLACE '...'.
-    // The value forms that can hold a ';' come first: a JSON-escaped \"...\", "..." and '...' (optionally N'...') with
-    // a doubled quote as an escape, {...} with }} as one, and a quoted value wrapped in a call, PASSWORD('...'). A quote
-    // that never closes runs to the end of the text: a truncated value is still all secret, so failing open would log
-    // its tail. An unquoted value stops at ';' or a line break, so a stack trace after it survives -- or, after a key
-    // that ends a longer word (a shell or token assignment), at whitespace too, so the next assignment survives. Only
-    // spaces and tabs may surround '=', so an empty value at a line end masks nothing more.
+    // A key's '=' may stand at the start of the next line, and a value may too when the key ends its line: a formatter
+    // breaks before the '=', and an empty value cannot be told from a value moved down, so that next line is masked
+    // (to its ';' or its end). '==' is a comparison in code, never a key.
+    // The value forms that can hold a ';' come first: a JSON-escaped \"...\" closed by a quote escaped as deeply as the
+    // one that opened it, "..." and '...' (optionally N'...') with a doubled quote as an escape, {...} with }} as one,
+    // and a quoted value wrapped in a call, PASSWORD('...'). A quote that never closes runs to the end of the text: a
+    // truncated value is still all secret, so failing open would log its tail. An unquoted value stops at ';' or a line
+    // break, so a stack trace after it survives -- or, after a key that ends a longer word (a shell or token
+    // assignment), at whitespace or a quote too, so the next assignment and the string it was logged in survive.
     private static readonly Regex ConnectionStringSecret =
-        new(@"(?<key>(?<prefixed>(?<=\w))?(?:password|pwd|secret)[ \t]*="
+        new(@"(?<key>(?:(?<prefixed>(?<=\w))?(?:password|pwd|secret)[ \t]*(?:\r?\n[ \t]*)?=(?!=)"
             + @"|\bpassword[ \t]+(?=N?['""])"
             + @"|\bidentified(?:[ \t]+with[ \t]+\w+)?[ \t]+by(?:[ \t]+password)?[ \t]+(?=['""])"
-            + @"|\breplace[ \t]+(?=['""]))[ \t]*"
-            + @"(?:\\""(?:(?!\\"")[\s\S])*(?:\\"")?"
+            + @"|\breplace[ \t]+(?=['""]))(?:[ \t]*\r?\n)?)[ \t]*"
+            + @"(?:(?<bs>(?:\\\\)*\\)""(?:(?!(?<!\\)\k<bs>"")[\s\S])*(?:\k<bs>"")?"
             + @"|""(?:[^""]|"""")*""?"
             + @"|N?'(?:[^']|'')*'?"
             + @"|\{(?:[^}]|\}\})*\}?"
             + @"|\w+\([ \t]*N?'(?:[^']|'')*'?[ \t]*\)?"
-            + @"|(?(prefixed)[^\s;]*|[^;\r\n]*))",
+            + @"|(?(prefixed)(?:[^\s;""'\\]|\\(?![""']))*|[^;\r\n]*))",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
     // A credential in a URL's userinfo component -- scheme://user:password@host. Not covered by the
     // keyword pattern above, so "?password=x" in a value masked while "user:pass@host" earlier in the
