@@ -232,7 +232,7 @@ DataTongs validates that each table exists in the source database before attempt
 
 Key columns define the row-matching predicate -- the `ON` clause on platforms that support `MERGE`, the unique-key match on MySQL.
 
-**Auto-detection:** When `KeyColumns` is blank, DataTongs queries the table's indexes and selects the primary key if one exists. If there's no primary key, it falls back to the first available unique index. Nullable columns in the detected key are automatically prefixed with `*` for NULL-safe comparison. This handles the vast majority of tables without any manual configuration.
+**Auto-detection:** When `KeyColumns` is blank, DataTongs queries the table's indexes and selects the primary key if one exists. If there's no primary key, on SQL Server and PostgreSQL it falls back to a unique index that covers the whole table: a filtered or partial unique index, or one with an expression key, is not used, and `INCLUDE` columns are not part of the key. On MySQL and MariaDB only the primary key is detected. Nullable columns in the detected key are automatically prefixed with `*` for NULL-safe comparison. This handles the vast majority of tables without any manual configuration.
 
 **Manual override:** When you specify `KeyColumns`, DataTongs uses your list instead of auto-detection. Separate multiple columns with commas:
 
@@ -256,7 +256,7 @@ ON Source.[SourceCode] = Target.[SourceCode]
 
 When auto-detection discovers a nullable column in a unique index, it automatically applies the `*` behavior.
 
-**No key available:** If a table has no primary key, no unique index, and no `KeyColumns` configured, DataTongs skips the table with an error message.
+**No key available:** If a table has no key DataTongs can detect (see Auto-detection above) and no `KeyColumns` configured, DataTongs skips the table with an error message.
 
 ### Filter
 
