@@ -444,7 +444,7 @@ For every table that produces output, DataTongs finds the table's JSON file in t
 |---|---|
 | `ContentFile` | Path to the written `.tabledata` file, relative to the template root. |
 | `MergeType` | Either the per-table `MergeType` from config, or a default derived from `ShouldCast:MergeUpdate` + `ShouldCast:MergeDelete` (see below). |
-| `MatchColumns` | The key columns used during extraction -- either the per-table `KeyColumns`, or the primary key auto-detected from the source database (same logic that drives the generated script). |
+| `MatchColumns` | The per-table `KeyColumns`, if one was specified. Otherwise `MatchColumns` is left out, and SchemaQuench detects the key on the target at deploy, with the same logic that drives the generated script (see [Key columns](#key-columns)). |
 | `MergeFilter` | The per-table `Filter`, if one was specified. |
 | `MergeDisableTriggers` | Mirrors `ShouldCast:DisableTriggers`. |
 | `MergeDisableRules` | **PostgreSQL.** Mirrors `ShouldCast:DisableRules`. |
