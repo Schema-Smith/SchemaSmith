@@ -1755,6 +1755,7 @@ public class ProductQuench
             try
             {
                 ProvisionDatabaseViaAdminConnection(server, databaseName);
+                _changeAudit.Record("database", databaseName, IsWhatIfOnly ? "wouldCreate" : "created");
             }
             catch (Exception ex)
             {
@@ -2108,6 +2109,7 @@ public class ProductQuench
             if (_checkpointing.HasCompletedScript(ProductScopeForServer(server), slot, script.LogPath))
             {
                 _progressLog.Info($"{serverMsg}[{initDb}]    {(IsWhatIfOnly ? "Would SKIP" : "Skipping")} (previously quenched per checkpoint) {script.LogPath}");
+                if (IsWhatIfOnly) _whatIf.Record(WhatIfCategory.Skip, $"{serverMsg}[{initDb}]", script.LogPath);
                 script.HasBeenQuenched = true;
                 continue;
             }
@@ -2115,6 +2117,7 @@ public class ProductQuench
             if (IsWhatIfOnly)
             {
                 _progressLog.Info($"{serverMsg}[{initDb}]    Would Quench {script.LogPath}");
+                _whatIf.Record(WhatIfCategory.Apply, $"{serverMsg}[{initDb}]", script.LogPath);
                 script.HasBeenQuenched = true;
                 continue;
             }

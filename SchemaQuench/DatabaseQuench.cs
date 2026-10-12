@@ -1316,6 +1316,7 @@ public class DatabaseQuench
         {
             new SchemaProvisioner().EnsureSchemaExists(command, _schemaName, _product.Platform,
                 IsWhatIf, SafeProgressLog);
+            ChangeAudit?.Record("schema", _schemaName, IsWhatIf ? "wouldCreate" : "created");
         }
         catch (Exception ex)
         {

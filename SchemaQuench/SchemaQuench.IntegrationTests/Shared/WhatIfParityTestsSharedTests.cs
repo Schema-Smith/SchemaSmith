@@ -85,6 +85,14 @@ public abstract class WhatIfParityTestsSharedTests
                 Assert.That(WouldDeliver(whatIfLogs), Has.Count.EqualTo(1),
                     "the WhatIf summary's wouldDeliver must list the JSON delivery the console announces");
 
+                // Scripts: WhatIf's wouldApply must name every script the real run ran, by file.
+                var previewedScripts = WouldApply(whatIfLogs);
+                var ranScripts = ScriptsRan(realLogs);
+                Assert.That(ranScripts, Is.SupersetOf(new[] { "WhatIfProductBefore.sql", "WhatIfPlainView.sql", "WhatIfTokenView.sql" }),
+                    "the real v2 deploy must run the product script and both views, or this test proves nothing about scripts");
+                Assert.That(previewedScripts, Is.EquivalentTo(ranScripts),
+                    "WhatIf's wouldApply must list the scripts the real run ran");
+
                 var onlyPreviewed = Difference(previewed, applied);
                 var onlyApplied = Difference(applied, previewed);
                 Assert.That(onlyPreviewed.Count + onlyApplied.Count, Is.Zero,
@@ -140,6 +148,23 @@ public abstract class WhatIfParityTestsSharedTests
         _ => action
     };
 
+    private static List<string> WouldApply(string logDir)
+    {
+        var summary = JObject.Parse(File.ReadAllText(Path.Join(logDir, "SchemaQuench - Summary.json")));
+        return ((JArray)summary.SelectToken("whatIf.wouldApply") ?? [])
+            .Select(e => Path.GetFileName((string)e["script"])).Distinct().OrderBy(x => x).ToList();
+    }
+
+    // Object scripts appear as "ran" change rows; product and template migration scripts in migrationScripts.
+    private static List<string> ScriptsRan(string logDir)
+    {
+        var summary = JObject.Parse(File.ReadAllText(Path.Join(logDir, "SchemaQuench - Summary.json")));
+        var objects = ((JArray)summary.SelectToken("objectChanges.details") ?? [])
+            .Where(d => (string)d["action"] == "ran").Select(d => (string)d["objectName"]);
+        var migrations = ((JArray)summary.SelectToken("migrationScripts") ?? []).Select(m => (string)m["path"]);
+        return objects.Concat(migrations).Select(Path.GetFileName).Distinct().OrderBy(x => x).ToList();
+    }
+
     private static List<string> WouldDeliver(string logDir)
     {
         var summary = JObject.Parse(File.ReadAllText(Path.Join(logDir, "SchemaQuench - Summary.json")));
@@ -171,7 +196,7 @@ public abstract class WhatIfParityTestsSharedTests
               "Name": "{{ProductName}}",
               "ValidationScript": "{{ValidationScript}}",
               "TemplateOrder": ["Main"],
-              "ScriptFolders": [],
+              "ScriptFolders": [ { "FolderPath": "ProductBefore", "QuenchSlot": "Before" } ],
               "ScriptTokens": { "MainDB": "TestMain" },
               "Platform": "{{PlatformName}}",
               "DropTablesRemovedFromProduct": true,
@@ -185,9 +210,18 @@ public abstract class WhatIfParityTestsSharedTests
             {
               "Name": "Main",
               "DatabaseIdentificationScript": "{{IdentificationScript}}",
-              "ScriptFolders": []
+              "ScriptTokens": { "WhatIfAnswer": "<*Query*>SELECT 42" },
+              "ScriptFolders": [ { "FolderPath": "Views", "QuenchSlot": "Objects" } ]
             }
             """);
+
+        var productBeforeDir = Path.Join(dir, "ProductBefore");
+        Directory.CreateDirectory(productBeforeDir);
+        File.WriteAllText(Path.Join(productBeforeDir, "WhatIfProductBefore.sql"), "SELECT 1");
+        var viewsDir = Path.Join(templateDir, "Views");
+        Directory.CreateDirectory(viewsDir);
+        File.WriteAllText(Path.Join(viewsDir, "WhatIfPlainView.sql"), View("WhatIfPlainView", "1"));
+        File.WriteAllText(Path.Join(viewsDir, "WhatIfTokenView.sql"), View("WhatIfTokenView", "{{WhatIfAnswer}}"));
 
         if (version == 1)
         {
@@ -236,6 +270,13 @@ public abstract class WhatIfParityTestsSharedTests
                    + " }";
         File.WriteAllText(Path.Join(dir, $"{table}.json"), json);
     }
+
+    private string View(string name, string value) => Platform switch
+    {
+        Platform.SqlServer => $"CREATE OR ALTER VIEW dbo.{name} AS SELECT {value} AS Answer",
+        Platform.PostgreSQL => $"CREATE OR REPLACE VIEW public.\"{name}\" AS SELECT {value} AS answer;",
+        _ => $"CREATE OR REPLACE VIEW `{name}` AS SELECT {value} AS Answer"
+    };
 
     private string Column(string name, string type, bool nullable) =>
         $"{{ \"Name\": \"{Quote(name)}\", \"DataType\": \"{type}\", \"Nullable\": {(nullable ? "true" : "false")} }}";
@@ -317,6 +358,17 @@ public abstract class WhatIfParityTestsSharedTests
 
     private void Cleanup(IDbCommand cmd)
     {
+        foreach (var view in new[] { "WhatIfPlainView", "WhatIfTokenView" })
+        {
+            cmd.CommandText = Platform switch
+            {
+                Platform.SqlServer => $"DROP VIEW IF EXISTS dbo.{view}",
+                Platform.PostgreSQL => $"DROP VIEW IF EXISTS public.\"{view}\"",
+                _ => $"DROP VIEW IF EXISTS `{view}`"
+            };
+            cmd.ExecuteNonQuery();
+        }
+
         foreach (var table in TablesChildFirst)
         {
             cmd.CommandText = Platform switch
