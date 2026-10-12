@@ -75,17 +75,10 @@ public class RebuildBlockedReasonTests
             try
             {
                 _connection.ChangeDatabase("master");
-                // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
-                Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-                // Retried on deadlock. This fixture enables CDC and Change Tracking, both of which write
-                // server-wide replication metadata, so tearing its database down collides with any sibling
-                // fixture doing DDL at the same moment. Seen once in a full concurrent gate: every assembly
-                // reported 0 failures and the RUN still exited non-zero, because an NUnit TearDown failure
-                // fails the run without ever being counted as a failed test -- which is exactly why this is
-                // worth retrying rather than leaving as a rare confusing red.
-                // One batch: between two separate calls a CDC or Change Tracking cleanup task can take the
-                // single-user slot, and the DROP then fails with "currently in use".
-                ExecWithDeadlockRetry($"IF DB_ID('{_db}') IS NOT NULL BEGIN ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_db}]; END");
+                // This fixture enables CDC, so the drop goes through the helper that disables it first: otherwise a
+                // capture job can take the single-user slot and the database leaks, its job still running.
+                using var cmd = _connection.CreateCommand();
+                TestDatabaseDrop.Drop(cmd, _db);
             }
             finally
             {

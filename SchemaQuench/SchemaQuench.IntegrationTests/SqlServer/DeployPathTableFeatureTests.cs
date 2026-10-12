@@ -712,8 +712,9 @@ public class DeployPathTableFeatureTests
             cmd.Connection!.ChangeDatabase("master");
             Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
         }
-        catch (DbException) { /* best-effort cleanup */ }
-        catch (InvalidOperationException) { /* connection already unusable */ }
+        // Cleanup must not fail the test, but a database it leaves behind keeps running (a CDC capture job), so say so.
+        catch (DbException e) { TestContext.Progress.WriteLine($"WARNING: test database {db} was not dropped: {e.Message}"); }
+        catch (InvalidOperationException e) { TestContext.Progress.WriteLine($"WARNING: test database {db} was not dropped: {e.Message}"); }
     }
 
     // Everything a scenario can leave in a shared database: the probe table with its capture instances, Change Tracking
