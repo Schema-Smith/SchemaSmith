@@ -302,7 +302,7 @@ public class SchemaTongs
         _stopwatch.Start();
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
         var targetDb = config[SettingsKeys.Source.Database] ?? config[SettingsKeys.Source.Schema];
-        if (string.IsNullOrEmpty(targetDb)) throw new Exception("Source database is required. Set 'Source:Database' in appsettings.json.");
+        if (string.IsNullOrEmpty(targetDb)) throw new RunFailedException("Source database is required. Set 'Source:Database' in SchemaTongs.settings.json.");
         _productPath = ConfigHelper.PathSetting(config, SettingsKeys.ProductKeys.Path);
 
         LoadShouldCastSettings(config);

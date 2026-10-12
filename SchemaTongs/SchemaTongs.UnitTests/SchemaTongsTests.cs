@@ -118,7 +118,7 @@ public class SchemaTongsTests
             });
 
             var tongs = new SchemaTongs(Platform.SqlServer);
-            Assert.Throws<Exception>(() => tongs.CastTemplate());
+            Assert.That(Assert.Throws<RunFailedException>(() => tongs.CastTemplate())!.Message, Does.Contain("Source:Database"));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -137,7 +137,7 @@ public class SchemaTongsTests
             });
 
             var tongs = new SchemaTongs(Platform.SqlServer);
-            Assert.Throws<Exception>(() => tongs.CastTemplate());
+            Assert.That(Assert.Throws<RunFailedException>(() => tongs.CastTemplate())!.Message, Does.Contain("Source:Database"));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
