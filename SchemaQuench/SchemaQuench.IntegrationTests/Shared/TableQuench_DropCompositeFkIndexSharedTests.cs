@@ -13,37 +13,27 @@ public abstract class TableQuench_DropCompositeFkIndexSharedTests : BaseTableQue
     // from interfering (same rationale as the single-column FK/index drop test siblings).
     private const string CompositeFkProduct = "Composite FK Index Drop Tests";
 
-    // Regression test for STEP 8's FK-drop-before-index-drop path: when a composite FK backs a
-    // composite UNIQUE index that is being dropped, the FK-drop detection join produced one row
-    // PER FK COLUMN (KEY_COLUMN_USAGE has one row per column of a composite FK), so the same
-    // DROP FOREIGN KEY statement was queued twice. The second execution raised MySQL error 1091
-    // ("Can't DROP ...; check that column/key exists"), and the whole quench failed. The fix adds
-    // SELECT DISTINCT to the FK-drop statement materialization so each FK is dropped exactly once.
+    // A composite UNIQUE index a composite foreign key references, removed from the package. The deploy used to drop
+    // every foreign key referencing the index's table to make way -- first twice for a composite key (1091), then once --
+    // destroying a key the package still declares. No key is dropped now: the engine refuses to drop an index a key needs
+    // (1553), so the index is kept and the key with it, and phase 2 succeeds.
     //
-    // Two-phase, mirroring TableQuench_DropIndexesTests / TableQuench_DropForeignKeysTests:
-    // Phase 1 (OneTimeSetUp) quenches CompFkParent (with its composite UNIQUE index uq_parent_ab)
-    // and CompFkChild (with its composite FK referencing that index) into existence via the full
-    // SchemaSmith_TableQuench pipeline, so the index becomes product-owned and the FK is created
-    // against it (STEP 8/ForeignKeyQuench ordering: indexes/constraints are created before FKs).
-    // Phase 2 reconciles CompFkParent with uq_parent_ab removed from its definition, calling
-    // ParseTableJson + ModifiedTableQuench directly (NOT the full TableQuench) — index removal,
-    // STEP 8 included, lives in ModifiedTableQuench — so ForeignKeyQuench does not also run in the
-    // same call and interfere with STEP 8's own FK-drop-before-index-drop logic. Before the fix,
-    // phase 2 throws (1091) and OneTimeSetUp fails the fixture; after the fix, it succeeds and the
-    // assertions below hold.
+    // Two-phase: phase 1 (OneTimeSetUp) deploys CompFkParent with uq_parent_ab and CompFkChild with its composite key
+    // against it; phase 2 runs ParseTableJson + ModifiedTableQuench for CompFkParent alone, without uq_parent_ab, and
+    // with DropUnknownIndexes and DropIndexesRemovedFromProduct on.
     [Test]
-    public void TableQuench_ShouldDropCompositeForeignKeyOnceBeforeDroppingBackingUniqueIndex()
+    public void RemovingAUniqueIndexACompositeForeignKeyNeeds_KeepsTheIndexAndTheKey()
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
         conn.Open();
         conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
-        cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = 'CompFkParent' AND INDEX_NAME = 'uq_parent_ab'";
-        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "uq_parent_ab should be gone (removed from product definition).");
-
         cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '{_mainDb}' AND TABLE_NAME = 'CompFkChild' AND CONSTRAINT_NAME = 'FK_CompFkChild_Parent_AB' AND CONSTRAINT_TYPE = 'FOREIGN KEY'";
-        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "The composite FK backed by uq_parent_ab should have been dropped exactly once (not fail with 1091 on a duplicate drop).");
+        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "removing an index must never drop a foreign key");
+
+        cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = 'CompFkParent' AND INDEX_NAME = 'uq_parent_ab'";
+        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.GreaterThan(0), "the index the key references is kept while the key needs it");
 
         conn.Close();
     }
@@ -93,12 +83,8 @@ public abstract class TableQuench_DropCompositeFkIndexSharedTests : BaseTableQue
 
         // Phase 2 — reconcile CompFkParent with uq_parent_ab removed from its definition. Run
         // ModifiedTableQuench directly — it owns STEP 8, the index-removal step — with
-        // DropUnknownIndexes=1 so the FK-drop-before-index-drop path fires WITHOUT also running
-        // ForeignKeyQuench in the same call (the full TableQuench would try to reconcile/recreate
-        // the FK afterward, which is not what this regression targets). CompFkChild need not be
-        // listed: STEP 8's FK-before-index join reads live INFORMATION_SCHEMA.KEY_COLUMN_USAGE /
-        // TABLE_CONSTRAINTS, not the current quench's table list — and DropTablesRemovedFromProduct
-        // is 0 below, so leaving it out cannot drop it.
+        // DropUnknownIndexes=1. CompFkChild need not be listed, and DropTablesRemovedFromProduct is 0
+        // below, so leaving it out cannot drop it.
         var withoutIndex = """
             [
             {

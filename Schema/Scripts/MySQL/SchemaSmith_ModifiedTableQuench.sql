@@ -3765,35 +3765,6 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
           AND s.SEQ_IN_INDEX = 1;
 
-        -- FK rows referencing a product table (for the FK-before-index drop join). Same-schema FKs.
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8KCU;
-        CREATE TEMPORARY TABLE _SchemaSmith_Step8KCU (
-            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
-            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-            ReferencedTableName VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
-            KEY ix_s8kcu (ReferencedTableName)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_Step8KCU (TableName, ConstraintName, ReferencedTableName)
-        SELECT CONVERT(kcu.TABLE_NAME USING utf8mb4), CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4), CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4)
-        FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-        WHERE kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
-          AND kcu.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA) = v_DbKey
-          AND kcu.REFERENCED_TABLE_NAME IS NOT NULL;
-
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8TC;
-        CREATE TEMPORARY TABLE _SchemaSmith_Step8TC (
-            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
-            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-            KEY ix_s8tc (TableName, ConstraintName)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_Step8TC (TableName, ConstraintName)
-        SELECT CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4)
-        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-        WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
-          AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
-
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexesToDrop;
         CREATE TEMPORARY TABLE _SchemaSmith_IndexesToDrop (
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
@@ -3885,44 +3856,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             SELECT CONNECTION_ID(), 'index', CONCAT(TableName, '.', IndexName), 'wouldDrop'
             FROM _SchemaSmith_IndexesToDrop;
         ELSE
-            -- First, drop any foreign keys that reference unique indexes we're about to drop.
-            -- FK drops MUST complete before the index drops below (a FK backed by a unique index
-            -- blocks dropping that index); these are two sequential loops, preserving that order.
-            -- Reads the STEP 8 snapshots (Step8Idx existence bridge, Step8KCU, Step8TC).
-            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropFKForIdxStmts;
-            CREATE TEMPORARY TABLE _SchemaSmith_DropFKForIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT)
-                ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-            -- DISTINCT: one DROP FOREIGN KEY per FK. A composite FK yields multiple KEY_COLUMN_USAGE
-            -- rows (one per column), and several dropped indexes on the same referenced table re-join
-            -- the same FK; both would otherwise emit a duplicate DROP FOREIGN KEY (error 1091 on the
-            -- second). The original per-row cursor had the same latent duplication.
-            INSERT INTO _SchemaSmith_DropFKForIdxStmts (LogMsg, Stmt)
-            SELECT DISTINCT
-                CONCAT('  Drop FK for index: ',
-                       CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', kcu.TableName, '` DROP FOREIGN KEY `', tc.ConstraintName, '`')),
-                CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', kcu.TableName, '` DROP FOREIGN KEY `', tc.ConstraintName, '`')
-            FROM _SchemaSmith_IndexesToDrop itd
-            JOIN _SchemaSmith_Step8Idx ei
-                ON CONVERT(ei.TableName USING utf8mb4) = CONVERT(itd.TableName USING utf8mb4)
-                AND CONVERT(ei.IndexName USING utf8mb4) = CONVERT(itd.IndexName USING utf8mb4)
-            JOIN _SchemaSmith_Step8KCU kcu
-                ON CONVERT(kcu.ReferencedTableName USING utf8mb4) = CONVERT(itd.TableName USING utf8mb4)
-            JOIN _SchemaSmith_Step8TC tc
-                ON CONVERT(tc.TableName USING utf8mb4) = CONVERT(kcu.TableName USING utf8mb4)
-                AND CONVERT(tc.ConstraintName USING utf8mb4) = CONVERT(kcu.ConstraintName USING utf8mb4)
-            WHERE itd.IsUnique = 1;
-
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropFKForIdxStmts);
-            WHILE @ss_id IS NOT NULL DO
-                SELECT LogMsg, Stmt INTO @ss_log, @exec_sql FROM _SchemaSmith_DropFKForIdxStmts WHERE RowId = @ss_id;
-                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
-                PREPARE stmt FROM @exec_sql;
-                EXECUTE stmt;
-                DEALLOCATE PREPARE stmt;
-                SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropFKForIdxStmts WHERE RowId > @ss_id);
-            END WHILE;
-            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropFKForIdxStmts;
-
+            -- No foreign key is dropped to make way: an index a key still needs -- on its own table, or a unique index
+            -- another table's key references -- raises 1553 below and is kept. A key the package drops goes in
+            -- ForeignKeyQuench, and the next deploy drops the index.
             -- Now drop the unknown indexes
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown indexes');
 
@@ -3973,8 +3909,6 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexesToDrop;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8Idx;
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8KCU;
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8TC;
     END IF;
 
     -- =======================
