@@ -4,7 +4,7 @@ name: CI (docs-only companion)
 # for docs/demos, so a docs-only PR never starts it — and the eight required status checks it would produce
 # stay stuck on "Expected — Waiting for status to be reported", blocking the PR from merging forever. That
 # only bites contributors WITHOUT admin bypass (an external drive-by fixing a typo); maintainers never see
-# it because the Rule 6 doc/demo carve-out pushes such content straight to `main`.
+# it because the doc/demo exemption from pull requests pushes such content straight to `main`.
 #
 # This companion fires on EXACTLY those excluded paths and reports the SAME check contexts as success,
 # with no build and no containers.
@@ -176,7 +176,7 @@ jobs:
   # Never stubbed before 2026-09-20, and latent rather than harmless: sweep-record lives in
   # continuous-integration.yml, which carries paths-ignore for docs -- so if this context is required, an
   # external contributor's docs-only PR waits on it forever. Maintainers would never hit it, because the
-  # Rule 6 carve-out pushes docs straight to main. Stubbed here so it is safe whether the ruleset requires
+  # The doc/demo exemption from pull requests pushes docs straight to main. Stubbed here so it is safe whether the ruleset requires
   # it or not; a stub for a non-required context costs nothing.
   sweep-record:
     name: Genuine Sweep Record

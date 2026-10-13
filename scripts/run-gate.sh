@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Paths below are repo-relative; this anchors the script so it runs from anywhere.
 cd "$(dirname "$0")/.." || exit 1
-# Full multi-engine green gate (CLAUDE.md Rule 25): unit + integration across all engines.
+# Full multi-engine green gate: unit + integration across all engines.
 set -u
 # Every run keeps a TRX per project, so a failure that does not reproduce alone still has its message and output.
 results="TestResults/gate/$(date +%Y%m%d-%H%M%S)"

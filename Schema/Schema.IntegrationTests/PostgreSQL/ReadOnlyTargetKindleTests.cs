@@ -11,7 +11,7 @@ using Schema.Utility;
 namespace Schema.IntegrationTests.PostgreSQL;
 
 /// <summary>
-/// The PostgreSQL half of read-only extraction support (CLAUDE.md Rule 20 — the feature is not
+/// The PostgreSQL half of read-only extraction support (the feature is not
 /// SQL-Server-specific, so neither is its certification).
 /// <para>A hot standby is PostgreSQL's equivalent of an Availability Group readable secondary, and
 /// <c>ReadOnlyTargetDetector</c> treats them the same: <c>pg_is_in_recovery()</c> catches the standby,

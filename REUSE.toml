@@ -3,7 +3,7 @@ version = 1
 # SchemaSmith-authored source is under the SchemaSmith Community License (SSCL) v2.0,
 # declared as a custom LicenseRef (text in LICENSES/LicenseRef-SSCL-2.0.txt) because SSCL
 # is not on the SPDX License List. Bulk-declared by path so no per-file SPDX headers are
-# needed — this leaves the existing copyright-header CI check (DoD #8) untouched.
+# needed — this leaves the existing copyright-header CI check untouched.
 #
 # Demos/ is deliberately excluded: it bundles third-party sample schemas under their own
 # licenses (AdventureWorks, Chinook, Northwind, Sakila) alongside SchemaSmith-authored

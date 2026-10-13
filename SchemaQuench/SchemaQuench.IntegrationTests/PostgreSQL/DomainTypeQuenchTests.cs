@@ -152,7 +152,7 @@ public class DomainTypeQuenchTests : BaseTableQuenchTests
         conn.Close();
     }
 
-    // Rule 32: assert the OUTCOME is stable across three passes, authored in natural (aliased) form.
+    // Assert the OUTCOME is stable across three passes, authored in natural (aliased) form.
     [Test]
     public void DomainType_DeclaredWithAnAlias_IsStableAcrossThreePasses()
     {

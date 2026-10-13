@@ -323,7 +323,7 @@ KindleForge
     [Test]
     public void ShouldResumeSuccessfullyWhenModifiedTablesAlreadyCheckpointed()
     {
-        // Parity guard for #332 (Rule 20): the PostgreSQL fix rebuilds temp_existing_indexes when a
+        // Parity guard for #332: the PostgreSQL fix rebuilds temp_existing_indexes when a
         // resumed run skipped the ModifiedTables step that normally builds it. MySQL re-parses its
         // session temp tables via MySqlTempTablesExist + ParseMySqlTableJson inside the consuming
         // steps, so seeding ModifiedTables complete and resuming must NOT crash here — no engine-code

@@ -9,9 +9,9 @@ on:
       - '**/*.md'
       - 'LICENSE'
       - '.gitignore'
-      # Demo/lab scripts are doc/demo content (Rule 6 carve-out): a lab .ps1/.sh/.sql is not product
+      # Demo/lab scripts are doc/demo content (exempt from pull requests): a lab .ps1/.sh/.sql is not product
       # code and should not spin the three-engine container matrix. Package JSON and .json-schemas
-      # under Demos are deliberately NOT excluded — validate-demo-schemas.yml reads them and DoD #9
+      # under Demos are deliberately NOT excluded — validate-demo-schemas.yml reads them and the regeneration rule
       # (the --Validate SS-STALE-001 staleness check) keeps them current, so those still trigger CI.
       - 'Demos/**/*.ps1'
       - 'Demos/**/*.sh'
@@ -30,9 +30,9 @@ on:
       - '**/*.md'
       - 'LICENSE'
       - '.gitignore'
-      # Demo/lab scripts are doc/demo content (Rule 6 carve-out): a lab .ps1/.sh/.sql is not product
+      # Demo/lab scripts are doc/demo content (exempt from pull requests): a lab .ps1/.sh/.sql is not product
       # code and should not spin the three-engine container matrix. Package JSON and .json-schemas
-      # under Demos are deliberately NOT excluded — validate-demo-schemas.yml reads them and DoD #9
+      # under Demos are deliberately NOT excluded — validate-demo-schemas.yml reads them and the regeneration rule
       # (the --Validate SS-STALE-001 staleness check) keeps them current, so those still trigger CI.
       - 'Demos/**/*.ps1'
       - 'Demos/**/*.sh'

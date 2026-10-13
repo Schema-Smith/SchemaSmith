@@ -355,7 +355,7 @@ KindleForge
     [Test]
     public void ShouldResumeSuccessfullyWhenModifiedTablesAlreadyCheckpointed()
     {
-        // Parity guard for #332 (Rule 20): the PostgreSQL fix rebuilds temp_existing_indexes when a
+        // Parity guard for #332: the PostgreSQL fix rebuilds temp_existing_indexes when a
         // resumed run skipped the ModifiedTables step that normally builds it. SQL Server rebuilds
         // its #-temp state per consuming step, so seeding ModifiedTables complete and resuming must
         // NOT crash here — no engine-code change required. Locks in cross-engine parity.

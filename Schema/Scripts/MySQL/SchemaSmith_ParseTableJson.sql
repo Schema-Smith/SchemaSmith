@@ -329,7 +329,7 @@ BEGIN
            OldNameKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(OldName));
 
     -- =========================================================================
-    -- DATA-TYPE SYNONYM NORMALIZATION (Rule 20 parity with PostgreSQL)
+    -- DATA-TYPE SYNONYM NORMALIZATION (parity with PostgreSQL)
     -- =========================================================================
     -- Every engine has type synonyms, and the catalog reports the BASE name whatever the package
     -- declared. A column authored INTEGER is reported int, so the comparison saw a difference that

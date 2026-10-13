@@ -92,7 +92,7 @@ public class EncryptionQuenchTests
     // SchemaSmith_CreateOption itself does (REPLACE(p_Options, '`', '')) so every substring assertion in
     // this file that inspects CREATE_OPTIONS text is backtick-robust -- without this, Does.Contain
     // ("ENCRYPTED=YES") pins MySQL's bare-key shape and fails on MariaDB even when the table genuinely
-    // is encrypted, which is exactly the raw-string pinning Rule 32 warns against.
+    // is encrypted, which is exactly the raw-string pinning that passes over a real defect.
     private string CreateOptions() => (ScalarStr(
         $"SELECT COALESCE(CREATE_OPTIONS, '') FROM INFORMATION_SCHEMA.TABLES "
         + $"WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{TableName}'") ?? "").Replace("`", "");
@@ -125,7 +125,7 @@ public class EncryptionQuenchTests
         Assert.That(CreateOptions().ToUpperInvariant(), Does.Contain("ENCRYPTED=YES"), CreateOptions());
 
         // Deserialize rather than substring-match the raw JSON: what matters is the domain property's
-        // VALUE round-trips true, not that some literal text appears in the extracted blob (Rule 32).
+        // VALUE round-trips true, not that some literal text appears in the extracted blob.
         var extracted = ExtractedJson();
         if (PlatformDeserializer.DeserializeTable(extracted, Platform.MariaDb) is not MariaDbTable table)
         {

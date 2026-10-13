@@ -8,7 +8,7 @@ using Schema.DataAccess;
 namespace SchemaQuench.IntegrationTests.Shared;
 
 /// <summary>
-/// Data-type synonyms must not churn (Rule 20 parity with PostgreSQL, which has had this since its
+/// Data-type synonyms must not churn (parity with PostgreSQL, which has had this since its
 /// parse step).
 ///
 /// <para>Every engine accepts synonyms and the catalog reports the BASE name whatever the package
@@ -16,7 +16,7 @@ namespace SchemaQuench.IntegrationTests.Shared;
 /// comparison saw a difference that was not one and drop/recreated the column on EVERY quench: not a
 /// cosmetic diff, an unnecessary table rewrite on every deploy, forever.</para>
 ///
-/// <para><b>Asserted at the outcome, per Rule 32.</b> Not "the helper returns X for Y" — declare the
+/// <para><b>Asserted at the outcome.</b> Not "the helper returns X for Y" — declare the
 /// column with the synonym, deploy twice, and require the column to be untouched. The mapping table
 /// itself was measured against both engines rather than assumed, so a test that re-asserted the table
 /// would only be checking my arithmetic against itself.</para>

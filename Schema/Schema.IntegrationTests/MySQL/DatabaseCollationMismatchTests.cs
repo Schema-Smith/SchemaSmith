@@ -8,7 +8,7 @@ namespace Schema.IntegrationTests.MySQL;
 
 /// <summary>MySQL leg of <see cref="DatabaseCollationMismatchSharedTests"/>. The MySQL branch of the
 /// encryption comparison carries the same degraded COALESCE shape as the MariaDB one, so it needs the
-/// same guard (Rule 20 -- no accidental single-platform coverage).</summary>
+/// same guard (no accidental single-platform coverage).</summary>
 [Category("MySQL")]
 [Category("Integration")]
 [TestFixture]

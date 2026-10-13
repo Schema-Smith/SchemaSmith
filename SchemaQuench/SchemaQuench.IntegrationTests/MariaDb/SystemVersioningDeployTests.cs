@@ -96,7 +96,7 @@ public class SystemVersioningDeployTests : BaseTableQuenchTests
         RunTableQuenchProc(cmd, TableJson());
 
         // Asserted against the catalog rather than against the generated SQL: the point is that the
-        // table IS system-versioned, not that a particular statement was emitted (Rule 32).
+        // table IS system-versioned, not that a particular statement was emitted.
         Assert.That(GetTableType(cmd), Is.EqualTo("SYSTEM VERSIONED"),
             "A table declaring IsSystemVersioned: true must deploy WITH SYSTEM VERSIONING, not as an "
             + "ordinary table — losing this silently would mean the package's declared history-tracking "
@@ -173,7 +173,7 @@ public class SystemVersioningDeployTests : BaseTableQuenchTests
 
         RunTableQuenchProc(cmd, TableJsonFor(table, isSystemVersioned: true));
 
-        // Outcome, not mechanism (Rule 32): assert what the table IS, not that a particular ALTER TABLE
+        // Outcome, not mechanism: assert what the table IS, not that a particular ALTER TABLE
         // statement was emitted.
         Assert.That(GetTableType(cmd, table), Is.EqualTo("SYSTEM VERSIONED"),
             "Redeclaring IsSystemVersioned: true on an existing ordinary table must converge it to "

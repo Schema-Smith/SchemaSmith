@@ -9,14 +9,14 @@ using Schema.Domain;
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
 /// <summary>
-/// Data-type synonyms must not churn (Rule 20 parity with PostgreSQL).
+/// Data-type synonyms must not churn (parity with PostgreSQL).
 ///
 /// <para>SQL Server accepts synonyms and <c>sys.types</c> reports the base type whatever the package
 /// declared, so a column authored <c>INTEGER</c> comes back <c>int</c> and the comparison read that as
 /// a type change on EVERY quench — an unnecessary column rewrite on every deploy, forever. Only
 /// <c>ROWVERSION</c> was mapped before, and inline in three separate places.</para>
 ///
-/// <para><b>Asserted at the outcome, per Rule 32</b> — declare with the synonym, deploy twice, and
+/// <para><b>Asserted at the outcome</b> — declare with the synonym, deploy twice, and
 /// require the column not to be rewritten. The mapping table itself was measured against SQL Server
 /// 2022 rather than assumed, so re-asserting it here would only check my arithmetic against itself.</para>
 /// </summary>

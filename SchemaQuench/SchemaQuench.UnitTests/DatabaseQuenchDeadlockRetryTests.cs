@@ -12,7 +12,7 @@ namespace SchemaQuench.UnitTests;
 
 /// <summary>
 /// Covers the proc-level deadlock-retry behaviour at the ExecuteNonQueryHandlingMessages
-/// chokepoint (Rule 15 — tested at the layer the capability lives, not a call site). Retry is
+/// chokepoint (tested at the layer the capability lives, not a call site). Retry is
 /// opt-in and only the idempotent convergence procs request it.
 /// </summary>
 [TestFixture]

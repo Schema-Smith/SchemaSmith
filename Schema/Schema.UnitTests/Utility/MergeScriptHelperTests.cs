@@ -404,7 +404,7 @@ public class MergeScriptHelperTests
     // delivery script on modern hardware. It is the same decision the model-ingest encoding makes (compat
     // < 130 OR server major < 14), which only SchemaQuench and SchemaTongs could force.
     //
-    // Asserted at the outcome per Rule 32: whether the probe runs at all, and which aggregation the built
+    // Asserted at the outcome: whether the probe runs at all, and which aggregation the built
     // query uses -- not "the resolver returned X".
     private static (IDbCommand cmd, List<string> statements) RecordingSqlServerCommand(string scalar)
     {

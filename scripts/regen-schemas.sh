@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Paths below are repo-relative; this anchors the script so it runs from anywhere.
 cd "$(dirname "$0")/.." || exit 1
-# Regenerate every committed .json-schemas directory (DoD #9).
+# Regenerate every committed .json-schemas directory.
 # Required after any domain-model or SchemaGenerator change.
 set -u
 TONGS="SchemaTongs/bin/Debug/net10.0/SchemaTongs.dll"

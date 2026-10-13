@@ -500,7 +500,7 @@ VALUES ('{_productName}', '', '{TestSchema}', 'FOREIGN KEY', 'ModFKCascUpd.FK_Mo
     /// is being modified by concurrent DDL statement</code>
     /// <para>Reproduced at <c>NUnit.NumberOfTestWorkers=2</c>; it is one of the two races that forced
     /// the assembly to <c>LevelOfParallelism(1)</c>. Serialising the tests would hide it rather than
-    /// fix it (Rule 28) -- the real defect is two concurrent DDL streams in one database, so each gets
+    /// fix it -- the real defect is two concurrent DDL streams in one database, so each gets
     /// its own. This is cheap: the target database is never kindled (the SchemaSmith procedures live in
     /// the suite database and take the target as a parameter), so this is one CREATE DATABASE, not a
     /// kindle and a plan compile.</para>

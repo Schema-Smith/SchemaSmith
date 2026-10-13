@@ -26,7 +26,7 @@ namespace Schema.IntegrationTests.Shared;
 /// fixture's own database, which is created at the server default and therefore MATCHES the connection
 /// collation -- the comparison degrades only when they differ. Nothing else in the suite deploys into a
 /// database with a deliberately different collation, which is exactly why this fixture creates its own.
-/// Found by deploying the shipped demo packages, not by the suite (Rule 24).</para>
+/// Found by deploying the shipped demo packages, not by the suite.</para>
 /// </summary>
 public abstract class DatabaseCollationMismatchSharedTests
 {

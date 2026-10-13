@@ -267,7 +267,7 @@ BEGIN
     -- that order and it is not name order and not even stable. MEASURED: MariaDB 11.4 emitted a table's
     -- check constraints in creation order (zzz, mmm, aaa), and MySQL 8.0 emitted the SAME table's two
     -- different ways across two runs. SQL Server and PostgreSQL have always sorted these by name in their
-    -- own generators; this is the Rule 20 parity gap (#10).
+    -- own generators; this is the cross-engine parity gap (#10).
     --
     -- Name order is NOT what Product:ObjectOrder selects here. These are sets, not sequences -- there is
     -- no physical order to preserve -- so they sort by name unconditionally, exactly as the other two
