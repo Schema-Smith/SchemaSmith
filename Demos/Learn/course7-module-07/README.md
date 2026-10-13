@@ -44,7 +44,7 @@ schemaquench --ConfigFile:quench.settings.json
 ```
 
 ```
-Version: 2.7.1.0
+Version: 2.7.2.0
   Product Script Tokens:
     ControlDb: FleetRegistry_Dev
 ```

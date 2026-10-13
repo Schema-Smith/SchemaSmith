@@ -12,5 +12,6 @@
   "ScriptPath": "./cast",
   "Tables": [
     { "Name": "public.isocurrency", "KeyColumns": "code" }
-  ]
+  ],
+  "ShouldCast": { "TokenizeScripts": false }
 }
