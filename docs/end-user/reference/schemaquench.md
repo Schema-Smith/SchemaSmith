@@ -285,16 +285,16 @@ When SchemaQuench runs, the product quench executes these steps in order:
 2. **Test server connection** -- Opens a connection to the target server and runs a platform-appropriate liveness check. Aborts if the connection fails.
 3. **Validate server** -- If `Product.ValidationScript` is configured, executes it against the platform's administrative database (`master` on SQL Server, `postgres` on PostgreSQL, `information_schema` on MySQL and MariaDB). Aborts if the result is falsy.
 4. **Validate baseline** -- If `Product.BaselineValidationScript` is configured, executes it. Aborts if the result is falsy.
-5. **Product Before scripts** -- Executes scripts from `Before Product` folder(s). On SQL Server with secondary servers, scripts run in parallel to all eligible servers.
-6. **Quench each template** -- For each template name in `Product.TemplateOrder`:
-   - Loads `Template.json` and merges template-level `ScriptTokens` over the product token set.
+5. **Load and check templates** -- Loads every template in `Product.TemplateOrder`, merging template-level `ScriptTokens` over the product token set, then checks `TemplateTargets` and `Target.Templates` against them and, on a MySQL or MariaDB server that folds table names, refuses two tables differing only in case. None of this touches a database, so an error here stops the run before anything has changed.
+6. **Product Before scripts** -- Executes scripts from `Before Product` folder(s). On SQL Server with secondary servers, scripts run in parallel to all eligible servers.
+7. **Quench each template** -- For each template in scope, in `Product.TemplateOrder`:
    - Executes `DatabaseIdentificationScript` against the administrative database to discover target databases.
    - For schema templates: executes `SchemaIdentificationScript` against each discovered database to produce one work unit per `(database, schema)` pair. For regular templates: one work unit per discovered database.
    - Dispatches all work units to a pool of up to `MaxThreads` concurrent workers. Each worker runs the full [database quench sequence](#database-quench-sequence) for its assigned iteration.
    - If any iteration fails, logs the failure. Failure routing follows the template's `ContinueOnDatabaseFailure` (regular templates) or `ContinueOnSchemaFailure` (schema templates) settings.
-7. **Product After scripts** -- Executes scripts from `After Product` folder(s).
-8. **Stamp product version** -- If `Product.VersionStampScript` is configured, executes it.
-9. **Log completion** -- Logs "Completed quench of {ProductName}".
+8. **Product After scripts** -- Executes scripts from `After Product` folder(s).
+9. **Stamp product version** -- If `Product.VersionStampScript` is configured, executes it.
+10. **Log completion** -- Logs "Completed quench of {ProductName}".
 
 After the quench returns, the calling program backs up log files to a numbered directory and exits with code 0 (see [Exit Codes](configuration.md#exit-codes)).
 

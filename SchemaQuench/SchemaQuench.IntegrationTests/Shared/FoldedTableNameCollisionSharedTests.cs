@@ -15,7 +15,7 @@ namespace SchemaQuench.IntegrationTests.Shared;
 /// <summary>
 /// A package declaring two tables whose names differ only in case. On a server with lower_case_table_names = 0 they
 /// are two tables and both deploy. On a server that folds table names they would be one table, so the deploy is
-/// refused (exit 2) before it touches either.
+/// refused (exit 2) before it touches anything -- the product's Before scripts included.
 /// </summary>
 public abstract class FoldedTableNameCollisionSharedTests
 {
@@ -27,6 +27,7 @@ public abstract class FoldedTableNameCollisionSharedTests
 
     private const string Declared = "FoldCollide";
     private const string Sibling = "foldcollide";
+    private const string BeforeMarker = "foldcollide_before_ran";
 
     private readonly ILog _errorLog = Substitute.For<ILog>();
     private readonly ILog _progressLog = Substitute.For<ILog>();
@@ -48,6 +49,7 @@ public abstract class FoldedTableNameCollisionSharedTests
             LogFactory.Register("ProgressLog", _progressLog);
 
             BuildPackage(tempDir);
+            AddBeforeScript(tempDir);
 
             using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(BaseConnectionString + "Database=information_schema;");
             conn.Open();
@@ -68,11 +70,13 @@ public abstract class FoldedTableNameCollisionSharedTests
                     _environment.Received().Exit(2);
                     _errorLog.Received().Error(Arg.Is<string>(s => s.Contains("differ only in case")));
                     Assert.That(TableCount(cmd), Is.EqualTo(0), "a refused deploy must not create either table");
+                    Assert.That(MarkerCount(cmd), Is.EqualTo(0), "the refusal must come before the product's Before scripts run");
                 }
                 else
                 {
                     _environment.DidNotReceive().Exit(2);
                     Assert.That(TableCount(cmd), Is.EqualTo(2), "a case-sensitive server holds both tables");
+                    Assert.That(MarkerCount(cmd), Is.EqualTo(1), "the Before script runs on a deploy that goes ahead");
                 }
             }
             finally
@@ -150,6 +154,22 @@ public abstract class FoldedTableNameCollisionSharedTests
                 """);
     }
 
+    private void AddBeforeScript(string dest)
+    {
+        var productFile = Path.Join(dest, "Product.json");
+        File.WriteAllText(productFile, File.ReadAllText(productFile)
+            .Replace("\"ScriptFolders\": []", "\"ScriptFolders\": [{ \"FolderPath\": \"Before\", \"QuenchSlot\": \"Before\" }]"));
+        Directory.CreateDirectory(Path.Join(dest, "Before"));
+        File.WriteAllText(Path.Join(dest, "Before", "marker.sql"), $"CREATE TABLE IF NOT EXISTS `{MainDb}`.`{BeforeMarker}` (Id INT)");
+    }
+
+    private int MarkerCount(System.Data.IDbCommand cmd)
+    {
+        cmd.CommandText = $"SELECT COUNT(*) FROM information_schema.TABLES WHERE {MySqlNameMatch.Folded("TABLE_SCHEMA", $"'{MainDb}'")} " +
+                          $"AND LOWER(TABLE_NAME) = '{BeforeMarker}'";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
     private static void CopyDirectory(string src, string dest)
     {
         Directory.CreateDirectory(dest);
@@ -168,7 +188,8 @@ public abstract class FoldedTableNameCollisionSharedTests
 
     private void Drop(System.Data.IDbCommand cmd)
     {
-        cmd.CommandText = $"DROP TABLE IF EXISTS `{MainDb}`.`{Declared}`; DROP TABLE IF EXISTS `{MainDb}`.`{Sibling}`;";
+        cmd.CommandText = $"DROP TABLE IF EXISTS `{MainDb}`.`{Declared}`; DROP TABLE IF EXISTS `{MainDb}`.`{Sibling}`; " +
+                          $"DROP TABLE IF EXISTS `{MainDb}`.`{BeforeMarker}`;";
         cmd.ExecuteNonQuery();
         cmd.CommandText = $"DELETE FROM `{MainDb}`.SchemaSmith_ProductOwnership WHERE LOWER(ObjectName) = '{Sibling}'";
         cmd.ExecuteNonQuery();

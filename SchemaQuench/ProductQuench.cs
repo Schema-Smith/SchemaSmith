@@ -709,17 +709,25 @@ public class ProductQuench
         return true;
     }
 
-    private bool RefuseFoldedTableNameCollisions(Template template)
+    // Every template in scope is checked before anything deploys, so a later template's collision cannot leave the
+    // earlier templates, or the Before scripts, applied.
+    private bool RefuseFoldedTableNameCollisions(IEnumerable<Template> templates)
     {
         if (_product.Platform.GetBasePlatform() != Platform.MySQL) return false;
-        var collisions = FoldedTableNameCollisions.Find(template);
-        if (collisions.Count == 0 || !ServerFoldsNames()) return false;
+        var messages = templates
+            .Select(t => (Template: t, Collisions: FoldedTableNameCollisions.Find(t)))
+            .Where(c => c.Collisions.Count > 0)
+            .Select(c => $"Template '{c.Template.Name}' declares tables whose names differ only in case ({string.Join("; ", c.Collisions)}). " +
+                         "The target server folds table names (lower_case_table_names >= 1), so each pair would be one table. " +
+                         "Rename one of each pair, or deploy to a server with lower_case_table_names = 0.")
+            .ToList();
+        if (messages.Count == 0 || !ServerFoldsNames()) return false;
 
-        var message = $"Template '{template.Name}' declares tables whose names differ only in case ({string.Join("; ", collisions)}). " +
-                      "The target server folds table names (lower_case_table_names >= 1), so each pair would be one table. " +
-                      "Rename one of each pair, or deploy to a server with lower_case_table_names = 0.";
-        _progressLog.Error(message);
-        _errorLog.Error(message);
+        foreach (var message in messages)
+        {
+            _progressLog.Error(message);
+            _errorLog.Error(message);
+        }
         _updateFailed = true;
         _anyFailure = true;
         EmitFailureRollup();
@@ -874,8 +882,8 @@ public class ProductQuench
                     script.ReplaceQueryTokens(_product.QueryTokens.ToList());
             }
 
-            QuenchProductScriptsWithCheckpoint(_product.BeforeFolders, "Before Product", true);
-
+            // Loading and checking the templates touches no database, so a package or target error stops the run
+            // here, before the Before scripts change anything.
             var templates = LoadTemplates();
             var suppressKindling = suppressKindlingForTesting || _skipKindling;
 
@@ -895,6 +903,10 @@ public class ProductQuench
             // for Target.Templates runs against the loaded template list — typos surface here.
             if (!TryFilterTemplatesByTarget(templates, out var templatesInScope))
                 return;
+
+            if (RefuseFoldedTableNameCollisions(templatesInScope)) return;
+
+            QuenchProductScriptsWithCheckpoint(_product.BeforeFolders, "Before Product", true);
 
             foreach (var template in templatesInScope)
             {
@@ -1314,8 +1326,6 @@ public class ProductQuench
             LogScriptTokens("Template Script Tokens:", template.LoggableTokens);
 
         _updateFailed = false;
-
-        if (RefuseFoldedTableNameCollisions(template)) return;
 
         // Slice-3 fan-out: enumerate the flat work-unit list across all eligible servers, then
         // dispatch to a single MaxThreads-bounded pool. SQL Server's per-server ServerToQuench
