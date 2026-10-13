@@ -322,6 +322,8 @@ public class DataDeliveryProcessor : IDataDelivery
                     try
                     {
                         ExecuteDelivery(context, delivery, table.Name, mergeScript);
+                        // Recorded here, not after pass 1: until pass 2 lands, the deferred columns are still NULL.
+                        context.RecordDelivery?.Invoke($"{tableKey}{VariantSuffix(delivery)}");
                     }
                     catch (Exception ex)
                     {
@@ -410,7 +412,6 @@ public class DataDeliveryProcessor : IDataDelivery
                 pendingArtifacts.Remove(artifactKey);   // pass-1 succeeded — clear any earlier deferred artifact
                 pass2Units.Add((table, index, delivery, deferredColumns));
                 deliverySucceeded.Add(deliveryKey);
-                context.RecordDelivery?.Invoke($"{tableKey}{VariantSuffix(delivery)}");
             }
             else
             {

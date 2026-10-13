@@ -650,6 +650,71 @@ public class DataDeliveryProcessorTests
         Assert.That(_executedScripts[2], Does.Contain("Tasks"));
     }
 
+    // A two-pass delivery is delivered only when its second pass lands: pass 1 inserts the rows with the deferred
+    // foreign-key columns NULL, so a failed pass 2 leaves the table without them, and the summary must not say otherwise.
+    [Test]
+    public void DeliverTables_DeferredMergeWhosePass2Fails_IsNotRecordedAsDelivered()
+    {
+        var processor = new DataDeliveryProcessor();
+        var parent = new TestTable
+        {
+            Name = "Employees", Schema = "dbo",
+            DataDeliveries = new List<DataDelivery> { new DataDelivery { MergeType = "Insert", ContentFile = "employees.json" } }
+        };
+        var child = new TestTable
+        {
+            Name = "Tasks", Schema = "dbo",
+            DataDeliveries = new List<DataDelivery> { new DataDelivery { MergeType = "Insert", ContentFile = "tasks.json" } },
+            DeliverableColumns = new List<IDeliverableColumn> { new TestColumn { Name = "AssigneeId", Nullable = true } },
+            DeliverableForeignKeys = new List<IDeliverableForeignKey>
+            {
+                new TestFK { Columns = "AssigneeId", RelatedTable = "Employees", RelatedTableSchema = "dbo" }
+            }
+        };
+        var recorded = new List<string>();
+        var context = MakeContext(new List<IDeliverableTable> { child, parent });
+        context.RecordDelivery = recorded.Add;
+        var tasksRuns = 0;
+        context.ExecuteScript = (name, script) =>
+        {
+            if (name == "Tasks" && ++tasksRuns == 2) throw new InvalidOperationException("pass 2 failed");
+            _executedScripts.Add(script);
+        };
+
+        Assert.Throws<InvalidOperationException>(() => processor.DeliverTables(context));
+
+        Assert.That(tasksRuns, Is.EqualTo(2), "pass 1 and pass 2 both ran");
+        Assert.That(recorded, Is.EqualTo(new[] { "dbo.Employees" }));
+    }
+
+    [Test]
+    public void DeliverTables_DeferredMerge_IsRecordedOnceWhenBothPassesLand()
+    {
+        var processor = new DataDeliveryProcessor();
+        var parent = new TestTable
+        {
+            Name = "Employees", Schema = "dbo",
+            DataDeliveries = new List<DataDelivery> { new DataDelivery { MergeType = "Insert", ContentFile = "employees.json" } }
+        };
+        var child = new TestTable
+        {
+            Name = "Tasks", Schema = "dbo",
+            DataDeliveries = new List<DataDelivery> { new DataDelivery { MergeType = "Insert", ContentFile = "tasks.json" } },
+            DeliverableColumns = new List<IDeliverableColumn> { new TestColumn { Name = "AssigneeId", Nullable = true } },
+            DeliverableForeignKeys = new List<IDeliverableForeignKey>
+            {
+                new TestFK { Columns = "AssigneeId", RelatedTable = "Employees", RelatedTableSchema = "dbo" }
+            }
+        };
+        var recorded = new List<string>();
+        var context = MakeContext(new List<IDeliverableTable> { child, parent });
+        context.RecordDelivery = recorded.Add;
+
+        processor.DeliverTables(context);
+
+        Assert.That(recorded, Is.EquivalentTo(new[] { "dbo.Employees", "dbo.Tasks" }));
+    }
+
     [Test]
     public void DeliverTables_WhatIf_DoesNotExecute()
     {
