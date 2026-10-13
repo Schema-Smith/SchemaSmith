@@ -127,7 +127,8 @@ public static class MySqlReservedWords
             var unquoted = trimmed.Substring(1, trimmed.Length - 2);
             return unquoted.Replace("``", "`");
         }
-        return trimmed;
+        // Trimmed only to find the wrapper: spaces at either end of a bare name are the name's own.
+        return identifier;
     }
 
     /// <summary>

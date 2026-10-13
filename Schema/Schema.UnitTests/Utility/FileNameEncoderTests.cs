@@ -281,4 +281,33 @@ public class FileNameEncoderTests
         var spaces = "   ";
         Assert.That(FileNameEncoder.Decode(FileNameEncoder.Encode(spaces)), Is.EqualTo(spaces));
     }
+
+    // Windows reserves a device name before the first dot too, so one name that holds a dot -- a MySQL table named
+    // con.backup -- cannot be written as con.backup.json on Windows, and Git for Windows cannot check it out.
+    [TestCase("aux.users", "%61ux.users")]
+    [TestCase("CON.Orders", "%43ON.Orders")]
+    [TestCase("lpt1.sql", "%6Cpt1.sql")]
+    public void ADeviceNameBeforeTheFirstDot_IsEncoded(string name, string expected)
+    {
+        Assert.That(FileNameEncoder.Encode(name), Is.EqualTo(expected));
+        Assert.That(FileNameEncoder.Decode(expected), Is.EqualTo(name));
+    }
+
+    [TestCase("auxiliary.users")]
+    [TestCase("users.aux")]
+    public void ADeviceNameThatIsNotTheFirstPart_IsLeftAlone(string name) =>
+        Assert.That(FileNameEncoder.Encode(name), Is.EqualTo(name));
+
+    [Test]
+    public void ControlCharacters_AreEncoded_AndRoundTrip()
+    {
+        var name = "abc	d";
+        var encoded = FileNameEncoder.Encode(name);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(encoded, Is.EqualTo("a%01b%1Fc%09d"));
+            Assert.That(FileNameEncoder.Decode(encoded), Is.EqualTo(name));
+        });
+    }
 }
