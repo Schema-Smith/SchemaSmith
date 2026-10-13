@@ -154,7 +154,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"}]') || fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2019","image":"mcr.microsoft.com/mssql/server:2019-CU32-GDR11-ubuntu-20.04"},{"ss":"2022","image":"mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04"}]') }}
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04","collation":"Latin1_General_CS_AS"}]') || fromJSON('[{"ss":"2017","image":"mcr.microsoft.com/mssql/server:2017-CU31-GDR18-ubuntu-18.04"},{"ss":"2019","image":"mcr.microsoft.com/mssql/server:2019-CU32-GDR11-ubuntu-20.04"},{"ss":"2022","image":"mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"},{"ss":"2025","image":"mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-24.04","collation":"Latin1_General_CS_AS"}]') }}
     permissions:
       contents: read
       checks: write
@@ -164,6 +164,10 @@ jobs:
         env:
           SA_PASSWORD: ${{ env.TEST_PASSWORD }}
           ACCEPT_EULA: Y
+          # The 2025 leg runs on a case-sensitive SERVER, which no test database can stand in for: #temp column
+          # names follow the server collation, so a column referenced in another case than declared works on
+          # every case-insensitive server and fails there.
+          MSSQL_COLLATION: ${{ matrix.collation || 'SQL_Latin1_General_CP1_CI_AS' }}
         ports:
           - 1440:1433
         options: --name mssql
