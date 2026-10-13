@@ -1440,6 +1440,8 @@ By default, checkpoints live in `%TEMP%/schemaquench-checkpoints` (or the platfo
 
 The same value can be set in `SchemaQuench.settings.json` via the `CheckpointDirectory` key. The CLI switch wins if both are present.
 
+Checkpoint files are named by product, template, server and database, not by run, so two runs at the same time that share those names write to the same files. Only `--ResumeQuench` reads them, so that never changes what a run does -- but if you may need to resume one of two concurrent runs, give each its own `CheckpointDirectory`.
+
 ### Checkpoint scopes
 
 SchemaQuench tracks two kinds of progress:
@@ -1452,16 +1454,21 @@ SchemaQuench tracks two kinds of progress:
 
 | Step name | What it covers |
 |---|---|
-| `KindleForge` | Helper procedure deployment for this database. |
 | `ValidateBaseline` | Baseline validation script. |
-| `MissingTablesAndColumns` | Adding missing tables and missing columns. |
+| `DomainTypeQuench` | PostgreSQL domain type deployment. |
+| `EnumTypeQuench` | PostgreSQL enum type deployment. |
+| `SequenceQuench` | PostgreSQL sequence deployment. |
 | `ModifiedTables` | Altering existing columns, computed / generated columns, dropping tables. |
 | `IndexesAndConstraints` | Creating missing indexes, check constraints, defaults, statistics. |
+| `TableFeatures` | SQL Server table features: Change Data Capture, Change Tracking, FILESTREAM. |
 | `TableDataDelivery` | Both passes of FK-aware data delivery for tables with `DataDelivery` blocks. |
 | `ForeignKeys` | Creating, modifying, and dropping foreign keys. |
 | `MaterializedViewQuench` | PostgreSQL materialized view deployment. |
+| `EventQuench` | MySQL and MariaDB scheduled event deployment. |
 | `IndexedViewQuench` | SQL Server indexed view deployment. |
 | `VersionStamp` | Version stamp script. |
+
+Kindling the helper procedures and adding missing tables and columns are never checkpointed: they rebuild session state the later steps need, so a resumed run always repeats them. Both are safe to repeat.
 
 In addition, each template slot (`Before`, `Objects`, `BetweenTablesAndKeys`, `AfterTablesScripts`, `AfterTablesObjects`, `TableData`, `After`) records the exact scripts that ran, so resumed runs skip each individual script that already succeeded.
 

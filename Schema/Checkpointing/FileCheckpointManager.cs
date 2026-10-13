@@ -20,6 +20,10 @@ namespace Schema.Checkpointing;
 public class FileCheckpointManager : ICheckpointing
 {
     private readonly string _checkpointDirectory;
+    // Whether this run takes up progress files already on disk. Only --ResumeQuench should: the folder is shared by
+    // every run for the same user, and the file names do not identify the run, so a run that is not resuming would
+    // otherwise read a concurrent run's progress as its own and skip steps it never ran.
+    private readonly bool _adoptExisting;
     private readonly ConcurrentDictionary<string, DatabaseCheckpoint> _dbCheckpoints = new();
     private readonly ConcurrentDictionary<string, ProductCheckpoint> _productCheckpoints = new();
     private static readonly ConcurrentDictionary<string, object> FileLocks = new();
@@ -27,7 +31,11 @@ public class FileCheckpointManager : ICheckpointing
     public FileCheckpointManager() : this(GetDefaultCheckpointDirectory()) { }
 
     public FileCheckpointManager(string checkpointDirectory)
+        : this(checkpointDirectory, CommandLineParser.ContainsSwitch("ResumeQuench")) { }
+
+    public FileCheckpointManager(string checkpointDirectory, bool adoptExisting)
     {
+        _adoptExisting = adoptExisting;
         _checkpointDirectory = checkpointDirectory ?? throw new ArgumentNullException(nameof(checkpointDirectory));
         if (!DirectoryWrapper.GetFromFactory().Exists(_checkpointDirectory))
             DirectoryWrapper.GetFromFactory().CreateDirectory(_checkpointDirectory);
@@ -219,7 +227,7 @@ public class FileCheckpointManager : ICheckpointing
     private DatabaseCheckpoint LoadDatabaseCheckpoint(TrackingScope scope)
     {
         var filePath = GetDatabaseCheckpointPath(scope.ProductName, scope.TemplateName, scope.Server, scope.DatabaseName, scope.SchemaName);
-        if (!FileWrapper.GetFromFactory().Exists(filePath))
+        if (!_adoptExisting || !FileWrapper.GetFromFactory().Exists(filePath))
             return new DatabaseCheckpoint
             {
                 ProductName = scope.ProductName,
@@ -385,7 +393,7 @@ public class FileCheckpointManager : ICheckpointing
     private ProductCheckpoint LoadProductCheckpoint(string productName)
     {
         var filePath = GetProductCheckpointPath(productName);
-        if (!FileWrapper.GetFromFactory().Exists(filePath))
+        if (!_adoptExisting || !FileWrapper.GetFromFactory().Exists(filePath))
             return new ProductCheckpoint { ProductName = productName };
 
         try

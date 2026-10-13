@@ -74,7 +74,7 @@ public class FileCheckpointManagerTests
         var mgr = new FileCheckpointManager(_tempDir);
         mgr.Track(DbScope(), "KindleForge", () => { });
 
-        var mgr2 = new FileCheckpointManager(_tempDir);
+        var mgr2 = new FileCheckpointManager(_tempDir, adoptExisting: true);
         var ran = false;
         mgr2.Track(DbScope(), "KindleForge", () => ran = true);
 
@@ -122,7 +122,7 @@ public class FileCheckpointManagerTests
         var mgr = new FileCheckpointManager(_tempDir);
         mgr.TrackScript(DbScope(), "Object", "views/MyView.sql", () => { });
 
-        var mgr2 = new FileCheckpointManager(_tempDir);
+        var mgr2 = new FileCheckpointManager(_tempDir, adoptExisting: true);
         var ran = false;
         mgr2.TrackScript(DbScope(), "Object", "views/MyView.sql", () => ran = true);
 
@@ -176,7 +176,7 @@ public class FileCheckpointManagerTests
 
         mgr.DeleteCheckpoints("TestProduct");
 
-        var mgr2 = new FileCheckpointManager(_tempDir);
+        var mgr2 = new FileCheckpointManager(_tempDir, adoptExisting: true);
         var count = 0;
         mgr2.Track(DbScope(), "KindleForge", () => count++);
         mgr2.Track(ProductScope(), "MainTemplate", () => count++);
@@ -255,7 +255,7 @@ public class FileCheckpointManagerTests
             .Single(f => !f.EndsWith(".product.checkpoint"));
         File.WriteAllText(checkpointFile, "THIS IS NOT VALID CHECKPOINT CONTENT @@##!!");
 
-        var mgr2 = new FileCheckpointManager(_tempDir);
+        var mgr2 = new FileCheckpointManager(_tempDir, adoptExisting: true);
         var ran = false;
         mgr2.Track(scope, "KindleForge", () => ran = true);
 
@@ -273,7 +273,7 @@ public class FileCheckpointManagerTests
         var productCheckpointFile = Directory.GetFiles(_tempDir, "*.product.checkpoint").Single();
         File.WriteAllText(productCheckpointFile, "\x00\x01\x02 BINARY GARBAGE \xFF\xFE");
 
-        var mgr2 = new FileCheckpointManager(_tempDir);
+        var mgr2 = new FileCheckpointManager(_tempDir, adoptExisting: true);
         var ran = false;
         mgr2.Track(scope, "MainTemplate", () => ran = true);
 
@@ -299,7 +299,7 @@ public class FileCheckpointManagerTests
         mgr.Track(productScope, "MainTemplate", () => { });
         mgr.DeleteCheckpoints("TestProduct");
 
-        var mgr2 = new FileCheckpointManager(_tempDir);
+        var mgr2 = new FileCheckpointManager(_tempDir, adoptExisting: true);
         var count = 0;
         mgr2.Track(dbScope, "KindleForge", () => count++);
         mgr2.Track(productScope, "MainTemplate", () => count++);
@@ -458,5 +458,69 @@ public class FileCheckpointManagerTests
         var summary = mgr.GetDatabaseCheckpointSummary(ProductScope());
 
         Assert.That(summary, Is.EqualTo(DatabaseCheckpointSummary.Empty));
+    }
+
+    // Two runs at once that share a product, template, server name and database share these files. A run that is
+    // not resuming must not take another run's progress for its own, or it skips steps it never ran and exits 0.
+    [Test]
+    public void Track_DatabaseScope_WhenNotResuming_RunsAStepAnotherRunRecorded()
+    {
+        new FileCheckpointManager(_tempDir, adoptExisting: false).Track(DbScope(), "ForeignKeys", () => { });
+
+        var mgr = new FileCheckpointManager(_tempDir, adoptExisting: false);
+        var ran = false;
+        mgr.Track(DbScope(), "ForeignKeys", () => ran = true);
+
+        Assert.That(ran, Is.True, "a step recorded by another run was skipped");
+    }
+
+    [Test]
+    public void TrackScript_DatabaseScope_WhenNotResuming_RunsAScriptAnotherRunRecorded()
+    {
+        new FileCheckpointManager(_tempDir, adoptExisting: false).TrackScript(DbScope(), "After", "seed.sql", () => { });
+
+        var mgr = new FileCheckpointManager(_tempDir, adoptExisting: false);
+        var ran = false;
+        mgr.TrackScript(DbScope(), "After", "seed.sql", () => ran = true);
+
+        Assert.That(ran, Is.True, "a script recorded by another run was skipped");
+    }
+
+    [Test]
+    public void Track_ProductScope_WhenNotResuming_RunsATemplateAnotherRunRecorded()
+    {
+        new FileCheckpointManager(_tempDir, adoptExisting: false).Track(ProductScope(), "Template:Main", () => { });
+
+        var mgr = new FileCheckpointManager(_tempDir, adoptExisting: false);
+        var ran = false;
+        mgr.Track(ProductScope(), "Template:Main", () => ran = true);
+
+        Assert.That(ran, Is.True, "a template recorded by another run was skipped");
+    }
+
+    [Test]
+    public void CheckpointSummaries_WhenNotResuming_ReportNothingFromAnotherRun()
+    {
+        var other = new FileCheckpointManager(_tempDir, adoptExisting: false);
+        other.Track(DbScope(), "ModifiedTables", () => { });
+        other.Track(ProductScope(), "Template:Main", () => { });
+
+        var mgr = new FileCheckpointManager(_tempDir, adoptExisting: false);
+
+        Assert.That(mgr.GetDatabaseCheckpointSummary(DbScope()), Is.EqualTo(DatabaseCheckpointSummary.Empty));
+        Assert.That(mgr.GetProductCheckpointSummary("TestProduct"), Is.EqualTo(ProductCheckpointSummary.Empty));
+    }
+
+    [Test]
+    public void Track_WhenResuming_SkipsWhatTheEarlierRunCompleted()
+    {
+        new FileCheckpointManager(_tempDir, adoptExisting: false).Track(DbScope(), "ForeignKeys", () => { });
+
+        var mgr = new FileCheckpointManager(_tempDir, adoptExisting: true);
+        var ran = false;
+        mgr.Track(DbScope(), "ForeignKeys", () => ran = true);
+
+        Assert.That(ran, Is.False, "a resumed run repeated a completed step");
+        Assert.That(mgr.GetDatabaseCheckpointSummary(DbScope()).CompletedSteps, Is.EqualTo(1));
     }
 }

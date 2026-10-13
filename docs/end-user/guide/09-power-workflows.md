@@ -509,7 +509,7 @@ For the full SchemaShears reference -- manifest format, always-include file, `--
 
 Long-running deployments fail. A 90-minute production quench hits a transient deadlock at minute 75, or the migration script at stage 12 of 18 trips on unexpected data. Without checkpointing, the recovery is brutal: start over from zero, re-run every step you already applied, hope the interrupted state is self-consistent.
 
-SchemaQuench writes checkpoints as it goes. Every completed step (helper procedure deployment, missing tables, modified tables, indexes, FK-aware data delivery, foreign keys, materialized or indexed view rebuilds) and every completed migration script gets recorded to disk. Re-run with `--ResumeQuench` and everything already recorded is skipped:
+SchemaQuench writes checkpoints as it goes. Every completed step (modified tables, indexes, FK-aware data delivery, foreign keys, materialized or indexed view rebuilds, and the rest) and every completed migration script gets recorded to disk. Re-run with `--ResumeQuench` and everything already recorded is skipped:
 
 ```bash
 SchemaQuench --ResumeQuench
