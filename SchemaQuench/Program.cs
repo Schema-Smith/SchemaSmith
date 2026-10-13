@@ -13,9 +13,16 @@ namespace SchemaQuench;
 
 public static class Program
 {
+    internal static readonly FirstRunSetting[] FirstRunSettings =
+    [
+        new(SettingsKeys.Target.Server, "the server to deploy to"),
+        new(SettingsKeys.SchemaPackagePath, "the folder that holds your package's Product.json")
+    ];
+
     public static void Main(string[] args)
     {
         CommandLineParser.HandleCommonSwitches("SchemaQuench", ToolSpecificSwitches);
+        if (GettingStarted.ShowIfUnconfigured("SchemaQuench", "deploys a schema package to a database", FirstRunSettings, args)) return;
 
         var skipKindlingForge = args.Length > 0 && args[0] == "SkipKindlingForge";
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;

@@ -213,13 +213,17 @@ public static class CommandLineParser
         return s.TrimStart('/').TrimStart('-');
     }
 
-    internal static void ShowVersionAndExit(string app)
+    internal static string ToolVersion()
     {
         var assembly = Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly();
-        var version = assembly.GetCustomAttribute<AssemblyFileVersionAttribute>()?.Version
-                      ?? assembly.GetName().Version?.ToString()
-                      ?? "unknown";
-        Console.WriteLine($"{app} - Version: {version}");
+        return assembly.GetCustomAttribute<AssemblyFileVersionAttribute>()?.Version
+               ?? assembly.GetName().Version?.ToString()
+               ?? "unknown";
+    }
+
+    internal static void ShowVersionAndExit(string app)
+    {
+        Console.WriteLine($"{app} - Version: {ToolVersion()}");
         EnvironmentWrapper.GetFromFactory().Exit(0);
     }
 

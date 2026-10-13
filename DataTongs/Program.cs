@@ -11,9 +11,18 @@ namespace DataTongs;
 
 public static class Program
 {
+    internal static readonly FirstRunSetting[] FirstRunSettings =
+    [
+        new(SettingsKeys.Source.Server, "the server to extract from"),
+        new(SettingsKeys.Source.Platform, "SqlServer, PostgreSQL, MySQL or MariaDb"),
+        new(SettingsKeys.Source.Database, "the database holding the tables"),
+        new(SettingsKeys.Target.Platform, null)
+    ];
+
     public static void Main(string[] args)
     {
         CommandLineParser.HandleCommonSwitches("DataTongs", ToolSpecificSwitches);
+        if (GettingStarted.ShowIfUnconfigured("DataTongs", "extracts table data into content files and merge scripts", FirstRunSettings, args)) return;
 
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;

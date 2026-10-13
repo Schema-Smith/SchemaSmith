@@ -12,9 +12,18 @@ namespace SchemaTongs;
 
 public static class Program
 {
+    internal static readonly FirstRunSetting[] FirstRunSettings =
+    [
+        new(SettingsKeys.Source.Server, "the server to extract from"),
+        new(SettingsKeys.Source.Platform, "SqlServer, PostgreSQL, MySQL or MariaDb"),
+        new(SettingsKeys.Source.Database, "the database to extract"),
+        new(SettingsKeys.Target.Platform, null)
+    ];
+
     public static void Main(string[] args)
     {
         CommandLineParser.HandleCommonSwitches("SchemaTongs", ToolSpecificSwitches);
+        if (GettingStarted.ShowIfUnconfigured("SchemaTongs", "extracts an existing database into a schema package", FirstRunSettings, args)) return;
 
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;

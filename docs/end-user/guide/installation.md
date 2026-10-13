@@ -186,6 +186,6 @@ Useful for procurement review and dependency auditing.
 
 ## What's Next
 
-Tools in place? Time to put them to work.
+Tools in place? Time to put them to work. Run any of them with no arguments before you've configured it and it tells you which settings file it read and which settings to fill in.
 
 **[Quick Start →](02-quick-start.md)**
