@@ -37,6 +37,8 @@ BEGIN
 
   DECLARE @trimmed NVARCHAR(MAX) = LTRIM(RTRIM(@p_DataType))
   DECLARE @upper NVARCHAR(MAX) = UPPER(@trimmed)
+  -- A computed column declared in DataType is an expression, not a type: its column names must keep their case.
+  IF @upper LIKE 'AS[ (]%' RETURN @trimmed
   DECLARE @t NVARCHAR(MAX)
 
   SET @t = CASE
