@@ -1630,14 +1630,18 @@ public abstract class TableDataDeliverySharedTests
     private void RegisterTargetConfig()
     {
         var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+        var settings = new Dictionary<string, string>
+        {
+            ["Target:User"] = config[$"{ConfigPrefix}:User"] ?? config["Target:User"] ?? "TestUser",
+            ["Target:Password"] = config[$"{ConfigPrefix}:Password"] ?? config["Target:Password"] ?? "aCa2d805-41E5@40c4!98e7#92F93zzxo176",
+            ["Target:Port"] = config[$"{ConfigPrefix}:Port"] ?? config["Target:Port"] ?? "3306",
+            ["Target:Server"] = config[$"{ConfigPrefix}:Server"] ?? config["Target:Server"] ?? "127.0.0.1"
+        };
+        // The connection properties carry what the leg needs to connect at all, such as SslMode=None on MySQL 5.7.
+        foreach (var prop in ConnectionString.ReadProperties(config, $"{ConfigPrefix}:ConnectionProperties"))
+            settings[$"Target:ConnectionProperties:{prop.Key}"] = prop.Value;
         var configBuilder = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string>
-            {
-                ["Target:User"] = config[$"{ConfigPrefix}:User"] ?? config["Target:User"] ?? "TestUser",
-                ["Target:Password"] = config[$"{ConfigPrefix}:Password"] ?? config["Target:Password"] ?? "aCa2d805-41E5@40c4!98e7#92F93zzxo176",
-                ["Target:Port"] = config[$"{ConfigPrefix}:Port"] ?? config["Target:Port"] ?? "3306",
-                ["Target:Server"] = config[$"{ConfigPrefix}:Server"] ?? config["Target:Server"] ?? "127.0.0.1"
-            }!)
+            .AddInMemoryCollection(settings!)
             .Build();
         FactoryContainer.Register<IConfigurationRoot>(configBuilder);
     }

@@ -133,13 +133,17 @@ public abstract class TimestampDefaultsDeploySharedTests
             try
             {
                 var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-                FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+                var settings = new Dictionary<string, string>
                 {
                     ["Target:User"] = config[$"{ConfigPrefix}:User"] ?? config["Target:User"] ?? "TestUser",
                     ["Target:Password"] = config[$"{ConfigPrefix}:Password"] ?? config["Target:Password"],
                     ["Target:Port"] = config[$"{ConfigPrefix}:Port"] ?? config["Target:Port"] ?? "3306",
                     ["Target:Server"] = config[$"{ConfigPrefix}:Server"] ?? config["Target:Server"] ?? "127.0.0.1"
-                }!).Build());
+                };
+                // The connection properties carry what the leg needs to connect at all, such as SslMode=None on MySQL 5.7.
+                foreach (var prop in ConnectionString.ReadProperties(config, $"{ConfigPrefix}:ConnectionProperties"))
+                    settings[$"Target:ConnectionProperties:{prop.Key}"] = prop.Value;
+                FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(settings!).Build());
 
                 var template = new Template { Name = "TimestampDefaults", FilePath = Path.Join(tempDir, "Template.json") };
                 template.Tables.Add(new MySqlTable
