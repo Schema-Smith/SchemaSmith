@@ -13,15 +13,17 @@ namespace Schema.DataAccess;
 /// </summary>
 public static class MySqlSessionSettings
 {
-    // Modes that change how SQL text is parsed or how SHOW CREATE renders it. The kindled procedures and the generated
-    // delivery scripts are written for the default reading, and a stored routine keeps the mode it was created under.
+    // Modes that change how SQL text is parsed, what it means (HIGH_NOT_PRECEDENCE, REAL_AS_FLOAT), how values read back
+    // (PAD_CHAR_TO_FULL_LENGTH) or how SHOW CREATE renders it. The kindled procedures and the generated delivery scripts
+    // are written for the default reading, and a stored routine keeps the mode it was created under.
     // Strictness flags (STRICT_*, NO_ZERO_DATE, ONLY_FULL_GROUP_BY) are the server's to choose and are left alone.
     internal static readonly HashSet<string> ParseAlteringModes = new(StringComparer.OrdinalIgnoreCase)
     {
         "ANSI_QUOTES", "PIPES_AS_CONCAT", "NO_BACKSLASH_ESCAPES", "IGNORE_SPACE",
         "ANSI", "ORACLE", "MSSQL", "DB2", "POSTGRESQL", "MAXDB",
         "NO_KEY_OPTIONS", "NO_TABLE_OPTIONS", "NO_FIELD_OPTIONS",
-        "EMPTY_STRING_IS_NULL", "SIMULTANEOUS_ASSIGNMENT"
+        "EMPTY_STRING_IS_NULL", "SIMULTANEOUS_ASSIGNMENT",
+        "HIGH_NOT_PRECEDENCE", "REAL_AS_FLOAT", "PAD_CHAR_TO_FULL_LENGTH"
     };
 
     /// <summary>The mode with every parse-altering flag removed, plus <paramref name="add"/>, in a stable order.</summary>

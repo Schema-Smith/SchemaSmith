@@ -87,6 +87,38 @@ public abstract class ParseAlteringSqlModeSharedTests
         }
     }
 
+    // Three flags change what a package means rather than how it is quoted: HIGH_NOT_PRECEDENCE reads
+    // NOT a BETWEEN b AND c as (NOT a) BETWEEN b AND c, REAL_AS_FLOAT makes REAL a FLOAT, and PAD_CHAR_TO_FULL_LENGTH
+    // reads CHAR values back padded. A routine kindled under one carried it into every deploy.
+    [TestCase("HIGH_NOT_PRECEDENCE")]
+    [TestCase("REAL_AS_FLOAT")]
+    [TestCase("PAD_CHAR_TO_FULL_LENGTH")]
+    public void Deploy_UnderAMeaningChangingMode_DeploysThePackageAsWritten_AndRedeploysWithoutChange(string flag)
+    {
+        Exec($"SET SESSION sql_mode = CONCAT(@@GLOBAL.sql_mode, ',{flag}')");
+        ForgeKindler.KindleTheForge(Command(), Platform, forceReKindle: true);
+        const string deploy = """
+             CALL SchemaSmith_TableQuench('MeaningModeProduct', DATABASE(),
+               '[{ "Name": "`meaning_t`", "Columns": [ { "Name": "`id`", "DataType": "INT", "Nullable": false },
+                   { "Name": "`r`", "DataType": "REAL", "Nullable": true },
+                   { "Name": "`c`", "DataType": "CHAR(5)", "Nullable": true, "Default": "''ab''" } ],
+                   "CheckConstraints": [ { "Name": "`ck_meaning`", "Expression": "NOT `id` BETWEEN 5 AND 9" } ],
+                   "Indexes": [ { "Name": "`PRIMARY`", "PrimaryKey": true, "Unique": true, "IndexColumns": "`id`" } ] }]', 0, 0, 0)
+             """;
+        Exec(deploy);
+        var afterFirst = Count("SELECT COUNT(*) FROM SchemaSmith_ChangeAudit");
+        Exec(deploy);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Scalar($"SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = 'meaning_t' AND COLUMN_NAME = 'r'"),
+                Is.EqualTo("double"), "REAL is a DOUBLE in the default reading");
+            Assert.That(Scalar($"SELECT CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '{_testDb}' AND CONSTRAINT_NAME = 'ck_meaning'"),
+                Does.Contain("not between").IgnoreCase, "the constraint keeps NOT applied to the BETWEEN");
+            Assert.That(Count("SELECT COUNT(*) FROM SchemaSmith_ChangeAudit"), Is.EqualTo(afterFirst), "an unchanged redeploy changes nothing");
+        });
+    }
+
     private void KindleAndDeployUnder(string mode)
     {
         Exec($"SET SESSION sql_mode = '{mode}'");
