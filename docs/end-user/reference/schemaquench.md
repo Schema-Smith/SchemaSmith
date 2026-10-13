@@ -306,24 +306,26 @@ For each work unit dispatched by a template -- one identified database for regul
 
 1. **Kindle the Forge** -- Deploys SchemaSmith helper procedures, functions, and the migration tracking table for the active platform. Skipped if `KindleTheForge` is `false`.
 2. **Validate baseline** -- Executes `Template.BaselineValidationScript` if configured. Aborts if falsy.
-3. **Object scripts (first pass)** -- Executes scripts from all `Objects`-slot folders using the dependency retry loop. If `RunScriptsTwice` is enabled, resets all scripts and runs a complete second pass to verify idempotency.
-4. **Parse table JSON** -- Serializes all `Tables/*.json` definitions into temp/staging tables for the modular procedures to consume.
-5. **MissingTableAndColumnQuench** -- Creates missing tables and adds missing columns.
-6. **Object scripts (second opportunity)** -- Re-attempts any Objects-slot scripts that failed in step 3, now that missing tables exist.
+3. **Object scripts (first pass)** -- Executes `Objects`-slot scripts that need no query-token values, using the dependency retry loop. If `RunScriptsTwice` is enabled, runs a complete second pass to verify idempotency.
+4. **Domain types, enum types, sequences** (PostgreSQL) -- Deploys the template's declared domain types, enum types, and sequences, before the tables whose columns can use them.
+5. **MissingTableAndColumnQuench** -- Parses `Tables/*.json` into session staging tables for the later steps, then creates missing tables and adds missing columns.
+6. **Object scripts (second pass)** -- Retries the `Objects`-slot scripts that need no query-token values, now that missing tables exist, then resolves the template's query tokens. Scripts that use them run in step 15.
 7. **Before scripts** -- Executes migration scripts from any folder in the `Before` slot. Sequential and tracked.
-8. **ModifiedTableQuench** -- Alters existing columns (type changes, nullability, defaults, computed/generated columns) and manages indexes and check constraints.
-9. **Object scripts (third opportunity)** -- Re-attempts any remaining failed Objects-slot scripts now that table modifications are complete.
-10. **BetweenTablesAndKeys scripts** -- Executes migration scripts from any folder in the `BetweenTablesAndKeys` slot. Sequential and tracked.
-11. **MissingIndexesAndConstraintsQuench** -- Creates missing indexes, check constraints, default constraints, and (where supported) statistics.
-12. **AfterTablesScripts** -- Executes migration scripts from any folder in the `AfterTablesScripts` slot. Sequential and tracked.
-13. **AfterTablesObjects scripts** -- Executes scripts from `AfterTablesObjects`-slot folders (triggers, DDL triggers, rules, post-table views) using the dependency retry loop. Also retries any still-unresolved Objects-slot scripts.
-14. **Table data delivery** -- Merges table data described by per-table `DataDelivery` blocks, ordered by foreign key dependencies. See [Table Data Delivery](#table-data-delivery). Then executes any hand-written scripts in the `TableData` slot using the dependency retry loop.
-15. **ForeignKeyQuench** -- Creates, drops, and modifies foreign keys to match the schema package.
-16. **Indexed view / materialized view quench** -- If the template defines indexed views (SQL Server) or materialized views (PostgreSQL), deploys them via the platform's view quench procedure.
-17. **After scripts** -- Executes migration scripts from any folder in the `After` slot. Sequential and tracked.
-18. **Stamp version** -- Executes `Template.VersionStampScript` if configured.
+8. **Database-level CDC and Change Tracking check** (SQL Server, when the template has Before scripts) -- Decides whether the database has the Change Data Capture and Change Tracking its tables ask for, after the Before scripts so a Before script can enable them. Without Before scripts this check runs in the pre-flight, before step 1.
+9. **ModifiedTableQuench** -- Alters existing columns (type changes, nullability, defaults, computed/generated columns), drops tables removed from the product, and manages indexes and check constraints.
+10. **AfterTablesObjects scripts** -- Executes `AfterTablesObjects`-slot scripts (triggers, DDL triggers, rules, post-table views) using the dependency retry loop.
+11. **BetweenTablesAndKeys scripts** -- Executes migration scripts from any folder in the `BetweenTablesAndKeys` slot. Sequential and tracked.
+12. **MissingIndexesAndConstraintsQuench** -- Creates missing indexes, check constraints, default constraints, and (where supported) statistics.
+13. **Table features** (SQL Server) -- Applies Change Data Capture, Change Tracking, and FILESTREAM as declared.
+14. **AfterTablesScripts** -- Executes migration scripts from any folder in the `AfterTablesScripts` slot. Sequential and tracked.
+15. **Object scripts (final pass)** -- Runs every `Objects`- or `AfterTablesObjects`-slot script not yet applied, including those that use query tokens.
+16. **Table data delivery** -- Merges table data described by per-table `DataDelivery` blocks, ordered by foreign key dependencies. See [Table Data Delivery](#table-data-delivery). Then executes any hand-written scripts in the `TableData` slot using the dependency retry loop. Skipped when `DeliverData` is `false`.
+17. **ForeignKeyQuench** -- Creates, drops, and modifies foreign keys to match the schema package.
+18. **Materialized views** (PostgreSQL), **scheduled events** (MySQL, MariaDB), **indexed views** (SQL Server) -- Deployed through the platform's procedure when the template declares any.
+19. **After scripts** -- Executes migration scripts from any folder in the `After` slot. Sequential and tracked.
+20. **Stamp version** -- Executes `Template.VersionStampScript` if configured.
 
-When `UpdateTables` is `false`, steps 4 through 16 are skipped entirely. When `IndexOnlyTableQuenches` is enabled on a template, steps 4--8 (parse JSON, missing tables, second Objects pass, Before scripts, modified tables) are replaced by a single call to the platform's `IndexOnlyQuench` procedure. Steps 9--16 still execute, with `MissingIndexesAndConstraintsQuench` (step 11) and `ForeignKeyQuench` (step 15) skipped.
+When `UpdateTables` is `false`, the table steps -- 5, 8, 9, 12, 13 and 17 -- are skipped; scripts, data delivery and step 18 still run. When `IndexOnlyTableQuenches` is enabled on a template, steps 5, 8, 9, 13 and 17 are skipped and step 12 runs the platform's `IndexOnlyQuench` procedure instead, so the template manages only the indexes of tables it does not own.
 
 ---
 
