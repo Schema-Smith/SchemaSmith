@@ -121,12 +121,13 @@ public class DataDirectoryQuenchTests
         + $"JOIN INFORMATION_SCHEMA.INNODB_TABLES it ON it.SPACE = df.SPACE "
         + $"WHERE it.NAME = '{_testDb}/{TableName}'");
 
-    [Test]
-    public void DataDirectory_IsAppliedAndRoundTrips_ForANameInnoDbEncodes()
+    // InnoDB stores `dd-probe` (and its .ibd file) as `dd@002dprobe`; matching the raw name read back no directory,
+    // so extraction dropped it and a redeploy declaring it was refused as a move. A non-ASCII letter may take one of
+    // MySQL's short codes instead (`é` is `@0p`), which no SQL function on MySQL reproduces.
+    [TestCase("dd-probe")]
+    [TestCase("dd-épreuve")]
+    public void DataDirectory_IsAppliedAndRoundTrips_ForANameInnoDbEncodes(string table)
     {
-        // InnoDB stores `dd-probe` (and its .ibd file) as `dd@002dprobe`; matching the raw name read back no directory,
-        // so extraction dropped it and a redeploy declaring it was refused as a move.
-        const string table = "dd-probe";
         try
         {
             Deploy($", \"DataDirectory\": \"{DataDir}\"", table: table);

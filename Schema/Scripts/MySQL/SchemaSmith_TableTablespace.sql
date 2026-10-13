@@ -59,7 +59,7 @@ BEGIN
         DECLARE CONTINUE HANDLER FOR NOT FOUND SET @ss_tts_out = NULL;
         -- Session variables, not routine params, inside the dynamic SQL string: a prepared statement cannot reference
         -- IN/local routine variables directly, only session (@-prefixed) ones.
-        SET @ss_tts_name = CONCAT(SchemaSmith_InnodbName(p_Schema), '/', SchemaSmith_InnodbName(p_Table));
+        CALL SchemaSmith_InnodbTableName(p_Schema, p_Table, @ss_tts_name);
         -- Space 0 is the system tablespace. With innodb_file_per_table OFF every new table lands there unasked, which
         -- space 0 cannot tell from an explicit placement, so it reads as one only when file-per-table is on.
         SET @ss_tts_system = IF(@@GLOBAL.innodb_file_per_table = 1, 1, 0);
