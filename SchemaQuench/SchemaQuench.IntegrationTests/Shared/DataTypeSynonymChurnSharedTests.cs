@@ -57,6 +57,12 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
     [TestCase("LONG VARBINARY", TestName = "Synonym_LONG_VARBINARY_DoesNotChurn")] // -> mediumblob
     [TestCase("DECIMAL", TestName = "Synonym_DECIMAL_DoesNotChurn")]           // -> decimal(10,0)
     [TestCase("NUMERIC", TestName = "Synonym_NUMERIC_DoesNotChurn")]           // -> decimal(10,0)
+    [TestCase("DEC", TestName = "Synonym_bare_DEC_DoesNotChurn")]              // -> decimal(10,0)
+    [TestCase("FIXED", TestName = "Synonym_bare_FIXED_DoesNotChurn")]          // -> decimal(10,0)
+    [TestCase("DECIMAL UNSIGNED", TestName = "Synonym_DECIMAL_UNSIGNED_DoesNotChurn")] // -> decimal(10,0) unsigned
+    [TestCase("DEC UNSIGNED", TestName = "Synonym_DEC_UNSIGNED_DoesNotChurn")] // -> decimal(10,0) unsigned
+    [TestCase("FIXED UNSIGNED", TestName = "Synonym_FIXED_UNSIGNED_DoesNotChurn")] // -> decimal(10,0) unsigned
+    [TestCase("NUMERIC UNSIGNED", TestName = "Synonym_NUMERIC_UNSIGNED_DoesNotChurn")] // -> decimal(10,0) unsigned
     [TestCase("CHAR", TestName = "Synonym_CHAR_DoesNotChurn")]                 // -> char(1)
     [TestCase("BIT", TestName = "Synonym_BIT_DoesNotChurn")]                   // -> bit(1)
     [TestCase("BINARY", TestName = "Synonym_BINARY_DoesNotChurn")]             // -> binary(1)
@@ -191,6 +197,9 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
     // Index spellings the engine stores in another form must not be rebuilt on every deploy.
     [TestCase("varchar(10)", "`Val`", "HASH", false, null, TestName = "Index_HashOnInnoDB_DoesNotChurn")]
     [TestCase("varchar(10)", "`Val`(10)", "BTREE", false, null, TestName = "Index_FullLengthPrefix_DoesNotChurn")]
+    // Column names match without regard to case on every server, so the key part may name the column in another case.
+    [TestCase("varchar(10)", "`val`(10)", "BTREE", false, null, TestName = "Index_FullLengthPrefix_ColumnInAnotherCase_DoesNotChurn")]
+    [TestCase("varchar(10)", "`val`", "BTREE", false, null, TestName = "Index_ColumnInAnotherCase_DoesNotChurn")]
     [TestCase("point", "`Val`", "BTREE", false, "MySQL", TestName = "Index_BtreeOnGeometry_DoesNotChurn")]
     // MySQL 5.7 stores a BTREE key on a POINT as prefix 25, the whole value, so a package extracted there may say so.
     [TestCase("point", "`Val`(25)", "BTREE", false, "MySQL", TestName = "Index_BtreeOnGeometry_WithItsImplicitPrefix_DoesNotChurn")]

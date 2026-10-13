@@ -492,7 +492,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_StripFullLengthPrefixes (a key-part prefix as long as its column is the whole column).
         // +1 = SchemaSmith_TrimEnumMembers (ENUM/SET members lose trailing spaces when the column is created).
         // +1 = SchemaSmith_IndexKeyPartsUnsupported (a functional or multi-valued key part the target cannot build).
-        Assert.That(mysql.Length, Is.EqualTo(76));
+        // +1 = SchemaSmith_RespellIndexColumns (a key part naming its column in another case).
+        Assert.That(mysql.Length, Is.EqualTo(77));
     }
 
     [Test]

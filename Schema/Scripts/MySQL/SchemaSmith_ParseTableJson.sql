@@ -369,7 +369,7 @@ BEGIN
                  THEN CONCAT('DECIMAL', SUBSTRING(TRIM(DataType), LENGTH('NUMERIC') + 1))
             WHEN UPPER(TRIM(DataType)) LIKE 'FIXED%'
                  THEN CONCAT('DECIMAL', SUBSTRING(TRIM(DataType), LENGTH('FIXED') + 1))
-            WHEN UPPER(TRIM(DataType)) LIKE 'DEC(%' OR UPPER(TRIM(DataType)) = 'DEC'
+            WHEN UPPER(TRIM(DataType)) LIKE 'DEC(%' OR UPPER(TRIM(DataType)) LIKE 'DEC %' OR UPPER(TRIM(DataType)) = 'DEC'
                  THEN CONCAT('DECIMAL', SUBSTRING(TRIM(DataType), LENGTH('DEC') + 1))
             ELSE DataType
         END
@@ -493,17 +493,18 @@ BEGIN
                          ELSE Collation END
     WHERE CharacterSet IS NOT NULL OR Collation IS NOT NULL;
 
-    -- A bare length-taking type takes its default length, which is what the catalog reports.
+    -- A bare length-taking type takes its default length, which is what the catalog reports. Whatever follows the
+    -- keyword (DECIMAL UNSIGNED, CHAR BINARY) is kept after it.
     UPDATE _SchemaSmith_Columns
     SET DataType =
-        CASE UPPER(TRIM(DataType))
-            WHEN 'DECIMAL' THEN 'DECIMAL(10,0)'
-            WHEN 'CHAR' THEN 'CHAR(1)'
-            WHEN 'BIT' THEN 'BIT(1)'
-            WHEN 'BINARY' THEN 'BINARY(1)'
-            ELSE DataType
-        END
-    WHERE DataType IS NOT NULL;
+        CONCAT(CASE UPPER(SUBSTRING_INDEX(TRIM(DataType), ' ', 1))
+                   WHEN 'DECIMAL' THEN 'DECIMAL(10,0)'
+                   WHEN 'CHAR' THEN 'CHAR(1)'
+                   WHEN 'BIT' THEN 'BIT(1)'
+                   WHEN 'BINARY' THEN 'BINARY(1)'
+               END,
+               SUBSTRING(TRIM(DataType), LENGTH(SUBSTRING_INDEX(TRIM(DataType), ' ', 1)) + 1))
+    WHERE UPPER(SUBSTRING_INDEX(TRIM(DataType), ' ', 1)) IN ('DECIMAL', 'CHAR', 'BIT', 'BINARY');
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Identify new columns');
 
@@ -817,6 +818,11 @@ BEGIN
     UPDATE _SchemaSmith_Indexes
        SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
            IndexKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(IndexName));
+
+    -- A key part naming its column in another case is respelled as the column, which is how the catalog reports it.
+    UPDATE _SchemaSmith_Indexes
+       SET IndexColumns = SchemaSmith_RespellIndexColumns(IndexColumns, TableName, p_DatabaseName)
+     WHERE IndexColumns IS NOT NULL;
 
     -- A prefix as long as its column indexes the whole column, and is reported with no prefix; written that way
     -- it compares equal instead of being rebuilt on every deploy.

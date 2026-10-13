@@ -569,6 +569,8 @@ public static class ForgeKindler
                 new("SchemaSmith_IndexKeyPartsUnsupported.sql"),
                 // Calls IndexHasFunctionalKeyPart, above; read by ParseTableJson.
                 new("SchemaSmith_StripFullLengthPrefixes.sql"),
+                // Calls IndexHasFunctionalKeyPart, NameKeyCI and IdentifierKey; read by ParseTableJson.
+                new("SchemaSmith_RespellIndexColumns.sql"),
                 new("SchemaSmith_NormalizeCheckExpression.sql"),
                 // #242: the authored-vs-canonical decision and the pass that records it.
                 new("SchemaSmith_ExpressionMapUnchanged.sql"),
