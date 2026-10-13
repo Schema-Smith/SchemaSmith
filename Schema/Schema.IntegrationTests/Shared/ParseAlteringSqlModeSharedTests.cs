@@ -119,6 +119,20 @@ public abstract class ParseAlteringSqlModeSharedTests
         });
     }
 
+    // DataTongs reads table data under this pin. PAD_CHAR_TO_FULL_LENGTH returns CHAR values padded, so 'ab' in a
+    // CHAR(5) was extracted as "ab   "; on a NO PAD collation (MySQL 8's utf8mb4_0900_*) that never matches the stored
+    // value again, and every delivery rewrites the row.
+    [Test]
+    public void AParseNeutralSession_ReadsCharValuesAsStored()
+    {
+        Exec("CREATE TABLE char_read (id INT PRIMARY KEY, c CHAR(5))");
+        Exec("INSERT INTO char_read VALUES (1, 'ab')");
+        Exec("SET SESSION sql_mode = CONCAT(@@GLOBAL.sql_mode, ',PAD_CHAR_TO_FULL_LENGTH')");
+
+        using (MySqlSessionSettings.UseParseNeutralSqlMode(Command()))
+            Assert.That(Scalar("SELECT JSON_EXTRACT(JSON_OBJECT('c', c), '$.c') FROM char_read"), Is.EqualTo("\"ab\""));
+    }
+
     private void KindleAndDeployUnder(string mode)
     {
         Exec($"SET SESSION sql_mode = '{mode}'");

@@ -306,6 +306,8 @@ public class DataTongs
         // delivery reads the values back in the same zone wherever it runs.
         var extractionTimeZone = _platform.GetBasePlatform() == Platform.MySQL ? "+00:00" : null;
         using var timeZone = extractionTimeZone != null ? MySqlSessionSettings.UseTimeZone(cmd, extractionTimeZone) : null;
+        // The values are read as the default sql_mode reads them: PAD_CHAR_TO_FULL_LENGTH would extract CHAR values padded.
+        using var sqlMode = _platform.GetBasePlatform() == Platform.MySQL ? MySqlSessionSettings.UseParseNeutralSqlMode(cmd) : null;
 
         var tablesProcessed = 0;
         var errors = 0;
