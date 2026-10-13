@@ -904,4 +904,160 @@ public abstract class TableQuench_IndexOnlySharedTests
         var count = Convert.ToInt32(command.ExecuteScalar());
         Assert.That(count, Is.EqualTo(1), "Index should be tracked in ProductOwnership");
     }
+
+    // ---- Foreign keys and audit: an index-only deploy manages indexes and never foreign keys ----
+
+    private string CreateScratchDb(IDbCommand cmd, string ddl)
+    {
+        var db = $"IdxOnlyFk_{Guid.NewGuid():N}"[..22];
+        cmd.CommandText = $"CREATE DATABASE `{db}`; {ddl.Replace("{db}", db)}";
+        cmd.ExecuteNonQuery();
+        return db;
+    }
+
+    private void RunIndexOnly(IDbCommand cmd, string db, string json, bool whatIf = false)
+    {
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = $"CALL `{MainDb}`.SchemaSmith_ParseTableJson('{db}', '{json.Replace("'", "''")}'); " +
+                          $"CALL `{MainDb}`.SchemaSmith_IndexOnlyQuench('IdxOnlyFkProduct', '{db}', {(whatIf ? 1 : 0)}, 1, 1);";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static string Scalar(IDbCommand cmd, string sql)
+    {
+        cmd.CommandText = sql;
+        return cmd.ExecuteScalar()?.ToString();
+    }
+
+    private string IndexAudit(IDbCommand cmd) => Scalar(cmd,
+        $"SELECT GROUP_CONCAT(CONCAT(ObjectName, ' ', ActionType) ORDER BY ObjectName, ActionType SEPARATOR '; ') FROM `{MainDb}`.SchemaSmith_ChangeAudit " +
+        "WHERE SessionId = CONNECTION_ID() AND ObjectType = 'index'") ?? "";
+
+    private void DropScratchDb(IDbCommand cmd, string db)
+    {
+        cmd.CommandText = $"DROP DATABASE IF EXISTS `{db}`; DELETE FROM `{MainDb}`.SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID();";
+        cmd.ExecuteNonQuery();
+    }
+
+    // MySQL needs an index for a foreign key's columns, so the index the key uses cannot be dropped on its own (1553)
+    // while the deploy changes it. It is replaced in one ALTER; a new definition that no longer serves the key leaves it
+    // as it is.
+    [TestCase("ParentId,Id", "ParentId,Id", TestName = "IndexOnlyQuench_ChangingAnIndexAForeignKeyUses_Deploys")]
+    [TestCase("Id,ParentId", "ParentId", TestName = "IndexOnlyQuench_ChangingAnIndexAForeignKeyUses_KeptWhenTheKeyStillNeedsIt")]
+    public void IndexOnlyQuench_ChangingAnIndexAForeignKeyUses(string declaredColumns, string expectedColumns)
+    {
+        using var cmd = _connection.CreateCommand();
+        var db = CreateScratchDb(cmd, """
+            CREATE TABLE `{db}`.`Parent` (`Id` INT NOT NULL PRIMARY KEY);
+            CREATE TABLE `{db}`.`Child` (`Id` INT NOT NULL PRIMARY KEY, `ParentId` INT NOT NULL,
+              INDEX `IX_Child_ParentId` (`ParentId`),
+              CONSTRAINT `FK_Child_Parent` FOREIGN KEY (`ParentId`) REFERENCES `{db}`.`Parent` (`Id`));
+            """);
+        try
+        {
+            Assert.DoesNotThrow(() => RunIndexOnly(cmd, db, $$"""
+                [ { "Name": "Child", "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "Id" },
+                                                  { "Name": "IX_Child_ParentId", "IndexColumns": "{{declaredColumns}}" } ] } ]
+                """), "changing an index a foreign key uses must not stop the deploy");
+
+            Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) FROM INFORMATION_SCHEMA.STATISTICS " +
+                                    $"WHERE TABLE_SCHEMA = '{db}' AND TABLE_NAME = 'Child' AND INDEX_NAME = 'IX_Child_ParentId'"),
+                Is.EqualTo(expectedColumns));
+            Assert.That(Scalar(cmd, $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = '{db}' AND CONSTRAINT_NAME = 'FK_Child_Parent'"),
+                Is.EqualTo("1"), "an index-only deploy never touches a foreign key");
+        }
+        finally
+        {
+            DropScratchDb(cmd, db);
+        }
+    }
+
+    // A foreign key with no declared index gets one from the engine. The package does not declare it, so with
+    // DropUnknownIndexes on it was dropped as unknown, and the engine refused (1553).
+    [Test]
+    public void IndexOnlyQuench_AnUnknownIndexAForeignKeyNeeds_IsKept()
+    {
+        using var cmd = _connection.CreateCommand();
+        var db = CreateScratchDb(cmd, """
+            CREATE TABLE `{db}`.`Parent` (`Id` INT NOT NULL PRIMARY KEY);
+            CREATE TABLE `{db}`.`Child` (`Id` INT NOT NULL PRIMARY KEY, `ParentId` INT NOT NULL,
+              CONSTRAINT `FK_Child_Parent` FOREIGN KEY (`ParentId`) REFERENCES `{db}`.`Parent` (`Id`));
+            """);
+        try
+        {
+            Assert.DoesNotThrow(() => RunIndexOnly(cmd, db,
+                """[ { "Name": "Child", "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "Id" } ] } ]"""));
+
+            Assert.That(Scalar(cmd, $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = '{db}' AND TABLE_NAME = 'Child' AND COLUMN_NAME = 'ParentId'"),
+                Is.EqualTo("1"), "the index the key needs stays");
+        }
+        finally
+        {
+            DropScratchDb(cmd, db);
+        }
+    }
+
+    // Dropping an unknown unique index used to drop, first, every foreign key referencing its TABLE -- including keys on
+    // another column -- and an index-only deploy never re-creates foreign keys. No key is dropped now; an index a key
+    // references is kept, and the other unknown index still goes.
+    [Test]
+    public void IndexOnlyQuench_DroppingUnknownUniqueIndexes_NeverDropsAnotherTablesForeignKey()
+    {
+        using var cmd = _connection.CreateCommand();
+        var db = CreateScratchDb(cmd, """
+            CREATE TABLE `{db}`.`Parent` (`Id` INT NOT NULL PRIMARY KEY, `Code` INT NOT NULL, `Other` INT NOT NULL,
+              UNIQUE KEY `UQ_Code` (`Code`), UNIQUE KEY `UQ_Other` (`Other`));
+            CREATE TABLE `{db}`.`ByCode` (`Id` INT NOT NULL PRIMARY KEY, `ParentCode` INT NOT NULL,
+              CONSTRAINT `FK_ByCode` FOREIGN KEY (`ParentCode`) REFERENCES `{db}`.`Parent` (`Code`));
+            CREATE TABLE `{db}`.`ById` (`Id` INT NOT NULL PRIMARY KEY, `ParentId` INT NOT NULL,
+              CONSTRAINT `FK_ById` FOREIGN KEY (`ParentId`) REFERENCES `{db}`.`Parent` (`Id`));
+            """);
+        try
+        {
+            Assert.DoesNotThrow(() => RunIndexOnly(cmd, db,
+                """[ { "Name": "Parent", "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "Id" } ] } ]"""));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CONSTRAINT_NAME ORDER BY CONSTRAINT_NAME) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS " +
+                                        $"WHERE TABLE_SCHEMA = '{db}' AND CONSTRAINT_TYPE = 'FOREIGN KEY'"), Is.EqualTo("FK_ByCode,FK_ById"));
+                Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT INDEX_NAME ORDER BY INDEX_NAME) FROM INFORMATION_SCHEMA.STATISTICS " +
+                                        $"WHERE TABLE_SCHEMA = '{db}' AND TABLE_NAME = 'Parent'"), Is.EqualTo("PRIMARY,UQ_Code"),
+                    "the index a key references is kept; the unreferenced unknown index is dropped");
+            });
+        }
+        finally
+        {
+            DropScratchDb(cmd, db);
+        }
+    }
+
+    // The deployment summary and --WhatIf read index changes from the audit, which an index-only deploy did not write
+    // for ordinary indexes.
+    [TestCase(false, "T.idx_gone dropped; T.idx_new created; T.idx_old created; T.idx_old dropped", TestName = "IndexOnlyQuench_AuditsIndexChanges")]
+    [TestCase(true, "T.idx_gone wouldDrop; T.idx_new wouldCreate; T.idx_old wouldCreate; T.idx_old wouldDrop", TestName = "IndexOnlyQuench_WhatIf_AuditsIndexChanges")]
+    public void IndexOnlyQuench_AuditsIndexChanges(bool whatIf, string expected)
+    {
+        using var cmd = _connection.CreateCommand();
+        var db = CreateScratchDb(cmd, """
+            CREATE TABLE `{db}`.`T` (`Id` INT NOT NULL PRIMARY KEY, `A` INT, `B` INT,
+              INDEX `idx_old` (`A`), INDEX `idx_gone` (`B`));
+            """);
+        try
+        {
+            cmd.CommandText = $"DELETE FROM `{MainDb}`.SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            RunIndexOnly(cmd, db, """
+                [ { "Name": "T", "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "Id" },
+                                              { "Name": "idx_old", "IndexColumns": "B" },
+                                              { "Name": "idx_new", "IndexColumns": "A,B" } ] } ]
+                """, whatIf);
+
+            Assert.That(IndexAudit(cmd), Is.EqualTo(expected));
+        }
+        finally
+        {
+            DropScratchDb(cmd, db);
+        }
+    }
 }
