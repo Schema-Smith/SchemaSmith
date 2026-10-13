@@ -708,7 +708,8 @@ default" authorable. It requires `Default`; without one there is no value to app
 trailing blanks (trailing zeros in a binary column) are trimmed when a value is stored. SchemaTongs writes it for each
 such column it finds unpadded and leaves it out otherwise. Leaving it out leaves an existing column's padding as it
 is, and creates a new column padded; `true` pads a column that is currently unpadded. It is ignored on every other
-type: `nchar` and `nvarchar` are always padded, and the rest have nothing to pad.
+type: `nchar` and `nvarchar` are always padded, and the rest have nothing to pad. It is ignored on a ledger table too:
+SQL Server pads every column of one whatever `ANSI_PADDING` says.
 
 SQL Server pads a column whenever it is altered, so a change to a column declared `AnsiPadding: false` -- its length,
 type, nullability or collation -- replaces it rather than altering it: a new column is added unpadded, the data is

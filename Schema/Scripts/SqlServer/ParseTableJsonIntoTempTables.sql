@@ -608,6 +608,9 @@
   -- resolved to their base type). AnsiPadding stays NULL when the package omits it, which leaves the column unmanaged.
   UPDATE #Columns
     SET [PaddingApplies] = CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) = '' AND [IsColumnSet] = 0 AND [FileStream] = 0 AND [EncryptionType] = 'NONE'
+                                 -- A ledger table pads every column whatever ANSI_PADDING says, so the setting never applies there.
+                                 AND NOT EXISTS (SELECT 1 FROM #Tables lt WITH (NOLOCK)
+                                                  WHERE lt.[Schema] = #Columns.[Schema] AND lt.[Name] = #Columns.[TableName] AND ISNULL(lt.[Ledger], 'Off') <> 'Off')
                                  AND EXISTS (SELECT 1 FROM sys.types ty
                                               WHERE ty.user_type_id = ISNULL(TYPE_ID(RTRIM(LEFT(SchemaSmith.fn_NormalizeDataType([DataType]), CHARINDEX('(', SchemaSmith.fn_NormalizeDataType([DataType]) + '(') - 1))), TYPE_ID(LOWER(RTRIM(LEFT(SchemaSmith.fn_NormalizeDataType([DataType]), CHARINDEX('(', SchemaSmith.fn_NormalizeDataType([DataType]) + '(') - 1)))))
                                                 AND TYPE_NAME(ty.system_type_id) IN ('char', 'varchar', 'binary', 'varbinary'))

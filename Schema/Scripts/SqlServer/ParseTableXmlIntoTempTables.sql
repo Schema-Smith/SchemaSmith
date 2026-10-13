@@ -107,7 +107,7 @@
          c.[Default], c.[CheckExpression], c.[ComputedExpression], [Persisted] = ISNULL(c.[Persisted], 0),
          [Sparse] = ISNULL(c.[Sparse], 0), [FileStream] = ISNULL(c.[FileStream], 0), [IsColumnSet] = ISNULL(c.[IsColumnSet], 0), [BackfillExistingRows] = ISNULL(c.[BackfillExistingRows], 0), [AnsiPadding] = c.[AnsiPadding],
          -- See the JSON twin for PaddingApplies.
-         [PaddingApplies] = CONVERT(BIT, CASE WHEN RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND ISNULL(c.[IsColumnSet], 0) = 0 AND ISNULL(c.[FileStream], 0) = 0 AND ISNULL(c.[EncryptionType], 'NONE') = 'NONE'
+         [PaddingApplies] = CONVERT(BIT, CASE WHEN RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND ISNULL(c.[IsColumnSet], 0) = 0 AND ISNULL(c.[FileStream], 0) = 0 AND ISNULL(c.[EncryptionType], 'NONE') = 'NONE' AND ISNULL(t.[Ledger], 'Off') = 'Off'
                                                AND EXISTS (SELECT 1 FROM sys.types ty
                                                             WHERE ty.user_type_id = ISNULL(TYPE_ID(RTRIM(LEFT(SchemaSmith.fn_NormalizeDataType(c.[DataType]), CHARINDEX('(', SchemaSmith.fn_NormalizeDataType(c.[DataType]) + '(') - 1))), TYPE_ID(LOWER(RTRIM(LEFT(SchemaSmith.fn_NormalizeDataType(c.[DataType]), CHARINDEX('(', SchemaSmith.fn_NormalizeDataType(c.[DataType]) + '(') - 1)))))
                                                               AND TYPE_NAME(ty.system_type_id) IN ('char', 'varchar', 'binary', 'varbinary'))
