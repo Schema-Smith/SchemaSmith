@@ -75,7 +75,7 @@ schemaquench --ConfigFile:quench.settings.verbose.json --LogPath:"$PWD/logs-verb
 - **PostgreSQL** — a `RAISE NOTICE` shows in **both** logs. `VerboseLogging` has no effect here; PostgreSQL surfaces its notices by default.
 - **MySQL and MariaDB** — the report line appears in **neither**. User scripts on these engines have no progress channel at all — the `SchemaSmith_StatusMessages` sidecar is the *engine's* channel, not yours.
 
-> **Note:** Use the `=` form — `--VerboseLogging=true` — to set it on the command line, or put `"VerboseLogging": true` in your settings file. The colon form (`--VerboseLogging:true`) is silently ignored for config settings; the `=` form is the config-override syntax.
+> **Note:** Set it on the command line in either form — `--VerboseLogging=true` or `--VerboseLogging:true` — or put `"VerboseLogging": true` in your settings file.
 
 `VerboseLogging` doesn't touch SchemaSmith's own progress — the tool always shows you its phases — it's
 purely a valve for the low-severity chatter your SQL Server scripts produce.
