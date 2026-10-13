@@ -1204,7 +1204,7 @@ namespace Schema.Domain
         /// Per design §3.3, schema-only fields set non-default on a regular template are almost
         /// certainly a configuration mistake. Don't fail the load — surface a clear warning
         /// through the progress log so the user can correct it. <see cref="ContinueOnDatabaseFailure"/>
-        /// is excluded: it applies universally (DB-level failure isolation parity).
+        /// is excluded: it is the regular template's own setting.
         /// </summary>
         private void WarnIfSchemaOnlyFieldsSetOnRegularTemplate()
         {

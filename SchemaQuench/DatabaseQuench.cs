@@ -2797,8 +2797,18 @@ SET NOCOUNT ON
 
     private void OnPostgreSqlNotice(object sender, NpgsqlNoticeEventArgs e)
     {
-        if (e.Notice.MessageText.EndsWith("does not exist, skipping") || e.Notice.MessageText.EndsWith("already exists, skipping")) return;
-        SafeProgressLog($"      {e.Notice.MessageText}");
+        var verboseLogging = FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.VerboseLogging]?.ToLower() == "true";
+        if (ShouldLogPostgreSqlNotice(e.Notice.MessageText, e.Notice.Where, verboseLogging))
+            SafeProgressLog($"      {e.Notice.MessageText}");
+    }
+
+    // SchemaSmith's own routines report progress through RAISE NOTICE, so those always log, as SQL Server's state-100
+    // messages do. A notice raised by anything else -- a user script's DO block or function -- logs only with
+    // VerboseLogging. The context names the innermost routine first: PL/pgSQL function "SchemaSmith"."X"(...) line N.
+    internal static bool ShouldLogPostgreSqlNotice(string messageText, string where, bool verboseLogging)
+    {
+        if (messageText.EndsWith("does not exist, skipping") || messageText.EndsWith("already exists, skipping")) return false;
+        return verboseLogging || (where?.StartsWith("PL/pgSQL function \"SchemaSmith\".", StringComparison.Ordinal) ?? false);
     }
 
     #endregion

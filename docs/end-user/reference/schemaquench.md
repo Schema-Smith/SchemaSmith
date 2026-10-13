@@ -71,7 +71,7 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | `PruneObsoleteMigrationTracking` | bool | `true` | Remove tracking entries for scripts no longer in the package. When `Target` filters are active, prune is restricted to the targeted scope. See [PruneObsoleteMigrationTracking](#pruneobsoletemigrationtracking). |
 | `CheckpointDirectory` | string | `""` | Directory for checkpoint files used by `--ResumeQuench`. When blank, defaults to a per-platform temp location. See [Checkpoint and Resume](#checkpoint-and-resume). |
 | `MaxThreads` | int | `10` | Maximum parallel work units. Covers both database-level and schema-level iterations. Range 1--20. See [MaxThreads](#maxthreads). |
-| `VerboseLogging` | bool | `false` | Include `PRINT` / `RAISE NOTICE` / equivalent informational output from user scripts in logs. |
+| `VerboseLogging` | bool | `false` | Include informational output from user scripts in the progress log: `PRINT` and low-severity messages on SQL Server, `RAISE NOTICE` on PostgreSQL. SchemaSmith's own progress messages always appear. SchemaQuench does not log informational messages from MySQL or MariaDB scripts, so the setting has no effect there. |
 | `ScriptTokens` | object | `{}` | Config-level overrides for product script tokens. |
 
 ### Full settings file example
@@ -245,7 +245,7 @@ With schema templates, a single database can contribute many work units -- one p
 
 ## ContinueOnDatabaseFailure
 
-Failure isolation at the database level applies to all templates -- both regular templates and schema templates. When `ContinueOnDatabaseFailure` is `true` (the default), one database's failure does not abort the product run; SchemaQuench logs the failure, continues processing remaining databases, and exits with code 2 after all work units have completed or failed. Continuing does not make the run complete: after any failure, the product's `After Product` scripts and its `VersionStampScript` are skipped, so the next run is not told this version is deployed. A later `--ResumeQuench` that finishes the failed work runs them.
+`ContinueOnDatabaseFailure` governs regular templates. When it is `true` (the default), one database's failure does not abort the product run; SchemaQuench logs the failure, continues processing remaining databases, and exits with code 2 after all work units have completed or failed. Continuing does not make the run complete: after any failure, the product's `After Product` scripts and its `VersionStampScript` are skipped, so the next run is not told this version is deployed. A later `--ResumeQuench` that finishes the failed work runs them.
 
 When `false`, the first database-level failure aborts subsequent iterations. In-flight work units drain naturally -- SchemaQuench does not cancel active database connections because an incomplete transaction is more hazardous than a completed one. The product run exits with code 2.
 
@@ -259,7 +259,7 @@ When `false`, the first database-level failure aborts subsequent iterations. In-
 }
 ```
 
-For schema templates, `ContinueOnDatabaseFailure` governs database-level failures during work unit enumeration (a bad `DatabaseIdentificationScript`, an unreachable server). Schema iteration failures inside a schema template are governed separately by `ContinueOnSchemaFailure`. See [ContinueOnSchemaFailure](#continueonschemafailure) for the schema-level analog.
+A schema template ignores `ContinueOnDatabaseFailure`: every failure inside it -- a bad `DatabaseIdentificationScript`, an unreachable server, a failed schema iteration -- is governed by `ContinueOnSchemaFailure`. See [ContinueOnSchemaFailure](#continueonschemafailure).
 
 ---
 
