@@ -86,7 +86,7 @@ BEGIN TRY
       WHERE po.[IndexName] = ''
 
   RAISERROR('Validate Table Ownership', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Table ' + tp.[Schema] + '.' + tp.[TableName] + ' owned by different product. [' + tp.[Value] + ']'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Table ' + tp.[Schema] + '.' + tp.[TableName] + ' owned by different product. [' + tp.[value] + ']'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
                            FROM #Tables t WITH (NOLOCK)
                            JOIN #TableProperties tp WITH (NOLOCK) ON t.[Schema] = tp.[Schema]
                                                                  AND t.[Name] = QUOTENAME(tp.TableName)
