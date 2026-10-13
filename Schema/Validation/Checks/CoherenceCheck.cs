@@ -47,6 +47,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string MinimumVersionUnresolvableCode = "SS-VER-001";
     private const string CdcFilegroupInertCode = "SS-CDC-001";
     private const string CdcIndexNameInvalidCode = "SS-CDC-002";
+    private const string FullTextKeyIndexInvalidCode = "SS-FT-001";
     private const string CompressionConflictCode = "SS-CO-001";
     private const string CompressionLevelInertCode = "SS-CO-002";
     private const string DuplicateEventCode = "SS-EVT-001";
@@ -124,6 +125,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckCdcFilegroup(table, location));
             findings.AddRange(CheckCdcSupportsNetChanges(table, location));
             findings.AddRange(CheckCdcIndexName(table, location));
+            findings.AddRange(CheckFullTextKeyIndex(table, location));
             findings.AddRange(CheckCompressionOptions(table, location));
             findings.AddRange(CheckPartitionPlacement(table, location));
             findings.AddRange(CheckMyPartitioning(table, location));
@@ -755,6 +757,41 @@ public sealed class CoherenceCheck : ISchemaCheck
                 $"Table '{table.Name}' names CdcIndexName '{ssTable.CdcIndexName}', {problem}. CDC identifies rows by a " +
                 "unique index over NOT NULL columns, and the deploy refuses anything else — name one of the table's " +
                 "declared unique indexes, or drop CdcIndexName to use the primary key.");
+    }
+
+    /// <summary>
+    /// SQL Server builds a full-text index only over its KEY INDEX: an unfiltered unique index on a single NOT NULL column. Anything
+    /// else fails the deploy when it creates the full-text index; checked against the declared indexes, as CdcIndexName is.
+    /// </summary>
+    private static IEnumerable<Finding> CheckFullTextKeyIndex(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable ssTable) yield break;
+
+        foreach (var fullText in ssTable.FullTextIndex.Where(f => !string.IsNullOrWhiteSpace(f.KeyIndex)))
+        {
+            var keyIndex = NormalizeIdentifier(fullText.KeyIndex);
+            var problem = FullTextKeyIndexProblem(table, keyIndex);
+            if (problem != null)
+                yield return new Finding(Severity.Error, FullTextKeyIndexInvalidCode, Category, tableLocation,
+                    $"Table '{table.Name}' names full-text KeyIndex '{fullText.KeyIndex}', {problem}. SQL Server builds a " +
+                    "full-text index only over an unfiltered unique index on a single NOT NULL column (error 7653), so the deploy fails creating it " +
+                    "— name one of the table's declared indexes that is.");
+        }
+    }
+
+    private static string FullTextKeyIndexProblem(Table table, string indexName)
+    {
+        var index = table.Indexes.FirstOrDefault(i =>
+            string.Equals(NormalizeIdentifier(i.Name), indexName, StringComparison.OrdinalIgnoreCase));
+        if (index == null) return "which is not one of its declared indexes";
+        if (!index.Unique && !index.PrimaryKey && !index.UniqueConstraint) return "which is not unique";
+
+        var keyColumns = SplitNames(index.IndexColumns).Select(c => NormalizeIdentifier(StripOrderingSuffix(c))).ToList();
+        if (keyColumns.Count > 1) return "which has more than one key column";
+        if (index is SqlServerIndex { FilterExpression: { } filter } && !string.IsNullOrWhiteSpace(filter)) return "which has a filter";
+        return table.Columns.Any(c => c.Nullable && keyColumns.Contains(NormalizeIdentifier(c.Name), StringComparer.OrdinalIgnoreCase))
+            ? "which has a nullable key column"
+            : null;
     }
 
     private static string CdcIndexProblem(Table table, string indexName)

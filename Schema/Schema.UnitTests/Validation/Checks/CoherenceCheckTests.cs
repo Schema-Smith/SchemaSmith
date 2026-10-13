@@ -1719,6 +1719,38 @@ public class CoherenceCheckTests
         Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code.StartsWith("SS-CDC-")), Is.Empty);
     }
 
+    [TestCase("[UX_Missing]", "which is not one of its declared indexes")]
+    [TestCase("[IX_Plain]", "which is not unique")]
+    [TestCase("[UX_Note]", "which has more than one key column")]
+    [TestCase("[UX_NoteOnly]", "which has a nullable key column")]
+    [TestCase("[UX_Filtered]", "which has a filter")]
+    public void FullTextKeyIndex_ThatSqlServerWouldRefuse_IsAnError(string keyIndex, string problem)
+    {
+        var table = CdcIndexTable(enableCdc: null, cdcIndexName: null);
+        table.Indexes.Add(new SqlServerIndex { Name = "[UX_NoteOnly]", Unique = true, IndexColumns = "[Note]" });
+        table.Indexes.Add(new SqlServerIndex { Name = "[UX_Filtered]", Unique = true, IndexColumns = "[Code]", FilterExpression = "[Code] > 0" });
+        table.FullTextIndex.Add(new Schema.Domain.SqlServer.FullTextIndex { FullTextCatalog = "[cat]", KeyIndex = keyIndex, Columns = "[Code]" });
+
+        var finding = RunFor(table, Platform.SqlServer).Single(f => f.Code == "SS-FT-001");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Error));
+            Assert.That(finding.Message, Does.Contain("Orders").And.Contain(keyIndex).And.Contain(problem));
+        });
+    }
+
+    [TestCase("[UX_Code]")]
+    [TestCase("ux_code")]
+    [TestCase("[PK_Orders]")]
+    public void FullTextKeyIndex_NamingADeclaredUniqueSingleNotNullColumnIndex_IsSilent(string keyIndex)
+    {
+        var table = CdcIndexTable(enableCdc: null, cdcIndexName: null);
+        table.FullTextIndex.Add(new Schema.Domain.SqlServer.FullTextIndex { FullTextCatalog = "[cat]", KeyIndex = keyIndex, Columns = "[Code]" });
+
+        Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-FT-001"), Is.Empty);
+    }
+
     private static SqlServerTable CdcIndexTable(bool? enableCdc, string cdcIndexName)
     {
         var table = new SqlServerTable { Schema = "dbo", Name = "Orders", EnableCDC = enableCdc, CdcIndexName = cdcIndexName };

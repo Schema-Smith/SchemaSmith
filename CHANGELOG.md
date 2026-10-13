@@ -14,6 +14,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Added
 
+- **`--Validate` checks a full-text index's `KeyIndex` (`SS-FT-001`, SQL Server).** SQL Server builds a full-text index only over an unfiltered unique index on a single `NOT NULL` column, and refuses anything else with error 7653 when the deploy creates it. A `KeyIndex` naming no declared index, or one that is not unique, has more than one key column, has a filter, or has a nullable key column, is now an error before the deploy, as `CdcIndexName` already was.
 - **`--ExitNonZeroOnWarning` on every tool.** With the switch, or the `ExitNonZeroOnWarning` setting, a run that would exit `0` but logged a warning exits `1`, for pipelines that treat warnings as failures. Failure codes are unchanged.
 - **`--Validate` reports a PostgreSQL name longer than 63 bytes (`SS-IDENT-002`).** PostgreSQL truncates such a name with only a notice, so the object was created under a shorter name and the next deploy, looking for the declared one, failed creating it again. The limit is in bytes, so a name in multi-byte characters reaches it sooner than its length suggests.
 
