@@ -1813,6 +1813,34 @@ public class CoherenceCheckTests
             .Where(f => f.Code == "SS-COL-002"), Is.Empty);
     }
 
+    // utf8 is utf8mb3 under its older name, and the deploy writes both in the server's own form before comparing.
+    [TestCase("utf8", "utf8mb3_general_ci")]
+    [TestCase("utf8mb3", "utf8_general_ci")]
+    public void AColumnInTheTablesCharsetUnderItsOtherName_IsSilent(string charset, string tableCollation)
+    {
+        Assert.That(RunFor(CharsetTable(charset, null, tableCollation), Platform.MySQL)
+            .Where(f => f.Code == "SS-COL-002"), Is.Empty);
+    }
+
+    // MariaDB 11.4's short collation names (uca1400_ai_ci) name no character set: they take the table's.
+    [Test]
+    public void AShortTableCollation_BelongsToTheTablesCharset()
+    {
+        var sameSet = CharsetTable("utf8mb4", null, "uca1400_ai_ci", maria: true);
+        sameSet.CharacterSet = "utf8mb4";
+        var otherSet = CharsetTable("latin1", null, "uca1400_ai_ci", maria: true);
+        otherSet.CharacterSet = "utf8mb4";
+        var tableSetUnknown = CharsetTable("latin1", null, "uca1400_ai_ci", maria: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunFor(sameSet, Platform.MariaDb).Where(f => f.Code == "SS-COL-002"), Is.Empty, "the table's own set");
+            Assert.That(RunFor(otherSet, Platform.MariaDb).Count(f => f.Code == "SS-COL-002"), Is.EqualTo(1), "another set");
+            Assert.That(RunFor(tableSetUnknown, Platform.MariaDb).Where(f => f.Code == "SS-COL-002"), Is.Empty,
+                "with no table character set the database default decides, which validation cannot see");
+        });
+    }
+
     // ---- SS-IDENT-002: a PostgreSQL name longer than 63 bytes is stored truncated ----
 
     [Test]

@@ -285,18 +285,34 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// </summary>
     private static IEnumerable<Finding> CheckCharsetWithoutCollation(Table table, string tableLocation)
     {
-        if (table is not MySqlTable { Collation: { } tableCollation } || string.IsNullOrWhiteSpace(tableCollation))
+        if (table is not MySqlTable { Collation: { } tableCollation } mySqlTable || string.IsNullOrWhiteSpace(tableCollation))
             yield break;
+        var tableCharset = CharsetOfCollation(tableCollation.Trim(), mySqlTable.CharacterSet);
+        if (tableCharset == null) yield break;
 
         foreach (var column in table.Columns.OfType<MySqlColumn>()
                      .Where(c => !string.IsNullOrWhiteSpace(c.CharacterSet) && string.IsNullOrWhiteSpace(c.Collation)
-                                 && !tableCollation.Trim().StartsWith(c.CharacterSet.Trim() + "_",
-                                     StringComparison.OrdinalIgnoreCase)))
+                                 && !string.Equals(CanonicalCharset(c.CharacterSet), tableCharset, StringComparison.OrdinalIgnoreCase)))
             yield return new Finding(Severity.Warning, CharsetWithoutCollationCode, Category, tableLocation,
                 $"Column '{column.Name}' declares CharacterSet '{column.CharacterSet.Trim()}' but no Collation, so it " +
                 $"gets that character set's default collation, which depends on the engine version. Add a Collation " +
                 $"to choose one; the table's own '{tableCollation.Trim()}' belongs to a different character set.");
     }
+
+    // A collation name starts with its character set's (charset names hold no underscore), except MariaDB 11.4's short
+    // uca1400_* names, which take the table's character set -- or, where it declares none, the database default, which
+    // validation cannot see (null). The deploy resolves both forms the same way before it compares.
+    private static string CharsetOfCollation(string collation, string tableCharset)
+    {
+        if (collation.StartsWith("uca1400_", StringComparison.OrdinalIgnoreCase))
+            return string.IsNullOrWhiteSpace(tableCharset) ? null : CanonicalCharset(tableCharset);
+        var underscore = collation.IndexOf('_');
+        return CanonicalCharset(underscore > 0 ? collation[..underscore] : collation);
+    }
+
+    // utf8 is utf8mb3 under its older name.
+    private static string CanonicalCharset(string charset) =>
+        string.Equals(charset.Trim(), "utf8", StringComparison.OrdinalIgnoreCase) ? "utf8mb3" : charset.Trim();
 
     /// <summary>
     /// Error, not Warning — the distinction from SS-COL-001 is the point. A BackfillExistingRows with no
