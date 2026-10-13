@@ -1128,13 +1128,13 @@ namespace Schema.Domain
             // Ahead of the generic rule: on MySQL and MariaDB the legacy alias has already been migrated away, so that
             // rule would tell a template which plainly carries a SchemaIdentificationScript that it has none.
             if (CreateSchemaIfMissing && Product is { } product && product.Platform.GetBasePlatform() == Platform.MySQL)
-                throw new InvalidOperationException(
+                throw new PackageException(
                     $"Template '{Name}' (file: {FilePath}) sets CreateSchemaIfMissing=true, which does not apply on " +
                     $"{product.Platform}: a schema is a database there, and templates do not fan out per schema. " +
                     $"Remove CreateSchemaIfMissing; use DatabaseIdentificationScript to target tenant databases.");
 
             if (CreateSchemaIfMissing && !IsSchemaTemplate)
-                throw new InvalidOperationException(
+                throw new PackageException(
                     $"Template '{Name}' (file: {FilePath}) sets CreateSchemaIfMissing=true but " +
                     $"has no SchemaIdentificationScript. CreateSchemaIfMissing only applies to " +
                     $"schema templates — add a SchemaIdentificationScript or remove " +
@@ -1146,7 +1146,7 @@ namespace Schema.Domain
             // migration clears the field. If somehow we get here, fail loud with the design's
             // database-per-tenant hint rather than silently producing broken DDL.
             if (Product?.Platform.GetBasePlatform() == Platform.MySQL)
-                throw new InvalidOperationException(
+                throw new PackageException(
                     $"Template '{Name}' (file: {FilePath}) is a schema template on MySQL. " +
                     $"MySQL has no schema-inside-database concept — use database-per-tenant " +
                     $"instead (one DatabaseIdentificationScript-driven template per tenant DB).");
@@ -1154,7 +1154,7 @@ namespace Schema.Domain
             // Rule 2: database-scoped ObjectType rejection.
             var offending = ScriptFolders.FirstOrDefault(f => DisallowedSchemaTemplateObjectTypes.Contains(f.ObjectType));
             if (offending != null)
-                throw new InvalidOperationException(
+                throw new PackageException(
                     $"Template '{Name}' (file: {FilePath}) is a schema template but declares a " +
                     $"ScriptFolder for '{offending.ObjectType}' (path: '{offending.FolderPath}'). " +
                     $"{offending.ObjectType} is database-scoped and cannot fan out per schema. " +
@@ -1191,7 +1191,7 @@ namespace Schema.Domain
                     var bareName = Path.GetFileNameWithoutExtension(fileName);
                     if (!bareName.Contains('.')) continue;
 
-                    throw new InvalidOperationException(
+                    throw new PackageException(
                         $"Template '{Name}' (file: {FilePath}) is a schema template; the {ownerKind} " +
                         $"file '{fileName}' has a schema-qualified name. Schema templates require " +
                         $"unqualified filenames — rename to '{bareName.Substring(bareName.LastIndexOf('.') + 1)}.json' " +
@@ -1282,7 +1282,7 @@ namespace Schema.Domain
                     var cyclePath = startIndex >= 0
                         ? visitingStack.GetRange(startIndex, visitingStack.Count - startIndex)
                         : visitingStack;
-                    throw new InvalidOperationException(
+                    throw new PackageException(
                         $"Cycle detected in template '{Name}' token graph involving '{name}'. " +
                         $"The token graph contains a cycle: {string.Join(" → ", cyclePath)} → {name}. " +
                         $"Remove the circular reference between these tokens.");

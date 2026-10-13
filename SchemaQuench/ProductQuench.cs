@@ -684,7 +684,7 @@ public class ProductQuench
             {
                 units = ApplyPerTemplateTargetFilter(template, units);
             }
-            catch (InvalidOperationException ex)
+            catch (RunFailedException ex)
             {
                 _progressLog.Error($"Target filter rejection for template '{template.Name}': {ex.Message}");
                 _errorLog.Error($"Target filter rejection for template '{template.Name}': {ex.Message}");
@@ -1115,13 +1115,13 @@ public class ProductQuench
 
     // A package that cannot be loaded (a missing path, malformed JSON, an invalid template setting) is the author's to
     // fix, so it is a failed run rather than a defect in the tool.
-    private static T LoadPackage<T>(Func<T> load)
+    internal static T LoadPackage<T>(Func<T> load)
     {
         try
         {
             return load();
         }
-        catch (InvalidOperationException e)
+        catch (PackageException e)
         {
             throw new RunFailedException(e.Message, e);
         }
@@ -1338,7 +1338,7 @@ public class ProductQuench
         {
             workUnits = ApplyPerTemplateTargetFilter(template, workUnits);
         }
-        catch (InvalidOperationException ex)
+        catch (RunFailedException ex)
         {
             _progressLog.Error($"Target filter rejection for template '{template.Name}': {ex.Message}");
             _errorLog.Error($"Target filter rejection for template '{template.Name}': {ex.Message}");

@@ -84,7 +84,7 @@ namespace Schema.UnitTests.Domain.PostgreSQL
         {
             var table = new PostgreSqlTable { Name = "customers", Schema = "public" };
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 SchemaDefaultResolver.Resolve(table, isSchemaTemplate: true, Platform.PostgreSQL));
 
             Assert.That(ex.Message, Does.Contain("customers"));

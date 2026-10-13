@@ -52,7 +52,7 @@ namespace Schema.UnitTests.Domain
         {
             var fk = new SqlServerForeignKey { Name = "FK_Orders_Customer", RelatedTable = "sales.Customer", RelatedTableSchema = "hr" };
 
-            var ex = Assert.Throws<InvalidOperationException>(() => SchemaDefaultResolver.Resolve(fk, false, Platform.SqlServer));
+            var ex = Assert.Throws<PackageException>(() => SchemaDefaultResolver.Resolve(fk, false, Platform.SqlServer));
             Assert.That(ex!.Message, Does.Contain("FK_Orders_Customer").And.Contain("sales").And.Contain("hr"));
         }
 
@@ -81,7 +81,7 @@ namespace Schema.UnitTests.Domain
         {
             var view = new SqlServerIndexedView { Name = "vw_Test", Schema = "dbo" };
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 SchemaDefaultResolver.Resolve(view, isSchemaTemplate: true, Platform.SqlServer));
 
             Assert.That(ex.Message, Does.Contain("vw_Test"));
@@ -112,7 +112,7 @@ namespace Schema.UnitTests.Domain
         {
             var view = new PostgreSqlMaterializedView { Name = "mv_test", Schema = "public" };
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 SchemaDefaultResolver.Resolve(view, isSchemaTemplate: true, Platform.PostgreSQL));
 
             Assert.That(ex.Message, Does.Contain("mv_test"));
@@ -195,7 +195,7 @@ namespace Schema.UnitTests.Domain
         {
             var obj = new PostgreSqlEnumType { Name = "enumtype_test", Schema = "public" };
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: true, Platform.PostgreSQL));
 
             Assert.That(ex.Message, Does.Contain("enumtype_test"));
@@ -236,7 +236,7 @@ namespace Schema.UnitTests.Domain
         {
             var obj = new PostgreSqlDomainType { Name = "domaintype_test", Schema = "public" };
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: true, Platform.PostgreSQL));
 
             Assert.That(ex.Message, Does.Contain("domaintype_test"));
@@ -277,7 +277,7 @@ namespace Schema.UnitTests.Domain
         {
             var obj = new PostgreSqlSequence { Name = "sequence_test", Schema = "public" };
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 SchemaDefaultResolver.Resolve(obj, isSchemaTemplate: true, Platform.PostgreSQL));
 
             Assert.That(ex.Message, Does.Contain("sequence_test"));
@@ -354,7 +354,7 @@ namespace Schema.UnitTests.Domain
             };
             template.Tables.Add(new SqlServerTable { Name = "Customers", Schema = "dbo" });
 
-            var ex = Assert.Throws<InvalidOperationException>(() => SchemaDefaultResolver.Resolve(template));
+            var ex = Assert.Throws<PackageException>(() => SchemaDefaultResolver.Resolve(template));
 
             // Outer wrap surfaces template name + file path so the user can find the bad JSON.
             Assert.That(ex.Message, Does.Contain("TenantBody"));
@@ -373,7 +373,7 @@ namespace Schema.UnitTests.Domain
                 FilePath = @"C:\some\Templates\Bad\Template.json",
                 Product = new Product { Platform = Platform.Unknown }
             };
-            var ex = Assert.Throws<InvalidOperationException>(() => SchemaDefaultResolver.Resolve(template));
+            var ex = Assert.Throws<PackageException>(() => SchemaDefaultResolver.Resolve(template));
             Assert.That(ex.Message, Does.Contain("Bad"));
             Assert.That(ex.Message, Does.Contain("Unknown"));
             Assert.That(ex.Message, Does.Contain("Template.json"));

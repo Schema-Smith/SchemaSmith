@@ -68,7 +68,7 @@ namespace Schema.UnitTests.Domain
                 }
             };
 
-            var ex = Assert.Throws<InvalidOperationException>(() => template.ResolveTokenScopes());
+            var ex = Assert.Throws<PackageException>(() => template.ResolveTokenScopes());
             Assert.That(ex!.Message, Does.Contain("cycle").IgnoreCase);
             // Message should name the tokens involved so the user can find them.
             Assert.That(ex.Message, Does.Contain("A"));
@@ -163,7 +163,7 @@ namespace Schema.UnitTests.Domain
                 QueryTokens = { ["A"] = "<*Query*>SELECT {{A}}" }
             };
 
-            var ex = Assert.Throws<InvalidOperationException>(() => template.ResolveTokenScopes());
+            var ex = Assert.Throws<PackageException>(() => template.ResolveTokenScopes());
             Assert.That(ex!.Message, Does.Contain("cycle").IgnoreCase);
             Assert.That(ex.Message, Does.Contain("A"));
         }
@@ -184,7 +184,7 @@ namespace Schema.UnitTests.Domain
                 }
             };
 
-            var ex = Assert.Throws<InvalidOperationException>(() => template.ResolveTokenScopes());
+            var ex = Assert.Throws<PackageException>(() => template.ResolveTokenScopes());
             Assert.That(ex!.Message, Does.Contain("cycle").IgnoreCase);
             Assert.That(ex.Message, Does.Contain("A"));
             Assert.That(ex.Message, Does.Contain("B"));

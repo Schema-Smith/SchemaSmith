@@ -135,7 +135,7 @@ namespace Schema.UnitTests.Domain
             _mockDirectory.Exists(tablesPath).Returns(false);
             _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 Template.Load("Main", MakeProduct(Platform.SqlServer)));
             Assert.That(ex!.Message, Does.Contain("DDLTriggers"));
             Assert.That(ex.Message, Does.Contain("non-schema-template").IgnoreCase
@@ -158,7 +158,7 @@ namespace Schema.UnitTests.Domain
             _mockDirectory.Exists(tablesPath).Returns(false);
             _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 Template.Load("Main", MakeProduct(Platform.SqlServer)));
             Assert.That(ex!.Message, Does.Contain("Schemas"));
         }
@@ -179,7 +179,7 @@ namespace Schema.UnitTests.Domain
             _mockDirectory.Exists(tablesPath).Returns(false);
             _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
 
-            Assert.Throws<InvalidOperationException>(() =>
+            Assert.Throws<PackageException>(() =>
                 Template.Load("Main", MakeProduct(Platform.SqlServer)));
         }
 
@@ -199,7 +199,7 @@ namespace Schema.UnitTests.Domain
             _mockDirectory.Exists(tablesPath).Returns(false);
             _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
 
-            Assert.Throws<InvalidOperationException>(() =>
+            Assert.Throws<PackageException>(() =>
                 Template.Load("Main", MakeProduct(Platform.SqlServer)));
         }
 
@@ -246,7 +246,7 @@ namespace Schema.UnitTests.Domain
             _mockFile.Exists(tableFile).Returns(true);
             _mockFile.ReadAllText(tableFile).Returns(@"{ ""Name"": ""Customers"", ""Columns"": [] }");
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 Template.Load("Main", MakeProduct(Platform.SqlServer)));
             Assert.That(ex!.Message, Does.Contain("dbo.Customers.json"));
             Assert.That(ex.Message, Does.Contain("schema").IgnoreCase);
@@ -316,7 +316,7 @@ namespace Schema.UnitTests.Domain
                 .Returns(new[] { mvFile });
             _mockFile.ReadAllText(mvFile).Returns(@"{ ""Name"": ""mv_test"", ""Definition"": ""SELECT 1"" }");
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 Template.Load("Main", MakeProduct(Platform.PostgreSQL)));
             Assert.That(ex!.Message, Does.Contain("public.mv_test.json"));
         }
@@ -340,7 +340,7 @@ namespace Schema.UnitTests.Domain
                 .Returns(new[] { ivFile });
             _mockFile.ReadAllText(ivFile).Returns(@"{ ""Name"": ""vw_test"", ""Definition"": ""SELECT 1"" }");
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 Template.Load("Main", MakeProduct(Platform.SqlServer)));
             Assert.That(ex!.Message, Does.Contain("dbo.vw_test.json"));
         }
@@ -369,7 +369,7 @@ namespace Schema.UnitTests.Domain
             _mockFile.Exists(tableFile).Returns(true);
             _mockFile.ReadAllText(tableFile).Returns(@"{ ""Name"": ""Customers"", ""Schema"": ""dbo"", ""Columns"": [] }");
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 Template.Load("Main", MakeProduct(Platform.SqlServer)));
 
             // SchemaDefaultResolver.Resolve(Template) wraps with template name + file path.
@@ -394,7 +394,7 @@ namespace Schema.UnitTests.Domain
             _mockDirectory.Exists(tablesPath).Returns(false);
             _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 Template.Load("Main", MakeProduct(Platform.SqlServer)));
             Assert.That(ex!.Message, Does.Contain("CreateSchemaIfMissing"));
             Assert.That(ex.Message, Does.Contain("SchemaIdentificationScript"));
@@ -412,7 +412,7 @@ namespace Schema.UnitTests.Domain
             _mockDirectory.Exists(tablesPath).Returns(false);
             _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
 
-            var ex = Assert.Throws<InvalidOperationException>(() => Template.Load("Main", MakeProduct(Platform.SqlServer)));
+            var ex = Assert.Throws<PackageException>(() => Template.Load("Main", MakeProduct(Platform.SqlServer)));
             Assert.That(ex!.Message, Does.Contain("'Foo'").And.Contain("'foo'").And.Contain("Main"));
         }
 
@@ -450,7 +450,7 @@ namespace Schema.UnitTests.Domain
             _mockDirectory.Exists(tablesPath).Returns(false);
             _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
 
-            var ex = Assert.Throws<InvalidOperationException>(() => Template.Load("Main", MakeProduct(Platform.SqlServer)));
+            var ex = Assert.Throws<PackageException>(() => Template.Load("Main", MakeProduct(Platform.SqlServer)));
             Assert.That(ex!.Message, Does.Contain("Cycle"));
         }
 
@@ -491,7 +491,7 @@ namespace Schema.UnitTests.Domain
             _mockDirectory.Exists(tablesPath).Returns(false);
             _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 Template.Load("Main", MakeProduct(platform)));
             Assert.That(ex!.Message, Does.Not.Contain("has no SchemaIdentificationScript"));
             Assert.That(ex.Message, Does.Contain("CreateSchemaIfMissing"));

@@ -110,7 +110,7 @@ namespace Schema.Domain
                     $"construct the Template directly instead of going through Template.Load?");
             var platform = template.Product.Platform;
             if (platform == Platform.Unknown)
-                throw new InvalidOperationException(
+                throw new PackageException(
                     $"Template '{template.Name}' (file: {template.FilePath}) has Product.Platform = " +
                     $"Unknown. Set Platform to SqlServer, PostgreSQL, or MySQL in Product.json.");
 
@@ -150,11 +150,11 @@ namespace Schema.Domain
                 foreach (var sequence in template.Sequences)
                     Resolve(sequence, isSchemaTemplate, platform);
             }
-            catch (InvalidOperationException inner)
+            catch (PackageException inner)
             {
                 // Rewrap with template context so a user staring at a multi-template product
                 // can find the offending JSON file without grep-spelunking.
-                throw new InvalidOperationException(
+                throw new PackageException(
                     $"In template '{template.Name}' (file: {template.FilePath}): {inner.Message}",
                     inner);
             }
@@ -168,7 +168,7 @@ namespace Schema.Domain
                 if (string.IsNullOrWhiteSpace(existing) || existing == SchemaNameToken)
                     return SchemaNameToken;
 
-                throw new InvalidOperationException(
+                throw new PackageException(
                     $"The {ownerKind} '{ownerName}' in a schema template has an explicit Schema='{existing}'. " +
                     $"Schema templates require this field to be omitted, empty, or the literal '{SchemaNameToken}' " +
                     $"— the {ownerKind} lives in {SchemaNameToken} by construction. " +
@@ -189,7 +189,7 @@ namespace Schema.Domain
             if (string.IsNullOrWhiteSpace(relatedTableSchema)) return (prefix, name);
             if (Identifier.Unwrap(relatedTableSchema, platform).Equals(prefix, StringComparison.OrdinalIgnoreCase))
                 return (relatedTableSchema, name);
-            throw new InvalidOperationException($"Foreign key '{fkName}' names RelatedTable '{relatedTable}', in schema '{prefix}', " +
+            throw new PackageException($"Foreign key '{fkName}' names RelatedTable '{relatedTable}', in schema '{prefix}', " +
                 $"but RelatedTableSchema '{relatedTableSchema}'. Give the schema once, in RelatedTableSchema.");
         }
 

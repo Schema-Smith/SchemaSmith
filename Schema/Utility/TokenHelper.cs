@@ -43,7 +43,7 @@ public static class TokenHelper
     {
         var collision = names.GroupBy(n => n, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
         if (collision == null) return;
-        throw new InvalidOperationException($"{scope} declares script tokens {string.Join(" and ", collision.Select(n => $"'{n}'"))}, " +
+        throw new Schema.Domain.PackageException($"{scope} declares script tokens {string.Join(" and ", collision.Select(n => $"'{n}'"))}, " +
             "which differ only in case. Token names are matched case-insensitively, so they are the same token -- rename or remove one.");
     }
 
@@ -62,7 +62,7 @@ public static class TokenHelper
         ResolveFileTokensByTag(tokens, basePath, tokenErrors, BinaryFileTag, binaryPrefix, binarySuffix, fileName => BitConverter.ToString(ProductFileWrapper.GetFromFactory().ReadAllBytes(fileName)).Replace("-", ""));
         ResolveFileTokensByTag(tokens, basePath, tokenErrors, QueryFileTag, QueryTag, "", fileName => ProductFileWrapper.GetFromFactory().ReadAllText(fileName));
         if (tokenErrors.Count == 0 || tolerateErrors) return tokenErrors;
-        throw new InvalidOperationException(string.Join("\r\n", tokenErrors));
+        throw new Schema.Domain.PackageException(string.Join("\r\n", tokenErrors));
     }
 
     public static void ResolveSpecificTableTokens(Dictionary<string, string> tokens, IList<Table> tables, Platform platform)
@@ -96,7 +96,7 @@ public static class TokenHelper
             }
         }
         if (tokenErrors.Count == 0) return;
-        throw new InvalidOperationException(string.Join("\r\n", tokenErrors));
+        throw new Schema.Domain.PackageException(string.Join("\r\n", tokenErrors));
     }
 
     public static void ResolveSpecificMaterializedViewTokens(
@@ -132,7 +132,7 @@ public static class TokenHelper
             }
         }
         if (tokenErrors.Count == 0) return;
-        throw new InvalidOperationException(string.Join("\r\n", tokenErrors));
+        throw new Schema.Domain.PackageException(string.Join("\r\n", tokenErrors));
     }
 
     public static void ResolveSpecificIndexedViewTokens(
@@ -168,7 +168,7 @@ public static class TokenHelper
             }
         }
         if (tokenErrors.Count == 0) return;
-        throw new InvalidOperationException(string.Join("\r\n", tokenErrors));
+        throw new Schema.Domain.PackageException(string.Join("\r\n", tokenErrors));
     }
 
     private static SqlServerIndexedView FindIndexedView(

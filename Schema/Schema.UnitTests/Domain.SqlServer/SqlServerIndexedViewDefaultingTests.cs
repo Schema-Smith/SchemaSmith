@@ -91,7 +91,7 @@ namespace Schema.UnitTests.Domain.SqlServer
         {
             var view = new SqlServerIndexedView { Name = "vw_OrderSummary", Schema = "dbo" };
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 SchemaDefaultResolver.Resolve(view, isSchemaTemplate: true, Platform.SqlServer));
 
             Assert.That(ex.Message, Does.Contain("vw_OrderSummary"));
