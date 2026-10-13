@@ -1497,6 +1497,33 @@ BEGIN TRY
   SELECT [Schema], [TableName], SchemaSmith.fn_StripBracketWrapping([IndexName]), [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
     FROM #XmlIndexChanges WITH (NOLOCK)
 
+  -- A foreign key this deploy will not re-create references an index it would drop or change, and SQL Server will not
+  -- drop such an index while the key exists. Dropping the key first lost it for good, so the index is kept as it is.
+  IF OBJECT_ID('tempdb..#IndexesKeptForForeignKeys') IS NOT NULL DROP TABLE #IndexesKeptForForeignKeys
+  SELECT DISTINCT di.[Schema], di.[TableName], di.[IndexName],
+         [KeyName] = CAST(OBJECT_SCHEMA_NAME(fk.parent_object_id) + '.' + OBJECT_NAME(fk.parent_object_id) + '.' + fk.[name] AS NVARCHAR(800))
+    INTO #IndexesKeptForForeignKeys
+    FROM #IndexesToDrop di WITH (NOLOCK)
+    JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(di.[Schema] + '.' + di.[TableName]) AND si.[name] = di.[IndexName] COLLATE DATABASE_DEFAULT
+    JOIN sys.foreign_keys fk ON fk.referenced_object_id = si.[object_id] AND fk.key_index_id = si.index_id
+    WHERE 1 = 1
+      -- An index dropped because one of its columns changes has to go; the column change cannot run around it.
+      AND NOT EXISTS (SELECT * FROM #IndexesToDropForColumnChanges cc WITH (NOLOCK)
+                       WHERE cc.[Schema] = di.[Schema] AND cc.[TableName] = di.[TableName] AND SchemaSmith.fn_StripBracketWrapping(cc.[IndexName]) = di.[IndexName])
+      -- A key the package declares is dropped below and put back by ForeignKeyQuench.
+      AND NOT EXISTS (SELECT * FROM #ForeignKeys k WITH (NOLOCK)
+                       WHERE SchemaSmith.fn_StripBracketWrapping(k.[Schema]) = OBJECT_SCHEMA_NAME(fk.parent_object_id) COLLATE DATABASE_DEFAULT
+                         AND SchemaSmith.fn_StripBracketWrapping(k.[TableName]) = OBJECT_NAME(fk.parent_object_id) COLLATE DATABASE_DEFAULT
+                         AND SchemaSmith.fn_StripBracketWrapping(k.[KeyName]) = fk.[name] COLLATE DATABASE_DEFAULT)
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Kept ' + REPLACE(REPLACE(k.[Schema] + '.' + k.[TableName] + '.' + k.[IndexName], '''', ''''''), '%', '%%') +
+                                  ' as it is: foreign key ' + REPLACE(REPLACE(k.[KeyName], '''', ''''''), '%', '%%') + ' references it'', 10, 100) WITH NOWAIT;'
+                           FROM #IndexesKeptForForeignKeys k WITH (NOLOCK)
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  EXEC(@v_SQL)
+  DELETE di FROM #IndexesToDrop di
+   WHERE EXISTS (SELECT * FROM #IndexesKeptForForeignKeys k WITH (NOLOCK)
+                  WHERE k.[Schema] = di.[Schema] AND k.[TableName] = di.[TableName] AND k.[IndexName] = di.[IndexName])
+
   -- Need to drop all the XML indexes if we're removing the clustered PK
   INSERT #IndexesToDrop ([Schema], [TableName], [IndexName], [IsConstraint], [IsUnique], [IsClustered])
     SELECT [xSchema], [xTableName], [xIndexName], [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
@@ -1539,7 +1566,8 @@ BEGIN TRY
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping foreign Key ' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '.' + OBJECT_NAME(fk.parent_object_id) + '.' + fk.[name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'IF OBJECT_ID(''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''') IS NOT NULL ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + ' DROP CONSTRAINT ' + QUOTENAME(fk.[name]) + ';' AS NVARCHAR(MAX))
                            FROM #IndexesToDrop di WITH (NOLOCK)
-                           JOIN sys.foreign_keys fk ON fk.referenced_object_id = OBJECT_ID(di.[Schema] + '.' + di.[TableName])
+                           JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(di.[Schema] + '.' + di.[TableName]) AND si.[name] = di.[IndexName] COLLATE DATABASE_DEFAULT
+                           JOIN sys.foreign_keys fk ON fk.referenced_object_id = si.[object_id] AND fk.key_index_id = si.index_id
                            WHERE IsConstraint = 1 OR IsUnique = 1
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
