@@ -77,7 +77,15 @@ public static class GettingStarted
                 .AddJsonFile(Path.GetFileName(settingsFile), optional: false)
                 .Build();
         }
-        catch (Exception e) when (e is InvalidDataException or FormatException or IOException)
+        catch (FormatException)
+        {
+            return false;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+        catch (IOException)
         {
             return false;
         }
