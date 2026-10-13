@@ -135,7 +135,6 @@ DROP TABLE IF EXISTS ""SchemaSmith"".""TestLog"";
 
             var config = FactoryContainer.Resolve<IConfigurationRoot>();
             config["SchemaPackagePath"] = TestHelper.GetTestProductPath("PostgreSQL", "ValidProduct");
-            config["WhatIfONLY"] = "true";
 
             using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
             conn.Open();
@@ -161,8 +160,7 @@ DROP TABLE IF EXISTS ""SchemaSmith"".""TestLog"";
             conn.ChangeDatabase(_mainDb);
             cmd.CommandText = @"SELECT COUNT(*) FROM ""SchemaSmith"".""CompletedMigrationScripts""";
             var mainMigrationCountBefore = (long)cmd.ExecuteScalar();
-            cmd.CommandText = "SELECT CASE WHEN EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'TestTable') THEN (SELECT COUNT(*) FROM public.\"TestTable\") ELSE -1 END";
-            var mainTestTableRowsBefore = (long)cmd.ExecuteScalar();
+            var mainTestTableRowsBefore = TestTableRowsOrMinusOne(cmd);
             conn.ChangeDatabase(_secondaryDb);
             cmd.CommandText = @"SELECT COUNT(*) FROM ""SchemaSmith"".""CompletedMigrationScripts""";
             var secondaryMigrationCountBefore = (long)cmd.ExecuteScalar();
@@ -170,6 +168,9 @@ DROP TABLE IF EXISTS ""SchemaSmith"".""TestLog"";
 
             try
             {
+                // Set inside the try: the finally resets it, so a failure above cannot leave the shared configuration in
+                // WhatIf for the next fixture.
+                config["WhatIfONLY"] = "true";
                 RunSchemaQuench();
 
                 // No errors should occur
@@ -226,8 +227,7 @@ DROP TABLE IF EXISTS ""SchemaSmith"".""TestLog"";
                 cmd.CommandText = @"SELECT COUNT(*) FROM ""SchemaSmith"".""CompletedMigrationScripts""";
                 Assert.That((long)cmd.ExecuteScalar(), Is.EqualTo(mainMigrationCountBefore), "MainDB CompletedMigrationScripts should be unchanged");
 
-                cmd.CommandText = "SELECT CASE WHEN EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'TestTable') THEN (SELECT COUNT(*) FROM public.\"TestTable\") ELSE -1 END";
-                Assert.That((long)cmd.ExecuteScalar(), Is.EqualTo(mainTestTableRowsBefore), "MainDB TestTable row count should be unchanged");
+                Assert.That(TestTableRowsOrMinusOne(cmd), Is.EqualTo(mainTestTableRowsBefore), "MainDB TestTable should be unchanged (-1: still absent)");
 
                 conn.ChangeDatabase(_secondaryDb);
                 cmd.CommandText = @"SELECT COUNT(*) FROM ""SchemaSmith"".""CompletedMigrationScripts""";
@@ -429,5 +429,15 @@ DROP TABLE IF EXISTS ""SchemaSmith"".""TestLog"";
         conn.Close();
 
         return scriptLog;
+    }
+
+    // PostgreSQL resolves every table a statement names when it parses it, branches not taken included, so
+    // CASE WHEN EXISTS(...) THEN (SELECT COUNT(*) FROM t) fails outright when t is absent. Check, then count.
+    private static long TestTableRowsOrMinusOne(System.Data.IDbCommand cmd)
+    {
+        cmd.CommandText = "SELECT to_regclass('public.\"TestTable\"') IS NOT NULL";
+        if (!(bool)cmd.ExecuteScalar()!) return -1;
+        cmd.CommandText = "SELECT COUNT(*) FROM public.\"TestTable\"";
+        return (long)cmd.ExecuteScalar()!;
     }
 }
