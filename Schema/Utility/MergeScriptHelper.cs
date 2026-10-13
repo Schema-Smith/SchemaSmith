@@ -1032,6 +1032,9 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         HashSet<string> jsonKeys, bool identityInsert, bool disableTriggers, bool memoryOptimized, bool appendOnlyLedger)
     {
         var target = $"[{destSchema}].[{tableName}]";
+        // #v_ss_Source's column names follow the server's collation, not the database's, so a key named in another case
+        // than the table's must be respelled before it is matched against the copy.
+        keyColumns = KeyColumnsInTableCaseSqlServer(cmd, tableSchema, tableName, keyColumns);
         var matchColumns = BuildSqlServerMatchColumns(keyColumns);
         var hint = memoryOptimized ? " WITH (SNAPSHOT)" : "";
         var filter = string.IsNullOrWhiteSpace(mergeFilter) ? "" : $" AND ({mergeFilter})";
@@ -1069,6 +1072,25 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         if (identityInsert) sb.Append($"SET IDENTITY_INSERT {target} OFF;\r\n");
         if (disableTriggers) sb.Append($"ALTER TABLE {target} ENABLE TRIGGER ALL;\r\n");
         return sb.ToString();
+    }
+
+    // An exact match wins, so a case-sensitive table with both Id and ID keeps the one named.
+    private static string KeyColumnsInTableCaseSqlServer(IDbCommand cmd, string tableSchema, string tableName, string keyColumns)
+    {
+        BindIdentifierParameters(cmd, ("@objname", $"[{tableSchema.Replace("]", "]]")}].[{tableName.Replace("]", "]]")}]"));
+        cmd.CommandText = "SELECT [name] FROM sys.columns WHERE [object_id] = OBJECT_ID(@objname)";
+        var columns = ReadStringColumn(cmd);
+        cmd.Parameters.Clear();
+        return string.Join(",", keyColumns.Split(',').Select(key =>
+        {
+            var trimmed = key.Trim();
+            var nullable = trimmed.StartsWith('*') ? "*" : "";
+            var name = trimmed.TrimStart('*').Trim().Trim('[', ']');
+            var inTableCase = columns.Contains(name, StringComparer.Ordinal)
+                ? name
+                : columns.Where(c => string.Equals(c, name, StringComparison.OrdinalIgnoreCase)).ToList() is [var only] ? only : name;
+            return $"{nullable}[{inTableCase}]";
+        }));
     }
 
     private static string BuildSqlServerMatchColumns(string keyColumns)
