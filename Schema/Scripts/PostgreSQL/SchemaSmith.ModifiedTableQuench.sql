@@ -1042,6 +1042,33 @@ BEGIN
                                      AND i."Name" = ei."IndexName")));
     END IF;
 
+    -- A foreign key this deploy will not re-create references an index it would drop or change. Dropping a constraint
+    -- CASCADE took the key with it for good, and a plain unique index a key references cannot be dropped at all, so the
+    -- index is kept as it is.
+    DROP TABLE IF EXISTS temp_indexes_kept_for_fks;
+    CREATE TEMPORARY TABLE temp_indexes_kept_for_fks AS
+      SELECT DISTINCT ti."TableSchema", ti."TableName", ti."IndexName",
+             fkn.nspname || '.' || fkr.relname || '.' || fkc.conname AS "KeyName"
+        FROM temp_indexes_to_drop ti
+        JOIN pg_namespace icn ON icn.nspname = ti."TableSchema"
+        JOIN pg_class ic ON ic.relnamespace = icn.oid AND ic.relname = ti."IndexName" AND ic.relkind = 'i'
+        JOIN pg_constraint fkc ON fkc.contype = 'f' AND fkc.conindid = ic.oid
+        JOIN pg_class fkr ON fkr.oid = fkc.conrelid
+        JOIN pg_namespace fkn ON fkn.oid = fkr.relnamespace
+        WHERE TRUE
+          -- A key the package declares is dropped with the constraint and put back by ForeignKeyQuench.
+          AND NOT EXISTS (SELECT 1 FROM temp_fks f
+                          WHERE f."TableSchema" = fkn.nspname AND f."TableName" = fkr.relname AND f."Name" = fkc.conname);
+    SELECT STRING_AGG('RAISE NOTICE ''  Kept ' || REPLACE(k."TableSchema" || '.' || k."TableName" || '.' || k."IndexName", '''', '''''') ||
+                      ' as it is: foreign key ' || REPLACE(k."KeyName", '''', '''''') || ' references it'';', CHR(10))
+      INTO sql_script
+      FROM temp_indexes_kept_for_fks k;
+    CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, FALSE);
+    DELETE FROM temp_indexes_to_drop ti
+      USING temp_indexes_kept_for_fks k
+      WHERE k."TableSchema" = ti."TableSchema" AND k."TableName" = ti."TableName" AND k."IndexName" = ti."IndexName";
+    DROP TABLE IF EXISTS temp_indexes_kept_for_fks;
+
     RAISE NOTICE 'Drop Unknown, Removed, and Modified Indexes';
     SELECT STRING_AGG('RAISE NOTICE ''  Dropping ' || CASE WHEN "IsConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''';' || CHR(10) ||
                       CASE WHEN "IsConstraint"
