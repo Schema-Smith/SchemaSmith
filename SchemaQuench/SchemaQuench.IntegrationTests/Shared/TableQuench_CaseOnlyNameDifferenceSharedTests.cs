@@ -61,6 +61,46 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         }
     }
 
+    // Below the RENAME COLUMN floor the respell restates the column with CHANGE COLUMN. A non-first TIMESTAMP NOT NULL
+    // restated without its DEFAULT gets an invented zero default where explicit_defaults_for_timestamp is off (MySQL
+    // 5.7, and MariaDB below 10.10, where 10.2-10.3 refuse to let a session turn it on) -- 1067 under a strict mode, or
+    // a silently lost CURRENT_TIMESTAMP.
+    [Test]
+    public void ACaseOnlySpellingOfANonFirstTimestamp_KeepsItsDefault()
+    {
+        const string table = "CaseOnlyTs";
+        const string product = "Case Only Timestamp";
+        var json = $$"""
+            [{
+                "Name": "{{table}}",
+                "Columns": [
+                    { "Name": "id", "DataType": "INT", "Nullable": false },
+                    { "Name": "a", "DataType": "INT", "Nullable": true },
+                    { "Name": "stamp", "DataType": "TIMESTAMP", "Nullable": false, "Default": "CURRENT_TIMESTAMP" }
+                ],
+                "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" } ]
+            }]
+            """;
+
+        using var conn = Open(out var cmd);
+        CleanUp(cmd, product, table);
+        Exec(cmd, $"CREATE TABLE `{table}` (`id` INT NOT NULL PRIMARY KEY, `a` INT NULL, `Stamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        Exec(cmd, $"INSERT INTO `{table}` (`id`, `a`) VALUES (1, 1)");
+
+        try
+        {
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product));
+            cmd.CommandText = $"SELECT CONCAT(COLUMN_NAME, ' ', UPPER(COALESCE(COLUMN_DEFAULT, 'none'))) FROM INFORMATION_SCHEMA.COLUMNS " +
+                              $"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' AND LOWER(COLUMN_NAME) = 'stamp'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Does.StartWith("stamp CURRENT_TIMESTAMP"),
+                "the column takes the package spelling and keeps its default");
+        }
+        finally
+        {
+            CleanUp(cmd, product, table);
+        }
+    }
+
     // Below the RENAME COLUMN floor (MySQL 8.0 / MariaDB 10.6) the rename restates the column with CHANGE COLUMN,
     // whose generated-column form differs by engine.
     [Test]
