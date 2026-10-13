@@ -77,23 +77,6 @@ namespace Schema.UnitTests.Utility
             Assert.That(VersionHelper.ParseDeclaredVersion(version, platform), Is.Null);
         }
 
-        [TestCase(Platform.SqlServer, 9, true)]     // SQL Server 2005 — below the 2008 floor
-        [TestCase(Platform.SqlServer, 10, false)]   // 2008 floor
-        [TestCase(Platform.SqlServer, 13, false)]   // SQL Server 2016 — now supported
-        [TestCase(Platform.SqlServer, 16, false)]
-        [TestCase(Platform.PostgreSQL, 11, true)]   // PostgreSQL 11 (below floor)
-        [TestCase(Platform.PostgreSQL, 12, false)]  // 12 floor
-        [TestCase(Platform.MySQL, 506, true)]       // MySQL 5.6 — below the 5.7 floor (no JSON)
-        [TestCase(Platform.MySQL, 507, false)]      // 5.7 floor
-        [TestCase(Platform.MySQL, 800, false)]      // 8.0 — above floor
-        [TestCase(Platform.MariaDb, 1001, true)]    // MariaDB 10.1 — below the 10.2 floor (no JSON)
-        [TestCase(Platform.MariaDb, 1002, false)]   // 10.2 floor
-        [TestCase(Platform.MariaDb, 1006, false)]   // 10.6 — above floor
-        public void IsBelowFloor_ComparesAgainstEngineFloor(Platform platform, int comparable, bool expected)
-        {
-            Assert.That(VersionHelper.IsBelowFloor(platform, comparable), Is.EqualTo(expected));
-        }
-
         [TestCase(Platform.SqlServer, "2008 (major 10)")]
         [TestCase(Platform.PostgreSQL, "12")]
         [TestCase(Platform.MySQL, "5.7.22 / 8.0.23")]
@@ -179,6 +162,10 @@ namespace Schema.UnitTests.Utility
         [TestCase(Platform.MariaDb, "10.2.44-MariaDB-1:10.2.44+maria~bionic", false)]
         [TestCase(Platform.SqlServer, "9.0.5000.0", true)]
         [TestCase(Platform.SqlServer, "10.50.4000.0", false)]
+        [TestCase(Platform.SqlServer, "10.0.1600.22", false)]  // 2008, the floor
+        [TestCase(Platform.SqlServer, "16.0.1000.6", false)]
+        [TestCase(Platform.PostgreSQL, "110022", true)]   // server_version_num
+        [TestCase(Platform.PostgreSQL, "120000", false)]
         public void IsBelowFloor_OtherEngines_KeepTheirFloors(Platform platform, string raw, bool expected)
         {
             var info = new TargetVersionInfo(platform, raw, VersionHelper.ParseDetectedVersion(raw, platform)!.Value);

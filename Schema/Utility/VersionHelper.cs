@@ -56,15 +56,15 @@ namespace Schema.Utility
         // MariaDB 10.2.7 is the first patch with the JSON type alias the kindled helpers declare; 10.2.6 cannot kindle.
         private const int MariaDbFloor = 100207;
 
-        /// <summary>True when the detected server comparable is below the platform's intrinsic hard floor.</summary>
-        public static bool IsBelowFloor(Platform platform, int serverComparable)
+        // Major-level only: the MySQL family's floors are patches (5.7.22, 8.0.23, 10.2.7), which a comparable cannot see.
+        private static bool IsBelowMajorFloor(Platform platform, int serverComparable)
             => serverComparable < HardFloorComparable(platform);
 
         /// <summary>True when the detected server is below the platform's floor, including the MySQL family's patch floors.</summary>
         public static bool IsBelowFloor(TargetVersionInfo info)
         {
             if (info.Platform.GetBasePlatform() != Platform.MySQL)
-                return IsBelowFloor(info.Platform, info.ServerComparable);
+                return IsBelowMajorFloor(info.Platform, info.ServerComparable);
 
             var patch = ParsePatchComparable(info.RawVersion, info.Platform) ?? info.ServerComparable * 100;
             if (info.Platform == Platform.MariaDb)
