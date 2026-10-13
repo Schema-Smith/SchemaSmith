@@ -34,13 +34,13 @@ namespace Schema.Utility
             // version string disambiguates; fail closed on a mismatch.
             var isMariaDb = raw != null && raw.IndexOf("MariaDB", StringComparison.OrdinalIgnoreCase) >= 0;
             if (platform == Platform.MariaDb && !isMariaDb)
-                throw new Exception($"Target declared as MariaDb but the server does not appear to be MariaDB (VERSION() = '{raw ?? "<null>"}').");
+                throw new RunFailedException($"Target declared as MariaDb but the server does not appear to be MariaDB (VERSION() = '{raw ?? "<null>"}').");
             if (platform == Platform.MySQL && isMariaDb)
-                throw new Exception($"Target declared as MySQL but the server appears to be MariaDB (VERSION() = '{raw}'). Set Platform to MariaDb.");
+                throw new RunFailedException($"Target declared as MySQL but the server appears to be MariaDB (VERSION() = '{raw}'). Set Platform to MariaDb.");
 
             var comparable = VersionHelper.ParseDetectedVersion(raw, platform);
             if (comparable == null)
-                throw new Exception($"Unable to determine the {platform} server version (got '{raw ?? "<null>"}').");
+                throw new RunFailedException($"Unable to determine the {platform} server version (got '{raw ?? "<null>"}').");
 
             int? compatibilityLevel = null;
             if (platform.GetBasePlatform() == Platform.SqlServer && !string.IsNullOrWhiteSpace(databaseName))

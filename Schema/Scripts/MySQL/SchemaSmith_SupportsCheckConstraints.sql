@@ -12,12 +12,12 @@ NOT DETERMINISTIC
 NO SQL
 BEGIN
   -- 1 when the target enforces CHECK constraints AND exposes INFORMATION_SCHEMA.CHECK_CONSTRAINTS:
-  --   * MariaDB: enforcement since 10.2.1, the view since 10.2.22 — at/above our 10.2 floor, treat as yes.
-  --   * MySQL: both arrived at 8.0.16. ServerVersionNum() has major*100+minor granularity (cannot see the
-  --     .16 patch), so major >= 8 is treated as yes; MySQL 8.0.0-8.0.15 is an accepted out-of-scope edge.
-  -- Below this (MySQL 5.7), CHECK constraints are parsed-and-ignored and the catalog view does not exist,
-  -- so the CHECK catalog reads must be version-gated and CHECK emit must degrade via UnsupportedFeaturePolicy.
-  RETURN IF(VERSION() LIKE '%MariaDB%' OR SchemaSmith_ServerVersionNum() >= 800, 1, 0);
+  --   * MariaDB: enforcement since 10.2.1, the view since 10.2.22.
+  --   * MySQL: both arrived at 8.0.16.
+  -- Below this CHECK constraints are parsed and ignored (MySQL) or cannot be read back (MariaDB), so the CHECK
+  -- catalog reads are version-gated and CHECK emit degrades via UnsupportedFeaturePolicy.
+  RETURN IF((VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionPatchNum() >= 100222)
+            OR (VERSION() NOT LIKE '%MariaDB%' AND SchemaSmith_ServerVersionPatchNum() >= 80016), 1, 0);
 END //
 
 DELIMITER ;

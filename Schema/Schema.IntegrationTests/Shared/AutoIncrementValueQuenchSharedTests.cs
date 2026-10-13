@@ -101,6 +101,14 @@ public abstract class AutoIncrementValueQuenchSharedTests
         // even after an explicit ALTER TABLE ... AUTO_INCREMENT=N. Use SHOW TABLE STATUS
         // which reads the storage-level value reliably.
         using var cmd = _connection.CreateCommand();
+        // MySQL 8 serves SHOW TABLE STATUS from its statistics cache. With lower_case_table_names=2 and a mixed-case
+        // database, a dropped table's entry outlives it and ANALYZE refreshes a different (lowercase) entry, so read
+        // past the cache wherever the server has one.
+        if (HasStatsCache(cmd))
+        {
+            cmd.CommandText = "SET SESSION information_schema_stats_expiry = 0";
+            cmd.ExecuteNonQuery();
+        }
         cmd.CommandText = $"SHOW TABLE STATUS FROM `{_testDb}` LIKE 'ai_quench_test'";
         using var reader = cmd.ExecuteReader();
         if (!reader.Read()) return null;
@@ -177,6 +185,102 @@ public abstract class AutoIncrementValueQuenchSharedTests
 
         Assert.That(maxId, Is.GreaterThanOrEqualTo(1000UL),
             "After re-quenching with AutoIncrementValue=1000, the next inserted row must receive id >= 1000.");
+    }
+
+    [Test]
+    public void ExistingTable_AfterTruncate_GetsTheDeclaredSeed_ThoughTheStatisticsCacheIsStale()
+    {
+        // MySQL 8 caches TABLES.AUTO_INCREMENT server-wide (24 hours by default) and TRUNCATE resets the counter
+        // without refreshing the entry. A seed compared against that entry looks already reached and is skipped.
+        RunQuench(BuildTableJson(autoIncrementValue: null));
+
+        using var cmd = _connection.CreateCommand();
+        var hasStatsCache = HasStatsCache(cmd);
+        if (hasStatsCache)
+        {
+            cmd.CommandText = "SET SESSION information_schema_stats_expiry = DEFAULT";
+            cmd.ExecuteNonQuery();
+        }
+        cmd.CommandText = $"INSERT INTO `{_testDb}`.`ai_quench_test` (id, name) VALUES (2000, 'before_truncate')";
+        cmd.ExecuteNonQuery();
+        var cachedRead = $"SELECT AUTO_INCREMENT FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = 'ai_quench_test'";
+        cmd.CommandText = cachedRead;
+        cmd.ExecuteScalar();
+        cmd.CommandText = $"TRUNCATE TABLE `{_testDb}`.`ai_quench_test`";
+        cmd.ExecuteNonQuery();
+        if (hasStatsCache)
+        {
+            cmd.CommandText = cachedRead;
+            Assert.That(Convert.ToUInt64(cmd.ExecuteScalar()), Is.EqualTo(2001UL),
+                "premise: the cache still holds the pre-TRUNCATE value, or this test proves nothing");
+        }
+        cmd.CommandText = "SELECT @@SESSION.information_schema_stats_expiry";
+        var sessionExpiryBefore = hasStatsCache ? cmd.ExecuteScalar()?.ToString() : null;
+
+        RunQuench(BuildTableJson(autoIncrementValue: 500));
+
+        cmd.CommandText = $"INSERT INTO `{_testDb}`.`ai_quench_test` (name) VALUES ('after_seed')";
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = $"SELECT MAX(id) FROM `{_testDb}`.`ai_quench_test`";
+        var firstId = Convert.ToUInt64(cmd.ExecuteScalar());
+        Assert.That(firstId, Is.EqualTo(500UL), "the first row after the deploy must take the declared seed");
+
+        if (hasStatsCache)
+        {
+            cmd.CommandText = "SELECT @@SESSION.information_schema_stats_expiry";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo(sessionExpiryBefore),
+                "the deploy must put the session's statistics-cache setting back");
+        }
+    }
+
+    // Extraction read AUTO_INCREMENT from the statistics cache, so a table that had grown since the cache was filled
+    // extracted its old seed (or none).
+    [Test]
+    public void Extraction_ReadsAutoIncrementPastTheStatisticsCache()
+    {
+        using var cmd = _connection.CreateCommand();
+        var hasStatsCache = HasStatsCache(cmd);
+        try
+        {
+            // The shared connection may have had the cache switched off by another test; the premise needs it on.
+            if (hasStatsCache)
+            {
+                cmd.CommandText = "SET SESSION information_schema_stats_expiry = DEFAULT";
+                cmd.ExecuteNonQuery();
+            }
+            cmd.CommandText = $"CREATE TABLE `{_testDb}`.`ai_extract_test` (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(20))";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"INSERT INTO `{_testDb}`.`ai_extract_test` (name) VALUES ('a'), ('b')";
+            cmd.ExecuteNonQuery();
+            var cachedRead = $"SELECT AUTO_INCREMENT FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = 'ai_extract_test'";
+            cmd.CommandText = cachedRead;
+            cmd.ExecuteScalar();
+            cmd.CommandText = $"INSERT INTO `{_testDb}`.`ai_extract_test` (id, name) VALUES (40, 'c')";
+            cmd.ExecuteNonQuery();
+            if (hasStatsCache)
+            {
+                cmd.CommandText = cachedRead;
+                Assert.That(Convert.ToUInt64(cmd.ExecuteScalar()), Is.EqualTo(3UL),
+                    "premise: the cache still holds the earlier value, or this test proves nothing");
+            }
+
+            cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_testDb}', 'ai_extract_test')";
+            var json = cmd.ExecuteScalar()?.ToString() ?? "";
+
+            Assert.That(json, Does.Contain("\"AutoIncrementValue\": 41"));
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`ai_extract_test`";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static bool HasStatsCache(IDbCommand cmd)
+    {
+        cmd.CommandText = "SHOW VARIABLES LIKE 'information_schema_stats_expiry'";
+        using var probe = cmd.ExecuteReader();
+        return probe.Read();
     }
 
     [Test]

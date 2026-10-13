@@ -7,12 +7,12 @@ DROP PROCEDURE IF EXISTS `SchemaSmith_EventQuench`;
 DELIMITER //
 
 CREATE PROCEDURE `SchemaSmith_EventQuench`(
-    IN p_ProductName VARCHAR(50),
-    IN p_DatabaseName VARCHAR(200),
-    IN p_EventDefinitions LONGTEXT,
+    IN p_ProductName VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_DatabaseName VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_EventDefinitions LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_WhatIf TINYINT,
     IN p_DropEventsRemovedFromProduct TINYINT,
-    IN p_TemplateName VARCHAR(256)
+    IN p_TemplateName VARCHAR(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 BEGIN
     -- Converges declared scheduled events, and RETURNS THE STATEMENTS TO RUN rather than running them.
@@ -61,7 +61,7 @@ BEGIN
         ShouldApply TINYINT DEFAULT 1,
         Changed TINYINT DEFAULT 0,
         DdlScript LONGTEXT
-    );
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_EventStatements;
     -- Seq is assigned explicitly rather than auto-incremented, because the statements are inserted in
@@ -69,7 +69,7 @@ BEGIN
     CREATE TEMPORARY TABLE _SchemaSmith_EventStatements (
         Seq INT NOT NULL PRIMARY KEY,
         Statement LONGTEXT
-    );
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     SET v_count = COALESCE(JSON_LENGTH(p_EventDefinitions), 0);
     WHILE v_idx < v_count DO
@@ -126,7 +126,10 @@ BEGIN
              END,
         ' ON COMPLETION ', CASE WHEN Preserve = 1 THEN 'PRESERVE' ELSE 'NOT PRESERVE' END,
         ' ', CASE Status WHEN 'DISABLE' THEN 'DISABLE'
-                         WHEN 'DISABLE ON SLAVE' THEN 'DISABLE ON SLAVE'
+                         -- MySQL 8.4 deprecates the SLAVE spelling (warning 1287) and 8.0 does not accept REPLICA;
+                         -- MariaDB accepts SLAVE without complaint back to the 10.2 floor.
+                         WHEN 'DISABLE ON SLAVE' THEN IF(VERSION() NOT LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 804,
+                                                         'DISABLE ON REPLICA', 'DISABLE ON SLAVE')
                          ELSE 'ENABLE' END,
         CASE WHEN NULLIF(Comment, '') IS NOT NULL
              THEN CONCAT(' COMMENT ''', REPLACE(Comment, '''', ''''''), '''') ELSE '' END,
@@ -203,7 +206,7 @@ BEGIN
     -- pair is what makes the drop path work on every supported MySQL and MariaDB.
     IF p_DropEventsRemovedFromProduct = 1 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_EventsToDrop;
-        CREATE TEMPORARY TABLE _SchemaSmith_EventsToDrop (Id INT AUTO_INCREMENT PRIMARY KEY, Name VARCHAR(64) NOT NULL);
+        CREATE TEMPORARY TABLE _SchemaSmith_EventsToDrop (Id INT AUTO_INCREMENT PRIMARY KEY, Name VARCHAR(64) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_EventsToDrop (Name)
             SELECT po.ObjectName
               FROM SchemaSmith_ProductOwnership po

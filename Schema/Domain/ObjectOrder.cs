@@ -25,13 +25,14 @@ namespace Schema.Domain
     [JsonConverter(typeof(StringEnumConverter))]
     public enum ObjectOrder
     {
-        /// <summary>Alphabetical by name. The default, and stable when a source table's ordinal order changes.</summary>
+        /// <summary>Alphabetical by name. Stable when a source table's ordinal order changes.</summary>
         Name,
 
         /// <summary>
-        /// The table's own column order. Useful when the package is meant to read like the table does;
-        /// note that two databases can order the same logical table differently, so a package extracted
-        /// this way is not guaranteed to match elsewhere.
+        /// The table's own column order, and SchemaTongs' default: a table deployed fresh from the package then has
+        /// the column order of the table it was extracted from, so a positional <c>INSERT</c> or <c>SELECT *</c> reads
+        /// the same. Two databases can order the same logical table differently, so a package extracted this way is
+        /// not guaranteed to match elsewhere.
         /// </summary>
         Physical
     }

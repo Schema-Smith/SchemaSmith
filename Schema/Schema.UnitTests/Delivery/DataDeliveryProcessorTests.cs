@@ -150,18 +150,34 @@ public class DataDeliveryProcessorTests
         var context = MakeContext(tables);
         context.Platform = "MySQL";
         context.MySqlServerVersionNum = 507; // MySQL 5.7
+        var downgrades = new List<(string Type, string Name)>();
+        context.RecordDowngrade = (type, name) => downgrades.Add((type, name));
 
         processor.DeliverTables(context);
 
         Assert.That(_executedScripts, Is.Empty, "No data may be delivered below the MySQL 8.0 floor.");
         Assert.That(_logs, Has.Some.Contains("MySQL 8.0"), "A clear skip message naming the floor must be logged.");
+        Assert.That(downgrades, Has.Some.Matches<(string Type, string Name)>(d => d.Type == "data delivery" && d.Name.Contains("Config")));
     }
 
-    [Test]
-    public void DeliverTables_SqlServerBelowJsonCliff_JsonDelivery_SkipsWithClearLog()
+    // Below compatibility level 130 there is no OPENJSON, so a JSON delivery used to be skipped (warn) or abort the run
+    // (fail). The XML shred works at every level, so the delivery is converted and delivered instead, whatever the policy.
+    [TestCase(100, "warn", "Xml")]
+    [TestCase(100, "fail", "Xml")]
+    [TestCase(130, "warn", "Json")]
+    public void DeliverTables_SqlServerJsonDelivery_BelowCompat130_IsDeliveredAsXml(int compatLevel, string policy, string expectedEncoding)
     {
-        // A JSON (OPENJSON) delivery needs SQL Server compatibility level 130. On a compat-100 target
-        // the default policy (warn) skips that delivery with a clear message and runs no merge script.
+        var built = new List<(string Data, string Encoding)>();
+        _mockHelper.BuildMergeScript(Arg.Any<IDbCommand>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<bool>(),
+            Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<bool>(),
+            Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string>())
+            .Returns(ci =>
+            {
+                built.Add((ci.ArgAt<string>(3), ci.ArgAt<string>(14)));
+                return $"MERGE INTO {ci.ArgAt<string>(2)}";
+            });
+
         var processor = new DataDeliveryProcessor();
         var tables = new List<IDeliverableTable>
         {
@@ -173,33 +189,20 @@ public class DataDeliveryProcessorTests
             }
         };
         var context = MakeContext(tables);
-        context.SqlServerCompatibilityLevel = 100;
+        context.SqlServerCompatibilityLevel = compatLevel;
+        context.UnsupportedFeaturePolicy = policy;
+        var downgrades = new List<(string Type, string Name)>();
+        context.RecordDowngrade = (type, name) => downgrades.Add((type, name));
 
         processor.DeliverTables(context);
 
-        Assert.That(_executedScripts, Is.Empty, "A JSON delivery must not run below compatibility level 130.");
-        Assert.That(_logs, Has.Some.Contains("compatibility level 130"), "A clear skip message naming the cliff must be logged.");
-    }
-
-    [Test]
-    public void DeliverTables_SqlServerBelowJsonCliff_JsonDelivery_FailPolicy_Throws()
-    {
-        // Under Target:UnsupportedFeaturePolicy=fail the same below-cliff JSON delivery aborts the run.
-        var processor = new DataDeliveryProcessor();
-        var tables = new List<IDeliverableTable>
+        var expectedData = expectedEncoding == "Xml" ? Schema.Utility.MergeScriptHelper.JsonPayloadToXml("[{\"Id\": 1}]") : "[{\"Id\": 1}]";
+        Assert.Multiple(() =>
         {
-            new TestTable
-            {
-                Name = "Config", Schema = "dbo",
-                DataDeliveries = new List<DataDelivery> { new DataDelivery { MergeType = "Insert", ContentFile = "data.json" } }
-            }
-        };
-        var context = MakeContext(tables);
-        context.SqlServerCompatibilityLevel = 100;
-        context.UnsupportedFeaturePolicy = "fail";
-
-        Assert.Throws<NotSupportedException>(() => processor.DeliverTables(context));
-        Assert.That(_executedScripts, Is.Empty);
+            Assert.That(built, Is.EqualTo(new[] { (expectedData, expectedEncoding) }), "the merge is built from the delivered content and encoding");
+            Assert.That(_executedScripts, Has.Count.EqualTo(1));
+            Assert.That(downgrades, Is.Empty, "nothing is left undelivered, so nothing is downgraded");
+        });
     }
 
     [Test]
@@ -739,7 +742,7 @@ public class DataDeliveryProcessorTests
     }
 
     [Test]
-    public void ValidateDeleteCascade_MySql_UsesBinaryCaseSensitiveComparison()
+    public void ValidateDeleteCascade_MySql_MatchesTheTableTheWayTheServerFoldsNames()
     {
         var mockReader = Substitute.For<IDataReader>();
         mockReader.Read().Returns(false);
@@ -748,7 +751,9 @@ public class DataDeliveryProcessorTests
         DataDeliveryProcessor.ValidateDeleteCascade(_mockCommand, "MySQL", "testdb",
             new List<(string, string)> { ("testdb", "Users") });
 
-        Assert.That(_mockCommand.CommandText, Does.Contain("BINARY"));
+        // Exact (binary) on a case-sensitive server, folded when lower_case_table_names >= 1.
+        Assert.That(_mockCommand.CommandText, Does.Contain("COLLATE utf8mb4_bin"));
+        Assert.That(_mockCommand.CommandText, Does.Contain("@@lower_case_table_names"));
         Assert.That(_mockCommand.CommandText, Does.Contain("REFERENCED_TABLE_NAME"));
     }
 

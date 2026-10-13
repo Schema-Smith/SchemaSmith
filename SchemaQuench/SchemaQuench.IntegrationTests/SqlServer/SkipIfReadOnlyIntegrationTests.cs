@@ -42,14 +42,13 @@ public class SkipIfReadOnlyIntegrationTests
     [OneTimeSetUp]
     public void CreateProbeDatabase()
     {
+        // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+        Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
         ExecuteOnMaster($@"
 IF DB_ID('{ProbeDb}') IS NOT NULL
-BEGIN
-    ALTER DATABASE [{ProbeDb}] SET READ_WRITE WITH ROLLBACK IMMEDIATE;
-    ALTER DATABASE [{ProbeDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-    DROP DATABASE [{ProbeDb}];
-END;
-CREATE DATABASE [{ProbeDb}];");
+    ALTER DATABASE [{ProbeDb}] SET READ_WRITE WITH ROLLBACK IMMEDIATE;");
+        DropProbeOnMaster();
+        ExecuteOnMaster($"CREATE DATABASE [{ProbeDb}];");
     }
 
     [OneTimeTearDown]
@@ -59,11 +58,8 @@ CREATE DATABASE [{ProbeDb}];");
         Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
         ExecuteOnMaster($@"
 IF DB_ID('{ProbeDb}') IS NOT NULL
-BEGIN
-    ALTER DATABASE [{ProbeDb}] SET READ_WRITE WITH ROLLBACK IMMEDIATE;
-    ALTER DATABASE [{ProbeDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-    DROP DATABASE [{ProbeDb}];
-END;");
+    ALTER DATABASE [{ProbeDb}] SET READ_WRITE WITH ROLLBACK IMMEDIATE;");
+        DropProbeOnMaster();
     }
 
     [Test]
@@ -166,6 +162,16 @@ END;");
         cmd.CommandTimeout = 0;
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+        conn.Close();
+    }
+
+    private void DropProbeOnMaster()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 0;
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, ProbeDb);
         conn.Close();
     }
 

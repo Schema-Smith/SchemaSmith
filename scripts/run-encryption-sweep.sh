@@ -67,6 +67,7 @@ echo "  encryption smoke check passed (ENCRYPTED=YES works)"
 
 out=$(env SmithySettings_MariaDB__Port=$PORT dotnet test "$PROJ" -c Release --no-build \
         --filter "TestCategory=Encryption&TestCategory=MariaDb" 2>&1)
+rc=$?
 summary=$(echo "$out" | grep -aE '^(Passed!|Failed!)' | tail -1)
 total=$(echo "$summary" | grep -oE 'Total:[[:space:]]*[0-9]+' | grep -oE '[0-9]+')
 
@@ -75,7 +76,8 @@ if [ -z "$summary" ] && echo "$out" | grep -qiE 'No test (matches|is available|m
   # above is the only thing proven. This is expected only before the encryption feature's tests land.
   echo "  NO TESTS: no Encryption+MariaDb tests matched. Infra is proven by the smoke check above, but"
   echo "            there are no encryption tests to run yet. (Expected before the feature lands.)"
-elif echo "$summary" | grep -q '^Passed!' && [ "${total:-0}" != "0" ]; then
+# A fixture's one-time teardown error fails the run under a "Passed!" summary.
+elif [ "$rc" -eq 0 ] && echo "$summary" | grep -q '^Passed!' && [ "${total:-0}" != "0" ]; then
   echo "  $summary"
 else
   FAILED=1

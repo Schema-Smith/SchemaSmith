@@ -18,6 +18,44 @@ namespace Schema.UnitTests.Domain
                 SchemaDefaultResolver.Resolve((SqlServerTable)null, isSchemaTemplate: false, Platform.SqlServer));
         }
 
+        // A schema-qualified RelatedTable was concatenated whole behind RelatedTableSchema at deploy
+        // (REFERENCES [dbo].[sales.Customer]) and resolved against the default schema by --Validate. The prefix is
+        // split off at load, so both read the key the same way.
+        [TestCase("sales.Customer", null, false, "sales", "Customer")]
+        [TestCase("[sales].[Customer]", null, false, "sales", "Customer")]
+        [TestCase("sales.Customer", "sales", false, "sales", "Customer")]
+        [TestCase("sales.Customer", null, true, "sales", "Customer")]
+        [TestCase("[Order.Detail]", null, false, "dbo", "[Order.Detail]")]
+        [TestCase("Customer", null, false, "dbo", "Customer")]
+        public void Resolve_SqlServerForeignKey_SplitsASchemaPrefixOffRelatedTable(string relatedTable, string relatedSchema,
+            bool isSchemaTemplate, string expectedSchema, string expectedTable)
+        {
+            var fk = new SqlServerForeignKey { Name = "FK_Orders_Customer", RelatedTable = relatedTable, RelatedTableSchema = relatedSchema };
+
+            SchemaDefaultResolver.Resolve(fk, isSchemaTemplate, Platform.SqlServer);
+
+            Assert.That((fk.RelatedTableSchema, fk.RelatedTable), Is.EqualTo((expectedSchema, expectedTable)));
+        }
+
+        [Test]
+        public void Resolve_PostgreSqlForeignKey_SplitsASchemaPrefixOffRelatedTable()
+        {
+            var fk = new PostgreSqlForeignKey { Name = "fk_orders", RelatedTable = "public.orders" };
+
+            SchemaDefaultResolver.Resolve(fk, isSchemaTemplate: false, Platform.PostgreSQL);
+
+            Assert.That((fk.RelatedTableSchema, fk.RelatedTable), Is.EqualTo(("public", "orders")));
+        }
+
+        [Test]
+        public void Resolve_ForeignKey_WhosePrefixContradictsRelatedTableSchema_IsRefusedByName()
+        {
+            var fk = new SqlServerForeignKey { Name = "FK_Orders_Customer", RelatedTable = "sales.Customer", RelatedTableSchema = "hr" };
+
+            var ex = Assert.Throws<InvalidOperationException>(() => SchemaDefaultResolver.Resolve(fk, false, Platform.SqlServer));
+            Assert.That(ex!.Message, Does.Contain("FK_Orders_Customer").And.Contain("sales").And.Contain("hr"));
+        }
+
         [Test]
         public void Resolve_SqlServerIndexedView_UnsetSchema_ResolvesToDbo_InRegularTemplate()
         {

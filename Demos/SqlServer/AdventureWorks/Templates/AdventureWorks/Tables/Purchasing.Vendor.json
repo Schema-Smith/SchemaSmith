@@ -4,7 +4,7 @@
   "Columns": [
     {
       "Name": "[AccountNumber]",
-      "DataType": "ACCOUNTNUMBER",
+      "DataType": "AccountNumber",
       "ShouldApplyExpression": "",
       "OldName": "",
       "Collation": "",
@@ -20,7 +20,7 @@
     },
     {
       "Name": "[ActiveFlag]",
-      "DataType": "FLAG",
+      "DataType": "Flag",
       "Default": "1",
       "ShouldApplyExpression": "",
       "OldName": "",
@@ -87,7 +87,7 @@
     },
     {
       "Name": "[Name]",
-      "DataType": "NAME",
+      "DataType": "Name",
       "ShouldApplyExpression": "",
       "OldName": "",
       "Collation": "",
@@ -103,7 +103,7 @@
     },
     {
       "Name": "[PreferredVendorStatus]",
-      "DataType": "FLAG",
+      "DataType": "Flag",
       "Default": "1",
       "ShouldApplyExpression": "",
       "OldName": "",

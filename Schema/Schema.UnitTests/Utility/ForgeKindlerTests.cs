@@ -191,6 +191,18 @@ public class ForgeKindlerTests
     }
 
     [Test]
+    public void GetKindlingScriptNames_MySQL_NameKeysPrecedeBootstrap()
+    {
+        // Bootstrap compares package names with catalog names through the name keys, and a function a procedure
+        // calls must exist when the procedure is created on MySQL.
+        var scripts = ForgeKindler.GetKindlingScriptNames(Platform.MySQL).ToList();
+        var bootstrapIdx = scripts.IndexOf("SchemaSmith_BootstrapTableQuench.sql");
+
+        Assert.That(scripts.IndexOf("SchemaSmith_IdentifierKey.sql"), Is.InRange(0, bootstrapIdx - 1));
+        Assert.That(scripts.IndexOf("SchemaSmith_NameKeyCI.sql"), Is.InRange(0, bootstrapIdx - 1));
+    }
+
+    [Test]
     public void GetKindlingScriptNames_MySQL_RebuildTableFollowsItsGuardAndPrecedesTheQuench()
     {
         // MySQL twin of the SQL Server and PostgreSQL ordering guards. SchemaSmith_RebuildTable calls
@@ -313,11 +325,12 @@ public class ForgeKindlerTests
         //   before any table or column is created, on every run including a resumed one).
         // +1 = SchemaSmith.DegradeDatabaseToggles (#432 -- the CDC and Change Tracking degrade, split out so it can be
         //   judged after the Before slot, which can enable either one).
-        // +1 = SchemaSmith.fn_EnterpriseFeaturesUnavailable (SS-053 -- compression and columnstore are Enterprise-only
+        // +1 = SchemaSmith.fn_EnterpriseFeaturesUnavailable (compression and columnstore are Enterprise-only
         //   below SQL Server 2016 SP1, so the index and table degrades ask the edition as well as the version).
-        // +1 = SchemaSmith.DegradeUnsupportedFullText (SS-054 -- STATISTICAL_SEMANTICS without a registered semantic
+        // +1 = SchemaSmith.DegradeUnsupportedFullText (STATISTICAL_SEMANTICS without a registered semantic
         //   database; called after the full-text parse on both the table and --IndexOnly paths).
-        Assert.That(sqlServer.Length, Is.EqualTo(48));
+        // +1 = SchemaSmith.RecordWouldChanges (WhatIf writes the change rows a quench script carries, as previews).
+        Assert.That(sqlServer.Length, Is.EqualTo(49));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -350,7 +363,10 @@ public class ForgeKindlerTests
         //   statistics definitions compared in the form the catalog reads back).
         // + SchemaSmith.ParseTableJson (the shred as a callable procedure, so SchemaQuench can pass the
         //   model as an argument instead of escaping it into an anonymous DO block).
-        Assert.That(postgres.Length, Is.EqualTo(50));
+        // + QuoteName (the identifier delimiter new PostgreSQL emission uses).
+        // + ColumnDataType (one column-type and collation rendering for extraction and the drift compare).
+        // + RecordWouldChanges (WhatIf writes the change rows a quench script carries, as previews).
+        Assert.That(postgres.Length, Is.EqualTo(53));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
@@ -461,7 +477,22 @@ public class ForgeKindlerTests
         //   default comparison folded only the LIVE value, so MariaDB's override turned a live uuid() into
         //   UUID while the declared uuid() was compared raw -- never equal, re-altering the column on every
         //   deploy. Both sides now fold through the same pair.).
-        Assert.That(mysql.Length, Is.EqualTo(66));
+        // +1 = SchemaSmith_NameKeyCI (the case-insensitive name key for columns, indexes and constraints, which the
+        //   engine compares case-insensitively on every lower_case_table_names setting).
+        // +1 = SchemaSmith_CatalogSnapshot (keyed TABLES/COLUMNS snapshots, so catalog reads compare names through
+        //   their keys without a key function on every row of a catalog join).
+        // +1 = SchemaSmith_ServerVersionPatchNum (major*10000+minor*100+patch, for gates that turn on a patch: MariaDB's
+        //   RENAME COLUMN / RENAME INDEX at 10.5.2).
+        // +1 = SchemaSmith_RefuseUnsupportedIndexes (a long unique key below MariaDB 10.4 has no degrade, so it
+        //   is refused before anything is created).
+        // +1 = SchemaSmith_CheckTableJoin (the MariaDB-only table predicate for CHECK_CONSTRAINTS joins, as a
+        //   string because MySQL's CHECK_CONSTRAINTS has no TABLE_NAME).
+        // +1 = SchemaSmith_InnodbName (InnoDB's filename-encoded name, for the placement reads).
+        // +1 = SchemaSmith_IndexTypesMatch (the one declared-vs-live index-kind rule both index detectors use).
+        // +1 = SchemaSmith_StripFullLengthPrefixes (a key-part prefix as long as its column is the whole column).
+        // +1 = SchemaSmith_TrimEnumMembers (ENUM/SET members lose trailing spaces when the column is created).
+        // +1 = SchemaSmith_IndexKeyPartsUnsupported (a functional or multi-valued key part the target cannot build).
+        Assert.That(mysql.Length, Is.EqualTo(76));
     }
 
     [Test]
@@ -571,6 +602,18 @@ public class ForgeKindlerTests
         {
             Assert.That(v15Warn, Is.Not.EqualTo(v10Warn), "a different detected version must change the stamp");
             Assert.That(v15Warn, Is.Not.EqualTo(v15Fail), "a different policy must change the stamp");
+        });
+    }
+
+    // A routine keeps the sql_mode it was created under, so routines kindled under another mode are not current.
+    [Test]
+    public void ComputeKindleStamp_MySql_VariesBySqlMode()
+    {
+        var strict = ForgeKindler.ComputeKindleStamp(Platform.MySQL, sqlMode: "STRICT_TRANS_TABLES");
+        Assert.Multiple(() =>
+        {
+            Assert.That(strict, Is.Not.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.MySQL, sqlMode: "")));
+            Assert.That(strict, Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.MySQL, sqlMode: "STRICT_TRANS_TABLES")));
         });
     }
 

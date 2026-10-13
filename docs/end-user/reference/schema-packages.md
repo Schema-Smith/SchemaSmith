@@ -506,6 +506,7 @@ Every table definition file declares exactly one table. The shared properties be
 | `CheckConstraints` | array | `[]` | No | Table-level check constraint definitions. See [Check Constraints](#check-constraints). |
 | `ShouldApplyExpression` | string | | No | SQL expression evaluated at quench time. If it returns false (or `0`), the entire table is skipped on this database. Tokens are resolved before evaluation. See [Conditional Application](#conditional-application). |
 | `VariantName` | string | | No | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
+| `TimeZone` | string | | **MySQL, MariaDB.** The session time zone, as an offset such as `+00:00`, that the `ContentFile`'s `TIMESTAMP` values were extracted in. Delivery runs in the same zone, so the values arrive unchanged wherever the target server's zone is. DataTongs sets it to `+00:00`. Without it, delivery reads the values in the target session's zone, which is right for data written in that zone. |
 | `OldName` | string | `""` | No | Previous table name. When set, the table is renamed during quench. Clear after the rename has been deployed everywhere. |
 | `DataDelivery` | object | `null` | No | Declarative data delivery configuration for this table. See [DataDelivery](#datadelivery). |
 | `Extensions` | object | `null` | No | Open metadata bag. See [Custom Properties](custom-properties.md). |
@@ -578,7 +579,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | `Comment` | string | `null` | Table comment. |
 | `AutoIncrementValue` | ulong | `null` | Initial auto-increment seed value. Applied at quench time using set-if-higher semantics: the seed is only raised, never lowered (MySQL clamps a below-current value to max+1, so skipping the statement avoids phantom DDL on every quench). |
 | `FullTextIndexes` | array | `[]` | Full-text index definitions (MySQL supports multiple per table). See [Full-Text Indexes (MySQL)](#full-text-indexes-mysql). |
-| `Compression` | string | `null` | **MySQL only.** InnoDB transparent page compression: `"zlib"`, `"lz4"` or `"none"`. Cannot be combined with `RowFormat: "COMPRESSED"` — MySQL refuses that with error 1031, and `--Validate` reports `SS-CO-001` first. MariaDB spells this `PageCompressed`. |
+| `Compression` | string | `null` | **MySQL only.** InnoDB transparent page compression: `"zlib"`, `"lz4"` or `"none"`. Cannot be combined with `RowFormat: "COMPRESSED"` — MySQL refuses that with error 1031, and `--Validate` reports `SS-CO-001` first. Applied when the table is created; a server whose data directory cannot punch holes creates it uncompressed under the [unsupported-feature policy](schemaquench.md#mysql--mariadb). MariaDB spells this `PageCompressed`. |
 | `KeyBlockSize` | int | `null` | InnoDB compressed-page size in KB (1, 2, 4, 8, 16). Only meaningful with `RowFormat: "COMPRESSED"`. |
 | `Encryption` | string | `null` | **MySQL only.** InnoDB at-rest tablespace encryption: `"Y"` or `"N"`. Unset means SchemaSmith does not manage encryption, so a tablespace someone encrypted by hand is left as it is. **Converges both ways** — unlike the placement properties below, turning encryption on or off rebuilds the tablespace in place without discarding anything, so there is no data-loss direction to refuse. There is no version gate: a server with no keyring plugin rejects the statement with its own error, which is server configuration rather than a version floor. MariaDB uses `Encrypted` instead. |
 | `DataDirectory` | string | `null` | The filesystem directory the table's data file is placed in (InnoDB `DATA DIRECTORY`). MySQL additionally requires the directory to be listed in the server's `innodb_directories`. **Applied at create; a move is refused by name** — MySQL and MariaDB cannot relocate a table's data file in place, so a declared directory that differs from the deployed one stops the run rather than being silently ignored. **The refusal fires under `--WhatIf` too**, because there is no safe preview of a change that cannot be made. Unset means placement is unmanaged, not "has none". |
@@ -690,7 +691,7 @@ Types this affects in practice: MariaDB `UUID` (10.7+), MySQL `VECTOR` (9.0+), S
 
 ### SQL Server column extras
 
-`CheckExpression`, `ComputedExpression`, `Persisted`, `Sparse`, `IsColumnSet`, `Collation`, `DataMaskFunction`, `FileStream` (see [FILESTREAM (SQL Server)](#filestream-sql-server)). Identity is part of the `DataType` string (`INT IDENTITY(1,1)`); `ROWGUIDCOL` likewise (`UNIQUEIDENTIFIER ROWGUIDCOL`).
+`CheckExpression`, `ComputedExpression`, `Persisted`, `Sparse`, `IsColumnSet`, `Collation`, `DataMaskFunction`, `AnsiPadding`, `FileStream` (see [FILESTREAM (SQL Server)](#filestream-sql-server)). Identity is part of the `DataType` string (`INT IDENTITY(1,1)`); `ROWGUIDCOL` likewise (`UNIQUEIDENTIFIER ROWGUIDCOL`).
 
 `IsColumnSet: true` declares `COLUMN_SET FOR ALL_SPARSE_COLUMNS` -- an XML column that aggregates the table's sparse columns. Available at the SQL Server 2008 floor, alongside `Sparse`. Adding a column set and the sparse columns it aggregates together in one deploy always works, whether the table is new or already exists. **Known limitation:** converting an *already-deployed* plain column into a column set in the same deploy that also introduces a brand-new sparse column is not supported -- the new sparse column commits before the conversion runs, and SQL Server refuses a column set on a table that already has a sparse column. The conversion works on its own (no new sparse columns in the same deploy, and none pre-existing on the table); combined with a new sparse column, it fails with SQL Server's own error.
 
@@ -703,6 +704,19 @@ default" authorable. It requires `Default`; without one there is no value to app
 > **Note:** This is a SQL Server difference, not a general one. PostgreSQL, MySQL and MariaDB backfill the default
 > on `ADD COLUMN` already, so the setting exists only here.
 
+`AnsiPadding: false` creates a `char`, `varchar`, `binary` or `varbinary` column under `SET ANSI_PADDING OFF`, so
+trailing blanks (trailing zeros in a binary column) are trimmed when a value is stored. SchemaTongs writes it for each
+such column it finds unpadded and leaves it out otherwise. Leaving it out leaves an existing column's padding as it
+is, and creates a new column padded; `true` pads a column that is currently unpadded. It is ignored on every other
+type: `nchar` and `nvarchar` are always padded, and the rest have nothing to pad.
+
+SQL Server pads a column whenever it is altered, so a change to a column declared `AnsiPadding: false` -- its length,
+type, nullability or collation -- replaces it rather than altering it: a new column is added unpadded, the data is
+copied across, and the old one is dropped. Its defaults and indexes are put back by the same deploy, and it moves
+to the end of the table, as an identity removal does.
+
+> **Note:** Microsoft has deprecated `ANSI_PADDING OFF`. Use it to keep a legacy column as it is, not for new design.
+
 ### PostgreSQL column extras
 
 `GenerationExpression` (for stored generated columns -- `Generated` may be left out, since an expression can only mean `ALWAYS`; add `"Virtual": true` for a `VIRTUAL` generated column on PostgreSQL 18+), `Collation`, `Storage` (`PLAIN`, `MAIN`, `EXTERNAL` or `EXTENDED` -- the column's TOAST strategy), `Compression` (`pglz` or `lz4`, PostgreSQL 14+), identity columns expressed via `DataType` (`INTEGER GENERATED BY DEFAULT AS IDENTITY` or `GENERATED ALWAYS`).
@@ -710,6 +724,10 @@ default" authorable. It requires `Default`; without one there is no value to app
 ### MySQL column extras
 
 `GenerationExpression`, `CharacterSet`, `Collation`, `Comment`, and `AutoIncrement` (bool) for an `AUTO_INCREMENT` column -- or spell it in `DataType` (`INT AUTO_INCREMENT`).
+
+`DataType` accepts the engine's synonyms, and a column declared with one is not changed again on the next deploy: `INTEGER`, `BOOL`/`BOOLEAN`, `DEC`/`NUMERIC`/`FIXED`, `REAL`, `DOUBLE PRECISION`, `FLOAT4`/`FLOAT8`, `INT1`-`INT8`, `MIDDLEINT`, `LONG`/`LONG VARCHAR`/`LONG VARBINARY`, `CHARACTER`/`CHARACTER VARYING`, and the national types (`NVARCHAR`, `NCHAR`, `NATIONAL CHAR`/`VARCHAR`), which mean `utf8mb3` unless the column declares a `CharacterSet`. A bare `DECIMAL`, `CHAR`, `BIT` or `BINARY` means its default length (`DECIMAL(10,0)`, length 1). `GEOMETRYCOLLECTION` and `GEOMCOLLECTION` are the same type.
+
+A column that sets `CharacterSet` to the table's character set and leaves `Collation` out gets the table's collation, as it would in `CREATE TABLE`. One in a different character set gets that set's default collation, which varies by engine version, so give it a `Collation` (`--Validate` reports `SS-COL-002`).
 
 `Invisible` (bool) hides a column from `SELECT *` and from an `INSERT` that names no column list; it is still readable when named explicitly. Requires MySQL 8.0.23 or MariaDB 10.3 -- below those the column deploys visible, per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation).
 
@@ -1055,13 +1073,13 @@ The chosen idiom is platform-specific -- `MERGE` on SQL Server and PostgreSQL, `
 
 `ContentEncoding` selects how SchemaQuench shreds the `ContentFile`, and every platform accepts `Xml` -- but the reason to reach for it, and how it's actually applied, differs by engine.
 
-On **SQL Server**, the default `Json` encoding shreds the content with `OPENJSON`, which requires compatibility level 130 (SQL Server 2016+). If your target database is left at an older compatibility level (100--120, common where a line-of-business app is certified against an older level), a JSON delivery cannot run there. Set `"ContentEncoding": "Xml"` and SchemaSmith shreds the payload with the XML data-type methods (`.nodes()` / `.value()`) instead -- a path that works at every compatibility level -- so the same package's data deploys on a legacy target. Clearing that cliff is the real reason to choose `Xml` on SQL Server.
+On **SQL Server**, the default `Json` encoding shreds the content with `OPENJSON`, which requires compatibility level 130 (SQL Server 2016+). If your target database is left at an older compatibility level (100--120, common where a line-of-business app is certified against an older level), SchemaQuench converts a `Json` delivery to the XML shape as it reads the content file and shreds it with the XML data-type methods (`.nodes()` / `.value()`), a path that works at every compatibility level. The same package's data deploys on a legacy target unchanged. Setting `"ContentEncoding": "Xml"` ships the content already in that shape, so nothing is converted at deploy time.
 
 On **PostgreSQL**, `Xml` is shredded natively with `xmltable()` at every supported version -- there's no compatibility cliff to route around there, so it's a stylistic choice rather than a necessity.
 
 On **MySQL and MariaDB**, neither engine can shred XML dynamically (both reject a non-constant XPath outright), so SchemaSmith converts an `Xml`-encoded payload to JSON once, up front, and shreds the result exactly as it would a hand-authored JSON payload. Declaring `Xml` there buys authoring uniformity for a schema package shared across engines -- not a version-reach benefit, since MySQL/MariaDB never had a compatibility-level cliff to begin with.
 
-The two encodings are not interchanged automatically: the payload is your data, in a shape SchemaSmith does not own, so you choose the encoding per delivery and SchemaSmith shreds whichever you declared. A `Json` delivery aimed at a below-130 SQL Server target follows the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation) -- `warn` (the default) skips just that delivery with a clear message and delivers the rest; `fail` aborts.
+You choose the encoding per delivery, and SchemaSmith shreds whichever you declared, with the one conversion above: a `Json` delivery aimed at a SQL Server database below compatibility level 130 is delivered as XML. Nothing is skipped.
 
 The XML row shape is a documented, stable contract -- one `<c>` element per column, named by an `n` attribute so any column name (including `[Order Date]`) is carried verbatim:
 
@@ -1650,7 +1668,7 @@ engine. Each is documented in full in its own section below.
 | Object | Converged | Where it stops, and why |
 |---|---|---|
 | Sequence | type, increment, bounds, cache | **The current position is never managed** — it records which numbers were handed out, so it is data, not schema |
-| Domain type | `CHECK`, default, nullability | **A base-type change is refused** — PostgreSQL has no `ALTER DOMAIN … TYPE`; it is a syntax error, not an unsupported operation |
+| Domain type | `CHECK`, default, nullability | **A base-type or collation change is refused** — PostgreSQL has no `ALTER DOMAIN … TYPE` or `… COLLATE`; it is a syntax error, not an unsupported operation |
 | Enum type | added values, ordering | **Removing a value is reported, never performed** — PostgreSQL cannot remove one without recreating the type, which would drop every column using it |
 | Scheduled event | schedule, body, status | **Removal reaches only events SchemaSmith created**, and only with `DropEventsRemovedFromProduct` on — one made by hand is never touched |
 
@@ -1702,6 +1720,7 @@ Domain types live in the `Domain Types/` directory of each template, which accep
 | `NotNull` | bool | `false` | Converges in place via `ALTER DOMAIN … SET/DROP NOT NULL`. |
 | `Default` | string | `null` | Default applied to a column of this domain that declares no default of its own. Converges in place. |
 | `CheckConstraints` | array | `[]` | Named `CHECK` constraints — `{ "Name": "...", "Expression": "VALUE > 0" }`. Write the predicate alone, without the surrounding `CHECK (…)`. |
+| `Collation` | string | `null` | The domain's collation when it differs from the base type's, such as `"C"`; one in another schema is written delimited, as `"sales"."ci"`. Create-time only: PostgreSQL cannot alter it, so a change is refused rather than attempted. Leave it out and it is not checked. |
 
 **Constraints converge as a set.** One the package declares and the server lacks is added; one the server has and the package no longer declares is dropped. Dropping is safe here in a way removing an enum value is not — it removes a validation rule, destroys no data, and cascades to nothing.
 

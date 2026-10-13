@@ -63,7 +63,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     "finishedUtc": "2026-07-09T14:03:47.881Z",
     "durationMs": 36677,            // run wall-clock
     "mode": "Quench",               // Quench | WhatIf | Validate
-    "outcome": "Success",           // Success | PartialFailure | Aborted
+    "outcome": "Success",           // Success | Incomplete | PartialFailure | Aborted
     "exitCode": 0,
     "resumedFromCheckpoint": false
   },
@@ -154,7 +154,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `startedUtc` / `finishedUtc` | Run start and end, UTC. |
 | `durationMs` | Wall-clock milliseconds for the whole run. |
 | `mode` | `Quench` (a real deploy), `WhatIf` (a dry run), or `Validate`. |
-| `outcome` | `Success`, `PartialFailure` (some targets failed, others succeeded), or `Aborted`. |
+| `outcome` | `Success`; `Incomplete` (every target finished, but a feature was downgraded on a target that lacks it -- see `unsupportedDowngrade` -- exit code `1`); `PartialFailure` (some targets failed, others succeeded); or `Aborted`. |
 | `exitCode` | The process exit code the run returned. |
 | `resumedFromCheckpoint` | `true` when the run resumed a prior interrupted deployment. |
 
@@ -205,9 +205,9 @@ Empty on a clean run. Each entry mirrors the failure triage roll-up exactly — 
 
 | Key | Meaning |
 | --- | --- |
-| `wouldApply[]` | Changes the run would apply: `scope`, `script`. |
+| `wouldApply[]` | Scripts the run would apply, product scripts included: `scope`, `script`. |
 | `wouldSkip[]` | Changes it would skip. |
-| `wouldDeliver[]` | Data-delivery scripts it would deliver. |
+| `wouldDeliver[]` | Data it would deliver: a `Table Data` script's path, or a table's `DataDelivery` as the table's name (with ` [variant]` when the delivery names one). |
 
 ## objectChanges — what actually changed
 
@@ -240,6 +240,10 @@ Where the counts are the summary, `details[]` is the itemized list — one row p
 - **`xmlIndex`** — an XML index created (SQL Server).
 - **`fullTextIndex`** — a full-text index created or dropped (SQL Server, MySQL, MariaDB).
 - **`constraint`** — includes exclude constraints (PostgreSQL), which land in the generic constraint type.
+- **`dataDelivery`** — a table's `DataDelivery` that ran (`delivered`), or under `WhatIf` would run (`wouldDeliver`). The name is the table's, with ` [variant]` when the delivery names one.
+- **`database`** and **`schema`** — a database or schema created because its `TemplateTargets` entry or template sets `CreateIfMissing` (`created`, or `wouldCreate` under `WhatIf`).
+- **`sequence`**, **`domain type`**, **`domain constraint`**, **`enum type`** and **`enum value`** — PostgreSQL sequences, domains and enum types. An enum value the package no longer declares, or a changed value order, is recorded as `wouldDrop` / `wouldModify` even on a real run, because PostgreSQL cannot apply it without recreating the type.
+- **`changeDataCapture`**, **`changeTracking`** and **`temporal`** — SQL Server CDC, change tracking and system versioning on a table: `created` when turned on, `dropped` when turned off, `modified` for a CDC capture-instance rotation or a change-tracking reset. Disabling CDC on a table with two capture instances records one row for each.
 
 These appear as `details[]` rows with their real `objectType` and `action` even though no top-level count field aggregates them — the detail is preserved even where the summary doesn't bucket it.
 

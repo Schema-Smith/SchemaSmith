@@ -110,7 +110,7 @@ public class SchemaTongs
 
     internal CheckConstraintStyle CheckConstraintStyle => _checkConstraintStyle;
     private CheckConstraintStyle _checkConstraintStyle;
-    private ObjectOrder _objectOrder = ObjectOrder.Name;
+    private ObjectOrder _objectOrder = ObjectOrder.Physical;
     private bool _preserveExistingOrder = true;
 
     // The wire encoding used to KINDLE and to READ the SQL Server schema model back out of the source.
@@ -302,7 +302,7 @@ public class SchemaTongs
         _stopwatch.Start();
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
         var targetDb = config[SettingsKeys.Source.Database] ?? config[SettingsKeys.Source.Schema];
-        if (string.IsNullOrEmpty(targetDb)) throw new Exception("Source database is required. Set 'Source:Database' in appsettings.json.");
+        if (string.IsNullOrEmpty(targetDb)) throw new RunFailedException("Source database is required. Set 'Source:Database' in SchemaTongs.settings.json.");
         _productPath = ConfigHelper.PathSetting(config, SettingsKeys.ProductKeys.Path);
 
         LoadShouldCastSettings(config);
@@ -316,7 +316,7 @@ public class SchemaTongs
         // PreserveExistingOrder defaults ON: it only has any effect when a file already exists, so a first
         // extract is unaffected and nobody is opted into a surprise.
         _objectOrder = Enum.TryParse<ObjectOrder>(config[SettingsKeys.ProductKeys.ObjectOrder], true, out var order)
-            ? order : ObjectOrder.Name;
+            ? order : ObjectOrder.Physical;
         _preserveExistingOrder = !bool.TryParse(config[SettingsKeys.ProductKeys.PreserveExistingOrder], out var preserve) || preserve;
 
         var productFile = Path.Combine(_productPath, "Product.json");
@@ -723,6 +723,10 @@ public class SchemaTongs
     // this to the same partial-failure exit code SchemaQuench uses.
     public bool Failed => _stats.TableErrors > 0;
 
+    /// <summary>2 when a table failed; 1 when an object was skipped or its script was invalid, so the package is
+    /// missing it; otherwise 0.</summary>
+    public int ExitCode => Failed ? 2 : _stats.SkippedObjects > 0 || _invalidScripts.Count > 0 ? 1 : 0;
+
     private readonly Dictionary<string, ExtractionFileIndex> _folderIndexes = new();
     private readonly List<string> _pendingSqulerrorCleanup = new();
 
@@ -830,6 +834,7 @@ public class SchemaTongs
         if (!file.Exists(errorPath)) return false;
 
         _progressLog.Info($"  Skipping export for known invalid script: {Path.GetFileName(filePath)} (.sqlerror exists, validation off)");
+        _stats.SkippedObjects++;
         return true;
     }
 
@@ -1122,7 +1127,8 @@ public class SchemaTongs
             if (_includeDDLTriggers) ScriptSqlServerDDLTriggers(command);
             if (_includeXmlSchemaCollections) ScriptSqlServerXmlSchemaCollections(command);
             if (_includeIndexedViews) CastSqlServerIndexedViews(command);
-            if (_includeSequences) ScriptSqlServerSequences(command);
+            // Sequences arrived in SQL Server 2012 (major 11); 2008 R2 has no sys.sequences, so there is nothing to cast.
+            if (_includeSequences && sourceMajor is 0 or >= 11) ScriptSqlServerSequences(command);
             if (_includeSynonyms) ScriptSqlServerSynonyms(command);
         }
         finally
@@ -1651,7 +1657,10 @@ SELECT s.name AS SchemaName, o.name AS ObjectName, CONVERT(BIT, ISNULL(sm.is_sch
  WHERE o.type = 'V'
    AND o.is_ms_shipped = 0
    AND s.name <> 'SchemaSmith'
-   AND o.name NOT LIKE 'MSSQL[_]DroppedLedgerView[_]%'" + LedgerViewFilter() + @"
+   AND o.name NOT LIKE 'MSSQL[_]DroppedLedgerView[_]%'" + LedgerViewFilter() +
+            // An indexed view is extracted as Indexed Views JSON; scripting it here as well created it twice.
+            (_includeIndexedViews ? @"
+   AND ISNULL(OBJECTPROPERTY(o.object_id, 'IsIndexed'), 0) = 0" : "") + @"
  ORDER BY s.name, o.name";
 
         var views = new List<(string Schema, string Name, bool SchemaBound)>();
@@ -1912,6 +1921,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
                     if (reader.IsDBNull(0))
                     {
                         _progressLog.Warn($"  WARNING: {triggerName} is encrypted, skipping");
+                        _stats.SkippedObjects++;
                         continue;
                     }
                     definition = reader.GetString(0);
@@ -2021,7 +2031,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
         return result;
     }
 
-    private string ScriptSqlServerProgrammableObject(IDbCommand command, string schemaName, string objectName,
+    internal string ScriptSqlServerProgrammableObject(IDbCommand command, string schemaName, string objectName,
         string level1Type, string level2Type = null, string level2ParentName = null)
     {
         command.CommandText = $@"
@@ -2042,6 +2052,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
                 if (reader.IsDBNull(0))
                 {
                     _progressLog.Warn($"  WARNING: {schemaName}.{objectName} is encrypted, skipping");
+                    _stats.SkippedObjects++;
                     return null;
                 }
                 definition = reader.GetString(0);
@@ -2160,6 +2171,7 @@ SELECT s.name AS SchemaName, v.name AS ViewName
             if (string.IsNullOrWhiteSpace(viewJson) || viewJson.Trim().Equals("{}"))
             {
                 _progressLog.Error($"    No json returned for {schema}.{name}");
+                _stats.SkippedObjects++;
                 continue;
             }
             var viewObj = JsonText.Deserialize<SqlServerIndexedView>(viewJson);
@@ -2344,6 +2356,11 @@ SELECT con.conname AS ""Name"",
                 var contentSchema = (tableObj as IDeliverableTable)?.Schema ?? "";
                 var resolution = resolver.Resolve(contentSchema, table);
                 var tableFile = resolution.WritePath;
+                // A refreshed file keeps the form it was written in: one that declares "Schema": "public" keeps
+                // declaring it, so its file name and content still agree.
+                if (!_isSchemaTemplate && string.IsNullOrEmpty(contentSchema) && !string.IsNullOrEmpty(resolution.ExistingSchema)
+                    && tableObj is PostgreSqlTable refreshed)
+                    refreshed.Schema = resolution.ExistingSchema;
                 MarkPathWritten(castPath, tableFile);
                 if (resolution.UngatedEmit)
                     _progressLog.Warn($"    Extracted {schema}.{table} did not match any active variant — writing ungated '{Path.GetFileName(tableFile)}'; resolve its gating (SS-DUP-001).");
@@ -2450,6 +2467,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
             if (string.IsNullOrWhiteSpace(typeJson) || typeJson.Trim() == "{}")
             {
                 _progressLog.Error($"    No json returned for domain type {schema}.{name}");
+                _stats.SkippedObjects++;
                 continue;
             }
 
@@ -2512,6 +2530,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
             if (string.IsNullOrWhiteSpace(typeJson) || typeJson.Trim() == "{}")
             {
                 _progressLog.Error($"    No json returned for enum type {schema}.{name}");
+                _stats.SkippedObjects++;
                 continue;
             }
 
@@ -2693,6 +2712,7 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
             if (string.IsNullOrWhiteSpace(seqJson) || seqJson.Trim() == "{}")
             {
                 _progressLog.Error($"    No json returned for sequence {schema}.{name}");
+                _stats.SkippedObjects++;
                 continue;
             }
 
@@ -2825,6 +2845,7 @@ SELECT mv.schemaname, mv.matviewname
             if (string.IsNullOrWhiteSpace(viewJson) || viewJson.Trim().Equals("{}"))
             {
                 _progressLog.Error($"    No json returned for {schema}.{name}");
+                _stats.SkippedObjects++;
                 continue;
             }
             var viewObj = JsonText.Deserialize<PostgreSqlMaterializedView>(viewJson);
@@ -2899,11 +2920,12 @@ SELECT mv.schemaname, mv.matviewname
             try
             {
                 using var command = connection.CreateCommand();
-                command.CommandText = "SET sql_mode='PIPES_AS_CONCAT';";
-                command.ExecuteNonQuery();
-
                 _progressLog.Info("Kindling The Forge");
                 ForgeKindler.KindleTheForge(command, _platform, allowReadOnlyTarget: true);
+
+                // The routine-scripting queries below build text with || and backslash escapes. Set only after the kindle,
+                // which creates the procedures under the server's own mode, so both tools stamp the same kindle.
+                using var sqlMode = MySqlSessionSettings.UseParseNeutralSqlMode(command, "PIPES_AS_CONCAT");
 
                 if (_includeTables) ExtractMySqlTableDefinitions(command, targetSchema);
                 if (_includeUserDefinedFunctions) ScriptMySqlFunctions(command, targetSchema);
@@ -2921,7 +2943,7 @@ SELECT mv.schemaname, mv.matviewname
         catch (MySqlException ex)
         {
             _progressLog.Error($"MySQL Error: {ex.Message}");
-            throw new Exception($"Database connection or query failed: {ex.Message}", ex);
+            throw new RunFailedException($"Database connection or query failed: {ex.Message}", ex);
         }
     }
 
@@ -2949,7 +2971,7 @@ SELECT 'Functions' AS Folder,
        '\n' || '  SQL SECURITY ' || SECURITY_TYPE ||
        '\n' || ROUTINE_DEFINITION || ' //\nDELIMITER ;' AS Code
   FROM INFORMATION_SCHEMA.ROUTINES r
-  WHERE ROUTINE_SCHEMA = '{EscapeSql(targetSchema)}'
+  WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
     AND ROUTINE_TYPE = 'FUNCTION'
     AND ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
 ";
@@ -2992,7 +3014,7 @@ SELECT 'Procedures' AS Folder,
        '\n' || '  SQL SECURITY ' || SECURITY_TYPE ||
        '\n' || ROUTINE_DEFINITION || ' //\nDELIMITER ;' AS Code
   FROM INFORMATION_SCHEMA.ROUTINES r
-  WHERE ROUTINE_SCHEMA = '{EscapeSql(targetSchema)}'
+  WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
     AND ROUTINE_TYPE = 'PROCEDURE'
     AND ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
 ";
@@ -3056,14 +3078,29 @@ SELECT EVENT_NAME
             if (string.IsNullOrWhiteSpace(eventJson) || eventJson.Trim() == "{}")
             {
                 _progressLog.Error($"    No json returned for event {name}");
+                _stats.SkippedObjects++;
                 continue;
             }
 
             var eventObj = JsonText.Deserialize<MySqlEvent>(eventJson);
-            var file = ResolveOutputPath(castPath, EncodeObjectFileName("", name, ".json"));
+            var fileName = EncodeFileName(name, ".json");
+            var file = ResolveOutputPath(castPath, fileName);
             WritePackageObject(file, eventObj, "events");
+            RetireDottedEventFile(castPath, fileName, file);
             _stats.Events++;
         }
+    }
+
+    // Earlier releases wrote events as ".name.json" (an empty schema segment), which Linux and macOS hide and which
+    // --Validate flags as non-canonical. The refreshed file replaces it rather than sitting beside it.
+    private void RetireDottedEventFile(string castPath, string fileName, string writtenPath)
+    {
+        var dotted = Path.Join(castPath, "." + fileName);
+        var file = FileWrapper.GetFromFactory();
+        if (string.Equals(dotted, writtenPath, StringComparison.OrdinalIgnoreCase) || !file.Exists(dotted)) return;
+        _folderIndexes.GetValueOrDefault(GetRelativeFolderName(castPath))?.MarkWritten(dotted);
+        file.Delete(dotted);
+        _progressLog.Info($"    Renamed {Path.GetFileName(dotted)} to {fileName}");
     }
 
     /// <summary>
@@ -3108,9 +3145,9 @@ SELECT TABLE_NAME
                 createStatement = reader.GetString(1); // "Create Table" column carries the CREATE SEQUENCE DDL
             }
 
-            // SHOW CREATE SEQUENCE emits a plain CREATE SEQUENCE; rewrap as CREATE OR REPLACE so the
-            // extracted script is idempotent on re-run, matching every other scripted-object folder here.
-            var script = createStatement.Replace("CREATE SEQUENCE", "CREATE OR REPLACE SEQUENCE");
+            // The script runs on every deploy, so it must leave an existing sequence where it is: CREATE OR REPLACE
+            // reset it to its START value each time, and NEXTVAL handed out numbers it had already given.
+            var script = createStatement.Replace("CREATE SEQUENCE", "CREATE SEQUENCE IF NOT EXISTS");
 
             var fileName = ResolveOutputPath(castPath, EncodeFullName(name, ".sql"));
             script = RewriteSqlBodyForSchemaTemplate(script, fileName);
@@ -3346,7 +3383,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                 try
                 {
                     var json = _ingestEncoding == IngestEncoding.Xml
-                        ? ExtractTableModelXml(commandJson, tableSchema, tableName)
+                        ? ExtractTableModelXml(commandJson, tableSchema, tableName, _objectOrder)
                         : ExtractTableModelJson(commandJson, tableSchema, tableName, _objectOrder);
                     if (string.IsNullOrWhiteSpace(json) || json.Trim().Equals("{}"))
                     {
@@ -3440,9 +3477,9 @@ SELECT cc.name AS [Name],
     // Legacy encoding (pre-2016 binary, or Source:CompatEncoding=legacy): GenerateTableXml emits the model
     // as FOR XML PATH, converted back to the JSON model via ModelXmlSerializer.FromIngestXml. FOR XML also
     // splits across rows past ~2033 chars, so concatenate every row into the single <Table> document first.
-    private static string ExtractTableModelXml(IDbCommand command, string tableSchema, string tableName)
+    private static string ExtractTableModelXml(IDbCommand command, string tableSchema, string tableName, ObjectOrder objectOrder)
     {
-        command.CommandText = $"EXEC SchemaSmith.GenerateTableXml @p_Schema = '{EscapeSql(tableSchema)}', @p_Table = '{EscapeSql(tableName)}'";
+        command.CommandText = $"EXEC SchemaSmith.GenerateTableXml @p_Schema = '{EscapeSql(tableSchema)}', @p_Table = '{EscapeSql(tableName)}', @p_ObjectOrder = '{objectOrder}'";
         using var reader = command.ExecuteReader();
         var xml = new StringBuilder();
         while (reader.Read())
@@ -3500,7 +3537,7 @@ SELECT cc.name AS [Name],
     internal static string EscapeSql(string value) => value.Replace("'", "''");
 
     // Index kinds a package cannot declare yet are left out of the table file (ForgeKindler.SqlServerRenderableIndexTypes,
-    // and selective XML indexes): each one is an object the package misses, so it is named.
+    // and selective XML indexes): each one is an object the package misses, so it is named and counted as skipped.
     private void WarnIndexesNotExtracted(IDbCommand command, string tableSchema, string tableName)
     {
         command.CommandText = $@"
@@ -3516,6 +3553,7 @@ SELECT [name], kind FROM @k ORDER BY [name];";
         while (reader.Read())
         {
             _progressLog.Warn($"    WARNING: {tableSchema}.{tableName}.{reader["name"]} is a {reader["kind"]} index, which a package cannot declare yet; not extracted");
+            _stats.SkippedObjects++;
         }
     }
 
@@ -3642,11 +3680,16 @@ SELECT [name], kind FROM @k ORDER BY [name];";
                 break;
         }
 
+        LogIfPositive("  Skipped:    ", _stats.SkippedObjects);
+        LogIfPositive("  Invalid:    ", _invalidScripts.Count);
         _progressLog.Info($"  Elapsed:    {_stopwatch.Elapsed.TotalSeconds:F1} seconds");
         _progressLog.Info("");
-        _progressLog.Info(_stats.TableErrors > 0
-            ? "Casting Completed with Errors"
-            : "Casting Completed Successfully");
+        _progressLog.Info(ExitCode switch
+        {
+            2 => "Casting Completed with Errors",
+            1 => "Casting Completed, but some objects were not extracted (see Skipped and Invalid above)",
+            _ => "Casting Completed Successfully"
+        });
     }
 
     private void LogIfPositive(string label, int count)
@@ -3661,6 +3704,7 @@ SELECT [name], kind FROM @k ORDER BY [name];";
     {
         public int Tables { get; set; }
         public int TableErrors { get; set; }
+        public int SkippedObjects { get; set; }
         public int Schemas { get; set; }
         public int DataTypes { get; set; }
         public int DomainTypes { get; set; }

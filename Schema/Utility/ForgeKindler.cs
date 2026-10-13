@@ -55,6 +55,10 @@ public static class ForgeKindler
         AcquireKindleLock(command, platform); // throws ArgumentException for unsupported platforms (before the try)
         try
         {
+            // A stored routine keeps the sql_mode it was created under, so the kindle session's mode is every kindled
+            // procedure's mode for good. Kindle under the parse-neutral form of the server's mode, and stamp it, so a
+            // server whose mode changes re-kindles rather than reusing routines created under another.
+            using var sqlMode = platform.GetBasePlatform() == Platform.MySQL ? MySqlSessionSettings.UseParseNeutralSqlMode(command) : null;
             // Footgun kill: a caller that does not supply the server version must NOT silently get the
             // serverMajorVersion == 0 ("assume OLD") branch on a modern server. That branch composes the
             // pre-2025 xml_compression reference (CONVERT(BIT, NULL)) into GenerateTableJSON and disables
@@ -69,7 +73,7 @@ public static class ForgeKindler
             if (platform == Platform.SqlServer && serverMajorVersion == 0)
                 serverMajorVersion = TargetVersionDetector.TryDetect(command, Platform.SqlServer)?.ServerComparable ?? 0;
 
-            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy);
+            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode);
             var current = ReadStamp(command, platform);
             if (!forceReKindle && string.Equals(current, expected, StringComparison.Ordinal))
             {
@@ -400,6 +404,7 @@ public static class ForgeKindler
                 new("SchemaSmith.DegradeDatabaseToggles.sql"),
                 new("SchemaSmith.DegradeUnsupportedFeatures.sql"),
                 new("SchemaSmith.PrintWithNoWait.sql"),
+                new("SchemaSmith.RecordWouldChanges.sql"),
                 new("SchemaSmith.CdcPreflight.sql"),
                 // Must follow fn_RebuildBlockedReason (it calls it to refuse) and PrintWithNoWait (its
                 // WhatIf output), and precede the quench procedures that will elect a rebuild.
@@ -441,8 +446,10 @@ public static class ForgeKindler
                 // expression stops reading as a change. Kindled like the other bootstrap tables.
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith.ExecuteOrDebug.sql"),
+                new("SchemaSmith.RecordWouldChanges.sql"),
                 new("SchemaSmith.QuoteColumnList.sql"),
                 new("SchemaSmith.QuoteIndexColumnList.sql"),
+                new("SchemaSmith.QuoteName.sql"),
                 // #242: declared index and statistics definitions compared in the form the catalog reads back.
                 // SQL-language functions are validated at creation, so the splitter and StripParenWrapping
                 // must be kindled before the statistics forms that call them.
@@ -454,6 +461,8 @@ public static class ForgeKindler
                 new("SchemaSmith.ExpressionMapUnchanged.sql"),
                 new("SchemaSmith.ExpressionMapRecord.sql"),
                 new("SchemaSmith.ColumnTypeArguments.sql"),
+                // Calls ColumnTypeArguments and QuoteName, and is called by extraction and the table quench.
+                new("SchemaSmith.ColumnDataType.sql"),
                 new("SchemaSmith.StripTypeCast.sql"),
                 new("SchemaSmith.ServerVersionNum.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
@@ -505,6 +514,12 @@ public static class ForgeKindler
                 // these helpers to shred its table definition.
                 new("SchemaSmith_JsonScalarInt.sql"),
                 new("SchemaSmith_JsonScalarStr.sql"),
+                // Name keys: every comparison of a name from the package with a name from the catalog goes
+                // through one of these, Bootstrap's included. IdentifierKey for database, table and view names
+                // (folded only when lower_case_table_names >= 1); NameKeyCI for everything the engine treats
+                // case-insensitively on every setting.
+                new("SchemaSmith_IdentifierKey.sql"),
+                new("SchemaSmith_NameKeyCI.sql"),
                 new("SchemaSmith_BootstrapTableQuench.sql"),
                 new("Kindling_KindleStamp_Table.sql", ReplaceTableDef: true),
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
@@ -516,13 +531,11 @@ public static class ForgeKindler
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith_QuoteIdentifier.sql"),
                 new("SchemaSmith_StripBacktickWrapping.sql"),
-                // Identifier-case policy in one place: whether two object names name the same object
-                // depends on the server's lower_case_table_names, and every ownership comparison has to
-                // ask the same question the same way.
-                new("SchemaSmith_IdentifierKey.sql"),
                 new("SchemaSmith_SafeBacktickWrap.sql"),
                 new("SchemaSmith_StripLeadingSelect.sql"),
                 new("SchemaSmith_ServerVersionNum.sql"),
+                new("SchemaSmith_ServerVersionPatchNum.sql"),
+                new("SchemaSmith_CheckTableJoin.sql"),
                 new("SchemaSmith_UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith_SupportsCheckConstraints.sql"),
                 new("SchemaSmith_SupportsRenameColumn.sql"),
@@ -549,7 +562,13 @@ public static class ForgeKindler
                 // period gate above it; calls SchemaSmith_ServerVersionNum, kindled earlier.
                 new("SchemaSmith_SupportsSystemVersioning.sql"),
                 new("SchemaSmith_NormalizeIndexColumns.sql"),
+                // The one declared-vs-live index-kind rule both index-change detectors call.
+                new("SchemaSmith_IndexTypesMatch.sql"),
                 new("SchemaSmith_IndexHasFunctionalKeyPart.sql"),
+                // Calls IndexHasFunctionalKeyPart, SupportsFunctionalIndex and ServerVersionPatchNum, above.
+                new("SchemaSmith_IndexKeyPartsUnsupported.sql"),
+                // Calls IndexHasFunctionalKeyPart, above; read by ParseTableJson.
+                new("SchemaSmith_StripFullLengthPrefixes.sql"),
                 new("SchemaSmith_NormalizeCheckExpression.sql"),
                 // #242: the authored-vs-canonical decision and the pass that records it.
                 new("SchemaSmith_ExpressionMapUnchanged.sql"),
@@ -559,6 +578,8 @@ public static class ForgeKindler
                 // supported engine rewrites it, so a literal compare would be engine-specific.
                 new("SchemaSmith_NormalizePartitionExpression.sql"),
                 new("SchemaSmith_UpperDataType.sql"),
+                // Read by ParseTableJson: ENUM/SET members lose trailing spaces at CREATE.
+                new("SchemaSmith_TrimEnumMembers.sql"),
                 new("SchemaSmith_StripIntDisplayWidth.sql"),
                 new("SchemaSmith_NormalizeColumnDefault.sql"),
                 // The DESIRED-side twin of the line above, so both sides of the default comparison fold
@@ -591,6 +612,8 @@ public static class ForgeKindler
                 // unconditionally. Must precede BOTH GenerateTableJson (CALLs it for extraction) and
                 // ModifiedTableQuench (CALLs it in the tablespace-move refuse guard), which is why it sits
                 // just ahead of the former.
+                // InnoDB's filename-encoded spelling of a name, which both placement reads below match on.
+                new("SchemaSmith_InnodbName.sql"),
                 new("SchemaSmith_TableTablespace.sql"),
                 // The DATA DIRECTORY placement read (F2c), both engines -- unlike SchemaSmith_TableTablespace
                 // above (MySQL-only), the MariaDb per-file override here resolves through the same
@@ -599,7 +622,9 @@ public static class ForgeKindler
                 // reason as its sibling immediately above.
                 new("SchemaSmith_TableDataDirectory.sql"),
                 new("SchemaSmith_GenerateTableJson.sql"),
+                new("SchemaSmith_CatalogSnapshot.sql"),
                 new("SchemaSmith_ParseTableJson.sql"),
+                new("SchemaSmith_RefuseUnsupportedIndexes.sql"),
                 new("SchemaSmith_MissingTableAndColumnQuench.sql"),
                 new("SchemaSmith_ModifiedTableQuench.sql"),
                 new("SchemaSmith_MissingIndexesAndConstraintsQuench.sql"),
@@ -824,9 +849,11 @@ public static class ForgeKindler
     /// -> the next kindle re-runs automatically (alternating version/policy across runs re-kindles; cheap).
     /// </summary>
     public static string ComputeKindleStamp(Platform platform, IngestEncoding encoding = IngestEncoding.Json,
-        int serverMajorVersion = 0, string policy = "warn")
+        int serverMajorVersion = 0, string policy = "warn", string sqlMode = null)
     {
         var sb = new StringBuilder();
+        if (!string.IsNullOrEmpty(sqlMode))
+            sb.Append("sql_mode=").Append(sqlMode).Append('\n');
         // The XML encoding swaps in different script bodies (and drops fn_FormatJson), so the concatenated
         // resolved text — and therefore the stamp — already differs from Json; no extra discriminator needed.
         foreach (var s in GetKindlingScripts(platform, encoding))

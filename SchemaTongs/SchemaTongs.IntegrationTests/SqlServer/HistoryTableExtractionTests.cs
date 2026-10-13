@@ -99,8 +99,11 @@ public class HistoryTableExtractionTests
             {
                 try { Run(cmd, "ALTER TABLE dbo.Versioned SET (SYSTEM_VERSIONING = OFF)"); } catch (DbException) { /* best effort */ }
             });
-            Master($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Master($"DROP DATABASE IF EXISTS [{_db}]");
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_masterConnectionString);
+            conn.Open();
+            using var dropCmd = conn.CreateCommand();
+            dropCmd.CommandTimeout = 300;
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(dropCmd, _db);
         }
         catch (DbException) { /* teardown must not mask an assertion */ }
 

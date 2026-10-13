@@ -2,10 +2,10 @@
 
 using System;
 using System.Data;
+using System.Data.Common;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
-using Schema.Utility;
 
 namespace Schema.IntegrationTests.SqlServer;
 
@@ -28,11 +28,15 @@ namespace Schema.IntegrationTests.SqlServer;
 public class FileStreamDegradeTests
 {
     private IDbConnection _connection;
-    private string _db;
 
-    private const string TableJson = """
+    // Runs on the suite's shared kindled database, isolated by a fixture-owned schema; the product name is
+    // unique too, because TableQuench drops tables its product no longer declares.
+    private readonly string _p = "fsd_" + Guid.NewGuid().ToString("N")[..8];
+    private string ProductName => "FsDegradeTest_" + _p;
+
+    private string TableJson => $$"""
         [{
-            "Schema": "[dbo]",
+            "Schema": "[{{_p}}]",
             "Name": "[FsWanted]",
             "Columns": [
                 { "Name": "[Id]", "DataType": "INT", "Nullable": false },
@@ -49,17 +53,13 @@ public class FileStreamDegradeTests
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        _db = $"SchemaFsDegrade_{Guid.NewGuid():N}"[..40];
         _connection = DbConnectionFactory.ForPlatform(Platform.SqlServer)
             .GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         _connection.Open();
 
-        _connection.ChangeDatabase("master");
-        Exec($"CREATE DATABASE [{_db}]");
-        _connection.ChangeDatabase(_db);
-
-        using var cmd = _connection.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
+        using (var cmd = _connection.CreateCommand())
+            TestSchemaDrop.Drop(cmd, _p);
+        Exec($"CREATE SCHEMA [{_p}]");
 
         // Guards the premise. On a Windows host with FILESTREAM enabled and a FILESTREAM filegroup, the
         // column would deploy for real and every assertion below would be testing nothing.
@@ -74,10 +74,11 @@ public class FileStreamDegradeTests
         if (_connection == null) return;
         try
         {
-            _connection.ChangeDatabase("master");
-            Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec($"DROP DATABASE IF EXISTS [{_db}]");
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandTimeout = 300;
+            TestSchemaDrop.Drop(cmd, _p);
         }
+        catch (DbException) { /* best-effort cleanup must not mask a test result */ }
         finally
         {
             _connection.Close();
@@ -105,7 +106,7 @@ public class FileStreamDegradeTests
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandTimeout = 300;
-        cmd.CommandText = "EXEC SchemaSmith.TableQuench @ProductName = 'FsDegradeTest', "
+        cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{ProductName}', "
                           + $"@TableDefinitions = N'{json.Replace("'", "''")}'";
         cmd.ExecuteNonQuery();
     }
@@ -113,23 +114,23 @@ public class FileStreamDegradeTests
     [Test]
     public void AFileStreamColumn_WithoutServerSupport_DeploysAsPlainVarbinary_AndIsRecordedAsDowngraded()
     {
-        Exec("DELETE FROM SchemaSmith.ChangeAudit");
+        Exec($"DELETE FROM SchemaSmith.ChangeAudit WHERE ObjectName LIKE '%{_p}%'");
 
         Deploy(TableJson);
 
         Assert.Multiple(() =>
         {
-            Assert.That(Scalar("SELECT COUNT(*) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.FsWanted') "
+            Assert.That(Scalar($"SELECT COUNT(*) FROM sys.columns WHERE [object_id] = OBJECT_ID('{_p}.FsWanted') "
                                + "AND name = 'Doc'"), Is.EqualTo(1),
                 "the column must still exist -- FILESTREAM is a storage choice, and degrading it must not "
                 + "cost the user the column itself");
 
             Assert.That(Scalar("SELECT CONVERT(INT, is_filestream) FROM sys.columns "
-                               + "WHERE [object_id] = OBJECT_ID('dbo.FsWanted') AND name = 'Doc'"),
+                               + $"WHERE [object_id] = OBJECT_ID('{_p}.FsWanted') AND name = 'Doc'"),
                 Is.Zero, "and it is genuinely not a FILESTREAM column here");
 
             Assert.That(Scalar("SELECT COUNT(*) FROM SchemaSmith.ChangeAudit "
-                               + "WHERE ActionType = 'downgraded' AND ObjectName LIKE '%FsWanted%Doc%'"),
+                               + $"WHERE ActionType = 'downgraded' AND ObjectName LIKE '%{_p}%FsWanted%Doc%'"),
                 Is.EqualTo(1),
                 "the storage change has to be reported -- a package that asked for FILESTREAM and silently "
                 + "got in-row storage is the same class of silent no-op the CDC fix removed");
@@ -144,7 +145,7 @@ public class FileStreamDegradeTests
         Deploy(TableJson);
 
         Assert.That(Scalar("SELECT CONVERT(INT, is_rowguidcol) FROM sys.columns "
-                           + "WHERE [object_id] = OBJECT_ID('dbo.FsWanted') AND name = 'G'"),
+                           + $"WHERE [object_id] = OBJECT_ID('{_p}.FsWanted') AND name = 'G'"),
             Is.EqualTo(1),
             "ROWGUIDCOL is declared as part of the DataType and is independently useful (merge "
             + "replication), so degrading FILESTREAM must not take it down too");
@@ -153,11 +154,11 @@ public class FileStreamDegradeTests
     [Test]
     public void ATableWithNoFileStreamColumns_IsNotDowngraded()
     {
-        Exec("DELETE FROM SchemaSmith.ChangeAudit");
+        Exec($"DELETE FROM SchemaSmith.ChangeAudit WHERE ObjectName LIKE '%{_p}%'");
 
-        Deploy("""
+        Deploy($$"""
             [{
-                "Schema": "[dbo]",
+                "Schema": "[{{_p}}]",
                 "Name": "[NoFsWanted]",
                 "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false } ],
                 "Indexes": [ { "Name": "[PK_NoFsWanted]", "IndexColumns": "[Id]", "PrimaryKey": true, "Unique": true } ]
@@ -165,7 +166,7 @@ public class FileStreamDegradeTests
             """);
 
         Assert.That(Scalar("SELECT COUNT(*) FROM SchemaSmith.ChangeAudit "
-                           + "WHERE ActionType = 'downgraded' AND ObjectName LIKE '%NoFsWanted%'"),
+                           + $"WHERE ActionType = 'downgraded' AND ObjectName LIKE '%{_p}%NoFsWanted%'"),
             Is.Zero, "a table that never asked for FILESTREAM must not be reported as downgraded");
     }
 }

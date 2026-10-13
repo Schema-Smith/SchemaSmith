@@ -402,7 +402,7 @@ ModifiedTables
     private static bool HelperProcExists(IDbCommand cmd)
     {
         cmd.CommandText = "SELECT COUNT(*) FROM information_schema.routines " +
-                           "WHERE routine_schema = DATABASE() AND routine_name = 'SchemaSmith_TableQuench'";
+                           $"WHERE {MySqlNameMatch.FoldedRoutineSchema("routine_schema", "DATABASE()")} AND routine_name = 'SchemaSmith_TableQuench'";
         return Convert.ToInt32(cmd.ExecuteScalar()) == 1;
     }
 }

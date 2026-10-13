@@ -10,18 +10,18 @@ DROP PROCEDURE IF EXISTS `SchemaSmith_GenerateTableJSON`;
 DELIMITER //
 
 CREATE PROCEDURE `SchemaSmith_GenerateTableJSON`(
-    IN p_Schema VARCHAR(200),
-    IN p_Table VARCHAR(200)
+    IN p_Schema VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_Table VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 BEGIN
-    DECLARE v_json LONGTEXT;
-    DECLARE v_columns LONGTEXT;
-    DECLARE v_indexes LONGTEXT;
-    DECLARE v_foreign_keys LONGTEXT;
-    DECLARE v_check_constraints LONGTEXT;
-    DECLARE v_fulltext_indexes LONGTEXT;
-    DECLARE v_tablespace VARCHAR(64);
-    DECLARE v_datadirectory VARCHAR(512);
+    DECLARE v_json LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_columns LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_indexes LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_foreign_keys LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_check_constraints LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_fulltext_indexes LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_tablespace VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_datadirectory VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
     -- Set session variables for proper GROUP_CONCAT handling
     SET SESSION group_concat_max_len = 1000000;
@@ -41,6 +41,9 @@ BEGIN
     -- JSON_OBJECT emits `false` in place of the value -- so a table/column/index comment and a
     -- generated column's expression all extracted as `false` at the floor while 8.0 was correct.
     -- The CASE form evaluates identically on both. Verified live against 5.7 and 8.0.
+    -- AUTO_INCREMENT comes from the statistics cache on MySQL 8+, which can be a day stale, so the seed read here
+    -- would lag the table.
+    CALL SchemaSmith_BypassStatisticsCache();
     -- Get table metadata
     SELECT JSON_OBJECT(
         'Name', SchemaSmith_QuoteIdentifier(t.TABLE_NAME),
@@ -64,7 +67,8 @@ BEGIN
         -- CHARACTER SET utf8mb4 on its RETURNS -- see that script for what happened when it did not.
         -- A catalog COLUMN against a literal is safe whatever the collations, because the column is
         -- IMPLICIT and wins, which is why nothing else here needs anything.
-        'PageCompressed', CASE WHEN SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'PAGE_COMPRESSED') = '1'
+        -- MariaDB accepts and reports PAGE_COMPRESSED=1, ='ON' and =YES alike.
+        'PageCompressed', CASE WHEN UPPER(SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'PAGE_COMPRESSED')) IN ('1', 'ON', 'YES')
                                THEN TRUE ELSE NULL END,
         'PageCompressionLevel', SchemaSmith_CreateOption(t.CREATE_OPTIONS, 'PAGE_COMPRESSION_LEVEL'),
         -- At-rest encryption, same CREATE_OPTIONS family as the compression four above. MySQL records
@@ -110,6 +114,7 @@ BEGIN
       -- BASE TABLE alone silently omitted such a table from the extracted package -- no error, no warning,
       -- and the deploy-side twin of this filter was fixed separately. MySQL never reports this type.
       AND t.TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED');
+    CALL SchemaSmith_RestoreStatisticsCache();
 
     -- Get columns
     SELECT CONCAT('[', GROUP_CONCAT(
@@ -121,7 +126,8 @@ BEGIN
         -- every MySQL package, whose schema does not declare it and would reject it. #408
         JSON_REMOVE(JSON_OBJECT(
             'Name', SchemaSmith_QuoteIdentifier(c.COLUMN_NAME),
-            'DataType', c.COLUMN_TYPE,
+            -- Without MariaDB's /* mariadb-5.3 */ storage-format note, which is not part of the type.
+            'DataType', TRIM(REPLACE(c.COLUMN_TYPE, ' /* mariadb-5.3 */', '')),
             'Nullable', CASE WHEN c.IS_NULLABLE = 'YES' THEN TRUE ELSE FALSE END,
             -- SchemaSmith_NormalizeColumnDefault folds MariaDB's divergent COLUMN_DEFAULT reporting
             -- (literal 'NULL' marker, quoted string values, current_timestamp() with parens) to the
@@ -278,7 +284,7 @@ BEGIN
                 'IndexColumns', GROUP_CONCAT(
                     CASE WHEN s.COLUMN_NAME IS NOT NULL THEN
                         CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME),
-                            CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
+                            CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')) THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
                             CASE WHEN s.COLLATION = 'D' THEN ' DESC' ELSE '' END
                         )
                     ELSE
@@ -299,6 +305,9 @@ BEGIN
             WHERE s.TABLE_SCHEMA = p_Schema
               AND s.TABLE_NAME = p_Table
               AND s.INDEX_TYPE != 'FULLTEXT'
+              -- A period column is left out of Columns, so an index must not name it either: the package would not
+              -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
+              AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
             GROUP BY s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
         ) idx_subquery;
     ELSE
@@ -312,7 +321,7 @@ BEGIN
                 'IndexType', s.INDEX_TYPE,
                 'IndexColumns', GROUP_CONCAT(
                     CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME),
-                        CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
+                        CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')) THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
                         CASE WHEN s.COLLATION = 'D' THEN ' DESC' ELSE '' END
                     )
                     ORDER BY s.SEQ_IN_INDEX
@@ -326,6 +335,9 @@ BEGIN
             WHERE s.TABLE_SCHEMA = p_Schema
               AND s.TABLE_NAME = p_Table
               AND s.INDEX_TYPE != 'FULLTEXT'
+              -- A period column is left out of Columns, so an index must not name it either: the package would not
+              -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
+              AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
             GROUP BY s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
         ) idx_subquery;
     END IF;
@@ -362,6 +374,8 @@ BEGIN
         JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
           ON tc.CONSTRAINT_SCHEMA = rc.CONSTRAINT_SCHEMA
           AND tc.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+          -- Foreign-key names are unique per table from MariaDB 12.1, so the name alone matches other tables' keys.
+          AND tc.TABLE_NAME = rc.TABLE_NAME
         WHERE tc.TABLE_SCHEMA = p_Schema
           AND tc.TABLE_NAME = p_Table
           AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
@@ -373,7 +387,7 @@ BEGIN
     IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
         SET @v_ccSchema = p_Schema;
         SET @v_ccTable = p_Table;
-        SET @v_ccSql = 'SELECT CONCAT(''['', IFNULL(GROUP_CONCAT(
+        SET @v_ccSql = CONCAT('SELECT CONCAT(''['', IFNULL(GROUP_CONCAT(
     JSON_OBJECT(
         ''Name'', cc.CONSTRAINT_NAME,
         ''Expression'', REPLACE(REGEXP_REPLACE(cc.CHECK_CLAUSE, ''_utf8mb4|_utf8mb3|_utf8|_latin1|_binary'', ''''), ''\\\\'''''', '''''''')
@@ -383,10 +397,10 @@ BEGIN
 FROM INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
 JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
   ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
-  AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+  AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME', SchemaSmith_CheckTableJoin(), '
 WHERE tc.TABLE_SCHEMA = @v_ccSchema
   AND tc.TABLE_NAME = @v_ccTable
-  AND tc.CONSTRAINT_TYPE = ''CHECK''';
+  AND tc.CONSTRAINT_TYPE = ''CHECK''');
         PREPARE stmt FROM @v_ccSql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;

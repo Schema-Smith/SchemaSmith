@@ -15,9 +15,7 @@ BEGIN
   -- INVISIBLE keyword (`ALTER TABLE t ADD c INT INVISIBLE`). Unlike the invisible-INDEX feature
   -- (INVISIBLE on MySQL, IGNORED on MariaDB), the column keyword is the SAME on both engines --
   -- only the introduction version differs:
-  --   * MySQL: since 8.0.23 -> major >= 8 (ServerVersionNum() >= 800). ServerVersionNum() has
-  --     major*100+minor granularity (cannot see the .23 patch), so MySQL 8.0.0-8.0.22 is an accepted
-  --     out-of-scope edge, the same tradeoff SchemaSmith_SupportsFunctionalIndex / SupportsDefaultExpression make.
+  --   * MySQL: since 8.0.23, which the patch-level version shows.
   --   * MariaDB: since 10.3.0 -> ServerVersionNum() >= 1003.
   -- Below this the keyword is a hard syntax error (unlike a DESC key part, which parses-and-ignores).
   -- So a declared invisible column degrades: the INVISIBLE clause is suppressed at ColumnScript build
@@ -25,7 +23,7 @@ BEGIN
   -- deploy stays idempotent, and one 'downgraded' manifest row is recorded (or, under
   -- UnsupportedFeaturePolicy 'fail', the deploy aborts) -- mirrors SchemaSmith_SupportsInvisibleIndex.
   RETURN IF((VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1003)
-            OR (VERSION() NOT LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 800), 1, 0);
+            OR (VERSION() NOT LIKE '%MariaDB%' AND SchemaSmith_ServerVersionPatchNum() >= 80023), 1, 0);
 END //
 
 DELIMITER ;

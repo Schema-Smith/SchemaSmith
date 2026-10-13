@@ -154,7 +154,9 @@ public enum RunOutcome
 {
     Success,
     PartialFailure,
-    Aborted
+    Aborted,
+    // Finished, but something the package asked for was not applied (a feature downgraded on this target).
+    Incomplete
 }
 
 public enum TargetOutcome

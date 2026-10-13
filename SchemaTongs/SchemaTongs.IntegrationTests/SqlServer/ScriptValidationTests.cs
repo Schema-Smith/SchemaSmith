@@ -268,7 +268,7 @@ public class ScriptValidationTests
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}];";
+        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
         cmd.ExecuteNonQuery();
 
         conn.ChangeDatabase(_integrationDb);
@@ -316,11 +316,6 @@ CREATE VIEW [dbo].[vw_InvalidTest] AS SELECT [Id], [Name] FROM [dbo].[RefTable];
 
     private static void DropOneDatabase(IDbCommand cmd, string dbName)
     {
-        cmd.CommandText = @$"
-IF DB_ID('{dbName}') IS NOT NULL
-  ALTER DATABASE [{dbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{dbName}];
-";
-        cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, dbName);
     }
 }

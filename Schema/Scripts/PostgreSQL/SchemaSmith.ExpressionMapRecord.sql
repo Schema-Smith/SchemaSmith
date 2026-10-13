@@ -58,7 +58,8 @@ BEGIN
        AND con.contype = 'c'
      WHERE COALESCE(col."CheckExpression", '') != ''
        AND NOT EXISTS (SELECT 1 FROM temp_expression_map_declared d
-                        WHERE d."ObjectTable" = col."TableName" AND d."ObjectName" = con.conname);
+                        WHERE d."ObjectSchema" = col."TableSchema" AND d."ObjectTable" = col."TableName"
+                          AND d."ObjectName" = con.conname);
 
   -- Generated columns: compared raw today, so any non-trivial expression churned on every deploy.
   INSERT INTO temp_expression_map_declared

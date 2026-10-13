@@ -70,5 +70,13 @@ namespace Schema.Domain.SqlServer
         [JsonProperty(Order = 111)]
         public bool FileStream { get; set; }
 
+        // Unset is unmanaged: packages extracted before this existed omit it, and treating that as padded would re-pad
+        // every legacy unpadded column on the first deploy. Extraction writes false and never true.
+        [JsonProperty(Order = 112, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(Description = "SQL Server only, for char, varchar, binary and varbinary columns. false creates the column " +
+                                      "under SET ANSI_PADDING OFF, so trailing blanks (or trailing zeros) are trimmed on insert; " +
+                                      "true pads it as usual. Leaving it out leaves an existing column's padding as it is.")]
+        public bool? AnsiPadding { get; set; }
+
     }
 }

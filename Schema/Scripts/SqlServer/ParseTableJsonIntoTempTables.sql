@@ -175,6 +175,8 @@
     [FileStream] BIT NULL,
     [IsColumnSet] BIT NULL,
     [BackfillExistingRows] BIT NULL,
+    [AnsiPadding] BIT NULL,
+    [PaddingApplies] BIT NULL,
     [Collation] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
     [DataMaskFunction] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
     [EncryptionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
@@ -494,7 +496,7 @@
   -- 6,938 ms of a 1,783-table parse against ~125 ms for the other six child tables combined.
   TRUNCATE TABLE #Columns
   RAISERROR('Parse Columns from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [OldName], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [AnsiPadding], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [OldName], [ShouldApplyExpression], [VariantName])
   -- INGEST ONLY -- raw values straight off the shred, exactly as the other tables do it. Every default,
   -- bracket-wrap, type canonicalization and the whole ColumnScript build moved to the NORMALIZE pass
   -- below, so a second ingestion path supplying these rows gets the identical treatment from one
@@ -504,7 +506,7 @@
          t.[Schema], t.[Name] AS [TableName], c.[ColumnName],
          c.[DataType], c.[Nullable], c.[Default], c.[CheckExpression],
          c.[ComputedExpression], c.[Persisted], c.[Sparse], c.[FileStream], c.[IsColumnSet],
-         c.[BackfillExistingRows], c.[Collation], c.[DataMaskFunction], c.[EncryptionType],
+         c.[BackfillExistingRows], c.[AnsiPadding], c.[Collation], c.[DataMaskFunction], c.[EncryptionType],
          c.[EncryptionKey], c.[EncryptionAlgorithm], c.[OldName],
          c.[ShouldApplyExpression], c.[VariantName]
     FROM #TableDefinitions t WITH (NOLOCK)
@@ -520,6 +522,7 @@
       [FileStream] BIT '$.FileStream',
       [IsColumnSet] BIT '$.IsColumnSet',
       [BackfillExistingRows] BIT '$.BackfillExistingRows',
+      [AnsiPadding] BIT '$.AnsiPadding',
       [Collation] NVARCHAR(500) '$.Collation',
       [DataMaskFunction] NVARCHAR(500) '$.DataMaskFunction',
       [EncryptionType] NVARCHAR(100) '$.EncryptionType',
@@ -583,9 +586,9 @@
               -- (see MissingTableAndColumnQuench.sql). A column set added to a table that already has
               -- standalone sparse columns from a prior deploy is left to the engine's own (clear) rejection
               -- rather than pre-validated here.
-              WHEN ISNULL([IsColumnSet], 0) = 1 THEN UPPER(SchemaSmith.fn_NormalizeDataType([DataType])) + ' COLUMN_SET FOR ALL_SPARSE_COLUMNS'
+              WHEN ISNULL([IsColumnSet], 0) = 1 THEN SchemaSmith.fn_NormalizeDataType([DataType]) + ' COLUMN_SET FOR ALL_SPARSE_COLUMNS'
               -- Otherwise build the column definition
-              ELSE UPPER(SchemaSmith.fn_NormalizeDataType([DataType])) +
+              ELSE SchemaSmith.fn_NormalizeDataType([DataType]) +
                    CASE WHEN ISNULL([FileStream], 0) = 1 THEN ' FILESTREAM' ELSE '' END +
                    CASE WHEN RTRIM(ISNULL([Collation], '')) NOT IN ('IGNORE', '') THEN ' COLLATE ' + [Collation] ELSE '' END +
                    CASE WHEN ISNULL([Sparse], 0) = 1 THEN ' SPARSE' ELSE '' END +
@@ -600,6 +603,15 @@
                    CASE WHEN ISNULL(Nullable, 0) = 1 THEN ' NULL' ELSE ' NOT NULL' END +
                    CASE WHEN RTRIM(ISNULL([Default], '')) <> '' THEN ' DEFAULT ' + [Default] ELSE '' END
               END
+
+  -- Whether ANSI_PADDING means anything for the column: only char, varchar, binary and varbinary record it (alias types
+  -- resolved to their base type). AnsiPadding stays NULL when the package omits it, which leaves the column unmanaged.
+  UPDATE #Columns
+    SET [PaddingApplies] = CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) = '' AND [IsColumnSet] = 0 AND [FileStream] = 0 AND [EncryptionType] = 'NONE'
+                                 AND EXISTS (SELECT 1 FROM sys.types ty
+                                              WHERE ty.user_type_id = ISNULL(TYPE_ID(RTRIM(LEFT(SchemaSmith.fn_NormalizeDataType([DataType]), CHARINDEX('(', SchemaSmith.fn_NormalizeDataType([DataType]) + '(') - 1))), TYPE_ID(LOWER(RTRIM(LEFT(SchemaSmith.fn_NormalizeDataType([DataType]), CHARINDEX('(', SchemaSmith.fn_NormalizeDataType([DataType]) + '(') - 1)))))
+                                                AND TYPE_NAME(ty.system_type_id) IN ('char', 'varchar', 'binary', 'varbinary'))
+                                THEN 1 ELSE 0 END
 
   -- DataType canonicalization runs LAST, after ColumnScript has been built from the un-suffixed type.
   -- ModifiedTableQuench compares against USER_TYPE + DATETIME_PRECISION, which reads back as e.g.
@@ -729,9 +741,9 @@
 
   -- Don't try to apply tables without columns
   DELETE FROM #Tables
-    WHERE NOT EXISTS (SELECT * FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = #Tables.[Schema] AND C.[TableName] = #Tables.[Name])
+    WHERE NOT EXISTS (SELECT * FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = #Tables.[Schema] AND c.[TableName] = #Tables.[Name])
   DELETE FROM #TableDefinitions
-    WHERE NOT EXISTS (SELECT * FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = #TableDefinitions.[Schema] AND C.[TableName] = #TableDefinitions.[Name])
+    WHERE NOT EXISTS (SELECT * FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = #TableDefinitions.[Schema] AND c.[TableName] = #TableDefinitions.[Name])
 
   RAISERROR('Parse Indexes from Json', 10, 100) WITH NOWAIT
   INSERT INTO #Indexes ([_RowId], [Schema], [TableName], [IndexName], [CompressionType], [XmlCompression], [PrimaryKey], [Unique], [UniqueConstraint], [Clustered], [ColumnStore], [FillFactor], [FilterExpression], [FileGroup], [PartitionScheme], [PartitionColumn], [BucketCount], [UpdateFillFactor], [IndexColumns], [IncludeColumns], [IgnoreDuplicateKey], [PadIndex], [ShouldApplyExpression], [VariantName])
@@ -797,10 +809,10 @@
                                                            ELSE SchemaSmith.fn_SafeBracketWrap([value])
                                                            END AS NVARCHAR(MAX)), ',')
                                  FROM STRING_SPLIT([IndexColumns], ',')
-                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [IncludeColumns]   = (SELECT STRING_AGG(SchemaSmith.fn_SafeBracketWrap([value]), ',') WITHIN GROUP (ORDER BY SchemaSmith.fn_SafeBracketWrap([value]))
                                  FROM STRING_SPLIT([IncludeColumns], ',')
-                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [IgnoreDuplicateKey] = ISNULL([IgnoreDuplicateKey], 0),
          [PadIndex]         = ISNULL([PadIndex], 0);
 
@@ -890,10 +902,10 @@
          [RelatedTable]      = SchemaSmith.fn_SafeBracketWrap([RelatedTable]),
          [Columns]           = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
                                   FROM STRING_SPLIT([Columns], ',')
-                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [RelatedColumns]    = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
                                   FROM STRING_SPLIT([RelatedColumns], ',')
-                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''),
+                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [DeleteAction]      = ISNULL(NULLIF(RTRIM([DeleteAction]), ''), 'NO ACTION'),
          [UpdateAction]      = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION');
 
@@ -957,7 +969,7 @@
          [SampleSize]    = ISNULL([SampleSize], 0),
          [Columns]       = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
                               FROM STRING_SPLIT([Columns], ',')
-                             WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> '');
+                             WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '');
 
   -- Identify Statistics to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #Statistics WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
@@ -1015,7 +1027,7 @@
                                                    ELSE SchemaSmith.fn_SafeBracketWrapFullTextColumn([value])
                                                    END AS NVARCHAR(MAX)), ',')
                                 FROM STRING_SPLIT([Columns], ',')
-                               WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> '');
+                               WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '');
 
   -- Identify FullTextIndexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #FullTextIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))

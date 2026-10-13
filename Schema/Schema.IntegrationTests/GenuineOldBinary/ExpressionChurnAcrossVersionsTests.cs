@@ -250,14 +250,7 @@ public class ExpressionChurnAcrossVersionsTests
         using var cmd = conn.CreateCommand();
         foreach (var db in _createdDbs)
         {
-            // Classic guard, not DROP DATABASE IF EXISTS (2016 syntax): this runs against 2008 R2.
-            cmd.CommandText = $@"
-IF DB_ID('{db}') IS NOT NULL
-BEGIN
-  ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-  DROP DATABASE [{db}];
-END";
-            cmd.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
         }
     }
 }

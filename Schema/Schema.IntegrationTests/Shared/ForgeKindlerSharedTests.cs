@@ -54,7 +54,7 @@ public abstract class ForgeKindlerSharedTests
             AND TABLE_NAME = 'SchemaSmith_CompletedMigrationScripts'";
         var result = command.ExecuteScalar();
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.ToString(), Is.EqualTo("SchemaSmith_CompletedMigrationScripts"));
+        Assert.That(result.ToString(), CatalogName.Matches(_connection, "SchemaSmith_CompletedMigrationScripts"));
     }
 
     [Test]
@@ -66,7 +66,7 @@ public abstract class ForgeKindlerSharedTests
         command.CommandText = $@"
             SELECT ROUTINE_NAME
             FROM INFORMATION_SCHEMA.ROUTINES
-            WHERE ROUTINE_SCHEMA = '{MainDb}'
+            WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{MainDb}'")}
             AND ROUTINE_NAME = 'SchemaSmith_GenerateTableJSON'
             AND ROUTINE_TYPE = 'PROCEDURE'";
         var result = command.ExecuteScalar();
@@ -329,8 +329,11 @@ public abstract class ForgeKindlerSharedTests
 
             ForgeKindler.KindleTheForge(command, Platform); // absent stamp => kindles
 
+            // The stamp covers the content and the parse-neutral sql_mode the procedures were created under.
+            command.CommandText = "SELECT @@SESSION.sql_mode";
+            var sqlMode = MySqlSessionSettings.ParseNeutral(command.ExecuteScalar()?.ToString());
             Assert.That(ForgeKindler.ReadStamp(command, Platform),
-                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform)),
+                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform, sqlMode: sqlMode)),
                 "A fresh kindle must write the current content stamp.");
         }
         finally
@@ -358,7 +361,7 @@ public abstract class ForgeKindlerSharedTests
         using var command = _connection.CreateCommand();
         ForgeKindler.KindleTheForge(command, Platform, forceReKindle: true);
         command.CommandText = "SELECT COUNT(*) FROM information_schema.routines " +
-                              "WHERE routine_schema = DATABASE() AND routine_name = 'SchemaSmith_TableQuench'";
+                              $"WHERE {MySqlNameMatch.FoldedRoutineSchema("routine_schema", "DATABASE()")} AND routine_name = 'SchemaSmith_TableQuench'";
         Assert.That(System.Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(1),
             "ForceReKindle must leave the helper procs present.");
     }
@@ -377,10 +380,12 @@ public abstract class ForgeKindlerSharedTests
             "Kindle must release its GET_LOCK when done.");
     }
 
-    [TestCase("SchemaSmith_ProductOwnership", "ObjectSchema,ObjectName")]
-    [TestCase("SchemaSmith_ExpressionMap", "ObjectSchema,ObjectTable,ObjectName")]
+    // Each table in the key shape it actually shipped with: ProductOwnership on an AUTO_INCREMENT Id, ExpressionMap with
+    // no primary key at all.
+    [TestCase("SchemaSmith_ProductOwnership", "ObjectSchema,ObjectName", "`Id` INT AUTO_INCREMENT PRIMARY KEY, ")]
+    [TestCase("SchemaSmith_ExpressionMap", "ObjectSchema,ObjectTable,ObjectName", "")]
     public void KindleTheForge_LegacyCaseInsensitiveIdentifierColumns_BootstrapConvergesThemToBinary(
-        string table, string identifierColumns)
+        string table, string identifierColumns, string legacyKeyDdl)
     {
         // The UPGRADE half of the case-differing-identifier fix, and the half every EXISTING
         // installation depends on. Every other fixture creates a brand-new database, so these tables are
@@ -408,8 +413,7 @@ public abstract class ForgeKindlerSharedTests
             var identifierDdl = string.Join(", ", columns.Select(c => $"`{c}` VARCHAR(64) NOT NULL"));
             command.CommandText = $@"
                 CREATE TABLE `{table}` (
-                    `Id` INT AUTO_INCREMENT PRIMARY KEY,
-                    {identifierDdl}
+                    {legacyKeyDdl}{identifierDdl}
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
             command.ExecuteNonQuery();
 

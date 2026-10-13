@@ -2,6 +2,7 @@
 
 using System;
 using System.Data;
+using System.Data.Common;
 using System.Text;
 using NUnit.Framework;
 using Schema.DataAccess;
@@ -32,37 +33,37 @@ namespace Schema.IntegrationTests.SqlServer;
 public class PartitioningExtractionTests
 {
     private IDbConnection _connection;
-    private string _db;
+
+    // Runs on the suite's shared kindled database. Tables live in a fixture-owned schema; the partition
+    // function and scheme are database-scoped, so their names carry the same token.
+    private readonly string _p = "pex_" + Guid.NewGuid().ToString("N")[..8];
+    private string PartitionFunction => _p + "_pfExtract";
+    private string PartitionScheme => _p + "_psExtract";
 
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        _db = $"SchemaPartExtract_{Guid.NewGuid():N}"[..40];
         _connection = DbConnectionFactory.ForPlatform(Platform.SqlServer)
             .GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         _connection.Open();
 
-        _connection.ChangeDatabase("master");
-        Exec($"CREATE DATABASE [{_db}]");
-        _connection.ChangeDatabase(_db);
+        DropFixtureObjects();
+        Exec($"CREATE SCHEMA [{_p}]");
 
-        using (var cmd = _connection.CreateCommand())
-            ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
-
-        Exec("CREATE PARTITION FUNCTION pfExtract (INT) AS RANGE RIGHT FOR VALUES (100, 200)");
-        Exec("CREATE PARTITION SCHEME psExtract AS PARTITION pfExtract ALL TO ([PRIMARY])");
+        Exec($"CREATE PARTITION FUNCTION [{PartitionFunction}] (INT) AS RANGE RIGHT FOR VALUES (100, 200)");
+        Exec($"CREATE PARTITION SCHEME [{PartitionScheme}] AS PARTITION [{PartitionFunction}] ALL TO ([PRIMARY])");
 
         // Partitioned table, clustered index aligned to the same scheme.
-        Exec("CREATE TABLE dbo.PartTable (Id INT NOT NULL, Val NVARCHAR(50) NULL) ON psExtract(Id)");
-        Exec("CREATE CLUSTERED INDEX ixPartTable ON dbo.PartTable(Id) ON psExtract(Id)");
+        Exec($"CREATE TABLE [{_p}].PartTable (Id INT NOT NULL, Val NVARCHAR(50) NULL) ON [{PartitionScheme}](Id)");
+        Exec($"CREATE CLUSTERED INDEX ixPartTable ON [{_p}].PartTable(Id) ON [{PartitionScheme}](Id)");
 
         // Ordinary table, ordinary index -- the control that proves nothing is emitted when nothing is
         // partitioned. Without it a bug that emitted the scheme unconditionally would look like a pass.
-        Exec("CREATE TABLE dbo.PlainTable (Id INT NOT NULL PRIMARY KEY, Val NVARCHAR(50) NULL)");
+        Exec($"CREATE TABLE [{_p}].PlainTable (Id INT NOT NULL PRIMARY KEY, Val NVARCHAR(50) NULL)");
 
         // Partitioned index on an UNPARTITIONED heap: the index carries placement the table does not.
-        Exec("CREATE TABLE dbo.PartIndexOnly (Id INT NOT NULL, Val NVARCHAR(50) NULL)");
-        Exec("CREATE NONCLUSTERED INDEX ixPartIndexOnly ON dbo.PartIndexOnly(Id) ON psExtract(Id)");
+        Exec($"CREATE TABLE [{_p}].PartIndexOnly (Id INT NOT NULL, Val NVARCHAR(50) NULL)");
+        Exec($"CREATE NONCLUSTERED INDEX ixPartIndexOnly ON [{_p}].PartIndexOnly(Id) ON [{PartitionScheme}](Id)");
     }
 
     [OneTimeTearDown]
@@ -71,10 +72,9 @@ public class PartitioningExtractionTests
         if (_connection == null) return;
         try
         {
-            _connection.ChangeDatabase("master");
-            Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec($"DROP DATABASE IF EXISTS [{_db}]");
+            DropFixtureObjects();
         }
+        catch (DbException) { /* best-effort cleanup must not mask a test result */ }
         finally
         {
             _connection.Close();
@@ -90,12 +90,26 @@ public class PartitioningExtractionTests
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>Tables first (they sit on the scheme), then the scheme, then the function it uses.</summary>
+    private void DropFixtureObjects()
+    {
+        using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandTimeout = 300;
+            TestSchemaDrop.Drop(cmd, _p);
+        }
+        Exec($"IF EXISTS (SELECT 1 FROM sys.partition_schemes WHERE [name] = N'{PartitionScheme}') "
+             + $"DROP PARTITION SCHEME [{PartitionScheme}]");
+        Exec($"IF EXISTS (SELECT 1 FROM sys.partition_functions WHERE [name] = N'{PartitionFunction}') "
+             + $"DROP PARTITION FUNCTION [{PartitionFunction}]");
+    }
+
     /// <summary>FOR JSON splits across rows at 2033 characters, so the whole reader has to be drained.</summary>
-    private string Extract(string table, bool xml = false)
+    private string Extract(string schema, string table, bool xml = false)
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandTimeout = 300;
-        cmd.CommandText = $"EXEC SchemaSmith.GenerateTable{(xml ? "Xml" : "Json")} @p_Schema = 'dbo', @p_Table = '{table}'";
+        cmd.CommandText = $"EXEC SchemaSmith.GenerateTable{(xml ? "Xml" : "JSON")} @p_Schema = '{schema}', @p_Table = '{table}'";
         using var reader = cmd.ExecuteReader();
         var sb = new StringBuilder();
         while (reader.Read())
@@ -106,14 +120,14 @@ public class PartitioningExtractionTests
     [Test]
     public void APartitionedTable_EmitsItsSchemeAndColumn()
     {
-        var json = Extract("PartTable");
+        var json = Extract(_p, "PartTable");
 
         Assert.Multiple(() =>
         {
             Assert.That(json, Does.Contain("PartitionScheme"),
                 "A partitioned table that extracts without saying so produces a package describing an "
                 + "ordinary table -- deploying it elsewhere silently builds the wrong physical layout.\n" + json);
-            Assert.That(json, Does.Contain("psExtract"), json);
+            Assert.That(json, Does.Contain(PartitionScheme), json);
             Assert.That(json, Does.Contain("PartitionColumn"),
                 "The scheme alone is not a placement: SQL Server needs the column the function is applied "
                 + "to, and a package carrying one without the other cannot be deployed.\n" + json);
@@ -123,12 +137,12 @@ public class PartitioningExtractionTests
     [Test]
     public void AnAlignedIndex_EmitsItsOwnSchemeAndColumn()
     {
-        var json = Extract("PartTable");
+        var json = Extract(_p, "PartTable");
 
         Assert.That(json, Does.Contain("ixPartTable"), json);
         // The scheme name has to appear at least twice: once for the table, once for its aligned index.
-        var first = json.IndexOf("psExtract", StringComparison.Ordinal);
-        Assert.That(json.IndexOf("psExtract", first + 1, StringComparison.Ordinal), Is.GreaterThan(-1),
+        var first = json.IndexOf(PartitionScheme, StringComparison.Ordinal);
+        Assert.That(json.IndexOf(PartitionScheme, first + 1, StringComparison.Ordinal), Is.GreaterThan(-1),
             "The index's placement is read independently of the table's, so an aligned index must carry the "
             + "scheme in its own right rather than relying on the table's.\n" + json);
     }
@@ -136,11 +150,11 @@ public class PartitioningExtractionTests
     [Test]
     public void APartitionedIndexOnAnUnpartitionedTable_EmitsTheIndexPlacementOnly()
     {
-        var json = Extract("PartIndexOnly");
+        var json = Extract(_p, "PartIndexOnly");
 
         Assert.Multiple(() =>
         {
-            Assert.That(json, Does.Contain("psExtract"),
+            Assert.That(json, Does.Contain(PartitionScheme),
                 "The index is partitioned even though the table is not; inferring index placement from the "
                 + "table would lose it.\n" + json);
             // The table itself is a heap on the default filegroup, so its own placement must stay silent.
@@ -153,7 +167,7 @@ public class PartitioningExtractionTests
     [Test]
     public void AnOrdinaryTable_EmitsNoPartitioningAtAll()
     {
-        var json = Extract("PlainTable");
+        var json = Extract(_p, "PlainTable");
 
         Assert.Multiple(() =>
         {
@@ -185,7 +199,7 @@ public class PartitioningExtractionTests
             Exec("CREATE TABLE dbo.PartTable (Id INT NOT NULL, Val NVARCHAR(50) NULL) ON psExtractXml(Id)");
             Exec("CREATE CLUSTERED INDEX ixPartTable ON dbo.PartTable(Id) ON psExtractXml(Id)");
 
-            var xml = Extract("PartTable", xml: true);
+            var xml = Extract("dbo", "PartTable", xml: true);
 
             Assert.Multiple(() =>
             {
@@ -197,9 +211,10 @@ public class PartitioningExtractionTests
         finally
         {
             _connection.ChangeDatabase("master");
-            Exec($"ALTER DATABASE [{xmlDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec($"DROP DATABASE IF EXISTS [{xmlDb}]");
-            _connection.ChangeDatabase(_db);
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandTimeout = 300;
+            TestDatabaseDrop.Drop(cmd, xmlDb);
+            _connection.ChangeDatabase(FixtureSetup.MainDb);
         }
     }
 }

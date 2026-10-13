@@ -69,4 +69,12 @@ public class DataDelivery
     [SchemaProperty(MaxLength = 128, Description = "Optional label for a conditional data-delivery variant — names the intent behind its ShouldApplyExpression, appears in deployment logging when the delivery applies, and identifies which array variant a DataTongs re-extraction reconciles.")]
     [JsonProperty(Order = 9)]
     public string VariantName { get; set; }
+
+    // A MySQL or MariaDB TIMESTAMP is written and read in the session's time zone, so data extracted in one zone and
+    // delivered in another shifts by the difference. DataTongs extracts at +00:00 and records it here; a delivery with no
+    // value runs in the session's zone, as every earlier extraction expects.
+    [SchemaProperty(Platforms = [Platform.MySQL, Platform.MariaDb], Pattern = "^[+-](0[0-9]|1[0-4]):[0-5][0-9]$",
+        Description = "The session time zone (an offset such as +00:00) the ContentFile's TIMESTAMP values were extracted in. Delivery uses the same zone so the values arrive unchanged. DataTongs sets it; leave it unset for data written in the target server's own zone.")]
+    [JsonProperty(Order = 11)]
+    public string TimeZone { get; set; }
 }

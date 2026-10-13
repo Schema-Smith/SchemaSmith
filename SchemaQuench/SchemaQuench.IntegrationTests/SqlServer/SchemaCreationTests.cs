@@ -10,6 +10,7 @@ using Schema.Isolators;
 using Schema.Utility;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Data;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
@@ -149,6 +150,8 @@ public class SchemaCreationTests
                 // The schema now exists.
                 Assert.That(SchemaExists(autoTenant), Is.True,
                     "Schema must be created when CreateSchemaIfMissing=true and schema was missing.");
+                Assert.That(SummaryRecords("schema", autoTenant, "created"), Is.True,
+                    "the deployment summary must record the schema it created");
             }
             finally
             {
@@ -241,6 +244,8 @@ public class SchemaCreationTests
                 // The schema does NOT exist on the server — WhatIf must not have applied DDL.
                 Assert.That(SchemaExists(ghostTenant), Is.False,
                     "WhatIf + CreateSchemaIfMissing: true must NOT actually create the schema.");
+                Assert.That(SummaryRecords("schema", ghostTenant, "wouldCreate"), Is.True,
+                    "the WhatIf summary must record the schema it would create");
             }
             finally
             {
@@ -265,6 +270,14 @@ public class SchemaCreationTests
     }
 
     private void RunSchemaQuench() => Program.Main(["SkipKindlingForge"]);
+
+    private static bool SummaryRecords(string objectType, string objectName, string action)
+    {
+        var summary = Newtonsoft.Json.Linq.JObject.Parse(System.IO.File.ReadAllText(
+            System.IO.Path.Join(Schema.Utility.ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+        return (summary.SelectToken("objectChanges.details") as Newtonsoft.Json.Linq.JArray ?? [])
+            .Any(d => (string)d["objectType"] == objectType && (string)d["objectName"] == objectName && (string)d["action"] == action);
+    }
 
     private static void ClearCheckpointsForProduct(string productName)
     {

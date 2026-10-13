@@ -18,7 +18,7 @@ BEGIN
   --   * below its introduction: nonclustered 2012 (major 11), clustered 2014 (12);
   --   * an edition without columnstore below 2016 SP1 (fn_EnterpriseFeaturesUnavailable);
   --   * nonclustered on 2012/2014, where it makes the table read-only: creating it would change what the
-  --     application can do, so it waits for 2016 (SS-052);
+  --     application can do, so it waits for 2016;
   --   * clustered beside rowstore indexes on 2014, which refuses the combination (35304); the rowstore indexes carry
   --     keys and uniqueness, so the columnstore is the one skipped.
   -- The last two only stop SchemaSmith CREATING the index. One that already exists on the table was made on purpose

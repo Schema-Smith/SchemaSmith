@@ -1,6 +1,8 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Linq;
+using System.Collections.Generic;
 using System.Data;
 using NUnit.Framework;
 using Schema.DataAccess;
@@ -148,6 +150,62 @@ public class IndexOnlyQuenchProductScopeTests : BaseTableQuenchTests
 
     // ---- fixtures -------------------------------------------------------------
 
+    // An index the index-only quench adds, changes or drops is recorded as a change, and WhatIf records the same
+    // changes as previews -- including the re-create of a changed index, which WhatIf never really drops.
+    [Test]
+    public void IndexOnlyChanges_AreRecorded_TheSameUnderWhatIfAsInARealRun()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"IdxOnlyAudit_{uid}";
+        var table = $"idxaudit_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        string Defs(params string[] indexes) =>
+            $$"""[ { "Schema": "public", "Name": "{{table}}", "Indexes": [ {{string.Join(", ", indexes)}} ] } ]""";
+
+        try
+        {
+            CreateVendorTable(cmd, table);
+            RunIndexOnly(cmd, Defs("""{ "Name": "ix_a", "IndexColumns": "\"Val\"" }""", """{ "Name": "ix_b", "IndexColumns": "\"Id\"" }"""), product);
+            DrainIndexAudit(cmd);
+
+            // ix_a becomes unique (dropped and re-created), ix_b is removed, ix_c is added.
+            var v2 = Defs("""{ "Name": "ix_a", "Unique": true, "IndexColumns": "\"Val\"" }""", """{ "Name": "ix_c", "IndexColumns": "\"Id\", \"Val\"" }""");
+            RunIndexOnly(cmd, v2, product, dropRemoved: true, whatIf: true);
+            var previewed = DrainIndexAudit(cmd).Select(r => r.Replace("|wouldCreate", "|created").Replace("|wouldDrop", "|dropped")).ToList();
+            RunIndexOnly(cmd, v2, product, dropRemoved: true);
+            var applied = DrainIndexAudit(cmd);
+
+            Assert.That(applied, Is.EquivalentTo(new[]
+            {
+                $"index|public.{table}.ix_a|dropped", $"index|public.{table}.ix_a|created",
+                $"index|public.{table}.ix_b|dropped", $"index|public.{table}.ix_c|created"
+            }), "the real run must record each index it created and dropped");
+            Assert.That(previewed, Is.EquivalentTo(applied), "WhatIf must record the same index changes");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    private static List<string> DrainIndexAudit(IDbCommand cmd)
+    {
+        var rows = new List<string>();
+        cmd.CommandText = @"SELECT ""ObjectType"" || '|' || ""ObjectName"" || '|' || ""ActionType"" FROM ""SchemaSmith"".""ChangeAudit""
+                             WHERE ""SessionId"" = pg_backend_pid() AND ""ObjectType"" IN ('index', 'constraint')";
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read()) rows.Add(reader.GetString(0));
+        cmd.CommandText = @"DELETE FROM ""SchemaSmith"".""ChangeAudit"" WHERE ""SessionId"" = pg_backend_pid()";
+        cmd.ExecuteNonQuery();
+        return rows;
+    }
+
     private static string Defs(string table, string index) => $$"""
 [
   {
@@ -178,14 +236,15 @@ public class IndexOnlyQuenchProductScopeTests : BaseTableQuenchTests
     /// That is the same class of blind spot as the base helper's, made a second time: a test that
     /// exercises a string SchemaQuench does not emit proves nothing about what it does.</para>
     /// </summary>
-    private void RunIndexOnly(IDbCommand cmd, string json, string product, bool dropRemoved = false)
+    private void RunIndexOnly(IDbCommand cmd, string json, string product, bool dropRemoved = false, bool whatIf = false)
     {
         var defs = json.Replace("'", "''");
+        var w = whatIf ? "true" : "false";
         cmd.CommandText = $@"
-CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{product}', p_TableDefinitions := '{defs}', p_DropUnknownIndexes := false, p_DropIndexesRemovedFromProduct := {(dropRemoved ? "true" : "false")}, p_WhatIf := false, p_UpdateFillFactor := true, p_CaptureWouldDrop := false);
-CALL ""SchemaSmith"".""ReplicaIdentityQuench""(p_WhatIf := false);
-CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{product}');
-";
+CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{product}', p_TableDefinitions := '{defs}', p_DropUnknownIndexes := false, p_DropIndexesRemovedFromProduct := {(dropRemoved ? "true" : "false")}, p_WhatIf := {w}, p_UpdateFillFactor := true, p_CaptureWouldDrop := false);
+CALL ""SchemaSmith"".""ReplicaIdentityQuench""(p_WhatIf := {w});
+" + (whatIf ? "" : $@"CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{product}');
+");
         cmd.ExecuteNonQuery();
     }
 

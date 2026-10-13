@@ -7,13 +7,13 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_ExpressionMapUnchanged//
 
 CREATE FUNCTION SchemaSmith_ExpressionMapUnchanged(
-    p_ObjectSchema VARCHAR(64),
-    p_ObjectTable VARCHAR(64),
-    p_ObjectKind VARCHAR(32),
-    p_ObjectName VARCHAR(64),
-    p_Slot VARCHAR(32),
-    p_Authored TEXT,
-    p_LiveCanonical TEXT
+    p_ObjectSchema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_ObjectTable VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_ObjectKind VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_ObjectName VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Slot VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Authored TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_LiveCanonical TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ) RETURNS TINYINT(1)
 READS SQL DATA
 BEGIN
@@ -32,10 +32,10 @@ BEGIN
     --   version moved  -> the row cannot vouch for today's canonical text. Stale, not wrong: leave the object
     --                     alone and let the recording pass re-baseline it.
     --   no row         -> no opinion; the caller's text comparison decides, exactly as before.
-    DECLARE v_authored TEXT DEFAULT NULL;
-    DECLARE v_canonical TEXT DEFAULT NULL;
-    DECLARE v_rowversion VARCHAR(50) DEFAULT NULL;
-    DECLARE v_version VARCHAR(50) DEFAULT VERSION();
+    DECLARE v_authored TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
+    DECLARE v_canonical TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
+    DECLARE v_rowversion VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
+    DECLARE v_version VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT VERSION();
 
     SELECT em.AuthoredText, em.CanonicalText, em.EngineVersion
       INTO v_authored, v_canonical, v_rowversion
@@ -57,7 +57,7 @@ BEGIN
      LIMIT 1;
 
     IF v_authored IS NULL THEN RETURN 0; END IF;
-    IF BINARY v_authored != BINARY IFNULL(p_Authored, '') THEN RETURN 0; END IF;
+    IF CAST(v_authored AS BINARY) != CAST(IFNULL(p_Authored, '') AS BINARY) THEN RETURN 0; END IF;
     -- ORDER MATTERS. The live object is checked BEFORE the context, because a stale context must never be an
     -- excuse to stop looking at the server. With the two the other way round, an engine version that moved since
     -- the last deploy -- a cumulative update, or on other engines a packaging rebuild -- made this function answer
@@ -66,7 +66,7 @@ BEGIN
     -- the live text first costs one re-apply in the rare case where an engine genuinely re-renders an existing
     -- object's stored text (SQL Server freezes it, so in practice this is PostgreSQL major upgrades), and that
     -- re-apply restores the declared text -- which is the right answer anyway.
-    IF BINARY v_canonical != BINARY IFNULL(p_LiveCanonical, '') THEN RETURN 0; END IF;
+    IF CAST(v_canonical AS BINARY) != CAST(IFNULL(p_LiveCanonical, '') AS BINARY) THEN RETURN 0; END IF;
     IF v_rowversion != v_version THEN RETURN 1; END IF;
 
     RETURN 1;

@@ -1,6 +1,8 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Linq;
+using System.Collections.Generic;
 using System.Data;
 using System.Threading;
 using Schema.DataAccess;
@@ -597,13 +599,67 @@ END $$;";
         conn.Close();
     }
 
-    private void RunMaterializedViewQuench(IDbCommand cmd, string viewDefinitionsJson)
+    // A view index added, changed or removed is recorded as a change, and WhatIf records the same changes as previews.
+    // Its own view and product, so the quench cannot drop the view the other tests share.
+    [Test]
+    public void ViewIndexChanges_AreRecorded_TheSameUnderWhatIfAsInARealRun()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+        const string product = "MvAuditTests";
+        static string Index(string name, string column, bool unique) =>
+            $@"{{""Name"":""{name}"",""Unique"":{(unique ? "true" : "false")},""IndexColumns"":""{column}"",""AccessMethod"":""btree"",""FillFactor"":90}}";
+        static string View(params string[] indexes) =>
+            BuildViewJson("mv_audit", "public", "SELECT id, name, amount FROM public.test_source", true, $"[{string.Join(",", indexes)}]");
+
+        try
+        {
+            RunMaterializedViewQuench(cmd, View(Index("ix_mv_audit_id", "id", true), Index("ix_mv_audit_amount", "amount", false)), productName: product);
+            DrainIndexAudit(cmd);
+
+            // ix_mv_audit_id changes (dropped and re-created), ix_mv_audit_amount is removed, ix_mv_audit_name is added.
+            var v2 = View(Index("ix_mv_audit_id", "id", false), Index("ix_mv_audit_name", "name", false));
+            RunMaterializedViewQuench(cmd, v2, whatIf: true, productName: product);
+            var previewed = DrainIndexAudit(cmd).Select(r => r.Replace("|wouldCreate", "|created").Replace("|wouldDrop", "|dropped")).ToList();
+            RunMaterializedViewQuench(cmd, v2, productName: product);
+            var applied = DrainIndexAudit(cmd);
+
+            Assert.That(applied, Is.EquivalentTo(new[]
+            {
+                "index|public.mv_audit.ix_mv_audit_amount|dropped", "index|public.mv_audit.ix_mv_audit_id|dropped",
+                "index|public.mv_audit.ix_mv_audit_id|created", "index|public.mv_audit.ix_mv_audit_name|created"
+            }), "the real run must record each view index it created and dropped");
+            Assert.That(previewed, Is.EquivalentTo(applied), "WhatIf must record the same view index changes");
+        }
+        finally
+        {
+            cmd.CommandText = "DROP MATERIALIZED VIEW IF EXISTS public.mv_audit";
+            cmd.ExecuteNonQuery();
+            conn.Close();
+        }
+    }
+
+    private static List<string> DrainIndexAudit(IDbCommand cmd)
+    {
+        var rows = new List<string>();
+        cmd.CommandText = @"SELECT ""ObjectType"" || '|' || ""ObjectName"" || '|' || ""ActionType"" FROM ""SchemaSmith"".""ChangeAudit""
+                             WHERE ""SessionId"" = pg_backend_pid() AND ""ObjectType"" = 'index'";
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read()) rows.Add(reader.GetString(0));
+        cmd.CommandText = @"DELETE FROM ""SchemaSmith"".""ChangeAudit"" WHERE ""SessionId"" = pg_backend_pid()";
+        cmd.ExecuteNonQuery();
+        return rows;
+    }
+
+    private void RunMaterializedViewQuench(IDbCommand cmd, string viewDefinitionsJson, bool whatIf = false, string productName = null)
     {
         cmd.CommandTimeout = 300;
         cmd.CommandText = $@"CALL ""SchemaSmith"".""MaterializedViewQuench""(
-  '{_productName}',
+  '{productName ?? _productName}',
   '{viewDefinitionsJson.Replace("'", "''")}',
-  false,
+  {(whatIf ? "true" : "false")},
   true
 );";
         var retry = true;

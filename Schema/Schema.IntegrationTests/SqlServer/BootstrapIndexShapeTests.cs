@@ -204,8 +204,7 @@ public class BootstrapIndexShapeTests
         finally
         {
             conn.ChangeDatabase("master");
-            cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-            cmd.ExecuteNonQuery();
+            TestDatabaseDrop.Drop(cmd, db);
         }
     }
 

@@ -46,7 +46,7 @@ BEGIN
   SELECT STRING_AGG('RAISE NOTICE ''  Create new table ' || tt."Schema" || '.' || tt."Name" || CASE WHEN COALESCE(tt."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tt."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
                     'CREATE TABLE "' || tt."Schema" || '"."' || tt."Name" || '" (' ||
                     (SELECT STRING_AGG('"' || tc."Name" || '" ' || tc."DataType" ||
-                            CASE WHEN COALESCE(tc."Collation", '') != '' THEN ' COLLATE "' || tc."Collation" || '"' ELSE '' END ||
+                            "SchemaSmith"."CollateClause"(tc."Collation") ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' THEN ' ' || tc."Generated" ELSE '' END ||
                             CASE WHEN tc."Nullable" THEN '' ELSE ' NOT NULL' END ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%' AND COALESCE(tc."Default", '') != '' THEN ' DEFAULT ' || tc."Default" ELSE '' END, ', ' ORDER BY tc."_RowId")
@@ -57,6 +57,10 @@ BEGIN
                          -- present at CREATE time, and inlining them here created a plain column then churned
                          -- it to generated via a drop-and-re-add. Identity columns are NOT deferred.
                          AND NOT (COALESCE(tc."Generated", 'NEVER') = 'ALWAYS' AND COALESCE(tc."GenerationExpression", '') <> '')) || ')' ||
+                    -- USING precedes WITH in the grammar and has existed since PostgreSQL 12, so a new table gets its
+                    -- declared access method on every supported version. Only changing an existing table's method
+                    -- needs 15 (SET ACCESS METHOD, in ModifiedTableQuench).
+                    CASE WHEN COALESCE(tt."AccessMethod", '') <> '' THEN ' USING "' || tt."AccessMethod" || '"' ELSE '' END ||
                     ' WITH (fillfactor = ' || tt."FillFactor" || ')' ||
                     -- TABLESPACE follows WITH in the CREATE TABLE grammar. Emitted only when declared:
                     -- an unset Tablespace means placement is not managed, so the table lands wherever
@@ -87,7 +91,7 @@ BEGIN
                     ')'';' || CHR(10) ||
                     'ALTER TABLE "' || tt."Schema" || '"."' || tt."Name" || '" ' ||
                     (SELECT STRING_AGG('ADD "' || tc."Name" || '" ' || tc."DataType" ||
-                            CASE WHEN COALESCE(tc."Collation", '') != '' THEN ' COLLATE "' || tc."Collation" || '"' ELSE '' END ||
+                            "SchemaSmith"."CollateClause"(tc."Collation") ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' THEN ' ' || tc."Generated" ELSE '' END ||
                             CASE WHEN tc."Nullable" THEN '' ELSE ' NOT NULL' END ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%' AND COALESCE(tc."Default", '') != '' THEN ' DEFAULT ' || tc."Default" ELSE '' END, ', ' ORDER BY tc."_RowId")

@@ -23,6 +23,7 @@ SchemaQuench --LogPath:path/to/logs
 # Pre-flight diagnostics (no deployment)
 SchemaQuench --TestConnection     # validate connections + MinimumVersion, then exit
 SchemaQuench --PreviewTargets     # validate connections + MinimumVersion + show target report, then exit
+SchemaQuench --WhatIf             # dry run: log the SQL a deployment would run, change nothing
 
 # SQL Server
 SchemaQuench --ConnectionString:"Data Source=myserver;Initial Catalog=master;User ID=sa;Password=secret;TrustServerCertificate=True;"
@@ -58,7 +59,7 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `SchemaPackagePath` | string | _(required)_ | Path to the schema package directory or ZIP file. |
-| `WhatIfONLY` | bool | `false` | Dry-run mode. Generates SQL without executing. |
+| `WhatIfONLY` | bool | `false` | Dry-run mode. Generates SQL without executing. The `--WhatIf` switch turns it on for one run. |
 | `KindleTheForge` | bool | `true` | Deploy SchemaSmith helper procedures and the migration tracking table to each target database before quenching. |
 | `UpdateTables` | bool | `true` | Apply table structure changes (columns, indexes, constraints, foreign keys) from the schema package. |
 | `DropTablesRemovedFromProduct` | bool | `true` | Drop tables that exist in the database but aren't defined in the schema package. Also settable as a `Product.json` property — see [DropTablesRemovedFromProduct](#droptablesremovedfromproduct). |
@@ -338,8 +339,10 @@ These are the minimum versions SchemaSmith supports for deployment:
 |----------|------------------|
 | SQL Server | 2008 (major version 10) |
 | PostgreSQL | 12 |
-| MySQL | 5.7 |
-| MariaDB | 10.2 |
+| MySQL | 5.7.22 on the 5.7 line; 8.0.23 on the 8.0 line |
+| MariaDB | 10.2.7 |
+
+**MySQL's floor is a patch, on two lines.** MySQL 5.7.0-5.7.21 lack `JSON_ARRAYAGG`, so DataTongs extracts nothing from them. MySQL 8.0.0-8.0.22 lack, patch by patch, features SchemaSmith reads as "8.0": functional indexes, enforced CHECK constraints, multi-valued indexes and invisible columns. Both bands are refused before anything runs, naming the detected version. MariaDB's floor is a patch too: 10.2.7, the first with the `JSON` type SchemaSmith's helpers declare.
 
 **And the other end of the range is measured, not assumed — new in v2.7.0.** Every engine also has a
 CI leg pinned to that engine's **`latest`** tag, so each release is exercised against whatever the vendor
@@ -359,7 +362,7 @@ decaying into "current as of whenever someone last looked".
 
 **These floors are enforced automatically — you don't declare anything.** Before any deployment (SchemaQuench) or extraction (SchemaTongs) work begins, the target server's version is detected and logged; a below-floor server aborts the run with a clear "unsupported version" message instead of failing later with a raw engine error. For SQL Server, the target database's `compatibility_level` is checked too — it must be `100` or higher (SQL Server 2008); a database below that is reported distinctly from a too-old server. Between compatibility levels 100 and 120 SchemaSmith ingests its schema model as XML rather than JSON (`OPENJSON`'s JSON path is a parse error below 130) — automatically, see [Version-adaptive code generation](#version-adaptive-code-generation) below. `MinimumVersion` (below) is a separate, opt-in gate for raising the floor *further* per product.
 
-**MySQL 5.7 / MariaDB 10.2 — what adapts at the floor.** The schema model parses on both (a version-agnostic `JSON_EXTRACT` shred replaces `JSON_TABLE`, which is MySQL 8.0 / MariaDB 10.6), and column/index renames that need newer DDL fall back to an equivalent path automatically (a below-`RENAME COLUMN`/`RENAME INDEX` target gets `CHANGE COLUMN` / drop-and-recreate — same end state). A few features have no equivalent below their introduction and degrade through the unsupported-feature policy (`Target:UnsupportedFeaturePolicy`, default `warn` → apply without the feature + a downgrade-manifest line; `fail` → abort): **CHECK constraints** require MySQL **8.0.16** (MariaDB enforces them at the 10.2 floor); **descending index key parts** are stored ascending below MySQL 8.0 / MariaDB 10.8; and **automatic table-data delivery** requires MySQL **8.0** (on MariaDB 10.2 it works via a recursive-CTE shred — full support; below the MySQL floor, use manual data scripts). **The hard wall is the floor itself, and it is not really about JSON.** MySQL **5.6** and MariaDB **10.1** are rejected outright because they have no way to expand a payload into ROWS: no JSON functions (MySQL 5.7 / MariaDB 10.2), no recursive CTE (MySQL 8.0 / MariaDB 10.2), and no set-returning XML shredder at any version. They do have XML — `ExtractValue()` and `UpdateXML()` — but those are *scalar*: one XPath, one string. That is the difference from SQL Server, where the fallback below the JSON cliff works because the `xml` type carries `.nodes()`, which returns a rowset. There is no MySQL-family equivalent to fall back to, which is also why MariaDB 10.2 is the first version that can deliver data at all — it is where recursive CTEs arrive.
+**MySQL 5.7 / MariaDB 10.2 — what adapts at the floor.** The schema model parses on both (a version-agnostic `JSON_EXTRACT` shred replaces `JSON_TABLE`, which is MySQL 8.0 / MariaDB 10.6), and column/index renames that need newer DDL fall back to an equivalent path automatically (a below-`RENAME COLUMN`/`RENAME INDEX` target gets `CHANGE COLUMN` / drop-and-recreate — same end state). A few features have no equivalent below their introduction and degrade through the unsupported-feature policy (`Target:UnsupportedFeaturePolicy`, default `warn` → apply without the feature + a downgrade-manifest line; `fail` → abort): **CHECK constraints** require MySQL **8.0.16** or MariaDB **10.2.22**; **descending index key parts** are stored ascending below MySQL 8.0 / MariaDB 10.8; and **automatic table-data delivery** requires MySQL **8.0** (on MariaDB 10.2 it works via a recursive-CTE shred — full support; below the MySQL floor, use manual data scripts). **The hard wall is the floor itself, and it is not really about JSON.** MySQL **5.6** and MariaDB **10.1** are rejected outright because they have no way to expand a payload into ROWS: no JSON functions (MySQL 5.7 / MariaDB 10.2), no recursive CTE (MySQL 8.0 / MariaDB 10.2), and no set-returning XML shredder at any version. They do have XML — `ExtractValue()` and `UpdateXML()` — but those are *scalar*: one XPath, one string. That is the difference from SQL Server, where the fallback below the JSON cliff works because the `xml` type carries `.nodes()`, which returns a rowset. There is no MySQL-family equivalent to fall back to, which is also why MariaDB 10.2 is the first version that can deliver data at all — it is where recursive CTEs arrive.
 
 ### MinimumVersion pre-flight gate
 
@@ -399,12 +402,13 @@ A feature a target version lacks is either taken by an equivalent longer path (s
 | Authored feature | Requires | Below that version, SchemaSmith… |
 |---|---|---|
 | **`NULLS NOT DISTINCT`** (unique index / constraint) | PostgreSQL 15 | emits the object *without* the clause + records a downgrade |
+| **Unlogged sequence** (`"PersistenceType": "Unlogged"`) | PostgreSQL 15 | creates the sequence logged and leaves an existing one's persistence alone + records a downgrade |
 | **`MERGE` data delivery** (`Insert/Update`) | PostgreSQL 15 | uses a manual, NULL-safe INSERT + UPDATE upsert with identical semantics |
 | **In-place generated-column expression change** (`SET EXPRESSION`) | PostgreSQL 17 | drops and re-adds the generated column (data type, collation, nullability, storage, compression preserved) |
 | **Per-column compression** (`SET COMPRESSION`) | PostgreSQL 14 | omits the compression + records a downgrade |
 | **Expression statistics** (`CREATE STATISTICS` on an expression) | PostgreSQL 14 | skips the statistic + records a downgrade |
-| **Removing a column's generation** (`DROP EXPRESSION`) | PostgreSQL 13 | drops and re-adds the column as a plain column (the previously-computed values are not preserved, unlike the in-place conversion available on 13+) |
-| **Table access method** (`USING <method>`) | PostgreSQL 15 | creates the table on the server's default access method + records a downgrade |
+| **Removing a column's generation** (`DROP EXPRESSION`) | PostgreSQL 13 | drops and re-adds the column as a plain column + records a downgrade (the previously-computed values are not preserved, unlike the in-place conversion available on 13+). Under `fail` the deploy is refused before anything is dropped |
+| **Table access method** (changing it on an existing table, `SET ACCESS METHOD`) | PostgreSQL 15 | leaves the table on its current access method + records a downgrade. A new table gets its declared method on every supported version (`CREATE TABLE ... USING`, PostgreSQL 12) |
 | **`VIRTUAL` generated columns** | PostgreSQL 18 | skips the column + records a downgrade (`STORED` is unaffected — it has been available since 12) |
 
 The version-sensitive system-catalog reads SchemaSmith uses to compare and extract state (per-column compression, expression statistics, `NULLS NOT DISTINCT`, INCLUDE columns) are branched automatically so they parse on the older server too — extraction and idempotency work the same on 12 as on current PostgreSQL. Delete-on-absence data delivery uses a single `MERGE … WHEN NOT MATCHED BY SOURCE THEN DELETE` on 17+ and a `MERGE` + follow-on `DELETE … WHERE NOT EXISTS` (keyed identically, same merge filter) on 15/16; below 15 it is the same version-agnostic `DELETE`. In every case the end state is identical — deploy the same package to PostgreSQL 12 through current and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
@@ -471,7 +475,7 @@ One further case is compatibility-level gated rather than version gated: a `Json
 
 
 
-The supported range (MySQL 5.7 through current, MariaDB 10.2 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
+The supported range (MySQL 5.7.22 and 8.0.23 through current, MariaDB 10.2.7 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
 
 The schema model itself parses on every supported version — a version-agnostic `JSON_EXTRACT` shred stands in for `JSON_TABLE` (MySQL 8.0 / MariaDB 10.6), so nothing about kindling or ingest depends on the target version. Beyond that, a feature a target lacks is either taken by an equivalent path (same end state) or degraded through the **unsupported-feature policy** (`Target:UnsupportedFeaturePolicy`, default `warn` → emit without the feature + an **Unsupported Feature Downgrades** line; `fail` → abort with a "requires MySQL N" message):
 
@@ -479,14 +483,15 @@ The schema model itself parses on every supported version — a version-agnostic
 |---|---|---|
 | **Column rename** (`RENAME COLUMN`) | MySQL 8.0 / MariaDB 10.5.2 | reproduces the rename with `CHANGE COLUMN`, reconstructing the current column definition (same end state) |
 | **Index rename** (`RENAME INDEX`) | MariaDB 10.5.2 (MySQL 5.7 has it) | drops and recreates the index under the new name from its live definition (same end state) |
-| **CHECK constraints** | MySQL 8.0.16 (MariaDB: at the 10.2 floor) | emits the table *without* the check + records a downgrade (MySQL 5.7 parses-and-ignores CHECK, so it can neither be created nor detected) |
+| **CHECK constraints** | MySQL 8.0.16 / MariaDB 10.2.22 | emits the table *without* the check + records a downgrade (MySQL before 8.0.16 parses and ignores CHECK, so it can neither be created nor detected; MariaDB before 10.2.22 has no `INFORMATION_SCHEMA.CHECK_CONSTRAINTS`, so a deployed check cannot be read back) |
 | **Invisible index** (`INVISIBLE`; MariaDB `IGNORED`) | MySQL 8.0 / MariaDB 10.6 | stores the index *visible* — the visibility clause is suppressed — + records a downgrade. The modified-index compare ignores the visibility difference below the floor, so re-deploys stay idempotent instead of churning the index every run |
 | **Invisible column** (`Column.Invisible`) | MySQL 8.0.23 / MariaDB 10.3 | stores the column *visible* — the `INVISIBLE` clause is suppressed — + records a downgrade. The modified-column compare ignores the visibility difference below the floor, so re-deploys stay idempotent instead of churning the column every run |
 | **Descending index key parts** (`… DESC`) | MySQL 8.0 / MariaDB 10.8 | stores the key part ascending (the engine silently does so anyway) + records a downgrade |
-| **Automatic table-data delivery** | MySQL 8.0 | on MariaDB 10.2 uses a recursive-CTE shred (full support); below the MySQL floor, skips delivery with a clear log — use manual data scripts |
+| **Automatic table-data delivery** | MySQL 8.0 | on MariaDB 10.2 uses a recursive-CTE shred (full support); below the MySQL floor, skips delivery with a clear log — use manual data scripts. MariaDB patches whose `JSON_TABLE` keeps string escapes literally (MDEV-27412: 10.6 before 10.6.20, 10.11 before 10.11.10, 11.2 before 11.2.6, 11.4 before 11.4.4, 11.6 before 11.6.2, and every 10.7–10.10, 11.0, 11.1, 11.3 and 11.5 patch) use the same shred, which is slower on large tables |
 | **Column `DEFAULT` expression** (a function or expression default, not a literal) | MySQL 8.0.13 (MariaDB: at the 10.2 floor) | **skips the whole column**, not just the default + records a downgrade — see the warning below |
-| **Functional / expression index** (a key part that is an expression) | MySQL 8.0.13 (MariaDB: no equivalent at any version) | skips the index + records a downgrade |
+| **Functional / expression index** (a key part that is an expression) | MySQL 8.0.13 (MariaDB: no equivalent at any version) | skips the index + records a downgrade. A multi-valued index (`CAST(... AS ... ARRAY)`) needs MySQL 8.0.17, and below it is skipped the same way |
 | **Column SRID restriction** (`SRID n` on a spatial column) | MySQL 8.0.3 (MariaDB: no equivalent at any version) | creates the column without the SRID restriction + records a downgrade |
+| **Long unique key** (`UNIQUE ... USING HASH`, extracted from MariaDB 10.4+) | MariaDB 10.4 | refuses the deploy by name before anything is created, under either policy. InnoDB on 10.2/10.3 cannot enforce the key, and skipping it would drop the uniqueness. Only a key too wide for a B-tree is refused (a `TEXT`, `BLOB` or `JSON` column used in full, or a character column over 768 characters); a narrower one is built as a B-tree, as it always was |
 | **Application-time period** (`PERIOD FOR`) | MariaDB 10.4.3 (MySQL: no equivalent at any version) | creates the table without the period + records a downgrade |
 | **Table-level system versioning** (`WITH SYSTEM VERSIONING`) | MariaDB 10.3 (MySQL: no equivalent) | creates an ordinary, non-versioned table + records a downgrade |
 | **Per-column history exclusion** (`WITHOUT SYSTEM VERSIONING`) | MariaDB 10.3.4 (MySQL: no equivalent) | creates the column without the exclusion + records a downgrade — the column survives, the exclusion does not |
@@ -495,7 +500,9 @@ The schema model itself parses on every supported version — a version-agnostic
 
 > **"No equivalent at any version" is not the same as "old".** Several rows above are not version gates at all — MySQL has no application-time periods or system versioning at *any* release, and MariaDB has no SRID restriction or functional index at any release. Those degrade on every target of that platform, current versions included, which is why they appear here rather than reading as legacy concerns.
 
-The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7 through current, or MariaDB 10.2 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
+**One more routes through the same policy but is gated on the server's filesystem, not its version.** **Page compression** (`Compression`, MySQL only) needs a data directory on a filesystem that supports hole punching, and MySQL refuses it anywhere else with error 4029 — a Windows data directory, for one. Under `warn` the table is created without its `COMPRESSION` option and the downgrade is recorded; under `fail` the deploy stops. `Compression` is applied when a table is created, so only new tables are affected.
+
+The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7.22 through current, or MariaDB 10.2.7 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
 ### MariaDB (MySQL family) — where the native DDL diverges
 
@@ -513,6 +520,39 @@ Within that shared family, three DDL surfaces diverge between the two engines:
 SchemaSmith detects each target's platform and emits the right native form automatically -- the divergence above is handled for you, not something you configure.
 
 > **MariaDB 11.4+ default collation — a note for your own SQL.** This one is not about the DDL SchemaSmith generates; it's about comparison SQL *you* write in migration scripts, After Scripts, or `ValidationScript`. MariaDB 11.4 changed the default collation for `utf8mb4` to `utf8mb4_uca1400_ai_ci`. When you compare a string produced at runtime (for example a value derived from `JSON_TABLE`, which takes that new default) against a table column stored under a different collation, MariaDB raises `Illegal mix of collations` rather than coercing. If you hit this on MariaDB 11.4+, add an explicit `COLLATE` to one side of the comparison (e.g. `WHERE t.name = j.name COLLATE utf8mb4_general_ci`) so both operands share a collation. (Distinct from a `latin1` *target database* charset, which SchemaSmith handles internally.)
+
+### Name case on MySQL
+
+MySQL and MariaDB decide whether two names are the same object from the server setting `lower_case_table_names`. SchemaSmith asks the server and follows its answer, so one package deploys the same way whichever setting the target runs.
+
+| Setting | Database and table names | Usual default on |
+|---------|--------------------------|------------------|
+| `0` | Case-sensitive: `Orders` and `orders` are two tables | Linux |
+| `1` | Stored in lowercase; any spelling finds the table | Windows |
+| `2` | Stored as declared, compared case-insensitively | macOS |
+
+Column, index, CHECK and foreign-key names are case-insensitive on every setting. When the server holds one of them under a spelling that differs from your package only in case, SchemaSmith keeps the object and its data and converges it to your package's spelling. MySQL renames the index; MariaDB drops and re-creates it instead, because a case-only index rename corrupts the index dictionary on some MariaDB versions. On MariaDB, an index that starts with a foreign key's column keeps its existing spelling, because the engine will not drop an index a foreign key depends on.
+
+A server on setting `1` or `2` has two consequences worth knowing:
+
+- **Extraction:** SchemaTongs run against a server on setting `1` writes lowercase table names, because the server holds no other spelling. Setting `2` keeps the declared spelling.
+- **Case-colliding tables:** a template that declares two tables whose names differ only in case is refused (exit code `2`) on a server on setting `1` or `2`, before any database is touched -- the server would hold one table for both. Variants gated by `ShouldApplyExpression` are not a collision. [`--Validate`](validate.md) reports such a pair as `SS-DUP-001` whatever the target.
+
+### Server settings on MySQL and MariaDB
+
+A MySQL or MariaDB server can be configured in ways that change how SQL is read and how columns and data behave.
+SchemaSmith runs its own work under a known setting for each of those, and puts the session back afterwards. Your
+scripts (Before, After, Objects, migration scripts and `ValidationScript`) always run under the server's own settings.
+
+| Server setting | What SchemaSmith does |
+|---|---|
+| `sql_mode` | Creates its procedures and delivers data under your server's mode with the flags that change how SQL text is read taken out: `ANSI_QUOTES`, `PIPES_AS_CONCAT`, `NO_BACKSLASH_ESCAPES`, `IGNORE_SPACE`, the combination modes `ANSI`, `ORACLE`, `MSSQL`, `DB2`, `POSTGRESQL` and `MAXDB`, `NO_KEY_OPTIONS`, `NO_TABLE_OPTIONS`, `NO_FIELD_OPTIONS`, `EMPTY_STRING_IS_NULL` and `SIMULTANEOUS_ASSIGNMENT`. Strictness flags such as `STRICT_TRANS_TABLES`, `NO_ZERO_DATE` and `ONLY_FULL_GROUP_BY` stay as your server has them. When the server's mode changes, the next run re-creates the procedures. |
+| `explicit_defaults_for_timestamp` | Turned on while tables are created and altered, so a `TIMESTAMP` column gets exactly the default it declares. With it off, the default on MySQL 5.7 and MariaDB before 10.10, the server would invent one. A few MariaDB versions (10.2, 10.3 and early 10.4 to 10.6 patches) do not let a session change it, and MySQL 5.7 lets only an account with `SUPER` change it (a managed service's admin user has no `SUPER`); there the deploy logs a note, and a `TIMESTAMP NOT NULL` column needs its default declared. |
+| `time_zone` | DataTongs extracts at `+00:00` and records that on the delivery it configures (`TimeZone`). Delivery uses the recorded zone, so `TIMESTAMP` values arrive unchanged whatever zone either server runs in. A delivery without `TimeZone` runs in the session's zone. |
+| `sql_mode` during data delivery | `NO_AUTO_VALUE_ON_ZERO` is added, so a row whose `AUTO_INCREMENT` key is `0` keeps `0`. |
+| `sql_require_primary_key` (MySQL), `innodb_force_primary_key` (MariaDB) | SchemaSmith's own tables all have primary keys. Your tables must declare one, because the server refuses any table without it. |
+| `information_schema_stats_expiry` (MySQL 8.0+) | Read past for `AUTO_INCREMENT`, on deploy and on extraction, so a stale statistics cache cannot hide the table's current value. |
+| `lower_case_table_names` | See [Name case on MySQL](#name-case-on-mysql). |
 
 ---
 
@@ -552,6 +592,7 @@ Product scripts run against the administrative connection, outside the per-datab
 See exactly what SchemaQuench would do before it touches a single table. Set `WhatIfONLY` to `true` to perform a dry run. In WhatIf mode:
 
 - **Validation scripts** execute normally (server validation, baseline validation).
+- **SchemaSmith's own helper schema** is installed or updated on the target, as on a real run, so WhatIf needs the same permissions. None of your objects change.
 - **Table quench procedures** run with `@WhatIf = 1`, generating the SQL that would be executed and logging it without applying changes.
 - **Migration scripts** show detailed status for each script:
   - `Would APPLY: {script}` for scripts that haven't yet been tracked.
@@ -1320,7 +1361,8 @@ For a narrative walkthrough and decision guide (when to use the sentinel vs. `Sh
 | Code | Meaning |
 |------|---------|
 | 0 | Successful quench (or passing pre-flight). All databases quenched, logs backed up. |
-| 2 | Failure. One or more database quenches failed; a `--TestConnection` / `--PreviewTargets` pre-flight found a connection error, version violation, or required-template target miss; or a `--Validate` pass found an Error-severity finding (warnings alone still exit `0`). |
+| 1 | Finished, but a feature the target lacks was downgraded under `UnsupportedFeaturePolicy: warn`; the deployment summary lists each one. With `--ExitNonZeroOnWarning`, also any run that logged a warning. |
+| 2 | Failure. A command-line argument was not recognized (nothing runs); the package could not be loaded; one or more database quenches failed; a `--TestConnection` / `--PreviewTargets` pre-flight found a connection error, version violation, or required-template target miss; or a `--Validate` pass found an Error-severity finding (warnings alone still exit `0`). |
 | 3 | Unhandled exception. An unexpected error occurred outside the normal quench flow. |
 | 4 | Unable to back up log files. |
 

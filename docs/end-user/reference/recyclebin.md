@@ -24,7 +24,7 @@ The two postures address different concerns. "Never drop" is protection against 
 
 The recyclebin is built on two optional stored procedures you create in the target database. SchemaSmith probes the target's catalog for each hook by name before every quench; if a hook is present, table removal and pre-creation route through it. If a hook is absent, SchemaSmith emits a plain `DROP TABLE` or `CREATE TABLE` as normal. Installing the hooks in a database opts that database in; removing them opts it back out. No settings file change required.
 
-Reference implementations ship with the Northwind demos at `Demos/<engine>/Northwind/Templates/Northwind/Procedures/`.
+Reference implementations ship with the Northwind demos at `Demos/<engine>/Northwind/Templates/Northwind/Procedures/`. SchemaTongs does not extract the hooks, since they live in SchemaSmith's own namespace, and it never reports their files as orphans, so re-extracting into the package leaves them where they are.
 
 ### Hook names
 

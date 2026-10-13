@@ -37,11 +37,13 @@ BEGIN TRY
         WHEN t.EnableChangeTracking = 1 AND ctt.[object_id] IS NULL
         THEN 'RAISERROR(''  Enable Change Tracking on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
              'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' ENABLE CHANGE_TRACKING' +
-             CASE WHEN t.TrackColumnsUpdated = 1 THEN ' WITH (TRACK_COLUMNS_UPDATED = ON)' ELSE '' END + ';' + CHAR(13) + CHAR(10)
+             CASE WHEN t.TrackColumnsUpdated = 1 THEN ' WITH (TRACK_COLUMNS_UPDATED = ON)' ELSE '' END + ';' + CHAR(13) + CHAR(10) +
+             'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeTracking'', ''' + REPLACE(t.[Schema] + '.' + t.[Name], '''', '''''') + ''', ''created'');' + CHAR(13) + CHAR(10)
 
         WHEN t.EnableChangeTracking = 0 AND ctt.[object_id] IS NOT NULL
         THEN 'RAISERROR(''  Disable Change Tracking on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-             'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' DISABLE CHANGE_TRACKING;' + CHAR(13) + CHAR(10)
+             'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' DISABLE CHANGE_TRACKING;' + CHAR(13) + CHAR(10) +
+             'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeTracking'', ''' + REPLACE(t.[Schema] + '.' + t.[Name], '''', '''''') + ''', ''dropped'');' + CHAR(13) + CHAR(10)
 
         -- TRACK_COLUMNS_UPDATED cannot be altered in place. Codebase-certified against SQL Server:
         -- re-running ENABLE on a tracked table fails 4996 ("Change tracking is already enabled"), and
@@ -55,7 +57,8 @@ BEGIN TRY
              '. SQL Server cannot alter that option in place, so change tracking was disabled and re-enabled and THE TRACKING BASELINE WAS DISCARDED -- every consumer of this table must re-synchronize in full (CHANGE_TRACKING_MIN_VALID_VERSION reports the new baseline).'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
              'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' DISABLE CHANGE_TRACKING;' + CHAR(13) + CHAR(10) +
              'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' ENABLE CHANGE_TRACKING' +
-             CASE WHEN t.TrackColumnsUpdated = 1 THEN ' WITH (TRACK_COLUMNS_UPDATED = ON)' ELSE '' END + ';' + CHAR(13) + CHAR(10)
+             CASE WHEN t.TrackColumnsUpdated = 1 THEN ' WITH (TRACK_COLUMNS_UPDATED = ON)' ELSE '' END + ';' + CHAR(13) + CHAR(10) +
+             'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeTracking'', ''' + REPLACE(t.[Schema] + '.' + t.[Name], '''', '''''') + ''', ''modified'');' + CHAR(13) + CHAR(10)
         ELSE '' END
       FROM #Tables t WITH (NOLOCK)
       JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
@@ -65,7 +68,7 @@ BEGIN TRY
          OR (t.EnableChangeTracking = 1 AND ctt.[object_id] IS NOT NULL AND ctt.is_track_columns_updated_on <> t.TrackColumnsUpdated)
     IF @v_SQL <> ''
     BEGIN
-      IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+      IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
     END
   END
   SET NOCOUNT OFF

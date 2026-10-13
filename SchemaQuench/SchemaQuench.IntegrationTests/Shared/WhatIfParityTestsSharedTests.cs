@@ -10,7 +10,6 @@ using log4net;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json.Linq;
 using NSubstitute;
-using Schema.Configuration;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Isolators;
@@ -58,20 +57,23 @@ public abstract class WhatIfParityTestsSharedTests
 
                 WritePackage(tempDir, version: 1);
                 RunSchemaQuench(LogDirFor(tempDir, "v1"), whatIf: false);
-                _environment.DidNotReceive().Exit(2);
-                _environment.DidNotReceive().Exit(3);
+                AssertRunSucceeded("the v1 deploy");
 
                 WritePackage(tempDir, version: 2);
                 var whatIfLogs = LogDirFor(tempDir, "whatif");
+                _progressLog.ClearReceivedCalls();
                 RunSchemaQuench(whatIfLogs, whatIf: true);
-                _environment.DidNotReceive().Exit(2);
-                _environment.DidNotReceive().Exit(3);
+                AssertRunSucceeded("the v2 WhatIf");
+                var auditLines = _progressLog.ReceivedCalls().Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "")
+                    .Where(line => line.Contains("ChangeAudit")).ToList();
+                Assert.That(auditLines, Is.Empty,
+                    "the WhatIf console must not show the change rows a quench records, since WhatIf does not write them:"
+                    + Environment.NewLine + string.Join(Environment.NewLine, auditLines.Take(5)));
                 Assert.That(TableExists(cmd, "WhatIfNew"), Is.False, "WhatIf must not create the table v2 adds");
 
                 var realLogs = LogDirFor(tempDir, "real");
                 RunSchemaQuench(realLogs, whatIf: false);
-                _environment.DidNotReceive().Exit(2);
-                _environment.DidNotReceive().Exit(3);
+                AssertRunSucceeded("the v2 deploy");
 
                 var previewed = Changes(whatIfLogs, expectedMode: "WhatIf");
                 var applied = Changes(realLogs, expectedMode: "Quench");
@@ -81,6 +83,38 @@ public abstract class WhatIfParityTestsSharedTests
                     "the real v2 deploy must create a foreign key, or this test proves nothing about them");
                 Assert.That(applied, Has.Some.Matches<string>(c => c.EndsWith("|dropped")),
                     "the real v2 deploy must drop something, or this test proves nothing about drops");
+                var deliverySkipped = false;
+                if (Platform == Platform.MySQL)
+                {
+                    cmd.CommandText = "SELECT VERSION()";
+                    deliverySkipped = Schema.Utility.VersionHelper.ParsePatchComparable(cmd.ExecuteScalar()?.ToString(), Platform) < 80000;
+                }
+                if (deliverySkipped)
+                    Assert.That(applied, Has.None.Matches<string>(c => c.StartsWith("dataDelivery|")),
+                        "below MySQL 8.0 automatic delivery is skipped as a downgrade, never reported as delivered");
+                else
+                    Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith("dataDelivery|") && c.EndsWith("|delivered")),
+                        "the real v2 deploy must record its data delivery");
+                foreach (var action in new[] { "|dropped", "|created" })
+                    Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith("index|") && c.Contains("IX_WhatIfChild_Name") && c.EndsWith(action)),
+                        $"the real v2 deploy must record the changed index as {action.TrimStart('|')}");
+                if (Platform == Platform.SqlServer)
+                    foreach (var row in new[] { "temporal|[dbo].[WhatIfParent]|created", "constraint|[dbo].[WhatIfChild].[Extra] (check)|created" })
+                        Assert.That(applied, Does.Contain(row), $"the real v2 deploy must record {row}");
+                if (Platform == Platform.PostgreSQL)
+                    foreach (var kind in new[] { "sequence|", "domain" })
+                        Assert.That(applied, Has.Some.Matches<string>(c => c.StartsWith(kind)),
+                            $"the real v2 deploy must record its {kind.TrimEnd('|')} changes");
+                Assert.That(WouldDeliver(whatIfLogs), Has.Count.EqualTo(deliverySkipped ? 0 : 1),
+                    "the WhatIf summary's wouldDeliver must list the JSON delivery the console announces, and none the real run skips");
+
+                // Scripts: WhatIf's wouldApply must name every script the real run ran, by file.
+                var previewedScripts = WouldApply(whatIfLogs);
+                var ranScripts = ScriptsRan(realLogs);
+                Assert.That(ranScripts, Is.SupersetOf(new[] { "WhatIfProductBefore.sql", "WhatIfPlainView.sql", "WhatIfTokenView.sql" }),
+                    "the real v2 deploy must run the product script and both views, or this test proves nothing about scripts");
+                Assert.That(previewedScripts, Is.EquivalentTo(ranScripts),
+                    "WhatIf's wouldApply must list the scripts the real run ran");
 
                 var onlyPreviewed = Difference(previewed, applied);
                 var onlyApplied = Difference(applied, previewed);
@@ -133,8 +167,32 @@ public abstract class WhatIfParityTestsSharedTests
         "wouldCreate" => "created",
         "wouldModify" => "modified",
         "wouldDrop" => "dropped",
+        "wouldDeliver" => "delivered",
         _ => action
     };
+
+    private static List<string> WouldApply(string logDir)
+    {
+        var summary = JObject.Parse(File.ReadAllText(Path.Join(logDir, "SchemaQuench - Summary.json")));
+        return ((JArray)summary.SelectToken("whatIf.wouldApply") ?? [])
+            .Select(e => Path.GetFileName((string)e["script"])).Distinct().OrderBy(x => x).ToList();
+    }
+
+    // Object scripts appear as "ran" change rows; product and template migration scripts in migrationScripts.
+    private static List<string> ScriptsRan(string logDir)
+    {
+        var summary = JObject.Parse(File.ReadAllText(Path.Join(logDir, "SchemaQuench - Summary.json")));
+        var objects = ((JArray)summary.SelectToken("objectChanges.details") ?? [])
+            .Where(d => (string)d["action"] == "ran").Select(d => (string)d["objectName"]);
+        var migrations = ((JArray)summary.SelectToken("migrationScripts") ?? []).Select(m => (string)m["path"]);
+        return objects.Concat(migrations).Select(Path.GetFileName).Distinct().OrderBy(x => x).ToList();
+    }
+
+    private static List<string> WouldDeliver(string logDir)
+    {
+        var summary = JObject.Parse(File.ReadAllText(Path.Join(logDir, "SchemaQuench - Summary.json")));
+        return ((JArray)summary.SelectToken("whatIf.wouldDeliver") ?? []).Select(e => (string)e["script"]).ToList();
+    }
 
     // Multiset difference: a change listed twice on one side and once on the other is a disagreement.
     private static List<string> Difference(List<string> left, List<string> right)
@@ -161,7 +219,7 @@ public abstract class WhatIfParityTestsSharedTests
               "Name": "{{ProductName}}",
               "ValidationScript": "{{ValidationScript}}",
               "TemplateOrder": ["Main"],
-              "ScriptFolders": [],
+              "ScriptFolders": [ { "FolderPath": "ProductBefore", "QuenchSlot": "Before" } ],
               "ScriptTokens": { "MainDB": "TestMain" },
               "Platform": "{{PlatformName}}",
               "DropTablesRemovedFromProduct": true,
@@ -175,11 +233,20 @@ public abstract class WhatIfParityTestsSharedTests
             {
               "Name": "Main",
               "DatabaseIdentificationScript": "{{IdentificationScript}}",
-              "ScriptFolders": []
+              "ScriptTokens": { "WhatIfAnswer": "<*Query*>SELECT 42" },
+              "ScriptFolders": [ { "FolderPath": "Views", "QuenchSlot": "Objects" } ]
             }
             """);
 
-        WriteTable(tablesDir, "WhatIfParent", [Column("Id", IntType, false)], [PrimaryKey("WhatIfParent")]);
+        if (Platform == Platform.PostgreSQL) WritePostgreSqlTypes(templateDir, version);
+
+        var productBeforeDir = Path.Join(dir, "ProductBefore");
+        Directory.CreateDirectory(productBeforeDir);
+        File.WriteAllText(Path.Join(productBeforeDir, "WhatIfProductBefore.sql"), "SELECT 1");
+        var viewsDir = Path.Join(templateDir, "Views");
+        Directory.CreateDirectory(viewsDir);
+        File.WriteAllText(Path.Join(viewsDir, "WhatIfPlainView.sql"), View("WhatIfPlainView", "1"));
+        File.WriteAllText(Path.Join(viewsDir, "WhatIfTokenView.sql"), View("WhatIfTokenView", "{{WhatIfAnswer}}"));
 
         if (version == 1)
         {
@@ -189,15 +256,23 @@ public abstract class WhatIfParityTestsSharedTests
                 foreignKeys: [ForeignKey("FK_WhatIfChild_Parent", "ParentId")],
                 checks: [Check("CK_WhatIfChild_Ids", $"{ColumnRef("Id")} <> {ColumnRef("ParentId")}")]);
             WriteTable(tablesDir, "WhatIfGone", [Column("Id", IntType, false)], [PrimaryKey("WhatIfGone")]);
+            WriteTable(tablesDir, "WhatIfParent", [Column("Id", IntType, false)], [PrimaryKey("WhatIfParent")]);
             return;
         }
 
-        // v2: a widened column, an added column and index, the old index, FK and CHECK removed, a new table with
-        // its own foreign key, and a table removed from the product.
+        // v2 also delivers rows into the parent, through a JSON DataDelivery.
+        File.WriteAllText(Path.Join(tablesDir, "WhatIfParent.tabledata"), "[{\"Id\":1},{\"Id\":2}]");
+        WriteTable(tablesDir, "WhatIfParent", [Column("Id", IntType, false)], [PrimaryKey("WhatIfParent")],
+            dataDelivery: "{ \"ContentFile\": \"Tables/WhatIfParent.tabledata\", \"MergeType\": \"Insert\" }",
+            temporal: Platform == Platform.SqlServer);
+
+        // v2: a widened column, an added column and index, an index whose columns change, the FK and CHECK
+        // removed, a new table with its own foreign key, and a table removed from the product.
         WriteTable(tablesDir, "WhatIfChild",
             [Column("Id", IntType, false), Column("ParentId", IntType, false), Column("Name", StringType(100), true),
-             Column("Extra", IntType, true)],
-            [PrimaryKey("WhatIfChild"), Index("IX_WhatIfChild_Extra", "Extra")]);
+             Platform == Platform.SqlServer ? Column("Extra", IntType, true, check: "[Extra] > 0") : Column("Extra", IntType, true)],
+            [PrimaryKey("WhatIfChild"), Index("IX_WhatIfChild_Extra", "Extra"),
+             Index("IX_WhatIfChild_Name", $"{Quote("Name")},{Quote("Id")}")]);
         WriteTable(tablesDir, "WhatIfNew",
             [Column("Id", IntType, false), Column("ParentId", IntType, false)],
             [PrimaryKey("WhatIfNew")],
@@ -205,7 +280,7 @@ public abstract class WhatIfParityTestsSharedTests
     }
 
     private void WriteTable(string dir, string table, string[] columns, string[] indexes,
-        string[] foreignKeys = null, string[] checks = null)
+        string[] foreignKeys = null, string[] checks = null, string dataDelivery = null, bool temporal = false)
     {
         var schema = Platform switch
         {
@@ -217,18 +292,57 @@ public abstract class WhatIfParityTestsSharedTests
                    + $" \"Columns\": [ {string.Join(", ", columns)} ],"
                    + $" \"Indexes\": [ {string.Join(", ", indexes)} ],"
                    + $" \"ForeignKeys\": [ {string.Join(", ", foreignKeys ?? [])} ],"
-                   + $" \"CheckConstraints\": [ {string.Join(", ", checks ?? [])} ] }}";
+                   + $" \"CheckConstraints\": [ {string.Join(", ", checks ?? [])} ]"
+                   + (dataDelivery == null ? "" : $", \"DataDelivery\": {dataDelivery}")
+                   + (temporal ? ", \"IsTemporal\": true" : "")
+                   + " }";
         File.WriteAllText(Path.Join(dir, $"{table}.json"), json);
     }
 
-    private string Column(string name, string type, bool nullable) =>
-        $"{{ \"Name\": \"{Quote(name)}\", \"DataType\": \"{type}\", \"Nullable\": {(nullable ? "true" : "false")} }}";
+    // Sequences, domains and enum types are quenched by their own procedures, before the tables.
+    // v2 changes each kind and adds a new one, so every create and modify path is compared.
+    private static void WritePostgreSqlTypes(string templateDir, int version)
+    {
+        string Folder(string name)
+        {
+            var path = Path.Join(templateDir, name);
+            if (Directory.Exists(path)) Directory.Delete(path, true);
+            Directory.CreateDirectory(path);
+            return path;
+        }
+
+        var sequences = Folder("Sequences");
+        var domains = Folder("Domain Types");
+        var enums = Folder("Enum Types");
+        File.WriteAllText(Path.Join(sequences, "WhatIfSeq.json"),
+            $$"""{ "Schema": "public", "Name": "WhatIfSeq", "Increment": {{(version == 1 ? 1 : 5)}} }""");
+        File.WriteAllText(Path.Join(domains, "WhatIfDomain.json"), version == 1
+            ? """{ "Schema": "public", "Name": "WhatIfDomain", "DataType": "integer" }"""
+            : """{ "Schema": "public", "Name": "WhatIfDomain", "DataType": "integer", "NotNull": true, "CheckConstraints": [ { "Name": "WhatIfDomain_Positive", "Expression": "VALUE > 0" } ] }""");
+        File.WriteAllText(Path.Join(enums, "WhatIfMood.json"), version == 1
+            ? """{ "Schema": "public", "Name": "WhatIfMood", "Values": [ "happy", "sad" ] }"""
+            : """{ "Schema": "public", "Name": "WhatIfMood", "Values": [ "happy", "sad", "meh" ] }""");
+        if (version == 1) return;
+        File.WriteAllText(Path.Join(sequences, "WhatIfSeq2.json"), """{ "Schema": "public", "Name": "WhatIfSeq2" }""");
+        File.WriteAllText(Path.Join(domains, "WhatIfDomain2.json"), """{ "Schema": "public", "Name": "WhatIfDomain2", "DataType": "text" }""");
+    }
+
+    private string View(string name, string value) => Platform switch
+    {
+        Platform.SqlServer => $"CREATE OR ALTER VIEW dbo.{name} AS SELECT {value} AS Answer",
+        Platform.PostgreSQL => $"CREATE OR REPLACE VIEW public.\"{name}\" AS SELECT {value} AS answer;",
+        _ => $"CREATE OR REPLACE VIEW `{name}` AS SELECT {value} AS Answer"
+    };
+
+    private string Column(string name, string type, bool nullable, string check = null) =>
+        $"{{ \"Name\": \"{Quote(name)}\", \"DataType\": \"{type}\", \"Nullable\": {(nullable ? "true" : "false")}"
+        + (check == null ? "" : $", \"CheckExpression\": \"{check}\"") + " }";
 
     private string PrimaryKey(string table) =>
         $"{{ \"Name\": \"{Quote($"PK_{table}")}\", \"PrimaryKey\": true, \"Unique\": true, \"IndexColumns\": \"{Quote("Id")}\" }}";
 
-    private string Index(string name, string column) =>
-        $"{{ \"Name\": \"{Quote(name)}\", \"PrimaryKey\": false, \"Unique\": false, \"IndexColumns\": \"{Quote(column)}\" }}";
+    private string Index(string name, string columns) =>
+        $"{{ \"Name\": \"{Quote(name)}\", \"PrimaryKey\": false, \"Unique\": false, \"IndexColumns\": \"{(columns.Contains(',') ? columns : Quote(columns))}\" }}";
 
     private string ForeignKey(string name, string column)
     {
@@ -301,6 +415,37 @@ public abstract class WhatIfParityTestsSharedTests
 
     private void Cleanup(IDbCommand cmd)
     {
+        if (Platform == Platform.SqlServer)
+        {
+            cmd.CommandText = """
+                IF OBJECTPROPERTY(OBJECT_ID('dbo.WhatIfParent'), 'TableTemporalType') = 2
+                  ALTER TABLE dbo.WhatIfParent SET (SYSTEM_VERSIONING = OFF);
+                IF OBJECT_ID('dbo.WhatIfParent_Hist') IS NOT NULL DROP TABLE dbo.WhatIfParent_Hist;
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        if (Platform == Platform.PostgreSQL)
+        {
+            cmd.CommandText = """
+                DROP SEQUENCE IF EXISTS public."WhatIfSeq", public."WhatIfSeq2";
+                DROP DOMAIN IF EXISTS public."WhatIfDomain", public."WhatIfDomain2" CASCADE;
+                DROP TYPE IF EXISTS public."WhatIfMood" CASCADE;
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        foreach (var view in new[] { "WhatIfPlainView", "WhatIfTokenView" })
+        {
+            cmd.CommandText = Platform switch
+            {
+                Platform.SqlServer => $"DROP VIEW IF EXISTS dbo.{view}",
+                Platform.PostgreSQL => $"DROP VIEW IF EXISTS public.\"{view}\"",
+                _ => $"DROP VIEW IF EXISTS `{view}`"
+            };
+            cmd.ExecuteNonQuery();
+        }
+
         foreach (var table in TablesChildFirst)
         {
             cmd.CommandText = Platform switch
@@ -339,16 +484,22 @@ public abstract class WhatIfParityTestsSharedTests
         LogFactory.Register("ProgressLog", _progressLog);
     }
 
+    private void AssertRunSucceeded(string run)
+    {
+        var exits = _environment.ReceivedCalls().Where(c => c.GetMethodInfo().Name == "Exit")
+            .Select(c => (int)c.GetArguments()[0]).ToList();
+        var errors = _errorLog.ReceivedCalls().Concat(_progressLog.ReceivedCalls())
+            .Where(c => c.GetMethodInfo().Name == "Error").Select(c => c.GetArguments()[0]?.ToString());
+        Assert.That(exits, Has.None.GreaterThanOrEqualTo(2),
+            $"{run} failed:{Environment.NewLine}  {string.Join(Environment.NewLine + "  ", errors)}");
+        _errorLog.ClearReceivedCalls();
+    }
+
     // Switches reach CommandLineParser through the IEnvironment isolator, not Main's args.
     private void RunSchemaQuench(string logDir, bool whatIf)
     {
         _environment.ClearReceivedCalls();
-        _environment.CommandLine.Returns($"SchemaQuench.exe \"--LogPath:{logDir}\"");
-        // On this line WhatIf is the WhatIfONLY setting; the --WhatIf switch arrives with a later release.
-        var config = FactoryContainer.Resolve<IConfigurationRoot>();
-        var saved = config[SettingsKeys.WhatIfOnly];
-        config[SettingsKeys.WhatIfOnly] = whatIf ? "true" : "false";
-        try { Program.Main(["SkipKindlingForge"]); }
-        finally { config[SettingsKeys.WhatIfOnly] = saved; }
+        _environment.CommandLine.Returns($"SchemaQuench.exe \"--LogPath:{logDir}\"{(whatIf ? " --WhatIf" : "")}");
+        Program.Main(["SkipKindlingForge"]);
     }
 }

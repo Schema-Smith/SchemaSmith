@@ -18,8 +18,16 @@ public static class Program
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;
         ConfigHelper.GetAppSettingsAndUserSecrets("SchemaShears", LogFactory.GetLogger("ProgressLog").Info);
-        CommandLineParser.WarnOnUnrecognizedArguments(KnownArguments, LogFactory.GetLogger("ProgressLog").Warn);
-        ConfigHelper.CheckStartupSettings(FactoryContainer.Resolve<IConfigurationRoot>(), LogFactory.GetLogger("ProgressLog").Warn);
+        try
+        {
+            CommandLineParser.RefuseUnrecognizedArguments(KnownArguments);
+            ConfigHelper.CheckStartupSettings(FactoryContainer.Resolve<IConfigurationRoot>(), LogFactory.GetLogger("ProgressLog").Warn);
+        }
+        catch (RunFailedException e)
+        {
+            LogBackup.FailedRunExit("SchemaShears", e);
+            return;
+        }
 
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
         SettingsContract.WarnOnUnrecognizedKeys(config, SettingsTool.SchemaShears, LogFactory.GetLogger("ProgressLog").Warn);
@@ -37,7 +45,19 @@ public static class Program
             AllowDrops = allowDrops
         };
 
-        new PatchBuilder().Build(request);
+        try
+        {
+            new PatchBuilder().Build(request);
+        }
+        catch (PatchBuildException ex)
+        {
+            // A request the user can correct (a missing source or manifest, an output that already exists, an unknown
+            // drop category) is a failure, not a defect in the tool: exit 2 and say what to fix.
+            LogFactory.GetLogger("ProgressLog").Error(ex.Message);
+            LogFactory.GetLogger("ErrorLog").Error(ex.Message);
+            LogBackup.BackupLogsAndExit("SchemaShears", 2);
+            return;
+        }
         LogBackup.BackupLogsAndExit("SchemaShears");
     }
 

@@ -35,6 +35,58 @@ public abstract class TableQuench_DropIndexesSharedTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // MySQL creates an index for a foreign key that has none declared, so that index is "unknown" to the package. With
+    // DropUnknownIndexes on, every redeploy tried to drop it and failed with 1553, because the key still needs it. It is
+    // kept while the key exists; once the key is removed, the next deploy drops it.
+    [Test]
+    public void DropUnknownIndexes_KeepsTheIndexAForeignKeyNeeds_ThenDropsItOnceTheKeyIsGone()
+    {
+        const string product = "Fk Needed Index Tests";
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        string Tables(bool withForeignKey) => $$"""
+            [{ "Name": "`FkNeedParent`", "Columns": [ { "Name": "`Id`", "DataType": "INT", "Nullable": false } ],
+               "Indexes": [ { "Name": "`PRIMARY`", "IndexColumns": "`Id`", "Unique": true, "PrimaryKey": true } ] },
+             { "Name": "`FkNeedChild`", "Columns": [ { "Name": "`Id`", "DataType": "INT", "Nullable": false }, { "Name": "`ParentId`", "DataType": "INT", "Nullable": true } ],
+               "Indexes": [ { "Name": "`PRIMARY`", "IndexColumns": "`Id`", "Unique": true, "PrimaryKey": true } ],
+               "ForeignKeys": [ {{(withForeignKey ? "{ \"Name\": \"`FK_FkNeedChild_Parent`\", \"Columns\": \"`ParentId`\", \"RelatedTable\": \"`FkNeedParent`\", \"RelatedColumns\": \"`Id`\" }" : "")}} ] }]
+            """;
+        void Deploy(bool withForeignKey)
+        {
+            cmd.CommandText = $"CALL SchemaSmith_TableQuench('{product}', '{_mainDb}', '{Tables(withForeignKey).Replace("'", "''")}', 0, 1, 0);";
+            RetryingTransientConcurrency(() => cmd.ExecuteNonQuery());
+        }
+        long Count(string sql)
+        {
+            cmd.CommandText = sql;
+            return Convert.ToInt64(cmd.ExecuteScalar());
+        }
+        var fkIndex = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = 'FkNeedChild' AND INDEX_NAME = 'FK_FkNeedChild_Parent'";
+
+        try
+        {
+            Deploy(withForeignKey: true);
+            Assert.DoesNotThrow(() => Deploy(withForeignKey: true), "an unchanged redeploy must not try to drop the foreign key's index");
+            Assert.That(Count(fkIndex), Is.EqualTo(1), "the index stays while the key needs it");
+
+            Assert.DoesNotThrow(() => Deploy(withForeignKey: false), "removing the key must not fail on its index");
+            Assert.That(Count($"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = 'FkNeedChild' AND CONSTRAINT_TYPE = 'FOREIGN KEY'"), Is.Zero);
+
+            Deploy(withForeignKey: false);
+            Assert.That(Count(fkIndex), Is.Zero, "with the key gone, the unknown index is dropped");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{_mainDb}`.`FkNeedChild`, `{_mainDb}`.`FkNeedParent`; " +
+                              $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}';";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     [OneTimeSetUp]
     public void Setup()
     {

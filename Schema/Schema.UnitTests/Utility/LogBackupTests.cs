@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using log4net;
+using Microsoft.Extensions.Configuration;
 using NSubstitute;
 using Schema.Isolators;
 using Schema.Utility;
@@ -38,6 +39,82 @@ public class LogBackupTests
     {
         FactoryContainer.Clear();
         LogFactory.Clear();
+    }
+
+    // A failure the user can fix ends in one plain line and exit 2. It is not an unhandled exception (exit 3), which is
+    // what every such failure used to produce: a stack dump the user had to read past to find the message.
+    [Test]
+    public void FailedRunExit_LogsTheMessage_AndExitsTwo()
+    {
+        var progressLog = Substitute.For<ILog>();
+        var errorLog = Substitute.For<ILog>();
+        LogFactory.Register("ProgressLog", progressLog);
+        LogFactory.Register("ErrorLog", errorLog);
+        _mockDirectory.GetFiles(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<SearchOption>()).Returns(Array.Empty<string>());
+        var failure = new RunFailedException("Platform is required.");
+
+        LogBackup.FailedRunExit("TestApp", failure);
+
+        Assert.Multiple(() =>
+        {
+            progressLog.Received(1).Error("FAILED: Platform is required.");
+            errorLog.Received(1).Error("Platform is required.", failure);
+            _mockEnvironment.Received(1).Exit(2);
+            _mockEnvironment.DidNotReceive().Exit(3);
+        });
+    }
+
+    // --ExitNonZeroOnWarning / ExitNonZeroOnWarning: a run that would exit 0 but logged a warning exits 1. Off by default,
+    // and it never lowers or replaces a failure code.
+    [TestCase(null, true, 0, 0)]
+    [TestCase("true", false, 0, 0)]
+    [TestCase("true", true, 0, 1)]
+    [TestCase("TRUE", true, 0, 1)]
+    [TestCase("true", true, 2, 2)]
+    [TestCase("false", true, 0, 0)]
+    public void BackupLogsAndExit_ExitNonZeroOnWarning(string setting, bool warned, int runCode, int expected)
+    {
+        var values = new System.Collections.Generic.Dictionary<string, string>();
+        if (setting != null) values["ExitNonZeroOnWarning"] = setting;
+        FactoryContainer.Register<Microsoft.Extensions.Configuration.IConfigurationRoot>(
+            new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(values).Build());
+        _mockDirectory.GetFiles(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<SearchOption>()).Returns(Array.Empty<string>());
+        lock (FactoryContainer.SharedLockObject)
+        {
+            WarningCounter.Reset();
+            try
+            {
+                if (warned)
+                    new WarningCounter().DoAppend(new log4net.Core.LoggingEvent(
+                        new log4net.Core.LoggingEventData { Level = log4net.Core.Level.Warn, Message = "a warning" }));
+
+                LogBackup.BackupLogsAndExit("TestApp", runCode);
+
+                _mockEnvironment.Received(1).Exit(expected);
+            }
+            finally { WarningCounter.Reset(); }
+        }
+    }
+
+    [Test]
+    public void BackupLogsAndExit_ExitNonZeroOnWarning_AsABareSwitch()
+    {
+        _mockEnvironment.CommandLine.Returns("app.exe --ExitNonZeroOnWarning");
+        _mockDirectory.GetFiles(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<SearchOption>()).Returns(Array.Empty<string>());
+        lock (FactoryContainer.SharedLockObject)
+        {
+            WarningCounter.Reset();
+            try
+            {
+                new WarningCounter().DoAppend(new log4net.Core.LoggingEvent(
+                    new log4net.Core.LoggingEventData { Level = log4net.Core.Level.Error, Message = "worse than a warning" }));
+
+                LogBackup.BackupLogsAndExit("TestApp");
+
+                _mockEnvironment.Received(1).Exit(1);
+            }
+            finally { WarningCounter.Reset(); }
+        }
     }
 
     [Test]

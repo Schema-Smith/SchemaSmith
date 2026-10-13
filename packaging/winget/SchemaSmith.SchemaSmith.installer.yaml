@@ -16,8 +16,5 @@ Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/Schema-Smith/SchemaSmith/releases/download/v__VERSION__/SchemaSmith-__VERSION__-win-x64.zip
     InstallerSha256: __SHA_X64__
-  - Architecture: arm64
-    InstallerUrl: https://github.com/Schema-Smith/SchemaSmith/releases/download/v__VERSION__/SchemaSmith-__VERSION__-win-arm64.zip
-    InstallerSha256: __SHA_ARM64__
 ManifestType: installer
 ManifestVersion: 1.6.0

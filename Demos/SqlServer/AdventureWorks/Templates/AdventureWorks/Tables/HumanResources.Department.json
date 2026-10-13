@@ -20,7 +20,7 @@
     },
     {
       "Name": "[GroupName]",
-      "DataType": "NAME",
+      "DataType": "Name",
       "ShouldApplyExpression": "",
       "OldName": "",
       "Collation": "",
@@ -53,7 +53,7 @@
     },
     {
       "Name": "[Name]",
-      "DataType": "NAME",
+      "DataType": "Name",
       "ShouldApplyExpression": "",
       "OldName": "",
       "Collation": "",

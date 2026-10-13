@@ -88,8 +88,9 @@ public class FileStreamDeployTests
             if (_db != null && Environment.GetEnvironmentVariable("FS_KEEP_DB") == null)
             {
                 _connection.ChangeDatabase("master");
-                Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-                Exec($"DROP DATABASE IF EXISTS [{_db}]");
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandTimeout = 300;
+                Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _db);
             }
         }
         finally
@@ -168,6 +169,18 @@ public class FileStreamDeployTests
         });
     }
 
+    // The FILESTREAM column is added by its own pass, after the table; that pass records the column it adds.
+    [Test]
+    public void AFileStreamColumn_IsRecordedAsCreated()
+    {
+        ScalarString("DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID; SELECT ''");
+        Deploy(Package("FsAudit", "\"UniqueConstraint\": true"));
+
+        Assert.That(ScalarString("SELECT TOP 1 ActionType FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID "
+                                 + "AND ObjectType = 'column' AND ObjectName = '[dbo].[FsAudit].[Doc]'"),
+            Is.EqualTo("created"), "the change audit must record the FILESTREAM column the deploy added");
+    }
+
     [Test]
     public void AFileStreamColumn_IsIdempotent()
     {
@@ -207,7 +220,7 @@ public class FileStreamDeployTests
         cmd.CommandTimeout = 300;
         cmd.CommandText = _encoding == IngestEncoding.Xml
             ? "EXEC SchemaSmith.GenerateTableXml @p_Schema = 'dbo', @p_Table = 'FsRoundTrip'"
-            : "EXEC SchemaSmith.GenerateTableJson @p_Schema = 'dbo', @p_Table = 'FsRoundTrip'";
+            : "EXEC SchemaSmith.GenerateTableJSON @p_Schema = 'dbo', @p_Table = 'FsRoundTrip'";
         var json = cmd.ExecuteScalar() as string ?? "";
 
         Assert.Multiple(() =>
@@ -322,7 +335,7 @@ public class FileStreamDeployTests
         cmd.CommandTimeout = 300;
         cmd.CommandText = _encoding == IngestEncoding.Xml
             ? $"EXEC SchemaSmith.GenerateTableXml @p_Schema = 'dbo', @p_Table = '{table}'"
-            : $"EXEC SchemaSmith.GenerateTableJson @p_Schema = 'dbo', @p_Table = '{table}'";
+            : $"EXEC SchemaSmith.GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
         using var reader = cmd.ExecuteReader();
         var sb = new System.Text.StringBuilder();
         while (reader.Read())

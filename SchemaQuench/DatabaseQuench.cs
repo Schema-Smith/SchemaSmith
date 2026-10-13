@@ -559,6 +559,7 @@ public class DatabaseQuench
                 var effectiveTableCmd = tableCommand ?? command;
                 var effectiveObjectsCmd = objectsCommand ?? command;
                 var effectiveSilentCmd = silentCommand ?? command;
+                if (ChangeAudit != null) ChangeAuditReader.DiscardStale(_product.Platform, effectiveTableCmd);
 
                 // Detect the target version ONCE, up front (the connection is open) and BEFORE folder gates,
                 // since a folder ShouldApplyExpression may reference the version tokens (A1). One unified
@@ -677,7 +678,7 @@ public class DatabaseQuench
                 if (_product.Platform == Platform.PostgreSQL && _template.DomainTypes.Count > 0)
                 {
                     var domainTypeSw = Stopwatch.StartNew();
-                    _checkpointing.Track(DbScope, "DomainTypeQuench", () => QuenchDomainTypes(command));
+                    _checkpointing.Track(DbScope, "DomainTypeQuench", () => QuenchDomainTypes(effectiveTableCmd));
                     domainTypeSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "DomainTypeQuench", domainTypeSw.ElapsedMilliseconds, 0);
                 }
@@ -688,7 +689,7 @@ public class DatabaseQuench
                 if (_product.Platform == Platform.PostgreSQL && _template.EnumTypes.Count > 0)
                 {
                     var enumTypeSw = Stopwatch.StartNew();
-                    _checkpointing.Track(DbScope, "EnumTypeQuench", () => QuenchEnumTypes(command));
+                    _checkpointing.Track(DbScope, "EnumTypeQuench", () => QuenchEnumTypes(effectiveTableCmd));
                     enumTypeSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "EnumTypeQuench", enumTypeSw.ElapsedMilliseconds, 0);
                 }
@@ -698,7 +699,7 @@ public class DatabaseQuench
                 if (_product.Platform == Platform.PostgreSQL && _template.Sequences.Count > 0)
                 {
                     var sequenceSw = Stopwatch.StartNew();
-                    _checkpointing.Track(DbScope, "SequenceQuench", () => QuenchSequences(command));
+                    _checkpointing.Track(DbScope, "SequenceQuench", () => QuenchSequences(effectiveTableCmd));
                     sequenceSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "SequenceQuench", sequenceSw.ElapsedMilliseconds, 0);
                 }
@@ -839,6 +840,8 @@ public class DatabaseQuench
                                 ExecuteScript = (name, script) => { effectiveSilentCmd.CommandText = script; effectiveSilentCmd.ExecuteNonQuery(); },
                                 ProgressLog = SafeProgressLog,
                                 ProgressLogError = SafeProgressLogError,
+                                RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded"),
+                                RecordDelivery = RecordDataDelivery,
                                 WhatIf = IsWhatIf,
                                 PostgreSqlServerVersionNum = _postgreSqlServerVersionNum,
                                 MySqlServerVersionNum = _mySqlServerVersionNum,
@@ -954,7 +957,7 @@ public class DatabaseQuench
                         {
                             Tables = _template.Tables.Cast<IDeliverableTable>().ToList(),
                             Command = command,
-                            Platform = _product.Platform.ToString(),
+                            Platform = _product.Platform.GetBasePlatform().ToString(),
                             DatabaseName = _databaseName,
                             SchemaName = _schemaName,
                             VersionTokens = _versionScriptTokens,
@@ -968,6 +971,8 @@ public class DatabaseQuench
                             ExecuteScript = (_, _) => { },
                             ProgressLog = SafeProgressLog,
                             ProgressLogError = SafeProgressLogError,
+                            RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded"),
+                            RecordDelivery = RecordDataDelivery,
                             WhatIf = true
                         });
                     }
@@ -1311,6 +1316,7 @@ public class DatabaseQuench
         {
             new SchemaProvisioner().EnsureSchemaExists(command, _schemaName, _product.Platform,
                 IsWhatIf, SafeProgressLog);
+            ChangeAudit?.Record("schema", _schemaName, IsWhatIf ? "wouldCreate" : "created");
         }
         catch (Exception ex)
         {
@@ -1577,6 +1583,7 @@ public class DatabaseQuench
             return;
 
         SafeProgressLog("  Quenching missing tables and columns");
+        using var timestampDefaults = PinExplicitTimestampDefaults(tableCommand);
 
         switch (_product.Platform.GetBasePlatform())
         {
@@ -1644,6 +1651,7 @@ EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmit
             return;
 
         SafeProgressLog("  Quenching modified tables");
+        using var timestampDefaults = PinExplicitTimestampDefaults(tableCommand);
 
         switch (_product.Platform.GetBasePlatform())
         {
@@ -1927,10 +1935,10 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
     /// Converges DECLARED scheduled events (MySQL/MariaDB). Scripted events in the same Events/ folder
     /// still run through the Objects slot untouched, so this is purely additive for existing packages.
     /// <para><b>This is the only quench that executes DDL from C# rather than inside the procedure, and
-    /// it is not a style choice.</b> MySQL cannot PREPARE event DDL at all — both CREATE EVENT and DROP
+    /// it is not a style choice.</b> MySQL before 9.0 cannot PREPARE event DDL — both CREATE EVENT and DROP
     /// EVENT fail with 1295, "This command is not supported in the prepared statement protocol yet" —
-    /// so a stored procedure physically cannot create an event there. MariaDB can, but writing to the
-    /// lower common denominator keeps ONE implementation for both engines.</para>
+    /// so a stored procedure cannot create an event on 8.4 and below. MariaDB and MySQL 9.0+ can, but writing to
+    /// the lowest common denominator keeps ONE implementation for every supported version.</para>
     /// <para>All the decision-making still lives in SQL: the procedure compares, decides, and returns an
     /// ORDERED list of statements. This method is a dumb executor. The ownership and audit writes are
     /// part of that list, so if a CREATE fails execution stops and no ownership row is left claiming an
@@ -2701,6 +2709,24 @@ SET NOCOUNT ON
         return $"SchemaQuench - {label} {_server}.{_databaseName}{schemaSuffix}.sql";
     }
 
+    private bool _explicitTimestampDefaultsReadOnlyReported;
+
+    // A TIMESTAMP column must be created with the default it declares. With explicit_defaults_for_timestamp off the
+    // engine invents one, so the table steps run with it on and give the session its own value back afterwards. User
+    // scripts on the same connection keep the server's setting.
+    private IDisposable PinExplicitTimestampDefaults(IDbCommand tableCommand)
+    {
+        if (_product.Platform.GetBasePlatform() != Platform.MySQL) return null;
+        return MySqlSessionSettings.UseExplicitTimestampDefaults(tableCommand, () =>
+        {
+            if (_explicitTimestampDefaultsReadOnlyReported) return;
+            _explicitTimestampDefaultsReadOnlyReported = true;
+            SafeProgressLog("  explicit_defaults_for_timestamp is OFF and this server or account does not let a session change it, so a " +
+                            "TIMESTAMP NOT NULL column declared without a default gets one the server chooses. Declare the " +
+                            "default, or turn the variable ON in the server configuration.");
+        });
+    }
+
     private void SafeProgressLog(string msg)
     {
         lock (_lockObject)
@@ -2800,6 +2826,17 @@ SET NOCOUNT ON
         }
         foreach (var line in WhatIfConsoleFormatter.Render(entries, WhatIfConsoleDetail))
             SafeProgressLog(line);
+    }
+
+    private void RecordDataDelivery(string label)
+    {
+        if (IsWhatIf)
+        {
+            WhatIf?.Record(WhatIfCategory.Deliver, LogPrefix, label);
+            ChangeAudit?.Record("dataDelivery", label, "wouldDeliver");
+        }
+        else
+            ChangeAudit?.Record("dataDelivery", label, "delivered");
     }
 
     private void WhatIfLogTableDataScripts(List<SqlScript> scripts)

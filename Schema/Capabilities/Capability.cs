@@ -39,6 +39,11 @@ namespace Schema.Capabilities
     /// <c>UnsupportedFeaturePolicy</c> (the "cite by message text" anchor); null for behavior-based degrades
     /// that produce no manifest row.
     /// </param>
+    /// <param name="IntroducedInPatchComparable">
+    /// For a gate that turns on a patch (the MySQL family's <c>major*10000+minor*100+patch</c>): the patch the feature
+    /// arrived in, which <see cref="IntroducedInComparable"/> (major*100+minor) cannot express. Null when the
+    /// major/minor comparable is exact.
+    /// </param>
     public sealed record Capability(
         string Key,
         string DisplayName,
@@ -48,5 +53,6 @@ namespace Schema.Capabilities
         int? RequiredCompatLevel,
         DegradeKind Degrade,
         string? ManifestObjectType,
-        string? RequiredDatabaseSetting = null);
+        string? RequiredDatabaseSetting = null,
+        int? IntroducedInPatchComparable = null);
 }

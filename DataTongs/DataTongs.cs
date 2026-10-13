@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -36,6 +37,40 @@ public class DataTongs
     public DataTongs(Platform platform)
     {
         _platform = platform;
+    }
+
+    // The Json extraction uses FOR JSON (2016) and STRING_AGG (2017), neither of which depends on the
+    // compatibility level. An explicit DeliveryEncoding wins; unset, a SQL Server source below 2017 extracts Xml. Other
+    // engines extract Json unless asked for Xml.
+    private const int JsonExtractionSqlServerMajor = 14;
+
+    // A tokenized MySQL/MariaDB script reads its content file with JSON_TABLE when it is deployed, and nothing converts
+    // an Xml file on that path, so every script failed with "Invalid JSON text". The content files themselves deliver
+    // through DataDelivery, which converts Xml to JSON first; and an untokenized script embeds converted data.
+    internal static void RefuseUndeliverableScripts(bool extractAsXml, Platform platform, bool tokenizeScripts)
+    {
+        if (extractAsXml && tokenizeScripts && platform.GetBasePlatform() == Platform.MySQL)
+            throw new RunFailedException(
+                "DeliveryEncoding is Xml, but MySQL and MariaDB merge scripts read their content file with JSON_TABLE, so " +
+                "tokenized scripts cannot deploy an Xml file. Use DeliveryEncoding Json, or set ShouldCast:TokenizeScripts " +
+                "to false to embed the data in each script.");
+    }
+
+    internal static bool ChooseXmlDeliveryEncoding(string deliveryEncoding, Platform platform, TargetVersionInfo sqlServerSource)
+    {
+        if (!string.IsNullOrWhiteSpace(deliveryEncoding))
+        {
+            var xml = deliveryEncoding.Trim().Equals("Xml", StringComparison.OrdinalIgnoreCase);
+            if (!xml && platform.GetBasePlatform() == Platform.SqlServer && sqlServerSource is { } source && source.ServerComparable < JsonExtractionSqlServerMajor)
+                throw new RunFailedException(
+                    $"DeliveryEncoding is Json, but the source is SQL Server {source.RawVersion}, and the Json extraction " +
+                    "needs SQL Server 2017 or later. Set DeliveryEncoding to Xml, or leave it unset to choose automatically.");
+            return xml;
+        }
+
+        return platform.GetBasePlatform() == Platform.SqlServer
+               && sqlServerSource != null
+               && sqlServerSource.ServerComparable < JsonExtractionSqlServerMajor;
     }
 
     private IDbConnection GetConnection(string targetDb)
@@ -117,9 +152,10 @@ public class DataTongs
         // to any downstream consumer that wants XML rather than JSON. SQL Server extracts XML natively;
         // every other engine extracts its normal JSON and converts it to the identical delivery XML shape
         // in C# (MergeScriptHelper.JsonPayloadToXml), so the file is the same dialect on every engine.
+        // Resolved once the source is open (ChooseXmlDeliveryEncoding): unset, a SQL Server source that cannot produce
+        // the Json extraction gets Xml automatically.
         var deliveryEncoding = CommandLineParser.ValueOfSwitch("DeliveryEncoding", null)
-            ?? config[SettingsKeys.ShouldCast.DeliveryEncoding] ?? "Json";
-        var extractAsXml = deliveryEncoding.Trim().Equals("Xml", StringComparison.OrdinalIgnoreCase);
+            ?? config[SettingsKeys.ShouldCast.DeliveryEncoding];
         var templatePath = CommandLineParser.ValueOfSwitch("TemplatePath", null)
             ?? config[SettingsKeys.TemplatePath];
         var sourceSchemaSetting = config[SettingsKeys.Source.Schema] ?? "";
@@ -162,7 +198,7 @@ public class DataTongs
 
         if (targetTemplateIsSchemaTemplate && !sourceSchemaSet)
         {
-            throw new InvalidOperationException(
+            throw new RunFailedException(
                 "Target template is a schema template (has SchemaIdentificationScript), but Source.Schema " +
                 "is not set in DataTongs.settings.json. Set Source.Schema to the name of the source schema " +
                 "you are extracting data from (typically a seed-tenant schema), or point DataTongs at a " +
@@ -179,7 +215,7 @@ public class DataTongs
         if (outputScripts) DirectoryWrapper.GetFromFactory().CreateDirectory(scriptPath);
 
         var sourceDb = config[SettingsKeys.Source.Database];
-        if (string.IsNullOrEmpty(sourceDb)) throw new Exception("Source database is required");
+        if (string.IsNullOrEmpty(sourceDb)) throw new RunFailedException("Source database is required. Set Source:Database in DataTongs.settings.json.");
 
         var tables = config.GetSection(SettingsKeys.TablesToExtract)
             .GetChildren()
@@ -204,7 +240,7 @@ public class DataTongs
             {
                 if (tables[i].TableName.Contains('.'))
                 {
-                    throw new InvalidOperationException(
+                    throw new RunFailedException(
                         $"Table names in schema-template mode must be unqualified. " +
                         $"Tables[{i}].Name = \"{tables[i].TableName}\". " +
                         $"Use \"{tables[i].TableName.Split('.').Last()}\" and let Source.Schema specify the source. " +
@@ -226,8 +262,29 @@ public class DataTongs
             return;
         }
 
-        using var sourceConnection = GetConnection(sourceDb);
+        IDbConnection sourceConnection;
+        try
+        {
+            sourceConnection = GetConnection(sourceDb);
+        }
+        catch (DbException e)
+        {
+            throw new RunFailedException($"Unable to connect to the source database {sourceDb}: {e.Message}", e);
+        }
+        using var sourceConnectionScope = sourceConnection;
         var cmd = sourceConnection.CreateCommand();
+
+        // The engine floor SchemaQuench checks before a deploy: below it the extraction queries do not run.
+        if (TargetVersionDetector.TryDetect(cmd, _platform, sourceDb) is { } sourceVersion)
+            PreFlightVersionGuard.CheckOrThrow(sourceVersion, $"Source {sourceDb}", sourceDb);
+
+        var sqlServerSource = _platform.GetBasePlatform() == Platform.SqlServer
+            ? TargetVersionDetector.TryDetect(cmd, _platform, sourceDb)
+            : null;
+        var extractAsXml = ChooseXmlDeliveryEncoding(deliveryEncoding, _platform, sqlServerSource);
+        if (extractAsXml && string.IsNullOrWhiteSpace(deliveryEncoding) && sqlServerSource != null)
+            _progressLog.Info($"  Delivery data is extracted as Xml: the source is SQL Server {sqlServerSource.RawVersion}, " +
+                              "and the Json extraction needs SQL Server 2017. Set DeliveryEncoding to choose.");
 
         // PostgreSQL MERGE is a v15 feature; below 15 the generated merge script must use INSERT ... ON
         // CONFLICT. DataTongs generates against the source it is extracting from, so the source version
@@ -244,6 +301,11 @@ public class DataTongs
         var mySqlServerVersionNum = _platform.GetBasePlatform() == Platform.MySQL
             ? TargetVersionDetector.Detect(cmd, _platform).ServerComparable
             : 0;
+
+        // A MySQL or MariaDB TIMESTAMP is rendered in the session's time zone. Extract at +00:00 and record it, so the
+        // delivery reads the values back in the same zone wherever it runs.
+        var extractionTimeZone = _platform.GetBasePlatform() == Platform.MySQL ? "+00:00" : null;
+        using var timeZone = extractionTimeZone != null ? MySqlSessionSettings.UseTimeZone(cmd, extractionTimeZone) : null;
 
         var tablesProcessed = 0;
         var errors = 0;
@@ -276,9 +338,18 @@ public class DataTongs
                 // of re-deriving it, so filename and token can never disagree.
                 var contentFileToken = $"{encodedDisplayName}.tabledata";
 
-                if (!TableExists(cmd, querySchema, tableName))
+                var (exists, isGraphEdge) = SourceTableState(cmd, querySchema, tableName);
+                if (!exists)
                 {
                     SkipTable($"  Table {displayName} does not exist in source database. Skipping table.");
+                    continue;
+                }
+
+                if (isGraphEdge)
+                {
+                    Incomplete = true;
+                    _progressLog.Warn($"  Table {displayName} is a graph edge table. Its $from_id and $to_id name rows of other node " +
+                                      "tables by internal id, which delivery cannot translate, so it is not extracted. Skipping table.");
                     continue;
                 }
 
@@ -368,6 +439,7 @@ public class DataTongs
                         KeyColumns = keyColumns,
                         DefaultMergeType = mergeDelete ? "Insert/Update/Delete" : mergeUpdate ? "Insert/Update" : "Insert",
                         ContentEncoding = extractAsXml ? "Xml" : "Json",
+                        TimeZone = extractionTimeZone,
                         DisableTriggers = disableTriggers,
                         DisableRules = disableRules,
                         UpdateDescendents = updateDescendents,
@@ -419,11 +491,16 @@ public class DataTongs
                     }
                 }
 
-                var destSchemaOverride = schemaTemplateMode ? "{{SchemaName}}" : null;
+                RefuseUndeliverableScripts(extractAsXml, _platform, tokenizeScripts);
+                // A MySQL/MariaDB script names the table alone, so it writes into the database it is deployed to.
+                var destSchemaOverride = schemaTemplateMode ? "{{SchemaName}}" : _platform.GetBasePlatform() == Platform.MySQL ? "" : null;
                 var mergeSQL = MergeScriptHelper.BuildMergeScript(_platform, cmd, querySchema, tableName, tableData,
                     keyColumns, mergeUpdate, mergeDelete, disableTriggers, tokenizeScripts, table.Filter,
                     disableRules, updateDescendents, destSchemaOverride, pgServerVersionNum, mySqlServerVersionNum,
                     extractAsXml ? "Xml" : "Json", contentFileToken);
+
+                if (extractionTimeZone != null)
+                    mergeSQL = MySqlSessionSettings.WithTimeZone(mergeSQL, extractionTimeZone);
 
                 var scriptFilePath = Path.Combine(scriptPath, $"Populate {encodedDisplayName}.sql");
                 _progressLog.Info($"    Writing merge script to : {scriptFilePath}");
@@ -576,6 +653,18 @@ public class DataTongs
 
     #region Table Existence Checks
 
+    // One query on SQL Server: whether the table exists, and whether it is a graph edge table (2017+). OBJECTPROPERTYEX's
+    // IsEdge is NULL on 2017, so an edge is a graph table with the visible $edge_id_ pseudo column.
+    private (bool Exists, bool IsGraphEdge) SourceTableState(IDbCommand cmd, string schemaOrDb, string tableName)
+    {
+        if (_platform.GetBasePlatform() != Platform.SqlServer) return (TableExists(cmd, schemaOrDb, tableName), false);
+        var id = $"OBJECT_ID('{schemaOrDb.Replace("'", "''")}.{tableName.Replace("'", "''")}')";
+        cmd.CommandText = $"SELECT CASE WHEN {id} IS NULL THEN 0 WHEN {MergeScriptHelper.SqlServerIsGraphTable(id)} " +
+                          $"AND EXISTS (SELECT 1 FROM sys.columns e WHERE e.[object_id] = {id} AND e.[name] LIKE '$edge[_]id[_]%') THEN 2 ELSE 1 END";
+        var state = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
+        return (state > 0, state == 2);
+    }
+
     internal bool TableExists(IDbCommand cmd, string schemaOrDb, string tableName)
     {
         return _platform.GetBasePlatform() switch
@@ -599,6 +688,8 @@ public class DataTongs
         return cmd.ExecuteScalar() as bool? ?? false;
     }
 
+    private static string Literal(string value) => $"'{value.Replace("'", "''")}'";
+
     private static bool TableExistsMySql(IDbCommand cmd, string databaseName, string tableName)
     {
         databaseName = databaseName.Trim().Trim('`');
@@ -606,8 +697,8 @@ public class DataTongs
         cmd.CommandText = $@"
 SELECT EXISTS (
     SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-    WHERE BINARY TABLE_SCHEMA = BINARY '{databaseName.Replace("'", "''")}'
-      AND BINARY TABLE_NAME = BINARY '{tableName.Replace("'", "''")}'
+    WHERE {MySqlNameMatch.Folded("TABLE_SCHEMA", Literal(databaseName))}
+      AND {MySqlNameMatch.Folded("TABLE_NAME", Literal(tableName))}
       AND TABLE_TYPE = 'BASE TABLE'
 );";
         var result = cmd.ExecuteScalar();
@@ -632,19 +723,18 @@ SELECT EXISTS (
     private static string GetSelectColumnsSqlServer(IDbCommand cmd, string tableSchema, string tableName)
     {
         cmd.CommandText = $@"
-SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('GEOGRAPHY', 'GEOMETRY')
+SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '].STSrid AS [' + c.COLUMN_NAME + '.STSrid]'
-                       WHEN c.DATA_TYPE = 'HIERARCHYID'
+                       WHEN c.DATA_TYPE = 'hierarchyid'
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + ']'
                        ELSE '[' + c.COLUMN_NAME + ']' END, ',') WITHIN GROUP (ORDER BY c.COLUMN_NAME)
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
-    AND sc.is_rowguidcol = 0
-    AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
+    {MergeScriptHelper.SqlServerGraphColumnFilter}AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
 ";
         return cmd.ExecuteScalar()?.ToString();
     }
@@ -653,13 +743,18 @@ SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('GEOGRAPHY', 'GEOMETRY')
     {
         cmd.CommandText = $@"
 SELECT STRING_AGG(
-    CASE WHEN c.udt_name IN ('geometry','geography','point','linestring','polygon',
-                              'multipoint','multilinestring','multipolygon','geometrycollection')
+    CASE WHEN c.udt_name IN ('geometry','geography')
          THEN 'ST_AsText(""' || c.column_name || '"") AS ""' || c.column_name || '"", ST_SRID(""' || c.column_name || '"") AS ""' || c.column_name || '.STSrid""'
          WHEN c.udt_name = 'bytea'
          THEN 'encode(""' || c.column_name || '"", ''base64'') AS ""' || c.column_name || '""'
+         -- An array as PostgreSQL's own literal, which keeps its dimensions, bounds and quoting; joining it on '*,*'
+         -- flattened a two-dimensional array, lost non-default lower bounds, and split any element containing the delimiter.
          WHEN LEFT(c.udt_name, 1) = '_'
-         THEN 'ARRAY_TO_STRING(""' || c.column_name || '"", ''*,*'', ''*NULL_VALUE_REPRESENTATION*'') AS ""' || c.column_name || '""'
+         THEN '""' || c.column_name || '""::text AS ""' || c.column_name || '""'
+         -- The single-byte char type; a non-ASCII byte is written as its signed number (always '-' and digits, which no
+         -- char text can be), since its text form is an escape that PostgreSQL before 15 cannot read back.
+         WHEN c.udt_name = 'char'
+         THEN 'CASE WHEN ""' || c.column_name || '""::int < 0 THEN (""' || c.column_name || '""::int)::text ELSE ""' || c.column_name || '""::text END AS ""' || c.column_name || '""'
          ELSE '""' || c.column_name || '""' END, ',' ORDER BY c.column_name)
   FROM information_schema.columns c
   JOIN pg_class cls ON cls.relname = c.table_name
@@ -683,7 +778,7 @@ SELECT GROUP_CONCAT(
     CASE
         WHEN c.DATA_TYPE IN ('binary','varbinary','tinyblob','blob','mediumblob','longblob')
             THEN CONCAT('REPLACE(REPLACE(TO_BASE64(`', c.COLUMN_NAME, '`), ''\n'', ''''), ''\r'', '''') AS `', c.COLUMN_NAME, '`')
-        WHEN c.DATA_TYPE IN ('geometry','point','linestring','polygon','multipoint','multilinestring','multipolygon','geometrycollection')
+        WHEN c.DATA_TYPE IN ('geometry','point','linestring','polygon','multipoint','multilinestring','multipolygon','geometrycollection','geomcollection')
             THEN CONCAT('ST_AsText(`', c.COLUMN_NAME, '`) AS `', c.COLUMN_NAME, '`, ST_SRID(`', c.COLUMN_NAME, '`) AS `', c.COLUMN_NAME, '.STSrid`')
         WHEN c.DATA_TYPE = 'bit'
             THEN CONCAT('CAST(`', c.COLUMN_NAME, '` AS UNSIGNED) AS `', c.COLUMN_NAME, '`')
@@ -697,8 +792,8 @@ SELECT GROUP_CONCAT(
     END
     ORDER BY c.ORDINAL_POSITION SEPARATOR ',')
   FROM INFORMATION_SCHEMA.COLUMNS c
-  WHERE BINARY c.TABLE_SCHEMA = BINARY '{databaseName.Replace("'", "''")}'
-    AND BINARY c.TABLE_NAME = BINARY '{tableName.Replace("'", "''")}'
+  WHERE {MySqlNameMatch.Folded("c.TABLE_SCHEMA", Literal(databaseName))}
+    AND {MySqlNameMatch.Folded("c.TABLE_NAME", Literal(tableName))}
     AND (c.GENERATION_EXPRESSION IS NULL OR c.GENERATION_EXPRESSION = '')
 ";
         return cmd.ExecuteScalar()?.ToString();
@@ -747,41 +842,45 @@ SELECT JSON_AGG(ROW_TO_JSON(tbl))
         return FormatJsonResult(cmd.ExecuteScalar()?.ToString() ?? "");
     }
 
-    private string GetTableDataJsonMySql(IDbCommand cmd, string databaseName,
+    internal string GetTableDataJsonMySql(IDbCommand cmd, string databaseName,
         string tableName, string orderColumns, string filter, string configSelectColumns)
     {
         databaseName = databaseName.Trim().Trim('`');
         tableName = tableName.Trim().Trim('`');
 
         // Get structured column info for type-aware JSON generation
-        List<ColumnInfo> columns;
+        // A configured SelectColumns narrows the real column list rather than replacing it: read as plain varchar, the
+        // selected columns lost every type-aware form below -- binary unencoded, BIT, geometry, ZEROFILL, dates.
+        var columns = GetMySqlColumnInfo(cmd, databaseName, tableName);
         if (!string.IsNullOrWhiteSpace(configSelectColumns))
         {
-            columns = configSelectColumns.Split(',')
+            var selected = configSelectColumns.Split(',')
                 .Select(c => c.Trim().Trim('`'))
                 .Where(c => !string.IsNullOrWhiteSpace(c))
-                .Select(c => new ColumnInfo { Name = c, DataType = "varchar" })
-                .ToList();
-        }
-        else
-        {
-            columns = GetMySqlColumnInfo(cmd, databaseName, tableName);
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            columns = columns.Where(c => selected.Contains(c.Name)).ToList();
         }
 
-        var jsonObjectArgs = columns.Select(c => FormatColumnForJsonObject(c)).ToList();
+        var isMariaDb = IsMariaDb(cmd);
+        var jsonObjectArgs = columns.Select(c => FormatColumnForJsonObject(c, quoteDecimals: !isMariaDb)).ToList();
         var jsonObjectClause = string.Join(",\n            ", jsonObjectArgs);
         var whereClause = string.IsNullOrWhiteSpace(filter) ? "" : $"WHERE {filter}";
 
         var qualifiedTable = $"`{Identifier.EscapeDelimited(databaseName, Platform.MySQL)}`.`{Identifier.EscapeDelimited(tableName, Platform.MySQL)}`";
 
-        // JSON_ARRAYAGG is MySQL 5.7.22+ / MariaDB 10.5+. On MariaDB 10.2-10.4 it does not exist, so aggregate the
-        // rows with GROUP_CONCAT(JSON_OBJECT(...)) wrapped in brackets instead (empty table -> '[]'). GROUP_CONCAT
-        // silently truncates at group_concat_max_len (which would corrupt a large table's extracted JSON), so
-        // raise it to the max_allowed_packet ceiling first — the same effective limit JSON_ARRAYAGG has.
-        if (!SupportsJsonArrayAgg(cmd))
+        // MariaDB's JSON_ARRAYAGG is built on GROUP_CONCAT and is cut off at group_concat_max_len (1 MiB by default)
+        // with only a warning, which left a large table's extracted JSON unterminated. So on every MariaDB version,
+        // not just the 10.2-10.4 GROUP_CONCAT fallback, raise it to the max_allowed_packet ceiling first.
+        if (isMariaDb)
         {
             cmd.CommandText = "SET SESSION group_concat_max_len = 1073741824";
             cmd.ExecuteNonQuery();
+        }
+
+        // JSON_ARRAYAGG is MySQL 5.7.22+ / MariaDB 10.5+. On MariaDB 10.2-10.4 it does not exist, so aggregate the
+        // rows with GROUP_CONCAT(JSON_OBJECT(...)) wrapped in brackets instead (empty table -> '[]').
+        if (!SupportsJsonArrayAgg(cmd))
+        {
             cmd.CommandText = $@"
 SELECT COALESCE(CONCAT('[', GROUP_CONCAT(
         JSON_OBJECT(
@@ -804,6 +903,12 @@ ORDER BY {orderColumns};";
 
         var result = cmd.ExecuteScalar();
         return result?.ToString() ?? "[]";
+    }
+
+    private static bool IsMariaDb(IDbCommand cmd)
+    {
+        cmd.CommandText = "SELECT VERSION()";
+        return (cmd.ExecuteScalar()?.ToString() ?? "").Contains("MariaDB", StringComparison.OrdinalIgnoreCase);
     }
 
     // JSON_ARRAYAGG is available on MySQL 5.7.22+ (our 5.7 floor is well past that in practice) and MariaDB 10.5+.
@@ -834,7 +939,11 @@ ORDER BY {orderColumns};";
         var columns = GetSqlServerColumnInfo(cmd, tableSchema, tableName);
         if (columns.Count == 0) return "";
 
-        var fragments = string.Join(",\r\n        ", columns.Select(BuildSqlServerXmlValueFragment));
+        // Style 3 (17 significant digits, lossless) is SQL Server 2016+, and an unknown style is an error, so it is
+        // chosen here rather than in the query. 2008-2014 get style 2, 16 digits, the closest they offer.
+        cmd.CommandText = "SELECT CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(128)), 4) AS INT)";
+        var floatStyle = Convert.ToInt32(cmd.ExecuteScalar()) >= 13 ? 3 : 2;
+        var fragments = string.Join(",\r\n        ", columns.Select(c => BuildSqlServerXmlValueFragment(c, floatStyle)));
         var whereClause = string.IsNullOrWhiteSpace(filter) ? "" : $"WHERE {filter}";
 
         // QUOTED_IDENTIFIER ON is required for the XML data-type methods used below.
@@ -861,7 +970,7 @@ SELECT CAST((
     // One VALUES tuple per column: ('ColName', <text-yielding expression over t.[ColName]>). The name
     // becomes a SQL string literal (for the @n attribute); the value expression uses the DB's native
     // text form so it matches the shred's typed .value(...). Geometry emits a second (SRID) tuple.
-    internal static string BuildSqlServerXmlValueFragment(ColumnInfo c)
+    internal static string BuildSqlServerXmlValueFragment(ColumnInfo c, int floatStyle = 3)
     {
         var nameLiteral = c.Name.Replace("'", "''");
         var ident = $"[{c.Name.Replace("]", "]]")}]";
@@ -869,10 +978,20 @@ SELECT CAST((
         {
             case "geometry":
             case "geography":
-                return $"('{nameLiteral}', t.{ident}.STAsText())," +
+                // AsTextZM, not STAsText: the latter drops Z and M, so POINT (1 2 3 4) arrived as POINT (1 2).
+                return $"('{nameLiteral}', t.{ident}.AsTextZM())," +
                        $"('{nameLiteral}.STSrid', CONVERT(NVARCHAR(MAX), t.{ident}.STSrid))";
             case "hierarchyid":
                 return $"('{nameLiteral}', t.{ident}.ToString())";
+            // CONVERT's default style keeps 6 significant digits of a float and 2 decimals of money.
+            // Through float, which holds a real exactly, and into VARCHAR(30): style 3 into NVARCHAR overflows (Msg 8115) on
+            // any negative value and on a real, probed on SQL Server 2022. The longest value is 24 characters.
+            case "float":
+            case "real":
+                return $"('{nameLiteral}', CONVERT(VARCHAR(30), CAST(t.{ident} AS FLOAT), {floatStyle}))";
+            case "money":
+            case "smallmoney":
+                return $"('{nameLiteral}', CONVERT(NVARCHAR(MAX), t.{ident}, 2))";
             case "binary":
             case "varbinary":
             case "image":
@@ -889,20 +1008,19 @@ SELECT CAST((
         }
     }
 
-    // Column roster for XML extraction: identical filters to GetSelectColumnsSqlServer (exclude computed,
-    // rowguid, and the delivery-unsupported sql_variant/rowversion/timestamp), ordered by name.
+    // Column roster for XML extraction: identical filters to GetSelectColumnsSqlServer (exclude computed
+    // and the delivery-unsupported sql_variant/rowversion/timestamp), ordered by name.
     internal static List<ColumnInfo> GetSqlServerColumnInfo(IDbCommand cmd, string tableSchema, string tableName)
     {
         cmd.CommandText = $@"
 SELECT c.COLUMN_NAME, c.DATA_TYPE
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME) AND sc.[name] = C.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(C.TABLE_SCHEMA + '.' + C.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
-    AND sc.is_rowguidcol = 0
-    AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
+    {MergeScriptHelper.SqlServerGraphColumnFilter}AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
   ORDER BY c.COLUMN_NAME";
 
         var columns = new List<ColumnInfo>();
@@ -917,10 +1035,11 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE
     internal static List<ColumnInfo> GetMySqlColumnInfo(IDbCommand cmd, string databaseName, string tableName)
     {
         cmd.CommandText = $@"
-SELECT c.COLUMN_NAME, c.DATA_TYPE
+SELECT c.COLUMN_NAME, c.DATA_TYPE, CASE WHEN c.COLUMN_TYPE LIKE '%zerofill%' THEN 1 ELSE 0 END AS IsZeroFill,
+       COALESCE(c.DATETIME_PRECISION, 0) AS DtPrecision
 FROM INFORMATION_SCHEMA.COLUMNS c
-WHERE BINARY c.TABLE_SCHEMA = BINARY '{databaseName.Replace("'", "''")}'
-  AND BINARY c.TABLE_NAME = BINARY '{tableName.Replace("'", "''")}'
+WHERE {MySqlNameMatch.Folded("c.TABLE_SCHEMA", Literal(databaseName))}
+  AND {MySqlNameMatch.Folded("c.TABLE_NAME", Literal(tableName))}
   AND (c.GENERATION_EXPRESSION IS NULL OR c.GENERATION_EXPRESSION = '')
 ORDER BY c.ORDINAL_POSITION;";
 
@@ -931,13 +1050,15 @@ ORDER BY c.ORDINAL_POSITION;";
             columns.Add(new ColumnInfo
             {
                 Name = reader.GetString(0),
-                DataType = reader.GetString(1)
+                DataType = reader.GetString(1),
+                ZeroFill = Convert.ToInt32(reader.GetValue(2)) == 1,
+                DatetimePrecision = Convert.ToInt32(reader.GetValue(3))
             });
         }
         return columns;
     }
 
-    internal static string FormatColumnForJsonObject(ColumnInfo column)
+    internal static string FormatColumnForJsonObject(ColumnInfo column, bool quoteDecimals = false)
     {
         var quotedName = $"'{column.Name.Replace("'", "''")}'";
         var columnRef = $"`{Identifier.EscapeDelimited(column.Name, Platform.MySQL)}`";
@@ -946,17 +1067,27 @@ ORDER BY c.ORDINAL_POSITION;";
         return dataType switch
         {
             "date" => $"{quotedName}, DATE_FORMAT({columnRef}, '%Y-%m-%d')",
+            // The fraction, cut to the column's precision, only where it has one: '%s' alone dropped it.
+            "datetime" or "timestamp" when column.DatetimePrecision > 0
+                => $"{quotedName}, CONCAT(DATE_FORMAT({columnRef}, '%Y-%m-%dT%H:%i:%s.'), LEFT(DATE_FORMAT({columnRef}, '%f'), {column.DatetimePrecision}))",
             "datetime" or "timestamp" => $"{quotedName}, DATE_FORMAT({columnRef}, '%Y-%m-%dT%H:%i:%s')",
+            "time" when column.DatetimePrecision > 0
+                => $"{quotedName}, CONCAT(TIME_FORMAT({columnRef}, '%H:%i:%s.'), LEFT(TIME_FORMAT({columnRef}, '%f'), {column.DatetimePrecision}))",
             "time" => $"{quotedName}, TIME_FORMAT({columnRef}, '%H:%i:%s')",
             "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob"
                 => $"{quotedName}, REPLACE(REPLACE(TO_BASE64({columnRef}), '\n', ''), '\r', '')",
             "geometry" or "point" or "linestring" or "polygon" or "multipoint"
-                or "multilinestring" or "multipolygon" or "geometrycollection"
+                or "multilinestring" or "multipolygon" or "geometrycollection" or "geomcollection"
                 // WKT alone drops the reference system. Pair it with a "<col>.STSrid" companion, the
                 // same shape SQL Server extraction has always produced, so the CRS survives delivery
                 // into an untyped destination column.
                 => $"{quotedName}, ST_AsText({columnRef}), '{column.Name.Replace("'", "''")}.STSrid', ST_SRID({columnRef})",
             "bit" => $"{quotedName}, CAST({columnRef} AS UNSIGNED)",
+            // As a string: MySQL reads a JSON number back as a double, so delivery would round a DECIMAL wider than one.
+            "decimal" or "numeric" when quoteDecimals => $"{quotedName}, CAST({columnRef} AS CHAR)",
+            // MariaDB's JSON_OBJECT writes a ZEROFILL number with its padding (MDEV-30962) -- 00007, which is not JSON,
+            // so delivery failed parsing the file. Adding zero yields the plain number.
+            _ when column.ZeroFill => $"{quotedName}, {columnRef} + 0",
             _ => $"{quotedName}, {columnRef}"
         };
     }
@@ -1089,5 +1220,7 @@ SELECT c.column_name, c.udt_name
     {
         public string Name { get; init; } = "";
         public string DataType { get; init; } = "";
+        public bool ZeroFill { get; init; }
+        public int DatetimePrecision { get; init; }
     }
 }

@@ -18,8 +18,8 @@ using Schema.Utility;
 namespace SchemaTongs.IntegrationTests.SqlServer;
 
 /// <summary>
-/// Index kinds a package cannot declare yet are left out of the table file and named in a warning.
-/// Before, a spatial index was extracted as a plain nonclustered index over a geometry column, which the next
+/// Index kinds a package cannot declare yet are left out of the table file, named in a warning, and counted as
+/// skipped. Before, a spatial index was extracted as a plain nonclustered index over a geometry column, which the next
 /// deploy refused, and a selective XML index was extracted as a primary XML index with no create statement, which the
 /// deploy silently did not create. Asserted on a real extraction, as HistoryTableExtractionTests is.
 /// </summary>
@@ -60,8 +60,11 @@ public class IndexKindExtractionTests
     {
         try
         {
-            Master($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Master($"DROP DATABASE IF EXISTS [{_db}]");
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_masterConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 300;
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _db);
         }
         catch (DbException) { /* teardown must not mask an assertion */ }
 
@@ -76,7 +79,7 @@ public class IndexKindExtractionTests
     // The legacy encoding runs the XML generator, which reaches servers too old for xml_index_type.
     [TestCase(false)]
     [TestCase(true)]
-    public void IndexKindsAPackageCannotDeclare_AreLeftOut_AndNamed(bool legacyEncoding)
+    public void IndexKindsAPackageCannotDeclare_AreLeftOut_NamedAndCountedAsSkipped(bool legacyEncoding)
     {
         _tempProductPath = Path.Join(Path.GetTempPath(), $"TongsIdxKind_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempProductPath);
@@ -113,6 +116,7 @@ public class IndexKindExtractionTests
             Assert.That(warnings.Count(w => w.Contains("dbo.Kinds.SX_Kinds") && w.Contains("SPATIAL")), Is.EqualTo(1),
                 "each index left out is named, with its kind");
             Assert.That(warnings.Count(w => w.Contains("dbo.Kinds.SXI_Kinds") && w.Contains("SELECTIVE")), Is.EqualTo(1));
+            Assert.That(tongs.ExitCode, Is.EqualTo(1), "an object the package misses makes the run exit 1");
         });
     }
 

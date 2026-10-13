@@ -117,7 +117,7 @@ public static class CommandLineParser
         var off = ContainsSwitch("NoEncrypt");
         if (!on && !off) return;
         if (on && off)
-            throw new Exception("Specify only one of -Encrypt / -NoEncrypt.");
+            throw new RunFailedException("Specify only one of -Encrypt / -NoEncrypt.");
 
         var (key, value) = platform.GetBasePlatform() switch
         {
@@ -129,7 +129,7 @@ public static class CommandLineParser
     }
 
     private static readonly string[] CommonBareFlags =
-        { "v", "ver", "version", "?", "h", "help", "Encrypt", "NoEncrypt", "debug", "verbose" };
+        { "v", "ver", "version", "?", "h", "help", "Encrypt", "NoEncrypt", "debug", "verbose", "ExitNonZeroOnWarning" };
 
     /// <summary>
     /// Arguments this run will never read, in command-line order. Two shapes qualify, and both are
@@ -157,16 +157,18 @@ public static class CommandLineParser
     }
 
     /// <summary>
-    /// Reports <see cref="UnrecognizedArguments"/> through <paramref name="warn"/>, naming the
-    /// grammar so the fix is in the message. Silent when everything on the line was read.
+    /// Stops the run on an argument the tool will never read. An argument the user typed and the tool did not
+    /// understand is a reason to stop, not to warn: <c>--WhatIf</c> misspelled, or a value written with a space, used
+    /// to be ignored, and the run went ahead, for real.
     /// </summary>
-    public static void WarnOnUnrecognizedArguments(IEnumerable<string> knownArguments, Action<string> warn)
+    public static void RefuseUnrecognizedArguments(IEnumerable<string> knownArguments)
     {
         var unread = UnrecognizedArguments(knownArguments);
         if (unread.Count == 0) return;
 
-        warn($"Ignored - not recognized: {string.Join(" ", unread)}"
-             + " (a switch value attaches with ':' or '=', never a space - e.g. --LogPath:./logs)");
+        throw new RunFailedException($"Not recognized: {string.Join(" ", unread)}. Nothing was run. Check the spelling "
+                                     + "(--help lists the switches); a switch value attaches with ':' or '=', never a space "
+                                     + "- e.g. --LogPath:./logs");
     }
 
     private static bool IsSwitch(string arg) => arg.StartsWith("/") || arg.StartsWith("-");
@@ -231,6 +233,7 @@ public static class CommandLineParser
         Console.WriteLine("  --Encrypt | --NoEncrypt          Force transport encryption on/off (SQL Server Encrypt, PostgreSQL SSL Mode, MySQL/MariaDB SslMode). Wins over ConnectionProperties.");
         Console.WriteLine("  --<Key>=<value>                  Override any configuration option (also --<Key>:<value>; nest with '__', e.g. --Source__Server=host). Logged at startup; sensitive values scrubbed.");
         toolSpecificSwitches?.Invoke();
+        Console.WriteLine("  --ExitNonZeroOnWarning           Exit 1 instead of 0 when the run logged a warning (also the ExitNonZeroOnWarning setting).");
         Console.WriteLine("  --help                           Show the command line options");
         EnvironmentWrapper.GetFromFactory().Exit(0);
     }

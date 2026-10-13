@@ -6,6 +6,7 @@ using System;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
+using Schema.IntegrationTests;
 
 namespace SchemaQuench.IntegrationTests.Shared;
 
@@ -104,7 +105,7 @@ public abstract class SchemaQuenchConnectionTestsSharedTests
         var result = command.ExecuteScalar();
 
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.ToString(), Is.EqualTo(MainDb));
+        Assert.That(result.ToString(), CatalogName.Matches(_connection, MainDb));
     }
 
     [Test]

@@ -1,6 +1,8 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System;
 using System.Data;
+using System.Linq;
 using Schema.DataAccess;
 using NUnit.Framework;
 using Schema.Domain;
@@ -90,6 +92,39 @@ public abstract class GenerateTableJsonSharedTests
         var lastUpdate = table.Columns.Find(c => c.Name.Contains("last_update"));
         Assert.That(lastUpdate, Is.Not.Null);
         Assert.That(lastUpdate.DataType, Does.Contain("timestamp"));
+    }
+
+    // MySQL 5.7 reports a BTREE key on a POINT column as prefix 25, the whole value; extraction writes it as declared.
+    [Test]
+    public void GenerateTableJSON_BtreeKeyOnAPoint_IsExtractedWithoutAPrefix()
+    {
+        if (Platform != Platform.MySQL) Assert.Ignore("Only MySQL gives a POINT key an implicit prefix.");
+        using (var versionCmd = _connection.CreateCommand())
+        {
+            versionCmd.CommandText = "SELECT VERSION()";
+            if (VersionHelper.ParsePatchComparable(versionCmd.ExecuteScalar()?.ToString(), Platform) >= 80000)
+                Assert.Ignore("MySQL 8.0 and later refuse a BTREE key on a POINT column.");
+        }
+        var table = $"pt_{Guid.NewGuid():N}"[..16];
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (Id INT PRIMARY KEY, Val POINT NOT NULL, KEY ix_val (Val) USING BTREE)";
+        command.ExecuteNonQuery();
+        try
+        {
+            command.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_testDb}', '{table}')";
+            var json = "";
+            using (var reader = command.ExecuteReader())
+                while (reader.Read())
+                    json += reader[0];
+
+            var extracted = (MySqlTable)PlatformDeserializer.DeserializeTable(json, Platform);
+            Assert.That(extracted.Indexes.Single(i => i.Name.Contains("ix_val")).IndexColumns, Is.EqualTo("`Val`"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
     }
 
     [Test]

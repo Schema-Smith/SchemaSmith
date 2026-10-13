@@ -36,7 +36,8 @@ IF OBJECT_ID('SchemaSmith.GenerateTableXml', 'P') IS NOT NULL DROP PROCEDURE Sch
 GO
 CREATE PROCEDURE SchemaSmith.GenerateTableXml
   @p_Schema SYSNAME = 'dbo',
-  @p_Table SYSNAME
+  @p_Table SYSNAME,
+  @p_ObjectOrder SYSNAME = 'Name'
 AS
 SET NOCOUNT ON
 DECLARE @v_DatabaseCollation NVARCHAR(200) = CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS NVARCHAR(200))
@@ -266,7 +267,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        '' AS [OldName],
        (SELECT 'true' AS [@json:Array],
                        QUOTENAME(c.COLUMN_NAME) AS [Name],
-                       UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+                       CASE WHEN ut.is_user_defined = 1 THEN USER_TYPE ELSE UPPER(USER_TYPE) END + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
                                                CASE WHEN sc.xml_collection_id <> 0
                                                     THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                     END,
@@ -275,7 +276,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                                THEN ' IDENTITY(' + CONVERT(NVARCHAR(20), ic.seed_value) + ', ' + CONVERT(NVARCHAR(20), ic.increment_value) + ')' +
                                                     CASE WHEN ic.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
                                                ELSE '' END AS [DataType],
-                       CASE WHEN c.IS_NULLABLE = 'Yes' THEN 'true' ELSE 'false' END AS [Nullable],
+                       CASE WHEN c.IS_NULLABLE = 'YES' THEN 'true' ELSE 'false' END AS [Nullable],
 		               NULLIF(SchemaSmith.fn_StripParenWrapping(COLUMN_DEFAULT), 'NULL') AS [Default],
                        (SELECT SchemaSmith.fn_StripParenWrapping([definition])
                           FROM sys.check_constraints
@@ -286,6 +287,10 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                        CASE WHEN sc.is_sparse = 1 THEN 'true' ELSE 'false' END AS [Sparse],
                        -- FILESTREAM round-trip -- emitted only when set.
                        CASE WHEN sc.is_filestream = 1 THEN 'true' END AS [FileStream],
+                       -- Written only for an unpadded column, as the JSON twin.
+                       CASE WHEN sc.is_ansi_padded = 0 AND TYPE_NAME(sc.system_type_id) IN ('char', 'varchar', 'binary', 'varbinary')
+                                 AND cc.[object_id] IS NULL AND cm.EncryptionType IS NULL
+                            THEN 'false' END AS [AnsiPadding],
                        CASE WHEN sc.is_column_set = 1 THEN 'true' ELSE 'false' END AS [IsColumnSet],
                        ISNULL(NULLIF(sc.collation_name, @v_DatabaseCollation), '') AS [Collation],
                        ISNULL(cm.MaskingFunction, '') COLLATE DATABASE_DEFAULT AS DataMaskFunction,
@@ -300,7 +305,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                   FROM INFORMATION_SCHEMA.COLUMNS c
                   JOIN sys.columns sc ON sc.[object_id] = st.[object_id] AND sc.[name] = c.COLUMN_NAME
                   JOIN (SELECT CASE WHEN SCHEMA_NAME(typ.[schema_id]) IN ('sys', 'dbo')
-                                    THEN '' ELSE SCHEMA_NAME(typ.[schema_id]) + '.' END + typ.[name] AS USER_TYPE, typ.user_type_id
+                                    THEN '' ELSE SCHEMA_NAME(typ.[schema_id]) + '.' END + typ.[name] AS USER_TYPE, typ.user_type_id, typ.is_user_defined
                           FROM sys.types typ) ut ON ut.user_type_id = sc.user_type_id
                   LEFT JOIN sys.computed_columns cc ON cc.[object_id] = st.[object_id]
                                                                  AND cc.[name] = c.COLUMN_NAME
@@ -315,7 +320,13 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     AND ISNULL(cm.GeneratedAlwaysType, 0) = 0
                     -- and the graph pseudo-columns staged above (empty below 2017).
                     AND NOT EXISTS (SELECT 1 FROM #GraphCols g WITH (NOLOCK) WHERE g.[column_id] = sc.column_id)
-                  ORDER BY c.COLUMN_NAME
+                    -- and every hidden column: what remains of one after GENERATED ALWAYS and graph is a dropped
+                    -- ledger column (2022), kept hidden by the engine; extracted, it came back visible on deploy.
+                    -- COLUMNPROPERTY is NULL where IsHidden is unknown (before 2016).
+                    AND ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0
+                  -- Column sequence: 'Name' (default) or 'Physical', as GenerateTableJSON orders it.
+                  ORDER BY CASE WHEN @p_ObjectOrder = 'Physical' THEN c.ORDINAL_POSITION END,
+                           CASE WHEN @p_ObjectOrder = 'Physical' THEN NULL ELSE c.COLUMN_NAME END
                   FOR XML PATH('Columns'), TYPE),
        (SELECT 'true' AS [@json:Array],
                QUOTENAME([Name]) AS [Name],

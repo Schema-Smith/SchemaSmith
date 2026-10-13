@@ -165,6 +165,8 @@ public class ValidateAndHandleScriptTests
 
             _progressLog.Received().Warn(Arg.Is<string>(s =>
                 s.Contains("dbo.BadView.sql") && s.Contains("Syntax error near 'INVALID'")));
+            // The package will not contain a deployable script for the view, so the run is incomplete.
+            Assert.That(tongs.ExitCode, Is.EqualTo(1));
 
             CleanUp();
         }
@@ -298,6 +300,7 @@ public class ValidateAndHandleScriptTests
 
             Assert.That(result, Is.True);
 
+            Assert.That(tongs.ExitCode, Is.EqualTo(1), "a skipped export leaves the object out of the package");
             CleanUp();
         }
     }
@@ -330,6 +333,61 @@ public class ValidateAndHandleScriptTests
             var result = tongs.ShouldSkipKnownBadScript(@"C:\test\dbo.BadView.sql");
 
             Assert.That(result, Is.False);
+
+            CleanUp();
+        }
+    }
+
+    // An object whose definition comes back empty is left out of the package, so the run reports itself incomplete
+    // (exit 1) as it does for an encrypted module.
+    [Test]
+    public void AnObjectWhoseDefinitionComesBackEmpty_IsSkipped_AndTheRunExitsOne()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var tongs = CreateTongs(Platform.MySQL, validateScripts: false);
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            typeof(SchemaTongs).GetField("_objectsToCast", flags)!.SetValue(tongs, Array.Empty<string>());
+            typeof(SchemaTongs).GetField("_templatePath", flags)!.SetValue(tongs, "template");
+
+            var command = Substitute.For<IDbCommand>();
+            var reader = Substitute.For<IDataReader>();
+            reader.Read().Returns(true, false);
+            reader.GetString(0).Returns("nightly_cleanup");
+            command.ExecuteReader().Returns(reader);
+            command.ExecuteScalar().Returns("{}");
+
+            typeof(SchemaTongs).GetMethod("ScriptMySqlEvents", flags)!.Invoke(tongs, new object[] { command, "salesdb" });
+
+            Assert.That(tongs.ExitCode, Is.EqualTo(1));
+            _progressLog.Received().Error(Arg.Is<string>(s => s.Contains("No json returned for event nightly_cleanup")));
+
+            CleanUp();
+        }
+    }
+
+    // An encrypted module cannot be scripted by anyone. It is skipped with a warning, and the run reports itself
+    // incomplete (exit 1) because the package will not contain it.
+    [Test]
+    public void EncryptedModule_IsSkipped_AndTheRunExitsOne()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var tongs = CreateTongs(Platform.SqlServer, validateScripts: false);
+            var command = Substitute.For<IDbCommand>();
+            var reader = Substitute.For<IDataReader>();
+            reader.Read().Returns(true);
+            reader.IsDBNull(0).Returns(true);
+            command.ExecuteReader().Returns(reader);
+
+            var script = tongs.ScriptSqlServerProgrammableObject(command, "dbo", "SecretProc", "PROCEDURE");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(script, Is.Null);
+                Assert.That(tongs.ExitCode, Is.EqualTo(1));
+            });
+            _progressLog.Received().Warn(Arg.Is<string>(s => s.Contains("dbo.SecretProc is encrypted")));
 
             CleanUp();
         }

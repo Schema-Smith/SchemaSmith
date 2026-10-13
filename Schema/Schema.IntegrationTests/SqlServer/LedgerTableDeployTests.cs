@@ -66,8 +66,9 @@ public class LedgerTableDeployTests
         try
         {
             _connection.ChangeDatabase("master");
-            Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec($"DROP DATABASE IF EXISTS [{_db}]");
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandTimeout = 300;
+            TestDatabaseDrop.Drop(cmd, _db);
         }
         finally
         {
@@ -172,7 +173,7 @@ public class LedgerTableDeployTests
 
         using var cmd = _connection.CreateCommand();
         cmd.CommandTimeout = 300;
-        cmd.CommandText = "EXEC SchemaSmith.GenerateTableJson @p_Schema = 'dbo', @p_Table = 'LRoundTrip'";
+        cmd.CommandText = "EXEC SchemaSmith.GenerateTableJSON @p_Schema = 'dbo', @p_Table = 'LRoundTrip'";
         using var reader = cmd.ExecuteReader();
         var sb = new StringBuilder();
         while (reader.Read())

@@ -125,6 +125,65 @@ public class SequenceTests
         });
     }
 
+    // UNLOGGED sequences (PostgreSQL 15+): created as declared, extracted, converged both ways, and left alone by a
+    // package that does not say. Below 15 the clause is a downgrade under the unsupported-feature policy.
+    [Test]
+    public void Persistence_IsCreatedExtractedAndConverged()
+    {
+        OnDb(cmd =>
+        {
+            cmd.CommandText = "SELECT current_setting('server_version_num')::int";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) < 150000)
+                Assert.Ignore("UNLOGGED sequences need PostgreSQL 15; below it the downgrade path applies.");
+
+            string Persistence() { cmd.CommandText = "SELECT relpersistence::text FROM pg_class WHERE relname = 'seq_unlogged'"; return Convert.ToString(cmd.ExecuteScalar()); }
+
+            Deploy(cmd, Package("seq_unlogged", ", \"PersistenceType\": \"Unlogged\""));
+            Assert.That(Persistence(), Is.EqualTo("u"), "the sequence must be created unlogged");
+            cmd.CommandText = "SELECT COUNT(*) FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() AND \"ObjectName\" = 'public.seq_unlogged' AND \"ActionType\" = 'modified'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0),
+                "it must be created unlogged, not created and then altered -- the summary would report a change that was not one");
+
+            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateSequenceJSON\"('public', 'seq_unlogged')";
+            Assert.That(Convert.ToString(cmd.ExecuteScalar()), Does.Contain("\"PersistenceType\": \"Unlogged\""),
+                "extraction must carry it");
+
+            Deploy(cmd, Package("seq_unlogged"));
+            Assert.That(Persistence(), Is.EqualTo("u"), "a package that does not declare it must leave it alone");
+
+            Deploy(cmd, Package("seq_unlogged", ", \"PersistenceType\": \"Logged\""));
+            Assert.That(Persistence(), Is.EqualTo("p"), "a declared change must converge");
+        });
+    }
+
+    // Below 15 an UNLOGGED sequence is a downgrade: created logged and recorded under 'warn', refused under 'fail'.
+    // Simulated with the version override, since CI's PostgreSQL 12 leg is the only one below 15.
+    [Test]
+    public void Persistence_Below15_IsADowngrade()
+    {
+        OnDb(cmd =>
+        {
+            try
+            {
+                Exec2(cmd, "SET schemasmith.version_override = '14'");
+                Deploy(cmd, Package("seq_unlogged14", ", \"PersistenceType\": \"Unlogged\""));
+
+                cmd.CommandText = "SELECT relpersistence::text FROM pg_class WHERE relname = 'seq_unlogged14'";
+                Assert.That(Convert.ToString(cmd.ExecuteScalar()), Is.EqualTo("p"), "below 15 the sequence is created logged");
+                cmd.CommandText = "SELECT COUNT(*) FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() AND \"ObjectName\" = 'public.seq_unlogged14' AND \"ActionType\" = 'downgraded'";
+                Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the skipped clause is recorded as a downgrade");
+
+                Exec2(cmd, "SET schemasmith.unsupported_policy = 'fail'");
+                var ex = Assert.Catch(() => Deploy(cmd, Package("seq_unlogged14b", ", \"PersistenceType\": \"Unlogged\"")));
+                Assert.That(ex!.Message, Does.Contain("PostgreSQL 15"));
+            }
+            finally
+            {
+                Exec2(cmd, "RESET schemasmith.version_override; RESET schemasmith.unsupported_policy");
+            }
+        });
+    }
+
     [Test]
     public void ChangedAttributes_Converge()
     {

@@ -55,7 +55,14 @@ public abstract class GenerateTableJsonSharedTests
         vcmd.CommandText = "SELECT VERSION()";
         var vp = (vcmd.ExecuteScalar()?.ToString() ?? "").Split('.');
         ServerVersionNum = vp.Length >= 2 && int.TryParse(vp[0], out var mj) && int.TryParse(vp[1], out var mn) ? mj * 100 + mn : int.MaxValue;
+        vcmd.CommandText = "SELECT @@lower_case_table_names";
+        _lowerCaseTableNames = Convert.ToInt32(vcmd.ExecuteScalar());
     }
+
+    private int _lowerCaseTableNames;
+
+    // lower_case_table_names = 1 stores (and so extracts) only the lowercase table name; 0 and 2 keep the declared one.
+    private string AsExtracted(string declaredName) => _lowerCaseTableNames == 1 ? declaredName.ToLowerInvariant() : declaredName;
 
     [Test]
     public void ShouldGenerateCorrectJsonForColumns()
@@ -95,7 +102,7 @@ CREATE TABLE `{_integrationDb}`.`TestColumns` (
 
         var result = GenerateTable(cmd, _integrationDb, "TestColumns");
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.Name, Is.EqualTo("`TestColumns`"));
+        Assert.That(result.Name, Is.EqualTo(AsExtracted("`TestColumns`")));
         Assert.That(result.Engine, Is.EqualTo("InnoDB"));
         Assert.That(result.CharacterSet, Is.EqualTo("utf8mb4"));
         Assert.That(result.Collation, Is.EqualTo("utf8mb4_unicode_ci"));
@@ -158,7 +165,7 @@ CREATE TABLE `{_integrationDb}`.`TestIndexes` (
         cmd.ExecuteNonQuery();
         var result = GenerateTable(cmd, _integrationDb, "TestIndexes");
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.Name, Is.EqualTo("`TestIndexes`"));
+        Assert.That(result.Name, Is.EqualTo(AsExtracted("`TestIndexes`")));
         Assert.That(result.Columns, Is.Not.Null);
         Assert.That(result.Columns, Has.Count.EqualTo(3));
         Assert.That(result.Indexes, Is.Not.Null);
@@ -197,7 +204,7 @@ CREATE TABLE `{_integrationDb}`.`MyFKTable` (
         cmd.ExecuteNonQuery();
         var result = GenerateTable(cmd, _integrationDb, "MyFKTable");
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.Name, Is.EqualTo("`MyFKTable`"));
+        Assert.That(result.Name, Is.EqualTo(AsExtracted("`MyFKTable`")));
         Assert.That(result.Columns, Is.Not.Null);
         Assert.That(result.Columns, Has.Count.EqualTo(3));
         Assert.That(result.ForeignKeys, Is.Not.Null);
@@ -206,7 +213,7 @@ CREATE TABLE `{_integrationDb}`.`MyFKTable` (
         var fk0 = FindForeignKey(result, "FK_MyFKTable_Col2_Ref_RefCol");
         Assert.That(fk0, Is.Not.Null, "FK_MyFKTable_Col2_Ref_RefCol should exist");
         Assert.That(fk0.Columns, Is.EqualTo("`Col2`"));
-        Assert.That(fk0.RelatedTable, Is.EqualTo("`MyFKReferencedTable`"));
+        Assert.That(fk0.RelatedTable, Is.EqualTo(AsExtracted("`MyFKReferencedTable`")));
         Assert.That(fk0.RelatedColumns, Is.EqualTo("`RefCol`"));
         Assert.That(fk0.DeleteAction, Is.EqualTo(ExpectedDefaultFkAction));
         Assert.That(fk0.UpdateAction, Is.EqualTo("CASCADE"));
@@ -214,7 +221,7 @@ CREATE TABLE `{_integrationDb}`.`MyFKTable` (
         var fk1 = FindForeignKey(result, "FK_MyFKTable_Col3_Ref_Id");
         Assert.That(fk1, Is.Not.Null, "FK_MyFKTable_Col3_Ref_Id should exist");
         Assert.That(fk1.Columns, Is.EqualTo("`Col3`"));
-        Assert.That(fk1.RelatedTable, Is.EqualTo("`MyFKReferencedTable`"));
+        Assert.That(fk1.RelatedTable, Is.EqualTo(AsExtracted("`MyFKReferencedTable`")));
         Assert.That(fk1.RelatedColumns, Is.EqualTo("`Id`"));
         Assert.That(fk1.DeleteAction, Is.EqualTo("CASCADE"));
         Assert.That(fk1.UpdateAction, Is.EqualTo(ExpectedDefaultFkAction));
@@ -242,7 +249,7 @@ CREATE TABLE `{_integrationDb}`.`TestChecks` (
         cmd.ExecuteNonQuery();
         var result = GenerateTable(cmd, _integrationDb, "TestChecks");
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.Name, Is.EqualTo("`TestChecks`"));
+        Assert.That(result.Name, Is.EqualTo(AsExtracted("`TestChecks`")));
         Assert.That(result.Columns, Is.Not.Null);
         Assert.That(result.Columns, Has.Count.EqualTo(3));
         Assert.That(result.CheckConstraints, Is.Not.Null);
@@ -280,7 +287,7 @@ CREATE TABLE `{_integrationDb}`.`TestFullText` (
         cmd.ExecuteNonQuery();
         var result = GenerateTable(cmd, _integrationDb, "TestFullText");
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.Name, Is.EqualTo("`TestFullText`"));
+        Assert.That(result.Name, Is.EqualTo(AsExtracted("`TestFullText`")));
         Assert.That(result.FullTextIndexes, Is.Not.Null);
         Assert.That(result.FullTextIndexes, Has.Count.EqualTo(2));
 
@@ -319,7 +326,7 @@ CREATE TABLE `{_integrationDb}`.`TestGenerated` (
         cmd.ExecuteNonQuery();
         var result = GenerateTable(cmd, _integrationDb, "TestGenerated");
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.Name, Is.EqualTo("`TestGenerated`"));
+        Assert.That(result.Name, Is.EqualTo(AsExtracted("`TestGenerated`")));
         Assert.That(result.Columns, Is.Not.Null);
         Assert.That(result.Columns, Has.Count.EqualTo(4));
 

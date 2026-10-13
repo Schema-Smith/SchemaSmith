@@ -2,7 +2,8 @@
 -- Licensed for use and modification with SchemaSmith products only.
 -- Redistribution outside of SchemaSmith product usage is prohibited.
 
--- Lightweight bootstrap procedure with ZERO SchemaSmith_* table or proc dependencies.
+-- Lightweight bootstrap procedure with no SchemaSmith_* table or proc dependencies; it calls only the JSON scalar
+-- helpers and the name keys, which kindle ahead of it.
 -- Parses a TableQuench-shaped JSON definition and applies, in order:
 --   1. TABLE rename when OldName is set (old table present, new absent) -- BEFORE CREATE TABLE so a
 --      renamed table's history is not orphaned under an empty freshly-created new table
@@ -24,80 +25,87 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_BootstrapTableQuench//
 
 CREATE PROCEDURE SchemaSmith_BootstrapTableQuench(
-    IN p_TableDefinitions LONGTEXT
+    IN p_TableDefinitions LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 SQL SECURITY INVOKER
 BEGIN
-    DECLARE v_TableName VARCHAR(128);
-    DECLARE v_Db VARCHAR(128);
-    DECLARE v_Sql LONGTEXT;
-    DECLARE v_ColumnList LONGTEXT;
-    DECLARE v_PkClause LONGTEXT;
+    DECLARE v_TableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_Db VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    -- Name keys, computed once. The catalog may spell the database and table differently from the package and
+    -- from DATABASE() when lower_case_table_names >= 1, so every catalog read compares keys, never spellings.
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+    DECLARE v_TableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+    DECLARE v_OldTableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+    DECLARE v_StatusTableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+    DECLARE v_Sql LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_ColumnList LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_PkClause LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_ColumnCount INT;
     DECLARE v_IdxCount INT;
     DECLARE v_Idx INT;
-    DECLARE v_ColumnName VARCHAR(128);
-    DECLARE v_DataType VARCHAR(200);
+    DECLARE v_ColumnName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_DataType VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_Nullable TINYINT;
-    DECLARE v_Default LONGTEXT;
+    DECLARE v_Default LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AutoIncrement TINYINT;
     DECLARE v_ColumnPrimaryKey TINYINT;
     DECLARE v_IndexPrimaryKey TINYINT;
-    DECLARE v_IndexColumns LONGTEXT;
+    DECLARE v_IndexColumns LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_HasPkColumn INT;
     DECLARE v_AcCnt INT;
     DECLARE v_AcIdx INT;
-    DECLARE v_AcClauses LONGTEXT;
-    DECLARE v_AcColName VARCHAR(128);
-    DECLARE v_AcDataType VARCHAR(200);
+    DECLARE v_AcClauses LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_AcColName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_AcDataType VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AcNullable TINYINT;
-    DECLARE v_AcDefault LONGTEXT;
+    DECLARE v_AcDefault LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AcAutoIncrement TINYINT;
-    DECLARE v_Collation VARCHAR(64);
-    DECLARE v_AcCollation VARCHAR(64);
-    DECLARE v_LiveCollation VARCHAR(64);
-    DECLARE v_CollateClauses LONGTEXT;
+    DECLARE v_Collation VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_AcCollation VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_LiveCollation VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_CollateClauses LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_ColExists INT;
     DECLARE v_HasStatusTable INT DEFAULT 0;
-    DECLARE v_ClashDetail LONGTEXT;
+    DECLARE v_ClashDetail LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AiCnt INT;
     DECLARE v_AiIdx INT;
-    DECLARE v_AiClauses LONGTEXT;
-    DECLARE v_AiIndexName VARCHAR(128);
+    DECLARE v_AiClauses LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_AiIndexName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AiUnique TINYINT;
     DECLARE v_AiPrimaryKey TINYINT;
-    DECLARE v_AiIndexColumns LONGTEXT;
+    DECLARE v_AiIndexColumns LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_IdxExists INT;
     DECLARE v_ShapeUnique INT;
-    DECLARE v_ShapeKeys LONGTEXT;
-    DECLARE v_DeclKeys LONGTEXT;
+    DECLARE v_ShapeKeys LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_DeclKeys LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_ShapeParts INT;
     DECLARE v_ShapeExprParts INT;
-    DECLARE v_GroupCols LONGTEXT;
-    DECLARE v_GroupPart VARCHAR(256);
+    DECLARE v_GroupCols LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_GroupPart VARCHAR(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_GroupIdx INT;
     DECLARE v_SupportsDescIndex TINYINT;
-    -- MESSAGE_TEXT is a VARCHAR(128) condition item in the server's own charset; a utf8mb4
-    -- variable is refused by MariaDB with "Data too long for condition item" whatever its length.
-    DECLARE v_SignalMsg VARCHAR(128) CHARACTER SET utf8mb3;
-    DECLARE v_OldTableName VARCHAR(128);
+    DECLARE v_PkReplacedIndex VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_OldTableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_TableRenameOldExists INT;
     DECLARE v_TableRenameNewExists INT;
     DECLARE v_ServerVersionNum INT;
     DECLARE v_SupportsRenameColumn TINYINT;
     DECLARE v_RenIdx INT;
-    DECLARE v_RenNewName VARCHAR(128);
-    DECLARE v_RenOldName VARCHAR(128);
+    DECLARE v_RenNewName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_RenOldName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_RenOldExists INT;
     DECLARE v_RenNewExists INT;
-    DECLARE v_RenDataType VARCHAR(200);
+    DECLARE v_RenDataType VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_RenNullable TINYINT;
-    DECLARE v_RenDefault LONGTEXT;
+    DECLARE v_RenDefault LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
     SET SESSION group_concat_max_len = 1000000;
 
     SET v_TableName = TRIM(BOTH FROM JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, '$.Name')));
     SET v_Db = DATABASE();
+    SET v_DbKey = SchemaSmith_IdentifierKey(v_Db);
+    SET v_TableKey = SchemaSmith_IdentifierKey(v_TableName);
+    SET v_StatusTableKey = SchemaSmith_IdentifierKey('SchemaSmith_StatusMessages');
 
     IF v_TableName IS NULL OR v_TableName = '' THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'BootstrapTableQuench: JSON must contain non-blank Name.';
@@ -109,10 +117,11 @@ BEGIN
     -- here too: NULLIF(TRIM(...), '') normalizes a blank OldName to "no rename", not a bogus empty name.
     SET v_OldTableName = NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, '$.OldName'))), '');
     IF v_OldTableName IS NOT NULL THEN
+        SET v_OldTableKey = SchemaSmith_IdentifierKey(v_OldTableName);
         SELECT COUNT(*) INTO v_TableRenameOldExists FROM information_schema.tables
-         WHERE BINARY table_schema = BINARY v_Db AND BINARY table_name = BINARY v_OldTableName;
+         WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_OldTableKey;
         SELECT COUNT(*) INTO v_TableRenameNewExists FROM information_schema.tables
-         WHERE BINARY table_schema = BINARY v_Db AND BINARY table_name = BINARY v_TableName;
+         WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey;
 
         IF v_TableRenameOldExists > 0 AND v_TableRenameNewExists > 0 THEN
             -- MESSAGE_TEXT has a hard 128-char limit; a message that exceeds it is replaced by MySQL's
@@ -127,7 +136,7 @@ BEGIN
                                        '` (OldName) and `', v_Db, '`.`', v_TableName,
                                        '` already exist; resolve manually before bootstrap can rename.');
             SELECT COUNT(*) INTO v_HasStatusTable FROM information_schema.tables
-             WHERE BINARY table_schema = BINARY v_Db AND BINARY table_name = BINARY 'SchemaSmith_StatusMessages';
+             WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_StatusTableKey;
             IF v_HasStatusTable > 0 THEN
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), v_ClashDetail);
             END IF;
@@ -236,9 +245,9 @@ BEGIN
 
         IF v_RenOldName IS NOT NULL THEN
             SELECT COUNT(*) INTO v_RenOldExists FROM information_schema.columns
-             WHERE BINARY table_schema = BINARY v_Db AND BINARY table_name = BINARY v_TableName AND BINARY column_name = BINARY v_RenOldName;
+             WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_RenOldName);
             SELECT COUNT(*) INTO v_RenNewExists FROM information_schema.columns
-             WHERE BINARY table_schema = BINARY v_Db AND BINARY table_name = BINARY v_TableName AND BINARY column_name = BINARY v_RenNewName;
+             WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_RenNewName);
 
             IF v_RenOldExists > 0 AND v_RenNewExists > 0 THEN
                 -- Same MESSAGE_TEXT 128-char limit as the table-rename SIGNAL above -- kept short with
@@ -248,7 +257,7 @@ BEGIN
                                            v_RenOldName, '` (OldName) and `', v_RenNewName,
                                            '` already exist; resolve manually before bootstrap can rename.');
                 SELECT COUNT(*) INTO v_HasStatusTable FROM information_schema.tables
-                 WHERE BINARY table_schema = BINARY v_Db AND BINARY table_name = BINARY 'SchemaSmith_StatusMessages';
+                 WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_StatusTableKey;
                 IF v_HasStatusTable > 0 THEN
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), v_ClashDetail);
                 END IF;
@@ -291,13 +300,11 @@ BEGIN
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapExistingCols;
     CREATE TEMPORARY TABLE _SchemaSmith_BootstrapExistingCols (ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY)
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    -- BINARY on the INFORMATION_SCHEMA-vs-proc-variable comparisons: on MySQL 8.0 the
-    -- INFORMATION_SCHEMA columns collate utf8mb4_0900_ai_ci while proc/temp/JSON strings are
-    -- utf8mb4_unicode_ci, and a bare '=' between them throws 1267. Sibling procs
-    -- (MissingIndexesAndConstraintsQuench, ParseTableJson) bridge this the same way.
+    -- Key-to-key comparisons: both sides are utf8mb4_bin, so the catalog column's own collation (which differs by
+    -- version and by lower_case_table_names) never meets a proc variable's in a bare '='.
     INSERT INTO _SchemaSmith_BootstrapExistingCols (ColumnName)
     SELECT column_name FROM information_schema.columns
-    WHERE BINARY table_schema = BINARY v_Db AND BINARY table_name = BINARY v_TableName;
+    WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapAddColStmts;
     CREATE TEMPORARY TABLE _SchemaSmith_BootstrapAddColStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
@@ -320,7 +327,7 @@ BEGIN
 
         SET v_ColExists = 0;
         SELECT COUNT(*) INTO v_ColExists FROM _SchemaSmith_BootstrapExistingCols ec
-        WHERE BINARY ec.ColumnName = BINARY v_AcColName;
+        WHERE SchemaSmith_NameKeyCI(ec.ColumnName) = SchemaSmith_NameKeyCI(v_AcColName);
 
         IF COALESCE(v_AcAutoIncrement, 0) = 0 AND v_ColExists = 0 THEN
             SET v_AcClauses = CONCAT(v_AcClauses, IF(v_AcClauses = '', '', ', '),
@@ -368,17 +375,14 @@ BEGIN
 
         IF v_AcCollation IS NOT NULL AND TRIM(v_AcCollation) <> '' THEN
             SET v_LiveCollation = NULL;
-            -- BINARY on the INFORMATION_SCHEMA comparisons for the same reason Step 4 uses it: on
-            -- MySQL 8.0 those columns collate utf8mb4_0900_ai_ci while proc variables do not, and a
-            -- bare '=' between them throws 1267.
             SELECT collation_name INTO v_LiveCollation
             FROM information_schema.columns
-            WHERE BINARY table_schema = BINARY v_Db
-              AND BINARY table_name = BINARY v_TableName
-              AND BINARY column_name = BINARY v_AcColName
+            WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey
+              AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
+              AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_AcColName)
             LIMIT 1;
 
-            IF v_LiveCollation IS NOT NULL AND BINARY v_LiveCollation <> BINARY v_AcCollation THEN
+            IF v_LiveCollation IS NOT NULL AND CAST(v_LiveCollation AS BINARY) <> CAST(v_AcCollation AS BINARY) THEN
                 SET v_CollateClauses = CONCAT(v_CollateClauses, IF(v_CollateClauses = '', '', ', '),
                     'MODIFY COLUMN `', v_AcColName, '` ', v_AcDataType, ' COLLATE ', v_AcCollation,
                     CASE WHEN v_AcNullable = 1 THEN ' NULL' ELSE ' NOT NULL' END,
@@ -412,16 +416,18 @@ BEGIN
         IF COALESCE(v_AiPrimaryKey, 0) = 1 THEN
             -- A declared PRIMARY KEY whose deployed key columns differ is swapped in ONE statement: MySQL will
             -- not let an AUTO_INCREMENT column sit without a key even momentarily, so DROP and ADD cannot be
-            -- separate statements. The rows are untouched.
+            -- separate statements. The rows are untouched. A table an older kindle created with no key gets one
+            -- added, which sql_require_primary_key needs before the table can be altered at all; a secondary
+            -- index already carrying the declared name is the key this replaces, so it goes in the same ALTER.
             SET v_ShapeKeys = NULL;
             SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') INTO v_ShapeKeys
               FROM information_schema.statistics
-             WHERE BINARY table_schema = BINARY v_Db
-               AND BINARY table_name = BINARY v_TableName
+             WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey
+               AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
                AND index_name = 'PRIMARY';
 
-            IF v_ShapeKeys IS NOT NULL
-               AND UPPER(v_ShapeKeys) <> UPPER(REPLACE(REPLACE(v_AiIndexColumns, '`', ''), ' ', '')) THEN
+            IF v_ShapeKeys IS NULL
+               OR UPPER(v_ShapeKeys) <> UPPER(REPLACE(REPLACE(v_AiIndexColumns, '`', ''), ' ', '')) THEN
             -- GROUP BY takes plain column names. A prefix length (ScriptPath(200)) and a sort direction are
             -- both legal in the index declaration and both a syntax error here, so each key part is reduced to
             -- its column name. No REGEXP_REPLACE: it does not exist on the MySQL 5.7 floor.
@@ -446,12 +452,23 @@ BEGIN
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
                 IF COALESCE(@v_dupes, 0) > 0 THEN
-                    SET v_SignalMsg = LEFT(CONCAT('SchemaSmith bootstrap: duplicate rows block the declared PRIMARY KEY on ',
+                    -- A user variable, in the connection's charset: MariaDB refuses a utf8mb4 local as MESSAGE_TEXT
+                    -- ("Data too long for condition item"), and declaring the local utf8mb3 is deprecated on MySQL.
+                    SET @ss_bootstrap_msg = LEFT(CONCAT('SchemaSmith bootstrap: duplicate rows block the declared PRIMARY KEY on ',
                                                   v_TableName, '; the existing key is unchanged'), 128);
-                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_SignalMsg;
+                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_bootstrap_msg;
                 END IF;
-                SET @exec_sql = CONCAT('ALTER TABLE `', v_Db, '`.`', v_TableName, '` DROP PRIMARY KEY, ADD PRIMARY KEY (',
-                                       v_AiIndexColumns, ')');
+                SET v_PkReplacedIndex = NULL;
+                SELECT MIN(index_name) INTO v_PkReplacedIndex
+                  FROM information_schema.statistics
+                 WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey
+                   AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
+                   AND index_name <> 'PRIMARY'
+                   AND SchemaSmith_NameKeyCI(index_name) = SchemaSmith_NameKeyCI(v_AiIndexName);
+                SET @exec_sql = CONCAT('ALTER TABLE `', v_Db, '`.`', v_TableName, '` ',
+                                       IF(v_ShapeKeys IS NULL, '', 'DROP PRIMARY KEY, '),
+                                       'ADD PRIMARY KEY (', v_AiIndexColumns, ')',
+                                       IF(v_PkReplacedIndex IS NULL, '', CONCAT(', DROP INDEX `', v_PkReplacedIndex, '`')));
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
@@ -477,9 +494,9 @@ BEGIN
                    SUM(column_name IS NULL)
               INTO v_ShapeUnique, v_ShapeKeys, v_ShapeParts, v_ShapeExprParts
               FROM information_schema.statistics
-             WHERE BINARY table_schema = BINARY v_Db
-               AND BINARY table_name = BINARY v_TableName
-               AND BINARY index_name = BINARY v_AiIndexName;
+             WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey
+               AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
+               AND SchemaSmith_NameKeyCI(index_name) = SchemaSmith_NameKeyCI(v_AiIndexName);
 
             -- v_ShapeParts = 0 means the index is not there at all; Step 5 creates it. (v_ShapeKeys can be NULL
             -- for an index whose every key part is an expression, which is NOT the same thing.)
@@ -523,9 +540,9 @@ BEGIN
                         IF COALESCE(@v_dupes, 0) > 0 THEN
                             -- MESSAGE_TEXT is capped at 128 characters (MariaDB errors rather than truncating),
                             -- so the message is short by construction and LEFT() guards a long index name.
-                            SET v_SignalMsg = LEFT(CONCAT('SchemaSmith bootstrap: duplicate rows block UNIQUE ',
+                            SET @ss_bootstrap_msg = LEFT(CONCAT('SchemaSmith bootstrap: duplicate rows block UNIQUE ',
                                                           v_AiIndexName, '; the existing index is unchanged'), 128);
-                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_SignalMsg;
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_bootstrap_msg;
                         END IF;
                     END IF;
                     SET @exec_sql = CONCAT('ALTER TABLE `', v_Db, '`.`', v_TableName, '` DROP INDEX `', v_AiIndexName, '`');
@@ -549,7 +566,7 @@ BEGIN
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT IGNORE INTO _SchemaSmith_BootstrapExistingIdxs (IndexName)
     SELECT index_name FROM information_schema.statistics
-    WHERE BINARY table_schema = BINARY v_Db AND BINARY table_name = BINARY v_TableName;
+    WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapAddIdxStmts;
     CREATE TEMPORARY TABLE _SchemaSmith_BootstrapAddIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
@@ -571,7 +588,7 @@ BEGIN
 
         SET v_IdxExists = 0;
         SELECT COUNT(*) INTO v_IdxExists FROM _SchemaSmith_BootstrapExistingIdxs ei
-        WHERE BINARY ei.IndexName = BINARY v_AiIndexName;
+        WHERE SchemaSmith_NameKeyCI(ei.IndexName) = SchemaSmith_NameKeyCI(v_AiIndexName);
 
         IF COALESCE(v_AiPrimaryKey, 0) = 0 AND v_IdxExists = 0 THEN
             SET v_AiClauses = CONCAT(v_AiClauses, IF(v_AiClauses = '', '', ', '),

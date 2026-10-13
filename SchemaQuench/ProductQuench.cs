@@ -27,7 +27,7 @@ public class ProductQuench
     private readonly LogHygieneOptions _logHygiene;
     private readonly ILog _errorLog = LogFactory.GetLogger("ErrorLog");
     private readonly ILog _progressLog = LogFactory.GetLogger("ProgressLog");
-    private readonly Product _product = Product.Load();
+    private readonly Product _product = LoadPackage(() => Product.Load());
 
     private readonly string _whatIfOnly;
     private readonly int _maxThreads;
@@ -111,16 +111,25 @@ public class ProductQuench
     /// </summary>
     public bool Failed => _anyFailure;
 
+    /// <summary>
+    /// True when the run finished but left something the package asked for unapplied: a feature downgraded on a target
+    /// that lacks it, including a data delivery the target cannot take. Exit code 1.
+    /// </summary>
+    public bool Incomplete => !Failed && _changeAudit.Snapshot().Any(r => r.Action == "downgraded");
+
     public ProductQuench()
     {
         if (_product.Platform == Platform.Unknown)
-            throw new Exception($"Product '{_product.Name}' does not have a Platform assigned. Use SchemaTongs or edit the product.json file to assign a platform before quenching.");
+            throw new RunFailedException($"Product '{_product.Name}' does not have a Platform assigned. Use SchemaTongs or edit the product.json file to assign a platform before quenching.");
 
         _logHygiene = LogHygieneOptions.FromConfiguration(_config);
 
         if (!int.TryParse(_config[SettingsKeys.MaxThreads], out _maxThreads) || _maxThreads < 1 || _maxThreads > 20)
             _maxThreads = 10;
-        _whatIfOnly = FormatWhatIfOnly(_config[SettingsKeys.WhatIfOnly]?.ToLower() == "true");
+        // --WhatIf is the switch people reach for; it is the same dry run as the WhatIfONLY setting.
+        var whatIfSwitch = CommandLineParser.ContainsSwitch("WhatIf")
+                           && !string.Equals(CommandLineParser.ValueOfSwitch("WhatIf"), "false", StringComparison.OrdinalIgnoreCase);
+        _whatIfOnly = FormatWhatIfOnly(whatIfSwitch || _config[SettingsKeys.WhatIfOnly]?.ToLower() == "true");
         _runScriptsTwice = _config[SettingsKeys.RunScriptsTwice]?.ToLower() == "true";
         _primaryServer = _config[SettingsKeys.Target.Server] ?? "localhost";
         _skipKindling = _config[SettingsKeys.KindleTheForge]?.ToLower() == "false";
@@ -336,7 +345,7 @@ public class ProductQuench
         string declaredMinimum)
     {
         return detected
-            .Where(d => !VersionHelper.IsAtLeast(d.Info.ServerComparable, requiredComparable))
+            .Where(d => !VersionHelper.MeetsDeclaredVersion(d.Info, declaredMinimum, requiredComparable))
             .Select(d => $"  {d.Server}: detected version {VersionHelper.DisplayVersion(d.Info)} is below the product's declared MinimumVersion {declaredMinimum}")
             .ToList();
     }
@@ -375,7 +384,7 @@ public class ProductQuench
 
         var required = VersionHelper.ParseDeclaredVersion(_product.MinimumVersion, _product.Platform);
         if (required == null)
-            throw new Exception($"Product MinimumVersion '{_product.MinimumVersion}' is not a valid {_product.Platform} version.");
+            throw new RunFailedException($"Product MinimumVersion '{_product.MinimumVersion}' is not a valid {_product.Platform} version.");
 
         _progressLog.Info("Validate Minimum Version");
         var detected = new List<(string Server, TargetVersionInfo Info)>();
@@ -395,7 +404,7 @@ public class ProductQuench
 
         var failures = BuildMinimumVersionFailures(detected, required.Value, _product.MinimumVersion);
         if (failures.Count > 0)
-            throw new Exception(
+            throw new RunFailedException(
                 "One or more target servers are below the product's declared MinimumVersion; aborting before any deployment:"
                 + Environment.NewLine + string.Join(Environment.NewLine, failures));
     }
@@ -432,7 +441,7 @@ public class ProductQuench
                 var message = $"Folder '{folder.FolderPath}'{ServerSuffix(server)} ShouldApplyExpression failed: {e.Message}";
                 _progressLog.Error($"  {message}");
                 _errorLog.Error(message, e);
-                throw;
+                throw new RunFailedException(message, e);
             }
 
             survivors.Add(folder);
@@ -507,7 +516,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new Exception($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -556,7 +565,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new Exception($"Unable to connect to {server} [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException($"Unable to connect to {server} [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -604,7 +613,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new Exception($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -700,6 +709,54 @@ public class ProductQuench
         return true;
     }
 
+    private bool RefuseFoldedTableNameCollisions(Template template)
+    {
+        if (_product.Platform.GetBasePlatform() != Platform.MySQL) return false;
+        var collisions = FoldedTableNameCollisions.Find(template);
+        if (collisions.Count == 0 || !ServerFoldsNames()) return false;
+
+        var message = $"Template '{template.Name}' declares tables whose names differ only in case ({string.Join("; ", collisions)}). " +
+                      "The target server folds table names (lower_case_table_names >= 1), so each pair would be one table. " +
+                      "Rename one of each pair, or deploy to a server with lower_case_table_names = 0.";
+        _progressLog.Error(message);
+        _errorLog.Error(message);
+        _updateFailed = true;
+        _anyFailure = true;
+        EmitFailureRollup();
+        WriteDeploymentSummary(RunOutcome.Aborted, 2);
+        LogBackup.BackupLogsAndExit("SchemaQuench", 2);
+        return true;
+    }
+
+    private bool? _serverFoldsNames;
+
+    // MySQL and MariaDB with lower_case_table_names >= 1 store database and table names in lowercase: Target.Databases
+    // has to match case-insensitively there, and two tables differing only in case are one table. Read once, from the
+    // primary server, which is the only one these engines deploy to.
+    private bool ServerFoldsNames()
+    {
+        if (_serverFoldsNames.HasValue) return _serverFoldsNames.Value;
+        if (_product.Platform.GetBasePlatform() != Platform.MySQL)
+        {
+            _serverFoldsNames = false;
+            return false;
+        }
+
+        using var command = GetCommand(_primaryServer);
+        try
+        {
+            command.CommandText = "SELECT @@lower_case_table_names";
+            var value = command.ExecuteScalar();
+            _serverFoldsNames = value is not null and not DBNull && Convert.ToInt32(value) != 0;
+            return _serverFoldsNames.Value;
+        }
+        finally
+        {
+            command.Connection?.Close();
+            command.Connection?.Dispose();
+        }
+    }
+
     /// <summary>
     /// Applies the <c>Target.Databases</c> / <c>Target.Schemas</c> per-template filter to
     /// <paramref name="units"/>. Returns the filtered list unchanged when the filter is empty
@@ -713,7 +770,7 @@ public class ProductQuench
         if (units.Count == 0 || (_targetDatabases.Count == 0 && _targetSchemas.Count == 0))
             return units;
 
-        var perTemplateFilter = new WorkUnitFilter([], _targetDatabases, _targetSchemas);
+        var perTemplateFilter = new WorkUnitFilter([], _targetDatabases, _targetSchemas, ServerFoldsNames());
         var filtered = perTemplateFilter.Apply(units, _progressLog.Warn);
         _progressLog.Info($"[Target] Resolved {filtered.Count} work unit(s) after filtering {units.Count} discovered unit(s) for template '{template.Name}'.");
         return filtered;
@@ -727,6 +784,14 @@ public class ProductQuench
         try
         {
             QuenchProductCore(suppressKindlingForTesting);
+        }
+        catch (RunFailedException)
+        {
+            // A failed validation, product script or version check, or a refused target: a failure the user can act
+            // on. Main reports it and exits 2.
+            _runTiming.Stop();
+            WriteDeploymentSummary(RunOutcome.Aborted, 2);
+            throw;
         }
         catch
         {
@@ -742,7 +807,9 @@ public class ProductQuench
 
         // Normal Success / continue-mode PartialFailure. (Hard-abort sites inside Core already wrote
         // their Aborted summary and Exit()ed before control could return here.)
-        WriteDeploymentSummary(Failed ? RunOutcome.PartialFailure : RunOutcome.Success, Failed ? 2 : 0);
+        WriteDeploymentSummary(
+            Failed ? RunOutcome.PartialFailure : Incomplete ? RunOutcome.Incomplete : RunOutcome.Success,
+            Failed ? 2 : Incomplete ? 1 : 0);
     }
 
     private void QuenchProductCore(bool suppressKindlingForTesting)
@@ -782,7 +849,7 @@ public class ProductQuench
                     _failureRecords.Add(new FailureRecord("Validate", "Product",
                         "Invalid server for this product", Array.Empty<string>(), null));
                     EmitFailureRollup();
-                    throw new Exception("Invalid server for this product");
+                    throw new RunFailedException("Invalid server for this product");
                 }
             }
 
@@ -795,7 +862,7 @@ public class ProductQuench
                     _failureRecords.Add(new FailureRecord("Validate", "Product",
                         "Invalid baseline for this release", Array.Empty<string>(), null));
                     EmitFailureRollup();
-                    throw new Exception("Invalid baseline for this release");
+                    throw new RunFailedException("Invalid baseline for this release");
                 }
             }
 
@@ -1046,6 +1113,28 @@ public class ProductQuench
             ? snapshot
             : snapshot.Replace(Schema.Domain.SchemaDefaultResolver.SchemaNameToken, CrossTemplateSchemaPlaceholder);
 
+    // A package that cannot be loaded (a missing path, malformed JSON, an invalid template setting) is the author's to
+    // fix, so it is a failed run rather than a defect in the tool.
+    private static T LoadPackage<T>(Func<T> load)
+    {
+        try
+        {
+            return load();
+        }
+        catch (InvalidOperationException e)
+        {
+            throw new RunFailedException(e.Message, e);
+        }
+        catch (Newtonsoft.Json.JsonException e)
+        {
+            throw new RunFailedException(e.Message, e);
+        }
+        catch (System.IO.IOException e)
+        {
+            throw new RunFailedException(e.Message, e);
+        }
+    }
+
     private List<Template> LoadTemplates()
     {
         var templates = new List<Template>();
@@ -1053,7 +1142,7 @@ public class ProductQuench
         foreach (var templateName in _product.TemplateOrder.Where(templateName => !string.IsNullOrWhiteSpace(templateName)))
         {
             _progressLog.Info($"Load Template Schema: {templateName}");
-            var template = Template.Load(templateName, _product);
+            var template = LoadPackage(() => Template.Load(templateName, _product));
             foreach (var kvp in BuildSpecialTokens(template))
                 specialTokens.Add(kvp.Key, kvp.Value);
             templates.Add(template);
@@ -1097,7 +1186,7 @@ public class ProductQuench
         {
             _anyFailure = true;
             EmitFailureRollup();
-            throw new Exception("Product script quench FAILED");
+            throw new RunFailedException("Product script quench FAILED");
         }
     }
 
@@ -1179,7 +1268,7 @@ public class ProductQuench
             shouldFail = true;
         }
 
-        if (shouldFail) throw new Exception("Error validating configured servers");
+        if (shouldFail) throw new RunFailedException("Error validating configured servers");
 
         _progressLog.Info("");
         _progressLog.Info("");
@@ -1225,6 +1314,8 @@ public class ProductQuench
             LogScriptTokens("Template Script Tokens:", template.LoggableTokens);
 
         _updateFailed = false;
+
+        if (RefuseFoldedTableNameCollisions(template)) return;
 
         // Slice-3 fan-out: enumerate the flat work-unit list across all eligible servers, then
         // dispatch to a single MaxThreads-bounded pool. SQL Server's per-server ServerToQuench
@@ -1672,6 +1763,7 @@ public class ProductQuench
             try
             {
                 ProvisionDatabaseViaAdminConnection(server, databaseName);
+                _changeAudit.Record("database", databaseName, IsWhatIfOnly ? "wouldCreate" : "created");
             }
             catch (Exception ex)
             {
@@ -2025,6 +2117,7 @@ public class ProductQuench
             if (_checkpointing.HasCompletedScript(ProductScopeForServer(server), slot, script.LogPath))
             {
                 _progressLog.Info($"{serverMsg}[{initDb}]    {(IsWhatIfOnly ? "Would SKIP" : "Skipping")} (previously quenched per checkpoint) {script.LogPath}");
+                if (IsWhatIfOnly) _whatIf.Record(WhatIfCategory.Skip, $"{serverMsg}[{initDb}]", script.LogPath);
                 script.HasBeenQuenched = true;
                 continue;
             }
@@ -2032,6 +2125,7 @@ public class ProductQuench
             if (IsWhatIfOnly)
             {
                 _progressLog.Info($"{serverMsg}[{initDb}]    Would Quench {script.LogPath}");
+                _whatIf.Record(WhatIfCategory.Apply, $"{serverMsg}[{initDb}]", script.LogPath);
                 script.HasBeenQuenched = true;
                 continue;
             }
@@ -2121,7 +2215,7 @@ public class ProductQuench
                     new[] { $"Unable to quench '{sqlScript.LogPath}'" }, artifactPath));
             }
 
-            throw new Exception($"{serverMsg}[{initDb}] Unable to quench one or more scripts");
+            throw new RunFailedException($"{serverMsg}[{initDb}] Unable to quench one or more scripts");
         }
     }
 

@@ -19,15 +19,43 @@ namespace SchemaQuench;
 public static class ChangeAuditReader
 {
     public static IReadOnlyList<ChangeAuditRow> ReadAndDrain(Platform platform, IDbCommand command) =>
+        SessionSql(platform) is { } sql ? ReadRows(command, sql.Select, sql.Delete) : null;
+
+    /// <summary>
+    /// Discards rows already carrying this connection's session id before the work unit writes any. They belong to an
+    /// earlier session that ended without draining -- a deploy that died part-way -- and the engine has since given its
+    /// id to this one; read at the end, they would be reported as this deploy's changes. Best-effort, like the drain:
+    /// before kindling the table does not exist yet, and then there is nothing stale to discard.
+    /// </summary>
+    public static void DiscardStale(Platform platform, IDbCommand command)
+    {
+        if (SessionSql(platform) is not { } sql) return;
+        try
+        {
+            command.Parameters.Clear();
+            // SQL Server's table connection reports user errors as info messages, which the run logs as errors, instead
+            // of throwing -- so the missing table is checked for rather than caught.
+            command.CommandText = platform.GetBasePlatform() == Platform.SqlServer
+                ? $"IF OBJECT_ID(N'SchemaSmith.ChangeAudit', N'U') IS NOT NULL {sql.Delete}"
+                : sql.Delete;
+            command.ExecuteNonQuery();
+        }
+        catch (DbException)
+        {
+            // Audit table absent (kindling not yet run, or suppressed): nothing to discard.
+        }
+    }
+
+    private static (string Select, string Delete)? SessionSql(Platform platform) =>
         platform.GetBasePlatform() switch
         {
-            Platform.SqlServer => ReadRows(command,
+            Platform.SqlServer => (
                 "SELECT ObjectType, ObjectName, ActionType FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID ORDER BY Id",
                 "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID"),
-            Platform.PostgreSQL => ReadRows(command,
+            Platform.PostgreSQL => (
                 "SELECT \"ObjectType\", \"ObjectName\", \"ActionType\" FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() ORDER BY \"Id\"",
                 "DELETE FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid()"),
-            Platform.MySQL => ReadRows(command,
+            Platform.MySQL => (
                 "SELECT ObjectType, ObjectName, ActionType FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() ORDER BY Id",
                 "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()"),
             _ => null

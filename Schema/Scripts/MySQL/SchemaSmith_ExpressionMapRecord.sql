@@ -7,13 +7,25 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_ExpressionMapRecord//
 
 CREATE PROCEDURE SchemaSmith_ExpressionMapRecord(
-    IN p_DatabaseName VARCHAR(64),
+    IN p_DatabaseName VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_WhatIf TINYINT(1)
 )
 proc: BEGIN
-    -- An index-only quench never builds the declared working set; a missing temp table means there is nothing
-    -- to record, not a failure. 1146 is "table doesn't exist".
-    DECLARE CONTINUE HANDLER FOR 1146 BEGIN END;
+    DECLARE v_WorkingSetMissing TINYINT DEFAULT 0;
+    DECLARE v_Probe INT;
+
+    -- An index-only quench, or a package with no tables, never builds the declared working set, so there is nothing
+    -- to record. Probed up front rather than by a handler over the whole body: such a handler also swallowed the
+    -- failed PREPARE below, and the EXECUTE after it then failed with "Unknown prepared statement handler".
+    -- 1146 is "table doesn't exist".
+    BEGIN
+        DECLARE CONTINUE HANDLER FOR 1146 SET v_WorkingSetMissing = 1;
+        SELECT COUNT(*) INTO v_Probe FROM _SchemaSmith_Columns;
+        SELECT COUNT(*) INTO v_Probe FROM _SchemaSmith_CheckConstraints;
+    END;
+    IF v_WorkingSetMissing = 1 THEN
+        LEAVE proc;
+    END IF;
 
     -- #242. Records what was applied for every expression-bearing object this run declared: the authored text,
     -- the canonical text the engine reports NOW, and the engine version that decides canonicalisation.
@@ -37,18 +49,18 @@ proc: BEGIN
     -- default, and mixing them is an error rather than a wrong answer.
     SET @v_emRebaselined := (
         SELECT COUNT(*) FROM SchemaSmith_ExpressionMap em
-         WHERE BINARY em.ObjectSchema = BINARY p_DatabaseName
-           AND BINARY em.EngineVersion != BINARY VERSION()
+         WHERE CAST(em.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
+           AND CAST(em.EngineVersion AS BINARY) != CAST(VERSION() AS BINARY)
            AND ((em.ObjectKind = 'COLUMN' AND em.Slot = 'generated'
                  AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
-                              WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY em.ObjectTable
-                                AND BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName) = BINARY em.ObjectName
-                                AND BINARY c.GeneratedExpression = BINARY em.AuthoredText))
+                              WHERE CAST(SchemaSmith_StripBacktickWrapping(c.TableName) AS BINARY) = CAST(em.ObjectTable AS BINARY)
+                                AND CAST(SchemaSmith_StripBacktickWrapping(c.ColumnName) AS BINARY) = CAST(em.ObjectName AS BINARY)
+                                AND CAST(c.GeneratedExpression AS BINARY) = CAST(em.AuthoredText AS BINARY)))
              OR (em.ObjectKind = 'CHECK' AND em.Slot = 'expression'
                  AND EXISTS (SELECT 1 FROM _SchemaSmith_CheckConstraints k
-                              WHERE BINARY SchemaSmith_StripBacktickWrapping(k.TableName) = BINARY em.ObjectTable
-                                AND BINARY SchemaSmith_StripBacktickWrapping(k.ConstraintName) = BINARY em.ObjectName
-                                AND BINARY k.Expression = BINARY em.AuthoredText))));
+                              WHERE CAST(SchemaSmith_StripBacktickWrapping(k.TableName) AS BINARY) = CAST(em.ObjectTable AS BINARY)
+                                AND CAST(SchemaSmith_StripBacktickWrapping(k.ConstraintName) AS BINARY) = CAST(em.ObjectName AS BINARY)
+                                AND CAST(k.Expression AS BINARY) = CAST(em.AuthoredText AS BINARY)))));
     IF IFNULL(@v_emRebaselined, 0) > 0 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         VALUES (CONNECTION_ID(), CONCAT('  Re-baselined ', @v_emRebaselined,
@@ -64,6 +76,10 @@ proc: BEGIN
     -- around a static reference would not save it. The table is named only inside a string that is PREPAREd,
     -- which is the same shape SchemaSmith_MissingIndexesAndConstraintsQuench uses for the same reason.
     IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
+        -- Names compare through their keys; the schema goes in through user variables (a case-insensitive prefilter,
+        -- then the exact key), so the catalog's own spelling never has to match the configured one.
+        SET @v_emDbCi = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci;
+        SET @v_emDbKey = SchemaSmith_IdentifierKey(p_DatabaseName);
         SET @v_emSql = CONCAT('INSERT INTO SchemaSmith_ExpressionMap
             (ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot, AuthoredText, CanonicalText,
              PlatformName, EngineVersion, CompatLevel, UpdatedUtc)
@@ -77,13 +93,13 @@ proc: BEGIN
                ''MySQL'', VERSION(), NULL, UTC_TIMESTAMP(3)
           FROM _SchemaSmith_CheckConstraints c
           JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            ON BINARY tc.TABLE_SCHEMA = BINARY ''', p_DatabaseName, '''
-           AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-           AND BINARY tc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
+            ON tc.TABLE_SCHEMA = @v_emDbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = @v_emDbKey
+           AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = c.TableKey
+           AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = c.ConstraintKey
            AND tc.CONSTRAINT_TYPE = ''CHECK''
           JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
-            ON BINARY cc.CONSTRAINT_SCHEMA = BINARY ''', p_DatabaseName, '''
-           AND BINARY cc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
+            ON cc.CONSTRAINT_SCHEMA = @v_emDbCi AND SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = @v_emDbKey
+           AND SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) = c.ConstraintKey', SchemaSmith_CheckTableJoin(), '
          WHERE IFNULL(TRIM(c.Expression), '''') != ''''
             ON DUPLICATE KEY UPDATE
                AuthoredText = VALUES(AuthoredText),
@@ -97,6 +113,7 @@ proc: BEGIN
 
     -- Generated columns. Compared with a bare TRIM today, so any expression the engine reformats re-applies
     -- on every deploy -- and this surface had no idempotency coverage at all.
+    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
     INSERT INTO SchemaSmith_ExpressionMap
         (ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot, AuthoredText, CanonicalText,
          PlatformName, EngineVersion, CompatLevel, UpdatedUtc)
@@ -109,10 +126,9 @@ proc: BEGIN
            IFNULL(isc.GENERATION_EXPRESSION, ''),
            'MySQL', VERSION(), NULL, UTC_TIMESTAMP(3)
       FROM _SchemaSmith_Columns c
-      JOIN INFORMATION_SCHEMA.COLUMNS isc
-        ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-       AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-       AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+      JOIN _SchemaSmith_CatColumns isc
+        ON isc.TableKey = c.TableKey
+       AND isc.ColumnKey = c.ColumnKey
      WHERE IFNULL(TRIM(c.GeneratedExpression), '') != ''
         ON DUPLICATE KEY UPDATE
            AuthoredText = VALUES(AuthoredText),

@@ -7,10 +7,10 @@ DROP FUNCTION IF EXISTS `SchemaSmith_EventMatches`;
 DELIMITER //
 
 CREATE FUNCTION `SchemaSmith_EventMatches`(
-    p_Schema VARCHAR(200), p_Name VARCHAR(64),
-    p_ScheduleType VARCHAR(10), p_Interval VARCHAR(64), p_ExecuteAt VARCHAR(64),
-    p_Starts VARCHAR(64), p_Ends VARCHAR(64), p_Status VARCHAR(20),
-    p_Preserve TINYINT, p_Comment TEXT, p_Definition LONGTEXT
+    p_Schema VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_ScheduleType VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Interval VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_ExecuteAt VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Starts VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Ends VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Status VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_Preserve TINYINT, p_Comment TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Definition LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 RETURNS TINYINT
 NOT DETERMINISTIC
@@ -32,15 +32,15 @@ BEGIN
   --   interval      catalog INTERVAL_VALUE + INTERVAL_FIELD, separate vs one string, "1 DAY"
   --   EVENT_TYPE    catalog 'RECURRING' / 'ONE TIME'                  vs DDL EVERY / AT
   -- Comparing either side raw would report a difference on every deploy and rebuild the event forever.
-  DECLARE v_type VARCHAR(20);
-  DECLARE v_interval VARCHAR(64);
-  DECLARE v_at VARCHAR(64);
-  DECLARE v_starts VARCHAR(64);
-  DECLARE v_ends VARCHAR(64);
-  DECLARE v_status VARCHAR(20);
+  DECLARE v_type VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_interval VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_at VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_starts VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_ends VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_status VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
   DECLARE v_preserve TINYINT;
-  DECLARE v_comment TEXT;
-  DECLARE v_def LONGTEXT;
+  DECLARE v_comment TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_def LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
   SELECT CASE WHEN EVENT_TYPE = 'ONE TIME' THEN 'AT' ELSE 'EVERY' END,
          CASE WHEN INTERVAL_VALUE IS NULL THEN NULL
@@ -98,11 +98,13 @@ BEGIN
 
   IF UPPER(COALESCE(p_Status, 'ENABLE')) <> v_status THEN RETURN 0; END IF;
   IF COALESCE(p_Preserve, 0) <> v_preserve THEN RETURN 0; END IF;
-  IF COALESCE(p_Comment, '') <> COALESCE(v_comment, '') THEN RETURN 0; END IF;
+  -- The comment and body are the user's text, so they compare byte for byte: a change only in case or accent is a
+  -- change, whatever the database's collation.
+  IF CAST(COALESCE(p_Comment, '') AS BINARY) <> CAST(COALESCE(v_comment, '') AS BINARY) THEN RETURN 0; END IF;
 
   -- The body is compared with whitespace collapsed at the ends only. The server stores the body
   -- essentially verbatim, so anything more aggressive risks calling two genuinely different bodies equal.
-  IF TRIM(COALESCE(p_Definition, '')) <> TRIM(COALESCE(v_def, '')) THEN RETURN 0; END IF;
+  IF CAST(TRIM(COALESCE(p_Definition, '')) AS BINARY) <> CAST(TRIM(COALESCE(v_def, '')) AS BINARY) THEN RETURN 0; END IF;
 
   RETURN 1;
 END //

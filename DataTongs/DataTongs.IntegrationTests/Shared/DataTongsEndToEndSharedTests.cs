@@ -298,19 +298,30 @@ public abstract class DataTongsEndToEndSharedTests
                 CREATE TABLE `{_testDb}`.`{tableName}` (
                     id INT PRIMARY KEY,
                     price DECIMAL(10,4) NOT NULL,
-                    quantity DECIMAL(15,6)
+                    quantity DECIMAL(15,6),
+                    wide DECIMAL(38,18)
                 )";
             command.ExecuteNonQuery();
 
             command.CommandText = $@"
                 INSERT INTO `{_testDb}`.`{tableName}` VALUES
-                (1, 123.4567, 9999.123456),
-                (2, 0.0001, 0.000001)";
+                (1, 123.4567, 9999.123456, 12345678901234567890.123456789012345678),
+                (2, 0.0001, 0.000001, NULL)";
             command.ExecuteNonQuery();
 
             // Extract
             var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, tableName);
             var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, tableName, "`id`", null);
+
+            // The file as written must carry the digits for a plain JSON_TABLE read, which is all a tokenized script does.
+            command.CommandText = "SELECT CAST(d AS CHAR) FROM JSON_TABLE(@p, '$[*]' COLUMNS (id INT PATH '$.id', d DECIMAL(38,18) PATH '$.wide')) jt WHERE id = 1";
+            var payload = command.CreateParameter();
+            payload.ParameterName = "@p";
+            payload.Value = json;
+            command.Parameters.Add(payload);
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("12345678901234567890.123456789012345678"),
+                "the extracted file must carry a wide DECIMAL losslessly: " + json);
+            command.Parameters.Clear();
 
             // Clear and re-insert via script (Insert: mergeUpdate=false, mergeDelete=false)
             command.CommandText = $"DELETE FROM `{_testDb}`.`{tableName}`";
@@ -333,6 +344,11 @@ public abstract class DataTongsEndToEndSharedTests
             Assert.That(reader.Read(), Is.True);
             Assert.That(reader.GetDecimal(0), Is.EqualTo(123.4567m));
             Assert.That(reader.GetDecimal(1), Is.EqualTo(9999.123456m));
+            reader.Close();
+
+            // More digits than a double carries: MySQL's JSON parser rounds a JSON number to one.
+            command.CommandText = $"SELECT CAST(wide AS CHAR) FROM `{_testDb}`.`{tableName}` WHERE id = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("12345678901234567890.123456789012345678"));
         }
         finally
         {
@@ -434,6 +450,236 @@ public abstract class DataTongsEndToEndSharedTests
         finally
         {
             command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // Values JSON_TABLE used to read through the wrong type, each lost without an error: an unsigned integer past the
+    // signed range (NULL), text and blobs over 64 KB (NULL, or truncated), a geometry collection (NULL -- MySQL 8 calls
+    // it geomcollection), and BIT, whose digits' characters MariaDB stored. Delivered values are compared with the source.
+    [Test]
+    public void EndToEnd_RoundTrip_PreservesUnsignedLongTextBlobGeometryCollectionAndBit()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_types_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_types_t_{Guid.NewGuid():N}".Substring(0, 30);
+        const string columns = "id INT PRIMARY KEY, u BIGINT UNSIGNED NULL, big LONGTEXT NULL, bl LONGBLOB NULL, "
+                               + "gc GEOMETRYCOLLECTION NULL, b8 BIT(8) NULL, b1 BIT(1) NULL";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` ({columns})";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` ({columns})";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` VALUES (1, 18446744073709551615, REPEAT('x', 100000), "
+                                  + "REPEAT('y', 70000), ST_GeomFromText('GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))'), b'00000101', b'0')";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT CONCAT_WS(',',
+                   IF(d.u <=> s.u, NULL, 'u'), IF(d.big <=> s.big, NULL, 'big'), IF(d.bl <=> s.bl, NULL, 'bl'),
+                   IF(ST_AsText(d.gc) <=> ST_AsText(s.gc), NULL, 'gc'), IF(d.b8 <=> s.b8, NULL, 'b8'), IF(d.b1 <=> s.b1, NULL, 'b1'))
+                FROM `{_testDb}`.`{sourceTable}` s LEFT JOIN `{_testDb}`.`{targetTable}` d ON d.id = s.id";
+            Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty,
+                "every column must arrive equal to its source; the list names the ones that did not");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // MariaDB's JSON_OBJECT writes a ZEROFILL number with its padding (MDEV-30962): {"n": 00007}, which is not JSON, so
+    // DataTongs wrote a file delivery could not parse. Extracted and delivered here; the value must arrive as 7.
+    [Test]
+    public void EndToEnd_RoundTrip_ZeroFillColumn()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_zf_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_zf_t_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` (id INT PRIMARY KEY, n INT(5) UNSIGNED ZEROFILL NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` (id INT PRIMARY KEY, n INT(5) UNSIGNED ZEROFILL NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` VALUES (1, 7)";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
+            Assert.DoesNotThrow(() => JsonText.ParseArray(json), "the extracted file must be valid JSON: " + json);
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT n + 0 FROM `{_testDb}`.`{targetTable}` WHERE id = 1";
+            Assert.That(Convert.ToInt64(command.ExecuteScalar()), Is.EqualTo(7));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // MariaDB's JSON_ARRAYAGG is cut off at group_concat_max_len (1 MiB by default) with only a warning, so a table whose
+    // extracted JSON passed 1 MiB was written unterminated and delivery failed parsing it. 1,200 rows of 1,000 characters.
+    [Test]
+    public void EndToEnd_RoundTrip_ExtractionOverOneMebibyte()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_big_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_big_t_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` (id INT PRIMARY KEY, v TEXT NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` (id INT PRIMARY KEY, v TEXT NULL)";
+            command.ExecuteNonQuery();
+            const string digits = "SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 "
+                                  + "UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9";
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` (id, v) SELECT h.n * 100 + t.n * 10 + o.n, REPEAT('x', 1000) "
+                                  + $"FROM ({digits} UNION ALL SELECT 10 UNION ALL SELECT 11) h CROSS JOIN ({digits}) t CROSS JOIN ({digits}) o";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
+            Assert.That(json.Length, Is.GreaterThan(1048576), "the extract must pass 1 MiB for this to test anything");
+            Assert.That(JsonText.ParseArray(json).Count, Is.EqualTo(1200), "the extracted file must be complete, valid JSON");
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+            command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{targetTable}` WHERE CHAR_LENGTH(v) = 1000";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(1200));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // Fractional seconds were formatted away ('%s' with no '%f'): DATETIME(6) 10:11:12.123456 extracted as 10:11:12.
+    // A whole-second column must still extract without a fraction, so existing files do not change.
+    [Test]
+    public void EndToEnd_RoundTrip_FractionalSeconds()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_frac_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_frac_t_{Guid.NewGuid():N}".Substring(0, 30);
+        const string columns = "id INT PRIMARY KEY, dt6 DATETIME(6) NULL, ts3 TIMESTAMP(3) NULL, t6 TIME(6) NULL, dt0 DATETIME NULL";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` ({columns})";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` ({columns})";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` VALUES "
+                                  + "(1, '2024-03-05 10:11:12.123456', '2024-03-05 10:11:12.456', '01:02:03.456789', '2024-03-05 10:11:12')";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
+            Assert.That(json, Does.Contain("\"2024-03-05T10:11:12\"").And.Contain("10:11:12.123456"),
+                "a whole-second column keeps its old form; a fractional one carries its fraction: " + json);
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT CONCAT_WS(',', IF(d.dt6 <=> s.dt6, NULL, 'dt6'), IF(d.ts3 <=> s.ts3, NULL, 'ts3'),
+                   IF(d.t6 <=> s.t6, NULL, 't6'), IF(d.dt0 <=> s.dt0, NULL, 'dt0'))
+                FROM `{_testDb}`.`{sourceTable}` s LEFT JOIN `{_testDb}`.`{targetTable}` d ON d.id = s.id";
+            Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty, "the list names the columns that did not arrive equal");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // A configured SelectColumns used to stand each selected column in as plain varchar, so a selected binary column
+    // was written raw instead of base64 and a DATETIME(6) lost its fraction. It now narrows the real column list.
+    [Test]
+    public void EndToEnd_SelectColumns_KeepTheirTypes()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_sel_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_sel_t_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` (id INT PRIMARY KEY, bl VARBINARY(16) NULL, dt6 DATETIME(6) NULL, other INT NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` (id INT PRIMARY KEY, bl VARBINARY(16) NULL, dt6 DATETIME(6) NULL, other INT NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` VALUES (1, 0xDEADBEEF00, '2024-03-05 10:11:12.123456', 42)";
+            command.ExecuteNonQuery();
+
+            var json = _dataTongs.GetTableDataJsonMySql(command, _testDb, sourceTable, "`id`", null, "`id`, `bl`, `dt6`");
+            Assert.That(json, Does.Not.Contain("other"), "a column that was not selected must not be extracted: " + json);
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT CONCAT_WS(',', IF(d.bl <=> s.bl, NULL, 'bl'), IF(d.dt6 <=> s.dt6, NULL, 'dt6'))
+                FROM `{_testDb}`.`{sourceTable}` s LEFT JOIN `{_testDb}`.`{targetTable}` d ON d.id = s.id";
+            Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty, "the list names the selected columns that did not arrive equal");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
             command.ExecuteNonQuery();
         }
     }

@@ -84,9 +84,12 @@ public class ReadOnlyTargetKindleTests
         using var master = OpenMaster();
         try
         {
+            // An idle pooled connection to the database makes ROLLBACK IMMEDIATE wait ~3s to kill it.
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
             Exec(master, $"ALTER DATABASE [{db}] SET READ_WRITE WITH ROLLBACK IMMEDIATE");
-            Exec(master, $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec(master, $"DROP DATABASE IF EXISTS [{db}]");
+            using var cmd = master.CreateCommand();
+            cmd.CommandTimeout = 300;
+            TestDatabaseDrop.Drop(cmd, db);
         }
         catch
         {
@@ -183,7 +186,7 @@ public class ReadOnlyTargetKindleTests
             {
                 ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, allowReadOnlyTarget: true);
 
-                cmd.CommandText = "SELECT COUNT(*) FROM sys.objects WHERE name = 'GenerateTableJson' AND type = 'P'";
+                cmd.CommandText = "SELECT COUNT(*) FROM sys.objects WHERE name = 'GenerateTableJSON' AND type = 'P'";
                 Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1),
                     "a writable target must still be kindled -- allowReadOnlyTarget relaxes what happens "
                     + "on a read-only target, it does not turn kindling off");
@@ -192,8 +195,9 @@ public class ReadOnlyTargetKindleTests
         finally
         {
             using var master = OpenMaster();
-            Exec(master, $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec(master, $"DROP DATABASE IF EXISTS [{db}]");
+            using var cmd = master.CreateCommand();
+            cmd.CommandTimeout = 300;
+            TestDatabaseDrop.Drop(cmd, db);
         }
     }
 }

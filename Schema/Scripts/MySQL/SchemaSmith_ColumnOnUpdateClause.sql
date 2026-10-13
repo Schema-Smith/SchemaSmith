@@ -7,13 +7,13 @@ DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_ColumnOnUpdateClause//
 
 CREATE FUNCTION SchemaSmith_ColumnOnUpdateClause(
-    p_Extra TEXT
+    p_Extra TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ) RETURNS VARCHAR(30) CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
 DETERMINISTIC
 NO SQL
 BEGIN
     DECLARE v_Pos INT;
-    DECLARE v_Rest VARCHAR(64);
+    DECLARE v_Rest VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_End INT;
 
     IF p_Extra IS NULL THEN

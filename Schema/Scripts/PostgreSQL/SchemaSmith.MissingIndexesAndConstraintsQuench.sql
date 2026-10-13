@@ -128,13 +128,18 @@ BEGIN
                          THEN 'ALTER TABLE "' || ti."TableSchema" || '"."' || ti."TableName" || '" ADD CONSTRAINT "' || ti."Name" || '" ' ||
                               CASE WHEN ti."PrimaryKey" THEN 'PRIMARY KEY ' ELSE 'UNIQUE ' || CASE WHEN ti."NullsNotDistinct" THEN 'NULLS NOT DISTINCT ' ELSE '' END END ||
                               '(' || "SchemaSmith"."QuoteIndexColumnList"(ti."IndexColumns") || ')' ||
+                              -- INCLUDE and the storage parameters, as the CREATE INDEX branch below emits them.
+                              -- Left out, the deployed constraint never matched its declaration, and every deploy
+                              -- dropped it CASCADE, taking its inbound foreign keys, and added it back (PG-031).
+                              CASE WHEN NULLIF(ti."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(ti."IncludeColumns") || ')' ELSE '' END ||
                               -- Positive gate on the AMs verified to accept fillfactor, not a deny-list of ones
                               -- that don't: an extension AM (e.g. pgvector's hnsw/ivfflat) can't be enumerated in
                               -- advance, and a deny-list defaults an unknown AM into the clause, breaking CREATE
                               -- with PostgreSQL's own "unrecognized parameter" error. An allow-list defaults an
                               -- unknown AM OUT of the clause instead — no fillfactor tuning, but no hard failure.
                               CASE WHEN COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash')
-                                   THEN ' WITH (fillfactor = ' || ti."FillFactor" || ')'
+                                   THEN ' WITH (fillfactor = ' || ti."FillFactor" || CASE WHEN COALESCE(ti."StorageParameters", '') <> '' THEN ', ' || ti."StorageParameters" ELSE '' END || ')'
+                                   WHEN COALESCE(ti."StorageParameters", '') <> '' THEN ' WITH (' || ti."StorageParameters" || ')'
                                    ELSE '' END ||
                               -- USING INDEX TABLESPACE precedes DEFERRABLE per the table-constraint grammar
                               -- (verified live on 16). Emitted only when declared: unset means placement is
@@ -174,7 +179,12 @@ BEGIN
                                         AND tc.relname = ti."TableName"
                                         AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                         JOIN pg_class i ON i.oid = idx.indexrelid
-                        WHERE i.relname = ti."Name");
+                        WHERE i.relname = ti."Name")
+       -- Under WhatIf a modified index was not really dropped, but the real run re-creates it.
+       OR (p_WhatIf AND EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                                 WHERE a."SessionId" = pg_backend_pid() AND a."ActionType" = 'wouldDrop'
+                                   AND a."ObjectType" IN ('index', 'constraint')
+                                   AND a."ObjectName" = ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name"));
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
   -- #363: WhatIf twin of the embedded 'index'/'constraint' 'created' audit above; same predicate.
@@ -190,7 +200,12 @@ BEGIN
                                             AND tc.relname = ti."TableName"
                                             AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                             JOIN pg_class i ON i.oid = idx.indexrelid
-                            WHERE i.relname = ti."Name");
+                            WHERE i.relname = ti."Name")
+           -- Under WhatIf a modified index was not really dropped, but the real run re-creates it.
+           OR (p_WhatIf AND EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                                     WHERE a."SessionId" = pg_backend_pid() AND a."ActionType" = 'wouldDrop'
+                                       AND a."ObjectType" IN ('index', 'constraint')
+                                       AND a."ObjectName" = ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name"));
   END IF;
 
   RAISE NOTICE 'Fixup Table Cluster';
@@ -238,7 +253,7 @@ BEGIN
 
   RAISE NOTICE 'Add Missing Statistics';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing statistics ' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || CASE WHEN COALESCE(ts."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ts."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
-                    'CREATE STATISTICS "' || ts."TableSchema" || '"."' || ts."Name" || '"' ||
+                    'CREATE STATISTICS "' || COALESCE(ts."StatisticsSchema", ts."TableSchema") || '"."' || ts."Name" || '"' ||
                     -- EXPRESSIONS is not a kind CREATE STATISTICS accepts; an extracted package carries it.
                     "SchemaSmith"."StatisticsKindClause"(ts."Kind") ||
                     ' ON ' || "SchemaSmith"."QuoteIndexColumnList"(ts."StatisticsColumns") ||

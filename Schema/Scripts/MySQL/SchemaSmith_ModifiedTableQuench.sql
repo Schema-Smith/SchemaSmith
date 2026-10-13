@@ -13,8 +13,8 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_ModifiedTableQuench//
 
 CREATE PROCEDURE SchemaSmith_ModifiedTableQuench(
-    IN p_ProductName VARCHAR(100),
-    IN p_DatabaseName VARCHAR(128),
+    IN p_ProductName VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_WhatIf TINYINT,
     IN p_DropTablesRemovedFromProduct TINYINT,
     IN p_DropColumnsRemovedFromProduct TINYINT,
@@ -43,14 +43,16 @@ BEGIN
     -- 8. ProductOwnership updates
     -- 9. Drop tables removed from product (if enabled)
 
-    DECLARE v_ConflictingTable VARCHAR(128);
-    DECLARE v_ConflictingOwner VARCHAR(100);
-    -- The catalog is utf8mb3. Comparing a bare catalog column against a value in the SAME charset lets
-    -- MariaDB push the schema filter down (EXPLAIN: "Scanned 1 database" rather than "Scanned all
-    -- databases"); wrapping the column in CONVERT(... USING utf8mb4) defeated it and cost ~1.8ms per
-    -- database ON THE SERVER, on every deploy. A bare parameter does NOT work -- it carries the
-    -- connection charset -- so the declared local is load-bearing, not decoration.
-    DECLARE v_IsDbName VARCHAR(128) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT p_DatabaseName;
+    DECLARE v_ConflictingTable VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_ConflictingOwner VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    -- TABLES and COLUMNS are read through the keyed snapshots in SchemaSmith_CatalogSnapshot. Other catalog views are
+    -- read directly: v_DbCi is a case-insensitive utf8mb4 prefilter the catalog can serve without a full scan (and
+    -- that never clashes with the catalog's own collation), and the key compare against v_DbKey then decides exactly.
+    -- Inside a correlated subquery, compare stored key columns or a built-in expression, never a stored function of
+    -- the outer row: once the schema holds a few dozen tables the optimizer's plan for such an EXISTS returned no rows,
+    -- and drop-by-absence silently dropped nothing.
+    DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_DatabaseName);
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'BEGIN ModifiedTableQuench');
 
@@ -233,10 +235,10 @@ BEGIN
           FROM _SchemaSmith_Tables t
           LEFT JOIN (SELECT p.TABLE_NAME, p.PARTITION_METHOD, p.PARTITION_EXPRESSION
                        FROM INFORMATION_SCHEMA.PARTITIONS p
-                      WHERE p.TABLE_SCHEMA = v_IsDbName
+                      WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
                         AND p.PARTITION_NAME IS NOT NULL
                         AND p.PARTITION_ORDINAL_POSITION = 1) lp
-            ON CONVERT(lp.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
+            ON SchemaSmith_IdentifierKey(lp.TABLE_NAME) = t.TableKey
          WHERE t.NewTable = 0
            AND t.PartitionMethod IS NOT NULL
            AND (lp.PARTITION_METHOD IS NULL
@@ -247,8 +249,8 @@ BEGIN
                 -- Gated on a declared count so RANGE/LIST (named partitions, no declared count) is untouched.
                 OR (t.PartitionCount IS NOT NULL AND t.PartitionCount > 0
                     AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS pc
-                          WHERE pc.TABLE_SCHEMA = v_IsDbName
-                            AND CONVERT(pc.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
+                          WHERE pc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(pc.TABLE_SCHEMA) = v_DbKey
+                            AND SchemaSmith_IdentifierKey(pc.TABLE_NAME) = t.TableKey
                             AND pc.PARTITION_NAME IS NOT NULL) <> t.PartitionCount));
 
         SET @ss_part_refusals = ROW_COUNT();
@@ -292,6 +294,7 @@ BEGIN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PartitionVerdict;
         CREATE TEMPORARY TABLE _SchemaSmith_PartitionVerdict (
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
+            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
             DeclaredCount INT NOT NULL,
             DeployedCount INT NOT NULL,
             PrefixMismatch VARCHAR(128) DEFAULT NULL,
@@ -299,18 +302,18 @@ BEGIN
             DeployedEndsMaxValue TINYINT NOT NULL DEFAULT 0
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-        INSERT INTO _SchemaSmith_PartitionVerdict (TableName, DeclaredCount, DeployedCount, DeployedEndsMaxValue)
-        SELECT t.TableName,
+        INSERT INTO _SchemaSmith_PartitionVerdict (TableName, TableKey, DeclaredCount, DeployedCount, DeployedEndsMaxValue)
+        SELECT t.TableName, t.TableKey,
                (SELECT COUNT(*) FROM _SchemaSmith_Partitions dp
                  WHERE CONVERT(dp.TableName USING utf8mb4) = CONVERT(t.TableName USING utf8mb4)),
                (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS pc
-                 WHERE pc.TABLE_SCHEMA = v_IsDbName
-                   AND CONVERT(pc.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
+                 WHERE pc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(pc.TABLE_SCHEMA) = v_DbKey
+                   AND SchemaSmith_IdentifierKey(pc.TABLE_NAME) = t.TableKey
                    AND pc.PARTITION_NAME IS NOT NULL),
                COALESCE((SELECT MAX(UPPER(TRIM(COALESCE(pm.PARTITION_DESCRIPTION, ''))) = 'MAXVALUE')
                            FROM INFORMATION_SCHEMA.PARTITIONS pm
-                          WHERE pm.TABLE_SCHEMA = v_IsDbName
-                            AND CONVERT(pm.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4)
+                          WHERE pm.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(pm.TABLE_SCHEMA) = v_DbKey
+                            AND SchemaSmith_IdentifierKey(pm.TABLE_NAME) = t.TableKey
                             AND pm.PARTITION_NAME IS NOT NULL), 0)
           FROM _SchemaSmith_Tables t
          WHERE t.NewTable = 0
@@ -325,8 +328,8 @@ BEGIN
                SELECT dp.PartitionName
                  FROM _SchemaSmith_Partitions dp
                  JOIN INFORMATION_SCHEMA.PARTITIONS lp
-                   ON lp.TABLE_SCHEMA = v_IsDbName
-                  AND CONVERT(lp.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(dp.TableName) USING utf8mb4)
+                   ON lp.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(lp.TABLE_SCHEMA) = v_DbKey
+                  AND SchemaSmith_IdentifierKey(lp.TABLE_NAME) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(dp.TableName))
                   AND lp.PARTITION_NAME IS NOT NULL
                   AND lp.PARTITION_ORDINAL_POSITION = dp.Ordinal + 1
                 WHERE CONVERT(dp.TableName USING utf8mb4) = CONVERT(v.TableName USING utf8mb4)
@@ -344,8 +347,8 @@ BEGIN
            SET v.RemovedName = (
                SELECT lp.PARTITION_NAME
                  FROM INFORMATION_SCHEMA.PARTITIONS lp
-                WHERE lp.TABLE_SCHEMA = v_IsDbName
-                  AND CONVERT(lp.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(v.TableName) USING utf8mb4)
+                WHERE lp.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(lp.TABLE_SCHEMA) = v_DbKey
+                  AND SchemaSmith_IdentifierKey(lp.TABLE_NAME) = v.TableKey
                   AND lp.PARTITION_NAME IS NOT NULL
                   AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Partitions dp
                                    WHERE CONVERT(dp.TableName USING utf8mb4) = CONVERT(v.TableName USING utf8mb4)
@@ -487,9 +490,9 @@ BEGIN
 
         BEGIN
             DECLARE v_TtsDone INT DEFAULT FALSE;
-            DECLARE v_TtsTableName VARCHAR(128);
-            DECLARE v_TtsDeclared VARCHAR(64);
-            DECLARE v_TtsDeployed VARCHAR(64);
+            DECLARE v_TtsTableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DECLARE v_TtsDeclared VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DECLARE v_TtsDeployed VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_TablespaceCandidates CURSOR FOR
                 SELECT t.TableName, t.Tablespace
                 FROM _SchemaSmith_Tables t
@@ -510,7 +513,8 @@ BEGIN
                 SET v_TtsDeployed = NULL;
                 CALL SchemaSmith_TableTablespace(p_DatabaseName, SchemaSmith_StripBacktickWrapping(v_TtsTableName), v_TtsDeployed);
 
-                IF COALESCE(v_TtsDeployed, '') <> v_TtsDeclared THEN
+                -- Tablespace names are case-sensitive, so one spelled differently in case is a different tablespace.
+                IF CAST(COALESCE(v_TtsDeployed, '') AS BINARY) <> CAST(v_TtsDeclared AS BINARY) THEN
                     -- Log every offending table (not just the one named in the SIGNAL below), same shape
                     -- as the partitioning guard above.
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(),
@@ -573,9 +577,9 @@ BEGIN
 
         BEGIN
             DECLARE v_TddDone INT DEFAULT FALSE;
-            DECLARE v_TddTableName VARCHAR(128);
-            DECLARE v_TddDeclared VARCHAR(512);
-            DECLARE v_TddDeployed VARCHAR(512);
+            DECLARE v_TddTableName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DECLARE v_TddDeclared VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DECLARE v_TddDeployed VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_DataDirectoryCandidates CURSOR FOR
                 SELECT t.TableName, t.DataDirectory
                 FROM _SchemaSmith_Tables t
@@ -664,22 +668,21 @@ BEGIN
     -- table (ER_CANT_REOPEN_TABLE 1137); the second reference reads the copy.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTables;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingTables (
-        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-        PRIMARY KEY (TableName)
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     -- No TABLE_TYPE filter: the original per-row checks read INFORMATION_SCHEMA.TABLES unfiltered (which
     -- includes views), so the snapshot must too, to stay behaviour-identical.
-    INSERT INTO _SchemaSmith_ExistingTables (TableName)
-    SELECT CONVERT(ist.TABLE_NAME USING utf8mb4)
-    FROM INFORMATION_SCHEMA.TABLES ist
-    WHERE BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName;
+    CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
+    INSERT IGNORE INTO _SchemaSmith_ExistingTables (TableKey)
+    SELECT TableKey FROM _SchemaSmith_CatTables;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTablesN;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingTablesN (
-        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-        PRIMARY KEY (TableName)
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    INSERT INTO _SchemaSmith_ExistingTablesN (TableName) SELECT TableName FROM _SchemaSmith_ExistingTables;
+    INSERT INTO _SchemaSmith_ExistingTablesN (TableKey) SELECT TableKey FROM _SchemaSmith_ExistingTables;
 
     -- =======================
     -- STEP 1: RECONCILE OWNERSHIP FOR RENAMED TABLES
@@ -712,11 +715,11 @@ BEGIN
           AND t.NewTable = 0
           AND EXISTS (
               SELECT 1 FROM _SchemaSmith_ExistingTables ist
-              WHERE BINARY ist.TableName = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+              WHERE ist.TableKey = t.TableKey
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_ExistingTablesN ist
-              WHERE BINARY ist.TableName = BINARY SchemaSmith_StripBacktickWrapping(t.OldName)
+              WHERE ist.TableKey = t.OldNameKey
           );
 
         -- Update ProductOwnership for the renamed tables (set-based join, one UPDATE for all pairs).
@@ -813,14 +816,15 @@ BEGIN
     -- MissingTableAndColumnQuench before this procedure starts) and columns that exist only live
     -- (by-absence drops, metadata-only here) are NOT counted, and neither is index / constraint churn:
     -- counting work a rebuild does not save would fire rebuilds that cost data movement and buy nothing.
+    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+    CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
     INSERT INTO _SchemaSmith_RebuildFacts (TableName, ModificationPasses)
     SELECT c.TableName, COUNT(*)
     FROM _SchemaSmith_Columns c
     INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-    INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-        ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-        AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-        AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+    INNER JOIN _SchemaSmith_CatColumns isc
+        ON isc.TableKey = c.TableKey
+        AND isc.ColumnKey = c.ColumnKey
     WHERE t.NewTable = 0
       AND c.NewColumn = 0
       AND (
@@ -833,20 +837,22 @@ BEGIN
           -- STEP 3's set: any declared attribute differs from the live one.
           OR CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                     OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                  THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                  THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                   ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
           OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
           OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
           OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-              AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                  SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+              AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
               AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                   c.DefaultValue, isc.DATA_TYPE) = 0)
           OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
-          OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+          OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+          OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+              AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+              != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
           OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-              AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+              AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
               -- #242: the texts differ, but they always differ once the engine has reformatted the expression.
               -- Ask what was actually applied before calling it a change.
               AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -855,15 +861,14 @@ BEGIN
           OR ((isc.EXTRA LIKE '%auto_increment%') <> (c.IsAutoIncrement = 1))
           OR (SchemaSmith_SupportsInvisibleColumn() = 1 AND (isc.EXTRA LIKE '%INVISIBLE%') <> (c.IsInvisible = 1))
           OR (SchemaSmith_SupportsSystemVersioning() = 1
-              AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES vt
-                           WHERE vt.TABLE_SCHEMA = p_DatabaseName
-                             AND vt.TABLE_NAME = SchemaSmith_StripBacktickWrapping(c.TableName)
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_CatTables vt
+                           WHERE vt.TableKey = c.TableKey
                              AND vt.TABLE_TYPE = 'SYSTEM VERSIONED')
               AND (isc.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%') <> (c.IsWithoutSystemVersioning = 1))
           OR (SchemaSmith_SupportsColumnSrid() = 1
               AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
-          OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
-          OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+          OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
+          OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
       )
     GROUP BY c.TableName;
 
@@ -871,16 +876,16 @@ BEGIN
     -- the package: a rebuild delivers that removal as part of building the replacement from the declared
     -- definition. Recorded separately from the count because it must NOT move the threshold -- a rebuild
     -- saves nothing on a metadata-only DROP COLUMN.
+    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
     INSERT INTO _SchemaSmith_RebuildFacts (TableName, HasColumnDrop)
     SELECT DISTINCT t.TableName, 1
     FROM _SchemaSmith_Tables t
-    INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-        ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-        AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+    INNER JOIN _SchemaSmith_CatColumns isc
+        ON isc.TableKey = t.TableKey
     WHERE t.NewTable = 0
       AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
                         WHERE c.TableName = t.TableName
-                          AND BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName) = BINARY isc.COLUMN_NAME)
+                          AND c.ColumnKey = isc.ColumnKey)
     ON DUPLICATE KEY UPDATE HasColumnDrop = 1;
 
     -- ================================================================================================
@@ -922,22 +927,24 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildColumnOrder;
     CREATE TEMPORARY TABLE _SchemaSmith_RebuildColumnOrder (
+        RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         DeclaredPos INT NOT NULL,
         DeclaredSeq INT NOT NULL,
         LivePos INT NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
     INSERT INTO _SchemaSmith_RebuildColumnOrder (TableName, DeclaredPos, DeclaredSeq, LivePos)
     SELECT c.TableName, c.OrdinalPosition, c.RowId, isc.ORDINAL_POSITION
     FROM _SchemaSmith_Columns c
-    INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-        ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-        AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-        AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName);
+    INNER JOIN _SchemaSmith_CatColumns isc
+        ON isc.TableKey = c.TableKey
+        AND isc.ColumnKey = c.ColumnKey;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildColumnOrderPeer;
     CREATE TEMPORARY TABLE _SchemaSmith_RebuildColumnOrderPeer (
+        RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         DeclaredPos INT NOT NULL,
         DeclaredSeq INT NOT NULL,
@@ -1070,7 +1077,7 @@ BEGIN
     IF p_WhatIf = 0 THEN
         BEGIN
             DECLARE v_ColCollFkDone INT DEFAULT FALSE;
-            DECLARE v_ColCollFkSql TEXT;
+            DECLARE v_ColCollFkSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_ColCollFks CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci,
                               '`.`', TableName, '` DROP FOREIGN KEY `', ConstraintName, '`')
@@ -1085,34 +1092,34 @@ BEGIN
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
             -- FKs declared ON a column whose collation is changing.
+            CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
             INSERT IGNORE INTO _SchemaSmith_ColumnCollationFKsToDrop (TableName, ConstraintName)
             SELECT DISTINCT CONVERT(kcu.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
                             CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
               FROM _SchemaSmith_Columns c
-              INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-                  ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-                  AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-                  AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+              INNER JOIN _SchemaSmith_CatColumns isc
+                  ON isc.TableKey = c.TableKey
+                  AND isc.ColumnKey = c.ColumnKey
               INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON kcu.TABLE_SCHEMA = v_IsDbName
-                  AND CONVERT(kcu.TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4)
-                  AND CONVERT(kcu.COLUMN_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4)
+                  ON kcu.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA) = v_DbKey
+                  AND SchemaSmith_IdentifierKey(kcu.TABLE_NAME) = c.TableKey
+                  AND SchemaSmith_NameKeyCI(kcu.COLUMN_NAME) = c.ColumnKey
                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
              WHERE c.NewColumn = 0 AND c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation;
 
             -- And FKs POINTING AT one. Separate INSERT for the same optimizer reason as the table-level twin.
+            CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
             INSERT IGNORE INTO _SchemaSmith_ColumnCollationFKsToDrop (TableName, ConstraintName)
             SELECT DISTINCT CONVERT(kcu.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
                             CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
               FROM _SchemaSmith_Columns c
-              INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-                  ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-                  AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-                  AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+              INNER JOIN _SchemaSmith_CatColumns isc
+                  ON isc.TableKey = c.TableKey
+                  AND isc.ColumnKey = c.ColumnKey
               INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                  ON kcu.TABLE_SCHEMA = v_IsDbName
-                  AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4)
-                  AND CONVERT(kcu.REFERENCED_COLUMN_NAME USING utf8mb4) = CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4)
+                  ON kcu.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA) = v_DbKey
+                  AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = c.TableKey
+                  AND SchemaSmith_NameKeyCI(kcu.REFERENCED_COLUMN_NAME) = c.ColumnKey
              WHERE c.NewColumn = 0 AND c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation;
 
             OPEN cur_ColCollFks;
@@ -1136,15 +1143,16 @@ BEGIN
     -- doesn't support that via ALTER MODIFY - those are handled in Step 3.5
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Modify columns');
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' MODIFY COLUMN ', c.ColumnScript)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 0
           -- Exclude columns where generated status is changing (regular->generated or generated->regular)
@@ -1170,7 +1178,7 @@ BEGIN
               -- synonym normalization would wrongly fold a real value-case change.
               CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                      != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
@@ -1178,18 +1186,20 @@ BEGIN
               -- Default value changes (strip outer single quotes from JSON default for comparison,
               -- since GenerateTableJson wraps string/enum defaults in quotes for DDL but INFORMATION_SCHEMA stores raw values)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               -- Collation changes (only when JSON specifies a collation)
-              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+              OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                  AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                  != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
               -- Generated expression changes (both sides are generated, but expression differs)
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
                   -- actually applied before calling it a change.
                   AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -1204,9 +1214,8 @@ BEGIN
               -- and one whose Invisible flag was removed (invisible -> visible) both trip this <> compare.
               OR (SchemaSmith_SupportsInvisibleColumn() = 1 AND (isc.EXTRA LIKE '%INVISIBLE%') <> (c.IsInvisible = 1))
           OR (SchemaSmith_SupportsSystemVersioning() = 1
-              AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES vt
-                           WHERE vt.TABLE_SCHEMA = p_DatabaseName
-                             AND vt.TABLE_NAME = SchemaSmith_StripBacktickWrapping(c.TableName)
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_CatTables vt
+                           WHERE vt.TableKey = c.TableKey
                              AND vt.TABLE_TYPE = 'SYSTEM VERSIONED')
               AND (isc.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%') <> (c.IsWithoutSystemVersioning = 1))
               -- Column SRID differs. Gated behind SchemaSmith_SupportsColumnSrid() (MySQL 8.0.3+; MariaDB
@@ -1218,22 +1227,23 @@ BEGIN
                   AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
               -- Comment differs (symmetric: covers added, changed, and cleared -- a declared NULL
               -- comment against a live comment counts as a difference the same as a value change).
-              OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
+              OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
               -- ON UPDATE CURRENT_TIMESTAMP[(n)] differs (symmetric: added, changed -- e.g. a precision
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
-              OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+              OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           );
 
         -- #363: WhatIf twin of the ELSE-branch 'column'/'modified' audit; same source/predicate, wouldModify.
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT CONNECTION_ID(), 'column', CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName)), 'wouldModify'
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 0
           AND NOT (
@@ -1250,22 +1260,24 @@ BEGIN
           AND (
               CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                      != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
-              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+              OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                  AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                  != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
                   -- actually applied before calling it a change.
                   AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -1279,9 +1291,8 @@ BEGIN
               -- and one whose Invisible flag was removed (invisible -> visible) both trip this <> compare.
               OR (SchemaSmith_SupportsInvisibleColumn() = 1 AND (isc.EXTRA LIKE '%INVISIBLE%') <> (c.IsInvisible = 1))
           OR (SchemaSmith_SupportsSystemVersioning() = 1
-              AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES vt
-                           WHERE vt.TABLE_SCHEMA = p_DatabaseName
-                             AND vt.TABLE_NAME = SchemaSmith_StripBacktickWrapping(c.TableName)
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_CatTables vt
+                           WHERE vt.TableKey = c.TableKey
                              AND vt.TABLE_TYPE = 'SYSTEM VERSIONED')
               AND (isc.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%') <> (c.IsWithoutSystemVersioning = 1))
               -- Column SRID differs. Gated behind SchemaSmith_SupportsColumnSrid() (MySQL 8.0.3+; MariaDB
@@ -1293,11 +1304,11 @@ BEGIN
                   AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
               -- Comment differs (symmetric: covers added, changed, and cleared -- a declared NULL
               -- comment against a live comment counts as a difference the same as a value change).
-              OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
+              OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
               -- ON UPDATE CURRENT_TIMESTAMP[(n)] differs (symmetric: added, changed -- e.g. a precision
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
-              OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+              OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           );
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Modify columns');
@@ -1305,15 +1316,16 @@ BEGIN
         -- Per-column progress messages, set-based (preserves the per-column "ALTER TABLE ...
         -- MODIFY COLUMN ..." single-column text, even though execution below folds multiple
         -- columns of the same table into one statement).
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Modify column: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' MODIFY COLUMN ', c.ColumnScript)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 0
           -- Exclude columns where generated status is changing (regular->generated or generated->regular)
@@ -1339,7 +1351,7 @@ BEGIN
               -- synonym normalization would wrongly fold a real value-case change.
               CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                      != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
@@ -1347,18 +1359,20 @@ BEGIN
               -- Default value changes (strip outer single quotes from JSON default for comparison,
               -- since GenerateTableJson wraps string/enum defaults in quotes for DDL but INFORMATION_SCHEMA stores raw values)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               -- Collation changes (only when JSON specifies a collation)
-              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+              OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                  AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                  != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
               -- Generated expression changes (both sides are generated, but expression differs)
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
                   -- actually applied before calling it a change.
                   AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -1373,9 +1387,8 @@ BEGIN
               -- and one whose Invisible flag was removed (invisible -> visible) both trip this <> compare.
               OR (SchemaSmith_SupportsInvisibleColumn() = 1 AND (isc.EXTRA LIKE '%INVISIBLE%') <> (c.IsInvisible = 1))
           OR (SchemaSmith_SupportsSystemVersioning() = 1
-              AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES vt
-                           WHERE vt.TABLE_SCHEMA = p_DatabaseName
-                             AND vt.TABLE_NAME = SchemaSmith_StripBacktickWrapping(c.TableName)
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_CatTables vt
+                           WHERE vt.TableKey = c.TableKey
                              AND vt.TABLE_TYPE = 'SYSTEM VERSIONED')
               AND (isc.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%') <> (c.IsWithoutSystemVersioning = 1))
               -- Column SRID differs. Gated behind SchemaSmith_SupportsColumnSrid() (MySQL 8.0.3+; MariaDB
@@ -1387,25 +1400,26 @@ BEGIN
                   AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
               -- Comment differs (symmetric: covers added, changed, and cleared -- a declared NULL
               -- comment against a live comment counts as a difference the same as a value change).
-              OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
+              OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
               -- ON UPDATE CURRENT_TIMESTAMP[(n)] differs (symmetric: added, changed -- e.g. a precision
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
-              OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+              OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           );
 
         -- Object-change audit (#243 E5): one row per column about to be modified. Same join +
         -- predicate as the fold below, evaluated before the ALTER (INFORMATION_SCHEMA still reflects
         -- the OLD definition); per-column (no GROUP BY). Same INFORMATION_SCHEMA read pattern the
         -- statement-build below uses — not the #337 set-based-UPDATE shape.
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT CONNECTION_ID(), 'column', CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName)), 'modified'
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 0
           AND NOT (
@@ -1422,22 +1436,24 @@ BEGIN
           AND (
               CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                      != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
-              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+              OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                  AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                  != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
                   -- actually applied before calling it a change.
                   AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -1451,9 +1467,8 @@ BEGIN
               -- and one whose Invisible flag was removed (invisible -> visible) both trip this <> compare.
               OR (SchemaSmith_SupportsInvisibleColumn() = 1 AND (isc.EXTRA LIKE '%INVISIBLE%') <> (c.IsInvisible = 1))
           OR (SchemaSmith_SupportsSystemVersioning() = 1
-              AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES vt
-                           WHERE vt.TABLE_SCHEMA = p_DatabaseName
-                             AND vt.TABLE_NAME = SchemaSmith_StripBacktickWrapping(c.TableName)
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_CatTables vt
+                           WHERE vt.TableKey = c.TableKey
                              AND vt.TABLE_TYPE = 'SYSTEM VERSIONED')
               AND (isc.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%') <> (c.IsWithoutSystemVersioning = 1))
               -- Column SRID differs. Gated behind SchemaSmith_SupportsColumnSrid() (MySQL 8.0.3+; MariaDB
@@ -1465,26 +1480,27 @@ BEGIN
                   AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
               -- Comment differs (symmetric: covers added, changed, and cleared -- a declared NULL
               -- comment against a live comment counts as a difference the same as a value change).
-              OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
+              OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
               -- ON UPDATE CURRENT_TIMESTAMP[(n)] differs (symmetric: added, changed -- e.g. a precision
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
-              OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+              OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           );
 
         -- Materialize: fold each table's column modifications into one multi-clause ALTER, then drain.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColStmts;
         CREATE TEMPORARY TABLE _SchemaSmith_ModifyColStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO _SchemaSmith_ModifyColStmts (Stmt)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
                       GROUP_CONCAT(CONCAT('MODIFY COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 0
           AND NOT (
@@ -1501,22 +1517,24 @@ BEGIN
           AND (
               CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN BINARY SchemaSmith_UpperDataType(isc.COLUMN_TYPE) != BINARY SchemaSmith_UpperDataType(c.DataType)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                      != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR BINARY SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) != BINARY
-                      SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue))
+                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
                                                       c.DefaultValue, isc.DATA_TYPE) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
-              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND BINARY isc.COLLATION_NAME != BINARY c.Collation)
+              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
+              OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                  AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                  != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
               OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR BINARY TRIM(isc.GENERATION_EXPRESSION) != BINARY TRIM(c.GeneratedExpression))
+                  AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
                   -- #242: the texts always differ once the engine has reformatted the expression; ask what was
                   -- actually applied before calling it a change.
                   AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
@@ -1530,9 +1548,8 @@ BEGIN
               -- and one whose Invisible flag was removed (invisible -> visible) both trip this <> compare.
               OR (SchemaSmith_SupportsInvisibleColumn() = 1 AND (isc.EXTRA LIKE '%INVISIBLE%') <> (c.IsInvisible = 1))
           OR (SchemaSmith_SupportsSystemVersioning() = 1
-              AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES vt
-                           WHERE vt.TABLE_SCHEMA = p_DatabaseName
-                             AND vt.TABLE_NAME = SchemaSmith_StripBacktickWrapping(c.TableName)
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_CatTables vt
+                           WHERE vt.TableKey = c.TableKey
                              AND vt.TABLE_TYPE = 'SYSTEM VERSIONED')
               AND (isc.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%') <> (c.IsWithoutSystemVersioning = 1))
               -- Column SRID differs. Gated behind SchemaSmith_SupportsColumnSrid() (MySQL 8.0.3+; MariaDB
@@ -1544,11 +1561,11 @@ BEGIN
                   AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
               -- Comment differs (symmetric: covers added, changed, and cleared -- a declared NULL
               -- comment against a live comment counts as a difference the same as a value change).
-              OR (BINARY COALESCE(isc.COLUMN_COMMENT, '') != BINARY COALESCE(c.Comment, ''))
+              OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
               -- ON UPDATE CURRENT_TIMESTAMP[(n)] differs (symmetric: added, changed -- e.g. a precision
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
-              OR (BINARY COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') != BINARY COALESCE(c.OnUpdateCurrentTimestamp, ''))
+              OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           )
         GROUP BY c.TableName;
 
@@ -1571,15 +1588,15 @@ BEGIN
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Recreate columns (generated status changes)');
         -- Show DROP COLUMN statements
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
                       SchemaSmith_StripBacktickWrapping(c.TableName), '` DROP COLUMN `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`')
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 0
           AND (
@@ -1590,15 +1607,15 @@ BEGIN
                AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
           );
         -- Show ADD COLUMN statements
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
                       SchemaSmith_StripBacktickWrapping(c.TableName), '` ADD COLUMN ', c.ColumnScript)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 0
           AND (
@@ -1612,14 +1629,14 @@ BEGIN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Recreate columns (generated status changes)');
 
         -- Per-column progress messages, set-based (preserves the per-column log line).
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Recreate column: ', SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 0
           AND (
@@ -1639,15 +1656,15 @@ BEGIN
         CREATE TEMPORARY TABLE _SchemaSmith_GenStatusStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_GenStatusStmts (Stmt)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_StripBacktickWrapping(c.TableName), '` ',
                       GROUP_CONCAT(CONCAT('DROP COLUMN `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`') ORDER BY c.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 0
           AND (
@@ -1659,15 +1676,15 @@ BEGIN
           )
         GROUP BY c.TableName;
 
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_GenStatusStmts (Stmt)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_StripBacktickWrapping(c.TableName), '` ',
                       GROUP_CONCAT(CONCAT('ADD COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 0
           AND (
@@ -1703,42 +1720,55 @@ BEGIN
     -- Create helper table to copy defined columns (avoids referencing _SchemaSmith_Columns multiple times)
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DefinedColumns;
     CREATE TEMPORARY TABLE _SchemaSmith_DefinedColumns (
+        RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         OldName VARCHAR(128) NULL,
-        INDEX idx_table_col (TableName, ColumnName),
-        INDEX idx_table_old (TableName, OldName)
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        OldNameKey VARCHAR(260) COLLATE utf8mb4_bin NULL,
+        INDEX idx_table_col (TableKey, ColumnKey),
+        INDEX idx_table_old (TableKey, OldNameKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-    INSERT INTO _SchemaSmith_DefinedColumns (TableName, ColumnName, OldName)
+    INSERT INTO _SchemaSmith_DefinedColumns (TableName, ColumnName, OldName, TableKey, ColumnKey, OldNameKey)
     SELECT
         SchemaSmith_StripBacktickWrapping(c.TableName),
         SchemaSmith_StripBacktickWrapping(c.ColumnName),
-        CASE WHEN c.OldName IS NOT NULL THEN SchemaSmith_StripBacktickWrapping(c.OldName) ELSE NULL END
+        CASE WHEN c.OldName IS NOT NULL THEN SchemaSmith_StripBacktickWrapping(c.OldName) ELSE NULL END,
+        c.TableKey, c.ColumnKey, c.OldNameKey
     FROM _SchemaSmith_Columns c;
 
     -- Create helper table for columns to drop (used by all subsequent cursors)
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColumnsToDrop;
+    -- TableName is the package's spelling and ColumnName the catalog's: both are what the DDL below names. The keys
+    -- are what every later catalog comparison uses.
     CREATE TEMPORARY TABLE _SchemaSmith_ColumnsToDrop (
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-        PRIMARY KEY (TableName, ColumnName)
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableName, ColumnName),
+        KEY ix_ctd_key (TableKey, ColumnKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-    -- Identify columns to drop: exist in DB but not in JSON definition
-    INSERT INTO _SchemaSmith_ColumnsToDrop (TableName, ColumnName)
+    -- Identify columns to drop: exist in DB but not in JSON definition. Column names compare through their keys:
+    -- the engine treats a column spelled differently only in case as the same column, so it is never dropped.
+    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+    INSERT INTO _SchemaSmith_ColumnsToDrop (TableName, ColumnName, TableKey, ColumnKey)
     SELECT
         SchemaSmith_StripBacktickWrapping(t.TableName) AS TableName,
-        isc.COLUMN_NAME AS ColumnName
+        isc.COLUMN_NAME AS ColumnName,
+        isc.TableKey,
+        isc.ColumnKey
     FROM _SchemaSmith_Tables t
-    INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-        ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-        AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+    INNER JOIN _SchemaSmith_CatColumns isc
+        ON isc.TableKey = t.TableKey
     LEFT JOIN _SchemaSmith_DefinedColumns dc
-        ON dc.TableName = SchemaSmith_StripBacktickWrapping(t.TableName)
+        ON dc.TableKey = t.TableKey
         AND (
-            BINARY dc.ColumnName = BINARY isc.COLUMN_NAME
-            OR (dc.OldName IS NOT NULL AND BINARY dc.OldName = BINARY isc.COLUMN_NAME)
+            dc.ColumnKey = isc.ColumnKey
+            OR (dc.OldName IS NOT NULL AND dc.OldNameKey = isc.ColumnKey)
         )
     WHERE t.NewTable = 0
       AND dc.ColumnName IS NULL
@@ -1753,21 +1783,22 @@ BEGIN
     IF p_CaptureWouldDrop = 1 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropColumns;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropColumns (
+            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_WouldDropColumns (TableName, ColumnName)
         SELECT SchemaSmith_StripBacktickWrapping(t.TableName), isc.COLUMN_NAME
         FROM _SchemaSmith_Tables t
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = t.TableKey
         LEFT JOIN _SchemaSmith_DefinedColumns dc
-            ON dc.TableName = SchemaSmith_StripBacktickWrapping(t.TableName)
+            ON dc.TableKey = t.TableKey
             AND (
-                BINARY dc.ColumnName = BINARY isc.COLUMN_NAME
-                OR (dc.OldName IS NOT NULL AND BINARY dc.OldName = BINARY isc.COLUMN_NAME)
+                dc.ColumnKey = isc.ColumnKey
+                OR (dc.OldName IS NOT NULL AND dc.OldNameKey = isc.ColumnKey)
             )
         WHERE t.NewTable = 0
           AND dc.ColumnName IS NULL
@@ -1809,9 +1840,9 @@ BEGIN
             CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-            ON kcu.TABLE_SCHEMA = v_IsDbName
-            AND CONVERT(kcu.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
-            AND CONVERT(kcu.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
+            ON kcu.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA) = v_DbKey
+            AND SchemaSmith_IdentifierKey(kcu.TABLE_NAME) = ctd.TableKey
+            AND SchemaSmith_NameKeyCI(kcu.COLUMN_NAME) = ctd.ColumnKey
         INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             ON CONVERT(tc.TABLE_SCHEMA USING utf8mb4) = CONVERT(kcu.TABLE_SCHEMA USING utf8mb4)
             AND CONVERT(tc.TABLE_NAME USING utf8mb4) = CONVERT(kcu.TABLE_NAME USING utf8mb4)
@@ -1825,9 +1856,9 @@ BEGIN
             CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-            ON kcu.REFERENCED_TABLE_SCHEMA = v_IsDbName
-            AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
-            AND CONVERT(kcu.REFERENCED_COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
+            ON kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
+            AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = ctd.TableKey
+            AND SchemaSmith_NameKeyCI(kcu.REFERENCED_COLUMN_NAME) = ctd.ColumnKey
         INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             ON CONVERT(tc.TABLE_SCHEMA USING utf8mb4) = CONVERT(kcu.TABLE_SCHEMA USING utf8mb4)
             AND CONVERT(tc.TABLE_NAME USING utf8mb4) = CONVERT(kcu.TABLE_NAME USING utf8mb4)
@@ -1877,7 +1908,7 @@ BEGIN
         -- constraints to drop, so _SchemaSmith_CKsToDrop simply stays unpopulated by this step.
         IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
             SET @v_ckDbName = p_DatabaseName;
-            SET @v_ckSql = 'INSERT IGNORE INTO _SchemaSmith_CKsToDrop (TableName, ConstraintName)
+            SET @v_ckSql = CONCAT('INSERT IGNORE INTO _SchemaSmith_CKsToDrop (TableName, ConstraintName)
 SELECT DISTINCT
     CONVERT(tc.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
     CONVERT(cc.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
@@ -1889,8 +1920,8 @@ INNER JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
 INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     ON CONVERT(tc.CONSTRAINT_SCHEMA USING utf8mb4) = CONVERT(cc.CONSTRAINT_SCHEMA USING utf8mb4)
     AND CONVERT(tc.CONSTRAINT_NAME USING utf8mb4) = CONVERT(cc.CONSTRAINT_NAME USING utf8mb4)
-    AND CONVERT(tc.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
-    AND tc.CONSTRAINT_TYPE = ''CHECK''';
+    AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = ctd.TableKey
+    AND tc.CONSTRAINT_TYPE = ''CHECK''', SchemaSmith_CheckTableJoin());
             PREPARE stmt FROM @v_ckSql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
@@ -1936,9 +1967,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             CONVERT(s.INDEX_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN INFORMATION_SCHEMA.STATISTICS s
-            ON s.TABLE_SCHEMA = v_IsDbName
-            AND CONVERT(s.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
-            AND CONVERT(s.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
+            ON s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
+            AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = ctd.TableKey
+            AND SchemaSmith_NameKeyCI(s.COLUMN_NAME) = ctd.ColumnKey
         WHERE UPPER(s.INDEX_NAME) != 'PRIMARY';
 
         -- Message text preserves the original standalone "DROP INDEX ... ON ..." wording even
@@ -1980,14 +2011,14 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- INSERT IGNORE: a generated column referencing two-or-more dropped columns produces
         -- multiple join rows for the same (TableName, ColumnName); the original loop had no
         -- DISTINCT here either, but the folded form needs the PK to hold a single row per column.
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT IGNORE INTO _SchemaSmith_GenColsToDrop (TableName, ColumnName)
         SELECT
             CONVERT(isc_gen.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
             CONVERT(isc_gen.COLUMN_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
         FROM _SchemaSmith_ColumnsToDrop ctd
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc_gen
-            ON isc_gen.TABLE_SCHEMA = v_IsDbName
-            AND CONVERT(isc_gen.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
+        INNER JOIN _SchemaSmith_CatColumns isc_gen
+            ON isc_gen.TableKey = ctd.TableKey
             AND isc_gen.GENERATION_EXPRESSION IS NOT NULL
             AND isc_gen.GENERATION_EXPRESSION != ''
             -- Explicit COLLATE to avoid collation mismatch between INFORMATION_SCHEMA and temp table
@@ -1996,8 +2027,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- Only drop generated columns that are also not in the definition
         -- (use _SchemaSmith_DefinedColumns to avoid MySQL's "Can't reopen table" error)
         LEFT JOIN _SchemaSmith_DefinedColumns dc_gen
-            ON dc_gen.TableName = ctd.TableName
-            AND BINARY dc_gen.ColumnName = BINARY isc_gen.COLUMN_NAME
+            ON dc_gen.TableKey = ctd.TableKey
+            AND dc_gen.ColumnKey = isc_gen.ColumnKey
         WHERE dc_gen.ColumnName IS NULL;
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -2027,15 +2058,15 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColsToDrop;
 
         -- Now drop the columns themselves
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Drop column: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
                       CONVERT(ctd.TableName USING utf8mb4) COLLATE utf8mb4_unicode_ci,
                       '` DROP COLUMN `', CONVERT(ctd.ColumnName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`')
         FROM _SchemaSmith_ColumnsToDrop ctd
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON isc.TABLE_SCHEMA = v_IsDbName
-            AND CONVERT(isc.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
-            AND CONVERT(isc.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = ctd.TableKey
+            AND isc.ColumnKey = ctd.ColumnKey
         -- Not a generated column (those were handled above)
         WHERE (isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '');
 
@@ -2043,15 +2074,15 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColDropStmts;
         CREATE TEMPORARY TABLE _SchemaSmith_ColDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_ColDropStmts (Stmt)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
                       CONVERT(ctd.TableName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '` ',
                       GROUP_CONCAT(CONCAT('DROP COLUMN `', CONVERT(ctd.ColumnName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`') ORDER BY ctd.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_ColumnsToDrop ctd
-        INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-            ON isc.TABLE_SCHEMA = v_IsDbName
-            AND CONVERT(isc.TABLE_NAME USING utf8mb4) = CONVERT(ctd.TableName USING utf8mb4)
-            AND CONVERT(isc.COLUMN_NAME USING utf8mb4) = CONVERT(ctd.ColumnName USING utf8mb4)
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = ctd.TableKey
+            AND isc.ColumnKey = ctd.ColumnKey
         WHERE (isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
         GROUP BY ctd.TableName;
 
@@ -2076,25 +2107,24 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- Alter table engine if different
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table engine');
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ENGINE = ', t.Engine)
         FROM _SchemaSmith_Tables t
-        INNER JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        INNER JOIN _SchemaSmith_CatTables ist
+            ON ist.TableKey = t.TableKey
         WHERE t.NewTable = 0
           AND t.Engine IS NOT NULL
           AND UPPER(ist.ENGINE) != UPPER(t.Engine);
     ELSE
         BEGIN
             DECLARE v_EngineDone INT DEFAULT FALSE;
-            DECLARE v_EngineSql TEXT;
+            DECLARE v_EngineSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_EngineChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ENGINE = ', t.Engine) AS AlterEngineStatement
                 FROM _SchemaSmith_Tables t
-                INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                    ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                    AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                INNER JOIN _SchemaSmith_CatTables ist
+                    ON ist.TableKey = t.TableKey
                 WHERE t.NewTable = 0
                   AND t.Engine IS NOT NULL
                   AND UPPER(ist.ENGINE) != UPPER(t.Engine);
@@ -2103,6 +2133,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table engine');
             SET v_EngineDone = FALSE;
+            CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
             OPEN cur_EngineChanges;
 
             engine_changes_loop: LOOP
@@ -2125,34 +2156,39 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- Alter table collation if different
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table collation');
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                       ' DEFAULT CHARACTER SET ',
-                      SUBSTRING_INDEX(t.Collation, '_', 1),
-                      ' COLLATE ', t.Collation)
+                      COALESCE(SUBSTRING_INDEX(t.Collation, '_', 1), t.CharacterSet),
+                      IF(t.Collation IS NULL, '', CONCAT(' COLLATE ', t.Collation)))
         FROM _SchemaSmith_Tables t
-        INNER JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        INNER JOIN _SchemaSmith_CatTables ist
+            ON ist.TableKey = t.TableKey
         WHERE t.NewTable = 0
-          AND t.Collation IS NOT NULL
-          AND ist.TABLE_COLLATION != t.Collation;
+          AND ((t.Collation IS NOT NULL AND ist.TABLE_COLLATION != t.Collation)
+               -- A table that names only its character set is compared on the character set alone.
+               OR (t.Collation IS NULL AND t.CharacterSet IS NOT NULL
+                   AND CAST(IF(LOWER(TRIM(SUBSTRING_INDEX(ist.TABLE_COLLATION, '_', 1))) = 'utf8', 'utf8mb3', LOWER(TRIM(SUBSTRING_INDEX(ist.TABLE_COLLATION, '_', 1)))) AS BINARY)
+                    != CAST(IF(LOWER(TRIM(t.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(t.CharacterSet))) AS BINARY)));
     ELSE
         BEGIN
             DECLARE v_CollationDone INT DEFAULT FALSE;
-            DECLARE v_CollationSql TEXT;
+            DECLARE v_CollationSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_CollationChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                               ' DEFAULT CHARACTER SET ',
-                              SUBSTRING_INDEX(t.Collation, '_', 1),
-                              ' COLLATE ', t.Collation) AS AlterCollationStatement
+                              COALESCE(SUBSTRING_INDEX(t.Collation, '_', 1), t.CharacterSet),
+                              IF(t.Collation IS NULL, '', CONCAT(' COLLATE ', t.Collation))) AS AlterCollationStatement
                 FROM _SchemaSmith_Tables t
-                INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                    ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                    AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                INNER JOIN _SchemaSmith_CatTables ist
+                    ON ist.TableKey = t.TableKey
                 WHERE t.NewTable = 0
-                  AND t.Collation IS NOT NULL
-                  AND ist.TABLE_COLLATION != t.Collation;
+                  AND ((t.Collation IS NOT NULL AND ist.TABLE_COLLATION != t.Collation)
+                       -- A table that names only its character set is compared on the character set alone.
+                       OR (t.Collation IS NULL AND t.CharacterSet IS NOT NULL
+                           AND CAST(IF(LOWER(TRIM(SUBSTRING_INDEX(ist.TABLE_COLLATION, '_', 1))) = 'utf8', 'utf8mb3', LOWER(TRIM(SUBSTRING_INDEX(ist.TABLE_COLLATION, '_', 1)))) AS BINARY)
+                            != CAST(IF(LOWER(TRIM(t.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(t.CharacterSet))) AS BINARY)));
 
             DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_CollationDone = TRUE;
 
@@ -2170,6 +2206,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             -- only where the package declares a collation for it -- which is what the comparison already does.
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table collation');
             SET v_CollationDone = FALSE;
+            CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
             OPEN cur_CollationChanges;
 
             collation_changes_loop: LOOP
@@ -2199,33 +2236,33 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- established _SchemaSmith_FullTextIndexes.Comment form (double the embedded single quotes).
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table comment');
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                       ' COMMENT=''', REPLACE(COALESCE(t.Comment, ''), '''', ''''''), '''')
         FROM _SchemaSmith_Tables t
-        INNER JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        INNER JOIN _SchemaSmith_CatTables ist
+            ON ist.TableKey = t.TableKey
         WHERE t.NewTable = 0
-          AND BINARY COALESCE(ist.TABLE_COMMENT, '') != BINARY COALESCE(t.Comment, '');
+          AND CAST(COALESCE(ist.TABLE_COMMENT, '') AS BINARY) != CAST(COALESCE(t.Comment, '') AS BINARY);
     ELSE
         BEGIN
             DECLARE v_CommentDone INT DEFAULT FALSE;
-            DECLARE v_CommentSql TEXT;
+            DECLARE v_CommentSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_CommentChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                               ' COMMENT=''', REPLACE(COALESCE(t.Comment, ''), '''', ''''''), '''') AS AlterCommentStatement
                 FROM _SchemaSmith_Tables t
-                INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                    ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                    AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                INNER JOIN _SchemaSmith_CatTables ist
+                    ON ist.TableKey = t.TableKey
                 WHERE t.NewTable = 0
-                  AND BINARY COALESCE(ist.TABLE_COMMENT, '') != BINARY COALESCE(t.Comment, '');
+                  AND CAST(COALESCE(ist.TABLE_COMMENT, '') AS BINARY) != CAST(COALESCE(t.Comment, '') AS BINARY);
 
             DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_CommentDone = TRUE;
 
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table comment');
             SET v_CommentDone = FALSE;
+            CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
             OPEN cur_CommentChanges;
 
             comment_changes_loop: LOOP
@@ -2251,12 +2288,12 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- Alter table row format if different
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table row format');
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ROW_FORMAT=', t.RowFormat)
         FROM _SchemaSmith_Tables t
-        INNER JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        INNER JOIN _SchemaSmith_CatTables ist
+            ON ist.TableKey = t.TableKey
         WHERE t.NewTable = 0
           AND t.RowFormat IS NOT NULL
           AND t.RowFormat != ''
@@ -2264,13 +2301,12 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     ELSE
         BEGIN
             DECLARE v_RowFormatDone INT DEFAULT FALSE;
-            DECLARE v_RowFormatSql TEXT;
+            DECLARE v_RowFormatSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_RowFormatChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ROW_FORMAT=', t.RowFormat) AS AlterRowFormatStatement
                 FROM _SchemaSmith_Tables t
-                INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                    ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                    AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                INNER JOIN _SchemaSmith_CatTables ist
+                    ON ist.TableKey = t.TableKey
                 WHERE t.NewTable = 0
                   AND t.RowFormat IS NOT NULL
                   AND t.RowFormat != ''
@@ -2280,6 +2316,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table row format');
             SET v_RowFormatDone = FALSE;
+            CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
             OPEN cur_RowFormatChanges;
 
             rowformat_changes_loop: LOOP
@@ -2318,6 +2355,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- SchemaSmith_Supports... gate exists for this step.
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table encryption');
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                       CASE WHEN VERSION() NOT LIKE '%MariaDB%'
@@ -2327,9 +2365,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                                             THEN CONCAT(' ENCRYPTION_KEY_ID=', t.EncryptionKeyId) ELSE '' END)
                       END)
         FROM _SchemaSmith_Tables t
-        INNER JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        INNER JOIN _SchemaSmith_CatTables ist
+            ON ist.TableKey = t.TableKey
         WHERE t.NewTable = 0
           -- BINARY on BOTH sides of every option comparison, deliberately. COALESCE(fn(), '<literal>')
           -- combines the function's return collation (the database default, fixed when the function was
@@ -2347,19 +2384,19 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           AND (
               (VERSION() NOT LIKE '%MariaDB%'
                AND t.Encryption IS NOT NULL AND t.Encryption != ''
-               AND BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION'), 'N')) != BINARY UPPER(t.Encryption))
+               AND CAST(UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION'), 'N')) AS BINARY) != CAST(UPPER(t.Encryption) AS BINARY))
               OR
               (VERSION() LIKE '%MariaDB%'
                AND (
-                   (CASE WHEN BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTED'), 'NO')) = BINARY 'YES' THEN 1 ELSE 0 END) != t.Encrypted
+                   (CASE WHEN CAST(UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTED'), 'NO')) AS BINARY) = CAST('YES' AS BINARY) THEN 1 ELSE 0 END) != t.Encrypted
                    OR (t.Encrypted = 1 AND t.EncryptionKeyId IS NOT NULL
-                       AND BINARY COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION_KEY_ID'), '') != BINARY CAST(t.EncryptionKeyId AS CHAR))
+                       AND CAST(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION_KEY_ID'), '') AS BINARY) != CAST(CAST(t.EncryptionKeyId AS CHAR) AS BINARY))
                ))
           );
     ELSE
         BEGIN
             DECLARE v_EncryptionDone INT DEFAULT FALSE;
-            DECLARE v_EncryptionSql TEXT;
+            DECLARE v_EncryptionSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_EncryptionChanges CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                               CASE WHEN VERSION() NOT LIKE '%MariaDB%'
@@ -2369,9 +2406,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                                                     THEN CONCAT(' ENCRYPTION_KEY_ID=', t.EncryptionKeyId) ELSE '' END)
                               END) AS AlterEncryptionStatement
                 FROM _SchemaSmith_Tables t
-                INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                    ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                    AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                INNER JOIN _SchemaSmith_CatTables ist
+                    ON ist.TableKey = t.TableKey
                 WHERE t.NewTable = 0
                   -- BINARY on both sides -- see the identical predicate in the p_WhatIf branch above for
                   -- why (COALESCE across two collations resolves to utf8mb4_bin/NONE and then compares
@@ -2379,13 +2415,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                   AND (
                       (VERSION() NOT LIKE '%MariaDB%'
                        AND t.Encryption IS NOT NULL AND t.Encryption != ''
-                       AND BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION'), 'N')) != BINARY UPPER(t.Encryption))
+                       AND CAST(UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION'), 'N')) AS BINARY) != CAST(UPPER(t.Encryption) AS BINARY))
                       OR
                       (VERSION() LIKE '%MariaDB%'
                        AND (
-                           (CASE WHEN BINARY UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTED'), 'NO')) = BINARY 'YES' THEN 1 ELSE 0 END) != t.Encrypted
+                           (CASE WHEN CAST(UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTED'), 'NO')) AS BINARY) = CAST('YES' AS BINARY) THEN 1 ELSE 0 END) != t.Encrypted
                            OR (t.Encrypted = 1 AND t.EncryptionKeyId IS NOT NULL
-                               AND BINARY COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION_KEY_ID'), '') != BINARY CAST(t.EncryptionKeyId AS CHAR))
+                               AND CAST(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'ENCRYPTION_KEY_ID'), '') AS BINARY) != CAST(CAST(t.EncryptionKeyId AS CHAR) AS BINARY))
                        ))
                   );
 
@@ -2393,6 +2429,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table encryption');
             SET v_EncryptionDone = FALSE;
+            CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
             OPEN cur_EncryptionChanges;
 
             encryption_changes_loop: LOOP
@@ -2418,53 +2455,44 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- Set auto-increment seed when declared value is higher than the live value (set-if-higher, idempotent).
     -- COALESCE(ist.AUTO_INCREMENT, 0): MySQL returns NULL for AUTO_INCREMENT on an empty InnoDB table,
     -- treating NULL as 0 ensures a declared seed is applied even on tables that have never had rows.
+    -- AUTO_INCREMENT is a cached statistic on MySQL 8, and a stale-high value would skip the seed silently, so
+    -- the read bypasses the cache. It covers only the tables that declare a seed, so a deploy does not
+    -- populate the statistics cache for every table in the schema.
+    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Set auto-increment seed');
+    CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_AutoIncStmts;
+    CREATE TEMPORARY TABLE _SchemaSmith_AutoIncStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    CALL SchemaSmith_BypassStatisticsCache();
+    INSERT INTO _SchemaSmith_AutoIncStmts (Stmt)
+    SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' AUTO_INCREMENT=', t.AutoIncrementValue)
+    FROM _SchemaSmith_Tables t
+    INNER JOIN _SchemaSmith_CatTables k
+        ON k.TableKey = t.TableKey
+    INNER JOIN INFORMATION_SCHEMA.TABLES ist
+        ON ist.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ist.TABLE_SCHEMA) = v_DbKey
+        AND ist.TABLE_NAME = k.TABLE_NAME
+    WHERE t.NewTable = 0
+      AND t.AutoIncrementValue IS NOT NULL
+      AND t.AutoIncrementValue > COALESCE(ist.AUTO_INCREMENT, 0)
+    ORDER BY t.TableName;
+    CALL SchemaSmith_RestoreStatisticsCache();
+
     IF p_WhatIf = 1 THEN
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Set auto-increment seed');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' AUTO_INCREMENT=', t.AutoIncrementValue)
-        FROM _SchemaSmith_Tables t
-        INNER JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
-        WHERE t.NewTable = 0
-          AND t.AutoIncrementValue IS NOT NULL
-          AND t.AutoIncrementValue > COALESCE(ist.AUTO_INCREMENT, 0);
+        SELECT CONNECTION_ID(), Stmt FROM _SchemaSmith_AutoIncStmts ORDER BY RowId;
     ELSE
-        BEGIN
-            DECLARE v_AutoIncDone INT DEFAULT FALSE;
-            DECLARE v_AutoIncSql TEXT;
-            DECLARE cur_AutoIncChanges CURSOR FOR
-                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' AUTO_INCREMENT=', t.AutoIncrementValue) AS AlterAutoIncStatement
-                FROM _SchemaSmith_Tables t
-                INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                    ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                    AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
-                WHERE t.NewTable = 0
-                  AND t.AutoIncrementValue IS NOT NULL
-                  AND t.AutoIncrementValue > COALESCE(ist.AUTO_INCREMENT, 0);
-
-            DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_AutoIncDone = TRUE;
-
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Set auto-increment seed');
-            SET v_AutoIncDone = FALSE;
-            OPEN cur_AutoIncChanges;
-
-            autoinc_changes_loop: LOOP
-                FETCH cur_AutoIncChanges INTO v_AutoIncSql;
-                IF v_AutoIncDone THEN
-                    LEAVE autoinc_changes_loop;
-                END IF;
-
-                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Set auto-increment: ', v_AutoIncSql));
-                SET @exec_sql = v_AutoIncSql;
-                PREPARE stmt FROM @exec_sql;
-                EXECUTE stmt;
-                DEALLOCATE PREPARE stmt;
-            END LOOP;
-
-            CLOSE cur_AutoIncChanges;
-        END;
+        SET @v_autoinc_id := (SELECT MIN(RowId) FROM _SchemaSmith_AutoIncStmts);
+        WHILE @v_autoinc_id IS NOT NULL DO
+            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_AutoIncStmts WHERE RowId = @v_autoinc_id;
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Set auto-increment: ', @exec_sql));
+            PREPARE stmt FROM @exec_sql;
+            EXECUTE stmt;
+            DEALLOCATE PREPARE stmt;
+            SET @v_autoinc_id := (SELECT MIN(RowId) FROM _SchemaSmith_AutoIncStmts WHERE RowId > @v_autoinc_id);
+        END WHILE;
     END IF;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_AutoIncStmts;
 
     -- =======================
     -- STEP 7.5: SYSTEM VERSIONING CONVERGENCE (EXISTING TABLES)
@@ -2506,18 +2534,19 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- the SIGNAL generic and push detail to the run log, this refuse only ever names the single first
     -- offender and truncates it defensively -- comfortably inside the cap even at MySQL's 64-character
     -- identifier ceiling -- so the exception message itself names the table.
+    CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
     SET @ss_sysver_refuse_table := (
         SELECT LEFT(SchemaSmith_StripBacktickWrapping(t.TableName), 40)
         FROM _SchemaSmith_Tables t
-        INNER JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        INNER JOIN _SchemaSmith_CatTables ist
+            ON ist.TableKey = t.TableKey
         WHERE t.NewTable = 0
           AND t.IsSystemVersioned = 0
           AND ist.TABLE_TYPE = 'SYSTEM VERSIONED'
         LIMIT 1
     );
 
+    CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
     IF @ss_sysver_refuse_table IS NOT NULL THEN
         -- Log every offending table (not just the first named in the SIGNAL below) to the run log, same
         -- shape as the partitioning/PreventDrop guards.
@@ -2525,9 +2554,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         SELECT CONNECTION_ID(), CONCAT('  Table is system-versioned and no longer declared -- DROP SYSTEM VERSIONING refused (would purge row history): ',
                SchemaSmith_StripBacktickWrapping(t.TableName))
         FROM _SchemaSmith_Tables t
-        INNER JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        INNER JOIN _SchemaSmith_CatTables ist
+            ON ist.TableKey = t.TableKey
         WHERE t.NewTable = 0
           AND t.IsSystemVersioned = 0
           AND ist.TABLE_TYPE = 'SYSTEM VERSIONED';
@@ -2546,11 +2574,11 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- F1S1's block exists to close for CREATE. Runs unconditionally (both WhatIf and live, ahead of the
     -- converge cursor below), matching F1S1's placement ahead of its own p_WhatIf branch.
     -- =========================================================================
+    CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
     IF SchemaSmith_SupportsSystemVersioning() = 0
        AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables t
-                   INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                       ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                       AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                   INNER JOIN _SchemaSmith_CatTables ist
+                       ON ist.TableKey = t.TableKey
                    WHERE t.NewTable = 0
                      AND t.IsSystemVersioned = 1
                      AND ist.TABLE_TYPE != 'SYSTEM VERSIONED') THEN
@@ -2559,32 +2587,31 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             SELECT CONNECTION_ID(), CONCAT('  System versioning requires MariaDB 10.3 (MySQL unsupported) (UnsupportedFeaturePolicy=fail): ',
                    SchemaSmith_StripBacktickWrapping(t.TableName))
             FROM _SchemaSmith_Tables t
-            INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+            INNER JOIN _SchemaSmith_CatTables ist
+                ON ist.TableKey = t.TableKey
             WHERE t.NewTable = 0
               AND t.IsSystemVersioned = 1
               AND ist.TABLE_TYPE != 'SYSTEM VERSIONED';
             SET @ss_msg = 'System versioning needs MariaDB 10.3 (UnsupportedFeaturePolicy=fail). See the run log.';
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         ELSE
+            CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
             SELECT CONNECTION_ID(), CONCAT('  Table deployed without system versioning (requires MariaDB 10.3, MySQL unsupported - downgraded): ',
                    SchemaSmith_StripBacktickWrapping(t.TableName))
             FROM _SchemaSmith_Tables t
-            INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+            INNER JOIN _SchemaSmith_CatTables ist
+                ON ist.TableKey = t.TableKey
             WHERE t.NewTable = 0
               AND t.IsSystemVersioned = 1
               AND ist.TABLE_TYPE != 'SYSTEM VERSIONED';
+            CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
             SELECT CONNECTION_ID(), 'table without its WITH SYSTEM VERSIONING clause',
                    SchemaSmith_StripBacktickWrapping(t.TableName), 'downgraded'
             FROM _SchemaSmith_Tables t
-            INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+            INNER JOIN _SchemaSmith_CatTables ist
+                ON ist.TableKey = t.TableKey
             WHERE t.NewTable = 0
               AND t.IsSystemVersioned = 1
               AND ist.TABLE_TYPE != 'SYSTEM VERSIONED';
@@ -2596,12 +2623,12 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- (only the column-level and table-drop passes elsewhere in this file audit their WhatIf twin).
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add system versioning to existing tables');
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ADD SYSTEM VERSIONING')
         FROM _SchemaSmith_Tables t
-        INNER JOIN INFORMATION_SCHEMA.TABLES ist
-            ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+        INNER JOIN _SchemaSmith_CatTables ist
+            ON ist.TableKey = t.TableKey
         WHERE t.NewTable = 0
           AND t.IsSystemVersioned = 1
           AND ist.TABLE_TYPE != 'SYSTEM VERSIONED'
@@ -2609,13 +2636,12 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     ELSE
         BEGIN
             DECLARE v_AddVersioningDone INT DEFAULT FALSE;
-            DECLARE v_AddVersioningSql TEXT;
+            DECLARE v_AddVersioningSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_AddVersioning CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ADD SYSTEM VERSIONING') AS AlterAddVersioningStatement
                 FROM _SchemaSmith_Tables t
-                INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                    ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                    AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+                INNER JOIN _SchemaSmith_CatTables ist
+                    ON ist.TableKey = t.TableKey
                 WHERE t.NewTable = 0
                   AND t.IsSystemVersioned = 1
                   AND ist.TABLE_TYPE != 'SYSTEM VERSIONED'
@@ -2625,6 +2651,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add system versioning to existing tables');
             SET v_AddVersioningDone = FALSE;
+            CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
             OPEN cur_AddVersioning;
 
             add_versioning_loop: LOOP
@@ -2664,19 +2691,17 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     IF SchemaSmith_SupportsSystemVersioning() = 1 AND UPPER(COALESCE(@ss_system_versioning_alter_history, '')) = 'KEEP' AND p_WhatIf = 0 THEN
         BEGIN
             DECLARE v_ExclDone INT DEFAULT FALSE;
-            DECLARE v_ExclSql TEXT;
+            DECLARE v_ExclSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_Excl CURSOR FOR
                 SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                               ' MODIFY COLUMN ', c.ColumnScript)
                 FROM _SchemaSmith_Columns c
                 INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-                INNER JOIN INFORMATION_SCHEMA.TABLES ist
-                    ON BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName
-                    AND BINARY ist.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-                INNER JOIN INFORMATION_SCHEMA.COLUMNS isc
-                    ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-                    AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-                    AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+                INNER JOIN _SchemaSmith_CatTables ist
+                    ON ist.TableKey = c.TableKey
+                INNER JOIN _SchemaSmith_CatColumns isc
+                    ON isc.TableKey = c.TableKey
+                    AND isc.ColumnKey = c.ColumnKey
                 WHERE t.NewTable = 0
                   AND c.IsWithoutSystemVersioning = 1
                   AND ist.TABLE_TYPE = 'SYSTEM VERSIONED'
@@ -2685,6 +2710,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_ExclDone = TRUE;
 
             SET v_ExclDone = FALSE;
+            CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
+            CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
             OPEN cur_Excl;
             excl_loop: LOOP
                 FETCH cur_Excl INTO v_ExclSql;
@@ -2706,7 +2733,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         FROM _SchemaSmith_Tables t
         WHERE EXISTS (
             SELECT 1 FROM _SchemaSmith_ExistingTables ist
-            WHERE BINARY ist.TableName = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
+            WHERE ist.TableKey = t.TableKey
         );
 
         -- INSERT IGNORE skips existing ownership rows, so a toggled PreventDrop would not take
@@ -2737,6 +2764,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Capture tables suppressed by PreventDrop (would drop by absence)');
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropTables;
         CREATE TEMPORARY TABLE _SchemaSmith_WouldDropTables (
+            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -2749,7 +2777,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           AND COALESCE(po.PreventDrop, 0) = 0
           AND EXISTS (
               SELECT 1 FROM _SchemaSmith_ExistingTables ist
-              WHERE CONVERT(ist.TableName USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
+              WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_Tables t
@@ -2781,8 +2809,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         SELECT DISTINCT CONNECTION_ID(), CONCAT('  Partitioned table removed from product, not dropped (data-loss guard): ', po.ObjectName)
         FROM SchemaSmith_ProductOwnership po
         INNER JOIN INFORMATION_SCHEMA.PARTITIONS ip
-            ON ip.TABLE_SCHEMA = v_IsDbName
-           AND CONVERT(ip.TABLE_NAME USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
+            ON ip.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ip.TABLE_SCHEMA) = v_DbKey
+           AND SchemaSmith_IdentifierKey(ip.TABLE_NAME) = SchemaSmith_IdentifierKey(po.ObjectName)
            AND ip.PARTITION_NAME IS NOT NULL
         WHERE CONVERT(po.ProductName USING utf8mb4) = CONVERT(p_ProductName USING utf8mb4)
           AND CONVERT(po.ObjectSchema USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
@@ -2790,7 +2818,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           AND COALESCE(po.PreventDrop, 0) = 0
           AND EXISTS (
               SELECT 1 FROM _SchemaSmith_ExistingTables ist
-              WHERE CONVERT(ist.TableName USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
+              WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_Tables t
@@ -2812,8 +2840,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                                    '` DROP FOREIGN KEY `', CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`')
             FROM SchemaSmith_ProductOwnership po
             INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                ON kcu.REFERENCED_TABLE_SCHEMA = v_IsDbName
-               AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
+                ON kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
+               AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = SchemaSmith_IdentifierKey(po.ObjectName)
             INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 ON CONVERT(tc.TABLE_SCHEMA USING utf8mb4) = CONVERT(kcu.TABLE_SCHEMA USING utf8mb4)
                AND CONVERT(tc.TABLE_NAME USING utf8mb4) = CONVERT(kcu.TABLE_NAME USING utf8mb4)
@@ -2825,7 +2853,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
               AND COALESCE(po.PreventDrop, 0) = 0
               AND EXISTS (
                   SELECT 1 FROM _SchemaSmith_ExistingTables ist
-                  WHERE CONVERT(ist.TableName USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
+                  WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
               )
               AND NOT EXISTS (
                   SELECT 1 FROM _SchemaSmith_Tables t
@@ -2848,8 +2876,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
             FROM SchemaSmith_ProductOwnership po
             INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                ON kcu.REFERENCED_TABLE_SCHEMA = v_IsDbName
-               AND CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
+                ON kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
+               AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = SchemaSmith_IdentifierKey(po.ObjectName)
             INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 ON CONVERT(tc.TABLE_SCHEMA USING utf8mb4) = CONVERT(kcu.TABLE_SCHEMA USING utf8mb4)
                AND CONVERT(tc.TABLE_NAME USING utf8mb4) = CONVERT(kcu.TABLE_NAME USING utf8mb4)
@@ -2861,7 +2889,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
               AND COALESCE(po.PreventDrop, 0) = 0
               AND EXISTS (
                   SELECT 1 FROM _SchemaSmith_ExistingTables ist
-                  WHERE CONVERT(ist.TableName USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
+                  WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
               )
               AND NOT EXISTS (
                   SELECT 1 FROM _SchemaSmith_Tables t
@@ -2901,7 +2929,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- user has installed a SchemaSmith_CustomTableDrop procedure in this database, mirroring the
         -- SQL Server / PostgreSQL hook.
         SET @has_custom_drop = (SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES
-                                WHERE CONVERT(ROUTINE_SCHEMA USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
+                                WHERE ROUTINE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ROUTINE_SCHEMA) = v_DbKey
                                   AND ROUTINE_NAME = 'SchemaSmith_CustomTableDrop'
                                   AND ROUTINE_TYPE = 'PROCEDURE');
 
@@ -2921,7 +2949,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
               -- Table exists
               AND EXISTS (
                   SELECT 1 FROM _SchemaSmith_ExistingTables ist
-                  WHERE CONVERT(ist.TableName USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
+                  WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
               )
               -- Not in current definition
               AND NOT EXISTS (
@@ -2940,7 +2968,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
               AND COALESCE(po.PreventDrop, 0) = 0
               AND EXISTS (
                   SELECT 1 FROM _SchemaSmith_ExistingTables ist
-                  WHERE CONVERT(ist.TableName USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
+                  WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
               )
               AND NOT EXISTS (
                   SELECT 1 FROM _SchemaSmith_Tables t
@@ -2971,7 +2999,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
               -- Table exists
               AND EXISTS (
                   SELECT 1 FROM _SchemaSmith_ExistingTables ist
-                  WHERE CONVERT(ist.TableName USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4)
+                  WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
               )
               -- Not in current definition
               AND NOT EXISTS (
@@ -3054,7 +3082,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           AND po.ObjectType = 'TABLE'
           AND COALESCE(po.PreventDrop, 0) = 1
           AND EXISTS (SELECT 1 FROM _SchemaSmith_ExistingTables ist
-                       WHERE CONVERT(ist.TableName USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4))
+                       WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin)
           AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Tables t
                             WHERE CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4));
     END IF;
@@ -3073,13 +3101,12 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- dropped (and any dropped out-of-band) as gone, so their ownership rows are reconciled here.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTables;
         CREATE TEMPORARY TABLE _SchemaSmith_ExistingTables (
-            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-            PRIMARY KEY (TableName)
+            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            PRIMARY KEY (TableKey)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_ExistingTables (TableName)
-        SELECT CONVERT(ist.TABLE_NAME USING utf8mb4)
-        FROM INFORMATION_SCHEMA.TABLES ist
-        WHERE BINARY ist.TABLE_SCHEMA = BINARY p_DatabaseName;
+        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
+        INSERT IGNORE INTO _SchemaSmith_ExistingTables (TableKey)
+        SELECT TableKey FROM _SchemaSmith_CatTables;
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_OrphanedOwnership;
         CREATE TEMPORARY TABLE _SchemaSmith_OrphanedOwnership (Id INT PRIMARY KEY)
@@ -3091,7 +3118,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             AND CONVERT(po.ObjectSchema USING utf8mb4) = CONVERT(p_DatabaseName USING utf8mb4)
             AND po.ObjectType = 'TABLE'
             AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_ExistingTables ist
-                             WHERE CONVERT(ist.TableName USING utf8mb4) = CONVERT(po.ObjectName USING utf8mb4));
+                             WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin);
         DELETE po FROM SchemaSmith_ProductOwnership po
           JOIN _SchemaSmith_OrphanedOwnership o ON o.Id = po.Id;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_OrphanedOwnership;
@@ -3157,34 +3184,33 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- ANY version (SchemaSmith_SupportsFunctionalIndex() is unconditionally 0 there), so this block
     -- fires on MariaDB every time a functional index is declared, not just below some threshold -- the
     -- mirror image of SchemaSmith_SupportsDefaultExpression, which is unconditionally 1 on MariaDB. A
-    -- multi-valued index (CAST(... AS ... ARRAY)) is a functional key part too and rides this same gate;
-    -- see SchemaSmith_SupportsFunctionalIndex for why it needs no gate of its own. 'fail' aborts naming
+    -- multi-valued index (CAST(... AS ... ARRAY)) is a functional key part too, and needs 8.0.17;
+    -- SchemaSmith_IndexKeyPartsUnsupported answers both. 'fail' aborts naming
     -- the offending index(es); 'warn' (default) records one 'downgraded' manifest row + a run-log line
     -- per declared functional index -- STEP 2 (modified-detect) and STEP 3 (create) below exclude it via
     -- the identical predicate, leaving any live index of the same name untouched.
     -- =========================================================================
-    IF SchemaSmith_SupportsFunctionalIndex() = 0
-       AND EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
-                   WHERE i.IsPrimaryKey = 0 AND SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1) THEN
+    IF EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
+                   WHERE i.IsPrimaryKey = 0 AND SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1) THEN
         IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail' THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Functional/expression index requires MySQL 8.0.13 (MariaDB unsupported) (UnsupportedFeaturePolicy=fail): ',
+            SELECT CONNECTION_ID(), CONCAT('  Functional/expression index requires MySQL 8.0.13, 8.0.17 if multi-valued (MariaDB unsupported) (UnsupportedFeaturePolicy=fail): ',
                    SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName))
             FROM _SchemaSmith_Indexes i
-            WHERE i.IsPrimaryKey = 0 AND SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1;
+            WHERE i.IsPrimaryKey = 0 AND SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
             SET @ss_msg = 'Functional/expression index requires MySQL 8.0.13; MariaDB unsupported (policy=fail). See the run log.';
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         ELSE
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Skipping index (functional/expression key part requires MySQL 8.0.13, MariaDB unsupported - downgraded): ',
+            SELECT CONNECTION_ID(), CONCAT('  Skipping index (functional/expression key part requires MySQL 8.0.13, 8.0.17 if multi-valued, MariaDB unsupported - downgraded): ',
                    SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName))
             FROM _SchemaSmith_Indexes i
-            WHERE i.IsPrimaryKey = 0 AND SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1;
+            WHERE i.IsPrimaryKey = 0 AND SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
             SELECT CONNECTION_ID(), 'INDEX (functional/expression, MySQL 8.0.13)',
                    CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)), 'downgraded'
             FROM _SchemaSmith_Indexes i
-            WHERE i.IsPrimaryKey = 0 AND SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1;
+            WHERE i.IsPrimaryKey = 0 AND SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
         END IF;
     END IF;
 
@@ -3211,7 +3237,12 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- MySQL's index comment ceiling is 1024 characters; MAX() alongside the other per-index
         -- aggregates below since INDEX_COMMENT is constant across a composite index's key parts.
         IndexComment VARCHAR(1024),
-        PRIMARY KEY (TableName, IndexName)
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        LeadColumn VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
+        FkBacked TINYINT NOT NULL DEFAULT 0,
+        PRIMARY KEY (TableName, IndexName),
+        KEY ix_idxsnap_key (TableKey, IndexKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     -- A functional/expression key part (MySQL 8.0.13+) has NULL COLUMN_NAME and reports its text via
     -- EXPRESSION instead; that column does not exist below the floor or on MariaDB, so the branch that
@@ -3226,7 +3257,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- only executes at 8.0.13+ and never on 5.7/MariaDB; see GenerateTableJson.sql for the full
     -- explanation) or the compare below never converges.
     IF SchemaSmith_SupportsFunctionalIndex() = 1 THEN
-        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment)
+        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment, LeadColumn)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4),
                CONVERT(s.INDEX_NAME USING utf8mb4),
                MAX(s.NON_UNIQUE),
@@ -3235,37 +3266,40 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                    CASE WHEN s.COLUMN_NAME IS NOT NULL THEN
                        CONCAT('`', s.COLUMN_NAME, '`',
                               -- SPATIAL's SUB_PART is a phantom internal value (always 32), not a declared prefix; exclude it or spatial indexes never converge
-                              IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL', CONCAT('(', s.SUB_PART, ')'), ''),
-                              CASE WHEN BINARY s.COLLATION = BINARY 'D' THEN ' DESC' ELSE '' END)
+                              -- MySQL 5.7 gives a BTREE key on a POINT column an implicit 25-byte prefix, the whole value: no prefix either
+                              IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')), CONCAT('(', s.SUB_PART, ')'), ''),
+                              CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    ELSE
                        CONCAT('(', REGEXP_REPLACE(
                            REPLACE(s.EXPRESSION, CONCAT(CHAR(92), CHAR(39)), CHAR(39)),
                            '_[A-Za-z0-9]+''', ''''), ')',
-                              CASE WHEN BINARY s.COLLATION = BINARY 'D' THEN ' DESC' ELSE '' END)
+                              CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    END
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
-               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
+               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4),
+               CONVERT(MAX(CASE WHEN s.SEQ_IN_INDEX = 1 THEN s.COLUMN_NAME END) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
-         WHERE BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
+         WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
          GROUP BY s.TABLE_NAME, s.INDEX_NAME;
     ELSE
-        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment)
+        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment, LeadColumn)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4),
                CONVERT(s.INDEX_NAME USING utf8mb4),
                MAX(s.NON_UNIQUE),
                CONVERT(MAX(s.INDEX_TYPE) USING utf8mb4),
                GROUP_CONCAT(
                    CONCAT('`', s.COLUMN_NAME, '`',
-                          IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL', CONCAT('(', s.SUB_PART, ')'), ''),
-                          CASE WHEN BINARY s.COLLATION = BINARY 'D' THEN ' DESC' ELSE '' END)
+                          IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')), CONCAT('(', s.SUB_PART, ')'), ''),
+                          CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
-               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
+               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4),
+               CONVERT(MAX(CASE WHEN s.SEQ_IN_INDEX = 1 THEN s.COLUMN_NAME END) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
-         WHERE BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
+         WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
          GROUP BY s.TABLE_NAME, s.INDEX_NAME;
     END IF;
 
@@ -3273,14 +3307,49 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- (the main join AND the "new index name doesn't exist" NOT EXISTS); MySQL/MariaDB forbid opening a
     -- TEMPORARY table twice in a single query (ER_CANT_REOPEN_TABLE 1137) -- the original could because
     -- it read INFORMATION_SCHEMA (not a temp) on both sides. The second reference reads this copy.
+    UPDATE _SchemaSmith_IdxDetectSnap
+       SET TableKey = SchemaSmith_IdentifierKey(TableName),
+           IndexKey = SchemaSmith_NameKeyCI(IndexName);
+
+    -- MariaDB converges a case-only index spelling by drop and re-create, which the engine refuses (1553) for an
+    -- index a foreign key depends on. Mark every index that leads with a foreign key's leading column, on either
+    -- side of the key, so that step leaves its spelling alone rather than abort the deploy over a cosmetic
+    -- difference. MySQL renames instead, so it skips the catalog read.
+    IF VERSION() LIKE '%MariaDB%' THEN
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
+        CREATE TEMPORARY TABLE _SchemaSmith_FkLeadColumns (
+            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            PRIMARY KEY (TableKey, ColumnKey)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
+        SELECT SchemaSmith_IdentifierKey(k.TABLE_NAME), SchemaSmith_NameKeyCI(k.COLUMN_NAME)
+          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+         WHERE k.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.TABLE_SCHEMA) = v_DbKey
+           AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
+        INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
+        SELECT SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_NAME), SchemaSmith_NameKeyCI(k.REFERENCED_COLUMN_NAME)
+          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+         WHERE k.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_SCHEMA) = v_DbKey
+           AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
+        UPDATE _SchemaSmith_IdxDetectSnap snap
+          JOIN _SchemaSmith_FkLeadColumns f
+            ON f.TableKey = snap.TableKey AND f.ColumnKey = SchemaSmith_NameKeyCI(snap.LeadColumn)
+           SET snap.FkBacked = 1;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
+    END IF;
+
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectNames;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxDetectNames (
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-        PRIMARY KEY (TableName, IndexName)
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        IndexKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableName, IndexName),
+        KEY ix_idxnames_key (TableKey, IndexKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    INSERT INTO _SchemaSmith_IdxDetectNames (TableName, IndexName)
-    SELECT TableName, IndexName FROM _SchemaSmith_IdxDetectSnap;
+    INSERT INTO _SchemaSmith_IdxDetectNames (TableName, IndexName, TableKey, IndexKey)
+    SELECT TableName, IndexName, TableKey, IndexKey FROM _SchemaSmith_IdxDetectSnap;
 
     -- Per-engine index-visibility snapshot (MySQL IS_VISIBLE / MariaDb IGNORED), one scan, for STEP 2's
     -- modified-index visibility comparison -- replaces the per-candidate SchemaSmith_IndexIsVisible() call.
@@ -3294,6 +3363,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         OldIndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         NewIndexName VARCHAR(128) NOT NULL,
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        OldIndexKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        NewIndexKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, OldIndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -3302,28 +3374,29 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- 1. The new index name doesn't exist
     -- 2. The old index exists and is owned by the product
     -- 3. The column list matches exactly
-    INSERT INTO _SchemaSmith_IndexRenames (TableName, OldIndexName, NewIndexName)
+    INSERT INTO _SchemaSmith_IndexRenames (TableName, OldIndexName, NewIndexName, TableKey, OldIndexKey, NewIndexKey)
     SELECT
         SchemaSmith_StripBacktickWrapping(i.TableName) AS TableName,
         snap.IndexName COLLATE utf8mb4_unicode_ci AS OldIndexName,
-        SchemaSmith_StripBacktickWrapping(i.IndexName) AS NewIndexName
+        SchemaSmith_StripBacktickWrapping(i.IndexName) AS NewIndexName,
+        i.TableKey, snap.IndexKey, i.IndexKey
     FROM _SchemaSmith_Indexes i
     JOIN _SchemaSmith_IdxDetectSnap snap
-        ON BINARY snap.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
+        ON snap.TableKey = i.TableKey
     JOIN SchemaSmith_ProductOwnership po
-        ON BINARY po.ProductName = BINARY p_ProductName
-        AND BINARY po.ObjectSchema = BINARY p_DatabaseName
+        ON CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
+        AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
         AND po.ObjectType = 'INDEX'
-        AND BINARY po.ObjectName = BINARY CONCAT(snap.TableName, '.', snap.IndexName)
+        AND CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(snap.TableKey, '.', snap.IndexKey)
     WHERE i.IsPrimaryKey = 0
       -- New index name doesn't exist
       AND NOT EXISTS (
           SELECT 1 FROM _SchemaSmith_IdxDetectNames s2
-          WHERE BINARY s2.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-            AND BINARY s2.IndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+          WHERE s2.TableKey = i.TableKey
+            AND s2.IndexKey = i.IndexKey
       )
       -- Old index exists with same columns (compare normalized column list)
-      AND BINARY SchemaSmith_NormalizeIndexColumns(i.IndexColumns) = BINARY snap.NormColumns
+      AND CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) = CAST(snap.NormColumns AS BINARY)
       -- Same uniqueness
       AND i.IsUnique = (snap.NonUnique = 0);
 
@@ -3363,10 +3436,10 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- a live index), so no old name equals another rename's new name and one pass suffices.
         UPDATE SchemaSmith_ProductOwnership po
         INNER JOIN _SchemaSmith_IndexRenames r
-            ON BINARY po.ObjectName = BINARY CONCAT(r.TableName, '.', r.OldIndexName)
+            ON CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(r.TableKey, '.', r.OldIndexKey)
         SET po.ObjectName = CONCAT(r.TableName, '.', r.NewIndexName)
-        WHERE BINARY po.ProductName = BINARY p_ProductName
-          AND BINARY po.ObjectSchema = BINARY p_DatabaseName
+        WHERE CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
+          AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
           AND po.ObjectType = 'INDEX';
     END IF;
 
@@ -3380,10 +3453,51 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     IF p_WhatIf = 0 THEN
         DELETE snap FROM _SchemaSmith_IdxDetectSnap snap
             JOIN _SchemaSmith_IndexRenames r
-              ON BINARY r.TableName = BINARY snap.TableName AND BINARY r.OldIndexName = BINARY snap.IndexName;
+              ON r.TableKey = snap.TableKey AND r.OldIndexKey = snap.IndexKey;
         DELETE nm FROM _SchemaSmith_IdxDetectNames nm
             JOIN _SchemaSmith_IndexRenames r
-              ON BINARY r.TableName = BINARY nm.TableName AND BINARY r.OldIndexName = BINARY nm.IndexName;
+              ON r.TableKey = nm.TableKey AND r.OldIndexKey = nm.IndexKey;
+    END IF;
+
+    -- =========================================================================
+    -- Case-only spelling: a declared index the server holds under a spelling that differs only in case is the
+    -- same index (the engine compares index names case-insensitively). Converge it to the package's spelling so
+    -- extraction round-trips. MySQL renames it, which is metadata only. MariaDB has it dropped and re-created by
+    -- STEP 2 instead: a case-only RENAME INDEX corrupts InnoDB's index dictionary on the versions MDEV-34951
+    -- affects (10.6.0-.25, 10.11.0-.16, 11.4.0-.10), and drop/re-create also keeps its full declared definition.
+    -- =========================================================================
+    IF VERSION() NOT LIKE '%MariaDB%' THEN
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCaseRenames;
+        CREATE TEMPORARY TABLE _SchemaSmith_IndexCaseRenames (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT)
+            ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        INSERT INTO _SchemaSmith_IndexCaseRenames (LogMsg, Stmt)
+        SELECT CONCAT('  Rename index (spelling): ', SchemaSmith_StripBacktickWrapping(i.TableName), '.', snap.IndexName,
+                      ' -> ', SchemaSmith_StripBacktickWrapping(i.IndexName)),
+               CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
+                      SchemaSmith_StripBacktickWrapping(i.TableName), '` RENAME INDEX `', snap.IndexName, '` TO `',
+                      SchemaSmith_StripBacktickWrapping(i.IndexName), '`')
+          FROM _SchemaSmith_Indexes i
+          JOIN _SchemaSmith_IdxDetectSnap snap
+            ON snap.TableKey = i.TableKey
+           AND snap.IndexKey = i.IndexKey
+         WHERE i.IsPrimaryKey = 0
+           AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY);
+
+        IF p_WhatIf = 1 THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), Stmt FROM _SchemaSmith_IndexCaseRenames ORDER BY RowId;
+        ELSE
+            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames);
+            WHILE @ss_id IS NOT NULL DO
+                SELECT LogMsg, Stmt INTO @ss_log, @exec_sql FROM _SchemaSmith_IndexCaseRenames WHERE RowId = @ss_id;
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+                SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames WHERE RowId > @ss_id);
+            END WHILE;
+        END IF;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCaseRenames;
     END IF;
 
     -- =========================================================================
@@ -3403,67 +3517,99 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         SchemaSmith_StripBacktickWrapping(i.IndexName) AS IndexName
     FROM _SchemaSmith_Indexes i
     JOIN _SchemaSmith_IdxDetectSnap snap
-        ON BINARY snap.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-        AND BINARY snap.IndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+        ON snap.TableKey = i.TableKey
+        AND snap.IndexKey = i.IndexKey
     LEFT JOIN _SchemaSmith_ExistingIndexVisibility viz
-        ON BINARY viz.TableName = BINARY snap.TableName
-        AND BINARY viz.IndexName = BINARY snap.IndexName
+        ON CAST(viz.TableName AS BINARY) = CAST(snap.TableName AS BINARY)
+        AND CAST(viz.IndexName AS BINARY) = CAST(snap.IndexName AS BINARY)
     WHERE i.IsPrimaryKey = 0
       -- Skip indexes that were just renamed
       AND NOT EXISTS (
           SELECT 1 FROM _SchemaSmith_IndexRenames r
-          WHERE BINARY r.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-            AND BINARY r.NewIndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+          WHERE r.TableKey = i.TableKey
+            AND r.NewIndexKey = i.IndexKey
       )
       -- A declared functional/expression index this target cannot legally CREATE (below the floor / see
       -- the degrade guard above) is left untouched rather than flagged modified-and-dropped: STEP 3 below
       -- excludes it from recreation via the identical predicate, so dropping it here would lose it for good.
-      AND NOT (SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1 AND SchemaSmith_SupportsFunctionalIndex() = 0)
+      AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1
       -- Check if definition differs
       AND (
-          -- Columns differ
-          BINARY SchemaSmith_NormalizeIndexColumns(i.IndexColumns) != BINARY snap.NormColumns
+          -- Spelled differently only in case, on MariaDB (see the case-only spelling step above)
+          (VERSION() LIKE '%MariaDB%' AND snap.FkBacked = 0 AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY))
+          -- Or columns differ
+          OR CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
           -- Or uniqueness differs
           OR i.IsUnique != (snap.NonUnique = 0)
+          -- Or the kind differs (BTREE, HASH, SPATIAL). This detector never compared it, so a real change of kind
+          -- was not applied; SchemaSmith_IndexTypesMatch is also what IndexOnlyQuench uses.
+          OR SchemaSmith_IndexTypesMatch(i.IndexType, snap.IndexType, p_DatabaseName, i.TableName) = 0
           -- Or visibility differs (FULLTEXT indexes don't support INVISIBLE, skip them). Below the
           -- invisible-index floor (MySQL 8.0 / MariaDB 10.6) the keyword can't be emitted, so a declared
           -- invisible index is stored visible; ignore the visibility difference there or it churns every run.
           -- viz.IsVisible is the once-snapshotted per-engine visibility (IS_VISIBLE / IGNORED), replacing
           -- the per-candidate SchemaSmith_IndexIsVisible() read; it is populated only at/above the floor,
           -- which is exactly when SchemaSmith_SupportsInvisibleIndex() = 1 gates this term.
-          OR (BINARY UPPER(snap.IndexType) != BINARY 'FULLTEXT'
+          OR (CAST(UPPER(snap.IndexType) AS BINARY) != CAST('FULLTEXT' AS BINARY)
               AND SchemaSmith_SupportsInvisibleIndex() = 1
               AND i.IsVisible != viz.IsVisible)
           -- Or comment differs (symmetric: covers added, changed, and cleared, matching the column
           -- comment predicate in ModifiedTableQuench). FULLTEXT indexes never reach this file (parsed
           -- separately into _SchemaSmith_FullTextIndexes), so no FULLTEXT exclusion is needed here.
-          OR (BINARY COALESCE(snap.IndexComment, '') != BINARY COALESCE(i.Comment, ''))
+          OR (CAST(COALESCE(snap.IndexComment, '') AS BINARY) != CAST(COALESCE(i.Comment, '') AS BINARY))
       );
 
-    -- Drop modified indexes (they'll be recreated later)
+    -- Drop modified indexes (they'll be recreated later). One a foreign key needs cannot be dropped on its own (1553), so
+    -- it is listed here instead and MissingIndexesAndConstraintsQuench replaces it in a single ALTER, which MySQL checks
+    -- against the key only once both the drop and the add are done.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DeferredIndexSwaps;
+    CREATE TEMPORARY TABLE _SchemaSmith_DeferredIndexSwaps (
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableName, IndexName)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop and recreate modified indexes');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
         FROM _SchemaSmith_ModifiedIndexes;
+
+        -- WhatIf twin of the 'index'/'dropped' audit below.
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'index', CONCAT(TableName, '.', IndexName), 'wouldDrop'
+        FROM _SchemaSmith_ModifiedIndexes;
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop and recreate modified indexes');
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropModIdxStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_DropModIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_DropModIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT,
+                                                             TableName VARCHAR(128) COLLATE utf8mb4_bin, IndexName VARCHAR(128) COLLATE utf8mb4_bin)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_DropModIdxStmts (LogMsg, Stmt)
+        INSERT INTO _SchemaSmith_DropModIdxStmts (LogMsg, Stmt, AuditName, TableName, IndexName)
         SELECT
             CONCAT('  Drop and recreate index: ', TableName, '.', IndexName),
-            CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
+            CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
+            CONCAT(TableName, '.', IndexName), TableName, IndexName
         FROM _SchemaSmith_ModifiedIndexes;
 
         SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModIdxStmts);
         WHILE @ss_id IS NOT NULL DO
-            SELECT LogMsg, Stmt INTO @ss_log, @exec_sql FROM _SchemaSmith_DropModIdxStmts WHERE RowId = @ss_id;
+            SELECT LogMsg, Stmt, AuditName, TableName, IndexName INTO @ss_log, @exec_sql, @ss_auditname, @ss_tbl, @ss_idx
+              FROM _SchemaSmith_DropModIdxStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
             PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
+            SET @ss_fk_needs_index := 0;
+            BEGIN
+                DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                EXECUTE stmt;
+            END;
+            IF @ss_fk_needs_index = 1 THEN
+                INSERT INTO _SchemaSmith_DeferredIndexSwaps (TableName, IndexName) VALUES (@ss_tbl, @ss_idx);
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('    A foreign key needs ', @ss_auditname, ': it is replaced in one statement when it is recreated'));
+            ELSE
+                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
+            END IF;
             DEALLOCATE PREPARE stmt;
             SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModIdxStmts WHERE RowId > @ss_id);
         END WHILE;
@@ -3496,7 +3642,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO _SchemaSmith_WouldDropStep8IdxCat (TableName, IndexName)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4), CONVERT(s.INDEX_NAME USING utf8mb4)
         FROM INFORMATION_SCHEMA.STATISTICS s
-        WHERE BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
+        WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
           AND s.SEQ_IN_INDEX = 1;
 
         -- Defined-index snapshot (table.index pairs from the current definition). This is the
@@ -3616,12 +3762,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO _SchemaSmith_Step8Idx (TableName, IndexName, NonUnique)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4), CONVERT(s.INDEX_NAME USING utf8mb4), s.NON_UNIQUE
         FROM INFORMATION_SCHEMA.STATISTICS s
-        WHERE BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
+        WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
           AND s.SEQ_IN_INDEX = 1;
 
         -- FK rows referencing a product table (for the FK-before-index drop join). Same-schema FKs.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8KCU;
         CREATE TEMPORARY TABLE _SchemaSmith_Step8KCU (
+            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ReferencedTableName VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
@@ -3630,12 +3777,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO _SchemaSmith_Step8KCU (TableName, ConstraintName, ReferencedTableName)
         SELECT CONVERT(kcu.TABLE_NAME USING utf8mb4), CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4), CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4)
         FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-        WHERE BINARY kcu.REFERENCED_TABLE_SCHEMA = BINARY p_DatabaseName
-          AND BINARY kcu.TABLE_SCHEMA = BINARY p_DatabaseName
+        WHERE kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
+          AND kcu.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA) = v_DbKey
           AND kcu.REFERENCED_TABLE_NAME IS NOT NULL;
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Step8TC;
         CREATE TEMPORARY TABLE _SchemaSmith_Step8TC (
+            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             KEY ix_s8tc (TableName, ConstraintName)
@@ -3643,7 +3791,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO _SchemaSmith_Step8TC (TableName, ConstraintName)
         SELECT CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4)
         FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-        WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
+        WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
           AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexesToDrop;
@@ -3793,9 +3941,22 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_DropIdxStmts WHERE RowId = @ss_id;
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
                 PREPARE stmt FROM @exec_sql;
-                EXECUTE stmt;
-                -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
-                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
+                -- An index a foreign key on the table still needs cannot be dropped (1553): MySQL creates one for any
+                -- key with no declared index. It is kept, with its ownership; once the key goes, a later deploy drops it.
+                SET @ss_fk_needs_index := 0;
+                BEGIN
+                    DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                    EXECUTE stmt;
+                END;
+                IF @ss_fk_needs_index = 1 THEN
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_auditname, ': a foreign key needs it'));
+                    DELETE FROM _SchemaSmith_IndexesToDrop
+                     WHERE CONCAT(TableName, '.', IndexName) = CONVERT(@ss_auditname USING utf8mb4) COLLATE utf8mb4_bin;
+                ELSE
+                    -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
+                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
+                END IF;
                 DEALLOCATE PREPARE stmt;
                 SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropIdxStmts WHERE RowId > @ss_id);
             END WHILE;
@@ -3911,8 +4072,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                     '  AND NOT EXISTS ( ',
                     '      SELECT 1 FROM _SchemaSmith_Periods d ',
                     '      WHERE d.TableName = t.TableName ',
-                    '        AND BINARY SchemaSmith_StripBacktickWrapping(d.PeriodName) ',
-                    '          = BINARY JSON_UNQUOTE(JSON_EXTRACT(live.PeriodJson, ''$.Name'')))');
+                    '        AND CAST(SchemaSmith_StripBacktickWrapping(d.PeriodName) AS BINARY) ',
+                    '          = CAST(JSON_UNQUOTE(JSON_EXTRACT(live.PeriodJson, ''$.Name'')) AS BINARY))');
                 PREPARE ss_pdd_stmt FROM @ss_pdd_sql;
                 EXECUTE ss_pdd_stmt;
                 DEALLOCATE PREPARE ss_pdd_stmt;

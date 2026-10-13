@@ -87,7 +87,7 @@ public abstract class FleetIdentificationDatabaseTestsSharedTests
 
                 Assert.That(result, Is.True, "Enumeration against the control DB must succeed.");
                 Assert.That(pq.Failed, Is.False);
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains($"db: {_mainDb}")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains($"db: {_mainDb}", StringComparison.OrdinalIgnoreCase)));
                 _errorLog.DidNotReceive().Error(Arg.Any<string>(), Arg.Any<Exception>());
             }
             finally
@@ -120,7 +120,7 @@ public abstract class FleetIdentificationDatabaseTestsSharedTests
 
                 Assert.That(result, Is.True);
                 Assert.That(pq.Failed, Is.False);
-                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains($"db: {_mainDb}")));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains($"db: {_mainDb}", StringComparison.OrdinalIgnoreCase)));
                 _errorLog.DidNotReceive().Error(Arg.Any<string>(), Arg.Any<Exception>());
             }
             finally

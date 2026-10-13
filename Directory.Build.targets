@@ -1,0 +1,23 @@
+<Project>
+  <!-- Every run of a tool writes into the folder beside its binary: log backups (SchemaQuench.0001 and up), its logs,
+       and resolved-SQL debug artifacts named per step and database ("SchemaQuench - Quench Indexes <server>.<db>.sql").
+       Test projects run the tools thousands of times against uniquely named databases, so none of it is ever
+       overwritten: one test output had gathered 50,000 backup folders and 97,000 of those .sql files, and copying it
+       took over 25 minutes. Remove all of it whenever a project is built or cleaned. Backup folders are matched as
+       <tool>.<four or more digits> (older builds numbered past 9999); the .sql artifacts by their "<tool> - " prefix,
+       which no fixture uses. Tool projects also drop any other top-level .sql, as their original cleanup did. -->
+  <Target Name="CleanLogFolders" BeforeTargets="Clean;PrepareForBuild;Build">
+    <ItemGroup Condition="Exists('$(OutDir)')">
+      <_LogBackupCandidate Include="$([System.IO.Directory]::GetDirectories('$(OutDir)', 'SchemaQuench.*'))" />
+      <_LogBackupCandidate Include="$([System.IO.Directory]::GetDirectories('$(OutDir)', 'SchemaTongs.*'))" />
+      <_LogBackupCandidate Include="$([System.IO.Directory]::GetDirectories('$(OutDir)', 'DataTongs.*'))" />
+      <_LogBackupCandidate Include="$([System.IO.Directory]::GetDirectories('$(OutDir)', 'SchemaShears.*'))" />
+      <_LogBackupFolders Include="@(_LogBackupCandidate)" Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(Extension)', '^\.\d{4,}$'))" />
+      <_LogFilesToClean Include="$(OutDir)*.log" />
+      <_LogFilesToClean Include="$(OutDir)SchemaQuench - *.sql;$(OutDir)SchemaTongs - *.sql;$(OutDir)DataTongs - *.sql;$(OutDir)SchemaShears - *.sql" />
+      <_LogFilesToClean Include="$(OutDir)*.sql" Condition="'$(MSBuildProjectName)' == 'SchemaQuench' Or '$(MSBuildProjectName)' == 'SchemaTongs' Or '$(MSBuildProjectName)' == 'DataTongs' Or '$(MSBuildProjectName)' == 'SchemaShears'" />
+    </ItemGroup>
+    <RemoveDir Directories="@(_LogBackupFolders)" ContinueOnError="true" />
+    <Delete Files="@(_LogFilesToClean)" ContinueOnError="true" />
+  </Target>
+</Project>

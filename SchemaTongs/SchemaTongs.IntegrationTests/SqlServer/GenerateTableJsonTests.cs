@@ -151,7 +151,7 @@ CREATE TABLE dbo.TestFullTextIndex (
     CONSTRAINT [PK_TestFullTextIndex] PRIMARY KEY NONCLUSTERED (MyInt)
 )
 
-CREATE FULLTEXT INDEX ON dbo.TestFullTextIndex (MyString) KEY INDEX PK_TestFullTextIndex ON FT_Catalog WITH CHANGE_TRACKING = AUTO, STOPLIST = SL_TEST
+CREATE FULLTEXT INDEX ON dbo.TestFullTextIndex (MyString) KEY INDEX PK_TestFullTextIndex ON FT_Catalog WITH CHANGE_TRACKING = AUTO, STOPLIST = SL_Test
 ";
         cmd.ExecuteNonQuery();
         var result = GenerateTable(cmd, "dbo", "TestFullTextIndex");
@@ -369,7 +369,7 @@ EXEC sys.sp_addextendedproperty 'Description', 'An integer column', 'SCHEMA', [d
         AssertColumnProperties(result.Columns[5], "MyDateTime2", "DATETIME2(4)", true, null, null);
         AssertColumnProperties(result.Columns[6], "MyDecimal", "DECIMAL(10, 2)", false, null, null);
         AssertColumnProperties(result.Columns[7], "MyDecimalWithDefault", "DECIMAL(12, 4)", false, "3.14", null);
-        AssertColumnProperties(result.Columns[8], "MyFlag", "TEST.FLAG", false, null, null);
+        AssertColumnProperties(result.Columns[8], "MyFlag", "Test.Flag", false, null, null);
         AssertColumnProperties(result.Columns[9], "MyFloat", "FLOAT", true, null, null);
         AssertColumnProperties(result.Columns[10], "MyIdentity", "INT IDENTITY(13, 2)", false, null, null);
         AssertColumnProperties(result.Columns[11], "MyInt", "INT", true, null, null);
@@ -804,14 +804,15 @@ CREATE NONCLUSTERED INDEX [IX_MyFileGroupTable_Somedata] ON dbo.MyFileGroupTable
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
+        // Each CDC enable writes server-wide job metadata and can lose a deadlock to another test process, so each is
+        // its own retried statement; the table DDL runs once beforehand.
         cmd.CommandText = @"
-IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1) EXEC sys.sp_cdc_enable_db;
 CREATE TABLE dbo.CdcOnFgTest (Id INT NOT NULL PRIMARY KEY, Val INT NULL);
-CREATE TABLE dbo.CdcOnDefaultTest (Id INT NOT NULL PRIMARY KEY, Val INT NULL);
-EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcOnFgTest', @role_name = NULL, @filegroup_name = N'FG_Test';
-EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcOnDefaultTest', @role_name = NULL;
-";
+CREATE TABLE dbo.CdcOnDefaultTest (Id INT NOT NULL PRIMARY KEY, Val INT NULL);";
         cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.SqlServerDeadlockRetry.Execute(cmd, "IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1) EXEC sys.sp_cdc_enable_db");
+        Schema.IntegrationTests.SqlServer.SqlServerDeadlockRetry.Execute(cmd, "EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcOnFgTest', @role_name = NULL, @filegroup_name = N'FG_Test'");
+        Schema.IntegrationTests.SqlServer.SqlServerDeadlockRetry.Execute(cmd, "EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcOnDefaultTest', @role_name = NULL");
 
         var onFg = GenerateTable(cmd, "dbo", "CdcOnFgTest");
         var onDefaultJson = GenerateTableJson(cmd, "dbo", "CdcOnDefaultTest");
@@ -836,20 +837,20 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcOnDefa
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
+        // As above: table DDL once, then each CDC enable as its own retried statement.
         cmd.CommandText = @"
-IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1) EXEC sys.sp_cdc_enable_db;
 CREATE TABLE dbo.CdcNetOnTest (Id INT NOT NULL PRIMARY KEY, Val INT NULL);
 CREATE TABLE dbo.CdcNetOffTest (Id INT NOT NULL PRIMARY KEY, Val INT NULL);
-EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNetOnTest', @role_name = NULL, @supports_net_changes = 1;
-EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNetOffTest', @role_name = NULL, @supports_net_changes = 0;
 CREATE TABLE dbo.CdcNetUixTest (Id INT NOT NULL, Val INT NULL);
 CREATE UNIQUE INDEX UX_CdcNetUixTest ON dbo.CdcNetUixTest (Id);
-EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNetUixTest', @role_name = NULL, @supports_net_changes = 1, @index_name = N'UX_CdcNetUixTest';
 CREATE TABLE dbo.CdcIdxOnlyTest (Id INT NOT NULL PRIMARY KEY, Code INT NOT NULL, Val INT NULL);
-CREATE UNIQUE INDEX UX_CdcIdxOnlyTest ON dbo.CdcIdxOnlyTest (Code);
-EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcIdxOnlyTest', @role_name = NULL, @supports_net_changes = 0, @index_name = N'UX_CdcIdxOnlyTest';
-";
+CREATE UNIQUE INDEX UX_CdcIdxOnlyTest ON dbo.CdcIdxOnlyTest (Code);";
         cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.SqlServerDeadlockRetry.Execute(cmd, "IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1) EXEC sys.sp_cdc_enable_db");
+        Schema.IntegrationTests.SqlServer.SqlServerDeadlockRetry.Execute(cmd, "EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNetOnTest', @role_name = NULL, @supports_net_changes = 1");
+        Schema.IntegrationTests.SqlServer.SqlServerDeadlockRetry.Execute(cmd, "EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNetOffTest', @role_name = NULL, @supports_net_changes = 0");
+        Schema.IntegrationTests.SqlServer.SqlServerDeadlockRetry.Execute(cmd, "EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNetUixTest', @role_name = NULL, @supports_net_changes = 1, @index_name = N'UX_CdcNetUixTest'");
+        Schema.IntegrationTests.SqlServer.SqlServerDeadlockRetry.Execute(cmd, "EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcIdxOnlyTest', @role_name = NULL, @supports_net_changes = 0, @index_name = N'UX_CdcIdxOnlyTest'");
 
         var on = GenerateTable(cmd, "dbo", "CdcNetOnTest");
         var offJson = GenerateTableJson(cmd, "dbo", "CdcNetOffTest");
@@ -975,7 +976,7 @@ ALTER TABLE dbo.TestPartitionedMixed REBUILD PARTITION = 2 WITH (DATA_COMPRESSIO
 
     private string GenerateTableJson(IDbCommand cmd, string schema, string table)
     {
-        cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJson @p_Schema = '{schema}', @p_Table = '{table}'";
+        cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = '{schema}', @p_Table = '{table}'";
         using var reader = cmd.ExecuteReader();
 
         var tableJson = string.Empty;
@@ -1004,7 +1005,7 @@ ALTER TABLE dbo.TestPartitionedMixed REBUILD PARTITION = 2 WITH (DATA_COMPRESSIO
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @$"
-CREATE DATABASE [{_integrationDb}];
+CREATE DATABASE [{_integrationDb}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};
 ";
         cmd.ExecuteNonQuery();
 
@@ -1093,13 +1094,6 @@ N'<?xml version=""1.0"" encoding=""UTF-16""?>
         conn.Close();
     }
 
-    private static void DropOneDatabase(IDbCommand cmd, string dbName)
-    {
-        cmd.CommandText = @$"
-IF DB_ID('{dbName}') IS NOT NULL
-  ALTER DATABASE [{dbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{dbName}];
-";
-        cmd.ExecuteNonQuery();
-    }
+    private static void DropOneDatabase(IDbCommand cmd, string dbName) =>
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, dbName);
 }
