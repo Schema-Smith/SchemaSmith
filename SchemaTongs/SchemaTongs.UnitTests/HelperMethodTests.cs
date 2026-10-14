@@ -172,6 +172,34 @@ public class HelperMethodTests
 
     #region ConvertToCreateOrAlter Tests
 
+    // sp_rename changes the catalog name but not the stored text, so the text's own name is what tells them apart.
+    [Test]
+    public void DefinedObjectName_ReadsTheNameTheStoredTextCreates()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SchemaTongs.DefinedObjectName("CREATE VIEW dbo.vOld AS SELECT 1 AS x"), Is.EqualTo("vOld"));
+            Assert.That(SchemaTongs.DefinedObjectName("CREATE   PROC [dbo].[My Proc]\r\nAS BEGIN END"), Is.EqualTo("My Proc"));
+            Assert.That(SchemaTongs.DefinedObjectName("CREATE FUNCTION \"dbo\".\"f\"() RETURNS INT AS BEGIN RETURN 1 END"), Is.EqualTo("f"));
+            Assert.That(SchemaTongs.DefinedObjectName("CREATE TRIGGER trg ON dbo.t AFTER INSERT AS SELECT 1"), Is.EqualTo("trg"));
+            Assert.That(SchemaTongs.DefinedObjectName("-- nothing here"), Is.Null);
+        });
+    }
+
+    [Test]
+    public void ReplaceDefinedName_WritesTheCurrentNameInPlaceOfTheStaleOne()
+    {
+        var result = SchemaTongs.ReplaceDefinedName("CREATE VIEW dbo.vOld AS SELECT vOld.x FROM dbo.vOld", "dbo", "vNew");
+        Assert.That(result, Does.StartWith("CREATE VIEW [dbo].[vNew] AS"), "only the created name changes; the body is the user's to review");
+    }
+
+    [Test]
+    public void ConvertToCreateOrAlter_ProcShorthand_ConvertsCorrectly()
+    {
+        var result = SchemaTongs.ConvertToCreateOrAlter("CREATE PROC dbo.MyProc AS BEGIN END", "dbo", "MyProc");
+        Assert.That(result, Does.StartWith("CREATE OR ALTER PROC [dbo].[MyProc]"));
+    }
+
     [Test]
     public void ConvertToCreateOrAlter_SimpleProcedure_ConvertsCorrectly()
     {

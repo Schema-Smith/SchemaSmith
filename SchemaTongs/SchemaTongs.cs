@@ -1291,14 +1291,20 @@ SELECT s.name AS SchemaName, t.name AS TypeName,
 
     private void ScriptSqlServerTableTypes(IDbCommand command, string castPath)
     {
-        command.CommandText = @"
-SELECT s.name AS SchemaName, tt.name AS TypeName, tt.type_table_object_id
+        // Every clause the type can carry: identity, computed, DEFAULT, COLLATE, named indexes (2014+) with HASH,
+        // INCLUDE and a filter, IGNORE_DUP_KEY and MEMORY_OPTIMIZED. The memory-optimized column and sys.hash_indexes
+        // do not exist before 2014, so they are read only there.
+        var memoryOptimized = _sourceMajor >= 12;
+        command.CommandText = $@"
+SELECT s.name AS SchemaName, tt.name AS TypeName, tt.type_table_object_id,
+       {(memoryOptimized ? "tt.is_memory_optimized" : "CONVERT(BIT, 0)")} AS IsMemoryOptimized,
+       CONVERT(NVARCHAR(128), DATABASEPROPERTYEX(DB_NAME(), 'Collation')) AS DatabaseCollation
   FROM sys.table_types tt
   JOIN sys.schemas s ON tt.schema_id = s.schema_id
  WHERE tt.is_user_defined = 1
  ORDER BY s.name, tt.name";
 
-        var tableTypes = new List<(string Schema, string Name, int ObjectId)>();
+        var tableTypes = new List<(string Schema, string Name, int ObjectId, bool IsMemoryOptimized, string DatabaseCollation)>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
@@ -1307,129 +1313,120 @@ SELECT s.name AS SchemaName, tt.name AS TypeName, tt.type_table_object_id
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
                 if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
-                tableTypes.Add((schema, name, reader.GetInt32(2)));
+                tableTypes.Add((schema, name, reader.GetInt32(2), reader.GetBoolean(3), reader.IsDBNull(4) ? "" : reader.GetString(4)));
             }
         }
 
-        foreach (var (schema, name, objectId) in tableTypes)
+        foreach (var (schema, name, objectId, isMemoryOptimized, databaseCollation) in tableTypes)
         {
             command.CommandText = $@"
 SELECT c.name, TYPE_NAME(c.user_type_id) AS TypeName,
        c.max_length, c.precision, c.scale, c.is_nullable,
        c.is_identity, c.is_computed,
        ts.name AS UserTypeName, tss.name AS UserTypeSchema,
-       c.column_id
+       c.collation_name,
+       CONVERT(VARCHAR(50), ic.seed_value) AS Seed, CONVERT(VARCHAR(50), ic.increment_value) AS Increment,
+       cc.definition AS ComputedDefinition, cc.is_persisted,
+       dc.definition AS DefaultDefinition
   FROM sys.columns c
   LEFT JOIN sys.types ts ON c.user_type_id = ts.user_type_id AND ts.is_user_defined = 1
   LEFT JOIN sys.schemas tss ON ts.schema_id = tss.schema_id
+  LEFT JOIN sys.identity_columns ic ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+  LEFT JOIN sys.computed_columns cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id
+  LEFT JOIN sys.default_constraints dc ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
  WHERE c.object_id = {objectId}
  ORDER BY c.column_id";
 
-            var columns = new List<(string Name, string TypeName, short MaxLength, byte Precision, byte Scale, bool IsNullable, bool IsIdentity, bool IsComputed, string UserTypeName, string UserTypeSchema)>();
+            var columnLines = new List<string>();
             using (var reader = command.ExecuteReader())
             {
                 while (reader.Read())
                 {
-                    columns.Add((
-                        reader.GetString(0),
-                        reader.GetString(1),
-                        reader.GetInt16(2),
-                        reader.GetByte(3),
-                        reader.GetByte(4),
-                        reader.GetBoolean(5),
-                        reader.GetBoolean(6),
-                        reader.GetBoolean(7),
-                        reader.IsDBNull(8) ? null : reader.GetString(8),
-                        reader.IsDBNull(9) ? null : reader.GetString(9)
-                    ));
+                    var columnName = $"[{Identifier.EscapeDelimited(reader.GetString(0), Platform.SqlServer)}]";
+                    if (reader.GetBoolean(7))
+                    {
+                        columnLines.Add($"\t{columnName} AS {reader.GetString(13)}{(reader.GetBoolean(14) ? " PERSISTED" : "")}");
+                        continue;
+                    }
+                    var typeSpec = reader.IsDBNull(8)
+                        ? FormatBaseType(reader.GetString(1), reader.GetInt16(2), reader.GetByte(3), reader.GetByte(4))
+                        : $"[{Identifier.EscapeDelimited(reader.GetString(9), Platform.SqlServer)}].[{Identifier.EscapeDelimited(reader.GetString(8), Platform.SqlServer)}]";
+                    var collation = !reader.IsDBNull(10) && !reader.GetString(10).Equals(databaseCollation, StringComparison.OrdinalIgnoreCase)
+                        ? $" COLLATE {reader.GetString(10)}" : "";
+                    var nullability = reader.GetBoolean(5) ? " NULL" : " NOT NULL";
+                    var defaultSpec = reader.IsDBNull(15) ? "" : $" DEFAULT {reader.GetString(15)}";
+                    var identity = reader.GetBoolean(6) ? $" IDENTITY({reader.GetString(11)}, {reader.GetString(12)})" : "";
+                    columnLines.Add($"\t{columnName} {typeSpec}{collation}{nullability}{defaultSpec}{identity}");
                 }
             }
 
             command.CommandText = $@"
-SELECT i.name, i.type_desc, i.is_unique, i.is_primary_key,
-       ic.column_id, c.name AS ColumnName, ic.is_descending_key
+SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key, i.is_unique_constraint, i.ignore_dup_key,
+       i.filter_definition, {(memoryOptimized ? "hi.bucket_count" : "CONVERT(INT, NULL)")} AS BucketCount,
+       ic.is_included_column, c.name AS ColumnName, ic.is_descending_key
   FROM sys.indexes i
   JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
   JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+  {(memoryOptimized ? "LEFT JOIN sys.hash_indexes hi ON hi.object_id = i.object_id AND hi.index_id = i.index_id" : "")}
  WHERE i.object_id = {objectId}
    AND i.type > 0
- ORDER BY i.index_id, ic.key_ordinal";
+ ORDER BY i.index_id, ic.is_included_column, ic.key_ordinal";
 
-            var indexes = new Dictionary<string, (string TypeDesc, bool IsUnique, bool IsPrimaryKey, List<(string ColumnName, bool IsDescending)> Columns)>();
+            // A PRIMARY KEY or UNIQUE constraint on a table type cannot be named, so only a plain index keeps its name.
+            var indexes = new List<(int Id, string Name, string TypeDesc, bool IsUnique, bool IsPrimaryKey, bool IsUniqueConstraint, bool IgnoreDupKey, string Filter, int? BucketCount, List<string> Keys, List<string> Includes)>();
             using (var reader = command.ExecuteReader())
             {
                 while (reader.Read())
                 {
-                    var indexName = reader.IsDBNull(0) ? "" : reader.GetString(0);
-                    var typeDesc = reader.GetString(1);
-                    var isUnique = reader.GetBoolean(2);
-                    var isPrimaryKey = reader.GetBoolean(3);
-                    var columnName = reader.GetString(5);
-                    var isDescending = reader.GetBoolean(6);
-
-                    if (!indexes.ContainsKey(indexName))
-                        indexes[indexName] = (typeDesc, isUnique, isPrimaryKey, new List<(string, bool)>());
-                    indexes[indexName].Columns.Add((columnName, isDescending));
+                    var indexId = reader.GetInt32(1);
+                    if (indexes.Count == 0 || indexes[^1].Id != indexId)
+                        indexes.Add((indexId, reader.GetBoolean(4) || reader.GetBoolean(5) || reader.IsDBNull(0) ? null : reader.GetString(0),
+                            reader.GetString(2), reader.GetBoolean(3), reader.GetBoolean(4), reader.GetBoolean(5), reader.GetBoolean(6),
+                            reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetInt32(8), [], []));
+                    var column = $"[{Identifier.EscapeDelimited(reader.GetString(10), Platform.SqlServer)}]";
+                    if (reader.GetBoolean(9)) indexes[^1].Includes.Add(column);
+                    else indexes[^1].Keys.Add(column + (reader.GetBoolean(11) ? " DESC" : " ASC"));
                 }
             }
 
             command.CommandText = $@"
-SELECT cc.name, cc.definition
+SELECT cc.definition
   FROM sys.check_constraints cc
  WHERE cc.parent_object_id = {objectId}
  ORDER BY cc.name";
-
-            var checkConstraints = new List<(string Name, string Definition)>();
+            var checks = new List<string>();
             using (var reader = command.ExecuteReader())
             {
-                while (reader.Read())
-                    checkConstraints.Add((reader.GetString(0), reader.GetString(1)));
+                while (reader.Read()) checks.Add(reader.GetString(0));
             }
 
-            var lines = new List<string>();
-            lines.Add($"CREATE TYPE [{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(name, Platform.SqlServer)}] AS TABLE(");
-
-            for (var i = 0; i < columns.Count; i++)
+            var constraintLines = new List<string>();
+            foreach (var index in indexes)
             {
-                var col = columns[i];
-                string typeSpec;
-                if (col.UserTypeName != null)
-                    typeSpec = $"[{Identifier.EscapeDelimited(col.UserTypeSchema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(col.UserTypeName, Platform.SqlServer)}]";
-                else
-                    typeSpec = FormatBaseType(col.TypeName, col.MaxLength, col.Precision, col.Scale);
-
-                var nullSpec = col.IsNullable ? "NULL" : "NOT NULL";
-                var comma = (i < columns.Count - 1 || indexes.Count > 0 || checkConstraints.Count > 0) ? "," : "";
-                lines.Add($"\t[{Identifier.EscapeDelimited(col.Name, Platform.SqlServer)}] {typeSpec} {nullSpec}{comma}");
-            }
-
-            var constraintEntries = new List<string>();
-            foreach (var kvp in indexes)
-            {
-                var idx = kvp.Value;
-                var colList = string.Join(",\r\n", idx.Columns.Select(c => $"\t[{Identifier.EscapeDelimited(c.ColumnName, Platform.SqlServer)}] " + (c.IsDescending ? "DESC" : "ASC")));
-
-                if (idx.IsPrimaryKey)
-                    constraintEntries.Add($"\tPRIMARY KEY {idx.TypeDesc} \r\n(\r\n{colList}\r\n)");
+                var keys = string.Join(", ", index.Keys);
+                var with = new List<string>();
+                if (index.IgnoreDupKey) with.Add("IGNORE_DUP_KEY = ON");
+                if (index.BucketCount is > 0) with.Add($"BUCKET_COUNT = {index.BucketCount}");
+                var withClause = with.Count > 0 ? $" WITH ({string.Join(", ", with)})" : "";
+                if (index.IsPrimaryKey)
+                    constraintLines.Add($"\tPRIMARY KEY {index.TypeDesc} ({keys}){withClause}");
+                else if (index.IsUniqueConstraint)
+                    constraintLines.Add($"\tUNIQUE {index.TypeDesc} ({keys}){withClause}");
+                else if (index.Name == null)
+                    constraintLines.Add($"\t{(index.IsUnique ? "UNIQUE " : "")}{index.TypeDesc} ({keys}){withClause}");
                 else
                 {
-                    var unique = idx.IsUnique ? "UNIQUE " : "";
-                    constraintEntries.Add($"\t{unique}{idx.TypeDesc} \r\n(\r\n{colList}\r\n)");
+                    var include = index.Includes.Count > 0 ? $" INCLUDE ({string.Join(", ", index.Includes)})" : "";
+                    var filter = index.Filter != null ? $" WHERE {index.Filter}" : "";
+                    constraintLines.Add($"\tINDEX [{Identifier.EscapeDelimited(index.Name, Platform.SqlServer)}] {(index.IsUnique ? "UNIQUE " : "")}{index.TypeDesc} ({keys}){include}{filter}{withClause}");
                 }
             }
+            foreach (var check in checks)
+                constraintLines.Add($"\tCHECK {check}");
 
-            foreach (var cc in checkConstraints)
-                constraintEntries.Add($"\tCHECK {cc.Definition}");
-
-            for (var i = 0; i < constraintEntries.Count; i++)
-            {
-                var suffix = i < constraintEntries.Count - 1 ? "," : "";
-                lines.Add(constraintEntries[i] + suffix);
-            }
-
-            lines.Add(")");
-
-            var createScript = string.Join("\r\n", lines);
+            var body = string.Join(",\r\n", columnLines.Concat(constraintLines));
+            var createScript = $"CREATE TYPE [{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(name, Platform.SqlServer)}] AS TABLE(\r\n{body}\r\n)" +
+                               (isMemoryOptimized ? "\r\nWITH (MEMORY_OPTIMIZED = ON)" : "");
 
             var script = $"IF NOT EXISTS (SELECT * FROM sys.types st JOIN sys.schemas ss ON st.schema_id = ss.schema_id WHERE st.name = N'{EscapeSql(name)}' AND ss.name = N'{EscapeSql(schema)}')\r\n" +
                          createScript;
@@ -1448,17 +1445,23 @@ SELECT cc.name, cc.definition
         var castPath = GetCastPath(ScriptObjectType.Sequences, "Sequences");
         DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
 
+        // The values are sql_variant and a DECIMAL(38, 0) sequence's bounds overflow the driver's decimal, so they are
+        // converted to text on the server. The type keeps its precision and an alias type keeps its name; CACHE is
+        // written when it is explicit (NO CACHE, or a size), and the server default otherwise.
         command.CommandText = @"
-SELECT s.name AS SchemaName, sq.name AS SequenceName, TYPE_NAME(sq.system_type_id) AS DataType,
-       sq.start_value, sq.increment, sq.minimum_value, sq.maximum_value, sq.is_cycling
+SELECT s.name AS SchemaName, sq.name AS SequenceName,
+       CASE WHEN t.is_user_defined = 1 THEN QUOTENAME(SCHEMA_NAME(t.schema_id)) + '.' + QUOTENAME(t.name)
+            WHEN TYPE_NAME(sq.system_type_id) IN ('decimal', 'numeric') THEN TYPE_NAME(sq.system_type_id) + '(' + CONVERT(VARCHAR(5), sq.precision) + ')'
+            ELSE TYPE_NAME(sq.system_type_id) END AS DataType,
+       CONVERT(VARCHAR(50), sq.start_value) AS StartValue, CONVERT(VARCHAR(50), sq.increment) AS Increment,
+       CONVERT(VARCHAR(50), sq.minimum_value) AS MinValue, CONVERT(VARCHAR(50), sq.maximum_value) AS MaxValue,
+       sq.is_cycling, sq.is_cached, sq.cache_size
   FROM sys.sequences sq
   JOIN sys.schemas s ON sq.schema_id = s.schema_id
+  JOIN sys.types t ON t.user_type_id = sq.user_type_id
  ORDER BY s.name, sq.name";
 
-        // start_value/increment/minimum_value/maximum_value are sql_variant (a sequence can be any exact
-        // numeric type) — read via ToString() rather than a numeric conversion so a DECIMAL/NUMERIC-typed
-        // sequence's value round-trips as a literal instead of risking overflow or truncation.
-        var sequences = new List<(string Schema, string Name, string DataType, string StartValue, string Increment, string MinValue, string MaxValue, bool IsCycling)>();
+        var sequences = new List<(string Schema, string Name, string DataType, string StartValue, string Increment, string MinValue, string MaxValue, bool IsCycling, bool IsCached, int? CacheSize)>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
@@ -1467,15 +1470,14 @@ SELECT s.name AS SchemaName, sq.name AS SequenceName, TYPE_NAME(sq.system_type_i
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
                 if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
-                sequences.Add((schema, name, reader.GetString(2),
-                    reader.GetValue(3).ToString(), reader.GetValue(4).ToString(),
-                    reader.GetValue(5).ToString(), reader.GetValue(6).ToString(),
-                    reader.GetBoolean(7)));
+                sequences.Add((schema, name, reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6),
+                    reader.GetBoolean(7), reader.GetBoolean(8), reader.IsDBNull(9) ? null : reader.GetInt32(9)));
             }
         }
 
-        foreach (var (schema, name, dataType, startValue, increment, minValue, maxValue, isCycling) in sequences)
+        foreach (var (schema, name, dataType, startValue, increment, minValue, maxValue, isCycling, isCached, cacheSize) in sequences)
         {
+            var cache = !isCached ? "\r\n\tNO CACHE" : cacheSize is > 0 ? $"\r\n\tCACHE {cacheSize}" : "";
             var createScript =
                 $"CREATE SEQUENCE [{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(name, Platform.SqlServer)}]\r\n" +
                 $"\tAS {dataType}\r\n" +
@@ -1483,7 +1485,7 @@ SELECT s.name AS SchemaName, sq.name AS SequenceName, TYPE_NAME(sq.system_type_i
                 $"\tINCREMENT BY {increment}\r\n" +
                 $"\tMINVALUE {minValue}\r\n" +
                 $"\tMAXVALUE {maxValue}\r\n" +
-                $"\t{(isCycling ? "CYCLE" : "NO CYCLE")}";
+                $"\t{(isCycling ? "CYCLE" : "NO CYCLE")}{cache}";
 
             // CREATE SEQUENCE has no IF NOT EXISTS form on SQL Server (unlike PostgreSQL); guard with the
             // same catalog-existence check the Schemas/DataTypes folders use above.
@@ -1795,25 +1797,25 @@ SELECT s.name AS TableSchema, pt.name AS TableName, tr.name AS TriggerName
         DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
 
         command.CommandText = @"
-SELECT name
+SELECT name, is_accent_sensitivity_on, is_default
   FROM sys.fulltext_catalogs
  ORDER BY name";
 
-        var catalogs = new List<string>();
+        var catalogs = new List<(string Name, bool AccentSensitive, bool IsDefault)>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
             {
                 var name = reader.GetString(0);
                 if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
-                catalogs.Add(name);
+                catalogs.Add((name, reader.GetBoolean(1), reader.GetBoolean(2)));
             }
         }
 
-        foreach (var name in catalogs)
+        foreach (var (name, accentSensitive, isDefault) in catalogs)
         {
-            var script = $"IF NOT EXISTS (SELECT * FROM sysfulltextcatalogs ftc WHERE ftc.name = N'{EscapeSql(name)}')\r\n" +
-                         $"CREATE FULLTEXT CATALOG [{Identifier.EscapeDelimited(name, Platform.SqlServer)}] ";
+            var script = $"IF NOT EXISTS (SELECT * FROM sys.fulltext_catalogs ftc WHERE ftc.name = N'{EscapeSql(name)}')\r\n" +
+                         $"CREATE FULLTEXT CATALOG [{Identifier.EscapeDelimited(name, Platform.SqlServer)}] WITH ACCENT_SENSITIVITY = {(accentSensitive ? "ON" : "OFF")}{(isDefault ? " AS DEFAULT" : "")}";
 
             var fileName = ResolveOutputPath(castPath, EncodeFileName(name, ".sql"));
             _progressLog.Info($"  Casting {fileName}");
@@ -2012,10 +2014,33 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
         }
     }
 
+    // The object's name as its stored definition spells it. After sp_rename the catalog name changes but the stored
+    // text does not, so the two disagree and a script written from the text would create the old name.
+    private static readonly Regex CreateHeaderName = new(
+        @"(?<!\w)CREATE\s+(OR\s+ALTER\s+)?(PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\s+(?<full>(\[[^\]]+\]|""[^""]+""|[\w$#@]+)(\s*\.\s*(\[[^\]]+\]|""[^""]+""|[\w$#@]+))?)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    internal static string DefinedObjectName(string definition)
+    {
+        var match = CreateHeaderName.Match(definition);
+        if (!match.Success) return null;
+        var full = match.Groups["full"].Value;
+        var last = full.LastIndexOf('.');
+        return (last >= 0 ? full[(last + 1)..] : full).Trim().Trim('[', ']', '"');
+    }
+
+    internal static string ReplaceDefinedName(string definition, string schemaName, string objectName)
+    {
+        var match = CreateHeaderName.Match(definition);
+        if (!match.Success) return definition;
+        var full = match.Groups["full"];
+        return definition[..full.Index] + $"[{Identifier.EscapeDelimited(schemaName, Platform.SqlServer)}].[{Identifier.EscapeDelimited(objectName, Platform.SqlServer)}]" + definition[(full.Index + full.Length)..];
+    }
+
     internal static string ConvertToCreateOrAlter(string definition, string schemaName, string objectName)
     {
         var createMatch = Regex.Match(definition,
-            @"(?<!\w)CREATE(\s+)(PROCEDURE|FUNCTION|VIEW|TRIGGER)\b",
+            @"(?<!\w)CREATE(\s+)(PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\b",
             RegexOptions.IgnoreCase);
         var result = createMatch.Success
             ? definition.Substring(0, createMatch.Index) + "CREATE OR ALTER" + createMatch.Value.Substring("CREATE".Length) + definition.Substring(createMatch.Index + createMatch.Length)
@@ -2067,6 +2092,13 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
 
         if (!definition.Contains("\r\n"))
             definition = definition.Replace("\n", "\r\n");
+
+        var definedName = DefinedObjectName(definition);
+        if (definedName != null && !definedName.Equals(objectName, StringComparison.OrdinalIgnoreCase))
+        {
+            _progressLog.Warn($"  WARNING: {schemaName}.{objectName} was renamed with sp_rename; its stored definition still creates {definedName}. The script is written under the current name; check the body for the old one.");
+            definition = ReplaceDefinedName(definition, schemaName, objectName);
+        }
 
         definition = ConvertToCreateOrAlter(definition, schemaName, objectName);
 

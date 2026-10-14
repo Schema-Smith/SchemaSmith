@@ -250,6 +250,8 @@ Control exactly what gets cast from the database. Each object type can be indivi
 | `XMLSchemaCollections` | `true` | XML schema collections |
 | `IndexedViews` | `true` | Indexed (materialized) view definitions as JSON files |
 
+**What the SQL Server scripts carry.** A table type is written with its identity, computed columns, defaults, a `COLLATE` that differs from the database's, its named indexes (`HASH`, `INCLUDE` and filter forms included), `IGNORE_DUP_KEY` and `MEMORY_OPTIMIZED` (2014+). A sequence keeps its type's precision, an alias type's name and an explicit `CACHE` or `NO CACHE`. A full-text catalog keeps `ACCENT_SENSITIVITY` and `AS DEFAULT`. A module renamed with `sp_rename` still carries its old name in its stored text; SchemaTongs writes it under the current name and logs a warning naming the old one, so review the body for references to it.
+
 ### PostgreSQL only
 
 | Flag | Default | What It Extracts |

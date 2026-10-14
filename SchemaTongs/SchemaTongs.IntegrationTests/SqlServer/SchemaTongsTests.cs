@@ -473,8 +473,8 @@ public class SchemaTongsTests
         var captured = RunCastWithCapture(config => config["ShouldCast:Catalogs"] = "true");
         var content = captured.First(kvp => kvp.Key.EndsWithIgnoringCase(Path.Combine("FullTextCatalogs", "FT_Catalog.sql"))).Value;
         Assert.That(content, Is.EqualTo(
-            "IF NOT EXISTS (SELECT * FROM sysfulltextcatalogs ftc WHERE ftc.name = N'FT_Catalog')\r\n" +
-            "CREATE FULLTEXT CATALOG [FT_Catalog] "));
+            "IF NOT EXISTS (SELECT * FROM sys.fulltext_catalogs ftc WHERE ftc.name = N'FT_Catalog')\r\n" +
+            "CREATE FULLTEXT CATALOG [FT_Catalog] WITH ACCENT_SENSITIVITY = ON"));
     }
 
     [Test]
