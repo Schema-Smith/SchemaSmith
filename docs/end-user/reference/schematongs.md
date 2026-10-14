@@ -268,6 +268,15 @@ Control exactly what gets cast from the database. Each object type can be indivi
 |---|---|---|
 | `Events` | `true` | Scheduled events |
 
+**Views, functions, procedures and triggers are written from the engine's own DDL** (`SHOW CREATE`), so everything the server knows about the object comes with it: parameter modes and character sets, defaults, `AGGREGATE` and `RETURNS ROW` functions, multi-event and `UPDATE OF` triggers, `COMMENT`, `SQL SECURITY`, a view's `ALGORITHM` and `CHECK OPTION`, and MySQL 9.4's JSON duality views. The `DEFINER` clause is removed, so a deployed object's definer is the account that deploys it. Two things are added to what the server returns:
+
+- **A routine or trigger script sets the object's own `sql_mode` around its `CREATE`** and restores the session's mode afterwards. The server renders the text in that mode (double-quoted identifiers under `ANSI_QUOTES`, Oracle syntax under `ORACLE`) and runs the body under it, so the deployed object keeps it whatever mode the target server runs.
+- **A trigger's `FOLLOWS` is rebuilt from the catalog's `ACTION_ORDER`.** `SHOW CREATE TRIGGER` returns the statement as it was written, which never carries the order. A follower whose file sorts before its predecessor fails on the deploy's first pass and is created on the retry pass.
+
+A view is written as `CREATE OR REPLACE VIEW`, so a view that fails to deploy leaves the previous view in place. A reference to a table in the same database is written unqualified, and a reference to another database keeps its qualifier, so the package deploys to a database of any name.
+
+**Extraction privileges.** The account needs `SELECT` on the database, `SHOW VIEW` for views, `TRIGGER` for triggers, `EVENT` for events, and, for the body of a routine it did not create, global `SELECT` (MySQL 8.0.20+: `SHOW_ROUTINE`; MariaDB: `SELECT` on `mysql.proc`). An object whose definition the server will not return is logged as skipped and counted in the run's skipped objects; without the `TRIGGER` privilege the catalog lists no triggers at all, and SchemaTongs says so once.
+
 ---
 
 ## Folder Mapping
@@ -394,6 +403,8 @@ If no single variant's gate is active on the source, the extracted shape is writ
 ## Script Validation
 
 Catch problems at extraction time instead of discovering them during deployment. When `ShouldCast:ValidateScripts` is `true`, SchemaTongs tests each extracted SQL script for validity immediately after writing it. The validation strategy depends on the platform and the object type, but the principle is the same: try to compile the object server-side, roll back, and flag failures.
+
+On MySQL and MariaDB there is no rollback for DDL, so a view, function or procedure is validated by creating it under a temporary name (`_validate_` followed by twelve hex characters) on the source database and dropping it straight after, under the object's own `sql_mode`. Triggers are not validated on these engines: `CREATE TRIGGER` cannot be parsed without being created, and a temporary trigger would be live on the source table while it was checked.
 
 ### Invalid script handling
 
