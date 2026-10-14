@@ -195,7 +195,9 @@ public class ProgramTests
     }
 
     [Test]
-    public void ResolvePlatform_TargetTakesPrecedenceOverSource()
+    // SchemaTongs extracts from Source, so Source names the platform; Target is only the shared-settings fallback, as for
+    // every connection key and in DataTongs.
+    public void ResolvePlatform_SourceTakesPrecedenceOverTarget()
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -209,7 +211,7 @@ public class ProgramTests
 
             var result = Program.ResolvePlatform();
 
-            Assert.That(result, Is.EqualTo(Platform.MySQL));
+            Assert.That(result, Is.EqualTo(Platform.PostgreSQL));
 
             FactoryContainer.Clear();
         }

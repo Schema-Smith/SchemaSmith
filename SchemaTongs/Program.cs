@@ -110,9 +110,9 @@ public static class Program
     internal static Platform ResolvePlatform()
     {
         var config = FactoryContainer.ResolveOrCreate<Microsoft.Extensions.Configuration.IConfigurationRoot>();
-        var platformValue = config[SettingsKeys.Target.Platform] ?? config[SettingsKeys.Source.Platform];
+        var platformValue = config[SettingsKeys.Source.Platform] ?? config[SettingsKeys.Target.Platform];
         if (string.IsNullOrWhiteSpace(platformValue))
-            throw new RunFailedException("Platform is required. Set 'Target:Platform' or 'Source:Platform' in SchemaTongs.settings.json.");
+            throw new RunFailedException("Platform is required. Set 'Source:Platform' or 'Target:Platform' in SchemaTongs.settings.json.");
 
         return PlatformExtensions.ParsePlatform(platformValue);
     }
