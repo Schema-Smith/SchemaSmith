@@ -2544,29 +2544,33 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
 
     private void CastPostgreSqlCompositeTypes(IDbCommand command)
     {
+        // Attribute names are quoted and a collation that differs from the type's own is written out; both were lost
+        // and a reserved-word attribute made the script fail. The old pg_type_is_visible filter also skipped every
+        // composite type in a schema that was not on the search_path, which is any named schema.
         command.CommandText = @"
 SELECT 'Composite Types' AS Folder,
        ns.nspname || '.' || t.typname AS FullName,
-       '
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = ''' || ns.nspname || ''' AND t.typname = ''' || t.typname || ''') THEN
-        CREATE TYPE ""' || ns.nspname || '"".""' || t.typname || '""  AS (' || STRING_AGG(a.attname || ' ' || FORMAT_TYPE(a.atttypid, a.atttypmod), ', ' ORDER BY a.attnum) || ');
-    END IF;
-END
-$$;' AS Code
+       E'\nDO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = ' || QUOTE_LITERAL(ns.nspname) || ' AND t.typname = ' || QUOTE_LITERAL(t.typname) || E') THEN\n        CREATE TYPE ' ||
+       QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(t.typname) || ' AS (' ||
+       STRING_AGG(QUOTE_IDENT(a.attname) || ' ' || FORMAT_TYPE(a.atttypid, a.atttypmod) ||
+                  CASE WHEN a.attcollation <> 0 AND a.attcollation <> ty.typcollation
+                       THEN ' COLLATE ' || QUOTE_IDENT(cn.nspname) || '.' || QUOTE_IDENT(co.collname) ELSE '' END,
+                  ', ' ORDER BY a.attnum) ||
+       E');\n    END IF;\nEND\n$$;' AS Code
   FROM pg_type t
   JOIN pg_class c ON t.typrelid = c.oid
   JOIN pg_attribute a ON c.oid = a.attrelid
+  JOIN pg_type ty ON ty.oid = a.atttypid
+  LEFT JOIN pg_collation co ON co.oid = a.attcollation
+  LEFT JOIN pg_namespace cn ON cn.oid = co.collnamespace
   JOIN pg_namespace ns ON t.typnamespace = ns.oid
   WHERE t.typtype = 'c'
+    AND c.relkind = 'c'
     AND a.attnum > 0
-    AND pg_type_is_visible(t.oid)
+    AND NOT a.attisdropped
     AND ns.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND ns.nspname NOT LIKE 'pg_temp_%'
     AND ns.nspname NOT LIKE 'pg_toast_temp_%'
-    AND NOT EXISTS (SELECT * FROM pg_Tables tbl WHERE tbl.schemaname = ns.nspname AND tbl.tablename = t.typname)
-    AND NOT EXISTS (SELECT * FROM pg_views v WHERE v.schemaname = ns.nspname AND v.viewname = t.typname)
   GROUP BY ns.nspname, t.typname;
 ";
         PerformPostgreSqlCasting(command, "Composite Types");
@@ -2574,16 +2578,18 @@ $$;' AS Code
 
     private void CastPostgreSqlCollations(IDbCommand command)
     {
-        // QUOTE_IDENT/QUOTE_LITERAL build the Code text rather than hand-doubled quote literals — each
-        // returns its value already correctly escaped, so no nested-quote arithmetic is needed here.
-        // Best-effort: libc-provider collations round-trip via LC_COLLATE/LC_CTYPE. ICU-provider
-        // collations (collprovider = 'i') fall back to collcollate as the LOCALE value, which covers
-        // pg_import_system_collations-derived ICU rows but not every hand-authored ICU nuance.
-        command.CommandText = @"
+        // The catalog moved the ICU locale twice (collcollate below 15, colliculocale on 15-16, colllocale from 17),
+        // added RULES on 16 and the builtin provider on 17, so the text is chosen by the server's version.
+        var version = PostgreSqlServerVersionNum(command);
+        var locale = version >= 170000 ? "c.colllocale" : version >= 150000 ? "c.colliculocale" : "c.collcollate";
+        var rules = version >= 160000 ? "COALESCE(', RULES = ' || QUOTE_LITERAL(c.collicurules), '')" : "''";
+        command.CommandText = $@"
 SELECT 'Collations' AS Folder,
        n.nspname || '.' || c.collname AS FullName,
        'CREATE COLLATION IF NOT EXISTS ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.collname) || ' (' ||
-       CASE WHEN c.collprovider = 'i' THEN 'PROVIDER = icu, LOCALE = ' || QUOTE_LITERAL(COALESCE(c.collcollate, c.collname))
+       CASE c.collprovider
+            WHEN 'i' THEN 'PROVIDER = icu, LOCALE = ' || QUOTE_LITERAL(COALESCE({locale}, c.collname)) || {rules}
+            WHEN 'b' THEN 'PROVIDER = builtin, LOCALE = ' || QUOTE_LITERAL({locale})
             ELSE 'LC_COLLATE = ' || QUOTE_LITERAL(c.collcollate) || ', LC_CTYPE = ' || QUOTE_LITERAL(c.collctype)
        END ||
        CASE WHEN c.collisdeterministic = false THEN ', DETERMINISTIC = false' ELSE '' END ||
@@ -2596,6 +2602,11 @@ SELECT 'Collations' AS Folder,
 ";
         PerformPostgreSqlCasting(command, "Collations");
     }
+
+    // server_version_num's shape (17.5 is 170005), from the version the driver already read at connect time; a
+    // connection that is not Npgsql's (a test double) is treated as the newest server.
+    private static int PostgreSqlServerVersionNum(IDbCommand command) =>
+        command.Connection is NpgsqlConnection npgsql ? npgsql.PostgreSqlVersion.Major * 10000 + Math.Max(npgsql.PostgreSqlVersion.Minor, 0) : int.MaxValue;
 
     private void CastPostgreSqlFunctions(IDbCommand command)
     {
@@ -2618,19 +2629,53 @@ SELECT CASE p.prokind
 
     private void CastPostgreSqlAggregates(IDbCommand command)
     {
+        // pg_dump's shape: the declared argument list, every support function schema-qualified, the quoted initial
+        // condition, and the final, combine, serial, moving-aggregate, sort-operator, parallel and hypothetical
+        // clauses. The old text used the state type as the argument list and left the condition unquoted.
         command.CommandText = @"
+WITH fn AS (SELECT f.oid, QUOTE_IDENT(fn.nspname) || '.' || QUOTE_IDENT(f.proname) AS qname
+              FROM pg_proc f JOIN pg_namespace fn ON fn.oid = f.pronamespace)
 SELECT 'Aggregates' AS Folder,
        n.nspname || '.' || p.proname AS FullName,
-       'CREATE OR REPLACE AGGREGATE ' || n.nspname || '.' || p.proname || '(' || FORMAT_TYPE(a.aggtranstype, null) || ') '
-       || '(sfunc = ' || a.aggtransfn
-       || ', stype = ' || FORMAT_TYPE(a.aggtranstype, null)
-       || CASE WHEN op.oprname IS NULL THEN '' ELSE ', sortop = ' || op.oprname END
-       || CASE WHEN a.agginitval IS NULL THEN '' ELSE ', initcond = ' || a.agginitval END
-       || ')' AS Code
+       'CREATE OR REPLACE AGGREGATE ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(p.proname) || '(' || PG_GET_FUNCTION_IDENTITY_ARGUMENTS(p.oid) || ') (' ||
+       E'\n    SFUNC = ' || sf.qname ||
+       E',\n    STYPE = ' || FORMAT_TYPE(a.aggtranstype, NULL) ||
+       CASE WHEN a.aggtransspace > 0 THEN E',\n    SSPACE = ' || a.aggtransspace ELSE '' END ||
+       COALESCE(E',\n    FINALFUNC = ' || ff.qname ||
+                CASE WHEN a.aggfinalextra THEN E',\n    FINALFUNC_EXTRA' ELSE '' END ||
+                CASE WHEN a.aggkind = 'n' AND a.aggfinalmodify = 's' THEN E',\n    FINALFUNC_MODIFY = SHAREABLE'
+                     WHEN a.aggkind = 'n' AND a.aggfinalmodify = 'w' THEN E',\n    FINALFUNC_MODIFY = READ_WRITE'
+                     WHEN a.aggkind <> 'n' AND a.aggfinalmodify = 'r' THEN E',\n    FINALFUNC_MODIFY = READ_ONLY'
+                     WHEN a.aggkind <> 'n' AND a.aggfinalmodify = 's' THEN E',\n    FINALFUNC_MODIFY = SHAREABLE'
+                     ELSE '' END, '') ||
+       COALESCE(E',\n    COMBINEFUNC = ' || cf.qname, '') ||
+       COALESCE(E',\n    SERIALFUNC = ' || srf.qname, '') ||
+       COALESCE(E',\n    DESERIALFUNC = ' || dsf.qname, '') ||
+       COALESCE(E',\n    INITCOND = ' || QUOTE_LITERAL(a.agginitval), '') ||
+       COALESCE(E',\n    MSFUNC = ' || msf.qname || E',\n    MINVFUNC = ' || minv.qname || E',\n    MSTYPE = ' || FORMAT_TYPE(a.aggmtranstype, NULL) ||
+                CASE WHEN a.aggmtransspace > 0 THEN E',\n    MSSPACE = ' || a.aggmtransspace ELSE '' END ||
+                COALESCE(E',\n    MFINALFUNC = ' || mff.qname ||
+                         CASE WHEN a.aggmfinalextra THEN E',\n    MFINALFUNC_EXTRA' ELSE '' END ||
+                         CASE WHEN a.aggmfinalmodify = 's' THEN E',\n    MFINALFUNC_MODIFY = SHAREABLE'
+                              WHEN a.aggmfinalmodify = 'w' THEN E',\n    MFINALFUNC_MODIFY = READ_WRITE' ELSE '' END, '') ||
+                COALESCE(E',\n    MINITCOND = ' || QUOTE_LITERAL(a.aggminitval), ''), '') ||
+       COALESCE(E',\n    SORTOP = OPERATOR(' || QUOTE_IDENT(opn.nspname) || '.' || op.oprname || ')', '') ||
+       CASE p.proparallel WHEN 's' THEN E',\n    PARALLEL = SAFE' WHEN 'r' THEN E',\n    PARALLEL = RESTRICTED' ELSE '' END ||
+       CASE WHEN a.aggkind = 'h' THEN E',\n    HYPOTHETICAL' ELSE '' END ||
+       E'\n);' AS Code
   FROM pg_proc p
   JOIN pg_namespace n ON p.pronamespace = n.oid
   JOIN pg_aggregate a ON a.aggfnoid = p.oid
+  JOIN fn sf ON sf.oid = a.aggtransfn
+  LEFT JOIN fn ff ON ff.oid = a.aggfinalfn
+  LEFT JOIN fn cf ON cf.oid = a.aggcombinefn
+  LEFT JOIN fn srf ON srf.oid = a.aggserialfn
+  LEFT JOIN fn dsf ON dsf.oid = a.aggdeserialfn
+  LEFT JOIN fn msf ON msf.oid = a.aggmtransfn
+  LEFT JOIN fn minv ON minv.oid = a.aggminvtransfn
+  LEFT JOIN fn mff ON mff.oid = a.aggmfinalfn
   LEFT JOIN pg_operator op ON op.oid = a.aggsortop
+  LEFT JOIN pg_namespace opn ON opn.oid = op.oprnamespace
   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND n.nspname NOT LIKE 'pg_temp_%'
     AND n.nspname NOT LIKE 'pg_toast_temp_%';
@@ -2726,31 +2771,46 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
 
     private void CastPostgreSqlPublications(IDbCommand command)
     {
-        // Best-effort: covers publish=insert/update/delete/truncate (all PG10+, below the PG12 floor)
-        // and FOR ALL TABLES / FOR TABLE. PG13's publish_via_partition_root is not emitted — a target
-        // above the floor without partitioned-root publishing loses only that one clause on re-extract.
-        // CREATE PUBLICATION has no IF NOT EXISTS form, so the guarded create goes through a DO $$ ... $$
-        // block (like Composite/Enum Types above). QUOTE_IDENT/QUOTE_LITERAL supply every interpolated
-        // value pre-escaped, and every literal chunk below opens and closes with exactly one quote each —
-        // no hand-doubled nested quoting, unlike the older ""schema""."" pattern elsewhere in this file.
-        command.CommandText = @"
+        // The catalog grew by version: publish_via_partition_root on 13; a row filter, a column list and TABLES IN
+        // SCHEMA on 15; publish_generated_columns on 18. The text is chosen by the server's version, and a publication
+        // with no tables is written without a FOR clause. CREATE PUBLICATION has no IF NOT EXISTS form, so the guarded
+        // create goes through a DO $$ ... $$ block. The column list comes from pg_publication_rel.prattrs, which is
+        // NULL when none was declared; pg_publication_tables.attnames lists every column either way.
+        var version = PostgreSqlServerVersionNum(command);
+        var columnList = version >= 150000
+            ? "COALESCE(' (' || (SELECT STRING_AGG(QUOTE_IDENT(att.attname), ', ' ORDER BY att.attnum) FROM pg_attribute att WHERE att.attrelid = pr.prrelid AND att.attnum = ANY(pr.prattrs)) || ')', '')"
+            : "''";
+        var rowFilter = version >= 150000 ? "COALESCE(' WHERE ' || PG_GET_EXPR(pr.prqual, pr.prrelid), '')" : "''";
+        var schemas = version >= 150000
+            ? "(SELECT STRING_AGG(QUOTE_IDENT(sn.nspname), ', ') FROM pg_publication_namespace pn JOIN pg_namespace sn ON sn.oid = pn.pnnspid WHERE pn.pnpubid = p.oid)"
+            : "NULL::text";
+        var viaRoot = version >= 130000 ? "CASE WHEN p.pubviaroot THEN ', publish_via_partition_root = true' ELSE '' END" : "''";
+        var generated = version >= 180000 ? "CASE WHEN p.pubgencols = 's' THEN ', publish_generated_columns = stored' ELSE '' END" : "''";
+        command.CommandText = $@"
 SELECT 'Publications' AS Folder,
        p.pubname AS FullName,
        E'\nDO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = ' || QUOTE_LITERAL(p.pubname) ||
-       E') THEN\n        CREATE PUBLICATION ' || QUOTE_IDENT(p.pubname) || ' ' ||
-       CASE WHEN p.puballtables THEN 'FOR ALL TABLES '
-            ELSE 'FOR TABLE ' || COALESCE(STRING_AGG(DISTINCT QUOTE_IDENT(pt.schemaname) || '.' || QUOTE_IDENT(pt.tablename), ', '), '') || ' '
+       E') THEN\n        CREATE PUBLICATION ' || QUOTE_IDENT(p.pubname) ||
+       CASE WHEN p.puballtables THEN ' FOR ALL TABLES'
+            WHEN t.tables IS NULL AND s.schemas IS NULL THEN ''
+            ELSE ' FOR ' || CONCAT_WS(', ', 'TABLE ' || t.tables, 'TABLES IN SCHEMA ' || s.schemas)
        END ||
-       'WITH (publish = ' || QUOTE_LITERAL(CONCAT_WS(',',
+       ' WITH (publish = ' || QUOTE_LITERAL(CONCAT_WS(', ',
             CASE WHEN p.pubinsert THEN 'insert' END,
             CASE WHEN p.pubupdate THEN 'update' END,
             CASE WHEN p.pubdelete THEN 'delete' END,
             CASE WHEN p.pubtruncate THEN 'truncate' END)) ||
+       {viaRoot} || {generated} ||
        E');\n    END IF;\nEND\n$$;' AS Code
   FROM pg_publication p
-  LEFT JOIN pg_publication_tables pt ON pt.pubname = p.pubname
- WHERE p.pubname NOT LIKE 'pg\_%'
- GROUP BY p.pubname, p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate;
+  LEFT JOIN LATERAL (
+       SELECT STRING_AGG(QUOTE_IDENT(rn.nspname) || '.' || QUOTE_IDENT(rc.relname) || {columnList} || {rowFilter}, ', ' ORDER BY rn.nspname, rc.relname) AS tables
+         FROM pg_publication_rel pr
+         JOIN pg_class rc ON rc.oid = pr.prrelid
+         JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+        WHERE pr.prpubid = p.oid) t ON true
+  LEFT JOIN LATERAL (SELECT {schemas} AS schemas) s ON true
+ WHERE p.pubname NOT LIKE 'pg\_%';
 ";
         PerformPostgreSqlCasting(command, "Publications");
     }
@@ -2774,10 +2834,19 @@ SELECT 'Rules' AS Folder,
 
     private void CastPostgreSqlTriggers(IDbCommand command)
     {
+        // DROP IF EXISTS then the engine's own CREATE: CREATE OR REPLACE TRIGGER is 14+ and failed on the 12 floor, a
+        // constraint trigger re-run as a plain CREATE failed on the second deploy, and a disabled or replica trigger
+        // came back enabled because tgenabled is not part of the definition.
         command.CommandText = @"
 SELECT 'Triggers' AS Folder,
        ns.nspname || '.' || tbl.relname || '.' || t.tgname AS FullName,
-       REPLACE(PG_GET_TRIGGERDEF(t.oid), 'CREATE TRIGGER', 'CREATE OR REPLACE TRIGGER') AS Code
+       'DROP TRIGGER IF EXISTS ' || QUOTE_IDENT(t.tgname) || ' ON ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname) || E';\n' ||
+       PG_GET_TRIGGERDEF(t.oid) || ';' ||
+       CASE t.tgenabled
+            WHEN 'D' THEN E'\nALTER TABLE ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname) || ' DISABLE TRIGGER ' || QUOTE_IDENT(t.tgname) || ';'
+            WHEN 'R' THEN E'\nALTER TABLE ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname) || ' ENABLE REPLICA TRIGGER ' || QUOTE_IDENT(t.tgname) || ';'
+            WHEN 'A' THEN E'\nALTER TABLE ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname) || ' ENABLE ALWAYS TRIGGER ' || QUOTE_IDENT(t.tgname) || ';'
+            ELSE '' END AS Code
   FROM pg_trigger t
   JOIN pg_class tbl ON t.tgrelid = tbl.oid
   JOIN pg_namespace ns ON tbl.relnamespace = ns.oid
@@ -2791,14 +2860,21 @@ SELECT 'Triggers' AS Folder,
 
     private void CastPostgreSqlViews(IDbCommand command)
     {
+        // The view's options (security_barrier, security_invoker, check_option) are stored as reloptions and are
+        // written back in the WITH clause; CREATE OR REPLACE VIEW without them resets them, which is how a
+        // security_invoker view lost its setting on every redeploy.
         command.CommandText = @"
 SELECT 'Views' AS Folder,
-       schemaname || '.' || viewname AS FullName,
-       'CREATE OR REPLACE VIEW ""' || schemaname || '"".""' || viewname || '"" AS' || E'\n' || definition AS Code
-  FROM pg_views
-  WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
-    AND schemaname NOT LIKE 'pg_temp_%'
-    AND schemaname NOT LIKE 'pg_toast_temp_%';
+       n.nspname || '.' || c.relname AS FullName,
+       'CREATE OR REPLACE VIEW ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.relname) ||
+       COALESCE(' WITH (' || ARRAY_TO_STRING(c.reloptions, ', ') || ')', '') ||
+       E' AS\n' || PG_GET_VIEWDEF(c.oid, true) AS Code
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE c.relkind = 'v'
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
+    AND n.nspname NOT LIKE 'pg_temp_%'
+    AND n.nspname NOT LIKE 'pg_toast_temp_%';
 ";
         PerformPostgreSqlCasting(command, "Views");
     }

@@ -172,7 +172,7 @@ internal class ScriptValidator
                 @"CREATE\s+(OR\s+ALTER\s+)?(?<kind>FUNCTION|VIEW|PROCEDURE)\s+(\[\w+\]\.)?(?<name>\[\w+\]|\w+)",
                 RegexOptions.IgnoreCase | RegexOptions.Singleline),
             Platform.PostgreSQL => new Regex(
-                @"CREATE\s+(OR\s+REPLACE\s+)?(?<kind>FUNCTION|VIEW|PROCEDURE)\s+(" + @"""[\w]+""\.|[\w]+\.)?(?<name>""[\w]+""|[\w]+)",
+                @"CREATE\s+(OR\s+REPLACE\s+)?(?<kind>FUNCTION|VIEW|PROCEDURE|AGGREGATE)\s+(" + @"""[\w]+""\.|[\w]+\.)?(?<name>""[\w]+""|[\w]+)",
                 RegexOptions.IgnoreCase | RegexOptions.Singleline),
             // The engine's own text: OR REPLACE, ALGORITHM=, SQL SECURITY, AGGREGATE, JSON [RELATIONAL] DUALITY, and
             // identifiers rendered with double quotes when the routine was created under ANSI_QUOTES.

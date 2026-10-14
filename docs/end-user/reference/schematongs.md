@@ -262,6 +262,8 @@ Control exactly what gets cast from the database. Each object type can be indivi
 | `Rules` | `true` | Rules attached to tables and views |
 | `MaterializedViews` | `true` | Materialized view definitions as JSON files |
 
+**What the PostgreSQL scripts carry.** A trigger script is `DROP TRIGGER IF EXISTS` followed by the engine's own definition (`pg_get_triggerdef`), with an `ALTER TABLE ... DISABLE TRIGGER`, `ENABLE REPLICA TRIGGER` or `ENABLE ALWAYS TRIGGER` line when the trigger is in that state, so it deploys on every version from 12 and a constraint trigger deploys again. A view is `CREATE OR REPLACE VIEW` with its options (`security_barrier`, `security_invoker`, `check_option`) in the `WITH` clause. An aggregate is written in the shape `pg_dump` uses, with every support function schema-qualified and the initial condition quoted. Composite-type attributes are quoted and carry a `COLLATE` that differs from the type's default. Collations and publications are written from the columns the server version has: a collation's locale, `RULES` (16+) and provider (`libc`, `icu`, or `builtin` on 17+); a publication's `publish_via_partition_root` (13+), row filter, column list and `TABLES IN SCHEMA` (15+), and `publish_generated_columns` (18+). A package extracted from a newer server deploys to an older one only where those clauses exist there.
+
 ### MySQL and MariaDB
 
 | Flag | Default | What It Extracts |
