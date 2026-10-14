@@ -2,7 +2,7 @@
 
 *Terraform for SQL Server, Postgres, MySQL, and MariaDB databases*
 
-> **SchemaSmith v2.7.2 released.** SQL Server fixes: a template deployed to several databases now deploys every script to each of them, CDC is no longer turned off on a table that leaves `EnableCDC` out (a breaking change — see the notes), and deploys to databases in another collation, temporal and computed-column changes, and spatial and memory-optimized indexes now work. [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.2) · [CHANGELOG](https://github.com/Schema-Smith/SchemaSmith/blob/main/CHANGELOG.md)
+> **SchemaSmith v2.7.3 released.** A dependency fix: the tools now carry `System.Security.Cryptography.Pkcs` 9.0.21, clearing two advisories on the 9.0.18 build that Microsoft.Data.SqlClient pulled in, and building from source passes NuGet's audit again. [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.3) · [CHANGELOG](https://github.com/Schema-Smith/SchemaSmith/blob/main/CHANGELOG.md)
 
 ![Build](https://github.com/Schema-Smith/SchemaSmith/actions/workflows/continuous-integration.yml/badge.svg)
 [![Latest Release](https://img.shields.io/github/v/release/Schema-Smith/SchemaSmith)](https://github.com/Schema-Smith/SchemaSmith/releases/latest)

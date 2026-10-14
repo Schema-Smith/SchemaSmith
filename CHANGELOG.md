@@ -125,6 +125,12 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **MySQL, MariaDB: `BIT` values on MariaDB 10.2–10.5, and deliveries between tables that reference each other, arrived wrong — #468.** Below MariaDB 10.6 a `BIT` value reached the column as text and was stored as its character codes, so `165` failed with "Data too long". Tables whose nullable foreign keys form a cycle are delivered in two passes, and the first pass had its own column handling: `DATETIME`/`TIME` lost their fraction, a geometry lost its SRID (fatal on a MySQL `SRID` column), and a backslash in a value broke the payload. That pass now uses the same column handling as every other delivery.
 - **MariaDB 11.4.13 and later: 4-byte characters became `?` in automatic data delivery to a database whose default character set is not `utf8mb4` — #481.** From 11.4.13 (and on the 11.8, 12.x and 13 lines) a `JSON_TABLE` text column with no declared character set takes the database's default instead of `utf8mb4`, so in a `latin1` database an emoji delivered into a `utf8mb4` column was stored as `?`. The generated delivery script now declares `utf8mb4` on every text column it reads, on MySQL and MariaDB alike.
 
+## [v2.7.3](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.3) — 2026-10-14
+
+### Fixed
+
+- **Building from source failed NuGet's audit on `System.Security.Cryptography.Pkcs` 9.0.18 — #505.** Microsoft.Data.SqlClient brings the package in, and two advisories published on 2026-10-13 (GHSA-846f-f764-76mx, GHSA-2fmv-rv2c-59x7) turned every restore into an error under the repository's warnings-as-errors policy, a consumer referencing `Schema.csproj` by project included. The package is pinned to 9.0.21, and the shipped tools carry the patched assembly. Nothing else changed since v2.7.2.
+
 ## [v2.7.2](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.2) — 2026-10-09
 
 ### Breaking Changes
