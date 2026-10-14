@@ -995,6 +995,63 @@ public class DatabaseQuenchTests
         Assert.That(script.Error.Message, Does.Contain("Syntax error"));
     }
 
+    // MariaDB reports a FOLLOWS whose predecessor does not exist yet as error 4031, which the driver takes for
+    // "disconnected by the server" and marks the session broken. The retry pass that would then succeed needs the
+    // connection reopened, and on the MySQL family a fresh session must be put back on the target database.
+    [Test]
+    public void QuenchOneScript_FailedScriptThatLeftTheConnectionBroken_ReopensItForTheRetryPass()
+    {
+        var product = new Product { Name = "Test", Platform = Platform.MariaDb };
+        var template = new Template { Name = "T" };
+        var quench = new DatabaseQuench("srv", product, template, "db",
+            false, "0", false, "0", "1", "1", "1", "1", "1", "1", "0", false, false, null);
+
+        var script = new SqlScript { Name = "a_follows_z.sql" };
+        script.Batches.Add("CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW FOLLOWS z SET NEW.x = 1");
+
+        var mockCmd = CreateMockCommand();
+        // The driver reports the session broken from the failed statement on; the server kept it, so Open() works.
+        mockCmd.Connection.State.Returns(ConnectionState.Broken);
+        var sent = new List<string>();
+        mockCmd.When(c => c.CommandText = Arg.Any<string>()).Do(ci => sent.Add(ci.ArgAt<string>(0)));
+        mockCmd.When(c => c.ExecuteNonQuery()).Do(_ =>
+        {
+            if (sent[^1].StartsWith("CREATE TRIGGER")) throw new Exception("Referenced trigger 'z' for the given action time and event type does not exist");
+        });
+
+        Assert.That(mockCmd.Connection, Is.Not.Null);
+        Assert.That(mockCmd.Connection.State, Is.EqualTo(ConnectionState.Broken), "precondition");
+
+        quench.QuenchOneScript(mockCmd, script, false, false);
+
+        Assert.That(script.HasBeenQuenched, Is.False);
+        Assert.That(script.Error?.Message, Does.Contain("Referenced trigger"), script.Error?.ToString());
+        mockCmd.Connection.Received(1).Close();
+        mockCmd.Connection.Received(1).Open();
+        Assert.That(sent.Last(), Does.StartWith("USE "), "the reopened session must be put back on the target database");
+    }
+
+    [Test]
+    public void QuenchOneScript_FailedScriptOnAnOpenConnection_DoesNotReopenIt()
+    {
+        var product = new Product { Name = "Test", Platform = Platform.MariaDb };
+        var template = new Template { Name = "T" };
+        var quench = new DatabaseQuench("srv", product, template, "db",
+            false, "0", false, "0", "1", "1", "1", "1", "1", "1", "0", false, false, null);
+
+        var script = new SqlScript { Name = "fail.sql" };
+        script.Batches.Add("INVALID SQL");
+
+        var mockCmd = CreateMockCommand();
+        mockCmd.Connection.State.Returns(ConnectionState.Open);
+        mockCmd.When(c => c.ExecuteNonQuery()).Do(_ => throw new Exception("Syntax error"));
+
+        quench.QuenchOneScript(mockCmd, script, false, false);
+
+        mockCmd.Connection.DidNotReceive().Close();
+        mockCmd.Connection.DidNotReceive().Open();
+    }
+
     [Test]
     public void QuenchOneScript_RunTwice_ExecutesTwice()
     {

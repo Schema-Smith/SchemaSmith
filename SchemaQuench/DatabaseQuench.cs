@@ -2493,10 +2493,30 @@ SET NOCOUNT ON
         catch (Exception ex)
         {
             script.Error = ex;
+            // A failed script can leave the driver's session marked broken although the server kept it: MariaDB reports
+            // "referenced trigger does not exist" (a FOLLOWS whose predecessor is a later file) as error 4031, the
+            // number MySqlConnector reserves for "disconnected by the server". The retry pass needs a live connection.
+            if (destCmd.Connection is { State: not ConnectionState.Open } connection) needDBReset = Reopen(connection);
         }
         finally
         {
             if (needDBReset) ResetDb(destCmd);
+        }
+    }
+
+    private bool Reopen(IDbConnection connection)
+    {
+        try
+        {
+            connection.Close();
+            connection.Open();
+            SafeProgressLog("    Reopened the connection the failed script left broken");
+            return true;
+        }
+        catch (System.Data.Common.DbException ex)
+        {
+            SafeProgressLog($"    Could not reopen the connection: {ex.Message}");
+            return false;
         }
     }
 
