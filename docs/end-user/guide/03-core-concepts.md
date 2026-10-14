@@ -111,7 +111,7 @@ A schema package is the folder structure that holds your entire database definit
 
 **Structural objects** -- tables, indexed views (SQL Server), materialized views (PostgreSQL) -- are defined as JSON files. JSON is diffable, mergeable, and machine-readable. SchemaQuench parses these definitions, compares them against the live database, and computes precise DDL statements. You never write ALTERs by hand.
 
-**Behavioral objects** -- stored procedures, functions, views, triggers, rules, and the rest -- are plain `.sql` files containing `CREATE OR ALTER` (or the platform equivalent). They're code: they get deployed as-is, replacing whatever currently exists. There's no diff to compute; the file *is* the definition.
+**Behavioral objects** -- stored procedures, functions, views, triggers, rules, and the rest -- are plain `.sql` files containing `CREATE OR ALTER` (or the platform equivalent). They're code: they get deployed as-is, replacing whatever currently exists. There's no diff to compute; the file *is* the definition. SchemaQuench does remember what each script left behind, so a script that hasn't changed -- and whose object nobody has touched on the server -- isn't re-run on the next deployment.
 
 The distinction matters for your workflow. Structural changes -- adding a column, modifying an index -- SchemaSmith hammers into shape for you, computing exactly the right DDL. Behavioral changes -- rewriting a stored procedure -- you author directly in SQL, and SchemaQuench deploys them wholesale.
 

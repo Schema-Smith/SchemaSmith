@@ -67,6 +67,7 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | `DropColumnsRemovedFromProduct` | bool | `true` | Drop columns that exist in the database but aren't defined in the schema package. Resolves across a four-tier cascade (env → product → template → table) with explicit-false-sticky semantics. See [DropColumnsRemovedFromProduct](#dropcolumnsremovedfromproduct). |
 | `DeliverData` | bool | `true` | Run the per-table `DataDelivery` step and the `TableData`-slot scripts. Set to `false` to ship a structure-only deployment that leaves reference data untouched -- pairs naturally with `UpdateTables: true` for "deploy schema, skip data" pipelines. |
 | `RunScriptsTwice` | bool | `false` | Run object scripts twice to verify idempotency. A CI/testing tool. |
+| `SkipUnchangedObjects` | bool | `true` | Do not re-run an object script whose text is unchanged since it last applied and whose object the server still renders as it was left. A hand change on the server, an edited script, an `[ALWAYS]` name or a `-- SchemaSmith: AlwaysRun` comment runs it again. See [Unchanged Object Scripts](#unchanged-object-scripts). |
 | `TrackRunOnceMigrations` | bool | `true` | Track run-once migration scripts. When `false`, all scripts run on every deployment. |
 | `PruneObsoleteMigrationTracking` | bool | `true` | Remove tracking entries for scripts no longer in the package. When `Target` filters are active, prune is restricted to the targeted scope. See [PruneObsoleteMigrationTracking](#pruneobsoletemigrationtracking). |
 | `CheckpointDirectory` | string | `""` | Directory for checkpoint files used by `--ResumeQuench`. When blank, defaults to a per-platform temp location. See [Checkpoint and Resume](#checkpoint-and-resume). |
@@ -99,6 +100,7 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
   "DropColumnsRemovedFromProduct": true,
   "DeliverData": true,
   "RunScriptsTwice": false,
+  "SkipUnchangedObjects": true,
   "TrackRunOnceMigrations": true,
   "PruneObsoleteMigrationTracking": true,
   "CheckpointDirectory": "",
@@ -585,7 +587,7 @@ Product scripts run against the administrative connection, outside the per-datab
 
 **Sequential, tracked** -- scripts run in alphabetical order and are recorded in `CompletedMigrationScripts` so they only run once (unless marked `[ALWAYS]`).
 
-**Dependency retry loop** -- scripts are retried in rounds until all succeed or no progress is made. See [Dependency Retry Loop](#dependency-retry-loop).
+**Dependency retry loop** -- scripts are retried in rounds until all succeed or no progress is made. See [Dependency Retry Loop](#dependency-retry-loop). An `Objects` or `AfterTablesObjects` script that is unchanged since it last applied, and whose object the server still holds as it was left, is not re-run. See [Unchanged Object Scripts](#unchanged-object-scripts).
 
 ---
 
@@ -1014,7 +1016,23 @@ On the **final attempt** (the last pass when errors are reported), failures are 
 
 This mechanism allows scripts with interdependencies to coexist in the same folder without requiring a specific naming order. For example, if View B references View A and is alphabetically first, it will fail on the first pass but succeed on the retry after View A has been created.
 
+A script that is unchanged since it last applied is not part of the loop at all -- see [Unchanged Object Scripts](#unchanged-object-scripts).
+
 The Objects slot gets four opportunities to resolve: (1) before the table quench, (2) after missing tables are created, (3) after table modifications are complete, and (4) during the AfterTablesObjects pass alongside triggers. This handles cases where a view or function references a table column that doesn't yet exist on the first pass.
+
+---
+
+## Unchanged Object Scripts
+
+Most of a package does not change between two deployments, yet every view, function, procedure and trigger script used to run again on every quench. Each run was harmless on paper -- `CREATE OR ALTER` and its equivalents leave an unchanged object as it was -- but it still rewrote the object, invalidated cached plans, fired DDL triggers, and on MySQL and MariaDB, where a module is a `DROP` and a `CREATE`, briefly removed it. SchemaQuench now records what each object script left behind and runs it again only when something has moved.
+
+**What is recorded.** After an `Objects` or `AfterTablesObjects` script applies, SchemaQuench stores two hashes in the `SchemaSmith.ScriptStamp` table on the target database, keyed by product, template and the script's path within the package: a hash of the script text, and a hash of the engine's own rendering of the object the script created (`sys.sql_modules` on SQL Server; `pg_get_viewdef`, `pg_get_functiondef` and `pg_get_triggerdef` on PostgreSQL; `SHOW CREATE` on MySQL and MariaDB -- with a trigger's enabled state and a module's `sql_mode` included where the engine keeps them apart). A script is stamped only when it comes from a folder declared with an `ObjectType` and contains exactly one `CREATE` of a view, function, procedure, trigger or event, so the rendering is of the object it declares; any other script runs every time, as before.
+
+**When a script runs again.** On the next quench the script is skipped only when both hashes still match: the text is as it was, *and* the server still renders the object as the last run left it. Edit the script and it runs. Change the object by hand on the server -- an `ALTER`, a disabled trigger, a dropped and recreated view -- and the rendering no longer matches, so the script runs and puts the declared definition back. Drop the object and it runs. A skipped script is logged as `Unchanged, not re-run`, recorded as `unchanged` in the change audit, and counted as `Unchanged (object scripts)` in the deployment summary, separately from the scripts that ran.
+
+**What is never skipped.** A script with `[ALWAYS]` in its name runs on every quench, as it always has, and so does a script carrying a `-- SchemaSmith: AlwaysRun` comment anywhere in its text -- the opt-out for a script with side effects whose object may well be unchanged. A script from a folder declared without an `ObjectType` (a custom folder) is never stamped. `RunScriptsTwice` runs every script twice, as before: it exists to prove scripts re-run cleanly, which a skipped script cannot. Scripts in the sequential slots (`Before`, `BetweenTablesAndKeys`, `AfterTablesScripts`, `After`) are migration scripts and keep their own run-once tracking. A WhatIf run reads the stamps and reports a script it would skip as `SKIP (unchanged)`, but records nothing; a script that uses query tokens is always previewed as would-apply, because WhatIf does not resolve the tokens and so cannot compare the text. Set `SkipUnchangedObjects: false` to run every object script on every deployment; while it is off nothing is stamped, so the first deploy after turning it back on runs everything once.
+
+> **A module the engine rewrites is still unchanged.** The rendering is compared only with the engine's own earlier rendering of the same object, never with the script text, so an engine that reformats a body, expands a `*` or re-quotes identifiers does not cause a re-run. Only a rendering that differs from the one recorded after the script last applied does.
 
 ---
 

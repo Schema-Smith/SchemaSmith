@@ -188,6 +188,7 @@ public static class DeploymentSummaryAssembler
             ForeignKeys: Count2("foreignKey", "dropped", "wouldDrop"));
 
         var scriptsRan = rows.Count(r => r.Action == "ran");
+        var scriptsUnchanged = rows.Count(r => r.Action == "unchanged");
         // 'dropSuppressed' rows are protection-suppressed drops, not changes that would occur — they
         // belong to the PreventDropSummary manifest, not the object-change detail. 'downgraded' rows
         // likewise belong to the UnsupportedDowngradeSummary manifest, not the detail. WhatIf 'would*'
@@ -197,7 +198,7 @@ public static class DeploymentSummaryAssembler
             .Select(r => new ObjectChangeDetail(r.ObjectType, r.ObjectName, r.Action))
             .ToArray();
 
-        return new ObjectChangeSummary(true, created, modified, dropped, scriptsRan, details);
+        return new ObjectChangeSummary(true, created, modified, dropped, scriptsRan, details, scriptsUnchanged);
     }
 
     /// <summary>

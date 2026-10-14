@@ -397,7 +397,7 @@ Tables are always loaded from `Tables/` regardless of platform. SQL Server adds 
 
 **Sequential, tracked** -- Template-level migration scripts run in alphabetical order. Each script's completion is recorded in the `CompletedMigrationScripts` table and won't run again on subsequent quenches. Scripts with `[ALWAYS]` in the filename run every time regardless of tracking.
 
-**Dependency retry loop** -- All scripts in the slot are attempted. Scripts that fail due to unresolved dependencies are retried on the next iteration. The loop continues until all scripts succeed or no progress is made on an iteration.
+**Dependency retry loop** -- All scripts in the slot are attempted. Scripts that fail due to unresolved dependencies are retried on the next iteration. The loop continues until all scripts succeed or no progress is made on an iteration. An `Objects` or `AfterTablesObjects` script that is unchanged since it last applied, and whose object nobody has changed on the server, is not re-run -- see [Unchanged Object Scripts](schemaquench.md#unchanged-object-scripts).
 
 ---
 

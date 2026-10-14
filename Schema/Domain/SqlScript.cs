@@ -32,6 +32,9 @@ namespace Schema.Domain
         [JsonIgnore]
         public ScriptOutcome Outcome { get; set; } = ScriptOutcome.Applied;
 
+        [JsonIgnore]
+        public ScriptObjectType ObjectType { get; set; }
+
         [JsonProperty(Order = 2)]
         public string LogPath => LongPathSupport.StripLongPathPrefix(FilePath);
 
@@ -61,7 +64,7 @@ namespace Schema.Domain
 
         public SqlScript Clone()
         {
-            var clone = new SqlScript { Name = Name, FilePath = FilePath };
+            var clone = new SqlScript { Name = Name, FilePath = FilePath, ObjectType = ObjectType };
             clone.Batches.AddRange(Batches);
             return clone;
         }

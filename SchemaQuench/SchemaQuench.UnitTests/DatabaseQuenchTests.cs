@@ -3020,6 +3020,22 @@ public class DatabaseQuenchTests
 
     #endregion
 
+    #region Unchanged-module stamps
+
+    [TestCase("-- SchemaSmith: AlwaysRun\nCREATE VIEW v AS SELECT 1", true)]
+    [TestCase("CREATE VIEW v AS SELECT 1\n--schemasmith:alwaysrun", true)]
+    [TestCase("-- SchemaSmith: AlwaysRunner\nCREATE VIEW v AS SELECT 1", false)]
+    [TestCase("CREATE VIEW v AS SELECT 1", false)]
+    public void HasAlwaysRunSentinel_FindsTheCommentAnywhereInTheScript(string batch, bool expected)
+    {
+        var script = new SqlScript { Name = "v.sql", FilePath = "Views/v.sql" };
+        script.Batches.Add(batch);
+
+        Assert.That(DatabaseQuench.HasAlwaysRunSentinel(script), Is.EqualTo(expected));
+    }
+
+    #endregion
+
     #region Helper Methods
 
     // Positional arguments of a MySQL "CALL proc(a, b, c)" statement, trimmed. Lets a test assert the

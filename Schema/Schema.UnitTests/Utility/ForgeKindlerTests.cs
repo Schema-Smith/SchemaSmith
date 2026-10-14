@@ -330,7 +330,9 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith.DegradeUnsupportedFullText (STATISTICAL_SEMANTICS without a registered semantic
         //   database; called after the full-text parse on both the table and --IndexOnly paths).
         // +1 = SchemaSmith.RecordWouldChanges (WhatIf writes the change rows a quench script carries, as previews).
-        Assert.That(sqlServer.Length, Is.EqualTo(49));
+                // + Kindling_ScriptStamp_Table (the unchanged-module stamp: the script text hash and the engine rendering hash
+        //   recorded after a successful object script, read before the next run of the same script).
+        Assert.That(sqlServer.Length, Is.EqualTo(50));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -366,7 +368,9 @@ public class ForgeKindlerTests
         // + QuoteName (the identifier delimiter new PostgreSQL emission uses).
         // + ColumnDataType (one column-type and collation rendering for extraction and the drift compare).
         // + RecordWouldChanges (WhatIf writes the change rows a quench script carries, as previews).
-        Assert.That(postgres.Length, Is.EqualTo(53));
+                // + Kindling_ScriptStamp_Table (the unchanged-module stamp: the script text hash and the engine rendering hash
+        //   recorded after a successful object script, read before the next run of the same script).
+        Assert.That(postgres.Length, Is.EqualTo(54));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
@@ -493,7 +497,9 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_TrimEnumMembers (ENUM/SET members lose trailing spaces when the column is created).
         // +1 = SchemaSmith_IndexKeyPartsUnsupported (a functional or multi-valued key part the target cannot build).
         // +1 = SchemaSmith_RespellIndexColumns (a key part naming its column in another case).
-        Assert.That(mysql.Length, Is.EqualTo(77));
+                // + Kindling_ScriptStamp_Table (the unchanged-module stamp: the script text hash and the engine rendering hash
+        //   recorded after a successful object script, read before the next run of the same script).
+        Assert.That(mysql.Length, Is.EqualTo(78));
     }
 
     [Test]

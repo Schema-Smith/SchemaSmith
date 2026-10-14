@@ -160,6 +160,7 @@ public static class DeploymentSummaryText
         lines.Add($"- Modified: tables={modified.Tables}, columns={modified.Columns}");
         lines.Add($"- Dropped: tables={dropped.Tables}, indexes={dropped.Indexes}, constraints={dropped.Constraints}, foreignKeys={dropped.ForeignKeys}");
         lines.Add($"- Ran (object scripts): {objectChanges.ScriptsRan}");
+        lines.Add($"- Unchanged (object scripts): {objectChanges.ScriptsUnchanged}");
     }
 
     private static void RenderPreventDrop(DeploymentSummary summary, List<string> lines)

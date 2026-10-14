@@ -285,7 +285,8 @@ public class DeploymentSummaryTextTests
             {
                 Instrumented = true,
                 Created = new CreatedCounts(Tables: 3, Columns: 0, Indexes: 1, Constraints: 0, ForeignKeys: 0, Procedures: 0, Views: 0, Functions: 0),
-                ScriptsRan = 2
+                ScriptsRan = 2,
+                ScriptsUnchanged = 5
             }
         };
 
@@ -295,6 +296,7 @@ public class DeploymentSummaryTextTests
         // "3000ms" target duration — pins the actual created-tables count being rendered.
         Assert.That(result, Does.Contain("tables=3"));
         Assert.That(result, Does.Contain("Ran (object scripts): 2"));
+        Assert.That(result, Does.Contain("Unchanged (object scripts): 5"));
         Assert.That(result, Does.Not.Contain("(not instrumented)"));
     }
 

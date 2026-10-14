@@ -50,6 +50,7 @@ namespace Schema.Domain
             var queue = new TaskQueueManager<string>(Environment.ProcessorCount * 2);
             files.ForEach(f => queue.AddToQueue(f, file => loaded[file] = SqlScript.Load(file, scriptTokens, platform)));
             queue.WaitForAll();
+            foreach (var script in loaded.Values) script.ObjectType = ObjectType;
 
             // Preserve original file ordering
             Scripts.AddRange(files.Select(f => loaded[f]));

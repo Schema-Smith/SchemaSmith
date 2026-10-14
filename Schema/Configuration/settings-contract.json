@@ -42,6 +42,7 @@
       "Target:Schemas",
       "Target:SecondaryServers",
       "Target:Server",
+      "Target:SkipUnchangedObjects",
       "Target:Templates",
       "Target:TemplateTargets",
       "Target:UnsupportedFeaturePolicy",

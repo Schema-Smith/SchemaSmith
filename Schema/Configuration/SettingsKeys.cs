@@ -214,6 +214,8 @@ public static class SettingsKeys
     public const string TrackRunOnceMigrations = "TrackRunOnceMigrations";
     public const string PruneObsoleteMigrationTracking = "PruneObsoleteMigrationTracking";
     public const string UnsupportedFeaturePolicy = "Target:UnsupportedFeaturePolicy";
+    /// <summary>When true (default), an object script whose text and whose module the server still renders as last applied is not re-run.</summary>
+    public const string SkipUnchangedObjects = "Target:SkipUnchangedObjects";
     public const string CompatEncoding = "Target:CompatEncoding";
     public const string SourceCompatEncoding = "Source:CompatEncoding";
     public const string ArtifactPath = "ArtifactPath";

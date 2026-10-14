@@ -15,6 +15,11 @@
                                               // is too old for a declared feature. warn degrades it and records
                                               // a 'downgraded' audit row; fail refuses the deploy rather than
                                               // shipping something quietly weaker.
+        // "SkipUnchangedObjects": true, // true (default) | false — an object script (view, function, procedure,
+                                        // trigger, event) is not re-run when its text is unchanged since it
+                                        // last applied AND the server still renders the object as it was left.
+                                        // A hand change on the server, an edited script, or an [ALWAYS] name
+                                        // runs it again. false re-runs every object script on every deploy.
         // "CompatEncoding": "", // Override the model-payload encoding chosen for the target's compatibility
                                  // level (Json | Xml). Blank = choose automatically. Diagnostic escape hatch.
         "ConnectionProperties": {}, // Driver-level properties passed through verbatim, e.g.

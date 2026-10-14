@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using log4net;
 using Microsoft.Data.SqlClient;
@@ -234,6 +235,8 @@ public class DatabaseQuench
     private int _postgreSqlServerVersionNum; // 0 until detected; only meaningful when Platform == PostgreSQL
     private int _mySqlServerVersionNum; // 0 until detected (major*100+minor); only meaningful for MySQL/MariaDb
     private int _sqlServerCompatibilityLevel; // 0 until detected; SQL-Server-only; gates JSON data delivery below 130 (B1 slice 2)
+    private bool _skipUnchangedObjects = true; // Target:SkipUnchangedObjects (default true)
+    private bool _stampWriteFailureLogged;
     private string _unsupportedFeaturePolicy; // Target:UnsupportedFeaturePolicy (warn | fail, default warn); general all-engine policy, not just the MySQL data-delivery gate
 
     // A1: the per-target version script tokens ({{ServerMajorVersion}} / {{CompatibilityLevel}}),
@@ -576,6 +579,7 @@ public class DatabaseQuench
                     // below see them regardless of the per-engine switch.
                     _sqlServerCompatibilityLevel = versionInfo.CompatibilityLevel ?? 0;
                     _unsupportedFeaturePolicy = FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.UnsupportedFeaturePolicy];
+                    _skipUnchangedObjects = !string.Equals(FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.SkipUnchangedObjects], "false", StringComparison.OrdinalIgnoreCase);
                     switch (_product.Platform.GetBasePlatform())
                     {
                         case Platform.PostgreSQL:
@@ -670,7 +674,7 @@ public class DatabaseQuench
                 else
                 {
                     SafeProgressLog("  [WhatIf] Object scripts without unresolved tokens:");
-                    WhatIfLogScripts(nonTokenScripts, DatabaseScriptSlot.Object);
+                    WhatIfLogScripts(nonTokenScripts, DatabaseScriptSlot.Object, effectiveObjectsCmd);
                 }
 
                 // Step: Domain types (PostgreSQL only). Before tables for the same reason enum types are:
@@ -739,7 +743,7 @@ public class DatabaseQuench
                 else
                 {
                     SafeProgressLog("  [WhatIf] Object scripts without query tokens:");
-                    WhatIfLogScripts(_iteration.ObjectScripts.Where(s => s.Batches.All(b => !b.Contains("{{") && !b.Contains("}}"))).ToList(), DatabaseScriptSlot.Object);
+                    WhatIfLogScripts(_iteration.ObjectScripts.Where(s => s.Batches.All(b => !b.Contains("{{") && !b.Contains("}}"))).ToList(), DatabaseScriptSlot.Object, effectiveObjectsCmd);
 
                     if (_template.QueryTokens.Count > 0)
                         SafeProgressLog("  [WhatIf] Would resolve template query tokens");
@@ -774,7 +778,7 @@ public class DatabaseQuench
                 else
                 {
                     SafeProgressLog("  [WhatIf] Object scripts (after tables):");
-                    WhatIfLogScripts(_iteration.AfterTablesObjectScripts, DatabaseScriptSlot.AfterTablesObject);
+                    WhatIfLogScripts(_iteration.AfterTablesObjectScripts, DatabaseScriptSlot.AfterTablesObject, effectiveObjectsCmd);
 
                     SafeProgressLog("  [WhatIf] Between table and keys scripts:");
                     WhatIfLogTemplateScripts(command, "Between Table And Keys", _iteration.BetweenTablesAndKeysScripts, DatabaseScriptSlot.BetweenTablesAndKeys);
@@ -943,7 +947,7 @@ public class DatabaseQuench
                     WhatIfLogTemplateScripts(command, "After Table", _iteration.AfterTableScripts, DatabaseScriptSlot.AfterTable);
 
                     SafeProgressLog("  [WhatIf] Object scripts (final pass):");
-                    WhatIfLogScripts(_iteration.AfterTablesObjectScripts.ToList(), DatabaseScriptSlot.AfterTablesObject);
+                    WhatIfLogScripts(_iteration.AfterTablesObjectScripts.ToList(), DatabaseScriptSlot.AfterTablesObject, effectiveObjectsCmd);
 
                     if (_deliverData)
                     {
@@ -2411,12 +2415,25 @@ SET NOCOUNT ON
                     continue;
                 }
 
+                var stamp = ProbeScriptStamp(destCmd, script, slot);
+                if (stamp is { Unchanged: true })
+                {
+                    script.HasBeenQuenched = true;
+                    script.Error = null;
+                    script.Outcome = ScriptOutcome.Unchanged;
+                    if (showErrors) SafeProgressLog($"    Unchanged, not re-run: {script.LogPath}");
+                    _checkpointing.MarkScriptCompleted(DbScope, slot.ToString(), script.LogPath);
+                    ChangeAudit?.Record(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged");
+                    continue;
+                }
+
                 QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
                 if (script.HasBeenQuenched)
                 {
                     _checkpointing.MarkScriptCompleted(DbScope, slot.ToString(), script.LogPath);
                     if (slot is DatabaseScriptSlot.Object or DatabaseScriptSlot.AfterTablesObject)
                         ChangeAudit?.RecordRan(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath);
+                    if (stamp != null && script.Outcome == ScriptOutcome.Applied) RecordScriptStamp(destCmd, stamp);
                 }
             }
         }
@@ -2519,6 +2536,92 @@ SET NOCOUNT ON
             return false;
         }
     }
+
+    #region Unchanged-module stamps
+
+    // An object script is not re-run when the text the deploy would run and the module the server renders are both
+    // as they were after the last apply. The two hashes are kept per script in SchemaSmith's ScriptStamp table; a
+    // hand change on the server changes the rendering, so the script runs. A script with no single recognisable
+    // CREATE, a script from a folder declared without an ObjectType, an [ALWAYS] script, a '-- SchemaSmith: AlwaysRun'
+    // sentinel, a RunScriptsTwice run, or the setting turned off never stamps. A WhatIf run reads stamps and writes none.
+    private sealed record ScriptStampProbe(string PathHash, string ScriptPath, string TextHash, ModuleScriptIdentity Identity, bool Unchanged);
+
+    private static readonly Regex AlwaysRunSentinel = new(@"--\s*SchemaSmith:\s*AlwaysRun\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    internal static bool HasAlwaysRunSentinel(SqlScript script) => script.Batches.Any(b => AlwaysRunSentinel.IsMatch(b));
+
+    private ScriptStampProbe ProbeScriptStamp(IDbCommand destCmd, SqlScript script, DatabaseScriptSlot slot)
+    {
+        if (destCmd == null || !_skipUnchangedObjects || _runScriptsTwice || ShouldAlwaysRun(script.Name) || HasAlwaysRunSentinel(script)) return null;
+        if (slot is not (DatabaseScriptSlot.Object or DatabaseScriptSlot.AfterTablesObject) || script.ObjectType == ScriptObjectType.None) return null;
+        var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
+        if (identity == null) return null;
+
+        var scriptPath = GetRelativeScriptPath(script.LogPath);
+        var pathHash = Sha256(scriptPath);
+        var textHash = Sha256(string.Join("\n", script.Batches));
+        var unchanged = false;
+        try
+        {
+            destCmd.CommandText = $"SELECT {Q("TextHash")}, {Q("DefinitionHash")} FROM {ScriptStampTable} WHERE {Q("ProductName")} = '{EscapeSqlLiteral(_product.Name)}' AND {Q("TemplateName")} = '{EscapeSqlLiteral(_template.Name)}' AND {Q("PathHash")} = '{pathHash}'";
+            string storedText = null, storedDefinition = null;
+            using (var reader = destCmd.ExecuteReader())
+            {
+                if (reader.Read()) { storedText = reader.GetString(0); storedDefinition = reader.GetString(1); }
+            }
+            if (storedText == textHash)
+            {
+                var rendering = ModuleDefinitionReader.Read(destCmd, _product.Platform, identity);
+                unchanged = rendering != null && Sha256(rendering) == storedDefinition;
+            }
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // No stamp table (kindling suppressed on a database that never had one): the script runs as before.
+            return null;
+        }
+        return new ScriptStampProbe(pathHash, scriptPath, textHash, identity, unchanged);
+    }
+
+    private void RecordScriptStamp(IDbCommand destCmd, ScriptStampProbe stamp)
+    {
+        try
+        {
+            var rendering = ModuleDefinitionReader.Read(destCmd, _product.Platform, stamp.Identity);
+            var where = $"WHERE {Q("ProductName")} = '{EscapeSqlLiteral(_product.Name)}' AND {Q("TemplateName")} = '{EscapeSqlLiteral(_template.Name)}' AND {Q("PathHash")} = '{stamp.PathHash}'";
+            destCmd.CommandText = $"DELETE FROM {ScriptStampTable} {where}";
+            destCmd.ExecuteNonQuery();
+            if (rendering == null) return;
+            destCmd.CommandText = $"INSERT INTO {ScriptStampTable} ({Q("ProductName")}, {Q("TemplateName")}, {Q("PathHash")}, {Q("ScriptPath")}, {Q("TextHash")}, {Q("DefinitionHash")}) " +
+                                  $"VALUES ('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(_template.Name)}', '{stamp.PathHash}', '{EscapeSqlLiteral(stamp.ScriptPath)}', '{stamp.TextHash}', '{Sha256(rendering)}')";
+            destCmd.ExecuteNonQuery();
+        }
+        catch (System.Data.Common.DbException ex)
+        {
+            if (_stampWriteFailureLogged) return;
+            _stampWriteFailureLogged = true;
+            SafeProgressLog($"    Could not record the script stamp, so object scripts will run again next time: {ex.Message}");
+        }
+    }
+
+    private string ScriptStampTable => _product.Platform.GetBasePlatform() switch
+    {
+        Platform.SqlServer => "[SchemaSmith].[ScriptStamp]",
+        Platform.PostgreSQL => "\"SchemaSmith\".\"ScriptStamp\"",
+        _ => "SchemaSmith_ScriptStamp"
+    };
+
+    private string Q(string column) => _product.Platform.GetBasePlatform() switch
+    {
+        Platform.SqlServer => $"[{column}]",
+        Platform.PostgreSQL => $"\"{column}\"",
+        _ => column
+    };
+
+    private static string Sha256(string text) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text ?? ""))).ToLowerInvariant();
+
+    #endregion
 
     private void ResetDb(IDbCommand destCmd)
     {
@@ -2845,14 +2948,22 @@ SET NOCOUNT ON
     // scope (mirroring the real path's two QuenchDatabaseObjectsWithCheckpoint passes), so this
     // gates on HasBeenQuenched exactly as the real path does — a script already logged here in an
     // earlier call is skipped, and each script is flagged once it's logged.
-    internal void WhatIfLogScripts(List<SqlScript> scripts, DatabaseScriptSlot slot)
+    internal void WhatIfLogScripts(List<SqlScript> scripts, DatabaseScriptSlot slot, IDbCommand destCmd = null)
     {
         var entries = new List<WhatIfConsoleEntry>();
         foreach (var script in scripts.Where(s => !s.HasBeenQuenched))
         {
+            script.HasBeenQuenched = true;
+            if (ProbeScriptStamp(destCmd, script, slot) is { Unchanged: true })
+            {
+                script.Outcome = ScriptOutcome.Unchanged;
+                entries.Add(new WhatIfConsoleEntry("skip (unchanged)", "SKIP (unchanged)", script.LogPath));
+                WhatIf?.Record(WhatIfCategory.Skip, LogPrefix, script.LogPath);
+                ChangeAudit?.Record(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged");
+                continue;
+            }
             entries.Add(new WhatIfConsoleEntry("apply", "APPLY", script.LogPath));
             WhatIf?.Record(WhatIfCategory.Apply, LogPrefix, script.LogPath);
-            script.HasBeenQuenched = true;
         }
         foreach (var line in WhatIfConsoleFormatter.Render(entries, WhatIfConsoleDetail))
             SafeProgressLog(line);
