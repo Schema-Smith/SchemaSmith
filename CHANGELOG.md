@@ -4,6 +4,12 @@ All notable changes to SchemaSmith Community Edition are documented here.
 
 For full release details and download links, see [GitHub Releases](https://github.com/Schema-Smith/SchemaSmith/releases).
 
+## [v2.7.3](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.3) — 2026-10-14
+
+### Fixed
+
+- **Building from source failed NuGet's audit on `System.Security.Cryptography.Pkcs` 9.0.18 — #505.** Microsoft.Data.SqlClient brings the package in, and two advisories published on 2026-10-13 (GHSA-846f-f764-76mx, GHSA-2fmv-rv2c-59x7) turned every restore into an error under the repository's warnings-as-errors policy, a consumer referencing `Schema.csproj` by project included. The package is pinned to 9.0.21, and the shipped tools carry the patched assembly. Nothing else changed since v2.7.2.
+
 ## [v2.7.2]
 
 ### Breaking Changes
