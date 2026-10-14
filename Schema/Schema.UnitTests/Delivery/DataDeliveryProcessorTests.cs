@@ -832,12 +832,12 @@ public class DataDeliveryProcessorTests
         DataDeliveryProcessor.ValidateDeleteCascade(_mockCommand, "MySQL", "`mydb`",
             new List<(string, string)> { ("`mydb`", "Users") });
 
-        Assert.That(_mockCommand.CommandText, Does.Contain("'mydb'"));
+        Assert.That(_mockCommand.CommandText, Does.Contain(Schema.Utility.MySqlNameMatch.Literal("mydb")));
         Assert.That(_mockCommand.CommandText, Does.Not.Contain("`mydb`"));
     }
 
     [Test]
-    public void ValidateDeleteCascade_MySql_TableNameWithQuote_IsEscaped()
+    public void ValidateDeleteCascade_MySql_TableNameWithQuote_PassesUnaltered()
     {
         var mockReader = Substitute.For<IDataReader>();
         mockReader.Read().Returns(false);
@@ -846,7 +846,7 @@ public class DataDeliveryProcessorTests
         DataDeliveryProcessor.ValidateDeleteCascade(_mockCommand, "MySQL", "testdb",
             new List<(string, string)> { ("testdb", "O'Brien") });
 
-        Assert.That(_mockCommand.CommandText, Does.Contain("O''Brien"));
+        Assert.That(_mockCommand.CommandText, Does.Contain(Schema.Utility.MySqlNameMatch.Literal("O'Brien")));
     }
 
     [Test]

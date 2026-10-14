@@ -144,6 +144,34 @@ INSERT IGNORE INTO `{MainDb}`.`legacy_types` (`id`, `blob_data`, `longblob_data`
         Assert.That(columns, Does.Contain("last_update"));
     }
 
+    // A backslash is an escape character inside a MySQL string literal unless NO_BACKSLASH_ESCAPES is set, so a name
+    // quoted only by doubling its apostrophes was read as a different name and the table looked absent.
+    [Test]
+    public void ATableNamedWithABackslash_IsFoundAndExtracted()
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"bs\\n_{Guid.NewGuid():N}"[..20];
+
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (Id INT PRIMARY KEY, `Va\\l` VARCHAR(20))";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, 'kept')";
+            command.ExecuteNonQuery();
+
+            Assert.That(_dataTongs.TableExists(command, _testDb, tableName), Is.True);
+            var columns = _dataTongs.GetSelectColumns(command, _testDb, tableName);
+            Assert.That(columns, Does.Contain("Va\\l"), "the column list must not come back empty");
+            var json = _dataTongs.GetTableDataJson(command, columns, _testDb, tableName, "`Id`", null);
+            Assert.That(System.Text.Json.JsonDocument.Parse(json).RootElement[0].GetProperty("Va\\l").GetString(), Is.EqualTo("kept"), json);
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void AMixedCaseTable_ExtractsItsColumnsAndRows_UnderItsDeclaredSpelling()
     {
@@ -227,7 +255,7 @@ INSERT IGNORE INTO `{MainDb}`.`legacy_types` (`id`, `blob_data`, `longblob_data`
 
         var result = global::DataTongs.DataTongs.FormatColumnForJsonObject(column);
 
-        Assert.That(result, Is.EqualTo("'first_name', `first_name`"));
+        Assert.That(result, Is.EqualTo($"{MySqlNameMatch.Literal("first_name")}, `first_name`"));
     }
 
     [Test]
@@ -242,7 +270,7 @@ INSERT IGNORE INTO `{MainDb}`.`legacy_types` (`id`, `blob_data`, `longblob_data`
         // "<col>.STSrid" companion; MySQL must emit the same pair so a spatial value delivered into an
         // untyped destination column keeps its CRS instead of silently becoming SRID 0.
         Assert.That(result, Does.Contain("ST_SRID"));
-        Assert.That(result, Does.Contain("location.STSrid"));
+        Assert.That(result, Does.Contain(MySqlNameMatch.Literal("location.STSrid")));
         Assert.That(result, Does.Contain("location"));
     }
 
@@ -297,7 +325,7 @@ INSERT IGNORE INTO `{MainDb}`.`legacy_types` (`id`, `blob_data`, `longblob_data`
 
         var result = global::DataTongs.DataTongs.FormatColumnForJsonObject(column);
 
-        Assert.That(result, Is.EqualTo("'actor_id', `actor_id`"));
+        Assert.That(result, Is.EqualTo($"{MySqlNameMatch.Literal("actor_id")}, `actor_id`"));
     }
 
     #endregion

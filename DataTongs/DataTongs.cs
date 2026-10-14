@@ -690,7 +690,7 @@ public class DataTongs
         return cmd.ExecuteScalar() as bool? ?? false;
     }
 
-    private static string Literal(string value) => $"'{value.Replace("'", "''")}'";
+    private static string Literal(string value) => MySqlNameMatch.Literal(value);
 
     private static bool TableExistsMySql(IDbCommand cmd, string databaseName, string tableName)
     {
@@ -1062,7 +1062,7 @@ ORDER BY c.ORDINAL_POSITION;";
 
     internal static string FormatColumnForJsonObject(ColumnInfo column, bool quoteDecimals = false)
     {
-        var quotedName = $"'{column.Name.Replace("'", "''")}'";
+        var quotedName = MySqlNameMatch.Literal(column.Name);
         var columnRef = $"`{Identifier.EscapeDelimited(column.Name, Platform.MySQL)}`";
         var dataType = column.DataType.ToLowerInvariant();
 
@@ -1083,7 +1083,7 @@ ORDER BY c.ORDINAL_POSITION;";
                 // WKT alone drops the reference system. Pair it with a "<col>.STSrid" companion, the
                 // same shape SQL Server extraction has always produced, so the CRS survives delivery
                 // into an untyped destination column.
-                => $"{quotedName}, ST_AsText({columnRef}), '{column.Name.Replace("'", "''")}.STSrid', ST_SRID({columnRef})",
+                => $"{quotedName}, ST_AsText({columnRef}), {MySqlNameMatch.Literal(column.Name + ".STSrid")}, ST_SRID({columnRef})",
             "bit" => $"{quotedName}, CAST({columnRef} AS UNSIGNED)",
             // As a string: MySQL reads a JSON number back as a double, so delivery would round a DECIMAL wider than one.
             "decimal" or "numeric" when quoteDecimals => $"{quotedName}, CAST({columnRef} AS CHAR)",

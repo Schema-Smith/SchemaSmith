@@ -300,19 +300,19 @@ public class DataTongsTests
         cmd.ExecuteScalar().Returns(1L);
 
         dt.TableExists(cmd, "`testdb`", "`users`");
-        Assert.That(cmd.CommandText, Does.Contain("'testdb'"));
-        Assert.That(cmd.CommandText, Does.Contain("'users'"));
+        Assert.That(cmd.CommandText, Does.Contain(MySqlNameMatch.Literal("testdb")));
+        Assert.That(cmd.CommandText, Does.Contain(MySqlNameMatch.Literal("users")));
     }
 
     [Test]
-    public void TableExists_MySQL_EscapesSingleQuotes()
+    public void TableExists_MySQL_PassesAnApostropheUnaltered()
     {
         var dt = new global::DataTongs.DataTongs(Platform.MySQL);
         var cmd = Substitute.For<IDbCommand>();
         cmd.ExecuteScalar().Returns(1L);
 
         dt.TableExists(cmd, "testdb", "user's_table");
-        Assert.That(cmd.CommandText, Does.Contain("user''s_table"));
+        Assert.That(cmd.CommandText, Does.Contain(MySqlNameMatch.Literal("user's_table")));
     }
 
     #endregion
@@ -1232,6 +1232,7 @@ public class DataTongsTests
             // both via SELECT VERSION() — return a modern MySQL version so the JSON_ARRAYAGG path is taken.
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
             if (command.CommandText?.Contains("@@SESSION.time_zone") == true) return "SYSTEM";
+            if (command.CommandText?.Contains("@@SESSION.sql_mode") == true) return "STRICT_TRANS_TABLES";
             callCount++;
             return callCount switch
             {
@@ -1637,6 +1638,7 @@ public class DataTongsTests
             // Data delivery detects the server version and probes JSON_ARRAYAGG support, both via SELECT VERSION().
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
             if (command.CommandText?.Contains("@@SESSION.time_zone") == true) return "SYSTEM";
+            if (command.CommandText?.Contains("@@SESSION.sql_mode") == true) return "STRICT_TRANS_TABLES";
             callCount++;
             return callCount switch
             {
