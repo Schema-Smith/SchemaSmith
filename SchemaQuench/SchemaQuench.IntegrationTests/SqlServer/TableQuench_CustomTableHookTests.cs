@@ -131,7 +131,7 @@ END");
         try
         {
             conn.ChangeDatabase("master");
-            Exec(cmd, $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE IF EXISTS [{db}];");
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
         }
         catch { /* best-effort cleanup */ }
     }

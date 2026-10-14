@@ -122,12 +122,14 @@ public class FixtureSetup
         DropStaleTestDatabases();
         CreateTestDatabases();
 
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => Cleanup();
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => CleanupIfInitialized();
     }
 
     private static bool _cleanedUp;
 
-    private static void Cleanup()
+    /// <summary>Drops this fixture's databases if this process created them. For assemblies that borrow the fixture
+    /// lazily: its own teardown runs only in this assembly, and a process-exit handler can be cut short.</summary>
+    public static void CleanupIfInitialized()
     {
         if (_cleanedUp || !_initialized) return;
         _cleanedUp = true;
@@ -157,7 +159,7 @@ public class FixtureSetup
             cmd.CommandTimeout = 120;
 
             cmd.CommandText = "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA "
-                              + "WHERE SCHEMA_NAME REGEXP '^(TestMain|TestSecondary)_[0-9]{8}_'";
+                              + "WHERE SCHEMA_NAME REGEXP '^(TestMain|TestSecondary)_MariaTest_[0-9]{8}_'";
             var stale = new List<string>();
             using (var reader = cmd.ExecuteReader())
                 while (reader.Read())

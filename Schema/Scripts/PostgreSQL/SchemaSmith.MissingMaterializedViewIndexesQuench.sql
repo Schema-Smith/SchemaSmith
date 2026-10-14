@@ -43,7 +43,8 @@ BEGIN
   -- MaterializedViewQuench (so an old target neither churns nor emits an unsupported clause).
   EXECUTE format($mv$
   SELECT STRING_AGG('RAISE NOTICE ''  Dropping changed materialized view index ' || n.nspname || '.' || i.relname || ''';' || CHR(10) ||
-                    'DROP INDEX IF EXISTS "' || n.nspname || '"."' || i.relname || '";', CHR(10))
+                    'DROP INDEX IF EXISTS "' || n.nspname || '"."' || i.relname || '";' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || n.nspname || '.' || c.relname || '.' || i.relname || ''', ''dropped'');', CHR(10))
     FROM temp_mv_indexes t
     JOIN pg_class c ON c.relname = t."ViewName"
                    AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t."ViewSchema")
@@ -83,12 +84,14 @@ BEGIN
              ELSE 'FALSE' END)
   INTO sql_script;
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   RAISE NOTICE 'Materialized View Indexes — Drop Removed';
 
   -- Drop indexes that exist in DB but not in definitions (for views that still exist)
   SELECT STRING_AGG('RAISE NOTICE ''  Dropping removed materialized view index ' || n.nspname || '.' || i.relname || ''';' || CHR(10) ||
-                    'DROP INDEX IF EXISTS "' || n.nspname || '"."' || i.relname || '";', CHR(10))
+                    'DROP INDEX IF EXISTS "' || n.nspname || '"."' || i.relname || '";' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || n.nspname || '.' || c.relname || '.' || i.relname || ''', ''dropped'');', CHR(10))
     INTO sql_script
     FROM temp_materialized_views tv
     JOIN pg_class c ON c.relname = tv."Name"
@@ -100,6 +103,7 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM temp_mv_indexes t
                        WHERE t."ViewSchema" = tv."Schema" AND t."ViewName" = tv."Name" AND t."Name" = i.relname);
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   RAISE NOTICE 'Materialized View Indexes — Create Missing';
 
@@ -119,7 +123,8 @@ BEGIN
     || CASE WHEN COALESCE(t."AccessMethod", 'btree') IN ('btree', 'gist', 'hash')
             THEN ' WITH (fillfactor = ' || t."FillFactor" || ')'
             ELSE '' END
-    || ';',
+    || ';' || CHR(10)
+    || 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || t."ViewSchema" || '.' || t."ViewName" || '.' || t."Name" || ''', ''created'');',
     CHR(10))
     INTO sql_script
     FROM temp_mv_indexes t
@@ -128,8 +133,13 @@ BEGIN
                    AND c.relkind = 'm'
     WHERE NOT EXISTS (SELECT 1 FROM pg_index idx
                        JOIN pg_class i ON i.oid = idx.indexrelid AND i.relname = t."Name"
-                       WHERE idx.indrelid = c.oid);
+                       WHERE idx.indrelid = c.oid)
+       -- Under WhatIf a changed index was not really dropped above, but the real run re-creates it.
+       OR (p_WhatIf AND EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                                 WHERE a."SessionId" = pg_backend_pid() AND a."ActionType" = 'wouldDrop' AND a."ObjectType" = 'index'
+                                   AND a."ObjectName" = t."ViewSchema" || '.' || t."ViewName" || '.' || t."Name"));
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- Cluster if specified
   SELECT STRING_AGG('ALTER INDEX "' || t."ViewSchema" || '"."' || t."Name" || '" SET (fillfactor = ' || t."FillFactor" || ');'

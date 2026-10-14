@@ -21,6 +21,18 @@ public class DataDeliveryContext
     public Func<string, string> ReadFileContent { get; set; }
     public Action<string, string> ExecuteScript { get; set; }
     public Action<string> ProgressLog { get; set; }
+
+    /// <summary>
+    /// Records a delivery the target cannot take (object type, object name), so the run reports it as incomplete
+    /// alongside the other downgrades instead of in the progress log alone.
+    /// </summary>
+    public Action<string, string> RecordDowngrade { get; set; }
+
+    /// <summary>
+    /// Records each delivery by its label (table key, plus the variant when it has one): one that ran, or under
+    /// WhatIf one that would run, so the deployment summary lists deliveries as well as the console.
+    /// </summary>
+    public Action<string> RecordDelivery { get; set; }
     public Action<string> ProgressLogError { get; set; }
     public bool WhatIf { get; set; }
 

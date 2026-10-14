@@ -182,6 +182,42 @@ INSERT INTO [dbo].[{tableName}] VALUES
         }
     }
 
+    // A ROWGUIDCOL column was left out of extraction and the merge, so a delivered row got a fresh GUID from the column's
+    // default: a silent data change for anything that keys on it. Both encodings carry it now.
+    [TestCase("Json", TestName = "EndToEnd_RoundTrip_KeepsRowGuidColValues_Json")]
+    [TestCase("Xml", TestName = "EndToEnd_RoundTrip_KeepsRowGuidColValues_Xml")]
+    public void EndToEnd_RoundTrip_KeepsRowGuidColValues(string encoding)
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"E2EGuid_{Guid.NewGuid():N}".Substring(0, 28);
+        try
+        {
+            command.CommandText = $@"
+CREATE TABLE [dbo].[{tableName}] ([Id] INT NOT NULL PRIMARY KEY, [G] UNIQUEIDENTIFIER ROWGUIDCOL NOT NULL DEFAULT NEWID());
+INSERT INTO [dbo].[{tableName}] VALUES (1, '11111111-2222-3333-4444-555555555555');";
+            command.ExecuteNonQuery();
+
+            var payload = encoding == "Xml"
+                ? _dataTongs.GetTableDataXmlSqlServer(command, "dbo", tableName, "[Id]", null)
+                : _dataTongs.GetTableDataJson(command, _dataTongs.GetSelectColumns(command, "dbo", tableName), "dbo", tableName, "[Id]", null);
+
+            command.CommandText = $"DELETE FROM [dbo].[{tableName}]";
+            command.ExecuteNonQuery();
+            command.CommandText = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, "dbo", tableName, payload, "[Id]",
+                mergeUpdate: true, mergeDelete: true, disableTriggers: false, tokenizeScripts: false, mergeFilter: null,
+                contentEncoding: encoding);
+            command.ExecuteNonQuery();
+
+            command.CommandText = $"SELECT CAST([G] AS NVARCHAR(36)) FROM [dbo].[{tableName}] WHERE [Id] = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("11111111-2222-3333-4444-555555555555").IgnoreCase);
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [dbo].[{tableName}]";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void EndToEnd_RoundTrip_HandlesNullValues()
     {
@@ -251,7 +287,7 @@ INSERT INTO [dbo].[{tableName}] VALUES
         conn.Open();
         using var cmd = conn.CreateCommand();
 
-        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}];";
+        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
         cmd.ExecuteNonQuery();
 
         conn.Close();
@@ -263,12 +299,7 @@ INSERT INTO [dbo].[{tableName}] VALUES
         conn.Open();
         using var cmd = conn.CreateCommand();
 
-        cmd.CommandText = $@"
-IF DB_ID('{_integrationDb}') IS NOT NULL
-    ALTER DATABASE [{_integrationDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{_integrationDb}];
-";
-        cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _integrationDb);
         conn.Close();
     }
 

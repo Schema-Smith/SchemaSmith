@@ -72,7 +72,7 @@
     },
     {
       "Name": "[FirstName]",
-      "DataType": "NAME",
+      "DataType": "Name",
       "ShouldApplyExpression": "",
       "OldName": "",
       "Collation": "",
@@ -88,7 +88,7 @@
     },
     {
       "Name": "[LastName]",
-      "DataType": "NAME",
+      "DataType": "Name",
       "ShouldApplyExpression": "",
       "OldName": "",
       "Collation": "",
@@ -104,7 +104,7 @@
     },
     {
       "Name": "[MiddleName]",
-      "DataType": "NAME",
+      "DataType": "Name",
       "Nullable": true,
       "ShouldApplyExpression": "",
       "OldName": "",
@@ -138,7 +138,7 @@
     },
     {
       "Name": "[NameStyle]",
-      "DataType": "NAMESTYLE",
+      "DataType": "NameStyle",
       "Default": "0",
       "ShouldApplyExpression": "",
       "OldName": "",

@@ -127,6 +127,230 @@ public abstract class TableDataDeliverySharedTests
         Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("Item A"));
     }
 
+    // 4-byte characters must arrive intact. On MariaDB 10.2-10.5 the recursive-CTE row source reads every value through
+    // SchemaSmith_JsonScalarStr, whose JSON parameter is LONGTEXT in the database's default character set there, so in a
+    // latin1 database an emoji became '?'. The test uses its own latin1 database, kindled there, because the function
+    // takes its parameter's character set from the database it is created in, and delivery runs in the target database.
+    // Asserted on the stored bytes; the JSON_TABLE path (MySQL 8, MariaDB 10.6+) runs it too.
+    [Test]
+    public void DeliverTableData_KeepsFourByteCharacters()
+    {
+        var db = $"_t_utf8_{Guid.NewGuid():N}".Substring(0, 24);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"CREATE DATABASE `{db}` CHARACTER SET latin1 COLLATE latin1_swedish_ci";
+            command.ExecuteNonQuery();
+            _connection.ChangeDatabase(db);
+            ForgeKindler.KindleTheForge(command, Platform);
+            command.CommandText = "CREATE TABLE `t4` (code VARCHAR(20) NOT NULL PRIMARY KEY, "
+                                  + "name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL)";
+            command.ExecuteNonQuery();
+
+            var script = BuildMergeScript(command, db, "t4", "[{\"code\":\"E1\",\"name\":\"ä😀\"}]", "`code`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            ExecuteScript(command, script);
+
+            command.CommandText = "SELECT HEX(name) FROM `t4` WHERE code = 'E1'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("C3A4F09F9880"),
+                "the stored bytes must be the UTF-8 of the delivered characters");
+        }
+        finally
+        {
+            _connection.ChangeDatabase(_testDb);
+            command.CommandText = $"DROP DATABASE IF EXISTS `{db}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    private const string Backslash = "\\";
+
+    // A payload written by a tool that escapes non-BMP characters carries \ud83d\ude00 rather than the character.
+    // MariaDB up to 10.11.11 and 11.4.5 turns any 4-byte character into '?' in JSON_UNQUOTE (MDEV-35614), escaped or
+    // not; the delivery row sources read strings through JSON_TABLE and JSON_VALUE, which are unaffected. This pins
+    // that they stay that way (checked against 11.4.4, where JSON_UNQUOTE of the same payload returns 3F).
+    [Test]
+    public void DeliverTableData_KeepsAnEscapedFourByteCharacter()
+    {
+        var table = $"t_esc_{Guid.NewGuid():N}".Substring(0, 20);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (code VARCHAR(20) NOT NULL PRIMARY KEY, "
+                                  + "name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL)";
+            command.ExecuteNonQuery();
+
+            var payload = "[{\"code\":\"E2\",\"name\":\"" + Backslash + "ud83d" + Backslash + "ude00\"}]";
+            var script = BuildMergeScript(command, _testDb, table, payload, "`code`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            if (Platform == Platform.MariaDb && _serverVersionNum == 1002)
+                Assert.That(script, Does.Contain("\U0001F600"), "MariaDB 10.2 refuses an escaped surrogate pair, so the payload must carry the character");
+            else
+                Assert.That(script, Does.Contain(Backslash + Backslash + "ud83d"), "the payload must reach the server still escaped");
+            ExecuteScript(command, script);
+
+            command.CommandText = $"SELECT HEX(name) FROM `{_testDb}`.`{table}` WHERE code = 'E2'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("F09F9880"),
+                "an escaped surrogate pair must be stored as the UTF-8 of the character it encodes");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // An upsert touching a row it does not change still fires AFTER UPDATE triggers: MySQL always, MariaDB from 10.11.17
+    // and 11.4.11 (MDEV-33083). Delivery leaves unchanged rows out of the upsert, so a redeploy of the same data fires
+    // nothing. Compared byte for byte, so a change a case-insensitive or PAD SPACE collation calls equal is still applied.
+    [TestCase(false, TestName = "DeliverTableData_UnchangedRows_FireNoUpdateTrigger_Upsert")]
+    [TestCase(true, TestName = "DeliverTableData_UnchangedRows_FireNoUpdateTrigger_UpsertAndDelete")]
+    public void DeliverTableData_UnchangedRows_FireNoUpdateTrigger(bool mergeDelete)
+    {
+        var table = $"t_trg_{Guid.NewGuid():N}".Substring(0, 20);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            CreateTriggeredTable(command, table);
+            const string data = @"[{""code"":""A"",""name"":""same"",""doc"":{""k"":1},""num"":1.5,""at"":""2024-01-02 03:04:05""},{""code"":""B"",""name"":null,""doc"":null,""num"":null,""at"":null}]";
+            Deliver(command, table, data, mergeDelete);
+            Assert.That(UpdatesLogged(command, table), Is.EqualTo(0), "the first delivery only inserts");
+
+            Deliver(command, table, data, mergeDelete);
+            Assert.That(UpdatesLogged(command, table), Is.EqualTo(0), "redelivering identical rows must not touch them");
+            Assert.That(Count(command, table), Is.EqualTo(2));
+
+            Deliver(command, table, data.Replace(@"""name"":""same""", @"""name"":""changed"""), mergeDelete);
+            Assert.That(UpdatesLogged(command, table), Is.EqualTo(1), "a changed row is still updated");
+        }
+        finally
+        {
+            DropTriggeredTable(command, table);
+        }
+    }
+
+    [TestCase(@"""SAME""", "53414D45", TestName = "DeliverTableData_CaseOnlyChange_IsApplied")]
+    [TestCase(@"""same """, "73616D6520", TestName = "DeliverTableData_TrailingSpaceChange_IsApplied")]
+    public void DeliverTableData_ChangeACollationCallsEqual_IsApplied(string newName, string expectedHex)
+    {
+        var table = $"t_trg_{Guid.NewGuid():N}".Substring(0, 20);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            CreateTriggeredTable(command, table);
+            Deliver(command, table, @"[{""code"":""A"",""name"":""same""}]", mergeDelete: false);
+            Deliver(command, table, @"[{""code"":""A"",""name"":" + newName + "}]", mergeDelete: false);
+
+            command.CommandText = $"SELECT HEX(name) FROM `{_testDb}`.`{table}` WHERE code = 'A'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo(expectedHex));
+        }
+        finally
+        {
+            DropTriggeredTable(command, table);
+        }
+    }
+
+    private void CreateTriggeredTable(IDbCommand command, string table)
+    {
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (code VARCHAR(20) NOT NULL PRIMARY KEY, "
+                              + "name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL, doc JSON NULL, "
+                              + "num DECIMAL(10,2) NULL, at DATETIME NULL)";
+        command.ExecuteNonQuery();
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}_log` (n INT)";
+        command.ExecuteNonQuery();
+        command.CommandText = $"CREATE TRIGGER `{_testDb}`.`{table}_au` AFTER UPDATE ON `{_testDb}`.`{table}` "
+                              + $"FOR EACH ROW INSERT INTO `{_testDb}`.`{table}_log` VALUES (1)";
+        command.ExecuteNonQuery();
+    }
+
+    private void DropTriggeredTable(IDbCommand command, string table)
+    {
+        command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`, `{_testDb}`.`{table}_log`";
+        command.ExecuteNonQuery();
+    }
+
+    private void Deliver(IDbCommand command, string table, string data, bool mergeDelete) =>
+        ExecuteScript(command, BuildMergeScript(command, _testDb, table, data, "`code`",
+            mergeUpdate: true, mergeDelete: mergeDelete, disableTriggers: false, tokenizeScripts: false, mergeFilter: null));
+
+    private int UpdatesLogged(IDbCommand command, string table)
+    {
+        command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{table}_log`";
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    private int Count(IDbCommand command, string table)
+    {
+        command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{table}`";
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    // MariaDB's JSON_TABLE stored string escapes literally until 10.6.20, 10.11.10, 11.2.6, 11.4.4 and 11.6.2
+    // (MDEV-27412), and before 10.6.9 could not return a JSON column's sub-document (MDEV-25875). Delivery on those
+    // patches uses the recursive-CTE shred. Asserted on stored bytes, on every leg; only those patches need the routing.
+    [Test]
+    public void DeliverTableData_KeepsEscapedCharactersAndSubDocuments()
+    {
+        var table = $"t_esc_{Guid.NewGuid():N}".Substring(0, 20);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (code VARCHAR(20) NOT NULL PRIMARY KEY, "
+                                  + "name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, doc JSON NULL)";
+            command.ExecuteNonQuery();
+
+            // name is a\"b\\c\nd once JSON-decoded: a, quote, b, backslash, c, newline, d.
+            var payload = "[{\"code\":\"E3\",\"name\":\"a" + Backslash + "\"b" + Backslash + Backslash + "c" + Backslash + "nd\","
+                          + "\"doc\":{\"a\":{\"b\":1}}}]";
+            var script = BuildMergeScript(command, _testDb, table, payload, "`code`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            ExecuteScript(command, script);
+
+            command.CommandText = $"SELECT HEX(name) FROM `{_testDb}`.`{table}` WHERE code = 'E3'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("6122625C630A64"),
+                "the stored bytes must be the decoded string: a, quote, b, backslash, c, newline, d");
+            command.CommandText = $"SELECT JSON_EXTRACT(doc, '$.a.b') FROM `{_testDb}`.`{table}` WHERE code = 'E3'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1"), "the JSON column must keep its sub-document");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // MySQL's JSON parser reads a JSON number as a double, so a DECIMAL with more digits than a double carries arrived
+    // rounded (12345678901234567000.000000000000000000), silently. Delivery hands such a column its value as a string.
+    [Test]
+    public void DeliverTableData_KeepsADecimalWiderThanADouble()
+    {
+        var table = $"t_dec_{Guid.NewGuid():N}".Substring(0, 20);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (code VARCHAR(20) NOT NULL PRIMARY KEY, wide DECIMAL(38,18) NULL, "
+                                  + "doc JSON NULL)";
+            command.ExecuteNonQuery();
+
+            var script = BuildMergeScript(command, _testDb, table,
+                @"[{""code"":""D1"",""wide"":12345678901234567890.123456789012345678,""doc"":{""wide"":1.5}},{""code"":""D2"",""wide"":-0.000000000000000001,""doc"":null}]",
+                "`code`", mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            ExecuteScript(command, script);
+
+            command.CommandText = $"SELECT CAST(wide AS CHAR) FROM `{_testDb}`.`{table}` WHERE code = 'D1'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("12345678901234567890.123456789012345678"));
+            command.CommandText = $"SELECT CAST(wide AS CHAR) FROM `{_testDb}`.`{table}` WHERE code = 'D2'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("-0.000000000000000001"));
+            command.CommandText = $"SELECT JSON_EXTRACT(doc, '$.wide') FROM `{_testDb}`.`{table}` WHERE code = 'D1'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1.5"), "a nested key of the same name is not a column");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void DeliverTableData_ReplaceType_ReplacesExistingRows()
     {
@@ -916,8 +1140,102 @@ public abstract class TableDataDeliverySharedTests
         }
     }
 
+    // InnoDB checks a foreign key row by row, so a self-referencing table whose payload lists a child before its parent
+    // could not be delivered into an empty table. The self-reference is deferred: pass 1 inserts the missing rows with it
+    // NULL and leaves existing rows alone, pass 2 merges as usual -- so a redeploy of unchanged data still touches nothing.
     [Test]
-    public void DeliverTableData_ViaQuench_FailsFastOnReplaceCascade()
+    public void DeliverTableData_ViaQuench_DeliversASelfReferencingTable()
+    {
+        if (!SupportsDataDelivery)
+            Assert.Ignore("Data delivery requires MySQL 8.0; skipped below the floor.");
+        lock (FactoryContainer.SharedLockObject)
+        {
+            using var command = _connection.CreateCommand();
+            var table = $"_test_emp_{Guid.NewGuid():N}".Substring(0, 30);
+            var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            var checkpointDir = Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
+            var savedConfig = FactoryContainer.Resolve<IConfigurationRoot>();
+            try
+            {
+                command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (id INT PRIMARY KEY, name VARCHAR(50) NOT NULL, boss_id INT NULL, "
+                                      + $"CONSTRAINT fk_{table}_boss FOREIGN KEY (boss_id) REFERENCES `{table}` (id))";
+                command.ExecuteNonQuery();
+                command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}_log` (n INT)";
+                command.ExecuteNonQuery();
+                command.CommandText = $"CREATE TRIGGER `{_testDb}`.`{table}_au` AFTER UPDATE ON `{_testDb}`.`{table}` "
+                                      + $"FOR EACH ROW INSERT INTO `{_testDb}`.`{table}_log` VALUES (1)";
+                command.ExecuteNonQuery();
+
+                Directory.CreateDirectory(tempDir);
+                File.WriteAllText(Path.Join(tempDir, "Template.json"), "{}");
+                const string data = @"[{""id"":3,""name"":""Carol"",""boss_id"":2},{""id"":2,""name"":""Bob"",""boss_id"":1},{""id"":1,""name"":""Alice"",""boss_id"":null}]";
+                File.WriteAllText(Path.Join(tempDir, "emp.tabledata"), data);
+
+                var template = new Template { Name = "SelfReferenceTest", FilePath = Path.Join(tempDir, "Template.json") };
+                template.Tables.Add(new MySqlTable
+                {
+                    Name = table,
+                    DataDelivery = [new DataDelivery { MergeType = "Insert/Update", ContentFile = "emp.tabledata" }],
+                    Columns =
+                    [
+                        new Column { Name = "id", DataType = "INT" },
+                        new Column { Name = "name", DataType = "VARCHAR(50)" },
+                        new Column { Name = "boss_id", DataType = "INT", Nullable = true }
+                    ],
+                    ForeignKeys = [new MySqlForeignKey { Name = $"fk_{table}_boss", Columns = "`boss_id`", RelatedTable = table, RelatedColumns = "`id`" }]
+                });
+                RegisterTargetConfig();
+
+                bool Deploy()
+                {
+                    var quench = new DatabaseQuench("127.0.0.1", new Product { Name = "TestProduct", Platform = Platform }, template, _testDb,
+                        suppressKindling: false, whatIfOnly: "0", runScriptsTwice: false,
+                        dropRemovedTables: "0", dropRemovedColumns: "0", dropRemovedForeignKeys: "0", dropRemovedCheckConstraints: "0", dropRemovedExcludeConstraints: "0", dropRemovedStatistics: "0", dropRemovedIndexes: "0", dropUnknownIndexes: false, updateTables: false,
+                        deliverData: true, checkpointing: new FileCheckpointManager(Path.Join(checkpointDir, Guid.NewGuid().ToString("N"))));
+                    quench.Execute();
+                    return quench.QuenchSuccessful;
+                }
+                string Bosses()
+                {
+                    command.CommandText = $"SELECT GROUP_CONCAT(CONCAT(id, ':', COALESCE(boss_id, '-')) ORDER BY id) FROM `{_testDb}`.`{table}`";
+                    return command.ExecuteScalar()?.ToString();
+                }
+                int UpdatesLogged()
+                {
+                    command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{table}_log`";
+                    return Convert.ToInt32(command.ExecuteScalar());
+                }
+
+                Assert.That(Deploy(), Is.True, "a child listed before its parent must deliver into an empty table");
+                Assert.That(Bosses(), Is.EqualTo("1:-,2:1,3:2"));
+
+                command.CommandText = $"DELETE FROM `{_testDb}`.`{table}_log`";
+                command.ExecuteNonQuery();
+                Assert.That(Deploy(), Is.True);
+                Assert.That(UpdatesLogged(), Is.EqualTo(0), "redelivering unchanged data must not touch the rows");
+
+                File.WriteAllText(Path.Join(tempDir, "emp.tabledata"), data.Replace(@"""boss_id"":2", @"""boss_id"":1"));
+                Assert.That(Deploy(), Is.True);
+                Assert.That(Bosses(), Is.EqualTo("1:-,2:1,3:1"));
+                Assert.That(UpdatesLogged(), Is.EqualTo(1), "only the changed row is updated");
+            }
+            finally
+            {
+                command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`, `{_testDb}`.`{table}_log`";
+                command.ExecuteNonQuery();
+                FactoryContainer.Register<IConfigurationRoot>(savedConfig);
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+                if (Directory.Exists(checkpointDir)) Directory.Delete(checkpointDir, true);
+            }
+        }
+    }
+
+    // A mixed-case parent must still be found where the server folds table names and reports them in lowercase.
+    // WhatIf must refuse it too: a preview that passes where the deploy aborts is the wrong preview.
+    [TestCase("_test_rparent_", "0")]
+    [TestCase("_Test_RParent_", "0")]
+    [TestCase("_test_rparent_", "1")]
+    public void DeliverTableData_ViaQuench_FailsFastOnReplaceCascade(string parentPrefix, string whatIf)
     {
         if (!SupportsDataDelivery)
             Assert.Ignore("Data delivery requires MySQL 8.0; skipped below the floor.");
@@ -926,7 +1244,7 @@ public abstract class TableDataDeliverySharedTests
         lock (FactoryContainer.SharedLockObject)
         {
             using var command = _connection.CreateCommand();
-            var parentTable = $"_test_rparent_{Guid.NewGuid():N}".Substring(0, 30);
+            var parentTable = $"{parentPrefix}{Guid.NewGuid():N}".Substring(0, 30);
             var childTable = $"_test_rchild_{Guid.NewGuid():N}".Substring(0, 30);
             var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
             var checkpointDir = Path.Combine(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
@@ -982,7 +1300,7 @@ public abstract class TableDataDeliverySharedTests
 
                 var product = new Product { Name = "TestProduct", Platform = Platform };
                 var quench = new DatabaseQuench("127.0.0.1", product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
+                    suppressKindling: true, whatIfOnly: whatIf, runScriptsTwice: false,
                     dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
                     deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
                 quench.Execute();
@@ -1312,14 +1630,18 @@ public abstract class TableDataDeliverySharedTests
     private void RegisterTargetConfig()
     {
         var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+        var settings = new Dictionary<string, string>
+        {
+            ["Target:User"] = config[$"{ConfigPrefix}:User"] ?? config["Target:User"] ?? "TestUser",
+            ["Target:Password"] = config[$"{ConfigPrefix}:Password"] ?? config["Target:Password"] ?? "aCa2d805-41E5@40c4!98e7#92F93zzxo176",
+            ["Target:Port"] = config[$"{ConfigPrefix}:Port"] ?? config["Target:Port"] ?? "3306",
+            ["Target:Server"] = config[$"{ConfigPrefix}:Server"] ?? config["Target:Server"] ?? "127.0.0.1"
+        };
+        // The connection properties carry what the leg needs to connect at all, such as SslMode=None on MySQL 5.7.
+        foreach (var prop in ConnectionString.ReadProperties(config, $"{ConfigPrefix}:ConnectionProperties"))
+            settings[$"Target:ConnectionProperties:{prop.Key}"] = prop.Value;
         var configBuilder = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string>
-            {
-                ["Target:User"] = config[$"{ConfigPrefix}:User"] ?? config["Target:User"] ?? "TestUser",
-                ["Target:Password"] = config[$"{ConfigPrefix}:Password"] ?? config["Target:Password"] ?? "aCa2d805-41E5@40c4!98e7#92F93zzxo176",
-                ["Target:Port"] = config[$"{ConfigPrefix}:Port"] ?? config["Target:Port"] ?? "3306",
-                ["Target:Server"] = config[$"{ConfigPrefix}:Server"] ?? config["Target:Server"] ?? "127.0.0.1"
-            }!)
+            .AddInMemoryCollection(settings!)
             .Build();
         FactoryContainer.Register<IConfigurationRoot>(configBuilder);
     }

@@ -74,6 +74,8 @@ A complete `DataTongs.settings.json`:
 | `Source:Database` | string | _(required)_ | Source database to extract data from. |
 | `Source:ConnectionProperties` | object | `{}` | Arbitrary key-value pairs appended to the connection string. Platform-specific keys -- see the [Configuration Reference](configuration.md#connection-configuration). |
 
+Each connection key falls back to its `Target:` twin when the `Source:` key is absent -- `Server`, `Port`, `User`, `Password`, `IntegratedSecurity`, and `ConnectionProperties` -- so one settings file can point SchemaQuench and DataTongs at the same server. `Source:CompatEncoding` falls back to `Target:CompatEncoding` the same way.
+
 The `--ConnectionString` switch bypasses all `Source` settings and passes the provided value directly to the platform-appropriate driver. `Source:Platform` is still required so the right script generator is used.
 
 ### Output paths
@@ -106,7 +108,7 @@ The typical placement inside a schema package is `ScriptPath` pointing at `Templ
 | `ShouldCast:MergeDelete` | bool | `false` | **Opt-in, because this branch deletes data.** Includes the delete branch (target rows missing from the source). On all four platforms: SQL Server / PostgreSQL emit `WHEN NOT MATCHED BY SOURCE THEN DELETE` inside the `MERGE`; MySQL and MariaDB emit an `INSERT ... ON DUPLICATE KEY UPDATE` followed by a separate `DELETE WHERE NOT EXISTS` step (because they have no `MERGE`). |
 | `ShouldCast:ConfigureDataDelivery` | bool | `false` | After extraction, write a `DataDelivery` block into each matching table's JSON file. See [--ConfigureDataDelivery](#--configuredatadelivery). |
 | `ShouldCast:TokenizeScripts` | bool | `true` | **All source engines.** Embeds each table's extracted row data in the merge script as a `{{<table>.tabledata}}` content token instead of inline JSON/XML text, matching SchemaTongs' tokenization behavior. DataTongs wires the matching `ScriptTokens` entry automatically -- see [Content-file tokenization](#tokenizescripts). Set to `false` to inline the literal row data in generated scripts instead. |
-| `ShouldCast:DeliveryEncoding` | string | `Json` | `Xml` extracts each table's content in the XML delivery encoding (so a package can deploy on a legacy-compatibility SQL Server, below the `OPENJSON` cliff), on any source engine, and stamps `"ContentEncoding": "Xml"` on the configured `DataDelivery`. Also settable per run with `--DeliveryEncoding=Xml`. See [Delivery encoding](#delivery-encoding-xml-for-legacy-sql-server). **Not the same setting as `Source:CompatEncoding`** — see the next row. |
+| `ShouldCast:DeliveryEncoding` | string | `Json` (`Xml` from a SQL Server source older than 2017) | `Xml` extracts each table's content in the XML delivery encoding (the shape a SQL Server database below compatibility level 130 shreds natively; SchemaQuench also converts a `Json` delivery there at deploy time), on any source engine, and stamps `"ContentEncoding": "Xml"` on the configured `DataDelivery`. Also settable per run with `--DeliveryEncoding=Xml`. See [Delivery encoding](#delivery-encoding-xml-for-legacy-sql-server). **Not the same setting as `Source:CompatEncoding`** — see the next row. |
 | `Source:CompatEncoding` | string | `auto` | SQL Server only. Forces the form of the catalog queries DataTongs builds its delivery script from — `legacy` uses the pre-`STRING_AGG` form a SQL Server 2008–2016 source needs, `modern` the current one. `auto` detects it. It changes how the script is built, not what it contains: the generated script and the content files come out the same either way. To produce a delivery a SQL Server 2008–2016 consumer can run, set `DeliveryEncoding` above to `Xml`. See [Forcing the encoding](schemaquench.md#forcing-the-encoding). |
 | `ShouldCast:DisableRules` | bool | `false` | **PostgreSQL only.** Wraps the delivery in `ALTER TABLE ... DISABLE RULE` / `ENABLE RULE`. |
 | `ShouldCast:UpdateDescendents` | bool | `true` | **PostgreSQL only.** When `false`, the generated `MERGE` uses `MERGE INTO ... ONLY` so partitioned-table writes do not propagate to descendant tables. |
@@ -201,7 +203,7 @@ MySQL doesn't have a `MERGE` statement. DataTongs generates the appropriate idio
 - **Insert + Update + Delete** -- `INSERT ... ON DUPLICATE KEY UPDATE` followed by `DELETE WHERE NOT EXISTS` to remove rows not present in the source data
 
 ```sql
-INSERT INTO `northwind`.`shippers` (`company_name`, `phone`, `shipper_id`) VALUES
+INSERT INTO `shippers` (`company_name`, `phone`, `shipper_id`) VALUES
   ('Speedy Express',   '(503) 555-9831', 1),
   ('United Package',   '(503) 555-3199', 2),
   ('Federal Shipping', '(503) 555-9931', 3)
@@ -210,7 +212,7 @@ ON DUPLICATE KEY UPDATE
   `phone`        = VALUES(`phone`);
 ```
 
-The MySQL generator infers the right idiom from `MergeUpdate` and `MergeDelete`.
+The MySQL generator infers the right idiom from `MergeUpdate` and `MergeDelete`. Tables are named without their database, so a script writes into the database it is deployed to, not the one the data came from.
 
 ---
 
@@ -232,7 +234,7 @@ DataTongs validates that each table exists in the source database before attempt
 
 Key columns define the row-matching predicate -- the `ON` clause on platforms that support `MERGE`, the unique-key match on MySQL.
 
-**Auto-detection:** When `KeyColumns` is blank, DataTongs queries the table's indexes and selects the primary key if one exists. If there's no primary key, it falls back to the first available unique index. Nullable columns in the detected key are automatically prefixed with `*` for NULL-safe comparison. This handles the vast majority of tables without any manual configuration.
+**Auto-detection:** When `KeyColumns` is blank, DataTongs queries the table's indexes and selects the primary key if one exists. If there's no primary key, on SQL Server and PostgreSQL it falls back to a unique index that covers the whole table: a filtered or partial unique index, or one with an expression key, is not used, and `INCLUDE` columns are not part of the key. On MySQL and MariaDB only the primary key is detected. Nullable columns in the detected key are automatically prefixed with `*` for NULL-safe comparison. This handles the vast majority of tables without any manual configuration.
 
 **Manual override:** When you specify `KeyColumns`, DataTongs uses your list instead of auto-detection. Separate multiple columns with commas:
 
@@ -256,7 +258,7 @@ ON Source.[SourceCode] = Target.[SourceCode]
 
 When auto-detection discovers a nullable column in a unique index, it automatically applies the `*` behavior.
 
-**No key available:** If a table has no primary key, no unique index, and no `KeyColumns` configured, DataTongs skips the table with an error message.
+**No key available:** If a table has no key DataTongs can detect (see Auto-detection above) and no `KeyColumns` configured, DataTongs skips the table with an error message.
 
 ### Filter
 
@@ -282,6 +284,8 @@ When enabled, DataTongs wraps each generated script with platform-appropriate tr
 ### MergeUpdate
 
 When enabled, the script updates existing rows whose data has changed. When disabled, the script only inserts new rows and (on MERGE platforms, if `MergeDelete` is on) deletes missing rows -- existing rows are left untouched regardless of whether their data differs.
+
+On MySQL and MariaDB a row already present exactly as delivered is left out of the upsert altogether. That matters for triggers: `INSERT ... ON DUPLICATE KEY UPDATE` fires a row's `AFTER UPDATE` trigger even when it changes nothing (always on MySQL; on MariaDB from 10.11.17 and 11.4.11), so without this every redeploy of unchanged data would fire it for every row. Text is compared byte for byte, so a change that only a case-insensitive collation would call equal is still applied. One exception: a table in a foreign-key cycle with another table is delivered in two passes, which really do update each row twice, so its triggers fire on every delivery. A table that only references itself is not affected.
 
 ### MergeDelete
 
@@ -318,13 +322,20 @@ DataTongs detects column types and applies the correct extraction and restoratio
 - **Geometry** -- extracted as WKT (basic support; restoration may need manual adjustment for complex cases).
 - **HierarchyID** -- canonical string round-trip.
 - **XML / NTEXT / TEXT / IMAGE** -- mapped through the OPENJSON layer with type-appropriate cast for change detection.
-- **Auto-excluded:** `sql_variant`, `rowversion` / `timestamp`, ROWGUIDCOL columns. A warning is logged for each skipped column.
+- **ROWGUIDCOL columns** -- extracted and delivered like any other column, so a row keeps its GUID rather than taking a new one from the column's default.
+- **Memory-optimized tables** -- SQL Server refuses `MERGE` on them, so delivery to one runs the same work as separate `UPDATE`, `INSERT` and `DELETE` statements. The result is the same.
+- **Append-only ledger tables** (SQL Server 2022+) -- refuse `UPDATE` and `DELETE`, so delivery only inserts the rows the table lacks. Rows that differ from what is delivered, or that a delete would have removed, are left as they are and counted in a message naming the table.
+- **Graph tables** (SQL Server 2017+) -- a node table's own columns are extracted and delivered, and the target assigns each row its `$node_id`. An edge table is skipped with a warning and the run exits `1`: its `$from_id` and `$to_id` name rows of other tables by internal id, which a delivery cannot translate.
+- **Auto-excluded:** `sql_variant`, `rowversion` / `timestamp`. A warning is logged for each skipped column.
 
 ### PostgreSQL
 
 - **Identity columns** -- handled via `OVERRIDING SYSTEM VALUE` where appropriate.
 - **Generated columns** -- auto-excluded.
 - **JSON / JSONB** -- preserved through the round-trip.
+- **Arrays** -- extracted as PostgreSQL's own array literal, so multi-dimensional arrays, non-default lower bounds and elements containing commas or quotes round-trip unchanged.
+- **PostGIS types** -- `geometry` and `geography` extracted as WKT with their SRID.
+- **`point` / `polygon`** -- PostgreSQL's built-in geometric types, carried in their own text form; PostGIS is not required.
 - **Auto-excluded with warning:** `tsvector`, `tsquery`, `money`, geometric types (`box`, `circle`, `line`, `lseg`, `path`), and user-defined composite types. These are skipped because their JSON representation can't reliably round-trip without manual intervention.
 
 ### MySQL
@@ -333,6 +344,7 @@ DataTongs detects column types and applies the correct extraction and restoratio
 - **Generated / virtual columns** -- auto-excluded.
 - **Spatial types** -- basic support via WKT.
 - **TEXT / BLOB families** -- supported through string and binary literals.
+- **DECIMAL / NUMERIC** -- written as JSON strings (`"12345678901234567890.123456789012345678"`). MySQL reads a JSON number back as a double, so a value with more digits than a double holds would be rounded on delivery. A file that carries a decimal as a number -- one written by hand, by another tool or by an earlier DataTongs -- is converted the same way when SchemaQuench delivers it.
 
 When a column is excluded from extraction, DataTongs logs a warning naming the table, the column, and the underlying type so you know exactly what was skipped.
 
@@ -444,12 +456,13 @@ For every table that produces output, DataTongs finds the table's JSON file in t
 |---|---|
 | `ContentFile` | Path to the written `.tabledata` file, relative to the template root. |
 | `MergeType` | Either the per-table `MergeType` from config, or a default derived from `ShouldCast:MergeUpdate` + `ShouldCast:MergeDelete` (see below). |
-| `MatchColumns` | The key columns used during extraction -- either the per-table `KeyColumns`, or the primary key auto-detected from the source database (same logic that drives the generated script). |
+| `MatchColumns` | The per-table `KeyColumns`, if one was specified. Otherwise `MatchColumns` is left out, and SchemaQuench detects the key on the target at deploy, with the same logic that drives the generated script (see [Key columns](#key-columns)). |
 | `MergeFilter` | The per-table `Filter`, if one was specified. |
 | `MergeDisableTriggers` | Mirrors `ShouldCast:DisableTriggers`. |
 | `MergeDisableRules` | **PostgreSQL.** Mirrors `ShouldCast:DisableRules`. |
 | `MergeUpdateDescendents` | **PostgreSQL.** Mirrors `ShouldCast:UpdateDescendents` (default `true`). |
 | `ContentEncoding` | `Xml` when extracting with `--DeliveryEncoding=Xml`, on any source engine (omitted for the default JSON). See [Delivery encoding](#delivery-encoding-xml-for-legacy-sql-server). |
+| `TimeZone` | **MySQL, MariaDB.** `+00:00`: DataTongs extracts `TIMESTAMP` values in that zone, and delivery reads them back in it, so they arrive unchanged whatever zone either server runs in. Generated merge scripts set the same zone around their data and restore the session's zone after. |
 
 Tables whose JSON file doesn't exist in the template are skipped with a warning. No file is created from scratch -- this tool configures existing tables, it doesn't scaffold new ones (use SchemaTongs for that).
 
@@ -486,7 +499,7 @@ DataTongs logs this once at startup, not per table (the per-table `Updated data 
 
 ## Delivery encoding (XML for legacy SQL Server)
 
-By default DataTongs extracts a table's data as a raw JSON array. On SQL Server, SchemaQuench delivers that with `OPENJSON` -- a path that requires **SQL Server compatibility level 130** (SQL Server 2016+). To produce a package that also deploys on an older SQL Server target (compatibility level 100--120), extract in the XML delivery encoding instead:
+By default DataTongs extracts a table's data as a raw JSON array. On SQL Server, SchemaQuench delivers that with `OPENJSON`, which requires **SQL Server compatibility level 130** (SQL Server 2016+). On an older target (compatibility level 100--120) it converts the JSON to the XML shape at deploy time and delivers that, so a JSON package deploys there too. To ship the content already in the XML shape, so nothing is converted at deploy time, extract in the XML delivery encoding:
 
 ```bash
 DataTongs --DeliveryEncoding=Xml
@@ -501,7 +514,11 @@ or in `DataTongs.settings.json`:
 
 With `Xml`, DataTongs writes each `.tabledata` file in the [XML delivery shape](schema-packages.md#content-encoding) -- `<rows><row><c n="Col">value</c>...</row></rows>`, with the database's native text forms (binary base64, geometry WKT + an SRID companion, ISO-8601 dates) and `NULL` columns omitted -- and, when `--ConfigureDataDelivery` is on, stamps `"ContentEncoding": "Xml"` on the reconciled `DataDelivery` entry so the extract → deploy round-trip works against a compatibility-level-100 database.
 
+**A SQL Server source older than 2017 extracts XML by default.** The JSON extraction uses `FOR JSON` (2016) and `STRING_AGG` (2017), so with `DeliveryEncoding` unset, DataTongs extracts XML from SQL Server 2008 R2 through 2016 and logs why. Setting `DeliveryEncoding` to `Json` against such a source stops the run with a message naming the setting.
+
 **Available on every source engine.** SQL Server extracts XML natively. PostgreSQL, MySQL, and MariaDB have no native XML producer, so DataTongs extracts the engine's normal JSON and converts it to the identical shape above -- one delivery XML dialect regardless of source engine, not a per-engine variant. That parity is useful even when the deployment target is never SQL Server: the `.tabledata` file is a standalone artifact, and `Xml` is a reasonable choice whenever a downstream consumer -- a third-party system, a hand-off package -- wants XML rather than JSON, independent of whether SchemaSmith ever reads the file back.
+
+**MySQL and MariaDB merge scripts cannot be tokenized with `Xml`.** A tokenized merge script reads its `.tabledata` file with `JSON_TABLE` when it is deployed, and that cannot read XML, so DataTongs refuses to write one: the table fails with a message naming both settings and the run exits `2`. The content file is still written. Delivering it through `DataDelivery` (`--ConfigureDataDelivery`) works -- SchemaQuench converts the XML before delivering it -- and so does a script with `ShouldCast:TokenizeScripts` set to `false`, which carries the data converted inside it.
 
 **Known limitation: geometry/geography SRID in data extraction.** Per-row SRID capture is a SQL-Server-only extraction capability — the JSON extraction query captures the SRID (`col.STSrid`) only on SQL Server. PostgreSQL and MySQL JSON extraction capture WKT (`ST_AsText()`) alone, with no per-row SRID companion. XML-encoded extracts inherit this same limitation, since XML is converted from the JSON result — a spatial column extracted as XML from PostgreSQL or MySQL carries WKT without the `.STSrid` companion. On **MySQL**, this no longer loses the reference system for a column whose schema declares a `Srid` restriction (`col POINT SRID 4326` -- see [MySQL column extras](schema-packages.md#mysql-column-extras)): every row in a SRID-restricted column is guaranteed to carry that one reference system, so a deploy target reconstructs it from the schema definition rather than needing the per-row companion. On **PostgreSQL** the same reasoning applies through the column *type* rather than a separate attribute: a typed column (`geometry(Point,4326)`) coerces an incoming SRID-less value to its declared reference system, so that round trip is lossless too. The gap is therefore narrower than it first looks — it remains open for an *unrestricted* MySQL spatial column and an *untyped* PostgreSQL `geometry` column. Those are the cases to watch, and they fail quietly: the WKT arrives intact and the value lands with SRID `0`, so the coordinates look right while the reference system is wrong. Extract spatial data from SQL Server, or type/restrict the destination column, when that matters. All other column types (binary, dates, NULLs, and non-spatial columns) are fully portable in both JSON and XML.
 

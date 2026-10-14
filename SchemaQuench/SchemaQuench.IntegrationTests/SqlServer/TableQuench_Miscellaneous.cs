@@ -671,8 +671,7 @@ INSERT dbo.RemoveIdentityFromColumn (Column2) VALUES ('Row1'), ('Row2')
         finally
         {
             conn.ChangeDatabase("master");
-            cmd.CommandText = $"IF DB_ID('{compatDb}') IS NOT NULL BEGIN ALTER DATABASE [{compatDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{compatDb}]; END";
-            cmd.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, compatDb);
             conn.Close();
         }
     }

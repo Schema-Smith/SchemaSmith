@@ -21,7 +21,7 @@
     },
     {
       "Name": "[Primary]",
-      "DataType": "FLAG",
+      "DataType": "Flag",
       "Default": "0",
       "ShouldApplyExpression": "",
       "OldName": "",

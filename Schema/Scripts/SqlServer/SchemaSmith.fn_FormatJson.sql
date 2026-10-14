@@ -25,7 +25,7 @@ BEGIN
 
   WHILE @CurrentRow <= @RowCount
   BEGIN
-    SELECT @key = [key], @value = [value], @type = [Type] 
+    SELECT @key = [key], @value = [value], @type = [type] 
       FROM @JsonTbl 
       WHERE Id = @CurrentRow
     IF @type = 1 -- String property
@@ -40,7 +40,7 @@ BEGIN
     END
     ELSE IF @type = 5 -- Embedded object
     BEGIN      
-      INSERT @r_Result ([Line]) VALUES(@Indent + CASE WHEN @Level = 1 OR ISNUMERIC(@Key) = 0 THEN '"' + @key + '": ' ELSE '' END + '{')
+      INSERT @r_Result ([Line]) VALUES(@Indent + CASE WHEN @Level = 1 OR ISNUMERIC(@key) = 0 THEN '"' + @key + '": ' ELSE '' END + '{')
       INSERT @r_Result ([Line]) SELECT [Line] FROM SchemaSmith.fn_FormatJson(@value, @Level + 1) ORDER BY [LineNo]
       INSERT @r_Result ([Line]) VALUES(@Indent + '}' + CASE WHEN @CurrentRow = @RowCount THEN '' ELSE ',' END)
     END

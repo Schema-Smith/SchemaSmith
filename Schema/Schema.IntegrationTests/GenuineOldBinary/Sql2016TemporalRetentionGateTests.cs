@@ -255,13 +255,7 @@ public class Sql2016TemporalRetentionGateTests
         using var cmd = conn.CreateCommand();
         foreach (var db in _createdDbs)
         {
-            cmd.CommandText = $@"
-IF DB_ID('{db}') IS NOT NULL
-BEGIN
-  ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-  DROP DATABASE [{db}];
-END";
-            cmd.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
         }
         conn.Close();
     }

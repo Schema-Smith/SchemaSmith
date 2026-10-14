@@ -2,6 +2,8 @@
 
 using System;
 using System.IO;
+using Microsoft.Extensions.Configuration;
+using Schema.Configuration;
 using Schema.Isolators;
 
 namespace Schema.Utility;
@@ -10,6 +12,8 @@ public static class LogBackup
 {
     public static void BackupLogsAndExit(string appName, int exitCode = 0)
     {
+        if (exitCode == 0 && WarningCounter.Count > 0 && ExitNonZeroOnWarning())
+            exitCode = 1;
         var backupDir = "UNKNOWN";
         try
         {
@@ -73,6 +77,22 @@ public static class LogBackup
             EnvironmentWrapper.GetFromFactory().Exit(4);
         }
     }
+
+    /// <summary>
+    /// Ends a run that failed for a reason the user can fix: the message on the console, the detail in the error log,
+    /// and exit 2. An unhandled exception, by contrast, is a defect and exits 3.
+    /// </summary>
+    public static void FailedRunExit(string appName, RunFailedException e)
+    {
+        LogFactory.GetLogger("ProgressLog").Error($"FAILED: {e.Message}");
+        LogFactory.GetLogger("ErrorLog").Error(e.Message, e);
+        BackupLogsAndExit(appName, 2);
+    }
+
+    private static bool ExitNonZeroOnWarning() =>
+        CommandLineParser.ContainsSwitch(SettingsKeys.ExitNonZeroOnWarning) ||
+        string.Equals(FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.ExitNonZeroOnWarning], "true",
+            StringComparison.OrdinalIgnoreCase);
 
     public static void UnhandledExceptionLogger(string appName, UnhandledExceptionEventArgs e)
     {

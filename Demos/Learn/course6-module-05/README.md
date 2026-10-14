@@ -124,6 +124,7 @@ category flips to `false`:
 "DropTablesRemovedFromProduct": false,
 "DropColumnsRemovedFromProduct": false,
 "DropUnknownIndexes": false,
+"DropIndexesRemovedFromProduct": false,
 "DropForeignKeysRemovedFromProduct": false,
 "DropCheckConstraintsRemovedFromProduct": false,
 "DropStatisticsRemovedFromProduct": false

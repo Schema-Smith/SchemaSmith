@@ -102,16 +102,17 @@ INSERT IGNORE INTO `{MainDb}`.`legacy_types` (`id`, `blob_data`, `longblob_data`
     }
 
     [Test]
-    public void TableExists_CaseSensitive_ReturnsFalse()
+    public void TableExists_DifferentCase_FollowsTheServersNameFolding()
     {
         using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT @@lower_case_table_names";
+        var serverFoldsNames = Convert.ToInt32(command.ExecuteScalar()) != 0;
 
-        // Test database has 'actor' table, not 'ACTOR' (case-sensitive with BINARY)
+        // The test database has 'actor'. 'ACTOR' names a different table on a case-sensitive server and the same
+        // table on one that folds names (lower_case_table_names >= 1).
         var exists = _dataTongs.TableExists(command, _testDb, "ACTOR");
 
-        // MySQL on Windows may be case-insensitive, but our BINARY comparison should be case-sensitive
-        // This test verifies our BINARY comparison is working
-        Assert.That(exists, Is.False);
+        Assert.That(exists, Is.EqualTo(serverFoldsNames));
     }
 
     [Test]
@@ -141,6 +142,34 @@ INSERT IGNORE INTO `{MainDb}`.`legacy_types` (`id`, `blob_data`, `longblob_data`
         Assert.That(columns, Does.Contain("first_name"));
         Assert.That(columns, Does.Contain("last_name"));
         Assert.That(columns, Does.Contain("last_update"));
+    }
+
+    [Test]
+    public void AMixedCaseTable_ExtractsItsColumnsAndRows_UnderItsDeclaredSpelling()
+    {
+        // On a server that folds names the catalog holds this table (and the test database) in lowercase, while the
+        // caller passes the declared spelling; the extraction must still find both.
+        using var command = _connection.CreateCommand();
+        var tableName = $"MixedCaseExtract_{Guid.NewGuid():N}"[..28];
+
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (Id INT PRIMARY KEY, DisplayName VARCHAR(50))";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, 'first')";
+            command.ExecuteNonQuery();
+
+            var columns = _dataTongs.GetSelectColumns(command, _testDb, tableName);
+            Assert.That(columns, Does.Contain("Id").And.Contain("DisplayName"), "the column list must not come back empty");
+
+            var json = _dataTongs.GetTableDataJson(command, columns, _testDb, tableName, "`Id`", null);
+            Assert.That(json, Does.Contain("first"), "the row must be extracted");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
     }
 
     [Test]

@@ -31,12 +31,15 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string ForeignKeyNameReusedCode = "SS-FK-006";
     private const string IndexColumnCode = "SS-IDX-001";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
+    private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RebuildThresholdCode = "SS-TBL-001";
     private const string IgnoredThresholdCode = "SS-TBL-002";
     private const string RlsWithoutPoliciesCode = "SS-RLS-001";
     private const string PoliciesWithoutRlsCode = "SS-RLS-002";
     private const string ReplicaIdentityIndexMissingCode = "SS-RI-001";
     private const string QuotedIdentifierCode = "SS-IDENT-001";
+    private const string IdentifierTooLongCode = "SS-IDENT-002";
+    private const int PostgreSqlMaxIdentifierBytes = 63;
     private const string ReplicaIdentityIndexUnknownCode = "SS-RI-002";
     private const string ReplicaIdentityIndexNotUniqueCode = "SS-RI-003";
     private const string ReplicaIdentityIndexIgnoredCode = "SS-RI-004";
@@ -89,6 +92,9 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckPostgreSqlQuotedIdentifierOnModeledObjects(template));
 
         foreach (var template in ctx.Templates)
+            findings.AddRange(IdentifierLengthFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'"));
+
+        foreach (var template in ctx.Templates)
         foreach (var table in template.Tables)
         {
             var location = $"Template '{template.Name}' / Table '{table.Name}'";
@@ -109,6 +115,7 @@ public sealed class CoherenceCheck : ISchemaCheck
                 findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
 
             findings.AddRange(CheckBackfill(table, location));
+            findings.AddRange(CheckCharsetWithoutCollation(table, location));
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
             findings.AddRange(CheckRowLevelSecurity(table, location));
             findings.AddRange(CheckReplicaIdentity(table, location));
@@ -268,6 +275,28 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
+    /// A MySQL-family column that names a character set and no collation gets that character set's DEFAULT
+    /// collation, which is not the table's and differs between engine versions (utf8mb4 defaults to
+    /// utf8mb4_0900_ai_ci on MySQL 8, utf8mb4_uca1400_ai_ci on MariaDB 11.4, utf8mb4_general_ci on older ones).
+    /// The deploy gives a column in the table's own character set the table's collation; one in another set it
+    /// cannot place, so it says so here. A table that declares no collation has nothing to compare against.
+    /// </summary>
+    private static IEnumerable<Finding> CheckCharsetWithoutCollation(Table table, string tableLocation)
+    {
+        if (table is not MySqlTable { Collation: { } tableCollation } || string.IsNullOrWhiteSpace(tableCollation))
+            yield break;
+
+        foreach (var column in table.Columns.OfType<MySqlColumn>()
+                     .Where(c => !string.IsNullOrWhiteSpace(c.CharacterSet) && string.IsNullOrWhiteSpace(c.Collation)
+                                 && !tableCollation.Trim().StartsWith(c.CharacterSet.Trim() + "_",
+                                     StringComparison.OrdinalIgnoreCase)))
+            yield return new Finding(Severity.Warning, CharsetWithoutCollationCode, Category, tableLocation,
+                $"Column '{column.Name}' declares CharacterSet '{column.CharacterSet.Trim()}' but no Collation, so it " +
+                $"gets that character set's default collation, which depends on the engine version. Add a Collation " +
+                $"to choose one; the table's own '{tableCollation.Trim()}' belongs to a different character set.");
+    }
+
+    /// <summary>
     /// Error, not Warning — the distinction from SS-COL-001 is the point. A BackfillExistingRows with no
     /// Default is INERT: the deploy runs, the setting simply does nothing, and a warning is proportionate.
     /// A THRESHOLD mode with no threshold is UNEVALUABLE: there is no number to compare pending changes
@@ -280,8 +309,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static IEnumerable<Finding> CheckRebuildPolicy(RebuildPolicy policy, string owner, string location)
     {
         if (policy == null) yield break;
-        // Spaces only, as the deploy trims on every engine.
-        var isThreshold = string.Equals(policy.Mode?.Trim(' '), "THRESHOLD", StringComparison.OrdinalIgnoreCase);
+        // Any whitespace, as the model trims it before the deploy sees it.
+        var isThreshold = string.Equals(policy.Mode?.Trim(), "THRESHOLD", StringComparison.OrdinalIgnoreCase);
 
         if (isThreshold && policy.Threshold is not >= 1)
             yield return new Finding(Severity.Error, RebuildThresholdCode, Category, location,
@@ -344,7 +373,9 @@ public sealed class CoherenceCheck : ISchemaCheck
         var location = $"{tableLocation} / Index '{index.Name}'";
         var localColumnNames = ColumnNames(table);
 
+        var hasPrefixKeyParts = table is MySqlTable;
         foreach (var column in SplitNames(index.IndexColumns).Select(StripOrderingSuffix)
+                     .Select(column => hasPrefixKeyParts ? StripPrefixLength(column) : column)
                      .Where(column => !IsExpressionKeyPart(column))
                      .Where(column => !localColumnNames.Contains(NormalizeIdentifier(column))))
             yield return new Finding(Severity.Error, IndexColumnCode, Category, location,
@@ -366,11 +397,15 @@ public sealed class CoherenceCheck : ISchemaCheck
         var relatedTableSchema = (fk as IDeliverableForeignKey)?.RelatedTableSchema;
         var hasExplicitSchemaProperty = !string.IsNullOrEmpty(relatedTableSchema);
 
-        var rawRelatedTable = fk.RelatedTable ?? "";
-        var dotIndex = rawRelatedTable.IndexOf('.');
-        var hasDotPrefix = dotIndex > 0;
-        var prefixSchema = hasDotPrefix ? rawRelatedTable[..dotIndex] : null;
-        var name = IdentityKey(hasDotPrefix ? rawRelatedTable[(dotIndex + 1)..] : rawRelatedTable);
+        // A dot inside a delimited name (`order.detail`) is part of the name, not a schema separator.
+        var platform = owningTable switch
+        {
+            MySqlTable => Platform.MySQL,
+            PostgreSqlTable => Platform.PostgreSQL,
+            _ => Platform.SqlServer
+        };
+        var (prefixSchema, unqualified) = Identifier.SplitQualifiedName(fk.RelatedTable ?? "", platform);
+        var name = IdentityKey(unqualified);
 
         var schema = hasExplicitSchemaProperty ? relatedTableSchema
             : prefixSchema ?? NormalizedSchema(owningTable);
@@ -490,7 +525,28 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static IEnumerable<Finding> CheckPostgreSqlQuotedIdentifier(Table table, string tableLocation)
     {
         if (table is not PostgreSqlTable pgTable) return [];
-        return QuotedIdentifierFindings(NamedParts(pgTable), tableLocation);
+        return QuotedIdentifierFindings(NamedParts(pgTable), tableLocation)
+            .Concat(IdentifierLengthFindings(NamedParts(pgTable), tableLocation));
+    }
+
+    /// <summary>
+    /// PostgreSQL truncates an identifier longer than 63 bytes, with only a NOTICE. The object is created under the
+    /// shorter name, the next deploy looks for the declared one, misses it, and fails creating it again. The limit is
+    /// in bytes (NAMEDATALEN - 1), so a name in multi-byte characters reaches it sooner than its length suggests.
+    /// </summary>
+    private static IEnumerable<Finding> IdentifierLengthFindings(IEnumerable<(string Kind, string Name)> parts, string location)
+    {
+        foreach (var (kind, name) in parts)
+        {
+            if (string.IsNullOrEmpty(name)) continue;
+            var bare = name.Length >= 2 && name[0] == '"' && name[^1] == '"' ? name[1..^1] : name;
+            var bytes = System.Text.Encoding.UTF8.GetByteCount(bare);
+            if (bytes <= PostgreSqlMaxIdentifierBytes) continue;
+            yield return new Finding(Severity.Error, IdentifierTooLongCode, Category, location,
+                $"{kind} '{name}' is {bytes} bytes long. PostgreSQL truncates identifiers to {PostgreSqlMaxIdentifierBytes} " +
+                "bytes, so it would be stored under a shorter name and the next deploy, not finding the declared one, " +
+                $"would fail creating it again. Shorten it to {PostgreSqlMaxIdentifierBytes} bytes or fewer.");
+        }
     }
 
     /// <summary>
@@ -989,6 +1045,16 @@ public sealed class CoherenceCheck : ISchemaCheck
         if (column.EndsWith(" ASC", StringComparison.OrdinalIgnoreCase))
             return column[..^4].TrimEnd();
         return column;
+    }
+
+    // A MySQL/MariaDB prefix key part -- `Email`(20) -- names the column before its length, as extraction writes it.
+    private static string StripPrefixLength(string column)
+    {
+        if (!column.EndsWith(')')) return column;
+        var open = column.LastIndexOf('(');
+        var length = open > 0 ? column[(open + 1)..^1].Trim() : "";
+        if (length.Length == 0 || !length.All(char.IsAsciiDigit)) return column;
+        return column[..open].TrimEnd();
     }
 
     // A functional/expression key part starts with '(' rather than a backtick — extraction always

@@ -65,6 +65,44 @@ public abstract class SchemaTongsSharedTests
         }
     }
 
+    // Extraction used to replace the session mode with PIPES_AS_CONCAT before kindling, so procedures it created ran
+    // non-strict and with || as concatenation, and SchemaQuench then found the stamp current and reused them.
+    [Test]
+    public void ShouldKindleUnderTheServersOwnMode()
+    {
+        using (var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM SchemaSmith_KindleStamp";
+            cmd.ExecuteNonQuery();
+        }
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            LogFactory.Register("ErrorLog", Substitute.For<ILog>());
+            LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+            FactoryContainer.Register(Substitute.For<IEnvironment>());
+            FactoryContainer.Register(Substitute.For<IFile>());
+            FactoryContainer.Register(Substitute.For<IDirectory>());
+            var config = SetupConfig();
+            config["ShouldCast:Tables"] = "true";
+            new SchemaTongs(Platform).CastTemplate();
+            config["ShouldCast:Tables"] = "false";
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+
+        using var check = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};");
+        check.Open();
+        using var query = check.CreateCommand();
+        query.CommandText = $"SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '{_integrationDb}' " +
+                            "AND CONCAT(',', SQL_MODE, ',') LIKE '%,PIPES_AS_CONCAT,%'";
+        Assert.That(Convert.ToInt32(query.ExecuteScalar()), Is.Zero, "no procedure may be kindled under the extraction session's mode");
+        query.CommandText = $"SELECT COUNT(*) FROM SchemaSmith_KindleStamp";
+        Assert.That(Convert.ToInt32(query.ExecuteScalar()), Is.EqualTo(1), "the extraction did kindle");
+    }
+
     [Test]
     public void ShouldCastViews()
     {
@@ -239,18 +277,23 @@ public abstract class SchemaTongsSharedTests
                 .Do(ci => enabledJson = ci.ArgAt<string>(1));
             file.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("Events") && s.EndsWithIgnoringCase("TestEventSlaveDisabled.json")), Arg.Any<string>()))
                 .Do(ci => slaveDisabledJson = ci.ArgAt<string>(1));
+            // A package from an earlier release holds the event under the old dotted name.
+            file.Exists(Arg.Is<string>(s => System.IO.Path.GetFileName(s) == ".TestEvent.json")).Returns(true);
 
             var tongs = new SchemaTongs(Platform);
             tongs.CastTemplate();
+
+            file.Received(1).Delete(Arg.Is<string>(s => s.Contains("Events") && System.IO.Path.GetFileName(s) == ".TestEvent.json"));
+            file.DidNotReceive().Delete(Arg.Is<string>(s => System.IO.Path.GetFileName(s) == "TestEvent.json"));
 
             file.Received().WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("product.json")), Arg.Any<string>());
             file.Received().WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("template.json")), Arg.Any<string>());
             // Events are now cast as DECLARATIVE .json rather than raw .sql (F4). The .sql form still
             // DEPLOYS -- a hand-written script in Events/ runs exactly as before -- but extraction now
             // writes the declared form, which is what can be compared and converged.
-            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && s.EndsWithIgnoringCase("TestEvent.json")), Arg.Any<string>());
-            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && s.EndsWithIgnoringCase("TestEventEnabled.json")), Arg.Any<string>());
-            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && s.EndsWithIgnoringCase("TestEventSlaveDisabled.json")), Arg.Any<string>());
+            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && System.IO.Path.GetFileName(s) == "TestEvent.json"), Arg.Any<string>());
+            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && System.IO.Path.GetFileName(s) == "TestEventEnabled.json"), Arg.Any<string>());
+            file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Events") && System.IO.Path.GetFileName(s) == "TestEventSlaveDisabled.json"), Arg.Any<string>());
 
             // What this test exists for is UNCHANGED (#391): INFORMATION_SCHEMA.EVENTS.STATUS reports
             // ENABLED / DISABLED / SLAVESIDE_DISABLED, and the package must carry the spelling an author
@@ -279,6 +322,61 @@ public abstract class SchemaTongsSharedTests
             config["ShouldCast:Events"] = "false";
             FactoryContainer.Clear();
             LogFactory.Clear();
+        }
+    }
+
+    // A sequence script runs on every deploy. Extracted as CREATE OR REPLACE SEQUENCE, each deploy reset the sequence to
+    // its START value, so NEXTVAL handed out numbers it had already given (verified on released 2.7.1). The extracted
+    // script must leave an existing sequence where it is.
+    [Test]
+    public void ShouldCastSequencesThatSurviveARedeploy()
+    {
+        if (Platform != Platform.MariaDb) Assert.Ignore("Sequences are MariaDB-only in the MySQL family.");
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT VERSION()";
+        if (VersionHelper.ParsePatchComparable(cmd.ExecuteScalar()?.ToString(), Platform) < 100300)
+            Assert.Ignore("Sequences arrived in MariaDB 10.3.");
+        cmd.CommandText = "CREATE OR REPLACE SEQUENCE TestSeq START WITH 100 INCREMENT BY 1";
+        cmd.ExecuteNonQuery();
+
+        string script = null;
+        var file = Substitute.For<IFile>();
+        file.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("Sequences") && s.EndsWithIgnoringCase("TestSeq.sql")), Arg.Any<string>()))
+            .Do(ci => script = ci.ArgAt<string>(1));
+        try
+        {
+            lock (FactoryContainer.SharedLockObject)
+            {
+                LogFactory.Register("ErrorLog", Substitute.For<ILog>());
+                LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+                FactoryContainer.Register(Substitute.For<IEnvironment>());
+                FactoryContainer.Register(file);
+                FactoryContainer.Register(Substitute.For<IDirectory>());
+                SetupConfig();
+                new SchemaTongs(Platform).CastTemplate();
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+            }
+            Assert.That(script, Is.Not.Null, "the sequence must be extracted");
+
+            cmd.CommandText = "SELECT NEXTVAL(TestSeq)";
+            Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(100));
+            cmd.CommandText = "SELECT NEXTVAL(TestSeq)";
+            cmd.ExecuteScalar();
+            for (var deploy = 0; deploy < 2; deploy++)
+            {
+                cmd.CommandText = script;
+                cmd.ExecuteNonQuery();
+            }
+            cmd.CommandText = "SELECT NEXTVAL(TestSeq)";
+            Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(102), "running the extracted script must not reset the sequence: " + script);
+        }
+        finally
+        {
+            cmd.CommandText = "DROP SEQUENCE IF EXISTS TestSeq";
+            cmd.ExecuteNonQuery();
         }
     }
 

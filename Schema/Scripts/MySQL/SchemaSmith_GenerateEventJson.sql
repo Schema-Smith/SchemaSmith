@@ -7,8 +7,8 @@ DROP PROCEDURE IF EXISTS `SchemaSmith_GenerateEventJSON`;
 DELIMITER //
 
 CREATE PROCEDURE `SchemaSmith_GenerateEventJSON`(
-    IN p_Schema VARCHAR(200),
-    IN p_Event VARCHAR(64)
+    IN p_Schema VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_Event VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 BEGIN
     -- Extracts one scheduled event as the DECLARATIVE package form.

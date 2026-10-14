@@ -61,8 +61,9 @@ public class GraphTableXmlExtractionTests
         try
         {
             _connection.ChangeDatabase("master");
-            Exec($"ALTER DATABASE [{_db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
-            Exec($"DROP DATABASE IF EXISTS [{_db}]");
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandTimeout = 300;
+            TestDatabaseDrop.Drop(cmd, _db);
         }
         finally
         {

@@ -178,7 +178,7 @@ public class ProgramTests
         {
             FactoryContainer.Register<IConfigurationRoot>(config);
 
-            var ex = Assert.Throws<Exception>(() => Program.ResolvePlatform());
+            var ex = Assert.Throws<RunFailedException>(() => Program.ResolvePlatform());
             Assert.That(ex.Message, Does.Contain("Platform is required"));
 
             FactoryContainer.Clear();

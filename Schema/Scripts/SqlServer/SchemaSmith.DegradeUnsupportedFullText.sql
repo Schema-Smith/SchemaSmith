@@ -8,7 +8,7 @@ CREATE PROCEDURE SchemaSmith.DegradeUnsupportedFullText
 AS
 BEGIN
   -- STATISTICAL_SEMANTICS on a full-text column needs a registered semantic language statistics database (SQL Server
-  -- 2012+); without one SQL Server refuses the whole full-text index with 41209 (SS-054). Under 'warn' the option is
+  -- 2012+); without one SQL Server refuses the whole full-text index with 41209. Under 'warn' the option is
   -- removed, so the index is still created; under 'fail' the deploy is refused before anything is created. Operates on
   -- the caller's #FullTextIndexes, and is called once it is filled, on both the table and --IndexOnly paths.
   IF NOT EXISTS (SELECT 1 FROM #FullTextIndexes WITH (NOLOCK) WHERE [Columns] LIKE '% STATISTICAL[_]SEMANTICS%')

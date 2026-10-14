@@ -15,13 +15,18 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_MissingIndexesAndConstraintsQuench//
 
 CREATE PROCEDURE SchemaSmith_MissingIndexesAndConstraintsQuench(
-    IN p_ProductName VARCHAR(100),
-    IN p_DatabaseName VARCHAR(128),
+    IN p_ProductName VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_WhatIf TINYINT,
     IN p_DropCheckConstraintsRemovedFromProduct TINYINT
 )
 SQL SECURITY DEFINER
 BEGIN
+    -- Names compare through their keys (SchemaSmith_IdentifierKey for tables, SchemaSmith_NameKeyCI for indexes and
+    -- constraints). Every catalog read lands in a snapshot that stores the keys, so no correlated subquery has to
+    -- call a key function on its outer row (see ModifiedTableQuench for why that is unsafe).
+    DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
+    DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_DatabaseName);
     -- This procedure CREATES missing indexes and check constraints, and drops CHECK CONSTRAINTS removed
     -- from the product. All index rename, modification and removal live in ModifiedTableQuench.
     -- It reads from the _SchemaSmith_Indexes and _SchemaSmith_CheckConstraints
@@ -69,6 +74,9 @@ BEGIN
         TableName VARCHAR(128) NOT NULL,
         OldIndexName VARCHAR(128) NOT NULL,
         NewIndexName VARCHAR(128) NOT NULL,
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        OldIndexKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        NewIndexKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, OldIndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -145,13 +153,43 @@ BEGIN
     CREATE TEMPORARY TABLE _SchemaSmith_IdxExistPostDrop (
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        IndexKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableName, IndexName),
+        KEY ix_key (TableKey, IndexKey)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    INSERT INTO _SchemaSmith_IdxExistPostDrop (TableName, IndexName, TableKey, IndexKey)
+    SELECT CONVERT(s.TABLE_NAME USING utf8mb4), CONVERT(s.INDEX_NAME USING utf8mb4),
+           SchemaSmith_IdentifierKey(s.TABLE_NAME), SchemaSmith_NameKeyCI(s.INDEX_NAME)
+    FROM INFORMATION_SCHEMA.STATISTICS s
+    WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
+      AND s.SEQ_IN_INDEX = 1;
+
+    -- A modified index a foreign key needs was left in place by ModifiedTableQuench and is replaced below in one ALTER,
+    -- so it counts as missing. The table exists only when ModifiedTableQuench ran in this session.
+    CREATE TEMPORARY TABLE IF NOT EXISTS _SchemaSmith_DeferredIndexSwaps (
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableName, IndexName)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    INSERT INTO _SchemaSmith_IdxExistPostDrop (TableName, IndexName)
-    SELECT CONVERT(s.TABLE_NAME USING utf8mb4), CONVERT(s.INDEX_NAME USING utf8mb4)
-    FROM INFORMATION_SCHEMA.STATISTICS s
-    WHERE BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
-      AND s.SEQ_IN_INDEX = 1;
+    -- Both lists hold the package's spelling and this one the catalog's, which differ in case on a server that folds
+    -- names, so they meet through the declared index's keys.
+    DELETE s FROM _SchemaSmith_IdxExistPostDrop s
+      JOIN _SchemaSmith_Indexes i ON i.TableKey = s.TableKey AND i.IndexKey = s.IndexKey
+      JOIN _SchemaSmith_DeferredIndexSwaps d
+        ON d.TableName = CONVERT(SchemaSmith_StripBacktickWrapping(i.TableName) USING utf8mb4) COLLATE utf8mb4_bin
+       AND d.IndexName = CONVERT(SchemaSmith_StripBacktickWrapping(i.IndexName) USING utf8mb4) COLLATE utf8mb4_bin;
+
+    -- Under WhatIf a modified index was not really dropped, but the real run re-creates it, so an index this session
+    -- previewed as dropped counts as missing.
+    IF p_WhatIf = 1 THEN
+        DELETE s FROM _SchemaSmith_IdxExistPostDrop s
+          JOIN _SchemaSmith_Indexes i ON i.TableKey = s.TableKey AND i.IndexKey = s.IndexKey
+          JOIN SchemaSmith_ChangeAudit a
+            ON a.SessionId = CONNECTION_ID() AND a.ActionType = 'wouldDrop' AND a.ObjectType = 'index'
+           AND CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin
+               = CONVERT(CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)) USING utf8mb4) COLLATE utf8mb4_bin;
+    END IF;
 
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing indexes');
@@ -165,7 +203,7 @@ BEGIN
                       ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
                       ' (', i.IndexColumns, ')',
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
-                           WHEN UPPER(i.IndexType) = 'BTREE' THEN ' USING BTREE'
+                           WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
                       CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
                            THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
@@ -175,17 +213,17 @@ BEGIN
           -- Not already renamed
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE r.TableName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.TableName) COLLATE utf8mb4_unicode_ci
-                AND r.NewIndexName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.IndexName) COLLATE utf8mb4_unicode_ci
+              WHERE r.TableKey = i.TableKey
+                AND r.NewIndexKey = i.IndexKey
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IdxExistPostDrop s
-              WHERE s.TableName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.TableName) COLLATE utf8mb4_unicode_ci
-                AND s.IndexName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.IndexName) COLLATE utf8mb4_unicode_ci
+              WHERE s.TableKey = i.TableKey
+                AND s.IndexKey = i.IndexKey
           )
           -- A declared functional index below the floor (see the STEP 0.7 degrade guard above) is
           -- never created -- it is a hard syntax error, not a clause that can be suppressed.
-          AND NOT (SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1 AND SchemaSmith_SupportsFunctionalIndex() = 0);
+          AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
 
         -- #363: WhatIf twin of the ELSE-branch 'index'/'created' audit; same predicate, set-based wouldCreate.
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -194,71 +232,94 @@ BEGIN
         WHERE i.IsPrimaryKey = 0
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE r.TableName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.TableName) COLLATE utf8mb4_unicode_ci
-                AND r.NewIndexName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.IndexName) COLLATE utf8mb4_unicode_ci
+              WHERE r.TableKey = i.TableKey
+                AND r.NewIndexKey = i.IndexKey
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IdxExistPostDrop s
-              WHERE s.TableName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.TableName) COLLATE utf8mb4_unicode_ci
-                AND s.IndexName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.IndexName) COLLATE utf8mb4_unicode_ci
+              WHERE s.TableKey = i.TableKey
+                AND s.IndexKey = i.IndexKey
           )
-          AND NOT (SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1 AND SchemaSmith_SupportsFunctionalIndex() = 0);
+          AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing indexes');
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateIdxStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_CreateIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_CreateIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT, IsSwap TINYINT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         -- Detection reads the post-drop snapshot _SchemaSmith_IdxExistPostDrop (taken after ModifiedTableQuench's
         -- modified-index drops) so a just-dropped modified index is correctly seen as missing here and recreated.
-        INSERT INTO _SchemaSmith_CreateIdxStmts (LogMsg, Stmt, AuditName)
+        INSERT INTO _SchemaSmith_CreateIdxStmts (LogMsg, Stmt, AuditName, IsSwap)
         SELECT
             CONCAT('  Create index: ', SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName),
                 CASE WHEN COALESCE(i.VariantName, '') <> '' THEN CONCAT(' (variant: ', i.VariantName, ')') ELSE '' END),
             CONCAT(
-                'CREATE ',
+                CASE WHEN d.IndexName IS NOT NULL
+                     THEN CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
+                                 ' DROP INDEX ', i.IndexName, ', ADD ')
+                     ELSE 'CREATE ' END,
                 CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL '
                      WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE '
                      ELSE '' END,
                 'INDEX ', i.IndexName,
-                ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
+                CASE WHEN d.IndexName IS NOT NULL THEN ''
+                     ELSE CONCAT(' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName) END,
                 ' (', i.IndexColumns, ')',
                 CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
-                     WHEN UPPER(i.IndexType) = 'BTREE' THEN ' USING BTREE'
+                     WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                      ELSE '' END,
                 CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
                      THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
                      ELSE '' END,
                 CASE WHEN i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1 THEN SchemaSmith_IndexInvisibleClause() ELSE '' END
             ),
-            CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName))
+            CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)),
+            d.IndexName IS NOT NULL
         FROM _SchemaSmith_Indexes i
+        LEFT JOIN _SchemaSmith_DeferredIndexSwaps d
+               ON d.TableName = CONVERT(SchemaSmith_StripBacktickWrapping(i.TableName) USING utf8mb4) COLLATE utf8mb4_bin
+              AND d.IndexName = CONVERT(SchemaSmith_StripBacktickWrapping(i.IndexName) USING utf8mb4) COLLATE utf8mb4_bin
         WHERE i.IsPrimaryKey = 0
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE r.TableName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.TableName) COLLATE utf8mb4_unicode_ci
-                AND r.NewIndexName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.IndexName) COLLATE utf8mb4_unicode_ci
+              WHERE r.TableKey = i.TableKey
+                AND r.NewIndexKey = i.IndexKey
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IdxExistPostDrop s
-              WHERE s.TableName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.TableName) COLLATE utf8mb4_unicode_ci
-                AND s.IndexName COLLATE utf8mb4_unicode_ci = SchemaSmith_StripBacktickWrapping(i.IndexName) COLLATE utf8mb4_unicode_ci
+              WHERE s.TableKey = i.TableKey
+                AND s.IndexKey = i.IndexKey
           )
-          AND NOT (SchemaSmith_IndexHasFunctionalKeyPart(i.IndexColumns) = 1 AND SchemaSmith_SupportsFunctionalIndex() = 0);
+          AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
 
         SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts);
         WHILE @ss_id IS NOT NULL DO
-            SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_CreateIdxStmts WHERE RowId = @ss_id;
+            SELECT LogMsg, Stmt, AuditName, IsSwap INTO @ss_log, @exec_sql, @ss_auditname, @ss_swap FROM _SchemaSmith_CreateIdxStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
             PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
-            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created');
+            SET @ss_fk_needs_index := 0;
+            BEGIN
+                -- Only a swap can raise this: its new definition no longer serves the key. The index is kept as it is,
+                -- and a later deploy changes it once the key no longer needs it.
+                DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                EXECUTE stmt;
+            END;
+            IF @ss_fk_needs_index = 1 THEN
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_auditname, ' unchanged: a foreign key needs its current columns'));
+            ELSE
+                -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
+                IF @ss_swap = 1 THEN
+                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
+                END IF;
+                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created');
+            END IF;
             DEALLOCATE PREPARE stmt;
             SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts WHERE RowId > @ss_id);
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateIdxStmts;
     END IF;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DeferredIndexSwaps;
 
     -- =========================================================================
     -- STEP 3.5: Drop modified check constraints (table-level AND column-level)
@@ -286,25 +347,27 @@ BEGIN
     -- Below the floor there are no check constraints to detect as modified, so _SchemaSmith_ModifiedChecks
     -- simply stays unpopulated by this step.
     SET @v_mcDbName = p_DatabaseName;
+    SET @v_mcDbCi = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci;
+    SET @v_mcDbKey = SchemaSmith_IdentifierKey(p_DatabaseName);
     IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
-        SET @v_mcSql1 = 'INSERT IGNORE INTO _SchemaSmith_ModifiedChecks (TableName, ConstraintName)
+        SET @v_mcSql1 = CONCAT('INSERT IGNORE INTO _SchemaSmith_ModifiedChecks (TableName, ConstraintName)
 SELECT
     SchemaSmith_StripBacktickWrapping(c.TableName) AS TableName,
     SchemaSmith_StripBacktickWrapping(c.ConstraintName) AS ConstraintName
 FROM _SchemaSmith_CheckConstraints c
 JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-    ON BINARY tc.TABLE_SCHEMA = BINARY @v_mcDbName
-    AND BINARY tc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-    AND BINARY tc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
+    ON tc.TABLE_SCHEMA = @v_mcDbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = @v_mcDbKey
+    AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = c.TableKey
+    AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = c.ConstraintKey
     AND tc.CONSTRAINT_TYPE = ''CHECK''
 JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
-    ON BINARY cc.CONSTRAINT_SCHEMA = BINARY @v_mcDbName
-    AND BINARY cc.CONSTRAINT_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
-WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))
-    != BINARY SchemaSmith_NormalizeCheckExpression(c.Expression)
+    ON cc.CONSTRAINT_SCHEMA = @v_mcDbCi AND SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = @v_mcDbKey
+    AND SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) = c.ConstraintKey', SchemaSmith_CheckTableJoin(), '
+WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4)) AS BINARY)
+    != CAST(SchemaSmith_NormalizeCheckExpression(c.Expression) AS BINARY)
   AND SchemaSmith_ExpressionMapUnchanged(@v_mcDbName, SchemaSmith_StripBacktickWrapping(c.TableName),
         ''CHECK'', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ''expression'',
-        c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0';
+        c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0');
         PREPARE stmt FROM @v_mcSql1;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
@@ -359,20 +422,34 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
             PRIMARY KEY (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-        INSERT INTO _SchemaSmith_WouldDropChecks (TableName, ConstraintName)
-        SELECT CONVERT(tc.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
-               CONVERT(tc.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkCat;
+        CREATE TEMPORARY TABLE _SchemaSmith_ChkCat (
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            PRIMARY KEY (TableName, ConstraintName),
+            KEY ix_key (TableKey, ConstraintKey)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        INSERT INTO _SchemaSmith_ChkCat (TableName, ConstraintName, TableKey, ConstraintKey)
+        SELECT CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4),
+               SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME)
         FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+        WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
+          AND tc.CONSTRAINT_TYPE = 'CHECK';
+
+        INSERT INTO _SchemaSmith_WouldDropChecks (TableName, ConstraintName)
+        SELECT tc.TableName COLLATE utf8mb4_unicode_ci,
+               tc.ConstraintName COLLATE utf8mb4_unicode_ci
+        FROM _SchemaSmith_ChkCat tc
         JOIN _SchemaSmith_Tables t
-            ON BINARY SchemaSmith_StripBacktickWrapping(t.TableName) = BINARY tc.TABLE_NAME
+            ON t.TableKey = tc.TableKey
             AND t.NewTable = 0
             AND COALESCE(t.DropCheckConstraintsRemovedFromProduct, 1) = 1
-        WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
-          AND tc.CONSTRAINT_TYPE = 'CHECK'
-          AND NOT EXISTS (
+        WHERE NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_CheckConstraints c
-              WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY tc.TABLE_NAME
-                AND BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName) = BINARY tc.CONSTRAINT_NAME)
+              WHERE c.TableKey = tc.TableKey
+                AND c.ConstraintKey = tc.ConstraintKey)
 ;
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -397,20 +474,34 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
             PRIMARY KEY (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-        INSERT INTO _SchemaSmith_ChecksToDropByAbsence (TableName, ConstraintName)
-        SELECT CONVERT(tc.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
-               CONVERT(tc.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkCat;
+        CREATE TEMPORARY TABLE _SchemaSmith_ChkCat (
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            PRIMARY KEY (TableName, ConstraintName),
+            KEY ix_key (TableKey, ConstraintKey)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        INSERT INTO _SchemaSmith_ChkCat (TableName, ConstraintName, TableKey, ConstraintKey)
+        SELECT CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4),
+               SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME)
         FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+        WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
+          AND tc.CONSTRAINT_TYPE = 'CHECK';
+
+        INSERT INTO _SchemaSmith_ChecksToDropByAbsence (TableName, ConstraintName)
+        SELECT tc.TableName COLLATE utf8mb4_unicode_ci,
+               tc.ConstraintName COLLATE utf8mb4_unicode_ci
+        FROM _SchemaSmith_ChkCat tc
         JOIN _SchemaSmith_Tables t
-            ON BINARY SchemaSmith_StripBacktickWrapping(t.TableName) = BINARY tc.TABLE_NAME
+            ON t.TableKey = tc.TableKey
             AND t.NewTable = 0
             AND COALESCE(t.DropCheckConstraintsRemovedFromProduct, 1) = 1
-        WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
-          AND tc.CONSTRAINT_TYPE = 'CHECK'
-          AND NOT EXISTS (
+        WHERE NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_CheckConstraints c
-              WHERE BINARY SchemaSmith_StripBacktickWrapping(c.TableName) = BINARY tc.TABLE_NAME
-                AND BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName) = BINARY tc.CONSTRAINT_NAME)
+              WHERE c.TableKey = tc.TableKey
+                AND c.ConstraintKey = tc.ConstraintKey)
 
           -- MariaDB backs an application-time period with a CHECK constraint named after the period
           -- (`start < end`), indistinguishable from a user check constraint in the catalog -- same
@@ -424,8 +515,8 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
           -- it returns '[]' and the exclusion cannot fire, so the defect remains on 10.4.3-11.3: nothing
           -- in that catalog distinguishes the two, and guessing from the check clause would risk
           -- silently preserving a genuine user constraint that happens to compare two columns.
-          AND JSON_SEARCH(SchemaSmith_TablePeriodsJson(p_DatabaseName, tc.TABLE_NAME),
-                          'one', CONVERT(tc.CONSTRAINT_NAME USING utf8mb4), NULL, '$[*].Name') IS NULL;
+          AND JSON_SEARCH(SchemaSmith_TablePeriodsJson(p_DatabaseName, tc.TableName),
+                          'one', tc.ConstraintName, NULL, '$[*].Name') IS NULL;
 
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop check constraints removed from product');
@@ -475,13 +566,17 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
     CREATE TEMPORARY TABLE _SchemaSmith_ChkExist (
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-        PRIMARY KEY (TableName, ConstraintName)
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableName, ConstraintName),
+        KEY ix_key (TableKey, ConstraintKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
-        INSERT INTO _SchemaSmith_ChkExist (TableName, ConstraintName)
-        SELECT CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4)
+        INSERT INTO _SchemaSmith_ChkExist (TableName, ConstraintName, TableKey, ConstraintKey)
+        SELECT CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4),
+               SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME)
         FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-        WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
+        WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
           AND tc.CONSTRAINT_TYPE = 'CHECK';
     END IF;
 
@@ -493,29 +588,31 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
     -- would make this create pass re-emit on every deploy. Degrade via the UnsupportedFeaturePolicy spine
     -- (mirrors the PostgreSQL NULLS-NOT-DISTINCT routing): 'fail' aborts naming the offending constraint(s);
     -- 'warn' (default) skips the emit and records one 'downgraded' manifest row per declared check so the run
-    -- stays idempotent. MariaDB reports support at/above the 10.2 floor, so it never enters this branch.
+    -- stays idempotent. MariaDB enters it below 10.2.22, where the CHECK_CONSTRAINTS view does not exist yet.
     IF SchemaSmith_SupportsCheckConstraints() = 0 THEN
+        SET @ss_check_floor = IF(VERSION() LIKE '%MariaDB%', 'MariaDB 10.2.22', 'MySQL 8.0.16');
         IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail'
            AND EXISTS (SELECT 1 FROM _SchemaSmith_CheckConstraints) THEN
             -- Log the full offending list to the run log first (SIGNAL MESSAGE_TEXT is capped at 128 chars,
             -- so the abort message stays concise + non-truncating and names the detail in the log instead).
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  CHECK constraint unsupported (requires MySQL 8.0.16): ',
+            SELECT CONNECTION_ID(), CONCAT('  CHECK constraint unsupported (requires ', @ss_check_floor, '): ',
                    SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName))
             FROM _SchemaSmith_CheckConstraints c;
             -- Keep < 128 chars: MySQL errors ("Data too long for condition item") on an over-long MESSAGE_TEXT.
-            SET @ss_msg = CONCAT('CHECK constraints require MySQL 8.0.16 (detected ',
-                                 SchemaSmith_ServerVersionNum(), '); see the deploy log for the unsupported check(s).');
+            -- Only the number: a packaged MariaDB's VERSION() ('10.2.21-MariaDB-1:10.2.21+maria~bionic') overruns it.
+            SET @ss_msg = CONCAT('CHECK constraints require ', @ss_check_floor, ' (detected ',
+                                 SUBSTRING_INDEX(VERSION(), '-', 1), '); see the deploy log for the unsupported check(s).');
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         ELSE
             -- Surface the downgrade in the run log too (not only the ChangeAudit manifest), matching this
             -- proc's per-object status-message convention, so a 5.7 deploy visibly reports skipped checks.
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Skipping check constraint (requires MySQL 8.0.16 - downgraded): ',
+            SELECT CONNECTION_ID(), CONCAT('  Skipping check constraint (requires ', @ss_check_floor, ' - downgraded): ',
                    SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName))
             FROM _SchemaSmith_CheckConstraints c;
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-            SELECT CONNECTION_ID(), 'CHECK constraint (MySQL 8.0.16)',
+            SELECT CONNECTION_ID(), IF(VERSION() LIKE '%MariaDB%', 'CHECK constraint (MariaDB 10.2.22)', 'CHECK constraint (MySQL 8.0.16)'),
                    CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName)), 'downgraded'
             FROM _SchemaSmith_CheckConstraints c;
         END IF;
@@ -528,8 +625,8 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
         FROM _SchemaSmith_CheckConstraints c
         WHERE NOT EXISTS (
             SELECT 1 FROM _SchemaSmith_ChkExist tc
-            WHERE BINARY tc.TableName = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-              AND BINARY tc.ConstraintName = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
+            WHERE tc.TableKey = c.TableKey
+              AND tc.ConstraintKey = c.ConstraintKey
         );
 
         -- #363: WhatIf twin of the ELSE-branch 'constraint'/'created' (check) audit; same predicate, wouldCreate.
@@ -538,8 +635,8 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
         FROM _SchemaSmith_CheckConstraints c
         WHERE NOT EXISTS (
             SELECT 1 FROM _SchemaSmith_ChkExist tc
-            WHERE BINARY tc.TableName = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-              AND BINARY tc.ConstraintName = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
+            WHERE tc.TableKey = c.TableKey
+              AND tc.ConstraintKey = c.ConstraintKey
         );
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing check constraints');
@@ -562,8 +659,8 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
         FROM _SchemaSmith_CheckConstraints c
         WHERE NOT EXISTS (
             SELECT 1 FROM _SchemaSmith_ChkExist tc
-            WHERE BINARY tc.TableName = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-              AND BINARY tc.ConstraintName = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
+            WHERE tc.TableKey = c.TableKey
+              AND tc.ConstraintKey = c.ConstraintKey
         );
 
         SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateChkStmts);
@@ -592,12 +689,16 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
         CREATE TEMPORARY TABLE _SchemaSmith_IdxExistFinal (
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-            PRIMARY KEY (TableName, IndexName)
+            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            IndexKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            PRIMARY KEY (TableName, IndexName),
+            KEY ix_key (TableKey, IndexKey)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_IdxExistFinal (TableName, IndexName)
-        SELECT CONVERT(s.TABLE_NAME USING utf8mb4), CONVERT(s.INDEX_NAME USING utf8mb4)
+        INSERT INTO _SchemaSmith_IdxExistFinal (TableName, IndexName, TableKey, IndexKey)
+        SELECT CONVERT(s.TABLE_NAME USING utf8mb4), CONVERT(s.INDEX_NAME USING utf8mb4),
+               SchemaSmith_IdentifierKey(s.TABLE_NAME), SchemaSmith_NameKeyCI(s.INDEX_NAME)
         FROM INFORMATION_SCHEMA.STATISTICS s
-        WHERE BINARY s.TABLE_SCHEMA = BINARY p_DatabaseName
+        WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
           AND s.SEQ_IN_INDEX = 1;
 
         -- Rebuild the CHECK existence snapshot to the post-create state (the create passes above saw the
@@ -606,13 +707,17 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
         CREATE TEMPORARY TABLE _SchemaSmith_ChkExist (
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-            PRIMARY KEY (TableName, ConstraintName)
+            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            PRIMARY KEY (TableName, ConstraintName),
+            KEY ix_key (TableKey, ConstraintKey)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
-            INSERT INTO _SchemaSmith_ChkExist (TableName, ConstraintName)
-            SELECT CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4)
+            INSERT INTO _SchemaSmith_ChkExist (TableName, ConstraintName, TableKey, ConstraintKey)
+            SELECT CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4),
+                   SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME)
             FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            WHERE BINARY tc.TABLE_SCHEMA = BINARY p_DatabaseName
+            WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
               AND tc.CONSTRAINT_TYPE = 'CHECK';
         END IF;
 
@@ -623,8 +728,8 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
         FROM _SchemaSmith_Indexes i
         WHERE EXISTS (
             SELECT 1 FROM _SchemaSmith_IdxExistFinal s
-            WHERE BINARY s.TableName = BINARY SchemaSmith_StripBacktickWrapping(i.TableName)
-              AND BINARY s.IndexName = BINARY SchemaSmith_StripBacktickWrapping(i.IndexName)
+            WHERE s.TableKey = i.TableKey
+              AND s.IndexKey = i.IndexKey
         );
 
         -- Track check constraints
@@ -634,8 +739,8 @@ WHERE BINARY SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING 
         FROM _SchemaSmith_CheckConstraints c
         WHERE EXISTS (
             SELECT 1 FROM _SchemaSmith_ChkExist tc
-            WHERE BINARY tc.TableName = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-              AND BINARY tc.ConstraintName = BINARY SchemaSmith_StripBacktickWrapping(c.ConstraintName)
+            WHERE tc.TableKey = c.TableKey
+              AND tc.ConstraintKey = c.ConstraintKey
         );
 
     END IF;

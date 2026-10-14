@@ -114,7 +114,7 @@ public abstract class ProductQuenchTestsSharedTests
         FactoryContainer.Register<IConfigurationRoot>(config);
 
         // Act & Assert
-        Assert.Throws<Exception>(() => Product.Load());
+        Assert.Throws<RunFailedException>(() => Product.Load());
     }
 
     [Test]

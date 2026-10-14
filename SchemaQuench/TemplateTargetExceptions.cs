@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using Schema.Utility;
 
 namespace SchemaQuench;
 
@@ -8,7 +9,7 @@ namespace SchemaQuench;
 /// Thrown when a <c>Target.TemplateTargets</c> configuration violates one of the
 /// fail-fast rules (design §5). The message is the user-facing diagnostic.
 /// </summary>
-public class TemplateTargetValidationException : Exception
+public class TemplateTargetValidationException : RunFailedException
 {
     public TemplateTargetValidationException(string message) : base(message) { }
 }

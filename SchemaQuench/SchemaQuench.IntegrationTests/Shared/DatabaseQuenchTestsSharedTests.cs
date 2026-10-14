@@ -8,6 +8,7 @@ using System.IO;
 using NUnit.Framework;
 using Schema.Domain;
 using Schema.Utility;
+using Schema.IntegrationTests;
 
 namespace SchemaQuench.IntegrationTests.Shared;
 
@@ -52,7 +53,7 @@ public abstract class DatabaseQuenchTestsSharedTests
             AND TABLE_NAME = 'SchemaSmith_CompletedMigrationScripts'";
         var result = command.ExecuteScalar();
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.ToString(), Is.EqualTo("SchemaSmith_CompletedMigrationScripts"));
+        Assert.That(result.ToString(), CatalogName.Matches(_connection, "SchemaSmith_CompletedMigrationScripts"));
     }
 
     [Test]
@@ -86,12 +87,13 @@ public abstract class DatabaseQuenchTestsSharedTests
     {
         using var command = _connection.CreateCommand();
 
-        // This is similar to what Template.SchemaIdentificationScript does
-        command.CommandText = $"SELECT '{MainDb}' AS DatabaseName";
+        var isConfiguredDatabase = CatalogName.Matches(_connection, MainDb);
+        // The shape the shipped templates' DatabaseIdentificationScript uses.
+        command.CommandText = $"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{MainDb}'";
         using var reader = command.ExecuteReader();
 
-        Assert.That(reader.Read(), Is.True);
-        Assert.That(reader.GetString(0), Is.EqualTo(MainDb));
+        Assert.That(reader.Read(), Is.True, "the configured database must be found by name");
+        Assert.That(reader.GetString(0), isConfiguredDatabase);
     }
 
     [Test]
@@ -129,7 +131,7 @@ public abstract class DatabaseQuenchTestsSharedTests
 
         command.CommandText = "SELECT DATABASE()";
         var db1 = command.ExecuteScalar()?.ToString();
-        Assert.That(db1, Is.EqualTo(secondaryDb));
+        Assert.That(db1, CatalogName.Matches(_connection, secondaryDb));
 
         // Switch to main database
         command.CommandText = $"USE `{mainDb}`";
@@ -137,7 +139,7 @@ public abstract class DatabaseQuenchTestsSharedTests
 
         command.CommandText = "SELECT DATABASE()";
         var db2 = command.ExecuteScalar()?.ToString();
-        Assert.That(db2, Is.EqualTo(mainDb));
+        Assert.That(db2, CatalogName.Matches(_connection, mainDb));
     }
 
     [Test]

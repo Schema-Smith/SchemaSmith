@@ -671,7 +671,7 @@ public class SchemaTongsTests
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @$"
-CREATE DATABASE [{_integrationDb}];
+CREATE DATABASE [{_integrationDb}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};
 ";
         cmd.ExecuteNonQuery();
 
@@ -804,11 +804,6 @@ END;
 
     private static void DropOneDatabase(IDbCommand cmd, string dbName)
     {
-        cmd.CommandText = @$"
-IF DB_ID('{dbName}') IS NOT NULL
-  ALTER DATABASE [{dbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{dbName}];
-";
-        cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, dbName);
     }
 }

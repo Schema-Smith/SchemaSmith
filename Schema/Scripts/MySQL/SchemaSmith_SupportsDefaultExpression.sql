@@ -15,10 +15,8 @@ BEGIN
   -- recognises this stored form -- COLUMN_DEFAULT LIKE '(%' -- see GenerateTableJson):
   --   * MariaDB: MDEV-10134 landed in 10.2.1, the very first point release of the 10.2 series -- at/below
   --     our 10.2 floor, so MariaDB always supports it and this branch never triggers.
-  --   * MySQL: since 8.0.13. ServerVersionNum() has major*100+minor granularity (cannot see the .13
-  --     patch), so major >= 8 is treated as yes; MySQL 8.0.0-8.0.12 is an accepted out-of-scope edge,
-  --     the same tradeoff SchemaSmith_SupportsFunctionalIndex makes for its 8.0.13 intro.
-  RETURN IF(VERSION() LIKE '%MariaDB%' OR SchemaSmith_ServerVersionNum() >= 800, 1, 0);
+  --   * MySQL: since 8.0.13, which the patch-level version shows.
+  RETURN IF(VERSION() LIKE '%MariaDB%' OR SchemaSmith_ServerVersionPatchNum() >= 80013, 1, 0);
 END //
 
 DELIMITER ;

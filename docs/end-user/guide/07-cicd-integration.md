@@ -66,7 +66,9 @@ This uses a self-hosted runner with SchemaQuench pre-installed. Credentials flow
 
 ### First-party composite action: SchemaSmith Deploy
 
-The repository root ships a composite action -- `uses: Schema-Smith/SchemaSmith@vX.Y.Z`
+SchemaSmith ships a composite action, listed on the
+[GitHub Marketplace](https://github.com/marketplace/actions/schemasmith-deploy) --
+`uses: Schema-Smith/schemasmith-deploy@vX.Y.Z`
 (replace with a release tag; pinning the tag pins both the action and the CLI
 version it runs, or set the `version` input explicitly). It fetches the matching
 self-contained binary for the runner OS at run time -- no runtime install, and no

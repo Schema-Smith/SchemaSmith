@@ -2,9 +2,11 @@
 
 using System;
 using System.Data;
+using System.Data.Common;
+using Microsoft.Extensions.Configuration;
 using Schema.DataAccess;
 using Schema.Domain;
-using Schema.Utility;
+using Schema.Isolators;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -12,34 +14,47 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 [TestFixture]
 public class IndexedViewQuenchTests
 {
-    private readonly string _productName = "IvQuenchTests";
+    // Runs on the suite's shared kindled main database, isolated by a fixture-owned schema. The product name
+    // is unique too: IndexedViewQuench drops every view its product owns that the call does not declare.
+    private readonly string _schema;
+    private readonly string _productName;
     private string _connectionString;
-    private string _ivTestDb = "";
+    private string _mainDb = "";
+
+    public IndexedViewQuenchTests()
+    {
+        var token = Guid.NewGuid().ToString("N")[..8];
+        _schema = "ivq_" + token;
+        _productName = "IvQuenchTests_" + token;
+    }
 
     [OneTimeSetUp]
     public void Setup()
     {
-        var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-        var connProps = ConnectionString.ReadProperties(config, "SqlServer:ConnectionProperties");
-        _connectionString = ConnectionString.Build(Platform.SqlServer, config["SqlServer:Server"], "master", config["SqlServer:User"], config["SqlServer:Password"], config["SqlServer:Port"], connProps);
-        _ivTestDb = $"IvTest_{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid().ToString()[..8]}";
+        // Sibling engine fixtures write the same Target:* / ScriptTokens:* keys, so SqlServer's are
+        // re-asserted under the shared lock before they are read.
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            FixtureSetup.ApplyTargetConfig(config);
+            _mainDb = config["ScriptTokens:MainDB"]!;
+            var connProps = ConnectionString.ReadProperties(config, "Target:ConnectionProperties");
+            _connectionString = ConnectionString.Build(Platform.SqlServer, config["Target:Server"], _mainDb, config["Target:User"], config["Target:Password"], config["Target:Port"], connProps);
+        }
 
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"CREATE DATABASE [{_ivTestDb}];";
+
+        Schema.IntegrationTests.SqlServer.TestSchemaDrop.Drop(cmd, _schema);
+
+        // Create the fixture schema and source table
+        cmd.CommandText = $"EXEC('CREATE SCHEMA [{_schema}]')";
         cmd.ExecuteNonQuery();
 
-        conn.ChangeDatabase(_ivTestDb);
-        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
-
-        // Create Test schema and source table
-        cmd.CommandText = "EXEC('CREATE SCHEMA [Test]')";
-        cmd.ExecuteNonQuery();
-
-        cmd.CommandText = @"
-CREATE TABLE Test.SourceTable (Id INT NOT NULL, Name VARCHAR(100) NOT NULL, Amount DECIMAL(10,2) NOT NULL);
-CREATE UNIQUE CLUSTERED INDEX UDX_SourceTable ON Test.SourceTable (Id);
+        cmd.CommandText = $@"
+CREATE TABLE [{_schema}].SourceTable (Id INT NOT NULL, Name VARCHAR(100) NOT NULL, Amount DECIMAL(10,2) NOT NULL);
+CREATE UNIQUE CLUSTERED INDEX UDX_SourceTable ON [{_schema}].SourceTable (Id);
 ";
         cmd.ExecuteNonQuery();
 
@@ -49,17 +64,16 @@ CREATE UNIQUE CLUSTERED INDEX UDX_SourceTable ON Test.SourceTable (Id);
     [OneTimeTearDown]
     public void TearDown()
     {
-        if (string.IsNullOrEmpty(_ivTestDb)) return;
-        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = @$"
-IF DB_ID('{_ivTestDb}') IS NOT NULL
-  ALTER DATABASE [{_ivTestDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{_ivTestDb}];
-";
-        cmd.ExecuteNonQuery();
-        conn.Close();
+        if (string.IsNullOrEmpty(_connectionString)) return;
+        try
+        {
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            Schema.IntegrationTests.SqlServer.TestSchemaDrop.Drop(cmd, _schema);
+            conn.Close();
+        }
+        catch (DbException) { /* best-effort cleanup must not mask a test result */ }
     }
 
     [Test]
@@ -67,7 +81,7 @@ DROP DATABASE IF EXISTS [{_ivTestDb}];
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
@@ -75,36 +89,36 @@ DROP DATABASE IF EXISTS [{_ivTestDb}];
         RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
 
         // Verify indexed view exists
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'
 AND OBJECTPROPERTY(v.object_id, 'IsIndexed') = 1";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Indexed view should exist");
 
         // Verify clustered index exists
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Clustered index should exist");
 
         // Verify nonclustered index exists
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Nonclustered index should exist");
 
         // Verify ownership extended property
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.extended_properties ep
 INNER JOIN sys.views v ON ep.major_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'
-AND ep.name = 'SchemaSmith_Product' AND CAST(ep.value AS NVARCHAR(200)) = 'IvQuenchTests'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'
+AND ep.name = 'SchemaSmith_Product' AND CAST(ep.value AS NVARCHAR(200)) = '{_productName}'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Ownership extended property should be set");
 
         conn.Close();
@@ -115,7 +129,7 @@ AND ep.name = 'SchemaSmith_Product' AND CAST(ep.value AS NVARCHAR(200)) = 'IvQue
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewExists(cmd);
@@ -123,26 +137,26 @@ AND ep.name = 'SchemaSmith_Product' AND CAST(ep.value AS NVARCHAR(200)) = 'IvQue
         RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
 
         // Verify the view still exists
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'
 AND OBJECTPROPERTY(v.object_id, 'IsIndexed') = 1";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Indexed view should still exist");
 
         // Verify both indexes still exist
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Clustered index should still exist");
 
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Nonclustered index should still exist");
 
         conn.Close();
@@ -153,25 +167,25 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewExists(cmd);
 
         // Record object_id before re-quench
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT v.object_id FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var objectIdBefore = cmd.ExecuteScalar();
 
         RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
 
         // Verify object_id is unchanged (view was NOT dropped and recreated)
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT v.object_id FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var objectIdAfter = cmd.ExecuteScalar();
         Assert.That(objectIdAfter, Is.EqualTo(objectIdBefore), "View object_id should be unchanged (no-op re-quench)");
 
@@ -183,43 +197,43 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewExists(cmd);
 
         // Record object_id before
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT v.object_id FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var objectIdBefore = cmd.ExecuteScalar();
 
         // Quench with a modified definition (added WHERE clause)
         RunIndexedViewQuench(cmd, ViewDefinitionWithWhereClause());
 
         // Verify view still exists
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'
 AND OBJECTPROPERTY(v.object_id, 'IsIndexed') = 1";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Indexed view should exist after rebuild");
 
         // Verify object_id changed (view was dropped and recreated)
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT v.object_id FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var objectIdAfter = cmd.ExecuteScalar();
         Assert.That(objectIdAfter, Is.Not.EqualTo(objectIdBefore), "View object_id should change (definition changed triggers rebuild)");
 
         // Verify the definition contains the WHERE clause
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT m.definition FROM sys.sql_modules m
 INNER JOIN sys.views v ON m.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var definition = cmd.ExecuteScalar()?.ToString() ?? "";
         Assert.That(definition.ToUpperInvariant(), Does.Contain("WHERE"), "Definition should contain WHERE clause");
 
@@ -231,36 +245,36 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         // Establish the WHERE clause definition first so adding an index is an index-only change
         RunIndexedViewQuench(cmd, ViewDefinitionWithWhereClause());
 
         // Record object_id before
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT v.object_id FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var objectIdBefore = cmd.ExecuteScalar();
 
         // Quench with same definition but an additional nonclustered index
         RunIndexedViewQuench(cmd, ViewDefinitionWithThreeIndexes());
 
         // Verify view object_id is unchanged (view was NOT rebuilt)
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT v.object_id FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var objectIdAfter = cmd.ExecuteScalar();
         Assert.That(objectIdAfter, Is.EqualTo(objectIdBefore), "View object_id should be unchanged (index-only change)");
 
         // Verify the new index exists
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Amount'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Amount'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "New index should exist");
 
         conn.Close();
@@ -271,16 +285,16 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewExists(cmd);
 
         // Verify the view exists before
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'
 AND OBJECTPROPERTY(v.object_id, 'IsIndexed') = 1";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Indexed view should exist before drop test");
 
@@ -288,16 +302,16 @@ AND OBJECTPROPERTY(v.object_id, 'IsIndexed') = 1";
         RunIndexedViewQuench(cmd, "[]");
 
         // Verify the view was dropped
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(0), "Indexed view should be dropped");
 
         // Verify ownership extended property was removed (no view = no EP)
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.extended_properties ep
-WHERE ep.name = 'SchemaSmith_Product' AND CAST(ep.value AS NVARCHAR(200)) = 'IvQuenchTests'
+WHERE ep.name = 'SchemaSmith_Product' AND CAST(ep.value AS NVARCHAR(200)) = '{_productName}'
 AND ep.major_id NOT IN (SELECT object_id FROM sys.tables)";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(0), "Ownership extended property should be removed");
 
@@ -309,42 +323,42 @@ AND ep.major_id NOT IN (SELECT object_id FROM sys.tables)";
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewExists(cmd);
 
         // Record object_id before
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT v.object_id FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var objectIdBefore = cmd.ExecuteScalar();
 
         // Re-quench with only the clustered index (removing the nonclustered)
         RunIndexedViewQuench(cmd, ViewDefinitionWithClusteredOnly());
 
         // Verify nonclustered index no longer exists
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(0), "Nonclustered index should be removed");
 
         // Verify clustered index still exists
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Clustered index should still exist");
 
         // Verify view object_id is unchanged (index-only change)
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT v.object_id FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var objectIdAfter = cmd.ExecuteScalar();
         Assert.That(objectIdAfter, Is.EqualTo(objectIdBefore), "View object_id should be unchanged (index-only change)");
 
@@ -356,26 +370,26 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewExists(cmd);
 
         // Manually update the extended property to a different value
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 EXEC sp_updateextendedproperty
     @name = N'SchemaSmith_Product',
     @value = N'WrongProduct',
-    @level0type = N'SCHEMA', @level0name = N'Test',
+    @level0type = N'SCHEMA', @level0name = N'{_schema}',
     @level1type = N'VIEW', @level1name = N'vTestSummary'";
         cmd.ExecuteNonQuery();
 
         // Verify it was changed
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT CAST(ep.value AS NVARCHAR(200)) FROM sys.extended_properties ep
 INNER JOIN sys.views v ON ep.major_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'
 AND ep.name = 'SchemaSmith_Product'";
         Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("WrongProduct"), "Extended property should be set to wrong product");
 
@@ -386,22 +400,22 @@ AND ep.name = 'SchemaSmith_Product'";
         Assert.That(ex!.Message, Does.Contain("already"), "Should fail when view is owned by different product");
 
         // Fix ownership back and verify quench succeeds
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 EXEC sp_updateextendedproperty
     @name = N'SchemaSmith_Product',
-    @value = N'IvQuenchTests',
-    @level0type = N'SCHEMA', @level0name = N'Test',
+    @value = N'{_productName}',
+    @level0type = N'SCHEMA', @level0name = N'{_schema}',
     @level1type = N'VIEW', @level1name = N'vTestSummary'";
         cmd.ExecuteNonQuery();
 
         Assert.DoesNotThrow(() => RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes()));
 
         // Verify ownership remains correct
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT CAST(ep.value AS NVARCHAR(200)) FROM sys.extended_properties ep
 INNER JOIN sys.views v ON ep.major_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'
 AND ep.name = 'SchemaSmith_Product'";
         Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo(_productName), "Extended property should remain with original product");
 
@@ -413,15 +427,15 @@ AND ep.name = 'SchemaSmith_Product'";
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         // Create a second source table
-        cmd.CommandText = @"
-IF OBJECT_ID('Test.SourceTable2', 'U') IS NULL
+        cmd.CommandText = $@"
+IF OBJECT_ID('{_schema}.SourceTable2', 'U') IS NULL
 BEGIN
-    CREATE TABLE Test.SourceTable2 (Code INT NOT NULL, Label VARCHAR(100) NOT NULL, Value DECIMAL(10,2) NOT NULL);
-    CREATE UNIQUE CLUSTERED INDEX UDX_SourceTable2 ON Test.SourceTable2 (Code);
+    CREATE TABLE [{_schema}].SourceTable2 (Code INT NOT NULL, Label VARCHAR(100) NOT NULL, Value DECIMAL(10,2) NOT NULL);
+    CREATE UNIQUE CLUSTERED INDEX UDX_SourceTable2 ON [{_schema}].SourceTable2 (Code);
 END";
         cmd.ExecuteNonQuery();
 
@@ -429,43 +443,43 @@ END";
         RunIndexedViewQuench(cmd, TwoViewDefinitions());
 
         // Verify both views exist
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'
 AND OBJECTPROPERTY(v.object_id, 'IsIndexed') = 1";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "First indexed view should exist");
 
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary2'
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary2'
 AND OBJECTPROPERTY(v.object_id, 'IsIndexed') = 1";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Second indexed view should exist");
 
         // Verify indexes on second view
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary2' AND i.name = 'IX_vTestSummary2_Code'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary2' AND i.name = 'IX_vTestSummary2_Code'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Second view clustered index should exist");
 
         // Drop the second view by quenching with only the first
         RunIndexedViewQuench(cmd, ViewDefinitionWithClusteredOnly());
 
         // Verify first view still exists
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "First view should still exist");
 
         // Verify second view was dropped
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary2'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary2'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(0), "Second view should be dropped");
 
         conn.Close();
@@ -478,12 +492,12 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary2'";
         using var conn = (Microsoft.Data.SqlClient.SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.InfoMessage += (_, e) => { foreach (Microsoft.Data.SqlClient.SqlError err in e.Errors) messages.Add(err.Message); };
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
 
-        var json = @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""VariantName"":""Modern engines"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
+        var json = @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""VariantName"":""Modern engines"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
         RunIndexedViewQuench(cmd, json);
 
         Assert.That(messages, Has.Some.Contains("(variant: Modern engines)"));
@@ -514,17 +528,17 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary2'";
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
         RunIndexedViewQuench(cmd, ViewDefinitionWithPadIndex(true));
 
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT CONVERT(INT, i.is_padded) FROM sys.indexes i
 INNER JOIN sys.views v ON v.object_id = i.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1),
             "declaring PadIndex on an indexed view index has to actually reach the engine -- otherwise the "
             + "schema offers a setting that does nothing");
@@ -537,18 +551,18 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
         // carry PadIndex, the second deploy either drops and recreates the index or misses a change.
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
         RunIndexedViewQuench(cmd, ViewDefinitionWithPadIndex(true));
         RunIndexedViewQuench(cmd, ViewDefinitionWithPadIndex(true));
 
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT CONVERT(INT, i.is_padded) FROM sys.indexes i
 INNER JOIN sys.views v ON v.object_id = i.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "still set after a re-deploy");
     }
 
@@ -559,17 +573,17 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
         // while changing every indexed view index in every package.
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
         RunIndexedViewQuench(cmd, ViewDefinitionWithPadIndex(false));
 
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT CONVERT(INT, i.is_padded) FROM sys.indexes i
 INNER JOIN sys.views v ON v.object_id = i.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.Zero);
     }
 
@@ -581,7 +595,7 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
         // other tests green. This is the one that exercises it.
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
@@ -589,18 +603,18 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
 
         RunIndexedViewQuench(cmd, ViewDefinitionWithPadIndex(true));
 
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT CONVERT(INT, i.is_padded) FROM sys.indexes i
 INNER JOIN sys.views v ON v.object_id = i.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1),
             "turning PadIndex on in the package has to reach an index that already exists, not only a "
             + "freshly created one");
     }
 
     private static string ViewDefinitionWithPadIndex(bool padIndex) =>
-        @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]"",""FillFactor"":70,""PadIndex"":"
+        @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]"",""FillFactor"":70,""PadIndex"":"
         + (padIndex ? "true" : "false") + @"}]}]";
 
 
@@ -621,22 +635,22 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
-        cmd.CommandText = @"SELECT v.object_id FROM sys.views v
+        cmd.CommandText = $@"SELECT v.object_id FROM sys.views v
                             INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-                            WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+                            WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var firstId = cmd.ExecuteScalar();
         Assert.That(firstId, Is.Not.Null, "setup: the indexed view must exist after the first deploy");
 
         for (var pass = 2; pass <= 3; pass++)
         {
             RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
-            cmd.CommandText = @"SELECT v.object_id FROM sys.views v
+            cmd.CommandText = $@"SELECT v.object_id FROM sys.views v
                                 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-                                WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+                                WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
             Assert.That(cmd.ExecuteScalar(), Is.EqualTo(firstId),
                 $"pass {pass}: the indexed view was dropped and re-created for an unchanged declaration");
         }
@@ -644,8 +658,11 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
         conn.Close();
     }
 
+    // Definitions name their schema as the placeholder IvSchema: the database is shared, so it resolves to
+    // this fixture's own schema here.
     private void RunIndexedViewQuench(IDbCommand cmd, string indexedViewJson)
     {
+        indexedViewJson = indexedViewJson.Replace("[IvSchema]", $"[{_schema}]");
         cmd.CommandTimeout = 300;
         cmd.CommandText = $@"EXEC [SchemaSmith].[IndexedViewQuench]
     @ProductName = '{_productName}',
@@ -659,55 +676,55 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
 
     private static string ViewDefinitionWithTwoIndexes()
     {
-        return @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name]""}]}]";
+        return @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name]""}]}]";
     }
 
     private static string ViewDefinitionWithWhereClause()
     {
-        return @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable WHERE Amount > 0 GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name]""}]}]";
+        return @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable WHERE Amount > 0 GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name]""}]}]";
     }
 
     private static string ViewDefinitionWithThreeIndexes()
     {
-        return @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable WHERE Amount > 0 GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name]""},{""Name"":""[IX_vTestSummary_Amount]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name],[Id]""}]}]";
+        return @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable WHERE Amount > 0 GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name]""},{""Name"":""[IX_vTestSummary_Amount]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name],[Id]""}]}]";
     }
 
     private static string ViewDefinitionWithClusteredOnly()
     {
-        return @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
+        return @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
     }
 
     private static string TwoViewDefinitions()
     {
-        return @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]},{""Schema"":""[Test]"",""Name"":""[vTestSummary2]"",""Definition"":""SELECT Code, Label, COUNT_BIG(*) AS Cnt, SUM(Value) AS TotalValue FROM Test.SourceTable2 GROUP BY Code, Label"",""Indexes"":[{""Name"":""[IX_vTestSummary2_Code]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Code]""}]}]";
+        return @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]},{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary2]"",""Definition"":""SELECT Code, Label, COUNT_BIG(*) AS Cnt, SUM(Value) AS TotalValue FROM [IvSchema].SourceTable2 GROUP BY Code, Label"",""Indexes"":[{""Name"":""[IX_vTestSummary2_Code]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Code]""}]}]";
     }
 
     private static string ViewDefinitionWithUniqueNameIndex()
     {
         // Same as TwoIndexes but IX_vTestSummary_Name is now UNIQUE
-        return @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":true,""Clustered"":false,""IndexColumns"":""[Name]""}]}]";
+        return @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":true,""Clustered"":false,""IndexColumns"":""[Name]""}]}]";
     }
 
     private static string ViewDefinitionWithDifferentClusteredColumns()
     {
         // Same view definition but clustered index now covers both Id and Name
-        return @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id],[Name]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name]""}]}]";
+        return @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id],[Name]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name]""}]}]";
     }
 
     /// <summary>
     /// Tags an index with an extended property marker. If the index is dropped, the marker disappears.
     /// </summary>
-    private static void TagIndex(IDbCommand cmd, string indexName)
+    private void TagIndex(IDbCommand cmd, string indexName)
     {
         cmd.CommandText = $@"
 IF EXISTS (SELECT 1 FROM sys.extended_properties ep
            INNER JOIN sys.indexes i ON ep.major_id = i.object_id AND ep.minor_id = i.index_id
            INNER JOIN sys.views v ON i.object_id = v.object_id
            INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-           WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = '{indexName}' AND ep.name = 'TestMarker')
-    EXEC sp_dropextendedproperty 'TestMarker', 'SCHEMA', 'Test', 'VIEW', 'vTestSummary', 'INDEX', '{indexName}';
+           WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = '{indexName}' AND ep.name = 'TestMarker')
+    EXEC sp_dropextendedproperty 'TestMarker', 'SCHEMA', '{_schema}', 'VIEW', 'vTestSummary', 'INDEX', '{indexName}';
 EXEC sp_addextendedproperty 'TestMarker', 'alive',
-    'SCHEMA', 'Test', 'VIEW', 'vTestSummary', 'INDEX', '{indexName}'";
+    'SCHEMA', '{_schema}', 'VIEW', 'vTestSummary', 'INDEX', '{indexName}'";
         cmd.ExecuteNonQuery();
     }
 
@@ -715,14 +732,14 @@ EXEC sp_addextendedproperty 'TestMarker', 'alive',
     /// Checks whether the extended property marker still exists on an index.
     /// Returns true if the index was NOT dropped (marker survives).
     /// </summary>
-    private static bool IndexMarkerSurvived(IDbCommand cmd, string indexName)
+    private bool IndexMarkerSurvived(IDbCommand cmd, string indexName)
     {
         cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.extended_properties ep
 INNER JOIN sys.indexes i ON ep.major_id = i.object_id AND ep.minor_id = i.index_id
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = '{indexName}'
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = '{indexName}'
 AND ep.name = 'TestMarker'";
         return (int)cmd.ExecuteScalar()! > 0;
     }
@@ -734,7 +751,7 @@ AND ep.name = 'TestMarker'";
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         // Establish baseline with two indexes
@@ -756,11 +773,11 @@ AND ep.name = 'TestMarker'";
             "Changed nonclustered index should be dropped and recreated");
 
         // Verify the nonclustered index is now UNIQUE
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT i.is_unique FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
         Assert.That(cmd.ExecuteScalar(), Is.EqualTo(true), "Nonclustered index should now be unique");
 
         conn.Close();
@@ -771,7 +788,7 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         // Establish baseline with two indexes
@@ -791,18 +808,18 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
             "Nonclustered indexes must be dropped when clustered index changes");
 
         // Verify both indexes exist with correct properties
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id' AND i.type = 1";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Id' AND i.type = 1";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Clustered index should be recreated");
 
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Nonclustered index should be recreated");
 
         conn.Close();
@@ -813,7 +830,7 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         // Establish baseline with two indexes
@@ -824,7 +841,7 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
         TagIndex(cmd, "IX_vTestSummary_Name");
 
         // Add a third index (same definition, extra nonclustered)
-        var threeIndexes = @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name]""},{""Name"":""[IX_vTestSummary_Cnt]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Cnt]""}]}]";
+        var threeIndexes = @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Name]""},{""Name"":""[IX_vTestSummary_Cnt]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""[Cnt]""}]}]";
         RunIndexedViewQuench(cmd, threeIndexes);
 
         // Both original indexes should survive (markers intact)
@@ -834,11 +851,11 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
             "Existing nonclustered index should survive when adding a new one");
 
         // New index should exist
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Cnt'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Cnt'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "New nonclustered index should be created");
 
         conn.Close();
@@ -849,7 +866,7 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         // Establish baseline
@@ -878,7 +895,7 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
@@ -886,13 +903,13 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_
         // A real expression evaluating false on the target must gate the view out — the
         // old C# filter only treated the literal string "false" as a gate, so "1 = 0"
         // would wrongly deploy.
-        var json = @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""ShouldApplyExpression"":""1 = 0"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
+        var json = @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""ShouldApplyExpression"":""1 = 0"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
         RunIndexedViewQuench(cmd, json);
 
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(0), "Indexed view gated by a false ShouldApplyExpression should NOT be created");
 
         conn.Close();
@@ -903,18 +920,18 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
 
-        var json = @"[{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""ShouldApplyExpression"":""1 = 1"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
+        var json = @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""ShouldApplyExpression"":""1 = 1"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
         RunIndexedViewQuench(cmd, json);
 
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'
 AND OBJECTPROPERTY(v.object_id, 'IsIndexed') = 1";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "Indexed view with a true ShouldApplyExpression should be created");
 
@@ -927,7 +944,7 @@ AND OBJECTPROPERTY(v.object_id, 'IsIndexed') = 1";
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
@@ -935,23 +952,23 @@ AND OBJECTPROPERTY(v.object_id, 'IsIndexed') = 1";
         // Two same-named variants with mutually exclusive expressions: the matching one
         // (1 = 1, with a WHERE clause) must be created; the other (1 = 0) must be gated out.
         var json = @"[
-{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""VariantName"":""Legacy"",""ShouldApplyExpression"":""1 = 0"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]},
-{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""VariantName"":""Modern"",""ShouldApplyExpression"":""1 = 1"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable WHERE Amount > 0 GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
+{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""VariantName"":""Legacy"",""ShouldApplyExpression"":""1 = 0"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]},
+{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""VariantName"":""Modern"",""ShouldApplyExpression"":""1 = 1"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable WHERE Amount > 0 GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
         RunIndexedViewQuench(cmd, json);
 
         // The view should exist and be the Modern variant (has the WHERE clause)
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'
 AND OBJECTPROPERTY(v.object_id, 'IsIndexed') = 1";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "The matching variant should be created");
 
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT m.definition FROM sys.sql_modules m
 INNER JOIN sys.views v ON m.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var definition = cmd.ExecuteScalar()?.ToString() ?? "";
         Assert.That(definition.ToUpperInvariant(), Does.Contain("WHERE"), "The Modern variant (with WHERE clause) should be the one created");
 
@@ -964,7 +981,7 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
@@ -973,17 +990,17 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
         // SQL Server allows one view per (schema, name), so both surviving the gate is unhonorable
         // and the quench must fail with the mutual-exclusivity THROW (51000).
         var json = @"[
-{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""VariantName"":""A"",""ShouldApplyExpression"":""1 = 1"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]},
-{""Schema"":""[Test]"",""Name"":""[vTestSummary]"",""VariantName"":""B"",""ShouldApplyExpression"":""1 = 1"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM Test.SourceTable WHERE Amount > 0 GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
+{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""VariantName"":""A"",""ShouldApplyExpression"":""1 = 1"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]},
+{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""VariantName"":""B"",""ShouldApplyExpression"":""1 = 1"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable WHERE Amount > 0 GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""}]}]";
 
         var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => RunIndexedViewQuench(cmd, json));
         Assert.That(ex!.Message, Does.Contain("mutually exclusive"));
 
         // No view should have been created.
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.views v
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(0), "No view should be created when both variants survive the gate");
 
         EnsureViewDropped(cmd);
@@ -995,7 +1012,7 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
-        conn.ChangeDatabase(_ivTestDb);
+        conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
 
         // Establish baseline with two indexes
@@ -1013,11 +1030,11 @@ WHERE s.name = 'Test' AND v.name = 'vTestSummary'";
             "Clustered index should survive when a nonclustered index is removed");
 
         // Nonclustered should be gone
-        cmd.CommandText = @"
+        cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.indexes i
 INNER JOIN sys.views v ON i.object_id = v.object_id
 INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-WHERE s.name = 'Test' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
+WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSummary_Name'";
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(0), "Removed nonclustered index should be gone");
 
         conn.Close();

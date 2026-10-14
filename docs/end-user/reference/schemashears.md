@@ -134,6 +134,10 @@ SchemaShears writes the patch package to the `--Output` directory, preserving th
 
 When `--Zip` is set, SchemaShears additionally compresses the output directory into a `.zip` archive at the same location, ready for artifact handoff or archival.
 
+### Exit code
+
+SchemaShears exits `0` when the patch is built. It exits `2` when the request cannot be built: the source folder, `Product.json` or manifest is missing, an always-include entry does not exist, the output folder or zip already exists, or `--AllowDrops` names an unknown category. The reason is in the progress log and in `SchemaShears - Errors.log`. These checks run before anything is written, so a failed request leaves no partial output. The full table of codes is in [Configuration -- Exit Codes](configuration.md#exit-codes).
+
 ---
 
 ## Drop Suppression
@@ -163,9 +167,9 @@ This is the correct posture for a patch: deploy what's in scope, leave everythin
 
 ### Enforcement
 
-**Every stamped flag is enforced.** As of v2.2.0, SchemaQuench's drop-control covers every category SchemaShears suppresses: a table absent from the patch is not dropped, and on the tables the patch does include, columns, foreign keys, check constraints, exclude constraints, and statistics that exist in the target but not in the table JSON are preserved -- along with out-of-band indexes (`DropUnknownIndexes` stays `false`). See the per-flag sections in the [SchemaQuench Reference](schemaquench.md#droptablesremovedfromproduct) for exact semantics.
+**Every stamped flag is enforced.** As of v2.2.0, SchemaQuench's drop-control covers every category SchemaShears suppresses: a table absent from the patch is not dropped, and on the tables the patch does include, columns, foreign keys, check constraints, exclude constraints, and statistics that exist in the target but not in the table JSON are preserved -- along with out-of-band indexes (`DropUnknownIndexes` stays `false`) and, since v2.7.2, indexes the product no longer declares (`DropIndexesRemovedFromProduct` stays `false`). See the per-flag sections in the [SchemaQuench Reference](schemaquench.md#droptablesremovedfromproduct) for exact semantics.
 
-The user promise is: _a patch won't drop objects you didn't include_ -- unless you explicitly re-enable a category with `--AllowDrops`.
+The user promise is: _a patch won't drop objects you didn't include_ -- unless you explicitly re-enable a category with `--AllowDrops`, or the target's own SchemaQuench settings turn on one of the two drop settings a patch cannot carry (see below).
 
 ### Selectively re-enabling drops
 

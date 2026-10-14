@@ -20,9 +20,6 @@ namespace Schema.UnitTests.Configuration;
 [TestFixture]
 public class SettingsContractDriftTests
 {
-    private static readonly string[] ProductProjects =
-        ["Schema", "SchemaQuench", "SchemaTongs", "DataTongs", "SchemaShears"];
-
     // Known ways product code reaches a configuration value by name. Any indexer whose literal is
     // preceded by a `)` or an identifier covers config["k"], _config["k"], Resolve<...>()?["k"], and
     // the like; GetSection / GetValue / ReadProperties cover the call forms.
@@ -48,13 +45,7 @@ public class SettingsContractDriftTests
                   .Select(l => l.TrimStart())
                   .Select(l => l.StartsWith("//") || l.StartsWith('*') || l.StartsWith("/*") ? "" : l));
 
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Join(dir.FullName, "SchemaSmith.sln")))
-            dir = dir.Parent;
-        return dir?.FullName;
-    }
+    private static string RepoRoot() => RepoSources.Root;
 
     private static IEnumerable<(string File, string Key)> ProductConfigReads(string root)
     {
@@ -80,12 +71,9 @@ public class SettingsContractDriftTests
         }
     }
 
+    // Test projects are skipped by the walk; IsScannable still holds the other exclusions.
     private static IEnumerable<string> ScannableProductFiles(string root) =>
-        ProductProjects
-            .Select(project => Path.Join(root, project))
-            .Where(Directory.Exists)
-            .SelectMany(dir => Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories))
-            .Where(IsScannable);
+        RepoSources.CSharpFiles(includeTestProjects: false).Where(IsScannable);
 
     private static bool IsScannable(string file) =>
         // Test projects live beneath the product project directories; they legitimately use

@@ -5,6 +5,7 @@ using System.Data;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
+using Schema.Utility;
 
 namespace Schema.IntegrationTests.Shared;
 
@@ -124,12 +125,12 @@ public abstract class QuenchReplayIdempotencySharedTests
     }
 
     private bool TableExists(string table) => Scalar(
-        $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE BINARY TABLE_SCHEMA = BINARY '{_testDb}' "
-        + $"AND BINARY TABLE_NAME = BINARY '{table}'") == 1;
+        $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE {MySqlNameMatch.Folded("TABLE_SCHEMA", $"'{_testDb}'")} "
+        + $"AND {MySqlNameMatch.Folded("TABLE_NAME", $"'{table}'")}") == 1;
 
     private int ColumnCount(string table) => Scalar(
-        $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE BINARY TABLE_SCHEMA = BINARY '{_testDb}' "
-        + $"AND BINARY TABLE_NAME = BINARY '{table}'");
+        $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE {MySqlNameMatch.Folded("TABLE_SCHEMA", $"'{_testDb}'")} "
+        + $"AND {MySqlNameMatch.Folded("TABLE_NAME", $"'{table}'")}");
 
     private int Scalar(string sql)
     {

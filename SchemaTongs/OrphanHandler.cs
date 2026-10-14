@@ -41,6 +41,16 @@ public class OrphanHandler
                     _log.Info($"  Retained {gatedCount} gated table declaration file(s) (ShouldApplyExpression gated them off this source; not treated as orphans)");
             }
 
+            // Extraction never reads SchemaSmith's own namespace, so a file there was never going to be marked
+            // written. Those files are user-authored (the recycle-bin hooks live there), and a cleanup script
+            // would drop them from the database.
+            var excludedCount = orphans.Count(path => IsInExcludedNamespace(path, platform));
+            if (excludedCount > 0)
+            {
+                orphans = orphans.Where(path => !IsInExcludedNamespace(path, platform)).ToList();
+                _log.Info($"  Retained {excludedCount} file(s) in {folderName} for objects in the SchemaSmith namespace, which extraction does not read (not treated as orphans)");
+            }
+
             if (orphans.Count > 0)
                 allOrphans[folderName] = orphans;
         }
@@ -117,6 +127,12 @@ public class OrphanHandler
                 CleanupScriptGenerator.GenerateDropStatement(f, objectType, platform, folderName) != null);
             _log.Info($"Generated {scriptFileName} with {dropCount} DROP statement(s).");
         }
+    }
+
+    internal static bool IsInExcludedNamespace(string path, Platform platform)
+    {
+        var prefix = platform.GetBasePlatform() == Platform.MySQL ? "SchemaSmith_" : "SchemaSmith.";
+        return Path.GetFileName(path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsGatedTableFile(string path, Platform platform)

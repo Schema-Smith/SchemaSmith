@@ -23,7 +23,7 @@ public enum SettingsTool
 /// The enumerable shape of each tool's settings surface, and the runtime check that consumes it.
 /// <para>A mistyped configuration key is silently inert: <c>Target:Sever</c> binds nothing and the run
 /// proceeds as though the setting were absent. That is the same defect 2.4.0 fixed on the command line
-/// with <c>CommandLineParser.WarnOnUnrecognizedArguments</c> — a switch that goes unread is worse than
+/// with <c>CommandLineParser.RefuseUnrecognizedArguments</c> — a switch that goes unread is worse than
 /// one that errors — arriving through a different door, so it gets the same treatment: know the
 /// accepted set, warn on anything outside it.</para>
 /// </summary>
@@ -74,7 +74,8 @@ public static class SettingsContract
             SettingsKeys.DeliverData, SettingsKeys.VerboseLogging, SettingsKeys.FailureContextLines,
             SettingsKeys.BottleneckThresholdMs, SettingsKeys.TrackRunOnceMigrations,
             SettingsKeys.PruneObsoleteMigrationTracking,
-            SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.ScriptTokens
+            SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.ScriptTokens,
+            SettingsKeys.LogHygiene, SettingsKeys.ExitNonZeroOnWarning
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.SchemaTongs)).Concat(
@@ -84,19 +85,21 @@ public static class SettingsContract
             SettingsKeys.ProductKeys.ObjectOrder, SettingsKeys.ProductKeys.PreserveExistingOrder,
             SettingsKeys.TemplateKeys.Name, SettingsKeys.TemplateKeys.SchemaIdentificationScript,
             SettingsKeys.OrphanHandling.Mode, SettingsKeys.FolderMapping, SettingsKeys.LogHygiene,
-            SettingsKeys.ScriptTokens
+            SettingsKeys.ExitNonZeroOnWarning
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.DataTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.DataTongs)).Concat(
         [
             SettingsKeys.ContentPath, SettingsKeys.ScriptPath, SettingsKeys.TemplatePath,
-            SettingsKeys.TablesToExtract, SettingsKeys.ScriptTokens
+            SettingsKeys.TablesToExtract, SettingsKeys.CompatEncoding, SettingsKeys.LogHygiene,
+            SettingsKeys.ExitNonZeroOnWarning
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaShears] = new(
         [
             SettingsKeys.SourcePath, SettingsKeys.ManifestPath, SettingsKeys.AlwaysIncludePath,
-            SettingsKeys.OutputPath, SettingsKeys.Zip, SettingsKeys.AllowDrops
+            SettingsKeys.OutputPath, SettingsKeys.Zip, SettingsKeys.AllowDrops, SettingsKeys.LogHygiene,
+            SettingsKeys.ExitNonZeroOnWarning
         ], StringComparer.OrdinalIgnoreCase)
     };
 
@@ -116,7 +119,10 @@ public static class SettingsContract
         SettingsKeys.Source.Port, SettingsKeys.Source.Platform, SettingsKeys.Source.Database,
         SettingsKeys.Source.Schema, SettingsKeys.Source.IntegratedSecurity,
         SettingsKeys.Source.ConnectionProperties, SettingsKeys.SourceCompatEncoding,
-        SettingsKeys.Target.Platform
+        SettingsKeys.Target.Platform,
+        // Each Source:* connection key falls back to its Target:* twin when absent.
+        SettingsKeys.Target.Server, SettingsKeys.Target.User, SettingsKeys.Target.Password, SettingsKeys.Target.Port,
+        SettingsKeys.Target.IntegratedSecurity, SettingsKeys.Target.ConnectionProperties
     ];
 
     // Only the keys the given tool actually reads. Handing both tools the whole set made the contract
@@ -211,7 +217,7 @@ public static class SettingsContract
 
     /// <summary>
     /// Logs a warning naming each unrecognised key. Warns rather than fails, matching
-    /// <c>CommandLineParser.WarnOnUnrecognizedArguments</c>: the key may belong to a newer version or a
+    /// <c>CommandLineParser.RefuseUnrecognizedArguments</c>: the key may belong to a newer version or a
     /// deliberately shared file, so the operator decides.
     /// </summary>
     public static void WarnOnUnrecognizedKeys(IConfiguration config, SettingsTool tool, Action<string> warn)

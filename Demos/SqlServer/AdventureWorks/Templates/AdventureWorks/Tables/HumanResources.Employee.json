@@ -37,7 +37,7 @@
     },
     {
       "Name": "[CurrentFlag]",
-      "DataType": "FLAG",
+      "DataType": "Flag",
       "Default": "1",
       "ShouldApplyExpression": "",
       "OldName": "",
@@ -222,7 +222,7 @@
     },
     {
       "Name": "[SalariedFlag]",
-      "DataType": "FLAG",
+      "DataType": "Flag",
       "Default": "1",
       "ShouldApplyExpression": "",
       "OldName": "",

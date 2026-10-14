@@ -10,6 +10,7 @@ using Schema.Isolators;
 using Schema.Utility;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Data;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
@@ -193,6 +194,8 @@ public class TemplateTargetsHappyPathTests
 
                 Assert.That(DatabaseExists(transientDb), Is.True,
                     "CreateIfMissing: true must provision the missing DB.");
+                Assert.That(SummaryRecords("database", transientDb, "created"), Is.True,
+                    "the deployment summary must record the database it created");
                 Assert.That(TableExistsInDb(transientDb, "public", "lookup"), Is.True,
                     "Shared template deployment must have run inside the newly-provisioned DB.");
             }
@@ -536,5 +539,13 @@ SELECT pg_terminate_backend(pid)
         {
             // Best-effort cleanup — a missing or already-dropped DB is fine.
         }
+    }
+
+    private static bool SummaryRecords(string objectType, string objectName, string action)
+    {
+        var summary = Newtonsoft.Json.Linq.JObject.Parse(System.IO.File.ReadAllText(
+            System.IO.Path.Join(Schema.Utility.ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+        return (summary.SelectToken("objectChanges.details") as Newtonsoft.Json.Linq.JArray ?? [])
+            .Any(d => (string)d["objectType"] == objectType && (string)d["objectName"] == objectName && (string)d["action"] == action);
     }
 }

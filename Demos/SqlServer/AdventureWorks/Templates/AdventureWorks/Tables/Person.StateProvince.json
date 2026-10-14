@@ -20,7 +20,7 @@
     },
     {
       "Name": "[IsOnlyStateProvinceFlag]",
-      "DataType": "FLAG",
+      "DataType": "Flag",
       "Default": "1",
       "ShouldApplyExpression": "",
       "OldName": "",
@@ -54,7 +54,7 @@
     },
     {
       "Name": "[Name]",
-      "DataType": "NAME",
+      "DataType": "Name",
       "ShouldApplyExpression": "",
       "OldName": "",
       "Collation": "",

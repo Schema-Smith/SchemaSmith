@@ -49,23 +49,28 @@ public abstract class CapabilityGuardConsistencySharedTests : BaseTableQuenchTes
                 foreach (var cap in rows)
                 {
                     var fn = PredicateFnByKey[cap.Key];
-                    Assert.That(Probe(cmd, fn, cap.IntroducedInComparable - 1), Is.EqualTo(0),
-                        $"{fn}() must be 0 just below {cap.IntroducedInDisplay} ({cap.IntroducedInComparable}) on {Platform}");
-                    Assert.That(Probe(cmd, fn, cap.IntroducedInComparable), Is.EqualTo(1),
-                        $"{fn}() must be 1 at {cap.IntroducedInDisplay} ({cap.IntroducedInComparable}) on {Platform}");
+                    // A gate that turns on a patch is probed one patch below and at it; the others one minor below and at it.
+                    var at = cap.IntroducedInPatchComparable ?? cap.IntroducedInComparable;
+                    var patched = cap.IntroducedInPatchComparable != null;
+                    Assert.That(Probe(cmd, fn, at - 1, patched), Is.EqualTo(0),
+                        $"{fn}() must be 0 just below {cap.IntroducedInDisplay} ({at}) on {Platform}");
+                    Assert.That(Probe(cmd, fn, at, patched), Is.EqualTo(1),
+                        $"{fn}() must be 1 at {cap.IntroducedInDisplay} ({at}) on {Platform}");
                 }
             });
         }
         finally
         {
-            cmd.CommandText = "SET @schemasmith_version_override = NULL";
+            cmd.CommandText = "SET @schemasmith_version_override = NULL, @schemasmith_version_patch_override = NULL";
             cmd.ExecuteNonQuery();
         }
     }
 
-    private static int Probe(IDbCommand cmd, string fn, int overrideComparable)
+    private static int Probe(IDbCommand cmd, string fn, int overrideComparable, bool patch)
     {
-        cmd.CommandText = $"SET @schemasmith_version_override = {overrideComparable}";
+        cmd.CommandText = patch
+            ? $"SET @schemasmith_version_override = {overrideComparable / 100}, @schemasmith_version_patch_override = {overrideComparable}"
+            : $"SET @schemasmith_version_override = {overrideComparable}, @schemasmith_version_patch_override = NULL";
         cmd.ExecuteNonQuery();
         cmd.CommandText = $"SELECT {fn}()";
         return Convert.ToInt32(cmd.ExecuteScalar());

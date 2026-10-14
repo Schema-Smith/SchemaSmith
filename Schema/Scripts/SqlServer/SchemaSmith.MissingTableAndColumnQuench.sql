@@ -137,11 +137,11 @@ BEGIN TRY
   END
 
   RAISERROR('Handle Table Renames', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Rename ' + T.[Schema] + '.' + T.[OldName] + ' to ' + T.[Schema] + '.' + T.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'EXEC sp_rename ''' + SchemaSmith.fn_StripBracketWrapping(T.[Schema]) + '.' + SchemaSmith.fn_StripBracketWrapping(T.[OldName]) + ''', ''' + SchemaSmith.fn_StripBracketWrapping(T.[Name]) + ''';' + CHAR(13) + CHAR(10) AS NVARCHAR(MAX))
-                           FROM #Tables T WITH (NOLOCK)
-                           WHERE OBJECT_ID(T.[Schema] + '.' + T.[OldName]) IS NOT NULL
-                             AND OBJECT_ID(T.[Schema] + '.' + T.[Name]) IS NULL
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Rename ' + t.[Schema] + '.' + t.[OldName] + ' to ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'EXEC sp_rename ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + '.' + SchemaSmith.fn_StripBracketWrapping(t.[OldName]) + ''', ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''';' + CHAR(13) + CHAR(10) AS NVARCHAR(MAX))
+                           FROM #Tables t WITH (NOLOCK)
+                           WHERE OBJECT_ID(t.[Schema] + '.' + t.[OldName]) IS NOT NULL
+                             AND OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NULL
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
@@ -157,14 +157,14 @@ BEGIN TRY
   IF OBJECT_ID('SchemaSmith.CustomTableRestore') IS NOT NULL
   BEGIN
     RAISERROR('Attempt custom table restore for tables being added in case they were custom dropped previously', 10, 100) WITH NOWAIT
-    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC SchemaSmith.CustomTableRestore ''' + SchemaSmith.fn_StripBracketWrapping(T.[Schema]) + ''', ''' + SchemaSmith.fn_StripBracketWrapping(T.[Name]) + ''';' AS NVARCHAR(MAX))
-                             FROM #Tables T WITH (NOLOCK)
+    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC SchemaSmith.CustomTableRestore ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''';' AS NVARCHAR(MAX))
+                             FROM #Tables t WITH (NOLOCK)
                              WHERE NewTable = 1
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
-    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + T.[Schema] + '.' + T.[Name] + ' Restored'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
-                             FROM #Tables T WITH (NOLOCK)
+    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + t.[Schema] + '.' + t.[Name] + ' Restored'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
+                             FROM #Tables t WITH (NOLOCK)
                              WHERE NewTable = 1
                                AND OBJECT_ID([Schema] + '.' + [Name], 'U') IS NOT NULL
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -271,32 +271,47 @@ BEGIN TRY
     -- Whether the column belongs in the CREATE at all: computed columns and the FILESTREAM column are
     -- added afterwards, the latter because it needs a unique constraint first.
     [InCreate] BIT NOT NULL,
-    [SparseOrColumnSet] BIT NOT NULL
+    [SparseOrColumnSet] BIT NOT NULL,
+    [NewColumn] BIT NOT NULL,
+    -- ANSI_PADDING is fixed when a column is created, and every ALTER COLUMN pads it whatever the session says. So a
+    -- table or ADD holding an unpadded column runs under SET ANSI_PADDING OFF, and the padded character columns
+    -- created alongside it are padded again afterwards with RepadScript, an ALTER COLUMN that changes nothing else.
+    [PaddingOff] BIT NOT NULL,
+    [RepadScript] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
   )
-  INSERT INTO #AddTableColumns ([KeySchema], [KeyTableName], [_RowId], [ColumnScript], [InCreate], [SparseOrColumnSet])
-  SELECT CONVERT(NVARCHAR(200), C.[Schema]), CONVERT(NVARCHAR(200), C.[TableName]), C.[_RowId], C.[ColumnScript],
-         CONVERT(BIT, CASE WHEN RTRIM(ISNULL(C.[ComputedExpression], '')) = '' AND ISNULL(C.[FileStream], 0) = 0 THEN 1 ELSE 0 END),
-         CONVERT(BIT, CASE WHEN ISNULL(C.[Sparse], 0) = 1 OR ISNULL(C.[IsColumnSet], 0) = 1 THEN 1 ELSE 0 END)
-    FROM #Columns C WITH (NOLOCK);
+  INSERT INTO #AddTableColumns ([KeySchema], [KeyTableName], [_RowId], [ColumnScript], [InCreate], [SparseOrColumnSet], [NewColumn], [PaddingOff], [RepadScript])
+  SELECT CONVERT(NVARCHAR(200), c.[Schema]), CONVERT(NVARCHAR(200), c.[TableName]), c.[_RowId], c.[ColumnScript],
+         CONVERT(BIT, CASE WHEN RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND ISNULL(c.[FileStream], 0) = 0 THEN 1 ELSE 0 END),
+         CONVERT(BIT, CASE WHEN ISNULL(c.[Sparse], 0) = 1 OR ISNULL(c.[IsColumnSet], 0) = 1 THEN 1 ELSE 0 END),
+         ISNULL(c.[NewColumn], 0),
+         CONVERT(BIT, CASE WHEN c.[PaddingApplies] = 1 AND c.[AnsiPadding] = 0 THEN 1 ELSE 0 END),
+         CASE WHEN c.[PaddingApplies] = 1 AND ISNULL(c.[AnsiPadding], 1) = 1
+              THEN c.[ColumnName] + ' ' + SchemaSmith.fn_NormalizeDataType(c.[DataType]) +
+                   CASE WHEN RTRIM(ISNULL(c.[Collation], '')) NOT IN ('IGNORE', '') THEN ' COLLATE ' + c.[Collation] ELSE '' END +
+                   CASE WHEN ISNULL(c.[Sparse], 0) = 1 THEN ' SPARSE' ELSE '' END +
+                   CASE WHEN ISNULL(c.[Nullable], 0) = 1 THEN ' NULL' ELSE ' NOT NULL' END
+              END
+    FROM #Columns c WITH (NOLOCK);
   CREATE CLUSTERED INDEX [ix_AddTableColumns] ON #AddTableColumns ([KeySchema], [KeyTableName], [_RowId]);
 
   RAISERROR('Add New Tables', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding new table ' + T.[Schema] + '.' + T.[Name] +
-                                  CASE WHEN RTRIM(ISNULL(T.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(T.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'EXEC(''CREATE TABLE ' + T.[Schema] + '.' + T.[Name] + ' (' + REPLACE(ScriptColumns, '''', '''''') + REPLACE(InlineIndexes, '''', '''''') + ')' +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding new table ' + t.[Schema] + '.' + t.[Name] +
+                                  CASE WHEN RTRIM(ISNULL(t.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(t.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'EXEC(''' + CASE WHEN t.[HasPaddingOff] = 1 THEN 'SET ANSI_PADDING OFF; ' ELSE '' END +
+                                  'CREATE TABLE ' + t.[Schema] + '.' + t.[Name] + ' (' + REPLACE(ScriptColumns, '''', '''''') + REPLACE(InlineIndexes, '''', '''''') + ')' +
                                   -- Filegroup placement (#filegroups): ON comes right after the column list,
                                   -- BEFORE the WITH clause, per CREATE TABLE's own grammar. Existence was
                                   -- already validated above, so this can emit unconditionally.
                                   -- Graph tables (#graph): AS NODE / AS EDGE follows the column list.
                                   -- Create-time only -- SQL Server has no ALTER for it -- so a change on an
                                   -- existing table is refused in ModifiedTableQuench rather than attempted.
-                                  CASE WHEN T.[GraphType] = 'Node' THEN ' AS NODE'
-                                       WHEN T.[GraphType] = 'Edge' THEN ' AS EDGE' ELSE '' END +
+                                  CASE WHEN t.[GraphType] = 'Node' THEN ' AS NODE'
+                                       WHEN t.[GraphType] = 'Edge' THEN ' AS EDGE' ELSE '' END +
                                   -- Partition placement wins over FileGroup because the two cannot both be
                                   -- declared -- validated above -- so this is a branch, not a precedence
                                   -- rule. ON <scheme>(<column>) is the same clause slot as ON <filegroup>.
-                                  CASE WHEN T.[PartitionScheme] IS NOT NULL THEN ' ON ' + T.[PartitionScheme] + '(' + T.[PartitionColumn] + ')'
-                                       WHEN T.[FileGroup] IS NOT NULL THEN ' ON ' + T.[FileGroup] ELSE '' END +
+                                  CASE WHEN t.[PartitionScheme] IS NOT NULL THEN ' ON ' + t.[PartitionScheme] + '(' + t.[PartitionColumn] + ')'
+                                       WHEN t.[FileGroup] IS NOT NULL THEN ' ON ' + t.[FileGroup] ELSE '' END +
                                   -- TEXTIMAGE_ON follows ON, in SQL Server's own clause order. FILESTREAM_ON
                                   -- deliberately does NOT appear here: the FILESTREAM column is withheld from
                                   -- this CREATE (it needs a unique constraint first, see FileStreamColumnQuench),
@@ -304,7 +319,7 @@ BEGIN TRY
                                   -- It is applied there instead, by ALTER, before the column is added.
                                   -- Both are create-time only; a change on a deployed table is refused in
                                   -- ModifiedTableQuench rather than silently ignored.
-                                  CASE WHEN T.[TextImageFileGroup] IS NOT NULL THEN ' TEXTIMAGE_ON ' + T.[TextImageFileGroup] ELSE '' END +
+                                  CASE WHEN t.[TextImageFileGroup] IS NOT NULL THEN ' TEXTIMAGE_ON ' + t.[TextImageFileGroup] ELSE '' END +
                                   -- Sparse columns and a COLUMN_SET are incompatible with data compression, and SQL Server 2008
                                   -- REJECTS the clause outright on such a table -- even DATA_COMPRESSION=NONE. Modern servers
                                   -- accept the redundant NONE, so this only fails at the floor, where the XML ingest path runs.
@@ -314,8 +329,20 @@ BEGIN TRY
                                   -- stripped once. An empty list emits no WITH at all, which is what
                                   -- keeps a table with neither exactly as it was before ledger existed.
                                   CASE WHEN t.[WithOptions] <> '' THEN ' WITH (' + STUFF(t.[WithOptions], 1, 2, '') + ')' ELSE '' END + ''');' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''table'', ''' + T.[Schema] + '.' + T.[Name] + ''', ''created'');' AS NVARCHAR(MAX))
-                           FROM (SELECT T.[Schema], T.[Name], t.[CompressionType], t.[XmlCompression], t.[FileGroup], t.[PartitionScheme], t.[PartitionColumn], t.[FileStreamFileGroup], t.[TextImageFileGroup], T.[VariantName], T.[GraphType], T.[MemoryOptimized],
+                                  CASE WHEN t.[HasPaddingOff] = 1 AND t.[RepadScripts] IS NOT NULL
+                                       THEN 'EXEC(''SET ANSI_PADDING ON; ' + REPLACE(t.[RepadScripts], '''', '''''') + ';'');' + CHAR(13) + CHAR(10) ELSE '' END +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''table'', ''' + t.[Schema] + '.' + t.[Name] + ''', ''created'');' AS NVARCHAR(MAX))
+                           FROM (SELECT t.[Schema], t.[Name],
+                                        HasPaddingOff = CASE WHEN t.[MemoryOptimized] = 0
+                                                              AND EXISTS (SELECT 1 FROM #AddTableColumns C2 WITH (NOLOCK)
+                                                                           WHERE C2.[KeySchema] = CONVERT(NVARCHAR(200), t.[Schema]) AND C2.[KeyTableName] = CONVERT(NVARCHAR(200), t.[Name])
+                                                                             AND C2.[InCreate] = 1 AND C2.[PaddingOff] = 1) THEN 1 ELSE 0 END,
+                                        RepadScripts = STUFF((SELECT '; ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' ALTER COLUMN ' + c.[RepadScript]
+                                                                FROM #AddTableColumns c WITH (NOLOCK)
+                                                               WHERE c.[KeySchema] = CONVERT(NVARCHAR(200), t.[Schema]) AND c.[KeyTableName] = CONVERT(NVARCHAR(200), t.[Name])
+                                                                 AND c.[InCreate] = 1 AND c.[RepadScript] IS NOT NULL
+                                                               ORDER BY c.[_RowId] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
+                                        t.[CompressionType], t.[XmlCompression], t.[FileGroup], t.[PartitionScheme], t.[PartitionColumn], t.[FileStreamFileGroup], t.[TextImageFileGroup], t.[VariantName], t.[GraphType], t.[MemoryOptimized],
                                         -- Memory-optimized indexes must be declared INLINE in the CREATE TABLE
                                         -- (#J1) -- CREATE INDEX is rejected on such a table. Built here from
                                         -- #Indexes; each is NONCLUSTERED (the only kind a memory-optimized
@@ -323,7 +350,7 @@ BEGIN TRY
                                         -- range index otherwise. The PK is a named constraint; the rest are
                                         -- INDEX clauses. Empty for an ordinary disk table, so nothing changes
                                         -- for one. The ordinary index passes skip memory-optimized tables.
-                                        InlineIndexes = CASE WHEN T.[MemoryOptimized] = 1 THEN
+                                        InlineIndexes = CASE WHEN t.[MemoryOptimized] = 1 THEN
                                             -- A clustered columnstore has no key columns; built like the others its
                                             -- NULL IndexColumns made the whole entry NULL, which FOR XML PATH drops, so
                                             -- the table was created without it and the index pass then tried a CREATE
@@ -340,59 +367,71 @@ BEGIN TRY
                                                                      THEN 'HASH (' + I.[IndexColumns] + ') WITH (BUCKET_COUNT = ' + CAST(I.[BucketCount] AS NVARCHAR(20)) + ')'
                                                                      ELSE '(' + I.[IndexColumns] + ')' END END
                                                      FROM #Indexes I WITH (NOLOCK)
-                                                    WHERE I.[Schema] = T.[Schema] AND I.[TableName] = T.[Name]
+                                                    WHERE I.[Schema] = t.[Schema] AND I.[TableName] = t.[Name]
                                                     ORDER BY I.[PrimaryKey] DESC, I.[IndexName]
                                                     FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), '')
                                           ELSE '' END,
                                         WithOptions =
-                                            CASE T.[Ledger] WHEN 'AppendOnly' THEN ', LEDGER = ON (APPEND_ONLY = ON)'
+                                            CASE t.[Ledger] WHEN 'AppendOnly' THEN ', LEDGER = ON (APPEND_ONLY = ON)'
                                                             WHEN 'Updatable'  THEN ', SYSTEM_VERSIONING = ON, LEDGER = ON'
                                                             ELSE '' END +
                                             -- Memory-optimized (#J1): the WITH that switches on the Hekaton
                                             -- storage engine. DURABILITY defaults to SCHEMA_AND_DATA in the parse.
-                                            CASE WHEN T.[MemoryOptimized] = 1 THEN ', MEMORY_OPTIMIZED = ON, DURABILITY = ' + T.[Durability] ELSE '' END +
+                                            CASE WHEN t.[MemoryOptimized] = 1 THEN ', MEMORY_OPTIMIZED = ON, DURABILITY = ' + t.[Durability] ELSE '' END +
                                             -- Sparse columns and a COLUMN_SET are incompatible with data compression, and SQL
                                             -- Server 2008 REJECTS the clause outright on such a table -- even DATA_COMPRESSION=NONE.
                                             -- Memory-optimized tables reject DATA_COMPRESSION (and XML_COMPRESSION)
                                             -- outright -- the in-memory engine has no page compression -- so both
                                             -- are suppressed for them here.
-                                            CASE WHEN T.[MemoryOptimized] = 0
+                                            CASE WHEN t.[MemoryOptimized] = 0
                                                   AND NOT EXISTS (SELECT 1 FROM #Columns C2 WITH (NOLOCK)
-                                                                   WHERE C2.[Schema] = T.[Schema] AND C2.[TableName] = T.[Name]
+                                                                   WHERE C2.[Schema] = t.[Schema] AND C2.[TableName] = t.[Name]
                                                                      AND (ISNULL(C2.[Sparse], 0) = 1 OR ISNULL(C2.[IsColumnSet], 0) = 1))
-                                                      AND ISNULL(T.[CompressionType], 'NONE') IN ('NONE', 'ROW', 'PAGE')
-                                                 THEN ', DATA_COMPRESSION=' + ISNULL(T.[CompressionType], 'NONE') ELSE '' END +
+                                                      AND ISNULL(t.[CompressionType], 'NONE') IN ('NONE', 'ROW', 'PAGE')
+                                                 THEN ', DATA_COMPRESSION=' + ISNULL(t.[CompressionType], 'NONE') ELSE '' END +
                                             -- XML_COMPRESSION joins the same WITH list. Independent of
                                             -- DATA_COMPRESSION -- a table can carry both -- and unaffected by
                                             -- the sparse/COLUMN_SET restriction above, which is specific to data
                                             -- compression. Gated on 2022 by VALUE (fn_ServerMajorVersion), which
                                             -- is safe anywhere; only the CATALOG READ in extraction needs
                                             -- kindle-time composition, because that names a column.
-                                            CASE WHEN ISNULL(T.[XmlCompression], 0) = 1 AND T.[MemoryOptimized] = 0 AND SchemaSmith.fn_ServerMajorVersion() >= 16
+                                            CASE WHEN ISNULL(t.[XmlCompression], 0) = 1 AND t.[MemoryOptimized] = 0 AND SchemaSmith.fn_ServerMajorVersion() >= 16
                                                  THEN ', XML_COMPRESSION = ON' ELSE '' END,
                                         HasSparseOrColumnSet = CASE WHEN EXISTS (SELECT 1 FROM #AddTableColumns C2 WITH (NOLOCK)
-                                                                                  WHERE C2.[KeySchema] = CONVERT(NVARCHAR(200), T.[Schema]) AND C2.[KeyTableName] = CONVERT(NVARCHAR(200), T.[Name])
+                                                                                  WHERE C2.[KeySchema] = CONVERT(NVARCHAR(200), t.[Schema]) AND C2.[KeyTableName] = CONVERT(NVARCHAR(200), t.[Name])
                                                                                     AND C2.[SparseOrColumnSet] = 1) THEN 1 ELSE 0 END,
-                                        ScriptColumns = STUFF((SELECT ', ' + [ColumnScript] FROM #AddTableColumns C WITH (NOLOCK) WHERE C.[KeySchema] = CONVERT(NVARCHAR(200), T.[Schema]) AND C.[KeyTableName] = CONVERT(NVARCHAR(200), T.[Name]) AND C.[InCreate] = 1 ORDER BY C.[_RowId] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-                                   FROM #Tables T WITH (NOLOCK)
-                                   WHERE NewTable = 1) T
+                                        ScriptColumns = STUFF((SELECT ', ' + [ColumnScript] FROM #AddTableColumns c WITH (NOLOCK) WHERE c.[KeySchema] = CONVERT(NVARCHAR(200), t.[Schema]) AND c.[KeyTableName] = CONVERT(NVARCHAR(200), t.[Name]) AND c.[InCreate] = 1 ORDER BY c.[_RowId] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+                                   FROM #Tables t WITH (NOLOCK)
+                                   WHERE NewTable = 1) t
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-  IF OBJECT_ID('tempdb..#AddTableColumns') IS NOT NULL DROP TABLE #AddTableColumns
 
   -- Object-change audit (#363): WhatIf twin of the embedded 'table'/'created' row above. That row
   -- rides the CREATE TABLE DDL (executed only on a real run); under WhatIf the DDL is printed, so
   -- capture the would-create here from the same #Tables state.
   IF @WhatIf = 1
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-      SELECT @@SPID, 'table', T.[Schema] + '.' + T.[Name], 'wouldCreate'
-        FROM #Tables T WITH (NOLOCK) WHERE NewTable = 1
+      SELECT @@SPID, 'table', t.[Schema] + '.' + t.[Name], 'wouldCreate'
+        FROM #Tables t WITH (NOLOCK) WHERE NewTable = 1
 
   RAISERROR('Add New Physical Columns', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding ' + CAST(ColumnCount AS NVARCHAR(100)) + ' new columns to ' + T.[Schema] + '.' + T.[Name] +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding ' + CAST(ColumnCount AS NVARCHAR(100)) + ' new columns to ' + t.[Schema] + '.' + t.[Name] +
                                   CASE WHEN RTRIM(ISNULL(VariantList, '')) <> '' THEN ' (variant: ' + VariantList + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + T.[Schema] + '.' + T.[Name] + ' ADD ' + ColumnScripts + ';' AS NVARCHAR(MAX))
-                           FROM (SELECT T.[Schema], T.[Name],
+                                  CASE WHEN t.[HasPaddingOff] = 1 THEN 'SET ANSI_PADDING OFF;' + CHAR(13) + CHAR(10) ELSE '' END +
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' ADD ' + ColumnScripts + ';' +
+                                  CASE WHEN t.[HasPaddingOff] = 1
+                                       THEN CHAR(13) + CHAR(10) + 'SET ANSI_PADDING ON;' +
+                                            ISNULL(CHAR(13) + CHAR(10) + 'EXEC(''' + REPLACE(t.[RepadScripts], '''', '''''') + ';'');', '')
+                                       ELSE '' END AS NVARCHAR(MAX))
+                           FROM (SELECT t.[Schema], t.[Name],
+                                        HasPaddingOff = CASE WHEN EXISTS (SELECT 1 FROM #AddTableColumns C2 WITH (NOLOCK)
+                                                                           WHERE C2.[KeySchema] = CONVERT(NVARCHAR(200), t.[Schema]) AND C2.[KeyTableName] = CONVERT(NVARCHAR(200), t.[Name])
+                                                                             AND C2.[NewColumn] = 1 AND C2.[InCreate] = 1 AND C2.[PaddingOff] = 1) THEN 1 ELSE 0 END,
+                                        RepadScripts = STUFF((SELECT '; ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' ALTER COLUMN ' + c.[RepadScript]
+                                                                FROM #AddTableColumns c WITH (NOLOCK)
+                                                               WHERE c.[KeySchema] = CONVERT(NVARCHAR(200), t.[Schema]) AND c.[KeyTableName] = CONVERT(NVARCHAR(200), t.[Name])
+                                                                 AND c.[NewColumn] = 1 AND c.[InCreate] = 1 AND c.[RepadScript] IS NOT NULL
+                                                               ORDER BY c.[_RowId] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
                                         ColumnScripts = STUFF((SELECT ', ' + CAST([ColumnScript] +
                                                               -- WITH VALUES is an ALTER-only clause, and it is per COLUMN, not per statement:
                                                               -- one column in a multi-column ADD can carry it while its neighbours do not
@@ -402,17 +441,19 @@ BEGIN TRY
                                                               -- that way is reported by --Validate rather than silently dropped here.
                                                               CASE WHEN ISNULL(c.[BackfillExistingRows], 0) = 1 AND RTRIM(ISNULL(c.[Default], '')) <> ''
                                                                    THEN ' WITH VALUES' ELSE '' END
-                                                         AS NVARCHAR(MAX)) FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '' AND ISNULL(C.[FileStream], 0) = 0 ORDER BY c.[_RowId] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
-                                        ColumnCount = (SELECT COUNT(*) FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '' AND ISNULL(C.[FileStream], 0) = 0),
+                                                         AS NVARCHAR(MAX)) FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '' AND ISNULL(c.[FileStream], 0) = 0 ORDER BY c.[_RowId] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''),
+                                        ColumnCount = (SELECT COUNT(*) FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '' AND ISNULL(c.[FileStream], 0) = 0),
                                         VariantList = STUFF((SELECT ', ' + CAST(REPLACE(RTRIM(c.[VariantName]), '''', '''''') AS NVARCHAR(MAX))
-                                                               FROM #Columns C WITH (NOLOCK)
-                                                               WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '' AND ISNULL(C.[FileStream], 0) = 0
+                                                               FROM #Columns c WITH (NOLOCK)
+                                                               WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '' AND ISNULL(c.[FileStream], 0) = 0
                                                                  AND RTRIM(ISNULL(c.[VariantName], '')) <> '' FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-                                   FROM #Tables T WITH (NOLOCK)
+                                   FROM #Tables t WITH (NOLOCK)
                                    WHERE NewTable = 0
-                                     AND EXISTS (SELECT * FROM #Columns c WHERE C.[Schema] = T.[Schema] AND C.[TableName] = T.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '' AND ISNULL(C.[FileStream], 0) = 0)) T
+                                     AND EXISTS (SELECT * FROM #Columns c WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1 AND RTRIM(ISNULL([ComputedExpression], '')) = '' AND ISNULL(c.[FileStream], 0) = 0)) t
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+
+  IF OBJECT_ID('tempdb..#AddTableColumns') IS NOT NULL DROP TABLE #AddTableColumns
 
   -- Object-change audit (#243 E5, #363): one row per physical column added to an EXISTING table. New
   -- tables' columns are covered by the table/created row above, so NewTable = 0 only. Per-source-row

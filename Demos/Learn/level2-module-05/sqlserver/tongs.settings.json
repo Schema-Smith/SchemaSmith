@@ -11,5 +11,6 @@
   "ScriptPath": "./cast",
   "Tables": [
     { "Name": "dbo.IsoCurrency", "KeyColumns": "Code" }
-  ]
+  ],
+  "ShouldCast": { "TokenizeScripts": false }
 }

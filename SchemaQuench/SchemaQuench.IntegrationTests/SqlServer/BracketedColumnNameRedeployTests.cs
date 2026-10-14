@@ -41,6 +41,11 @@ public class BracketedColumnNameRedeployTests
     private readonly ILog _progressLog = Substitute.For<ILog>();
     private readonly IEnvironment _environment = Substitute.For<IEnvironment>();
 
+    // Runs on the suite's shared kindled main database, isolated by a fixture-owned schema. The product name
+    // is unique too: the quench drops tables and indexes its product no longer declares, by product name.
+    private readonly string _p = "bcr_" + Guid.NewGuid().ToString("N")[..8];
+    private string ProductName => "BracketColumnProbe_" + _p;
+
     private const string TableName = "BracketColumnProbe";
     private const string RawColumnName = "a]b";          // what the catalog stores
     private const string DeclaredColumnName = "[a]]b]";  // its correct delimited form
@@ -59,20 +64,23 @@ public class BracketedColumnNameRedeployTests
     [Test]
     public void ABracketedColumnDeploysRedeploysAndIsNeverDropped()
     {
-        var db = "TestBracketCol_" + Guid.NewGuid().ToString("N")[..12];
         var tempDir = Path.Join(Path.GetTempPath(), $"BracketCol_{Guid.NewGuid():N}");
 
         lock (FactoryContainer.SharedLockObject)
         {
+            // Config comes from the container, the way every other SQL Server test in this project builds
+            // its connection -- there is no fixture accessor for it here. Sibling engine fixtures write the
+            // same Target:* / ScriptTokens:* keys, so SqlServer's are re-asserted before anything reads them.
+            var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
+            FixtureSetup.ApplyTargetConfig(cfg);
+            var db = cfg["ScriptTokens:MainDB"];
+
             SetupSharedMocks();
             WritePackage(tempDir, db);
 
-            // Config comes from the container, the way every other SQL Server test in this project builds
-            // its connection -- there is no fixture accessor for it here.
-            var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
             var connProps = ConnectionString.ReadProperties(cfg, "Target:ConnectionProperties");
             using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
-                ConnectionString.Build(Platform.SqlServer, cfg["Target:Server"], "master",
+                ConnectionString.Build(Platform.SqlServer, cfg["Target:Server"], db,
                     cfg["Target:User"], cfg["Target:Password"], cfg["Target:Port"], connProps));
             conn.Open();
             using var cmd = conn.CreateCommand();
@@ -83,10 +91,9 @@ public class BracketedColumnNameRedeployTests
 
             try
             {
-                cmd.CommandText = $"IF DB_ID('{db}') IS NULL CREATE DATABASE [{db}];";
+                Schema.IntegrationTests.SqlServer.TestSchemaDrop.Drop(cmd, _p);
+                cmd.CommandText = $"EXEC('CREATE SCHEMA [{_p}]')";
                 cmd.ExecuteNonQuery();
-                conn.ChangeDatabase(db);
-                ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
 
                 config["SchemaPackagePath"] = tempDir;
 
@@ -147,11 +154,7 @@ public class BracketedColumnNameRedeployTests
                 config["SchemaPackagePath"] = savedPath;
                 try
                 {
-                    conn.ChangeDatabase("master");
-                    cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN "
-                                      + $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; "
-                                      + $"DROP DATABASE [{db}]; END";
-                    cmd.ExecuteNonQuery();
+                    Schema.IntegrationTests.SqlServer.TestSchemaDrop.Drop(cmd, _p);
                 }
                 // Typed rather than bare: a teardown drop can legitimately fail if the engine refuses it
                 // (DbException) or the connection is no longer usable (InvalidOperationException). Anything
@@ -170,10 +173,10 @@ public class BracketedColumnNameRedeployTests
         }
     }
 
-    private static bool ColumnExistsOn(IDbCommand cmd, string table, string column)
+    private bool ColumnExistsOn(IDbCommand cmd, string table, string column)
     {
         cmd.CommandText = "SELECT COUNT(*) FROM sys.columns WHERE [object_id] = "
-                          + "OBJECT_ID('dbo." + table + "') AND [name] = @n";
+                          + "OBJECT_ID('" + _p + "." + table + "') AND [name] = @n";
         cmd.Parameters.Clear();
         var prm = cmd.CreateParameter();
         prm.ParameterName = "@n";
@@ -184,9 +187,11 @@ public class BracketedColumnNameRedeployTests
         return found;
     }
 
-    private static bool ObjectExists(IDbCommand cmd, string catalogView, string name)
+    private bool ObjectExists(IDbCommand cmd, string catalogView, string name)
     {
-        cmd.CommandText = "SELECT COUNT(*) FROM " + catalogView + " WHERE [name] = @n";
+        // Scoped to the fixture's schema: the database is shared. For sys.stats, object_id is the table's.
+        cmd.CommandText = "SELECT COUNT(*) FROM " + catalogView + " WHERE [name] = @n "
+                          + "AND OBJECT_SCHEMA_NAME([object_id]) = N'" + _p + "'";
         cmd.Parameters.Clear();
         var prm = cmd.CreateParameter();
         prm.ParameterName = "@n";
@@ -197,10 +202,10 @@ public class BracketedColumnNameRedeployTests
         return found;
     }
 
-    private static bool IndexExists(IDbCommand cmd, string indexName)
+    private bool IndexExists(IDbCommand cmd, string indexName)
     {
         cmd.CommandText = "SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = "
-                          + "OBJECT_ID('dbo." + TableName + "') AND [name] = @n";
+                          + "OBJECT_ID('" + _p + "." + TableName + "') AND [name] = @n";
         cmd.Parameters.Clear();
         var prm = cmd.CreateParameter();
         prm.ParameterName = "@n";
@@ -213,13 +218,13 @@ public class BracketedColumnNameRedeployTests
 
     private const string ProbeRowValue = "keep-me";
 
-    private static void InsertProbeRow(IDbCommand cmd)
+    private void InsertProbeRow(IDbCommand cmd)
     {
         // The parent row comes FIRST. The probe column is now the child side of a ]-bearing foreign key, so
         // without it the insert is refused -- which is itself evidence the FK was created correctly, but it
         // is not what this test is measuring.
-        cmd.CommandText = $"IF NOT EXISTS (SELECT 1 FROM dbo.[{ParentTable}]) "
-                          + $"INSERT INTO dbo.[{ParentTable}] ([{DeclaredParentCol.Trim('[', ']').Replace("]]", "]").Replace("]", "]]")}]) "
+        cmd.CommandText = $"IF NOT EXISTS (SELECT 1 FROM [{_p}].[{ParentTable}]) "
+                          + $"INSERT INTO [{_p}].[{ParentTable}] ([{DeclaredParentCol.Trim('[', ']').Replace("]]", "]").Replace("]", "]]")}]) "
                           + "VALUES (@v)";
         cmd.Parameters.Clear();
         var pp = cmd.CreateParameter();
@@ -229,7 +234,7 @@ public class BracketedColumnNameRedeployTests
         cmd.ExecuteNonQuery();
         cmd.Parameters.Clear();
 
-        cmd.CommandText = $"INSERT INTO dbo.{TableName} ([Id], [{RawColumnName.Replace("]", "]]")}]) "
+        cmd.CommandText = $"INSERT INTO [{_p}].{TableName} ([Id], [{RawColumnName.Replace("]", "]]")}]) "
                           + "VALUES (1, @v)";
         var prm = cmd.CreateParameter();
         prm.ParameterName = "@v";
@@ -239,17 +244,17 @@ public class BracketedColumnNameRedeployTests
         cmd.Parameters.Clear();
     }
 
-    private static string ProbeValue(IDbCommand cmd)
+    private string ProbeValue(IDbCommand cmd)
     {
-        cmd.CommandText = $"SELECT [{RawColumnName.Replace("]", "]]")}] FROM dbo.{TableName} WHERE [Id] = 1";
+        cmd.CommandText = $"SELECT [{RawColumnName.Replace("]", "]]")}] FROM [{_p}].{TableName} WHERE [Id] = 1";
         var v = cmd.ExecuteScalar();
         return v == null || v == DBNull.Value ? null : v.ToString();
     }
 
-    private static bool ColumnExists(IDbCommand cmd, string db)
+    private bool ColumnExists(IDbCommand cmd, string db)
     {
         cmd.CommandText = "SELECT COUNT(*) FROM sys.columns c "
-                          + $"WHERE c.[object_id] = OBJECT_ID('dbo.{TableName}') AND c.[name] = @n";
+                          + $"WHERE c.[object_id] = OBJECT_ID('{_p}.{TableName}') AND c.[name] = @n";
         cmd.Parameters.Clear();
         var p = cmd.CreateParameter();
         p.ParameterName = "@n";
@@ -260,13 +265,13 @@ public class BracketedColumnNameRedeployTests
         return found;
     }
 
-    private static void WritePackage(string dir, string db)
+    private void WritePackage(string dir, string db)
     {
         var tables = Path.Join(dir, "Templates", "Main", "Tables");
         Directory.CreateDirectory(tables);
 
         File.WriteAllText(Path.Join(dir, "Product.json"),
-            "{\n  \"Name\": \"BracketColumnProbe\",\n  \"ValidationScript\": \"SELECT CAST(1 AS BIT)\",\n"
+            "{\n  \"Name\": \"" + ProductName + "\",\n  \"ValidationScript\": \"SELECT CAST(1 AS BIT)\",\n"
             + "  \"TemplateOrder\": [\"Main\"],\n  \"ScriptTokens\": {},\n  \"ScriptFolders\": [],\n"
             + "  \"Platform\": \"SqlServer\"\n}\n");
 
@@ -282,8 +287,8 @@ public class BracketedColumnNameRedeployTests
         // #IndexesRemovedFromProduct (@DropIndexesRemovedFromProduct defaults to 1).
         // The PARENT table, so the foreign key has a ]-bearing target to point at. Its referenced column
         // carries a ] as well, which exercises the RelatedColumns rendering rather than only the FK name.
-        File.WriteAllText(Path.Join(tables, $"dbo.{ParentTable}.json"),
-            "{\n  \"Schema\": \"[dbo]\",\n"
+        File.WriteAllText(Path.Join(tables, $"{_p}.{ParentTable}.json"),
+            $"{{\n  \"Schema\": \"[{_p}]\",\n"
             + $"  \"Name\": \"[{ParentTable}]\",\n  \"Columns\": [\n"
             + $"    {{ \"Name\": \"{DeclaredParentCol}\", \"DataType\": \"VARCHAR(40)\", \"Nullable\": false }}\n"
             + "  ],\n  \"Indexes\": [\n"
@@ -294,8 +299,8 @@ public class BracketedColumnNameRedeployTests
         // a COLUMN, an INDEX, a FOREIGN KEY (name and related column), a CHECK CONSTRAINT and a STATISTIC.
         // Before this, nothing anywhere deployed a delimiter-bearing object of the last three kinds, which
         // is precisely why the index defect survived unnoticed -- the guard did not exist to catch it.
-        File.WriteAllText(Path.Join(tables, $"dbo.{TableName}.json"),
-            "{\n  \"Schema\": \"[dbo]\",\n"
+        File.WriteAllText(Path.Join(tables, $"{_p}.{TableName}.json"),
+            $"{{\n  \"Schema\": \"[{_p}]\",\n"
             + $"  \"Name\": \"[{TableName}]\",\n  \"Columns\": [\n"
             + "    { \"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false },\n"
             + $"    {{ \"Name\": \"{DeclaredColumnName}\", \"DataType\": \"VARCHAR(40)\", \"Nullable\": true }}\n"
@@ -305,7 +310,8 @@ public class BracketedColumnNameRedeployTests
             + $"    {{ \"Name\": \"{DeclaredIndexName}\", \"IndexColumns\": \"{DeclaredColumnName}\" }}\n"
             + "  ],\n  \"ForeignKeys\": [\n"
             + $"    {{ \"Name\": \"{DeclaredFkName}\", \"Columns\": \"{DeclaredColumnName}\", "
-            + $"\"RelatedTable\": \"[{ParentTable}]\", \"RelatedColumns\": \"{DeclaredParentCol}\" }}\n"
+            + $"\"RelatedTableSchema\": \"[{_p}]\", \"RelatedTable\": \"[{ParentTable}]\", "
+            + $"\"RelatedColumns\": \"{DeclaredParentCol}\" }}\n"
             + "  ],\n  \"CheckConstraints\": [\n"
             + $"    {{ \"Name\": \"{DeclaredCheckName}\", \"Expression\": \"[Id] >= 0\" }}\n"
             + "  ],\n  \"Statistics\": [\n"

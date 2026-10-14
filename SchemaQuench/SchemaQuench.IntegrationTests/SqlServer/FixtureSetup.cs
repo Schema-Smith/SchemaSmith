@@ -104,13 +104,7 @@ public class FixtureSetup
 
             foreach (var db in stale)
             {
-                cmd.CommandText = $@"
-IF DB_ID('{db}') IS NOT NULL
-BEGIN
-    ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-    DROP DATABASE [{db}];
-END";
-                try { cmd.ExecuteNonQuery(); } catch (DbException) { /* in use by a live run; leave it */ }
+                try { Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db); } catch (DbException) { /* in use by a live run; leave it */ }
             }
         }
         catch (DbException)
@@ -174,8 +168,7 @@ CREATE DATABASE [{_integrationMainDb}] COLLATE {collation};
         conn.ChangeDatabase(_integrationMainDb);
         ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
 
-        cmd.CommandText = "EXEC sys.sp_cdc_enable_db";
-        cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.SqlServerDeadlockRetry.Execute(cmd, "EXEC sys.sp_cdc_enable_db");
 
         cmd.CommandText = @"
 CREATE TYPE [Flag] FROM BIT NOT NULL
@@ -274,13 +267,6 @@ CREATE TABLE SchemaSmith.TestLog (Id INT IDENTITY(1,1) NOT NULL, Msg NVARCHAR(20
         conn.Close();
     }
 
-    private static void DropOneDatabase(IDbCommand cmd, string dbName)
-    {
-        cmd.CommandText = @$"
-IF DB_ID('{dbName}') IS NOT NULL
-  ALTER DATABASE [{dbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{dbName}];
-";
-        cmd.ExecuteNonQuery();
-    }
+    private static void DropOneDatabase(IDbCommand cmd, string dbName) =>
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, dbName);
 }

@@ -4,7 +4,7 @@
   "Columns": [
     {
       "Name": "[AccountNumber]",
-      "DataType": "ACCOUNTNUMBER",
+      "DataType": "AccountNumber",
       "Nullable": true,
       "ShouldApplyExpression": "",
       "OldName": "",
@@ -172,7 +172,7 @@
     },
     {
       "Name": "[OnlineOrderFlag]",
-      "DataType": "FLAG",
+      "DataType": "Flag",
       "Default": "1",
       "ShouldApplyExpression": "",
       "OldName": "",
@@ -206,7 +206,7 @@
     },
     {
       "Name": "[PurchaseOrderNumber]",
-      "DataType": "ORDERNUMBER",
+      "DataType": "OrderNumber",
       "Nullable": true,
       "ShouldApplyExpression": "",
       "OldName": "",

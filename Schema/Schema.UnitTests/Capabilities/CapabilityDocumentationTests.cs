@@ -69,9 +69,11 @@ public class CapabilityDocumentationTests
 
         // ---- PostgreSQL ----
         ["PostgreSQL/nulls-not-distinct"] = "**`NULLS NOT DISTINCT`**",
+        ["PostgreSQL/unlogged-sequence"] = "**Unlogged sequence**",
         ["PostgreSQL/expression-statistics"] = "**Expression statistics**",
         ["PostgreSQL/column-compression"] = "**Per-column compression**",
         ["PostgreSQL/table-access-method"] = "**Table access method**",
+        ["PostgreSQL/drop-expression"] = "**Removing a column's generation**",
         ["PostgreSQL/virtual-generated-column"] = "**`VIRTUAL` generated columns**",
 
         // ---- MySQL ----
@@ -83,14 +85,18 @@ public class CapabilityDocumentationTests
         ["MySQL/invisible-column"] = "**Invisible column**",
         ["MySQL/column-srid"] = "**Column SRID restriction**",
         ["MySQL/functional-index"] = "**Functional / expression index**",
+        // Gated on the server's filesystem, so documented in prose below the table, like FILESTREAM.
+        ["MySQL/page-compression"] = "**Page compression**",
 
         // ---- MariaDB (shares three rows with MySQL above; the doc cell names both thresholds) ----
+        ["MariaDb/check-constraint"] = "**CHECK constraints**",
         ["MariaDb/invisible-index"] = "**Invisible index**",
         ["MariaDb/descending-index"] = "**Descending index key parts**",
         ["MariaDb/invisible-column"] = "**Invisible column**",
         ["MariaDb/application-time-period"] = "**Application-time period**",
         ["MariaDb/column-history-exclusion"] = "**Per-column history exclusion**",
         ["MariaDb/table-system-versioning"] = "**Table-level system versioning**",
+        ["MariaDb/long-unique-key"] = "**Long unique key**",
     };
 
     private static string RepoRoot()

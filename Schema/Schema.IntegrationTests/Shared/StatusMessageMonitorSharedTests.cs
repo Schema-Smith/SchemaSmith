@@ -198,6 +198,6 @@ public abstract class StatusMessageMonitorSharedTests
             AND TABLE_NAME = 'SchemaSmith_StatusMessages'";
         var result = cmd.ExecuteScalar();
         Assert.That(result, Is.Not.Null);
-        Assert.That(result!.ToString(), Is.EqualTo("SchemaSmith_StatusMessages"));
+        Assert.That(result!.ToString(), CatalogName.Matches(_connection, "SchemaSmith_StatusMessages"));
     }
 }

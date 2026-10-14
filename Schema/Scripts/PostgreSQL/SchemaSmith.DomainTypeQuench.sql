@@ -45,6 +45,7 @@ BEGIN
          elem ->> 'DataType' AS "DataType",
          COALESCE((elem ->> 'NotNull')::BOOLEAN, false) AS "NotNull",
          elem ->> 'Default' AS "Default",
+         NULLIF(TRIM(elem ->> 'Collation'), '') AS "Collation",
          COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
          elem -> 'CheckConstraints' AS "CheckConstraints"
     FROM src, JSON_ARRAY_ELEMENTS(arr) AS elem;
@@ -72,6 +73,7 @@ BEGIN
   RAISE NOTICE 'Add Missing Domain Types';
   SELECT STRING_AGG('RAISE NOTICE ''  Create domain type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
                     'CREATE DOMAIN "' || t."Schema" || '"."' || t."Name" || '" AS ' || t."DataType" ||
+                    "SchemaSmith"."CollateClause"(t."Collation") ||
                     CASE WHEN t."Default" IS NOT NULL THEN ' DEFAULT ' || t."Default" ELSE '' END ||
                     CASE WHEN t."NotNull" THEN ' NOT NULL' ELSE '' END ||
                     COALESCE((SELECT STRING_AGG(' CONSTRAINT "' || ck."ConstraintName" || '" CHECK (' || ck."Expression" || ')', '')
@@ -85,6 +87,7 @@ BEGIN
                        JOIN pg_namespace n ON n.oid = ty.typnamespace
                       WHERE ty.typtype = 'd' AND ty.typname = t."Name" AND n.nspname = t."Schema");
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- REFUSE a base-type change before anything else is altered. There is no ALTER DOMAIN ... TYPE, so the
   -- only way to deliver this is to drop the domain -- which drops every column that uses it. Refusing by
@@ -149,6 +152,36 @@ BEGIN
     END IF;
   END LOOP;
 
+  -- A collation declared by its bare name, as earlier releases extracted it, names the one the domain already has.
+  UPDATE temp_domain_types t
+     SET "Collation" = x.deployed
+    FROM pg_type ty
+    JOIN pg_namespace n ON n.oid = ty.typnamespace
+    JOIN pg_collation co ON co.oid = ty.typcollation
+    JOIN pg_namespace cn ON cn.oid = co.collnamespace
+   CROSS JOIN LATERAL (SELECT "SchemaSmith"."ColumnCollation"(cn.nspname, co.collname) AS deployed) x
+   WHERE ty.typname = t."Name" AND ty.typtype = 'd' AND n.nspname = t."Schema"
+     AND COALESCE(t."Collation", '') <> '' AND POSITION('"."' IN t."Collation") = 0
+     AND co.collname = BTRIM(t."Collation", '"') AND x.deployed <> t."Collation";
+
+  -- REFUSE a collation change for the same reason: there is no ALTER DOMAIN ... COLLATE. Only a declared
+  -- collation is checked, so a package that leaves it out keeps deploying whatever the domain has.
+  FOR bad IN
+    SELECT t."Schema", t."Name", t."Collation" AS declared, x.deployed
+      FROM temp_domain_types t
+      JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
+      JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
+     CROSS JOIN LATERAL (SELECT CASE WHEN ty.typcollation IN (0, (SELECT bt.typcollation FROM pg_type bt WHERE bt.oid = ty.typbasetype)) THEN NULL
+                                             ELSE (SELECT "SchemaSmith"."ColumnCollation"(cn.nspname, co.collname)
+                                                     FROM pg_collation co JOIN pg_namespace cn ON cn.oid = co.collnamespace
+                                                    WHERE co.oid = ty.typcollation) END AS deployed) x
+     WHERE t."Collation" IS NOT NULL
+       AND t."Collation" IS DISTINCT FROM x.deployed
+  LOOP
+    RAISE EXCEPTION 'Domain type %.% declares collation "%", but is deployed with "%". PostgreSQL cannot alter a domain''s collation -- changing it means dropping the domain and every column that uses it. Migrate it with a script, or correct the declared collation to match.',
+      bad."Schema", bad."Name", bad.declared, COALESCE(bad.deployed, 'the base type''s');
+  END LOOP;
+
   -- NOT NULL and DEFAULT, each emitted only when it actually differs so an unchanged domain produces no
   -- statement at all. Both are in-place and touch no dependent column.
   RAISE NOTICE 'Fixup Modified Domain Types';
@@ -176,6 +209,7 @@ BEGIN
             JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
            WHERE COALESCE(t."Default", '') <> COALESCE(PG_GET_EXPR(ty.typdefaultbin, 0), '')) s;
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- Constraints, converged as a set.
   --
@@ -198,6 +232,7 @@ BEGIN
    WHERE NOT EXISTS (SELECT 1 FROM pg_constraint c
                       WHERE c.contypid = ty.oid AND c.contype = 'c' AND c.conname = ck."ConstraintName");
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- A constraint whose NAME is unchanged but whose EXPRESSION was edited. Both passes around this one key
   -- on the name alone -- "Add Missing" skips a name that exists, "Drop Removed" skips a name that is still
@@ -274,6 +309,7 @@ BEGIN
     EXECUTE 'DROP DOMAIN IF EXISTS pg_temp._ss_domain_check_probe CASCADE';
   END LOOP;
   CALL "SchemaSmith"."ExecuteOrDebug"(NULLIF(sql_script, ''), p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(NULLIF(sql_script, '')); END IF;
 
   -- A constraint the package no longer declares is DROPPED, which is the one place this type differs from
   -- the enum -- and safely so: it removes a rule, not data, and nothing depends on it.
@@ -290,4 +326,5 @@ BEGIN
    WHERE NOT EXISTS (SELECT 1 FROM temp_domain_checks ck
                       WHERE ck."Schema" = t."Schema" AND ck."Name" = t."Name" AND ck."ConstraintName" = c.conname);
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 END $$;

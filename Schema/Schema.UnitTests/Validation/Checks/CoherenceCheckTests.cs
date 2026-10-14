@@ -428,6 +428,8 @@ public class CoherenceCheckTests
     // The deploy trims Mode on every engine, so a padded THRESHOLD is THRESHOLD -- the check must read it the same way.
     [TestCase(" THRESHOLD")]
     [TestCase("threshold ")]
+    [TestCase("THRESHOLD\t")]
+    [TestCase("\r\nthreshold")]
     public void PaddedThresholdMode_WithoutAThreshold_IsSsTbl001(string mode)
     {
         Assert.That(RunOn(OrderWith(new RebuildPolicy { Mode = mode })).Select(f => f.Code), Does.Contain("SS-TBL-001"));
@@ -435,10 +437,21 @@ public class CoherenceCheckTests
 
     [TestCase(" THRESHOLD")]
     [TestCase("threshold ")]
+    [TestCase("THRESHOLD\t")]
+    [TestCase("\r\nthreshold")]
     public void PaddedThresholdMode_WithAThreshold_IsClean(string mode)
     {
         Assert.That(RunOn(OrderWith(new RebuildPolicy { Mode = mode, Threshold = 50 }))
             .Where(f => f.Code is "SS-TBL-001" or "SS-TBL-002").Select(f => f.Message), Is.Empty);
+    }
+
+    // The table's policy reaches the deploy re-serialised from the model, and the deploy's SQL trims spaces only, so a
+    // tab left on Mode read as no known mode there -- while the schema pattern accepted it. Trimmed at the model.
+    [Test]
+    public void AWhitespacePaddedMode_ReachesTheDeployTrimmed()
+    {
+        var policy = Newtonsoft.Json.JsonConvert.DeserializeObject<RebuildPolicy>("{\"Mode\": \"THRESHOLD\t\", \"Threshold\": 5}")!;
+        Assert.That(Newtonsoft.Json.Linq.JObject.FromObject(policy)["Mode"]!.ToString(), Is.EqualTo("THRESHOLD"));
     }
 
     [Test]
@@ -944,6 +957,67 @@ public class CoherenceCheckTests
         var findings = new CoherenceCheck().Run(ctx).ToList();
 
         Assert.That(findings, Is.Empty);
+    }
+
+    // The target was split at the first dot even inside delimiters, so `order.detail` resolved as table `detail` in a
+    // schema `order and was reported missing.
+    [Test]
+    public void AForeignKeyToADelimitedNameContainingADot_Resolves()
+    {
+        var table = new MySqlTable
+        {
+            Name = "`order.detail`",
+            Columns = { new MySqlColumn { Name = "id", DataType = "int" }, new MySqlColumn { Name = "parent_id", DataType = "int", Nullable = true } },
+            Indexes = { new MySqlIndex { Name = "PRIMARY", PrimaryKey = true, Unique = true, IndexColumns = "`id`" } },
+            ForeignKeys = { new MySqlForeignKey { Name = "fk_parent", Columns = "parent_id", RelatedTable = "`order.detail`", RelatedColumns = "id" } }
+        };
+
+        Assert.That(RunOnMy(table).Where(f => f.Code.StartsWith("SS-FK")).Select(f => f.Message), Is.Empty);
+    }
+
+    // SchemaTongs writes a MySQL prefix index as `Email`(20); the length is not part of the column's name, and an
+    // extracted package failed its own validation on every prefix index.
+    [TestCase("`Email`(20)")]
+    [TestCase("Email(20)")]
+    [TestCase("`Email` (20) DESC")]
+    public void MySqlPrefixKeyPart_NamesItsColumn(string keyPart)
+    {
+        var table = new MySqlTable
+        {
+            Name = "customer",
+            Columns = { new MySqlColumn { Name = "Email", DataType = "varchar(100)" } },
+            Indexes = { new MySqlIndex { Name = "ix_email", IndexColumns = keyPart } }
+        };
+
+        Assert.That(RunOnMy(table).Where(f => f.Code == "SS-IDX-001").Select(f => f.Message), Is.Empty);
+    }
+
+    [Test]
+    public void MySqlPrefixKeyPart_OnAMissingColumn_IsStillFlagged()
+    {
+        var table = new MySqlTable
+        {
+            Name = "customer",
+            Columns = { new MySqlColumn { Name = "Email", DataType = "varchar(100)" } },
+            Indexes = { new MySqlIndex { Name = "ix_mail", IndexColumns = "`Mail`(20)" } }
+        };
+
+        Assert.That(RunOnMy(table).Count(f => f.Code == "SS-IDX-001"), Is.EqualTo(1));
+    }
+
+    // Only MySQL and MariaDB have prefix key parts; on SQL Server `Email(20)` deploys as an error, so it is not a column.
+    [Test]
+    public void APrefixKeyPartOnSqlServer_IsFlagged()
+    {
+        var table = new SqlServerTable
+        {
+            Name = "Customer",
+            Schema = "dbo",
+            Columns = { new SqlServerColumn { Name = "Email", DataType = "varchar(100)" } },
+            Indexes = { new SqlServerIndex { Name = "IX_Email", IndexColumns = "Email(20)" } }
+        };
+
+        Assert.That(RunOn(table).Count(f => f.Code == "SS-IDX-001"), Is.EqualTo(1));
     }
 
     [Test]
@@ -1664,6 +1738,90 @@ public class CoherenceCheckTests
         template.Tables.Add(table);
         var product = new Product { Name = "Acme", Platform = platform, TemplateOrder = new System.Collections.Generic.List<string>() };
         return new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg")).ToList();
+    }
+
+    // ---- SS-COL-002: a character set other than the table's, with no collation, gets that set's default ----
+
+    private static MySqlTable CharsetTable(string columnCharset, string columnCollation = null,
+                                           string tableCollation = "utf8mb4_unicode_ci", bool maria = false)
+    {
+        var table = maria ? new MariaDbTable { Name = "invoice", Collation = tableCollation }
+                          : new MySqlTable { Name = "invoice", Collation = tableCollation };
+        var column = maria ? new MariaDbColumn() : new MySqlColumn();
+        column.Name = "code";
+        column.DataType = "varchar(20)";
+        column.CharacterSet = columnCharset;
+        column.Collation = columnCollation;
+        table.Columns.Add(column);
+        return table;
+    }
+
+    [TestCase(false, Platform.MySQL)]
+    [TestCase(true, Platform.MariaDb)]
+    public void AColumnCharsetOtherThanTheTables_WithNoCollation_IsAWarning(bool maria, Platform platform)
+    {
+        var finding = RunFor(CharsetTable("latin1", maria: maria), platform).Single(f => f.Code == "SS-COL-002");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Warning));
+            Assert.That(finding.Message, Does.Contain("'code'").And.Contain("latin1"),
+                "the author needs the column and the character set to act on it. " + finding.Message);
+        });
+    }
+
+    [TestCase("utf8mb4", null, "utf8mb4_unicode_ci")]
+    [TestCase("UTF8MB4", null, "utf8mb4_unicode_ci")]
+    [TestCase("latin1", "latin1_bin", "utf8mb4_unicode_ci")]
+    [TestCase("latin1", null, null)]
+    [TestCase(null, null, "utf8mb4_unicode_ci")]
+    public void ACharsetTheDeployResolves_IsSilent(string charset, string collation, string tableCollation)
+    {
+        Assert.That(RunFor(CharsetTable(charset, collation, tableCollation), Platform.MySQL)
+            .Where(f => f.Code == "SS-COL-002"), Is.Empty);
+    }
+
+    // ---- SS-IDENT-002: a PostgreSQL name longer than 63 bytes is stored truncated ----
+
+    [Test]
+    public void APostgreSqlColumnNameOver63Bytes_IsAnError()
+    {
+        var name = new string('c', 64);
+        var finding = RunFor(QTable(columnName: name), Platform.PostgreSQL).Single(f => f.Code == "SS-IDENT-002");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Error), "the second deploy fails");
+            Assert.That(finding.Message, Does.Contain(name).And.Contain("64 bytes"), finding.Message);
+        });
+    }
+
+    // The limit is bytes, not characters: 31 two-byte characters (62 bytes) fit, 32 (64 bytes) do not.
+    [TestCase(31, false)]
+    [TestCase(32, true)]
+    public void ThePostgreSqlLimitIsInBytes(int characters, bool reported)
+    {
+        var findings = RunFor(QTable(tableName: new string('\u00e9', characters)), Platform.PostgreSQL)
+            .Where(f => f.Code == "SS-IDENT-002");
+        Assert.That(findings, reported ? Is.Not.Empty : Is.Empty);
+    }
+
+    [Test]
+    public void ALongSequenceName_IsAnError()
+    {
+        var template = new Template { Name = "Main" };
+        template.Sequences.Add(new PostgreSqlSequence { Name = new string('s', 70) });
+        var product = new Product { Name = "Acme", Platform = Platform.PostgreSQL, TemplateOrder = [] };
+        var findings = new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg")).ToList();
+        Assert.That(findings.Where(f => f.Code == "SS-IDENT-002"), Is.Not.Empty);
+    }
+
+    [Test]
+    public void ALongNameOnAnotherEngine_IsNotThisCheck()
+    {
+        var table = new SqlServerTable { Name = new string('t', 100) };
+        table.Columns.Add(new SqlServerColumn { Name = "id", DataType = "INT" });
+        Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-002"), Is.Empty);
     }
 
     // ---- SS-IDENT-001: a " in a PostgreSQL name is refused, because no stored form of it deploys ----

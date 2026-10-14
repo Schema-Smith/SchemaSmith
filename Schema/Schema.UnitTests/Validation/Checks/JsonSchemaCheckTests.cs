@@ -126,6 +126,38 @@ public class JsonSchemaCheckTests
         Assert.That(findings[0].Message, Does.Contain("DataType"));
     }
 
+    // IndexColumns is required unless the index is a columnstore. The generated schema says so with if/else, which
+    // NJsonSchema does not evaluate, so an index with neither produced no finding at all.
+    [Test]
+    public void AnIndexWithNeitherColumnsNorColumnStore_IsError()
+    {
+        CommitTablesSchema(FreshTablesSchema());
+        var tableFile = TableFilePath();
+        JsonFiles(tableFile);
+        FileContent(tableFile, @"{ ""Name"": ""Customer"", ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"" } ],
+                                  ""Indexes"": [ { ""Name"": ""IX_Customer"" } ] }");
+
+        var findings = new JsonSchemaCheck().Run(Context()).ToList();
+
+        Assert.That(findings, Has.Exactly(1).Items, string.Join("\n", findings.Select(f => f.Message)));
+        Assert.That(findings[0].Code, Is.EqualTo("SS-JSON-001"));
+        Assert.That(findings[0].Message, Does.Contain("IndexColumns").And.Contain("ColumnStore"));
+    }
+
+    [TestCase(@"{ ""Name"": ""CCI_Customer"", ""ColumnStore"": true, ""Clustered"": true }")]
+    [TestCase(@"{ ""Name"": ""IX_Customer"", ""IndexColumns"": ""Id"" }")]
+    [TestCase(@"{ ""Name"": ""IX_Customer"", ""IndexColumns"": ""Id"", ""ColumnStore"": false }")]
+    public void AnIndexWithColumnsOrAColumnStore_IsClean(string index)
+    {
+        CommitTablesSchema(FreshTablesSchema());
+        var tableFile = TableFilePath();
+        JsonFiles(tableFile);
+        FileContent(tableFile, @"{ ""Name"": ""Customer"", ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"" } ],
+                                  ""Indexes"": [ " + index + " ] }");
+
+        Assert.That(new JsonSchemaCheck().Run(Context()).Select(f => f.Message), Is.Empty);
+    }
+
     [Test]
     public void CustomPropertyGovernanceViolation_IsError()
     {

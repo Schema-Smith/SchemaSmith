@@ -7,8 +7,8 @@ DELIMITER //
 DROP PROCEDURE IF EXISTS SchemaSmith_ParseTableJson//
 
 CREATE PROCEDURE SchemaSmith_ParseTableJson(
-    IN p_DatabaseName VARCHAR(128),
-    IN p_TableDefinitions LONGTEXT
+    IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    IN p_TableDefinitions LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 SQL SECURITY DEFINER
 BEGIN
@@ -68,8 +68,13 @@ BEGIN
     CREATE TEMPORARY TABLE _SchemaSmith_Tables (
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        -- Name keys (SchemaSmith_IdentifierKey of the unwrapped name), filled once after the parse. Every comparison
+        -- with the catalog goes through these; DDL keeps the declared spelling in TableName.
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        OldNameKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Engine VARCHAR(50) DEFAULT 'InnoDB',
         Collation VARCHAR(100) DEFAULT NULL,
+        CharacterSet VARCHAR(50) DEFAULT NULL,
         OldName VARCHAR(128) DEFAULT NULL,
         RowFormat VARCHAR(20) DEFAULT NULL,
         Compression VARCHAR(20) DEFAULT NULL,
@@ -124,7 +129,8 @@ BEGIN
         -- ModifiedTableQuench STEP 7.5 -- which reads this same flag -- so this is not a NewTable = 1
         -- value. (It said it was: that was true when written and stopped being true when 7.5 shipped.)
         IsSystemVersioned TINYINT DEFAULT 0,
-        KEY ix_tables_name (TableName)
+        KEY ix_tables_name (TableName),
+        KEY ix_tables_key (TableKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     -- First, insert all tables from JSON with NewTable = 0 (assume existing)
@@ -135,11 +141,12 @@ BEGIN
     SET v_TblIdx = 0;
     WHILE v_TblIdx < v_TblCnt DO
         IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name'))) IS NOT NULL THEN
-            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned)
+            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, CharacterSet, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned)
             SELECT
                 SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name')))) AS TableName,
                 COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Engine')))), ''), 'InnoDB') AS Engine,
                 NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Collation')))), '') AS Collation,
+                NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].CharacterSet')))), '') AS CharacterSet,
                 -- #375: a blank/whitespace OldName means "no rename" -> NULL, not a manufactured `` backtick pair.
                 -- Otherwise the OldName IS NOT NULL rename guards fire and two empty-OldName tables collide on
                 -- _SchemaSmith_TableRenames.PRIMARY (OldTableName = '') on the second deploy.
@@ -186,33 +193,37 @@ BEGIN
         SET v_TblIdx = v_TblIdx + 1;
     END WHILE;
 
+    UPDATE _SchemaSmith_Tables
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           OldNameKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(OldName));
+
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Identify new tables');
 
     -- Snapshot existing tables into a temp table to avoid MySQL optimizer issues
     -- with correlated NOT EXISTS subqueries against INFORMATION_SCHEMA.
     -- The optimizer can cache/materialize INFORMATION_SCHEMA results incorrectly
     -- when used in correlated subqueries (both in JSON_TABLE and UPDATE contexts).
+    CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTables;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingTables (
-        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-    INSERT INTO _SchemaSmith_ExistingTables (TableName)
-    SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-    WHERE BINARY TABLE_SCHEMA = BINARY p_DatabaseName
+    INSERT IGNORE INTO _SchemaSmith_ExistingTables (TableKey)
+    SELECT TableKey FROM _SchemaSmith_CatTables
     -- MariaDB reports a system-versioned table as 'SYSTEM VERSIONED', not 'BASE TABLE'. This list is
     -- what sets NewTable = 1, so filtering on 'BASE TABLE' alone made such a table look new and the
     -- deploy issued a CREATE for a table that already exists. Managing the versioning attribute is a
     -- separate feature; being able to see the table at all is not.
-    AND TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED');
+    WHERE TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED');
 
     -- Now set NewTable = 1 for tables not found in snapshot
     UPDATE _SchemaSmith_Tables t
     SET t.NewTable = 1
     WHERE NOT EXISTS (
         SELECT 1 FROM _SchemaSmith_ExistingTables et
-        WHERE BINARY et.TableName = BINARY SchemaSmith_StripBacktickWrapping(t.TableName)
-        OR (t.OldName IS NOT NULL AND BINARY et.TableName = BINARY SchemaSmith_StripBacktickWrapping(t.OldName))
+        WHERE et.TableKey = t.TableKey
+        OR (t.OldName IS NOT NULL AND et.TableKey = t.OldNameKey)
     );
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTables;
@@ -228,6 +239,11 @@ BEGIN
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        -- Name keys, filled once after the parse: the table's through SchemaSmith_IdentifierKey, the column's and
+        -- OldName's through SchemaSmith_NameKeyCI, because the engine compares column names case-insensitively.
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        ColumnKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        OldNameKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         OrdinalPosition INT NOT NULL DEFAULT 0,
         DataType VARCHAR(100) NOT NULL,
         IsNullable TINYINT DEFAULT 1,
@@ -255,7 +271,8 @@ BEGIN
         ShouldApply TINYINT DEFAULT 1,
         ShouldApplyExpression VARCHAR(4000) DEFAULT NULL,
         VariantName VARCHAR(128) DEFAULT NULL,
-        KEY ix_columns_table_name (TableName, ColumnName)
+        KEY ix_columns_table_name (TableName, ColumnName),
+        KEY ix_columns_key (TableKey, ColumnKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     SET v_ColOuterCnt = JSON_LENGTH(p_TableDefinitions);
@@ -306,6 +323,11 @@ BEGIN
         SET v_ColOuterIdx = v_ColOuterIdx + 1;
     END WHILE;
 
+    UPDATE _SchemaSmith_Columns
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           ColumnKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(ColumnName)),
+           OldNameKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(OldName));
+
     -- =========================================================================
     -- DATA-TYPE SYNONYM NORMALIZATION (Rule 20 parity with PostgreSQL)
     -- =========================================================================
@@ -353,43 +375,161 @@ BEGIN
         END
     WHERE DataType IS NOT NULL;
 
+    -- More synonyms, measured the same way (MySQL 8.0.45 and MariaDB 11.4.12 agree except where noted):
+    --     REAL -> double (float under REAL_AS_FLOAT)   DOUBLE PRECISION -> double   FLOAT4 -> float   FLOAT8 -> double
+    --     INT1 -> tinyint  INT2 -> smallint  INT3, MIDDLEINT -> mediumint  INT4 -> int  INT8 -> bigint
+    --     LONG, LONG VARCHAR -> mediumtext   LONG VARBINARY -> mediumblob
+    --     GEOMETRYCOLLECTION -> geomcollection on MySQL 8.0+; MariaDB and 5.7 report geometrycollection
+    -- Only the keyword is rewritten, by the same keyword-then-rest split as above. The national types
+    -- (NVARCHAR, NCHAR, NATIONAL CHAR/VARCHAR, NCHAR VARCHAR) report varchar/char in utf8mb3, so they fold to
+    -- VARCHAR/CHAR AND take that character set when none is declared: comparing them as plain VARCHAR would
+    -- call a latin1 column equal to a declared NVARCHAR one.
+    UPDATE _SchemaSmith_Columns
+    SET CharacterSet = 'utf8mb3'
+    WHERE (CharacterSet IS NULL OR TRIM(CharacterSet) = '')
+      AND (UPPER(TRIM(DataType)) LIKE 'NATIONAL %' OR UPPER(TRIM(DataType)) LIKE 'NVARCHAR%' OR UPPER(TRIM(DataType)) LIKE 'NCHAR%');
+
+    UPDATE _SchemaSmith_Columns
+    SET DataType =
+        CASE
+            WHEN UPPER(TRIM(DataType)) LIKE 'DOUBLE PRECISION%' THEN CONCAT('DOUBLE', SUBSTRING(TRIM(DataType), LENGTH('DOUBLE PRECISION') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'LONG VARBINARY%' THEN CONCAT('MEDIUMBLOB', SUBSTRING(TRIM(DataType), LENGTH('LONG VARBINARY') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'LONG VARCHAR%' THEN CONCAT('MEDIUMTEXT', SUBSTRING(TRIM(DataType), LENGTH('LONG VARCHAR') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NATIONAL CHARACTER VARYING%' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NATIONAL CHARACTER VARYING') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NATIONAL CHAR VARYING%' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NATIONAL CHAR VARYING') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NATIONAL VARCHAR%' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NATIONAL VARCHAR') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NATIONAL CHARACTER%' THEN CONCAT('CHAR', SUBSTRING(TRIM(DataType), LENGTH('NATIONAL CHARACTER') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NATIONAL CHAR%' THEN CONCAT('CHAR', SUBSTRING(TRIM(DataType), LENGTH('NATIONAL CHAR') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NCHAR VARCHAR%' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NCHAR VARCHAR') + 1))
+            WHEN UPPER(TRIM(DataType)) LIKE 'NCHAR VARYING%' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NCHAR VARYING') + 1))
+            ELSE
+                CASE UPPER(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(DataType), '(', 1), ' ', 1))
+                    WHEN 'REAL' THEN CONCAT(IF(@@SESSION.sql_mode LIKE '%REAL_AS_FLOAT%', 'FLOAT', 'DOUBLE'), SUBSTRING(TRIM(DataType), LENGTH('REAL') + 1))
+                    WHEN 'FLOAT4' THEN CONCAT('FLOAT', SUBSTRING(TRIM(DataType), LENGTH('FLOAT4') + 1))
+                    WHEN 'FLOAT8' THEN CONCAT('DOUBLE', SUBSTRING(TRIM(DataType), LENGTH('FLOAT8') + 1))
+                    WHEN 'INT1' THEN CONCAT('TINYINT', SUBSTRING(TRIM(DataType), LENGTH('INT1') + 1))
+                    WHEN 'INT2' THEN CONCAT('SMALLINT', SUBSTRING(TRIM(DataType), LENGTH('INT2') + 1))
+                    WHEN 'INT3' THEN CONCAT('MEDIUMINT', SUBSTRING(TRIM(DataType), LENGTH('INT3') + 1))
+                    WHEN 'MIDDLEINT' THEN CONCAT('MEDIUMINT', SUBSTRING(TRIM(DataType), LENGTH('MIDDLEINT') + 1))
+                    WHEN 'INT4' THEN CONCAT('INT', SUBSTRING(TRIM(DataType), LENGTH('INT4') + 1))
+                    WHEN 'INT8' THEN CONCAT('BIGINT', SUBSTRING(TRIM(DataType), LENGTH('INT8') + 1))
+                    WHEN 'LONG' THEN CONCAT('MEDIUMTEXT', SUBSTRING(TRIM(DataType), LENGTH('LONG') + 1))
+                    WHEN 'NVARCHAR' THEN CONCAT('VARCHAR', SUBSTRING(TRIM(DataType), LENGTH('NVARCHAR') + 1))
+                    WHEN 'NCHAR' THEN CONCAT('CHAR', SUBSTRING(TRIM(DataType), LENGTH('NCHAR') + 1))
+                    WHEN 'GEOMETRYCOLLECTION' THEN
+                        IF(VERSION() NOT LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 800,
+                           CONCAT('GEOMCOLLECTION', SUBSTRING(TRIM(DataType), LENGTH('GEOMETRYCOLLECTION') + 1)), DataType)
+                    WHEN 'GEOMCOLLECTION' THEN
+                        IF(VERSION() NOT LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 800,
+                           DataType, CONCAT('GEOMETRYCOLLECTION', SUBSTRING(TRIM(DataType), LENGTH('GEOMCOLLECTION') + 1)))
+                    ELSE DataType
+                END
+        END
+    WHERE DataType IS NOT NULL;
+
+    -- ENUM/SET members lose trailing spaces when the column is created.
+    UPDATE _SchemaSmith_Columns
+    SET DataType = SchemaSmith_TrimEnumMembers(DataType)
+    WHERE UPPER(TRIM(DataType)) LIKE 'ENUM%' OR UPPER(TRIM(DataType)) LIKE 'SET%';
+
+    -- The BINARY attribute on a character type (VARCHAR(10) BINARY) is the character set's _bin collation, and is
+    -- stored and reported as that: the attribute is not in the reported type. It is written that way here, in the
+    -- character set the column ends up in -- its own, else its table's (declared, else as deployed), else the
+    -- database's. An explicit Collation wins, as the engine lets it.
+    UPDATE _SchemaSmith_Columns c
+      JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+    SET c.Collation = CONCAT(COALESCE(NULLIF(TRIM(c.CharacterSet), ''),
+                                      NULLIF(TRIM(t.CharacterSet), ''),
+                                      (SELECT co.CHARACTER_SET_NAME FROM information_schema.COLLATIONS co WHERE co.COLLATION_NAME = TRIM(t.Collation) LIMIT 1),
+                                      (SELECT co.CHARACTER_SET_NAME FROM information_schema.TABLES it
+                                         JOIN information_schema.COLLATIONS co ON co.COLLATION_NAME = it.TABLE_COLLATION
+                                        WHERE it.TABLE_SCHEMA = p_DatabaseName AND it.TABLE_NAME = SchemaSmith_StripBacktickWrapping(c.TableName) LIMIT 1),
+                                      (SELECT DEFAULT_CHARACTER_SET_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = p_DatabaseName LIMIT 1)),
+                             '_bin'),
+        c.DataType = TRIM(LEFT(TRIM(c.DataType), CHAR_LENGTH(TRIM(c.DataType)) - CHAR_LENGTH('BINARY')))
+    WHERE UPPER(TRIM(c.DataType)) LIKE '% BINARY'
+      AND (c.Collation IS NULL OR TRIM(c.Collation) = '')
+      AND UPPER(TRIM(c.DataType)) REGEXP '^(VARCHAR|CHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|ENUM|SET)';
+
+    -- MariaDB 11.x collations that belong to no one character set (uca1400_ai_ci: listed with a NULL CHARACTER_SET_NAME)
+    -- are stored under the character set's full name, utf8mb4_uca1400_ai_ci. Declared that way, the table or column is
+    -- written with the full name here, in the character set it ends up in.
+    UPDATE _SchemaSmith_Tables t
+    SET t.Collation = CONCAT(COALESCE(NULLIF(TRIM(t.CharacterSet), ''),
+                                      (SELECT DEFAULT_CHARACTER_SET_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = p_DatabaseName LIMIT 1)),
+                             '_', TRIM(t.Collation))
+    WHERE EXISTS (SELECT 1 FROM information_schema.COLLATIONS co WHERE co.COLLATION_NAME = TRIM(t.Collation) AND co.CHARACTER_SET_NAME IS NULL);
+    UPDATE _SchemaSmith_Columns c
+      JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+    SET c.Collation = CONCAT(COALESCE(NULLIF(TRIM(c.CharacterSet), ''),
+                                      NULLIF(TRIM(t.CharacterSet), ''),
+                                      (SELECT co.CHARACTER_SET_NAME FROM information_schema.COLLATIONS co WHERE co.COLLATION_NAME = TRIM(t.Collation) LIMIT 1),
+                                      (SELECT co.CHARACTER_SET_NAME FROM information_schema.TABLES it
+                                         JOIN information_schema.COLLATIONS co ON co.COLLATION_NAME = it.TABLE_COLLATION
+                                        WHERE it.TABLE_SCHEMA = p_DatabaseName AND it.TABLE_NAME = SchemaSmith_StripBacktickWrapping(c.TableName) LIMIT 1),
+                                      (SELECT DEFAULT_CHARACTER_SET_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = p_DatabaseName LIMIT 1)),
+                             '_', TRIM(c.Collation))
+    WHERE EXISTS (SELECT 1 FROM information_schema.COLLATIONS co WHERE co.COLLATION_NAME = TRIM(c.Collation) AND co.CHARACTER_SET_NAME IS NULL);
+
+    -- utf8 is utf8mb3. MySQL 8.0.30 and MariaDB 10.6.1 report it, and its collations, under the mb3 name
+    -- (utf8mb3_general_ci); earlier servers under utf8 (utf8_general_ci), and each lists only its own form in
+    -- COLLATIONS (checked on 8.0.28, 8.0.45, 10.5.29 and 11.4.12). Declared names are written the way this server
+    -- reports them, so a package in either form compares equal on both kinds of server.
+    SET @ss_utf8_is_mb3 = (SELECT COUNT(*) FROM information_schema.COLLATIONS WHERE COLLATION_NAME = 'utf8mb3_general_ci');
+    UPDATE _SchemaSmith_Columns
+    SET CharacterSet = CASE WHEN @ss_utf8_is_mb3 > 0 AND LOWER(TRIM(CharacterSet)) = 'utf8' THEN 'utf8mb3'
+                            WHEN @ss_utf8_is_mb3 = 0 AND LOWER(TRIM(CharacterSet)) = 'utf8mb3' THEN 'utf8'
+                            ELSE CharacterSet END,
+        Collation = CASE WHEN @ss_utf8_is_mb3 > 0 AND LEFT(LOWER(TRIM(Collation)), 5) = 'utf8_' THEN CONCAT('utf8mb3_', SUBSTRING(TRIM(Collation), 6))
+                         WHEN @ss_utf8_is_mb3 = 0 AND LEFT(LOWER(TRIM(Collation)), 8) = 'utf8mb3_' THEN CONCAT('utf8_', SUBSTRING(TRIM(Collation), 9))
+                         ELSE Collation END
+    WHERE CharacterSet IS NOT NULL OR Collation IS NOT NULL;
+    UPDATE _SchemaSmith_Tables
+    SET CharacterSet = CASE WHEN @ss_utf8_is_mb3 > 0 AND LOWER(TRIM(CharacterSet)) = 'utf8' THEN 'utf8mb3'
+                            WHEN @ss_utf8_is_mb3 = 0 AND LOWER(TRIM(CharacterSet)) = 'utf8mb3' THEN 'utf8'
+                            ELSE CharacterSet END,
+        Collation = CASE WHEN @ss_utf8_is_mb3 > 0 AND LEFT(LOWER(TRIM(Collation)), 5) = 'utf8_' THEN CONCAT('utf8mb3_', SUBSTRING(TRIM(Collation), 6))
+                         WHEN @ss_utf8_is_mb3 = 0 AND LEFT(LOWER(TRIM(Collation)), 8) = 'utf8mb3_' THEN CONCAT('utf8_', SUBSTRING(TRIM(Collation), 9))
+                         ELSE Collation END
+    WHERE CharacterSet IS NOT NULL OR Collation IS NOT NULL;
+
+    -- A bare length-taking type takes its default length, which is what the catalog reports.
+    UPDATE _SchemaSmith_Columns
+    SET DataType =
+        CASE UPPER(TRIM(DataType))
+            WHEN 'DECIMAL' THEN 'DECIMAL(10,0)'
+            WHEN 'CHAR' THEN 'CHAR(1)'
+            WHEN 'BIT' THEN 'BIT(1)'
+            WHEN 'BINARY' THEN 'BINARY(1)'
+            ELSE DataType
+        END
+    WHERE DataType IS NOT NULL;
+
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Identify new columns');
 
-    -- Snapshot existing columns into a temp table (same optimizer workaround as tables)
-    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingColumns;
-    CREATE TEMPORARY TABLE _SchemaSmith_ExistingColumns (
-        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-        ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-        PRIMARY KEY (TableName, ColumnName)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-    INSERT INTO _SchemaSmith_ExistingColumns (TableName, ColumnName)
-    SELECT TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE BINARY TABLE_SCHEMA = BINARY p_DatabaseName;
+    -- Snapshot existing columns (same optimizer workaround as tables)
+    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
 
     -- Now set NewColumn = 1 for columns not found in snapshot
     UPDATE _SchemaSmith_Columns c
     SET c.NewColumn = 1
     WHERE NOT EXISTS (
-        SELECT 1 FROM _SchemaSmith_ExistingColumns ec
-        WHERE BINARY ec.TableName = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
+        SELECT 1 FROM _SchemaSmith_CatColumns ec
+        WHERE ec.TableKey = c.TableKey
         AND (
-            BINARY ec.ColumnName = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
-            OR (c.OldName IS NOT NULL AND BINARY ec.ColumnName = BINARY SchemaSmith_StripBacktickWrapping(c.OldName))
+            ec.ColumnKey = c.ColumnKey
+            OR (c.OldName IS NOT NULL AND ec.ColumnKey = c.OldNameKey)
         )
     );
-
-    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingColumns;
 
     -- A generated column's nullability is the engine's unless the package states one, as on SQL Server. Taking
     -- the live value (nullable for a new column) makes every comparison below agree without touching any of
     -- them. MariaDB cannot declare it at all -- NOT NULL on a generated column is a syntax error there -- so it
     -- is always the engine's. Reading an omission as NOT NULL rewrote such a column on every deploy.
     UPDATE _SchemaSmith_Columns c
-      LEFT JOIN INFORMATION_SCHEMA.COLUMNS isc
-             ON BINARY isc.TABLE_SCHEMA = BINARY p_DatabaseName
-            AND BINARY isc.TABLE_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.TableName)
-            AND BINARY isc.COLUMN_NAME = BINARY SchemaSmith_StripBacktickWrapping(c.ColumnName)
+      LEFT JOIN _SchemaSmith_CatColumns isc
+             ON isc.TableKey = c.TableKey
+            AND isc.ColumnKey = c.ColumnKey
        SET c.IsNullable = CASE WHEN isc.COLUMN_NAME IS NULL OR isc.IS_NULLABLE = 'YES'
                                     -- Only a column that is ALREADY generated has a nullability to keep; a plain column
                                     -- being converted keeps nothing of its old NOT NULL.
@@ -410,6 +550,34 @@ BEGIN
            AND UPPER(TRIM(DefaultValue)) NOT REGEXP '^(CURRENT_TIMESTAMP|NOW|LOCALTIME|LOCALTIMESTAMP)[[:space:]]*\\([0-9]*\\)$';
     END IF;
 
+    -- A column that declares the table's character set and no collation takes the table's collation, as it would in
+    -- a CREATE TABLE naming neither. CHARACTER SET on its own gives the character set's DEFAULT collation instead, which
+    -- changes sorting, comparison and unique keys whenever the table's collation is not that default -- and extraction
+    -- omits a column collation equal to the table's, so every such column was redeployed in the wrong one. Resolved
+    -- here, before anything compares, so the column script and every modified-column check see the same value.
+    -- A collation name starts with its character set's name and an underscore, on both engines.
+    UPDATE _SchemaSmith_Columns c
+      JOIN _SchemaSmith_Tables t ON t.TableKey = c.TableKey
+       SET c.Collation = TRIM(t.Collation)
+     WHERE (c.Collation IS NULL OR TRIM(c.Collation) = '')
+       AND c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != ''
+       AND t.Collation IS NOT NULL
+       AND TRIM(t.Collation) LIKE CONCAT(TRIM(c.CharacterSet), '\\_%');
+
+    -- An existing character column that declares neither a character set nor a collation keeps the ones it has. A
+    -- MODIFY made for any other reason restates the column, and without them the engine moves it to the table's
+    -- default -- a silent conversion of its data. Only for a character type: the live values must not be pinned on
+    -- a column whose declared type no longer takes them.
+    UPDATE _SchemaSmith_Columns c
+      JOIN _SchemaSmith_CatColumns isc ON isc.TableKey = c.TableKey AND isc.ColumnKey = c.ColumnKey
+       SET c.CharacterSet = isc.CHARACTER_SET_NAME, c.Collation = isc.COLLATION_NAME
+     WHERE c.NewColumn = 0
+       AND (c.CharacterSet IS NULL OR TRIM(c.CharacterSet) = '')
+       AND (c.Collation IS NULL OR TRIM(c.Collation) = '')
+       AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
+       AND isc.CHARACTER_SET_NAME IS NOT NULL
+       AND TRIM(c.DataType) REGEXP '^(var)?char|^(tiny|medium|long)?text|^enum|^set';
+
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Build column scripts');
 
     -- Build ColumnScript for each column
@@ -428,8 +596,14 @@ BEGIN
         CASE
             WHEN GeneratedExpression IS NOT NULL AND TRIM(GeneratedExpression) != '' THEN
                 CONCAT(
-                    SchemaSmith_UpperDataType(DataType), ' ',
-                    'GENERATED ALWAYS AS (', GeneratedExpression, ') ',
+                    SchemaSmith_UpperDataType(DataType),
+                    -- A generated column's own character set and collation, as on a regular column; left out, the
+                    -- column took the expression's and the compare re-issued the same MODIFY on every deploy.
+                    CASE WHEN CharacterSet IS NOT NULL AND TRIM(CharacterSet) != ''
+                         THEN CONCAT(' CHARACTER SET ', CharacterSet) ELSE '' END,
+                    CASE WHEN Collation IS NOT NULL AND TRIM(Collation) != ''
+                         THEN CONCAT(' COLLATE ', Collation) ELSE '' END,
+                    ' GENERATED ALWAYS AS (', GeneratedExpression, ') ',
                     COALESCE(UPPER(GeneratedType), 'VIRTUAL'),
                     CASE WHEN IsNullable = 0 AND VERSION() NOT LIKE '%MariaDB%' THEN ' NOT NULL' ELSE '' END
                 )
@@ -593,6 +767,9 @@ BEGIN
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        -- Name keys, filled once after the parse (see _SchemaSmith_Columns).
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         IsPrimaryKey TINYINT DEFAULT 0,
         IsUnique TINYINT DEFAULT 0,
         IndexType VARCHAR(20) DEFAULT 'BTREE',
@@ -604,7 +781,8 @@ BEGIN
         ShouldApply TINYINT DEFAULT 1,
         ShouldApplyExpression VARCHAR(4000) DEFAULT NULL,
         VariantName VARCHAR(128) DEFAULT NULL,
-        KEY ix_indexes_table_name (TableName, IndexName)
+        KEY ix_indexes_table_name (TableName, IndexName),
+        KEY ix_indexes_key (TableKey, IndexKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     SET v_IxOuterCnt = JSON_LENGTH(p_TableDefinitions);
@@ -636,6 +814,16 @@ BEGIN
         SET v_IxOuterIdx = v_IxOuterIdx + 1;
     END WHILE;
 
+    UPDATE _SchemaSmith_Indexes
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           IndexKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(IndexName));
+
+    -- A prefix as long as its column indexes the whole column, and is reported with no prefix; written that way
+    -- it compares equal instead of being rebuilt on every deploy.
+    UPDATE _SchemaSmith_Indexes
+       SET IndexColumns = SchemaSmith_StripFullLengthPrefixes(IndexColumns, TableName)
+     WHERE LOCATE('(', IndexColumns) > 0;
+
     -- MySQL: AUTO_INCREMENT column must be indexed. When it's not the first column
     -- in a composite PK, we need a separate KEY clause in the CREATE TABLE statement.
     -- Uses JOIN syntax instead of correlated subquery to avoid MySQL temp table re-open restriction.
@@ -653,6 +841,10 @@ BEGIN
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         KeyName VARCHAR(128) NOT NULL,
+        -- Name keys, filled once after the parse (see _SchemaSmith_Columns).
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        KeyNameKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        RelatedTableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Columns TEXT NOT NULL,
         RelatedTableSchema VARCHAR(128) DEFAULT NULL,
         RelatedTable VARCHAR(128) NOT NULL,
@@ -702,6 +894,9 @@ BEGIN
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        -- Name keys, filled once after the parse (see _SchemaSmith_Columns).
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Expression TEXT NOT NULL,
         ShouldApply TINYINT DEFAULT 1,
         ShouldApplyExpression VARCHAR(4000) DEFAULT NULL,
@@ -760,6 +955,9 @@ BEGIN
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
         TableName VARCHAR(128) NOT NULL,
         IndexName VARCHAR(128) NOT NULL,
+        -- Name keys, filled once after the parse (see _SchemaSmith_Columns).
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
+        IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Columns TEXT NOT NULL,
         Parser VARCHAR(128) DEFAULT NULL,
         -- Was VARCHAR(255) -- narrower than MySQL's actual 1024-char index-comment ceiling (the same
@@ -882,7 +1080,7 @@ BEGIN
     CREATE TEMPORARY TABLE _SchemaSmith_ShouldApplyEval (
         EvalId INT AUTO_INCREMENT PRIMARY KEY,
         EvalSql TEXT NOT NULL
-    ) ENGINE=InnoDB;
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     -- Tables: UPDATE ... SET ShouldApply = 0 WHERE NOT (expression)
     -- Scoped by RowId so each generated UPDATE targets exactly the source row whose expression
@@ -973,6 +1171,17 @@ BEGIN
     ALTER TABLE _SchemaSmith_ForeignKeys DROP KEY ix_fks_table_name, ADD UNIQUE KEY uq_fks_table_name (TableName, KeyName);
     ALTER TABLE _SchemaSmith_CheckConstraints DROP KEY ix_checks_table_name, ADD UNIQUE KEY uq_checks_table_name (TableName, ConstraintName);
     ALTER TABLE _SchemaSmith_FullTextIndexes DROP KEY ix_ft_table_name, ADD UNIQUE KEY uq_ft_table_name (TableName, IndexName);
+
+    UPDATE _SchemaSmith_ForeignKeys
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           KeyNameKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(KeyName)),
+           RelatedTableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(RelatedTable));
+    UPDATE _SchemaSmith_CheckConstraints
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           ConstraintKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(ConstraintName));
+    UPDATE _SchemaSmith_FullTextIndexes
+       SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
+           IndexKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(IndexName));
 
     -- Delete objects belonging to tables that should not apply
     DELETE cc FROM _SchemaSmith_CheckConstraints cc

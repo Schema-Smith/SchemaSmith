@@ -105,7 +105,14 @@
          -- engine's to derive unless the author states one, and only an explicit value may narrow it.
          [NullableDeclared] = c.[Nullable],
          c.[Default], c.[CheckExpression], c.[ComputedExpression], [Persisted] = ISNULL(c.[Persisted], 0),
-         [Sparse] = ISNULL(c.[Sparse], 0), [FileStream] = ISNULL(c.[FileStream], 0), [IsColumnSet] = ISNULL(c.[IsColumnSet], 0), [BackfillExistingRows] = ISNULL(c.[BackfillExistingRows], 0), [Collation] = RTRIM(ISNULL(c.[Collation], '')), [DataMaskFunction] = RTRIM(ISNULL(c.[DataMaskFunction], '')),
+         [Sparse] = ISNULL(c.[Sparse], 0), [FileStream] = ISNULL(c.[FileStream], 0), [IsColumnSet] = ISNULL(c.[IsColumnSet], 0), [BackfillExistingRows] = ISNULL(c.[BackfillExistingRows], 0), [AnsiPadding] = c.[AnsiPadding],
+         -- See the JSON twin for PaddingApplies.
+         [PaddingApplies] = CONVERT(BIT, CASE WHEN RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND ISNULL(c.[IsColumnSet], 0) = 0 AND ISNULL(c.[FileStream], 0) = 0 AND ISNULL(c.[EncryptionType], 'NONE') = 'NONE'
+                                               AND EXISTS (SELECT 1 FROM sys.types ty
+                                                            WHERE ty.user_type_id = ISNULL(TYPE_ID(RTRIM(LEFT(SchemaSmith.fn_NormalizeDataType(c.[DataType]), CHARINDEX('(', SchemaSmith.fn_NormalizeDataType(c.[DataType]) + '(') - 1))), TYPE_ID(LOWER(RTRIM(LEFT(SchemaSmith.fn_NormalizeDataType(c.[DataType]), CHARINDEX('(', SchemaSmith.fn_NormalizeDataType(c.[DataType]) + '(') - 1)))))
+                                                              AND TYPE_NAME(ty.system_type_id) IN ('char', 'varchar', 'binary', 'varbinary'))
+                                              THEN 1 ELSE 0 END),
+         [Collation] = RTRIM(ISNULL(c.[Collation], '')), [DataMaskFunction] = RTRIM(ISNULL(c.[DataMaskFunction], '')),
          [EncryptionType] = ISNULL(c.[EncryptionType], 'NONE'), [EncryptionKey] = RTRIM(ISNULL(c.[EncryptionKey], '')), [EncryptionAlgorithm] = RTRIM(ISNULL(c.[EncryptionAlgorithm], '')),
          [OldName] = SchemaSmith.fn_SafeBracketWrap(c.[OldName]),
          CONVERT(BIT, CASE WHEN (RTRIM(ISNULL([ComputedExpression], '')) <> '' OR NOT EXISTS (SELECT * FROM #Tables x WHERE x.[Name] = t.[Name] AND x.[Schema] = t.[Schema] AND x.NewTable = 1))
@@ -121,8 +128,8 @@
                                                                                                      + CASE WHEN ISNULL(c.[Persisted], 0) = 1 AND c.[Nullable] = 0 THEN ' NOT NULL' ELSE '' END
               -- See the JSON twin (ParseTableJsonIntoTempTables.sql) for why a column set gets its own
               -- branch instead of the COLLATE/SPARSE/MASKED/ENCRYPTED/NULL/DEFAULT chain below.
-              WHEN ISNULL([IsColumnSet], 0) = 1 THEN UPPER(SchemaSmith.fn_NormalizeDataType(c.[DataType])) + ' COLUMN_SET FOR ALL_SPARSE_COLUMNS'
-              ELSE UPPER(SchemaSmith.fn_NormalizeDataType(c.[DataType])) +
+              WHEN ISNULL([IsColumnSet], 0) = 1 THEN SchemaSmith.fn_NormalizeDataType(c.[DataType]) + ' COLUMN_SET FOR ALL_SPARSE_COLUMNS'
+              ELSE SchemaSmith.fn_NormalizeDataType(c.[DataType]) +
                    CASE WHEN ISNULL([FileStream], 0) = 1 THEN ' FILESTREAM' ELSE '' END +
                    CASE WHEN RTRIM(ISNULL([Collation], '')) NOT IN ('IGNORE', '') THEN ' COLLATE ' + [Collation] ELSE '' END +
                    CASE WHEN ISNULL([Sparse], 0) = 1 THEN ' SPARSE' ELSE '' END +
@@ -153,6 +160,7 @@
       [FileStream] = CONVERT(BIT, CASE LOWER(col.value('(FileStream/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [IsColumnSet] = CONVERT(BIT, CASE LOWER(col.value('(IsColumnSet/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [BackfillExistingRows] = CONVERT(BIT, CASE LOWER(col.value('(BackfillExistingRows/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
+      [AnsiPadding] = CONVERT(BIT, CASE LOWER(col.value('(AnsiPadding/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [Collation] = col.value('(Collation/text())[1]', 'NVARCHAR(500)'),
       [DataMaskFunction] = col.value('(DataMaskFunction/text())[1]', 'NVARCHAR(500)'),
       [EncryptionType] = col.value('(EncryptionType/text())[1]', 'NVARCHAR(100)'),
@@ -172,9 +180,9 @@
 
   -- Don't try to apply tables without columns
   DELETE FROM #Tables
-    WHERE NOT EXISTS (SELECT * FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = #Tables.[Schema] AND C.[TableName] = #Tables.[Name])
+    WHERE NOT EXISTS (SELECT * FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = #Tables.[Schema] AND c.[TableName] = #Tables.[Name])
   DELETE FROM #TableDefinitions
-    WHERE NOT EXISTS (SELECT * FROM #Columns C WITH (NOLOCK) WHERE C.[Schema] = #TableDefinitions.[Schema] AND C.[TableName] = #TableDefinitions.[Name])
+    WHERE NOT EXISTS (SELECT * FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = #TableDefinitions.[Schema] AND c.[TableName] = #TableDefinitions.[Name])
 
   RAISERROR('Parse Indexes from Xml', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#Indexes') IS NOT NULL DROP TABLE #Indexes
@@ -189,11 +197,11 @@
                                                    ELSE SchemaSmith.fn_SafeBracketWrap([value])
                                                    END
                              FROM SchemaSmith.fn_SplitList(i.[IndexColumns], ',')
-                             WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''
+                             WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''
                              ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          [IncludeColumns] = STUFF((SELECT ',' + SchemaSmith.fn_SafeBracketWrap([value])
                                FROM SchemaSmith.fn_SplitList(i.[IncludeColumns], ',')
-                               WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> ''
+                               WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''
                                ORDER BY SchemaSmith.fn_SafeBracketWrap([value]) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0),
          i.[ShouldApplyExpression], i.[VariantName]
@@ -262,8 +270,8 @@
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [KeyName] = SchemaSmith.fn_SafeBracketWrap(f.[KeyName]),
          [RelatedTableSchema] = SchemaSmith.fn_SafeBracketWrap(f.[RelatedTableSchema]), [RelatedTable] = SchemaSmith.fn_SafeBracketWrap(f.[RelatedTable]),
-         [Columns] = STUFF((SELECT ',' + SchemaSmith.fn_SafeBracketWrap([value]) FROM SchemaSmith.fn_SplitList(f.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> '' ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
-         [RelatedColumns] = STUFF((SELECT ',' + SchemaSmith.fn_SafeBracketWrap([value]) FROM SchemaSmith.fn_SplitList(f.[RelatedColumns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> '' ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
+         [Columns] = STUFF((SELECT ',' + SchemaSmith.fn_SafeBracketWrap([value]) FROM SchemaSmith.fn_SplitList(f.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '' ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
+         [RelatedColumns] = STUFF((SELECT ',' + SchemaSmith.fn_SafeBracketWrap([value]) FROM SchemaSmith.fn_SplitList(f.[RelatedColumns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '' ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          [DeleteAction] = ISNULL(NULLIF(RTRIM([DeleteAction]), ''), 'NO ACTION'),
          [UpdateAction] = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION'),
          f.[ShouldApplyExpression], f.[VariantName]
@@ -328,7 +336,7 @@
   IF OBJECT_ID('tempdb..#Statistics') IS NOT NULL DROP TABLE #Statistics
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [StatisticName] = SchemaSmith.fn_SafeBracketWrap(s.[StatisticName]), [SampleSize] = ISNULL(s.[SampleSize], 0), s.[FilterExpression],
-         [Columns] = STUFF((SELECT ',' + SchemaSmith.fn_SafeBracketWrap([value]) FROM SchemaSmith.fn_SplitList(s.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> '' ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
+         [Columns] = STUFF((SELECT ',' + SchemaSmith.fn_SafeBracketWrap([value]) FROM SchemaSmith.fn_SplitList(s.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '' ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          s.[ShouldApplyExpression], s.[VariantName]
     INTO #Statistics
     FROM #TableDefinitions t WITH (NOLOCK)
@@ -374,7 +382,7 @@
                                                         ' STATISTICAL_SEMANTICS'
                                               ELSE SchemaSmith.fn_SafeBracketWrapFullTextColumn([value])
                                               END
-                      FROM SchemaSmith.fn_SplitList(f.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([Value]))) <> '' ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
+                      FROM SchemaSmith.fn_SplitList(f.[Columns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '' ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          f.[ShouldApplyExpression], f.[VariantName]
     INTO #FullTextIndexes
     FROM #TableDefinitions t WITH (NOLOCK)

@@ -84,7 +84,8 @@ Each tool exits with a code that indicates the outcome. Automation scripts shoul
 | Code | Meaning | What to do |
 |------|---------|------------|
 | 0 | Success | Nothing -- the run completed normally. |
-| 2 | One or more database quenches failed | Check the progress log for `FAILED to quench` messages. The error log has details. |
+| 1 | Finished, but incomplete | Something was skipped or downgraded -- a feature the target lacks, a table DataTongs could not extract, an object SchemaTongs left out. The progress log names each one. |
+| 2 | Failed | The run stopped for a reason you can fix: an unrecognized argument, a missing setting, a package that will not load, or a failed database quench. The progress log starts the reason with `FAILED`; the error log has details. |
 | 3 | Unhandled exception | An unexpected error crashed the tool. Check the error log for the full stack trace. |
 | 4 | Unable to back up log files | The tool completed (or failed) but couldn't copy its logs to the backup directory. Check directory permissions and disk space. |
 

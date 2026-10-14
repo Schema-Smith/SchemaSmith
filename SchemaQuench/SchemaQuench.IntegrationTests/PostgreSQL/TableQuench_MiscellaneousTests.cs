@@ -906,6 +906,79 @@ COMMIT;
         conn.Close();
     }
 
+    // The referential actions belong before DEFERRABLE: written after it, the ALTER TABLE was a syntax error
+    // ("syntax error at or near ON"), so a deferrable key with any action could never be created.
+    [Test]
+    public void ShouldCreateDeferrableForeignKeyWithReferentialActions()
+    {
+        var productName = Guid.NewGuid().ToString();
+        var uniqueId = Guid.NewGuid().ToString("N")[..8];
+        var parentTable = $"defa_parent_{uniqueId}";
+        var childTable = $"defa_child_{uniqueId}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        var json = $$"""
+        [
+            {
+                "Schema": "public",
+                "Name": "{{parentTable}}",
+                "Columns": [ {"Name": "id", "DataType": "INT4", "Nullable": false} ],
+                "Indexes": [ {"Name": "{{parentTable}}_pkey", "PrimaryKey": true, "Unique": true, "IndexColumns": "id"} ]
+            },
+            {
+                "Schema": "public",
+                "Name": "{{childTable}}",
+                "Columns": [
+                    {"Name": "id", "DataType": "INT4", "Nullable": false},
+                    {"Name": "parent_id", "DataType": "INT4", "Nullable": true}
+                ],
+                "ForeignKeys": [
+                    {
+                        "Name": "fk_{{childTable}}_parent",
+                        "Columns": "parent_id",
+                        "RelatedTableSchema": "public",
+                        "RelatedTable": "{{parentTable}}",
+                        "RelatedColumns": "id",
+                        "MatchType": "SIMPLE",
+                        "DeleteAction": "CASCADE",
+                        "UpdateAction": "SET NULL",
+                        "Deferrable": true,
+                        "InitiallyDeferred": true
+                    }
+                ]
+            }
+        ]
+        """;
+
+        cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := false)";
+        cmd.ExecuteNonQuery();
+
+        cmd.CommandText = $@"
+SELECT c.condeferrable, c.condeferred, c.confdeltype::TEXT, c.confupdtype::TEXT
+FROM pg_constraint c
+JOIN pg_class t ON c.conrelid = t.oid
+JOIN pg_namespace n ON t.relnamespace = n.oid
+WHERE n.nspname = 'public' AND t.relname = '{childTable}'
+  AND c.conname = 'fk_{childTable}_parent' AND c.contype = 'f'";
+        using var reader = cmd.ExecuteReader();
+        Assert.That(reader.Read(), Is.True, "FK constraint should exist");
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.GetBoolean(0), Is.True, "FK should be DEFERRABLE");
+            Assert.That(reader.GetBoolean(1), Is.True, "FK should be INITIALLY DEFERRED");
+            Assert.That(reader.GetString(2), Is.EqualTo("c"), "ON DELETE CASCADE");
+            Assert.That(reader.GetString(3), Is.EqualTo("n"), "ON UPDATE SET NULL");
+        });
+        reader.Close();
+
+        conn.Close();
+    }
+
     [Test]
     public void ShouldNotRecreateDeferrablePrimaryKeyOnSecondIndexOnlyQuench()
     {

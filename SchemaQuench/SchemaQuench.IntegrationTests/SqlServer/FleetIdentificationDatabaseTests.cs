@@ -171,13 +171,7 @@ DELETE FROM dbo.fleet_registry;";
             conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 120;
-            cmd.CommandText = $@"
-IF DB_ID('{ControlDb}') IS NOT NULL
-BEGIN
-    ALTER DATABASE [{ControlDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-    DROP DATABASE [{ControlDb}];
-END";
-            cmd.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, ControlDb);
             conn.Close();
         }
         catch (System.Data.Common.DbException)

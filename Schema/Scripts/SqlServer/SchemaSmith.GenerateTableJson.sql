@@ -203,7 +203,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        '' AS [OldName],
        (SELECT *
           FROM (SELECT QUOTENAME(c.COLUMN_NAME) AS [Name],
-                       UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+                       CASE WHEN ut.is_user_defined = 1 THEN USER_TYPE ELSE UPPER(USER_TYPE) END + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
                                                CASE WHEN sc.xml_collection_id <> 0
                                                     THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                     END,
@@ -212,7 +212,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                                THEN ' IDENTITY(' + CONVERT(NVARCHAR(20), ic.seed_value) + ', ' + CONVERT(NVARCHAR(20), ic.increment_value) + ')' +
                                                     CASE WHEN ic.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
                                                ELSE '' END AS [DataType],                   
-                       CAST(CASE WHEN c.IS_NULLABLE = 'Yes' THEN 1 ELSE 0 END AS BIT) AS [Nullable],
+                       CAST(CASE WHEN c.IS_NULLABLE = 'YES' THEN 1 ELSE 0 END AS BIT) AS [Nullable],
 		               NULLIF(SchemaSmith.fn_StripParenWrapping(COLUMN_DEFAULT), 'NULL') AS [Default],
                        (SELECT SchemaSmith.fn_StripParenWrapping([definition])
                           FROM sys.check_constraints
@@ -224,6 +224,10 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                        -- FILESTREAM round-trip. Emitted only when set, so no existing package gains
                        -- a false on every column. Both catalog columns predate the 2008 floor.
                        CASE WHEN sc.is_filestream = 1 THEN CAST(1 AS BIT) END AS [FileStream],
+                       -- Written only for an unpadded column: an omitted AnsiPadding leaves the column unmanaged.
+                       CASE WHEN sc.is_ansi_padded = 0 AND TYPE_NAME(sc.system_type_id) IN ('char', 'varchar', 'binary', 'varbinary')
+                                 AND cc.[object_id] IS NULL AND sc.encryption_type IS NULL
+                            THEN CAST(0 AS BIT) END AS [AnsiPadding],
                        sc.is_column_set AS [IsColumnSet],
                        ISNULL(NULLIF(sc.collation_name, @v_DatabaseCollation), '') AS [Collation],
                        ISNULL(mc.masking_function, '') COLLATE DATABASE_DEFAULT AS DataMaskFunction,
@@ -237,7 +241,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                   FROM INFORMATION_SCHEMA.COLUMNS c
                   JOIN sys.columns sc ON sc.[object_id] = st.[object_id] AND sc.[name] = c.COLUMN_NAME
                   JOIN (SELECT CASE WHEN SCHEMA_NAME(typ.[schema_id]) IN ('sys', 'dbo')
-                                    THEN '' ELSE SCHEMA_NAME(typ.[schema_id]) + '.' END + typ.[name] AS USER_TYPE, typ.user_type_id
+                                    THEN '' ELSE SCHEMA_NAME(typ.[schema_id]) + '.' END + typ.[name] AS USER_TYPE, typ.user_type_id, typ.is_user_defined
                           FROM sys.types typ) ut ON ut.user_type_id = sc.user_type_id
                   LEFT JOIN sys.computed_columns cc ON cc.[object_id] = st.[object_id]
                                                                  AND cc.[name] = c.COLUMN_NAME
@@ -260,7 +264,11 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     -- are is_hidden = 0). sys.columns.graph_type is the discriminator: non-null for
                     -- exactly these, null for every user column -- including one merely NAMED like
                     -- them. 2017+, which the JSON ingest tier already requires (STRING_AGG).
-                    AND sc.graph_type IS NULL) x
+                    AND sc.graph_type IS NULL
+                    -- and every hidden column: what remains of one after GENERATED ALWAYS and graph is a dropped
+                    -- ledger column (2022), kept hidden by the engine; extracted, it came back visible on deploy.
+                    -- COLUMNPROPERTY is NULL where IsHidden is unknown (before 2016).
+                    AND ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0) x
           -- Column sequence: 'Name' (default) or 'Physical', the table's own order. The ordinal is looked up
           -- rather than projected: this is SELECT * over the derived table, so adding ORDINAL_POSITION to it
           -- would write the ordinal into the package file. The lookup only runs when Physical is asked for.

@@ -106,6 +106,7 @@ run_leg() {
 
   out=$(env $port_env dotnet test "$PROJ" -c Release --no-build \
           --filter "TestCategory=DataDirectory&TestCategory=$category" 2>&1)
+  rc=$?
   summary=$(echo "$out" | grep -aE '^(Passed!|Failed!)' | tail -1)
   total=$(echo "$summary" | grep -oE 'Total:[[:space:]]*[0-9]+' | grep -oE '[0-9]+')
 
@@ -113,7 +114,8 @@ run_leg() {
     echo "  NO TESTS: no DataDirectory+$category tests matched. Infra is proven by the smoke check above."
     SWEEP_ROWS="${SWEEP_ROWS}| $engine @ $port | NO TESTS MATCHED | smoke check passed |
 "
-  elif echo "$summary" | grep -q '^Passed!' && [ "${total:-0}" != "0" ]; then
+  # A fixture's one-time teardown error fails the run under a "Passed!" summary.
+  elif [ "$rc" -eq 0 ] && echo "$summary" | grep -q '^Passed!' && [ "${total:-0}" != "0" ]; then
     echo "  $summary"
     SWEEP_ROWS="${SWEEP_ROWS}| $engine @ $port | $summary | smoke check passed |
 "

@@ -4,6 +4,7 @@ using System;
 using System.Linq;
 using Schema.Domain.PostgreSQL;
 using Schema.Domain.SqlServer;
+using Schema.Utility;
 
 namespace Schema.Domain
 {
@@ -39,12 +40,14 @@ namespace Schema.Domain
         public static void Resolve(SqlServerForeignKey fk, bool isSchemaTemplate, Platform platform)
         {
             if (fk == null) return;
+            (fk.RelatedTableSchema, fk.RelatedTable) = SplitRelatedTablePrefix(fk.Name, fk.RelatedTable, fk.RelatedTableSchema, platform);
             fk.RelatedTableSchema = ResolveRelatedTableSchema(fk.RelatedTableSchema, isSchemaTemplate, platform);
         }
 
         public static void Resolve(PostgreSqlForeignKey fk, bool isSchemaTemplate, Platform platform)
         {
             if (fk == null) return;
+            (fk.RelatedTableSchema, fk.RelatedTable) = SplitRelatedTablePrefix(fk.Name, fk.RelatedTable, fk.RelatedTableSchema, platform);
             fk.RelatedTableSchema = ResolveRelatedTableSchema(fk.RelatedTableSchema, isSchemaTemplate, platform);
         }
 
@@ -173,6 +176,21 @@ namespace Schema.Domain
             }
 
             return string.IsNullOrWhiteSpace(existing) ? platform.GetDefaultSchema() : existing;
+        }
+
+        // A schema-qualified RelatedTable (sales.Customer) was concatenated whole behind RelatedTableSchema at deploy, so it
+        // could never deploy. The prefix moves into RelatedTableSchema here, before the default fills it; a dot inside a
+        // delimited name ([Order.Detail]) is part of the name.
+        private static (string Schema, string Table) SplitRelatedTablePrefix(string fkName, string relatedTable, string relatedTableSchema,
+            Platform platform)
+        {
+            var (prefix, name) = Identifier.SplitQualifiedName(relatedTable, platform);
+            if (prefix == null) return (relatedTableSchema, relatedTable);
+            if (string.IsNullOrWhiteSpace(relatedTableSchema)) return (prefix, name);
+            if (Identifier.Unwrap(relatedTableSchema, platform).Equals(prefix, StringComparison.OrdinalIgnoreCase))
+                return (relatedTableSchema, name);
+            throw new InvalidOperationException($"Foreign key '{fkName}' names RelatedTable '{relatedTable}', in schema '{prefix}', " +
+                $"but RelatedTableSchema '{relatedTableSchema}'. Give the schema once, in RelatedTableSchema.");
         }
 
         private static string ResolveRelatedTableSchema(string existing, bool isSchemaTemplate, Platform platform)

@@ -31,13 +31,35 @@ public class RegularTemplateFanOutTests
     private readonly ILog _progressLog = Substitute.For<ILog>();
     private readonly IEnvironment _environment = Substitute.For<IEnvironment>();
 
+    // Created on the first case and reused by the second, which starts by removing what the first deployed: a new
+    // database costs CREATE DATABASE and a full kindle, three times over, and the defect is in how scripts reach each
+    // database, not in a cold one.
+    private readonly string _prefix = "fanout_" + Guid.NewGuid().ToString("N")[..8];
+    private bool _databasesCreated;
+    private string[] Databases => Enumerable.Range(1, 3).Select(i => $"{_prefix}_db{i}").ToArray();
+
+    [OneTimeTearDown]
+    public void DropDatabases()
+    {
+        if (!_databasesCreated) return;
+        using var conn = OpenMaster();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            foreach (var db in Databases)
+            {
+                Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
+            }
+        }
+        catch (DbException) { /* best-effort cleanup */ }
+    }
+
     [TestCase("1")]
     [TestCase("4")]
     public void EveryDatabaseGetsEveryScript_WithItsOwnQueryTokenValues(string maxThreads)
     {
-        var prefix = "fanout_" + Guid.NewGuid().ToString("N")[..8];
-        var dbs = Enumerable.Range(1, 3).Select(i => $"{prefix}_db{i}").ToArray();
-        var tempDir = Path.Join(Path.GetTempPath(), $"{prefix}_pkg");
+        var dbs = Databases;
+        var tempDir = Path.Join(Path.GetTempPath(), $"{_prefix}_{maxThreads}_pkg");
 
         lock (FactoryContainer.SharedLockObject)
         {
@@ -48,11 +70,7 @@ public class RegularTemplateFanOutTests
             LogFactory.Register("ErrorLog", _errorLog);
             LogFactory.Register("ProgressLog", _progressLog);
             var config = FactoryContainer.Resolve<IConfigurationRoot>();
-            var connProps = ConnectionString.ReadProperties(config, "Target:ConnectionProperties");
-            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
-                ConnectionString.Build(Platform.SqlServer, config["Target:Server"], "master",
-                    config["Target:User"], config["Target:Password"], config["Target:Port"], connProps));
-            conn.Open();
+            using var conn = OpenMaster();
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 300;
             var savedPath = config["SchemaPackagePath"];
@@ -62,10 +80,14 @@ public class RegularTemplateFanOutTests
             {
                 foreach (var db in dbs)
                 {
-                    cmd.CommandText = $"CREATE DATABASE [{db}]";
+                    cmd.CommandText = _databasesCreated
+                        ? $"USE [{db}]; DROP PROCEDURE IF EXISTS dbo.FanoutProbe; DROP TABLE IF EXISTS dbo.AfterMarker; "
+                          + "DELETE SchemaSmith.CompletedMigrationScripts WHERE ProductName = 'FanoutProbe'; USE master;"
+                        : $"CREATE DATABASE [{db}]";
                     cmd.ExecuteNonQuery();
                 }
-                WritePackage(tempDir, prefix);
+                _databasesCreated = true;
+                WritePackage(tempDir, _prefix);
                 config["SchemaPackagePath"] = tempDir;
                 config[SettingsKeys.MaxThreads] = maxThreads;
 
@@ -87,22 +109,23 @@ public class RegularTemplateFanOutTests
             {
                 config["SchemaPackagePath"] = savedPath;
                 config[SettingsKeys.MaxThreads] = savedThreads;
-                try
-                {
-                    conn.ChangeDatabase("master");
-                    foreach (var db in dbs)
-                    {
-                        cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-                        cmd.ExecuteNonQuery();
-                    }
-                }
-                catch (DbException) { /* best-effort cleanup */ }
                 LogFactory.Clear();
                 FactoryContainer.Unregister<IEnvironment>();
                 try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); }
                 catch (IOException) { /* a held log handle must not fail a passing test */ }
             }
         }
+    }
+
+    private static IDbConnection OpenMaster()
+    {
+        var config = FactoryContainer.Resolve<IConfigurationRoot>();
+        var connProps = ConnectionString.ReadProperties(config, "Target:ConnectionProperties");
+        var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
+            ConnectionString.Build(Platform.SqlServer, config["Target:Server"], "master",
+                config["Target:User"], config["Target:Password"], config["Target:Port"], connProps));
+        conn.Open();
+        return conn;
     }
 
     private static void WritePackage(string dir, string prefix)

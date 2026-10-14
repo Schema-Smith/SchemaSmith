@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
+using System.Linq;
 using DataTongs.IntegrationTests.Support;
 using Schema.DataAccess;
 using Schema.Delivery;
@@ -364,6 +365,248 @@ public abstract class ConfigureDataDeliverySharedTests
             Assert.That(updatedTable.DataDelivery[0].ContentFile, Is.EqualTo("TableData/actor.tabledata"));
             Assert.That(updatedTable.DataDelivery[0].MergeType, Is.EqualTo("Insert/Update"));
         });
+    }
+
+    // A TIMESTAMP is rendered in the extraction session's time zone and read back in the delivery session's, so the
+    // two must agree. Extraction runs at +00:00 and records it on the delivery it configures.
+    [Test]
+    public void ConfigureDataDelivery_RecordsTheExtractionTimeZone()
+    {
+        EnsureDbConnection();
+        using var command = _connection.CreateCommand();
+
+        var tableName = $"tz_{Guid.NewGuid():N}".Substring(0, 20);
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, ts TIMESTAMP NULL)";
+        command.ExecuteNonQuery();
+        command.CommandText = $"SET SESSION time_zone = '+00:00'; INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, '2026-01-01 12:00:00'); SET SESSION time_zone = DEFAULT";
+        command.ExecuteNonQuery();
+
+        try
+        {
+            var templateRoot = CreateTemplateStructure();
+            var tablesDir = Path.Join(templateRoot, "Tables");
+            var tableDataDir = Path.Join(templateRoot, "TableData");
+            var tablePath = Path.Join(tablesDir, $"{tableName}.json");
+            File.WriteAllText(tablePath, $$"""{ "Name": "{{tableName}}", "Columns": [ { "Name": "id", "DataType": "int" }, { "Name": "ts", "DataType": "timestamp" } ] }""");
+
+            lock (FactoryContainer.SharedLockObject)
+            {
+                FactoryContainer.Unregister<IMergeScriptHelper>();
+                ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+                using var configScope = IsolatedConfigScope.Create();
+                var config = configScope.Config;
+                config["Source:Server"] = config[$"{ConfigPrefix}:Server"] ?? "127.0.0.1";
+                config["Source:Port"] = config[$"{ConfigPrefix}:Port"];
+                config["Source:User"] = config[$"{ConfigPrefix}:User"];
+                config["Source:Password"] = config[$"{ConfigPrefix}:Password"];
+                config["Source:Database"] = _testDb;
+                config["Tables:0:Name"] = tableName;
+                config["ShouldCast:OutputContentFiles"] = "true";
+                config["ShouldCast:OutputScripts"] = "false";
+                config["ShouldCast:ConfigureDataDelivery"] = "true";
+                config["ContentPath"] = tableDataDir;
+                _dataTongs.CastData();
+            }
+
+            var contents = string.Join("", Directory.GetFiles(tableDataDir).Select(File.ReadAllText));
+            Assert.Multiple(() =>
+            {
+                Assert.That(File.ReadAllText(tablePath), Does.Contain("\"TimeZone\": \"+00:00\""));
+                Assert.That(contents, Does.Contain("2026-01-01T12:00:00"), "the value as written at +00:00");
+            });
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // A tokenized MySQL/MariaDB script reads its content file with JSON_TABLE at deploy time, so with DeliveryEncoding
+    // Xml every generated script failed to deploy ("Invalid JSON text"). The script is refused by name and the run fails;
+    // the content file, which delivers fine through DataDelivery, is still written. With ConfigureDataDelivery the table
+    // gets no script at all, so the same run succeeds.
+    [TestCase(false, 2, TestName = "XmlWithTokenizedScripts_WritesNoScriptAndFails")]
+    [TestCase(true, 0, TestName = "XmlWithConfigureDataDelivery_StillSucceeds")]
+    public void XmlOnMySqlFamily(bool configureDataDelivery, int expectedExitCode)
+    {
+        EnsureDbConnection();
+        var tableName = $"xmls_{Guid.NewGuid():N}".Substring(0, 20);
+        using (var create = _connection.CreateCommand())
+        {
+            create.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, name VARCHAR(20)); INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, 'a')";
+            create.ExecuteNonQuery();
+        }
+        var templateRoot = CreateTemplateStructure();
+        var tableDataDir = Path.Join(templateRoot, "TableData");
+        var scriptDir = Path.Join(templateRoot, "MigrationScripts");
+        File.WriteAllText(Path.Join(templateRoot, "Tables", $"{tableName}.json"),
+            $$"""{ "Name": "{{tableName}}", "Columns": [ { "Name": "id", "DataType": "int" }, { "Name": "name", "DataType": "varchar(20)" } ] }""");
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Unregister<IMergeScriptHelper>();
+            ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+            using var configScope = IsolatedConfigScope.Create();
+            var config = configScope.Config;
+            config["Source:Server"] = config[$"{ConfigPrefix}:Server"] ?? "127.0.0.1";
+            config["Source:Port"] = config[$"{ConfigPrefix}:Port"];
+            config["Source:User"] = config[$"{ConfigPrefix}:User"];
+            config["Source:Password"] = config[$"{ConfigPrefix}:Password"];
+            config["Source:Database"] = _testDb;
+            config["Tables:0:Name"] = tableName;
+            config["ShouldCast:OutputContentFiles"] = "true";
+            config["ShouldCast:OutputScripts"] = "true";
+            config["ShouldCast:DeliveryEncoding"] = "Xml";
+            config["ShouldCast:ConfigureDataDelivery"] = configureDataDelivery ? "true" : "false";
+            config["ContentPath"] = tableDataDir;
+            config["ScriptPath"] = scriptDir;
+
+            _dataTongs.CastData();
+        }
+
+        try
+        {
+            // Below MySQL 8.0 DataTongs writes no merge script for any encoding and warns instead, so there is no Xml
+            // script to refuse.
+            using (var version = _connection.CreateCommand())
+                if (!configureDataDelivery && Platform == Platform.MySQL
+                    && TargetVersionDetector.Detect(version, Platform, _testDb).ServerComparable is > 0 and < 800)
+                    expectedExitCode = 1;
+            Assert.That(_dataTongs.ExitCode, Is.EqualTo(expectedExitCode));
+            Assert.That(Directory.Exists(scriptDir) ? Directory.GetFiles(scriptDir) : [], Is.Empty, "no script written");
+            Assert.That(Directory.GetFiles(tableDataDir), Has.Length.EqualTo(1), "the content file is still written");
+        }
+        finally
+        {
+            using var drop = _connection.CreateCommand();
+            drop.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            drop.ExecuteNonQuery();
+        }
+    }
+
+    // Every generated MySQL/MariaDB script named the SOURCE database (INSERT INTO `src`.`t`), so a package deployed to a
+    // database of another name -- dev, test and prod on one server -- wrote its rows back into the source, silently. The
+    // script names the table alone now, and runs in whatever database it is deployed to.
+    [Test]
+    public void GeneratedScript_WritesIntoTheDatabaseItIsDeployedTo()
+    {
+        EnsureDbConnection();
+        using var command = _connection.CreateCommand();
+        if (Platform == Platform.MySQL && TargetVersionDetector.Detect(command, Platform, _testDb).ServerComparable is > 0 and < 800)
+            Assert.Ignore("DataTongs writes no merge script below MySQL 8.0, by design.");
+
+        var tableName = $"qual_{Guid.NewGuid():N}".Substring(0, 20);
+        var otherDb = $"qualdst_{Guid.NewGuid():N}".Substring(0, 24);
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, name VARCHAR(20)); " +
+                              $"INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, 'a'), (2, 'b'); " +
+                              $"CREATE DATABASE `{otherDb}`; CREATE TABLE `{otherDb}`.`{tableName}` (id INT PRIMARY KEY, name VARCHAR(20))";
+        command.ExecuteNonQuery();
+        try
+        {
+            var scriptDir = Path.Join(Path.GetTempPath(), $"qualscripts_{Guid.NewGuid():N}");
+            lock (FactoryContainer.SharedLockObject)
+            {
+                FactoryContainer.Unregister<IMergeScriptHelper>();
+                ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+                using var configScope = IsolatedConfigScope.Create();
+                var config = configScope.Config;
+                config["Source:Server"] = config[$"{ConfigPrefix}:Server"] ?? "127.0.0.1";
+                config["Source:Port"] = config[$"{ConfigPrefix}:Port"];
+                config["Source:User"] = config[$"{ConfigPrefix}:User"];
+                config["Source:Password"] = config[$"{ConfigPrefix}:Password"];
+                config["Source:Database"] = _testDb;
+                config["Tables:0:Name"] = tableName;
+                config["ShouldCast:OutputContentFiles"] = "false";
+                config["ShouldCast:OutputScripts"] = "true";
+                config["ShouldCast:TokenizeScripts"] = "false";
+                config["ScriptPath"] = scriptDir;
+                _dataTongs.CastData();
+            }
+
+            var script = File.ReadAllText(Directory.GetFiles(scriptDir).Single());
+            Assert.That(script, Does.Not.Contain($"`{_testDb}`"), "the script must not name the source database");
+
+            command.CommandText = $"USE `{otherDb}`";
+            command.ExecuteNonQuery();
+            // Below MariaDB 10.6 the script reads its rows through SchemaSmith's helper functions, which SchemaQuench
+            // installs in every database it deploys to; this stands in for that deploy.
+            if (script.Contains("SchemaSmith_"))
+                ForgeKindler.KindleTheForge(command, Platform);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT COUNT(*) FROM `{otherDb}`.`{tableName}`";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(2), "the rows land in the database the script runs in");
+        }
+        finally
+        {
+            command.CommandText = $"USE `{_testDb}`; DROP DATABASE IF EXISTS `{otherDb}`; DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // The generated merge script carries the same zone, so running it on a session in another zone lands the
+    // TIMESTAMP values unchanged and gives the session its own zone back.
+    [Test]
+    public void GeneratedScript_PinsTheExtractionTimeZone_AndRestoresTheSessionZone()
+    {
+        EnsureDbConnection();
+        using var command = _connection.CreateCommand();
+        // By design DataTongs writes no merge script below MySQL 8.0 (no JSON_TABLE); there is nothing here to run.
+        if (Platform == Platform.MySQL && TargetVersionDetector.Detect(command, Platform, _testDb).ServerComparable is > 0 and < 800)
+            Assert.Ignore("DataTongs writes no merge script below MySQL 8.0, by design.");
+
+        var tableName = $"tzs_{Guid.NewGuid():N}".Substring(0, 20);
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, ts TIMESTAMP NULL)";
+        command.ExecuteNonQuery();
+        command.CommandText = $"SET SESSION time_zone = '+00:00'; INSERT INTO `{_testDb}`.`{tableName}` VALUES (1, '2026-01-01 12:00:00')";
+        command.ExecuteNonQuery();
+
+        try
+        {
+            var scriptDir = Path.Join(_testOutputDir, "Scripts");
+            Directory.CreateDirectory(scriptDir);
+            lock (FactoryContainer.SharedLockObject)
+            {
+                FactoryContainer.Unregister<IMergeScriptHelper>();
+                ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+                using var configScope = IsolatedConfigScope.Create();
+                var config = configScope.Config;
+                config["Source:Server"] = config[$"{ConfigPrefix}:Server"] ?? "127.0.0.1";
+                config["Source:Port"] = config[$"{ConfigPrefix}:Port"];
+                config["Source:User"] = config[$"{ConfigPrefix}:User"];
+                config["Source:Password"] = config[$"{ConfigPrefix}:Password"];
+                config["Source:Database"] = _testDb;
+                config["Tables:0:Name"] = tableName;
+                config["ShouldCast:OutputContentFiles"] = "false";
+                config["ShouldCast:OutputScripts"] = "true";
+                config["ShouldCast:TokenizeScripts"] = "false";
+                config["ShouldCast:ConfigureDataDelivery"] = "false";
+                config["ScriptPath"] = scriptDir;
+                _dataTongs.CastData();
+            }
+            var script = File.ReadAllText(Directory.GetFiles(scriptDir, "*.sql").Single());
+
+            command.CommandText = $"DELETE FROM `{_testDb}`.`{tableName}`; SET SESSION time_zone = '+05:00'";
+            command.ExecuteNonQuery();
+            command.CommandText = $"USE `{_testDb}`; {script}";
+            command.ExecuteNonQuery();
+
+            command.CommandText = "SELECT @@SESSION.time_zone";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("+05:00"), "the script gives the session its zone back");
+            command.CommandText = $"SET SESSION time_zone = '+00:00'; SELECT DATE_FORMAT(ts, '%Y-%m-%d %H:%i') FROM `{_testDb}`.`{tableName}`";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("2026-01-01 12:00"));
+        }
+        finally
+        {
+            command.CommandText = $"SET SESSION time_zone = DEFAULT; DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
     }
 
     [Test]

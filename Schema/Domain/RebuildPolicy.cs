@@ -20,7 +20,11 @@ namespace Schema.Domain
                           "pending changes reaches Threshold, which is then required.")]
         [JsonProperty(Order = 1)]
         [DefaultValue("NEVER")]
-        public string Mode { get; set; } = "NEVER";
+        // Trimmed here because the table's policy reaches the deploy re-serialised from this model, and the deploy's
+        // SQL trims only spaces; the schema pattern accepts any whitespace padding.
+        public string Mode { get => _mode; set => _mode = value?.Trim(); }
+
+        private string _mode = "NEVER";
 
         [SchemaProperty(Minimum = 1,
             Description = "Required when Mode is THRESHOLD: the number of pending changes at which the table is " +

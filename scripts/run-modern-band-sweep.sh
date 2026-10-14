@@ -61,6 +61,12 @@ cleanup() {
   done
 }
 trap cleanup EXIT
+# A sweep stopped part-way has certified nothing, so it writes no record: an interrupted band otherwise reads as
+# whatever its partial log happened to contain.
+trap 'echo; echo "Interrupted: no record written."; exit 130' INT TERM
+
+# The SQL Server category runs in four integration assemblies; a band where fewer reported did not finish.
+EXPECTED_ASSEMBLIES=4
 
 for band in $BANDS; do
   port="${band%%:*}"
@@ -177,6 +183,8 @@ for band in $BANDS; do
   SmithySettings_SqlServer__User=sa SmithySettings_SqlServer__Password="$PASSWORD" \
   dotnet test SchemaSmith.sln --filter "Category=SqlServer" 2>&1 \
     | tee "/tmp/ss-band-$port.log" | grep -E "^(Passed!|Failed!|No test)|^  Failed "
+  # A fixture's one-time teardown error fails the run without counting as a failed test.
+  band_rc=${PIPESTATUS[0]}
 
   # Every assembly, not just the first. `head -1` recorded whichever finished first, so a passing
   # Schema.IntegrationTests masked 464 failed SchemaQuench tests in the very same band -- and the row
@@ -195,8 +203,10 @@ for band in $BANDS; do
 
   if [ -z "$band_totals" ] || [ "$band_assemblies" -eq 0 ]; then
     summary="NO RESULT"
-  elif [ "$band_failed" -gt 0 ]; then
-    summary="Failed! - $band_failed failed, $band_passed passed across $band_assemblies assemblies"
+  elif [ "$band_assemblies" -lt "$EXPECTED_ASSEMBLIES" ]; then
+    summary="INCOMPLETE - only $band_assemblies of $EXPECTED_ASSEMBLIES assemblies finished ($band_failed failed, $band_passed passed)"
+  elif [ "$band_failed" -gt 0 ] || [ "$band_rc" -ne 0 ]; then
+    summary="Failed! - $band_failed failed, $band_passed passed across $band_assemblies assemblies (exit $band_rc)"
   else
     summary="Passed! - 0 failed, $band_passed passed across $band_assemblies assemblies"
   fi
@@ -223,7 +233,7 @@ echo "Recorded in $RECORD for commit $SWEEP_SHA -- commit it alongside the relea
 # sweep must not report success for it. Exiting 0 on an all-NEVER-READY run is how a broken probe
 # looked exactly like a clean pass -- the record said so plainly while the exit code said otherwise,
 # and the exit code is what a caller (or a hook) actually reads.
-if printf "%s" "$SWEEP_ROWS" | grep -qE "NEVER READY|CONTAINER FAILED TO START|FULL-TEXT INSTALL FAILED|NO RESULT|Failed!"; then
+if printf "%s" "$SWEEP_ROWS" | grep -qE "NEVER READY|CONTAINER FAILED TO START|FULL-TEXT INSTALL FAILED|NO RESULT|INCOMPLETE|Failed!"; then
   echo "FAIL: at least one band did not run. The rows above are not a certification."
   exit 1
 fi

@@ -19,6 +19,7 @@ public static class ValidationCheckRegistry
         new TokenCheck(),
         new TableFileNameCheck(),
         new DeprecationCheck(),
+        new SequenceScriptCheck(),
         new JsonSchemaCheck()
     };
 }

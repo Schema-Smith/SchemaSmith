@@ -84,7 +84,8 @@ BEGIN TRY
 
   SELECT @v_SQL = @v_SQL +
     'RAISERROR(''  Adding FILESTREAM column ' + c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-    'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ADD ' + CAST(c.[ColumnScript] AS NVARCHAR(MAX)) + ';' + CHAR(13) + CHAR(10)
+    'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ADD ' + CAST(c.[ColumnScript] AS NVARCHAR(MAX)) + ';' + CHAR(13) + CHAR(10) +
+    'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''column'', ''' + REPLACE(c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName], '''', '''''') + ''', ''created'');' + CHAR(13) + CHAR(10)
     FROM #Columns c WITH (NOLOCK)
    WHERE c.[FileStream] = 1
      AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName]), SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'ColumnId') IS NULL
@@ -92,7 +93,7 @@ BEGIN TRY
 
   IF @v_SQL <> ''
   BEGIN
-    IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+    IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
   END
 
   SET NOCOUNT OFF

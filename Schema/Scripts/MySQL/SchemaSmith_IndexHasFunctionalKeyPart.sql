@@ -7,7 +7,7 @@ DROP FUNCTION IF EXISTS `SchemaSmith_IndexHasFunctionalKeyPart`;
 DELIMITER //
 
 CREATE FUNCTION `SchemaSmith_IndexHasFunctionalKeyPart`(
-    p_IndexColumns TEXT
+    p_IndexColumns TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ) RETURNS TINYINT
 DETERMINISTIC
 NO SQL
@@ -25,7 +25,7 @@ BEGIN
   DECLARE v_Depth INT DEFAULT 0;
   DECLARE v_InBacktick TINYINT DEFAULT 0;
   DECLARE v_AtKeyPartStart TINYINT DEFAULT 1;
-  DECLARE v_Char CHAR(1);
+  DECLARE v_Char CHAR(1) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
   IF p_IndexColumns IS NULL OR TRIM(p_IndexColumns) = '' THEN
     RETURN 0;

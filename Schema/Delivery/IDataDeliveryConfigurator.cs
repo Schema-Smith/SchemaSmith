@@ -74,6 +74,7 @@ public class DataDeliveryConfiguratorContext
     /// Set by DataTongs when extracting in the XML delivery encoding (B1 slice 3).
     /// </summary>
     public string ContentEncoding { get; set; }
+    public string TimeZone { get; set; }
 
     /// <summary>
     /// Optional identity of the authored DataDelivery array variant this extraction targets.

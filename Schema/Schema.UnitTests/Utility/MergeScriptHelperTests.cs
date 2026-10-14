@@ -169,7 +169,7 @@ public class MergeScriptHelperTests
         // Sized off the constant so retuning the chunk size doesn't silently invalidate the assertions.
         var expectedChunks = 3;
         var rowCount = MergeScriptHelper.MariaDbShredChunkRows * expectedChunks;
-        var rows = Newtonsoft.Json.Linq.JArray.Parse(BuildPayload(rowCount));
+        var rows = MergeScriptHelper.SplitJsonArrayRows(BuildPayload(rowCount));
         var columns = new List<MergeScriptHelper.MySqlColumnInfo>
         {
             new() { Name = "Id", DataType = "int" }
@@ -210,11 +210,28 @@ public class MergeScriptHelperTests
         Assert.That(CountOf(sql, when), Is.EqualTo(MergeScriptHelper.MariaDbShredChunkRows + 1));
     }
 
+    // Re-serialised from parsed rows, a number went through double: a wide DECIMAL lost its tail digits.
+    [Test]
+    public void BuildChunkedMergeMySql_SendsEachRowExactlyAsDelivered()
+    {
+        var rowText = Enumerable.Range(0, MergeScriptHelper.MariaDbShredChunkRows + 1)
+            .Select(i => "{\"Id\":" + i + ",\"Amount\":12345678901234567890.123456789,\"Doc\":{\"a\":[1.50,\"},{\\\"\"]}}")
+            .ToList();
+        Assert.That(MergeScriptHelper.TryChunkMySqlPayload(false, false, "[" + string.Join(", ", rowText) + "]", out var rows), Is.True);
+        Assert.That(rows, Is.EqualTo(rowText), "each row is split out as the exact text it arrived in");
+        var columns = new List<MergeScriptHelper.MySqlColumnInfo> { new() { Name = "Id", DataType = "int" } };
+
+        var sql = MergeScriptHelper.BuildChunkedMergeMySql("db", "t", "`Id`, `Amount`", "jt.`Id`, jt.`Amount`",
+            "(SELECT 1) AS jt", null, "`Id`", rows, columns, null, null);
+
+        Assert.That(CountOf(sql, "12345678901234567890.123456789"), Is.EqualTo(MergeScriptHelper.MariaDbShredChunkRows + 1));
+    }
+
     [Test]
     public void BuildChunkedMergeMySql_WithoutDelete_EmitsNoKeyTable()
     {
         var noDeleteChunks = 2;
-        var rows = Newtonsoft.Json.Linq.JArray.Parse(BuildPayload(MergeScriptHelper.MariaDbShredChunkRows * noDeleteChunks));
+        var rows = MergeScriptHelper.SplitJsonArrayRows(BuildPayload(MergeScriptHelper.MariaDbShredChunkRows * noDeleteChunks));
         var columns = new List<MergeScriptHelper.MySqlColumnInfo> { new() { Name = "Id", DataType = "int" } };
         var sql = MergeScriptHelper.BuildChunkedMergeMySql("db", "t", "`Id`", "jt.`Id`",
             "(SELECT 1) AS jt", null, "`Id`", rows, columns, null, null);
@@ -1034,7 +1051,7 @@ public class MergeScriptHelperTests
     }
 
     [Test]
-    public void BuildMergeScript_PostgreSql_XmlEncoding_ArrayColumn_UsesStringToArrayWithSameDelimiter()
+    public void BuildMergeScript_PostgreSql_XmlEncoding_ArrayColumn_ReadsLiteralOrLegacyDelimiter()
     {
         var cmd = CreatePostgreSqlXmlMockCommand(
             unsupportedComments: null, identAndSeq: null,
@@ -1056,8 +1073,11 @@ public class MergeScriptHelperTests
             Assert.That(script, Does.Contain("\"Tags\" text PATH"),
                 "An array column must be shredded as text — the '*,*'-delimited form is not a PG array literal.");
             Assert.That(script,
-                Does.Contain("STRING_TO_ARRAY(\"x\".\"Tags\", '*,*', '*NULL_VALUE_REPRESENTATION*')::_int4"),
-                "Same function, delimiter, and NULL sentinel GetJsonColumnDefinitionsPostgreSql applies to the JSON row source.");
+                Does.Contain("CASE WHEN LEFT(\"x\".\"Tags\", 1) IN ('{', '[') THEN \"x\".\"Tags\"::integer[] "),
+                "An array is extracted as its own literal, which keeps dimensions, bounds and quoting.");
+            Assert.That(script,
+                Does.Contain("ELSE STRING_TO_ARRAY(\"x\".\"Tags\", '*,*', '*NULL_VALUE_REPRESENTATION*')::integer[] END"),
+                "A file extracted in the older '*,*' form must still load.");
         });
     }
 
@@ -1360,7 +1380,7 @@ public class MergeScriptHelperTests
         Assert.That(result, Does.Contain("`int_col` INT PATH '$.int_col'"));
         Assert.That(result, Does.Contain("`dec_col` DECIMAL(10,2) PATH '$.dec_col'"));
         Assert.That(result, Does.Contain("`dt_col` DATETIME(6) PATH '$.dt_col'"));
-        Assert.That(result, Does.Contain("`vc_col` VARCHAR(100) PATH '$.vc_col'"));
+        Assert.That(result, Does.Contain("`vc_col` VARCHAR(100) CHARACTER SET utf8mb4 PATH '$.vc_col'"));
         Assert.That(result, Does.Contain("`json_col` JSON PATH '$.json_col'"));
     }
 
@@ -1378,7 +1398,7 @@ public class MergeScriptHelperTests
             tokenizeScripts: false, mergeFilter: null);
 
         Assert.That(result, Does.Contain("FROM_BASE64(`data`)"));
-        Assert.That(result, Does.Contain("`data` TEXT PATH '$.data'"));
+        Assert.That(result, Does.Contain("`data` LONGTEXT CHARACTER SET utf8mb4 PATH '$.data'"));
     }
 
     [Test]
@@ -1704,13 +1724,10 @@ public class MergeScriptHelperTests
 
     [TestCase("geometry", true)]
     [TestCase("geography", true)]
-    [TestCase("point", true)]
-    [TestCase("linestring", true)]
-    [TestCase("polygon", true)]
-    [TestCase("multipoint", true)]
-    [TestCase("multilinestring", true)]
-    [TestCase("multipolygon", true)]
-    [TestCase("geometrycollection", true)]
+    // PostgreSQL's own geometric types: ST_AsText / ST_GeomFromText reject them.
+    [TestCase("point", false)]
+    [TestCase("polygon", false)]
+    [TestCase("box", false)]
     [TestCase("int4", false)]
     [TestCase("varchar", false)]
     [TestCase("text", false)]
@@ -1978,7 +1995,7 @@ public class MergeScriptHelperTests
             tokenizeScripts: false, mergeFilter: null);
 
         // Inspect the generated SQL queries. The first call sets up GetJsonSelectColumns
-        // which should contain IN ('GEOGRAPHY', 'GEOMETRY')
+        // which should contain IN ('geography', 'geometry')
         var commandTexts = cmd2.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == "set_CommandText")
             .Select(c => c.GetArguments()[0]?.ToString())
@@ -1986,8 +2003,8 @@ public class MergeScriptHelperTests
             .ToList();
 
         // Second query is GetJsonSelectColumns (first is GetUnsupportedColumnComments) - should contain both types
-        Assert.That(commandTexts[1], Does.Contain("'GEOGRAPHY'"));
-        Assert.That(commandTexts[1], Does.Contain("'GEOMETRY'"));
+        Assert.That(commandTexts[1], Does.Contain("'geography'"));
+        Assert.That(commandTexts[1], Does.Contain("'geometry'"));
     }
 
     [Test]
@@ -2007,8 +2024,8 @@ public class MergeScriptHelperTests
 
         // Fifth query is GetUpdateColumns - should check for both GEOGRAPHY and GEOMETRY
         var updateQuery = commandTexts[4];
-        Assert.That(updateQuery, Does.Contain("'GEOGRAPHY'"));
-        Assert.That(updateQuery, Does.Contain("'GEOMETRY'"));
+        Assert.That(updateQuery, Does.Contain("'geography'"));
+        Assert.That(updateQuery, Does.Contain("'geometry'"));
     }
 
     [Test]
@@ -2075,7 +2092,7 @@ public class MergeScriptHelperTests
             .ToList();
 
         var updateQuery = commandTexts[4];
-        Assert.That(updateQuery, Does.Contain("'DATETIMEOFFSET'"));
+        Assert.That(updateQuery, Does.Contain("'datetimeoffset'"));
         Assert.That(updateQuery, Does.Contain("'D'"));
     }
 
@@ -2303,7 +2320,7 @@ public class MergeScriptHelperTests
         if (updateCols != null)
         {
             sequence.Add(updateCols);
-            sequence.Add(null); // GetXmlColumnsPostgreSql: no xml-typed target columns
+            sequence.Add(null); // GetTextCompareColumnsPostgreSql: no xml or geometric target columns
         }
         sequence.Add(insertCols);
 
@@ -2349,8 +2366,15 @@ public class MergeScriptHelperTests
         reader.GetString(8).Returns(ci => columns[idx].Nullable ? "YES" : "NO");
         reader.GetValue(9).Returns(false);
         reader.GetValue(10).Returns(false);
+        reader.GetString(11).Returns(ci => FormatTypeLike(columns[idx]));
         return reader;
     }
+
+    // What format_type returns for the shapes these tests use.
+    private static string FormatTypeLike((string Name, string DataType, string UdtName, string UdtSchema, int? MaxLen, bool Nullable) c) =>
+        c.UdtName.StartsWith('_') ? (c.UdtName == "_int4" ? "integer" : c.UdtName[1..]) + "[]"
+        : c.MaxLen is null ? c.DataType
+        : $"{c.DataType}({c.MaxLen})";
 
     #endregion
 
@@ -2668,8 +2692,8 @@ public class MergeScriptHelperTests
         var result = MergeScriptHelper.GetJsonColumnDefinitions(Platform.MySQL, cmd, "testdb", "test_table");
 
         Assert.That(result, Does.Contain("`id` INT PATH '$.id'"));
-        Assert.That(result, Does.Contain("`name` VARCHAR(100) PATH '$.name'"));
-        Assert.That(result, Does.Contain("`location` TEXT PATH '$.location'"));
+        Assert.That(result, Does.Contain("`name` VARCHAR(100) CHARACTER SET utf8mb4 PATH '$.name'"));
+        Assert.That(result, Does.Contain("`location` LONGTEXT CHARACTER SET utf8mb4 PATH '$.location'"));
     }
 
     [Test]
@@ -2990,17 +3014,14 @@ public class MergeScriptHelperTests
         Assert.That(result, Does.Contain("{{public.test_table.tabledata}}"));
     }
 
-    [Test]
-    public void BuildMergeScript_MySQL_DestSchemaOverride_IgnoredOrThrows()
+    // The destination qualifier on MySQL: null keeps the database the catalog was read from (delivery builds its script
+    // in the target); "" names the table alone, so a script written now writes into whatever database it is deployed
+    // to; a name qualifies with that database.
+    [TestCase(null, "`testdb`.`testtable`", TestName = "BuildMergeScript_MySQL_NoOverride_KeepsTheCatalogDatabase")]
+    [TestCase("", "INTO `testtable`", TestName = "BuildMergeScript_MySQL_EmptyOverride_NamesTheTableAlone")]
+    [TestCase("other", "`other`.`testtable`", TestName = "BuildMergeScript_MySQL_Override_QualifiesWithIt")]
+    public void BuildMergeScript_MySQL_DestinationQualifier(string destOverride, string expected)
     {
-        // MySQL has no schema-template fan-out (no schema-inside-database concept), so the
-        // override is meaningless on MySQL. Two acceptable behaviors:
-        //   (a) silently ignore the override (the caller upstream is supposed to gate this
-        //       on platform, but defense in depth never hurts), or
-        //   (b) throw an explicit ArgumentException.
-        // We pick (a) for symmetry with MergeScriptHelper's existing tolerance of edge
-        // platform combinations, and to keep the call sites simple. The destination ref
-        // stays on the source database name on MySQL.
         var cmd = CreateMySqlMockCommand(new MySqlColumnDef[]
         {
             new("id", "int", null, 10L, 0L, null, "int", "", null)
@@ -3008,17 +3029,117 @@ public class MergeScriptHelperTests
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.MySQL, cmd,
             "testdb", "testtable", "[]", "`id`",
-            mergeUpdate: false, mergeDelete: false, disableTriggers: false,
+            mergeUpdate: true, mergeDelete: true, disableTriggers: false,
             tokenizeScripts: false, mergeFilter: null,
             disableRules: false, updateDescendents: true,
-            destSchemaOverride: "{{SchemaName}}");
+            destSchemaOverride: destOverride);
 
-        Assert.That(result, Does.Contain("`testdb`.`testtable`"),
-            "MySQL must keep using the source database name; the override is a no-op.");
-        Assert.That(result, Does.Not.Contain("{{SchemaName}}"),
-            "MySQL output must not leak the engine token into the script body.");
+        Assert.That(result, Does.Contain(expected));
+        if (destOverride != null)
+            Assert.That(result, Does.Not.Contain("`testdb`."), "no reference may keep the catalog database: " + result);
     }
 
     #endregion
 
+    // MariaDB 10.2's JSON parser refuses an escaped surrogate pair, so on 10.2 it is written as the character itself.
+    [TestCase(1002, @"[{""n"":""a😀b""}]", "[{\"n\":\"a\U0001F600b\"}]", TestName = "SurrogateEscapes_10_2_Decoded")]
+    [TestCase(1002, @"[{""n"":""😀""}]", "[{\"n\":\"\U0001F600\"}]", TestName = "SurrogateEscapes_10_2_UpperHexDecoded")]
+    [TestCase(1002, @"[{""n"":""\\ud83d\\ude00""}]", @"[{""n"":""\\ud83d\\ude00""}]", TestName = "SurrogateEscapes_10_2_EscapedBackslashIsText")]
+    [TestCase(1002, @"[{""n"":""\\😀""}]", "[{\"n\":\"\\\\\U0001F600\"}]", TestName = "SurrogateEscapes_10_2_AfterAnEscapedBackslash")]
+    [TestCase(1002, @"[{""n"":""\ud83d""}]", @"[{""n"":""\ud83d""}]", TestName = "SurrogateEscapes_10_2_LoneSurrogateUnchanged")]
+    [TestCase(1002, @"[{""n"":""é""}]", @"[{""n"":""é""}]", TestName = "SurrogateEscapes_10_2_BmpEscapeUnchanged")]
+    [TestCase(1003, @"[{""n"":""😀""}]", @"[{""n"":""😀""}]", TestName = "SurrogateEscapes_10_3_Unchanged")]
+    [TestCase(800, @"[{""n"":""😀""}]", @"[{""n"":""😀""}]", TestName = "SurrogateEscapes_MySql_Unchanged")]
+    public void DecodeSurrogateEscapesMySql_OnlyOnMariaDb10_2(int versionNum, string payload, string expected)
+        => Assert.That(MergeScriptHelper.DecodeSurrogateEscapesMySql(payload, versionNum), Is.EqualTo(expected));
+
+    // MySQL went 5.7, 8.x, 9.x, then calendar years from 26: 26.7 reads 2607. Only MariaDB 10.2-10.5 lacks JSON_TABLE.
+    [TestCase(0, true)]
+    [TestCase(507, false)]
+    [TestCase(800, true)]
+    [TestCase(904, true)]
+    [TestCase(1002, false)]
+    [TestCase(1005, false)]
+    [TestCase(1006, true)]
+    [TestCase(1300, true)]
+    [TestCase(2600, true)]
+    [TestCase(2607, true)]
+    public void MySqlFamilyHasJsonTable_ByVersionNum(int versionNum, bool expected)
+        => Assert.That(MergeScriptHelper.MySqlFamilyHasJsonTable(versionNum), Is.EqualTo(expected));
+
+    // MariaDB's JSON_TABLE kept string escapes literally until 10.6.20, 10.11.10, 11.2.6, 11.4.4 and 11.6.2 (MDEV-27412).
+    [TestCase("10.5.29-MariaDB", false, TestName = "JsonTableMisreadsStrings_10_5_HasNoJsonTable")]
+    [TestCase("10.6.8-MariaDB", true, TestName = "JsonTableMisreadsStrings_10_6_8")]
+    [TestCase("10.6.19-MariaDB-log", true, TestName = "JsonTableMisreadsStrings_10_6_19")]
+    [TestCase("10.6.20-MariaDB", false, TestName = "JsonTableMisreadsStrings_10_6_20")]
+    [TestCase("10.9.8-MariaDB", true, TestName = "JsonTableMisreadsStrings_10_9")]
+    [TestCase("10.11.9-MariaDB", true, TestName = "JsonTableMisreadsStrings_10_11_9")]
+    [TestCase("10.11.10-MariaDB", false, TestName = "JsonTableMisreadsStrings_10_11_10")]
+    [TestCase("11.1.6-MariaDB", true, TestName = "JsonTableMisreadsStrings_11_1")]
+    [TestCase("11.2.5-MariaDB", true, TestName = "JsonTableMisreadsStrings_11_2_5")]
+    [TestCase("11.2.6-MariaDB", false, TestName = "JsonTableMisreadsStrings_11_2_6")]
+    [TestCase("11.3.2-MariaDB", true, TestName = "JsonTableMisreadsStrings_11_3")]
+    [TestCase("11.4.3-MariaDB-ubu2404", true, TestName = "JsonTableMisreadsStrings_11_4_3")]
+    [TestCase("11.4.4-MariaDB-ubu2404", false, TestName = "JsonTableMisreadsStrings_11_4_4")]
+    [TestCase("11.5.2-MariaDB", true, TestName = "JsonTableMisreadsStrings_11_5")]
+    [TestCase("11.6.1-MariaDB", true, TestName = "JsonTableMisreadsStrings_11_6_1")]
+    [TestCase("11.6.2-MariaDB", false, TestName = "JsonTableMisreadsStrings_11_6_2")]
+    [TestCase("11.8.3-MariaDB", false, TestName = "JsonTableMisreadsStrings_11_8")]
+    [TestCase("8.0.36", false, TestName = "JsonTableMisreadsStrings_MySql")]
+    public void MariaDbJsonTableMisreadsStrings_ByVersion(string version, bool expected)
+        => Assert.That(MergeScriptHelper.MariaDbJsonTableMisreadsStrings(version), Is.EqualTo(expected));
+
+    [Test]
+    public void QuoteRowNumbers_QuotesOnlyTheNamedRowKeys()
+    {
+        var keys = new HashSet<string> { "d", "e" };
+        Assert.That(MergeScriptHelper.QuoteRowNumbers(
+                @"[{""d"":1.25,""e"":-3E+2,""n"":4.5,""j"":{""d"":7.5},""s"":""d"",""x"":null},{""d"":null, ""e"" : 12}]", keys),
+            Is.EqualTo(@"[{""d"":""1.25"",""e"":""-3E+2"",""n"":4.5,""j"":{""d"":7.5},""s"":""d"",""x"":null},{""d"":null, ""e"" : ""12""}]"));
+    }
+
+    [Test]
+    public void QuoteRowNumbers_LeavesStringsThatLookLikeKeysAlone()
+    {
+        const string json = @"[{""s"":""\""d\"":1.5"",""d"":""already""}]";
+        Assert.That(MergeScriptHelper.QuoteRowNumbers(json, new HashSet<string> { "d" }), Is.EqualTo(json));
+    }
+
+    [Test]
+    public void QuoteRowNumbers_NoKeysOrNullIsUnchanged()
+    {
+        Assert.That(MergeScriptHelper.QuoteRowNumbers(@"[{""d"":1.5}]", new HashSet<string>()), Is.EqualTo(@"[{""d"":1.5}]"));
+        Assert.That(MergeScriptHelper.QuoteRowNumbers(null, new HashSet<string> { "d" }), Is.Null);
+    }
+
+    [TestCase(1002, true)]
+    [TestCase(1300, true)]
+    [TestCase(904, false)]
+    [TestCase(2607, false)]   // MySQL 26.7, not MariaDB
+    public void IsMariaDbVersionNum_ByVersionNum(int versionNum, bool expected)
+        => Assert.That(MergeScriptHelper.IsMariaDbVersionNum(versionNum), Is.EqualTo(expected));
+
+    // The deferred self-reference pass inserts only the rows whose key is missing. With no key column known it has
+    // nothing to match on, and an empty match list produced WHERE NOT EXISTS (... WHERE ), a syntax error.
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("`unknown`")]
+    public void BuildMissingRowsFilterMySql_WithNoKnownKey_IsNull(string keyColumns)
+    {
+        var columns = new List<MergeScriptHelper.MySqlColumnInfo> { new() { Name = "id", DataType = "int", ColumnType = "int" } };
+        Assert.That(MergeScriptHelper.BuildMissingRowsFilterMySql("db", "t", columns, keyColumns), Is.Null);
+    }
+
+    [Test]
+    public void BuildMissingRowsFilterMySql_MatchesOnTheKey()
+    {
+        var columns = new List<MergeScriptHelper.MySqlColumnInfo>
+        {
+            new() { Name = "id", DataType = "int", ColumnType = "int" },
+            new() { Name = "parent_id", DataType = "int", ColumnType = "int" }
+        };
+        var filter = MergeScriptHelper.BuildMissingRowsFilterMySql("db", "t", columns, "`id`");
+        Assert.That(filter, Does.StartWith("WHERE NOT EXISTS (SELECT 1 FROM `db`.`t` _ss_live WHERE _ss_live.`id` <=> "));
+        Assert.That(filter, Does.Not.Contain("parent_id"));
+    }
 }

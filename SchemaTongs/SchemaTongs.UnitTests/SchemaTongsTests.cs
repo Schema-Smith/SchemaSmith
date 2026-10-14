@@ -118,7 +118,7 @@ public class SchemaTongsTests
             });
 
             var tongs = new SchemaTongs(Platform.SqlServer);
-            Assert.Throws<Exception>(() => tongs.CastTemplate());
+            Assert.That(Assert.Throws<RunFailedException>(() => tongs.CastTemplate())!.Message, Does.Contain("Source:Database"));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -137,7 +137,7 @@ public class SchemaTongsTests
             });
 
             var tongs = new SchemaTongs(Platform.SqlServer);
-            Assert.Throws<Exception>(() => tongs.CastTemplate());
+            Assert.That(Assert.Throws<RunFailedException>(() => tongs.CastTemplate())!.Message, Does.Contain("Source:Database"));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -2672,7 +2672,7 @@ public class SchemaTongsTests
 
             var tongs = new SchemaTongs(Platform.SqlServer);
 
-            var ex = Assert.Throws<Exception>(() => tongs.PreFlightSourceVersion());
+            var ex = Assert.Throws<RunFailedException>(() => tongs.PreFlightSourceVersion());
             Assert.That(ex!.Message, Does.Contain("below the minimum supported"));
             Assert.That(ex.Message, Does.Contain("SQL2K5"));
 

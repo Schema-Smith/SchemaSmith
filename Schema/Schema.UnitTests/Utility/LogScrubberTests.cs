@@ -356,11 +356,53 @@ public class LogScrubberTests
             Is.EqualTo("Login failed for Server=db1;Password=***\n   at Foo.Bar() in C:\\x\\Foo.cs:line 12\n   at Baz.Qux()"));
     }
 
-    [Test]
-    public void ScrubConnectionStringSubfields_EmptyValueAtALineEnd_DoesNotMaskTheNextLine()
+    // A value cannot be told from the line after an empty one -- "Password=" then "hunter2" is a connection string
+    // broken after the key -- so the next line is masked, to its ';' or its end, and nothing past that line.
+    [TestCase("Server=db;\nPassword=\nhunter2;", "Server=db;\nPassword=\n***;")]
+    [TestCase("Server=db1;Password=\nnext line\n   at Foo.Bar()", "Server=db1;Password=\n***\n   at Foo.Bar()")]
+    [TestCase("Server=db;Password=\r\nhunter2;Database=app", "Server=db;Password=\r\n***;Database=app")]
+    [TestCase("export PGPASSWORD=\nhunter2 next", "export PGPASSWORD=\n*** next")]
+    public void ScrubConnectionStringSubfields_EmptyValueAtALineEnd_MasksTheNextLineOnly(string text, string expected)
     {
-        Assert.That(LogScrubber.ScrubConnectionStringSubfields("Server=db1;Password=\nnext line;tail"),
-            Is.EqualTo("Server=db1;Password=***\nnext line;tail"));
+        Assert.That(LogScrubber.ScrubConnectionStringSubfields(text), Is.EqualTo(expected));
+    }
+
+    // A SQL formatter breaks the line before the '='.
+    [TestCase("CREATE LOGIN x WITH PASSWORD\n= 'S1;S2';", "CREATE LOGIN x WITH PASSWORD\n=***;")]
+    [TestCase("CREATE LOGIN x WITH PASSWORD\r\n    = N'S1;S2', CHECK_POLICY = OFF;", "CREATE LOGIN x WITH PASSWORD\r\n    =***, CHECK_POLICY = OFF;")]
+    public void ScrubConnectionStringSubfields_KeyEndingItsLine_MasksTheValueOnTheNext(string text, string expected)
+    {
+        Assert.That(LogScrubber.ScrubConnectionStringSubfields(text), Is.EqualTo(expected));
+    }
+
+    // A comparison in code is not an assignment: masking it destroyed the line it was logged in.
+    [TestCase("x_pwd == y_pwd")]
+    [TestCase("if (dbPassword == null) return;")]
+    [TestCase("IF @secret == 'x' PRINT 'no'")]
+    [TestCase("Password\n==========")]
+    public void ScrubConnectionStringSubfields_AComparison_IsLeftAlone(string text)
+    {
+        Assert.That(LogScrubber.ScrubConnectionStringSubfields(text), Is.EqualTo(text));
+    }
+
+    // A prefixed key's unquoted value ran over the quote closing the JSON string it was logged in.
+    [TestCase("""{"Message":"Executing: export PGPASSWORD=S1","Step":3}""", """{"Message":"Executing: export PGPASSWORD=***","Step":3}""")]
+    [TestCase("""{"cs":"{\"m\":\"MYSQL_PWD=S1\"}"}""", """{"cs":"{\"m\":\"MYSQL_PWD=***\"}"}""")]
+    public void ScrubConnectionStringSubfields_PrefixedUnquotedValue_StopsAtAQuote(string text, string expected)
+    {
+        Assert.That(LogScrubber.ScrubConnectionStringSubfields(text), Is.EqualTo(expected));
+    }
+
+    // A JSON-escaped value closes at a quote escaped as deeply as the one that opened it: JSON inside a JSON string
+    // escapes everything twice, and once-escaped text can hold a twice-escaped quote.
+    [TestCase("""{\"cs\":\"Password=\\\"S1;S2\\\"\"}""", """{\"cs\":\"Password=***\"}""")]
+    [TestCase("""{"cs":"Password=\"a\\\"b;S2\""}""", """{"cs":"Password=***"}""")]
+    public void ScrubConnectionStringSubfields_JsonEscapedValue_ClosesAtItsOwnDepth(string text, string expected)
+    {
+        var scrubbed = LogScrubber.ScrubConnectionStringSubfields(text);
+
+        Assert.That(scrubbed, Does.Not.Contain("S2"), scrubbed);
+        Assert.That(scrubbed, Is.EqualTo(expected));
     }
 
     // A value whose quote never closes is all secret. Matching it as unquoted stopped at its first ';' and logged the rest.

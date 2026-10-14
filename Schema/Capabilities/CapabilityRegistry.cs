@@ -77,8 +77,14 @@ namespace Schema.Capabilities
                 13, "SQL Server 2016", null, DegradeKind.Skip, "clustered columnstore beside rowstore indexes (SQL Server 2016)"));
 
             // ---- PostgreSQL (major gated via ServerVersionNum; all skipped) ---------------------------------
+            // Reduced: the column becomes plain as declared, but below 13 it is dropped and re-added, so its values
+            // are not kept (13+ converts it in place with DROP EXPRESSION).
+            rows.Add(new("drop-expression", "Removing a column's generation, keeping its values", Platform.PostgreSQL,
+                13, "PostgreSQL 13", null, DegradeKind.Reduced, "un-generated column, values not kept (PG13)"));
             rows.Add(new("nulls-not-distinct", "Unique index NULLS NOT DISTINCT", Platform.PostgreSQL,
                 15, "PostgreSQL 15", null, DegradeKind.Skip, "NULLS NOT DISTINCT (PG15)"));
+            rows.Add(new("unlogged-sequence", "Unlogged sequence", Platform.PostgreSQL,
+                15, "PostgreSQL 15", null, DegradeKind.Skip, "UNLOGGED sequence (PG15)"));
             rows.Add(new("expression-statistics", "Extended statistics on expressions", Platform.PostgreSQL,
                 14, "PostgreSQL 14", null, DegradeKind.Skip, "expression statistics (PG14)"));
             rows.Add(new("column-compression", "Per-column compression method", Platform.PostgreSQL,
@@ -96,10 +102,9 @@ namespace Schema.Capabilities
                 800, "MySQL 8.0", null, DegradeKind.Skip, "INDEX (invisible, MySQL 8.0 / MariaDB 10.6)"));
             rows.Add(new("descending-index", "Descending index key part", Platform.MySQL,
                 800, "MySQL 8.0", null, DegradeKind.Reduced, "INDEX (descending key part, MySQL 8.0 / MariaDB 10.8)"));
-            // CHECK's true intro is 8.0.16; the gate is major-only (800). Comparable matches the gate, display
-            // matches the manifest message (which names the 8.0.16 patch).
+            // CHECK arrived at 8.0.16, and the gate turns on that patch.
             rows.Add(new("check-constraint", "CHECK constraint", Platform.MySQL,
-                800, "MySQL 8.0.16", null, DegradeKind.Skip, "CHECK constraint (MySQL 8.0.16)"));
+                800, "MySQL 8.0.16", null, DegradeKind.Skip, "CHECK constraint (MySQL 8.0.16)", IntroducedInPatchComparable: 80016));
             // Automatic data delivery needs JSON_TABLE (MySQL 8.0). MySQL 5.7 has neither JSON_TABLE nor
             // recursive CTEs, so there is no row-source fallback: the delivery is skipped (warn) or aborts
             // (fail) at the C# layer (DataDeliveryProcessor) — a genuine skip, but with no ChangeAudit manifest
@@ -114,14 +119,14 @@ namespace Schema.Capabilities
             // unconditionally 1 on MariaDB — same "no row, no version boundary to cross" shape as the
             // MySQL-only check-constraint row above.
             rows.Add(new("default-expression", "Column DEFAULT expression", Platform.MySQL,
-                800, "MySQL 8.0.13", null, DegradeKind.Skip, "column (DEFAULT expression, MySQL 8.0.13)"));
+                800, "MySQL 8.0.13", null, DegradeKind.Skip, "column (DEFAULT expression, MySQL 8.0.13)", IntroducedInPatchComparable: 80013));
 
             // Invisible column: unlike invisible-index (INVISIBLE vs. IGNORED keyword differs by engine), the
             // INVISIBLE keyword itself is identical on both engines — only the introduction version differs,
             // so both platforms get a row with a shared ManifestObjectType literal (mirrors invisible-index).
             // MySQL row here; the MariaDb row lives in the MariaDb section below, alongside its siblings.
             rows.Add(new("invisible-column", "Invisible column", Platform.MySQL,
-                800, "MySQL 8.0.23", null, DegradeKind.Reduced, "column (invisible, MySQL 8.0.23 / MariaDB 10.3)"));
+                800, "MySQL 8.0.23", null, DegradeKind.Reduced, "column (invisible, MySQL 8.0.23 / MariaDB 10.3)", IntroducedInPatchComparable: 80023));
 
             // Column SRID restriction: MariaDB has NO equivalent at any version (verified live on 11.4 — the
             // syntax is a hard parse error and INFORMATION_SCHEMA.COLUMNS carries no SRS_ID at all), so
@@ -247,9 +252,24 @@ namespace Schema.Capabilities
             // boundary to cross" shape as column-srid above, just unconditionally-0 instead of
             // unconditionally-1 (default-expression's MariaDB shape).
             rows.Add(new("functional-index", "Functional/expression index", Platform.MySQL,
-                800, "MySQL 8.0.13", null, DegradeKind.Skip, "INDEX (functional/expression, MySQL 8.0.13)"));
+                800, "MySQL 8.0.13", null, DegradeKind.Skip, "INDEX (functional/expression, MySQL 8.0.13)", IntroducedInPatchComparable: 80013));
 
-            // ---- MariaDb (distinct rows — different intro versions; NO CHECK row: supported at the 10.2 floor)
+            // Gated on the server's filesystem rather than its version: MySQL refuses page compression where the
+            // data directory cannot punch holes (Windows among them). Reduced: the table deploys uncompressed.
+            rows.Add(new("page-compression", "Page compression (COMPRESSION)", Platform.MySQL,
+                0, "any supported version (needs a data directory on a filesystem that supports hole punching)",
+                null, DegradeKind.Reduced, "table without its COMPRESSION option",
+                "a data directory on a filesystem that supports hole punching"));
+
+            // ---- MariaDb (distinct rows — different intro versions)
+            // CHECK itself is older than the floor, but INFORMATION_SCHEMA.CHECK_CONSTRAINTS, which every read of a
+            // deployed CHECK needs, arrived in 10.2.22; below it CHECK degrades as it does on MySQL below 8.0.16.
+            rows.Add(new("check-constraint", "CHECK constraint", Platform.MariaDb,
+                1002, "MariaDB 10.2.22", null, DegradeKind.Skip, "CHECK constraint (MariaDB 10.2.22)", IntroducedInPatchComparable: 100222));
+            // Refused rather than degraded: a long unique key (MariaDB 10.4+ enforces it through a hidden hash and
+            // extracts it as IndexType HASH) cannot exist on 10.2/10.3, and dropping it would drop the uniqueness.
+            rows.Add(new("long-unique-key", "Long unique key (UNIQUE ... USING HASH)", Platform.MariaDb,
+                1004, "MariaDB 10.4", null, DegradeKind.Refused, null));
             rows.Add(new("invisible-index", "Invisible index (IGNORED)", Platform.MariaDb,
                 1006, "MariaDB 10.6", null, DegradeKind.Skip, "INDEX (invisible, MySQL 8.0 / MariaDB 10.6)"));
             rows.Add(new("descending-index", "Descending index key part", Platform.MariaDb,

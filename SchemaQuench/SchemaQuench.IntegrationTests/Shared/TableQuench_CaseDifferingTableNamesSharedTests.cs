@@ -5,6 +5,7 @@ using System;
 using System.Data;
 using NUnit.Framework;
 using Schema.DataAccess;
+using Schema.Utility;
 
 namespace SchemaQuench.IntegrationTests.Shared;
 
@@ -17,11 +18,10 @@ namespace SchemaQuench.IntegrationTests.Shared;
 /// <c>lower_case_table_names = 0</c> (the Linux default, and what CI and the demo containers run), collide
 /// on that key, and the deploy dies with <c>ERROR 1062: Duplicate entry 'CaseProbe' for key 'PRIMARY'</c>
 /// before doing anything.</para>
-/// <para>The comparisons were never the problem — <c>ModifiedTableQuench</c> alone carries 191 explicit
-/// <c>BINARY</c> comparisons, i.e. case-sensitive. Only the KEYS disagreed with them. The fix declares the
-/// identifier columns <c>COLLATE utf8mb4_bin</c> so uniqueness matches the comparisons already in place.
-/// Under <c>lower_case_table_names >= 1</c> the server folds identifiers anyway, so nothing changes there
-/// and this test simply finds one table instead of two.</para>
+/// <para>Table names compare through <c>SchemaSmith_IdentifierKey</c>, which is the exact name on
+/// <c>lower_case_table_names = 0</c>, so the two tables stay distinct there and the snapshot keys are binary to
+/// match. Under <c>lower_case_table_names >= 1</c> the server folds the names onto one table, and this test then
+/// checks that single table.</para>
 /// <para>Nothing else in the suite creates case-differing tables, which is exactly why this survived: it
 /// costs a deploy, not a test. Asserting the SIBLING's columns and row count is the point — a fix that
 /// stopped the error but let the quench reshape the wrong table would be worse than the bug.</para>
@@ -99,7 +99,8 @@ public abstract class TableQuench_CaseDifferingTableNamesSharedTests : BaseTable
     private string Columns(IDbCommand cmd, string table) =>
         Scalar(cmd, $@"SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION)
                          FROM INFORMATION_SCHEMA.COLUMNS
-                        WHERE TABLE_SCHEMA = '{_mainDb}' AND BINARY TABLE_NAME = BINARY '{table}'");
+                        WHERE {MySqlNameMatch.Folded("TABLE_SCHEMA", $"'{_mainDb}'")}
+                          AND {MySqlNameMatch.Folded("TABLE_NAME", $"'{table}'")}");
 
     private static void Exec(IDbCommand cmd, string sql)
     {

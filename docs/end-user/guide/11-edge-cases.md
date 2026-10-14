@@ -166,7 +166,7 @@ DataTongs generates sync scripts from live data. Most column types serialize to 
 - **NTEXT / TEXT / IMAGE** -- Legacy LOB types cast to modern equivalents for serialization.
 - **Identity columns** -- Detected automatically; `SET IDENTITY_INSERT ON/OFF` wraps the merge.
 - **Computed columns** -- Auto-excluded from SELECT and INSERT.
-- **ROWGUIDCOL columns** -- Excluded from UPDATE.
+- **ROWGUIDCOL columns** -- Extracted and delivered like any other column, so a row keeps its GUID.
 - **Excluded entirely with a warning:** `sql_variant`, `rowversion`, `timestamp`.
 
 **PostgreSQL:**

@@ -71,25 +71,25 @@ FAILED=0
 # is missing from the list. When an engine ratchets, that assertion is what tells you to add a band.
 #
 # LOCAL COVERS MORE THAN CI, NEVER LESS. CI minutes are spent on every push, so its matrix is what we
-# can afford continuously; this sweep runs once per release and can afford the bands CI cannot. Three
-# of these have no CI leg at all and are here for that reason: mysql:9 and mysql:26 sit in the gap
-# between the 8.4 LTS leg and the ceiling band, and mariadb:12 sits between 11.8 and 13. The ceiling
-# band only ever tests the TOP of the range, and assert_latest_is_covered() ratchets it upward as each
-# engine ships a major -- so without these the middle of a range we document as continuous is exactly
-# where nobody looks. Adding a CI leg for them is a separate decision with a per-push cost; covering
-# them here costs one release's wall clock.
+# can afford continuously; this sweep runs once per release and can afford the bands CI cannot. The
+# middle of each range is the part a ceiling band never reaches: the ceiling tests only the TOP, and
+# assert_latest_is_covered() ratchets it upward as each engine ships a major. MySQL 9.7 and MariaDB 12.3
+# are the LTS releases in those gaps; both are pinned here and, from 2.8, as CI legs on merge to main.
 FLOORS=(
   "floor-mariadb-102:mariadb:10.2:13402:MariaDb"
   "floor-mysql-57:mysql:5.7:13457:MySQL"
   "floor-postgres-12:postgres:12:15412:PostgreSQL"
   "band-mariadb-106:mariadb:10.6:13406:MariaDb"
+  # A patch with the JSON_TABLE bugs SchemaSmith routes around (MDEV-25875 before 10.6.9, MDEV-27412 before 10.6.20):
+  # every other leg is past them, so this is the only one that runs the workaround against the engine that needs it.
+  "band-mariadb-1068:mariadb:10.6.8:13468:MariaDb"
   "band-mariadb-114:mariadb:11.4:13414:MariaDb"
   "band-mariadb-118:mariadb:11.8:13418:MariaDb"
-  "band-mariadb-12:mariadb:12:13412:MariaDb"
+  "band-mariadb-123:mariadb:12.3:13412:MariaDb"
   "band-mariadb-13:mariadb:13:13413:MariaDb"
   "band-mysql-80:mysql:8.0:13480:MySQL"
   "band-mysql-84:mysql:8.4:13484:MySQL"
-  "band-mysql-9:mysql:9:13409:MySQL"
+  "band-mysql-97:mysql:9.7:13409:MySQL"
   "band-mysql-26:mysql:26:13426:MySQL"
   "band-postgres-13:postgres:13:15413:PostgreSQL"
   "band-postgres-14:postgres:14:15414:PostgreSQL"
@@ -141,7 +141,7 @@ if ! dotnet build SchemaSmith.sln -c Release -v q --nologo >/dev/null 2>&1; then
 fi
 
 # FLOOR_FILTER runs a SUBSET by band name, comma-separated:
-#   FLOOR_FILTER=band-mysql-9,band-mariadb-12 bash scripts/run-floor-sweep.sh
+#   FLOOR_FILTER=band-mysql-97,band-mariadb-123 bash scripts/run-floor-sweep.sh
 # For re-running the bands a change actually affects instead of the whole list. The full sweep is
 # still what certifies a release -- this exists so that "I added two bands" does not mean re-running
 # sixteen that already passed on the same commit.
@@ -206,15 +206,18 @@ for f in "${FLOORS[@]}"; do
   for proj in "${PROJS[@]}"; do
     out=$(env $PORT_ENV $SSL_ENV dotnet test "$proj" -c Release --no-build \
             --filter "TestCategory=$category" 2>&1)
+    rc=$?
     summary=$(echo "$out" | grep -aE '^(Passed!|Failed!)' | tail -1)
 
     # A missing summary is a failure, not a pass: a filter that selects nothing prints no "Passed!" line.
-    if echo "$summary" | grep -q '^Passed!'; then
+    # So is a non-zero exit under a "Passed!" summary: a fixture's one-time teardown error is not counted as a
+    # test failure, but it fails the run, and CI reads the exit code.
+    if [ "$rc" -eq 0 ] && echo "$summary" | grep -q '^Passed!'; then
       echo "  $(basename "$proj" .csproj): $summary"
     else
       FAILED=1
-      echo "  $(basename "$proj" .csproj): ${summary:-NO RESULT}"
-      echo "$out" | grep -aE '  Failed [A-Za-z]|Error occurred while kindling|Unknown column|Unknown system variable|error in your SQL syntax' | head -8 | sed 's/^/    /'
+      echo "  $(basename "$proj" .csproj): ${summary:-NO RESULT} (exit $rc)"
+      echo "$out" | grep -aE '  Failed [A-Za-z]|Error occurred while kindling|Unknown column|Unknown system variable|error in your SQL syntax|TearDown failed|SetUp failed' | head -8 | sed 's/^/    /'
     fi
   done
 

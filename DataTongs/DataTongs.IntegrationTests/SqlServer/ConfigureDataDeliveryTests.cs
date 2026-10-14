@@ -511,7 +511,7 @@ INSERT INTO [dbo].[TestTable] ([Id], [Name]) VALUES (1, 'Test');
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}];";
+        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
         cmd.ExecuteNonQuery();
     }
 
@@ -522,14 +522,7 @@ INSERT INTO [dbo].[TestTable] ([Id], [Name]) VALUES (1, 'Test');
             using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = $@"
-IF DB_ID('{_integrationDb}') IS NOT NULL
-BEGIN
-  ALTER DATABASE [{_integrationDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-  DROP DATABASE [{_integrationDb}];
-END
-";
-            cmd.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _integrationDb);
         }
         catch { }
     }

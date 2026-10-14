@@ -117,8 +117,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             finally
             {
                 conn.ChangeDatabase("master");
-                cmd.CommandText = $"IF DB_ID('{_benchDb}') IS NOT NULL BEGIN ALTER DATABASE [{_benchDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_benchDb}]; END";
-                cmd.ExecuteNonQuery();
+                Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _benchDb);
             }
         }
 
@@ -202,8 +201,7 @@ SELECT [Label], [ms] FROM (
             finally
             {
                 conn.ChangeDatabase("master");
-                cmd.CommandText = $"IF DB_ID('{_benchDb}') IS NOT NULL BEGIN ALTER DATABASE [{_benchDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_benchDb}]; END";
-                cmd.ExecuteNonQuery();
+                Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _benchDb);
             }
         }
 

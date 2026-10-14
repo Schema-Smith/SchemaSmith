@@ -1,11 +1,10 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
-using System.Data;
+using System.Data.Common;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Domain.SqlServer;
-using Schema.Utility;
 using Newtonsoft.Json;
 
 namespace SchemaTongs.IntegrationTests.SqlServer;
@@ -13,21 +12,19 @@ namespace SchemaTongs.IntegrationTests.SqlServer;
 [Category("SqlServer")]
 public class GenerateIndexedViewJsonTests
 {
-    private string _integrationDb = "";
-    private string _connectionString;
+    // Runs on the Schema suite's shared kindled database (already carrying GenerateIndexedViewJson), isolated
+    // by fixture-owned schemas. Each test keeps a schema of its own, as it did before.
+    private readonly string _p = "ivj_" + Guid.NewGuid().ToString("N")[..8];
+    private string TestSchema => _p;
+    private string NoNcSchema => _p + "_nonc";
+    private string MultiSchema => _p + "_multi";
     private string _testConnectionString;
 
     [OneTimeSetUp]
     public void OneTimeSetup()
     {
-        var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-        var connProps = ConnectionString.ReadProperties(config, "SqlServer:ConnectionProperties");
-        _connectionString = ConnectionString.Build(Platform.SqlServer, config["SqlServer:Server"], "master", config["SqlServer:User"], config["SqlServer:Password"], config["SqlServer:Port"], connProps);
-        _integrationDb = GenerateUniqueDBName("GenIvJson");
-
-        CreateTestDatabases();
-
-        _testConnectionString = ConnectionString.Build(Platform.SqlServer, config["SqlServer:Server"], _integrationDb, config["SqlServer:User"], config["SqlServer:Password"], config["SqlServer:Port"], connProps);
+        _testConnectionString = Schema.IntegrationTests.SqlServer.FixtureSetup.GetMainDbConnectionString();
+        DropFixtureSchemas();
     }
 
     [Test]
@@ -37,42 +34,39 @@ public class GenerateIndexedViewJsonTests
         conn.Open();
         using var cmd = conn.CreateCommand();
 
-        cmd.CommandText = @"
-EXEC('CREATE SCHEMA [Test]')
+        cmd.CommandText = $@"
+EXEC('CREATE SCHEMA [{TestSchema}]')
 ";
         cmd.ExecuteNonQuery();
 
-        cmd.CommandText = @"
-CREATE TABLE Test.SourceTable (Id INT NOT NULL, Name VARCHAR(100) NOT NULL, Amount DECIMAL(10,2) NOT NULL);
-CREATE UNIQUE CLUSTERED INDEX UDX_SourceTable ON Test.SourceTable (Id);
+        cmd.CommandText = $@"
+CREATE TABLE [{TestSchema}].SourceTable (Id INT NOT NULL, Name VARCHAR(100) NOT NULL, Amount DECIMAL(10,2) NOT NULL);
+CREATE UNIQUE CLUSTERED INDEX UDX_SourceTable ON [{TestSchema}].SourceTable (Id);
 ";
         cmd.ExecuteNonQuery();
 
-        cmd.CommandText = @"
-CREATE VIEW Test.vTestSummary WITH SCHEMABINDING AS
+        cmd.CommandText = $@"
+CREATE VIEW [{TestSchema}].vTestSummary WITH SCHEMABINDING AS
 SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount
-FROM Test.SourceTable
+FROM [{TestSchema}].SourceTable
 GROUP BY Id, Name;
 ";
         cmd.ExecuteNonQuery();
 
-        cmd.CommandText = @"
-CREATE UNIQUE CLUSTERED INDEX [IX_vTestSummary_Id] ON Test.vTestSummary (Id);
-CREATE NONCLUSTERED INDEX [IX_vTestSummary_Name] ON Test.vTestSummary (Name);
+        cmd.CommandText = $@"
+CREATE UNIQUE CLUSTERED INDEX [IX_vTestSummary_Id] ON [{TestSchema}].vTestSummary (Id);
+CREATE NONCLUSTERED INDEX [IX_vTestSummary_Name] ON [{TestSchema}].vTestSummary (Name);
 ";
         cmd.ExecuteNonQuery();
 
-        // Install the extraction function (via KindleOneFile so the GO-batched idempotent create is split).
-        ForgeKindler.KindleOneFile(cmd, "SchemaSmith.GenerateIndexedViewJson.sql", Platform.SqlServer);
-
         // Call it
-        cmd.CommandText = "SELECT [SchemaSmith].[GenerateIndexedViewJson]('Test', 'vTestSummary')";
+        cmd.CommandText = $"SELECT [SchemaSmith].[GenerateIndexedViewJson]('{TestSchema}', 'vTestSummary')";
         var json = cmd.ExecuteScalar()?.ToString();
 
         Assert.That(json, Is.Not.Null.And.Not.Empty);
         var view = JsonConvert.DeserializeObject<SqlServerIndexedView>(json);
         Assert.That(view, Is.Not.Null);
-        Assert.That(view.Schema, Is.EqualTo("[Test]"));
+        Assert.That(view.Schema, Is.EqualTo($"[{TestSchema}]"));
         Assert.That(view.Name, Is.EqualTo("[vTestSummary]"));
         Assert.That(view.Definition, Does.Contain("Id"));
         Assert.That(view.Definition, Does.Contain("Name"));
@@ -103,41 +97,38 @@ CREATE NONCLUSTERED INDEX [IX_vTestSummary_Name] ON Test.vTestSummary (Name);
         conn.Open();
         using var cmd = conn.CreateCommand();
 
-        cmd.CommandText = @"
-IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'NoNC')
-    EXEC('CREATE SCHEMA [NoNC]')
+        cmd.CommandText = $@"
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '{NoNcSchema}')
+    EXEC('CREATE SCHEMA [{NoNcSchema}]')
 ";
         cmd.ExecuteNonQuery();
 
-        cmd.CommandText = @"
-CREATE TABLE NoNC.Products (Id INT NOT NULL, Price DECIMAL(10,2) NOT NULL);
-CREATE UNIQUE CLUSTERED INDEX UDX_Products ON NoNC.Products (Id);
+        cmd.CommandText = $@"
+CREATE TABLE [{NoNcSchema}].Products (Id INT NOT NULL, Price DECIMAL(10,2) NOT NULL);
+CREATE UNIQUE CLUSTERED INDEX UDX_Products ON [{NoNcSchema}].Products (Id);
 ";
         cmd.ExecuteNonQuery();
 
-        cmd.CommandText = @"
-CREATE VIEW NoNC.vProductSummary WITH SCHEMABINDING AS
+        cmd.CommandText = $@"
+CREATE VIEW [{NoNcSchema}].vProductSummary WITH SCHEMABINDING AS
 SELECT Id, COUNT_BIG(*) AS Cnt, SUM(Price) AS TotalPrice
-FROM NoNC.Products
+FROM [{NoNcSchema}].Products
 GROUP BY Id;
 ";
         cmd.ExecuteNonQuery();
 
-        cmd.CommandText = @"
-CREATE UNIQUE CLUSTERED INDEX [IX_vProductSummary_Id] ON NoNC.vProductSummary (Id);
+        cmd.CommandText = $@"
+CREATE UNIQUE CLUSTERED INDEX [IX_vProductSummary_Id] ON [{NoNcSchema}].vProductSummary (Id);
 ";
         cmd.ExecuteNonQuery();
 
-        // Install the extraction function (via KindleOneFile so the GO-batched idempotent create is split).
-        ForgeKindler.KindleOneFile(cmd, "SchemaSmith.GenerateIndexedViewJson.sql", Platform.SqlServer);
-
-        cmd.CommandText = "SELECT [SchemaSmith].[GenerateIndexedViewJson]('NoNC', 'vProductSummary')";
+        cmd.CommandText = $"SELECT [SchemaSmith].[GenerateIndexedViewJson]('{NoNcSchema}', 'vProductSummary')";
         var json = cmd.ExecuteScalar()?.ToString();
 
         Assert.That(json, Is.Not.Null.And.Not.Empty);
         var view = JsonConvert.DeserializeObject<SqlServerIndexedView>(json);
         Assert.That(view, Is.Not.Null);
-        Assert.That(view.Schema, Is.EqualTo("[NoNC]"));
+        Assert.That(view.Schema, Is.EqualTo($"[{NoNcSchema}]"));
         Assert.That(view.Name, Is.EqualTo("[vProductSummary]"));
         Assert.That(view.Definition, Does.Contain("Id"));
         Assert.That(view.Indexes, Has.Count.EqualTo(1));
@@ -154,48 +145,45 @@ CREATE UNIQUE CLUSTERED INDEX [IX_vProductSummary_Id] ON NoNC.vProductSummary (I
         conn.Open();
         using var cmd = conn.CreateCommand();
 
-        cmd.CommandText = @"
-IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'Multi')
-    EXEC('CREATE SCHEMA [Multi]')
+        cmd.CommandText = $@"
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '{MultiSchema}')
+    EXEC('CREATE SCHEMA [{MultiSchema}]')
 ";
         cmd.ExecuteNonQuery();
 
-        cmd.CommandText = @"
-CREATE TABLE Multi.Orders (Id INT NOT NULL, CustomerId INT NOT NULL, Amount DECIMAL(10,2) NOT NULL);
-CREATE UNIQUE CLUSTERED INDEX UDX_Orders ON Multi.Orders (Id);
+        cmd.CommandText = $@"
+CREATE TABLE [{MultiSchema}].Orders (Id INT NOT NULL, CustomerId INT NOT NULL, Amount DECIMAL(10,2) NOT NULL);
+CREATE UNIQUE CLUSTERED INDEX UDX_Orders ON [{MultiSchema}].Orders (Id);
 ";
         cmd.ExecuteNonQuery();
 
-        cmd.CommandText = @"
-CREATE VIEW Multi.vOrdersByCustomer WITH SCHEMABINDING AS
+        cmd.CommandText = $@"
+CREATE VIEW [{MultiSchema}].vOrdersByCustomer WITH SCHEMABINDING AS
 SELECT CustomerId, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount
-FROM Multi.Orders
+FROM [{MultiSchema}].Orders
 GROUP BY CustomerId;
 ";
         cmd.ExecuteNonQuery();
 
-        cmd.CommandText = @"
-CREATE UNIQUE CLUSTERED INDEX [IX_vOrdersByCustomer_CustId] ON Multi.vOrdersByCustomer (CustomerId);
+        cmd.CommandText = $@"
+CREATE UNIQUE CLUSTERED INDEX [IX_vOrdersByCustomer_CustId] ON [{MultiSchema}].vOrdersByCustomer (CustomerId);
 ";
         cmd.ExecuteNonQuery();
 
-        cmd.CommandText = @"
-CREATE VIEW Multi.vOrderTotals WITH SCHEMABINDING AS
+        cmd.CommandText = $@"
+CREATE VIEW [{MultiSchema}].vOrderTotals WITH SCHEMABINDING AS
 SELECT Id, Amount
-FROM Multi.Orders;
+FROM [{MultiSchema}].Orders;
 ";
         cmd.ExecuteNonQuery();
 
-        cmd.CommandText = @"
-CREATE UNIQUE CLUSTERED INDEX [IX_vOrderTotals_Id] ON Multi.vOrderTotals (Id);
+        cmd.CommandText = $@"
+CREATE UNIQUE CLUSTERED INDEX [IX_vOrderTotals_Id] ON [{MultiSchema}].vOrderTotals (Id);
 ";
         cmd.ExecuteNonQuery();
-
-        // Install the extraction function (via KindleOneFile so the GO-batched idempotent create is split).
-        ForgeKindler.KindleOneFile(cmd, "SchemaSmith.GenerateIndexedViewJson.sql", Platform.SqlServer);
 
         // Extract first view
-        cmd.CommandText = "SELECT [SchemaSmith].[GenerateIndexedViewJson]('Multi', 'vOrdersByCustomer')";
+        cmd.CommandText = $"SELECT [SchemaSmith].[GenerateIndexedViewJson]('{MultiSchema}', 'vOrdersByCustomer')";
         var json1 = cmd.ExecuteScalar()?.ToString();
         Assert.That(json1, Is.Not.Null.And.Not.Empty);
         var view1 = JsonConvert.DeserializeObject<SqlServerIndexedView>(json1);
@@ -203,7 +191,7 @@ CREATE UNIQUE CLUSTERED INDEX [IX_vOrderTotals_Id] ON Multi.vOrderTotals (Id);
         Assert.That(view1.Name, Is.EqualTo("[vOrdersByCustomer]"));
 
         // Extract second view
-        cmd.CommandText = "SELECT [SchemaSmith].[GenerateIndexedViewJson]('Multi', 'vOrderTotals')";
+        cmd.CommandText = $"SELECT [SchemaSmith].[GenerateIndexedViewJson]('{MultiSchema}', 'vOrderTotals')";
         var json2 = cmd.ExecuteScalar()?.ToString();
         Assert.That(json2, Is.Not.Null.And.Not.Empty);
         var view2 = JsonConvert.DeserializeObject<SqlServerIndexedView>(json2);
@@ -216,50 +204,20 @@ CREATE UNIQUE CLUSTERED INDEX [IX_vOrderTotals_Id] ON Multi.vOrderTotals (Id);
     [OneTimeTearDown]
     public void RunAfterAnyTests()
     {
-        DropTestDatabases();
+        try
+        {
+            DropFixtureSchemas();
+        }
+        catch (DbException) { /* best-effort cleanup must not mask a test result */ }
     }
 
-    private void CreateTestDatabases()
+    private void DropFixtureSchemas()
     {
-        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = @$"
-CREATE DATABASE [{_integrationDb}];
-";
-        cmd.ExecuteNonQuery();
-
-        conn.ChangeDatabase(_integrationDb);
-        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
-
+        foreach (var schema in new[] { TestSchema, NoNcSchema, MultiSchema })
+            Schema.IntegrationTests.SqlServer.TestSchemaDrop.Drop(cmd, schema);
         conn.Close();
-    }
-
-    private static string GenerateUniqueDBName(string dbName)
-    {
-        dbName = dbName ?? throw new ArgumentNullException(nameof(dbName));
-        var uniqueSegment = Guid.NewGuid().ToString().Replace(" - ", "_").Substring(0, 8);
-        return $"{dbName}_Test_{DateTime.Now:yyyyMMdd_HHmmss}_{uniqueSegment}";
-    }
-
-    private void DropTestDatabases()
-    {
-        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-
-        DropOneDatabase(cmd, _integrationDb);
-
-        conn.Close();
-    }
-
-    private static void DropOneDatabase(IDbCommand cmd, string dbName)
-    {
-        cmd.CommandText = @$"
-IF DB_ID('{dbName}') IS NOT NULL
-  ALTER DATABASE [{dbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{dbName}];
-";
-        cmd.ExecuteNonQuery();
     }
 }

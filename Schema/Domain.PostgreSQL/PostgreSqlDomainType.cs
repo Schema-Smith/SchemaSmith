@@ -77,6 +77,15 @@ namespace Schema.Domain.PostgreSQL
         [JsonProperty(Order = 6)]
         public List<PostgreSqlDomainConstraint> CheckConstraints { get; set; } = [];
 
+        /// <summary>
+        /// The domain's collation, when it differs from its base type's -- <c>"C"</c>, or a qualified
+        /// <c>"x"."c"</c>. <b>Create-time only:</b> PostgreSQL has no <c>ALTER DOMAIN … COLLATE</c>, so a declared
+        /// collation that differs from the deployed one is refused by name. Left out, it is not checked.
+        /// </summary>
+        [SchemaProperty(Description = "The domain's collation, when it differs from the base type's. Create-time only: PostgreSQL cannot alter it, so a change is refused rather than attempted. Omit it to leave the collation unchecked.")]
+        [JsonProperty(Order = 7, NullValueHandling = NullValueHandling.Ignore)]
+        public string Collation { get; set; }
+
         [JsonProperty(Order = 10, NullValueHandling = NullValueHandling.Ignore)]
         public string ShouldApplyExpression { get; set; }
 

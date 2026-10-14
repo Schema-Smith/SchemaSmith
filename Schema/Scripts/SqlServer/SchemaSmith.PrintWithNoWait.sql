@@ -23,6 +23,9 @@ BEGIN
   DECLARE @v_LfPos INT
   DECLARE @v_Pos INT = 1
   DECLARE @v_End INT
+  DECLARE @v_Last BIT = 0
+  DECLARE @v_Audit INT
+  DECLARE @v_AuditEnd INT
 
   IF @Message IS NULL OR LEN(@Message) = 0
     RETURN
@@ -39,18 +42,35 @@ BEGIN
     BEGIN
       -- No further line ending: whatever remains is the last line.
       SET @v_Line = SUBSTRING(@Message, @v_Pos, @v_End - @v_Pos + 1)
-      -- DATALENGTH here too, for the same reason it sizes @v_End above: LEN reports 0 for a line made
-      -- entirely of spaces, so a final line of indentation was silently dropped rather than printed.
-      IF DATALENGTH(@v_Line) > 0 RAISERROR(@v_Line, 10, 100) WITH NOWAIT
-      BREAK
+      SET @v_Last = 1
+    END
+    ELSE
+    BEGIN
+      -- Both endings are handled by cutting at the line feed and dropping a carriage return if one sits
+      -- in front of it, which is what the two separate CHARINDEX scans used to work out.
+      SET @v_Line = SUBSTRING(@Message, @v_Pos, @v_LfPos - @v_Pos)
+      IF RIGHT(@v_Line, 1) = CHAR(13) SET @v_Line = LEFT(@v_Line, LEN(@v_Line) - 1)
     END
 
-    -- Both endings are handled by cutting at the line feed and dropping a carriage return if one sits
-    -- in front of it, which is what the two separate CHARINDEX scans used to work out.
-    SET @v_Line = SUBSTRING(@Message, @v_Pos, @v_LfPos - @v_Pos)
-    IF RIGHT(@v_Line, 1) = CHAR(13) SET @v_Line = LEFT(@v_Line, LEN(@v_Line) - 1)
+    -- A quench script carries the change rows it records, and under WhatIf they are not written, so they are not
+    -- shown either: printed, they read as statements the run would execute.
+    SET @v_Audit = CHARINDEX('INSERT INTO SchemaSmith.ChangeAudit', @v_Line)
+    IF @v_Audit > 0
+    BEGIN
+      WHILE @v_Audit > 0
+      BEGIN
+        SET @v_AuditEnd = CHARINDEX(''');', @v_Line, @v_Audit)
+        IF @v_AuditEnd = 0 BREAK
+        SET @v_Line = STUFF(@v_Line, @v_Audit, @v_AuditEnd + 3 - @v_Audit, '')
+        SET @v_Audit = CHARINDEX('INSERT INTO SchemaSmith.ChangeAudit', @v_Line)
+      END
+      IF LTRIM(@v_Line) = '' SET @v_Line = NULL
+    END
 
-    RAISERROR(@v_Line, 10, 100) WITH NOWAIT
+    -- DATALENGTH for the last line, for the same reason it sizes @v_End above: LEN reports 0 for a line made
+    -- entirely of spaces, so a final line of indentation was silently dropped rather than printed.
+    IF @v_Line IS NOT NULL AND (@v_Last = 0 OR DATALENGTH(@v_Line) > 0) RAISERROR(@v_Line, 10, 100) WITH NOWAIT
+    IF @v_Last = 1 BREAK
     SET @v_Pos = @v_LfPos + 1
   END
 END

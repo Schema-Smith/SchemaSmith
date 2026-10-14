@@ -66,7 +66,8 @@ ForeignKeys
 ./beat1-broken/Templates/Main/After Scripts/01_backfill_ok.sql
 ```
 
-That's your map: four phases done, `01` done, `02` is where it stopped. Now watch the two re-runs.
+That's your map: four phases done (five on SQL Server, which also checkpoints `TableFeatures`, its CDC,
+Change Tracking and FILESTREAM pass), `01` done, `02` is where it stopped. Now watch the two re-runs.
 
 **A plain re-run throws the map away.** Re-run *without* the flag (even before fixing `02`) and the log
 re-runs every phase — `Quenching modified tables`, `…indexes and constraints`, `…foreign keys`,
@@ -80,8 +81,8 @@ checkpoint.) It starts over.
 schemaquench --ConfigFile:quench.settings.beat1-broken.json --LogPath:"$PWD/logs" --ResumeQuench
 ```
 
-The log opens `Resuming from checkpoint (Completed Steps: 4, …)`, then jumps **straight to
-`Quenching after database scripts`** — the four completed phases are skipped. Exit `0`, checkpoint
+The log opens `Resuming from checkpoint (Completed Steps: 4, Completed Scripts: 1)` (`5` steps on SQL Server), then jumps **straight to
+`Quenching after database scripts`** — the completed phases are skipped. Exit `0`, checkpoint
 deleted. One gotcha you'll see: `Kindling the forge` still runs. Kindling and the missing-tables step
 are **never** checkpointed — they rebuild session state the later phases need, so resume always re-runs
 them. "Resume" skips the *phases*, not literally everything.

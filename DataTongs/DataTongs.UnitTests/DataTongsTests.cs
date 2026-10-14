@@ -376,8 +376,8 @@ public class DataTongsTests
         var result = dt.GetSelectColumns(cmd, "dbo", "Shapes");
         Assert.That(result, Does.Contain("Shape"));
         // Verify the query checks for both GEOGRAPHY and GEOMETRY
-        Assert.That(cmd.CommandText, Does.Contain("'GEOGRAPHY'"));
-        Assert.That(cmd.CommandText, Does.Contain("'GEOMETRY'"));
+        Assert.That(cmd.CommandText, Does.Contain("'geography'"));
+        Assert.That(cmd.CommandText, Does.Contain("'geometry'"));
     }
 
     // SQL Server has always paired a spatial column's WKT with an [Col.STSrid] companion, and the shred
@@ -418,7 +418,7 @@ public class DataTongsTests
         var result = dt.GetSelectColumns(cmd, "dbo", "OrgChart");
         Assert.That(result, Does.Contain("OrgNode"));
         // Verify the query contains the HIERARCHYID case
-        Assert.That(cmd.CommandText, Does.Contain("'HIERARCHYID'"));
+        Assert.That(cmd.CommandText, Does.Contain("'hierarchyid'"));
     }
 
     [Test]
@@ -430,7 +430,7 @@ public class DataTongsTests
 
         dt.GetSelectColumns(cmd, "dbo", "TestTable");
         // Verify the HIERARCHYID branch uses .ToString()
-        Assert.That(cmd.CommandText, Does.Contain("HIERARCHYID"));
+        Assert.That(cmd.CommandText, Does.Contain("hierarchyid"));
         Assert.That(cmd.CommandText, Does.Contain(".ToString()"));
     }
 
@@ -621,7 +621,7 @@ public class DataTongsTests
         {
             FactoryContainer.Register<IConfigurationRoot>(config);
 
-            var ex = Assert.Throws<Exception>(() => dt.CastData());
+            var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
             Assert.That(ex.Message, Does.Contain("Source database is required"));
 
             FactoryContainer.Clear();
@@ -640,7 +640,7 @@ public class DataTongsTests
         {
             FactoryContainer.Register<IConfigurationRoot>(config);
 
-            var ex = Assert.Throws<Exception>(() => dt.CastData());
+            var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
             Assert.That(ex.Message, Does.Contain("Source database is required"));
 
             FactoryContainer.Clear();
@@ -748,6 +748,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
             if (callCount == 1) return (object)true; // TableExists
             return null; // GetKeyColumns returns null
@@ -799,6 +802,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
             return callCount switch
             {
@@ -858,6 +864,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
             return callCount switch
             {
@@ -1202,13 +1211,27 @@ public class DataTongsTests
 
         connectionFactory.GetDbConnection(Arg.Any<string>()).Returns(connection);
         connection.CreateCommand().Returns(command);
+        // The table's real columns, which a configured SelectColumns narrows; 'secret' is not selected.
+        command.ExecuteReader().Returns(_ =>
+        {
+            var columns = new System.Data.DataTable();
+            columns.Columns.Add("COLUMN_NAME"); columns.Columns.Add("DATA_TYPE");
+            columns.Columns.Add("IsZeroFill", typeof(int)); columns.Columns.Add("DtPrecision", typeof(int));
+            foreach (var (name, type) in new[] { ("id", "int"), ("name", "varchar"), ("email", "varchar"), ("secret", "varchar") })
+                columns.Rows.Add(name, type, 0, 0);
+            return columns.CreateDataReader();
+        });
 
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             // Data delivery detects the server version (TargetVersionDetector) and probes JSON_ARRAYAGG support,
             // both via SELECT VERSION() — return a modern MySQL version so the JSON_ARRAYAGG path is taken.
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
+            if (command.CommandText?.Contains("@@SESSION.time_zone") == true) return "SYSTEM";
             callCount++;
             return callCount switch
             {
@@ -1229,12 +1252,13 @@ public class DataTongsTests
             var dt = new global::DataTongs.DataTongs(Platform.MySQL);
             dt.CastData();
 
-            // configSelectColumns branch: uses configured columns, builds JSON_OBJECT with varchar defaults
+            // The configured columns, with their real types, and nothing that was not selected
             Assert.That(command.CommandText, Does.Contain("JSON_ARRAYAGG"));
             Assert.That(command.CommandText, Does.Contain("JSON_OBJECT"));
             Assert.That(command.CommandText, Does.Contain("`id`"));
             Assert.That(command.CommandText, Does.Contain("`name`"));
             Assert.That(command.CommandText, Does.Contain("`email`"));
+            Assert.That(command.CommandText, Does.Not.Contain("`secret`"));
 
             fileWrapper.Received().WriteAllText(
                 Arg.Is<string>(s => s.Contains("users.tabledata")),
@@ -1242,6 +1266,106 @@ public class DataTongsTests
 
             FactoryContainer.Clear();
             LogFactory.Clear();
+        }
+    }
+
+    #endregion
+
+    #region CastData — below-floor source
+
+    // DataTongs used to run against a below-floor source; on MySQL 5.7.21, which lacks JSON_ARRAYAGG, it wrote nothing
+    // and still exited 0. It now refuses the source before extracting, as SchemaQuench refuses a target.
+    [Test]
+    public void CastData_MySqlSourceBelowTheFloor_IsRefusedBeforeExtracting()
+    {
+        var connectionFactory = Substitute.For<IDbConnectionFactory>();
+        var connection = Substitute.For<IDbConnection>();
+        var command = Substitute.For<IDbCommand>();
+        var fileWrapper = Substitute.For<IFile>();
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+        {
+            ["Source:Server"] = "localhost",
+            ["Source:Database"] = "testdb",
+            ["Source:User"] = "user",
+            ["Source:Password"] = "pass",
+            ["ShouldCast:OutputContentFiles"] = "true",
+            ["ShouldCast:OutputScripts"] = "false",
+            ["ContentPath"] = "./content",
+            ["Tables:0:Name"] = "users",
+            ["Tables:0:KeyColumns"] = "`id`"
+        }).Build();
+
+        connectionFactory.GetDbConnection(Arg.Any<string>()).Returns(connection);
+        connection.CreateCommand().Returns(command);
+        command.ExecuteScalar().Returns(_ => command.CommandText?.Contains("VERSION()") == true ? "5.7.21" : null);
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Register<IConfigurationRoot>(config);
+            FactoryContainer.Register<IDbConnectionFactory>(connectionFactory);
+            FactoryContainer.Register(Substitute.For<IDirectory>());
+            FactoryContainer.Register(fileWrapper);
+            LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+            try
+            {
+                var dt = new global::DataTongs.DataTongs(Platform.MySQL);
+                var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
+                Assert.That(ex!.Message, Does.Contain("5.7.21").And.Contain("5.7.22"));
+                fileWrapper.DidNotReceive().WriteAllText(Arg.Any<string>(), Arg.Any<string>());
+            }
+            finally
+            {
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+            }
+        }
+    }
+
+    #endregion
+
+    #region CastData — source unreachable
+
+    private sealed class FakeDbException(string message) : System.Data.Common.DbException(message);
+
+    // A source that refuses the connection is a settings problem the user fixes, so it ends the run with exit 2 and a
+    // message naming the database, not an unhandled exception and a stack trace.
+    [Test]
+    public void CastData_SourceRefusesTheConnection_FailsTheRunNamingTheDatabase()
+    {
+        var connectionFactory = Substitute.For<IDbConnectionFactory>();
+        var connection = Substitute.For<IDbConnection>();
+        connection.When(c => c.Open()).Do(_ => throw new FakeDbException("Access denied for user"));
+        connectionFactory.GetDbConnection(Arg.Any<string>()).Returns(connection);
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+        {
+            ["Source:Server"] = "localhost",
+            ["Source:Database"] = "salesdb",
+            ["Source:User"] = "user",
+            ["Source:Password"] = "pass",
+            ["Tables:0:Name"] = "users",
+            ["Tables:0:KeyColumns"] = "`id`"
+        }).Build();
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Register<IConfigurationRoot>(config);
+            FactoryContainer.Register<IDbConnectionFactory>(connectionFactory);
+            FactoryContainer.Register(Substitute.For<IDirectory>());
+            FactoryContainer.Register(Substitute.For<IFile>());
+            LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+            try
+            {
+                var dt = new global::DataTongs.DataTongs(Platform.MySQL);
+                var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
+                Assert.That(ex!.Message, Does.Contain("salesdb").And.Contain("Access denied"));
+            }
+            finally
+            {
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+            }
         }
     }
 
@@ -1377,6 +1501,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
             return callCount switch
             {
@@ -1437,6 +1564,9 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             callCount++;
             if (callCount == 1) return (object)true; // TableExists
             throw new Exception("Simulated database error");
@@ -1501,8 +1631,12 @@ public class DataTongsTests
         var callCount = 0;
         command.ExecuteScalar().Returns(_ =>
         {
+            // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
+            if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
+            if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
             // Data delivery detects the server version and probes JSON_ARRAYAGG support, both via SELECT VERSION().
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
+            if (command.CommandText?.Contains("@@SESSION.time_zone") == true) return "SYSTEM";
             callCount++;
             return callCount switch
             {
@@ -1565,7 +1699,7 @@ public class DataTongsTests
     public void XmlFragment_Geometry_EmitsWktPlusSridCompanion()
     {
         var frag = Fragment("Shape", "geometry");
-        Assert.That(frag, Does.Contain("('Shape', t.[Shape].STAsText())"));
+        Assert.That(frag, Does.Contain("('Shape', t.[Shape].AsTextZM())"));
         Assert.That(frag, Does.Contain("('Shape.STSrid', CONVERT(NVARCHAR(MAX), t.[Shape].STSrid))"));
     }
 

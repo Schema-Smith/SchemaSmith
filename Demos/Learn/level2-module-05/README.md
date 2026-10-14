@@ -108,7 +108,11 @@ Look in the generated `cast/` folder. Two artifacts, and the difference matters:
   for `DataDelivery` to ship; SchemaQuench builds its own merge from it at deploy time.
 - **`Populate dbo.IsoCurrency.sql`** — a standalone MERGE script. Data delivery does **not** use this;
   it's for running the merge by hand, handing to a DBA, dropping into a script folder as an override,
-  or using the data outside SchemaQuench entirely.
+  or using the data outside SchemaQuench entirely. It's standalone because `tongs.settings.json` sets
+  `"ShouldCast": { "TokenizeScripts": false }`, which writes the rows into the script itself. Leave that
+  out (the default) and the script reads its rows through a `{{dbo.IsoCurrency.tabledata}}` token that
+  SchemaQuench fills in only inside a package; cast to a folder outside one, DataTongs warns that it
+  can't wire the token and exits `1`.
 
 **Open that script before you hand it to anybody.** You are about to give someone a statement that writes
 to their table, and the shape of it is the whole question:

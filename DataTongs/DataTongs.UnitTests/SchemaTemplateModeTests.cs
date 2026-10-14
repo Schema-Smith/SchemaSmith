@@ -129,7 +129,9 @@ public class SchemaTemplateModeTests
         // answer those out-of-band (0 = modern / >= 130, the STRING_AGG path) so they don't consume the
         // data sequence and this stub stays aligned regardless of how many probes fire.
         _command.ExecuteScalar().Returns(_ =>
-            _command.CommandText?.Contains("compatibility_level", StringComparison.OrdinalIgnoreCase) == true
+            _command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true ? "16.0.1000.6"
+            : _command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true ? 160
+            : _command.CommandText?.Contains("compatibility_level", StringComparison.OrdinalIgnoreCase) == true
                 ? 0
                 : sequence.Count > 0 ? sequence.Dequeue() : null);
     }
@@ -257,7 +259,7 @@ public class SchemaTemplateModeTests
             LogFactory.Register("ProgressLog", _progressLog);
 
             var dt = new global::DataTongs.DataTongs(Platform.SqlServer);
-            var ex = Assert.Throws<InvalidOperationException>(() => dt.CastData());
+            var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
             Assert.That(ex.Message, Does.Contain("Source.Schema"),
                 "Error must name the missing setting.");
             Assert.That(ex.Message, Does.Contain("schema template"),
@@ -355,7 +357,7 @@ public class SchemaTemplateModeTests
             LogFactory.Register("ProgressLog", _progressLog);
 
             var dt = new global::DataTongs.DataTongs(Platform.SqlServer);
-            var ex = Assert.Throws<InvalidOperationException>(() => dt.CastData());
+            var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
             Assert.That(ex.Message, Does.Contain("unqualified"),
                 "Error must call out the unqualified-name requirement.");
             Assert.That(ex.Message, Does.Contain($"\"{SourceSchema}.Customers\""),

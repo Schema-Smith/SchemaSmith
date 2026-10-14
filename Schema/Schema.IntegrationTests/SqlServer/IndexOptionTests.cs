@@ -202,7 +202,7 @@ public class IndexOptionTests
 
         using var cmd = _connection.CreateCommand();
         cmd.CommandTimeout = 300;
-        cmd.CommandText = "EXEC SchemaSmith.GenerateTableJson @p_Schema = 'dbo', @p_Table = 'IdxRound'";
+        cmd.CommandText = "EXEC SchemaSmith.GenerateTableJSON @p_Schema = 'dbo', @p_Table = 'IdxRound'";
         using var reader = cmd.ExecuteReader();
         var sb = new StringBuilder();
         while (reader.Read())

@@ -39,7 +39,7 @@ public class GenerateTableXmlEquivalenceTests
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}];";
+        cmd.CommandText = $"CREATE DATABASE [{_integrationDb}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
         cmd.ExecuteNonQuery();
 
         // A non-default filegroup for the #filegroups JSON/XML equivalence test below -- reuses the new
@@ -387,7 +387,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'XmlEquivC
 
     private string GenerateTableJson(IDbCommand cmd, string schema, string table)
     {
-        cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJson @p_Schema = '{schema}', @p_Table = '{table}'";
+        cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = '{schema}', @p_Table = '{table}'";
         using var reader = cmd.ExecuteReader();
         var json = new StringBuilder();
         while (reader.Read()) json.Append(reader.GetString(0)).Append("\r\n");
@@ -442,11 +442,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'XmlEquivC
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = @$"
-IF DB_ID('{_integrationDb}') IS NOT NULL
-  ALTER DATABASE [{_integrationDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-DROP DATABASE IF EXISTS [{_integrationDb}];";
-        cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _integrationDb);
         conn.Close();
     }
 }

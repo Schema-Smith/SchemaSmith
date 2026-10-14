@@ -135,6 +135,7 @@ BEGIN
     SELECT elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
+           NULLIF(celem ->> 'Schema', '') AS "StatisticsSchema",
            COALESCE(celem ->> 'Kind', '') AS "Kind",
            COALESCE(celem ->> 'StatisticsColumns', '') AS "StatisticsColumns",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
@@ -308,10 +309,13 @@ BEGIN
     SELECT STRING_AGG('RAISE NOTICE ''  Dropping ' || CASE WHEN "IsConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''';' || CHR(10) ||
                       CASE WHEN "IsConstraint"
                            THEN 'ALTER TABLE "' || ti."TableSchema" || '"."' || ti."TableName" || '" DROP CONSTRAINT IF EXISTS "' || ti."IndexName" || '" CASCADE;'
-                           ELSE 'DROP INDEX IF EXISTS "' || ti."TableSchema" || '"."' || ti."IndexName" || '";' END, CHR(10))
+                           ELSE 'DROP INDEX IF EXISTS "' || ti."TableSchema" || '"."' || ti."IndexName" || '";' END || CHR(10) ||
+                      'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN "IsConstraint" THEN 'constraint' ELSE 'index' END || ''', ''' ||
+                      ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''', ''dropped'');', CHR(10))
       INTO sql_script
       FROM temp_indexes_to_drop ti;
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+    IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
     RAISE NOTICE 'Fixup Any Modified Index Fill Factors';
     SELECT STRING_AGG('RAISE NOTICE ''  Modify Fillfactor for ' || ti."TableSchema" || '.' || ti."Name" || ''';' || CHR(10) ||
@@ -340,12 +344,15 @@ BEGIN
                                      ELSE 'UNIQUE ' || CASE WHEN ti."NullsNotDistinct" THEN 'NULLS NOT DISTINCT ' ELSE '' END
                                      END ||
                                 '(' || "SchemaSmith"."QuoteIndexColumnList"(ti."IndexColumns") || ')' ||
+                                -- INCLUDE and the storage parameters, as MissingIndexesAndConstraintsQuench (PG-031).
+                                CASE WHEN NULLIF(ti."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(ti."IncludeColumns") || ')' ELSE '' END ||
                                 -- Positive gate, not a deny-list: an extension AM (e.g. pgvector's hnsw/ivfflat)
                                 -- can't be enumerated in advance, so allow-listing the AMs verified to accept
                                 -- fillfactor fails safe (no clause) instead of failing loud (PostgreSQL's own
                                 -- "unrecognized parameter" error) for anything not on the list.
                                 CASE WHEN COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash')
-                                     THEN ' WITH (fillfactor = ' || ti."FillFactor" || ')'
+                                     THEN ' WITH (fillfactor = ' || ti."FillFactor" || CASE WHEN COALESCE(ti."StorageParameters", '') <> '' THEN ', ' || ti."StorageParameters" ELSE '' END || ')'
+                                     WHEN COALESCE(ti."StorageParameters", '') <> '' THEN ' WITH (' || ti."StorageParameters" || ')'
                                      ELSE '' END ||
                                 -- USING INDEX TABLESPACE precedes DEFERRABLE per the table-constraint grammar
                               -- (verified live on 16). Emitted only when declared: unset means placement is
@@ -375,7 +382,9 @@ BEGIN
                               -- (verified live on 16).
                               CASE WHEN COALESCE(ti."Tablespace", '') <> '' THEN ' TABLESPACE "' || ti."Tablespace" || '"' ELSE '' END ||
                               CASE WHEN NULLIF(ti."FilterExpression", '') IS NOT NULL THEN ' WHERE ' || ti."FilterExpression" ELSE '' END || ';'
-                           END, CHR(10))
+                           END || CHR(10) ||
+                      'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'constraint' ELSE 'index' END || ''', ''' ||
+                      ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || ''', ''created'');', CHR(10))
       INTO sql_script
       FROM temp_indexes ti
       WHERE NOT EXISTS (SELECT *
@@ -385,8 +394,14 @@ BEGIN
                                           AND tc.relname = ti."TableName"
                                           AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                           JOIN pg_class i ON i.oid = idx.indexrelid
-                          WHERE i.relname = ti."Name");
+                          WHERE i.relname = ti."Name")
+         -- Under WhatIf a modified index was not really dropped above, but the real run re-creates it.
+         OR (p_WhatIf AND EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                                   WHERE a."SessionId" = pg_backend_pid() AND a."ActionType" = 'wouldDrop'
+                                     AND a."ObjectType" IN ('index', 'constraint')
+                                     AND a."ObjectName" = ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name"));
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+    IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
 
     RAISE NOTICE 'Fixup Table Cluster';
@@ -418,6 +433,7 @@ BEGIN
       SELECT t."Schema" AS "TableSchema",
              t."Name" AS "TableName",
              se.stxname AS "StatisticsName",
+             (SELECT sn.nspname FROM pg_namespace sn WHERE sn.oid = se.stxnamespace) AS "StatisticsSchema",
              -- Both definitions in the normalised forms of SchemaSmith.StatisticsDefinitionForms; the declared side
              -- is put through the same functions wherever it is compared.
              "SchemaSmith"."NormalizeStatisticsKind"((SELECT STRING_AGG(CASE k WHEN 'd' THEN 'NDISTINCT' WHEN 'f' THEN 'DEPENDENCIES' WHEN 'm' THEN 'MCV' ELSE NULL END, ',')
@@ -442,7 +458,7 @@ BEGIN
 
     RAISE NOTICE 'Drop Modified Statistics';
     SELECT STRING_AGG('RAISE NOTICE ''  Statistics ' || es."TableSchema" || '.' || es."StatisticsName" || ' modified'';' || CHR(10) ||
-                      'DROP STATISTICS IF EXISTS "' || es."TableSchema" || '"."' || es."StatisticsName" || '" CASCADE;', CHR(10))
+                      'DROP STATISTICS IF EXISTS "' || es."StatisticsSchema" || '"."' || es."StatisticsName" || '" CASCADE;', CHR(10))
       INTO sql_script
       FROM temp_existing_statistics es
       JOIN temp_statistics ts ON ts."TableSchema" = es."TableSchema"
@@ -474,7 +490,7 @@ BEGIN
 
   RAISE NOTICE 'Add Missing Statistics';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing statistics ' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || CASE WHEN COALESCE(ts."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ts."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
-                    'CREATE STATISTICS "' || ts."TableSchema" || '"."' || ts."Name" || '"' ||
+                    'CREATE STATISTICS "' || COALESCE(ts."StatisticsSchema", ts."TableSchema") || '"."' || ts."Name" || '"' ||
                     -- EXPRESSIONS is not a kind CREATE STATISTICS accepts; an extracted package carries it.
                     "SchemaSmith"."StatisticsKindClause"(ts."Kind") ||
                     ' ON ' || "SchemaSmith"."QuoteIndexColumnList"(ts."StatisticsColumns") ||

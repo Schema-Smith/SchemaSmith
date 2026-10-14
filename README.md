@@ -45,8 +45,8 @@ These are the minimum engine versions SchemaSmith supports. The floor is enforce
 |--------|-------------------|
 | SQL Server | 2008 (major version 10) |
 | PostgreSQL | 12 |
-| MySQL | 5.7 |
-| MariaDB | 10.2 |
+| MySQL | 5.7.22 / 8.0.23 |
+| MariaDB | 10.2.7 |
 
 The floor is enforced from the detected server version — below it, the run aborts before any change. SchemaSmith reaches these floors by generating version-correct SQL for each target rather than demanding a uniform version: newer-version features are taken by an equivalent path (or degraded through a policy with a downgrade manifest) instead of refused. For SQL Server the target database's `compatibility_level` is also checked (100+). Full detail — the compatibility-level floor, the per-version feature adaptations, and how to raise the floor per product — is in the [Engine Version Compatibility](docs/end-user/reference/schemaquench.md#engine-version-compatibility) reference.
 
@@ -127,12 +127,12 @@ Tags: `latest`, `X.Y.Z` (immutable), `X.Y`, `X`. Multi-arch (`linux/amd64` + `li
 
 ## GitHub Action (CI/CD)
 
-Run SchemaQuench in a workflow with the **SchemaSmith Deploy** action — WhatIf on pull requests, deploy on merge:
+Run SchemaQuench in a workflow with the **SchemaSmith Deploy** action ([GitHub Marketplace](https://github.com/marketplace/actions/schemasmith-deploy)) — WhatIf on pull requests, deploy on merge:
 
 ```yaml
 - name: WhatIf on PR
   if: github.event_name == 'pull_request'
-  uses: Schema-Smith/SchemaSmith@v2.7.0
+  uses: Schema-Smith/schemasmith-deploy@v2.7.2
   with:
     mode: whatif
     product-path: ./schema
@@ -142,7 +142,7 @@ Run SchemaQuench in a workflow with the **SchemaSmith Deploy** action — WhatIf
 
 - name: Deploy on merge
   if: github.ref == 'refs/heads/main'
-  uses: Schema-Smith/SchemaSmith@v2.7.0
+  uses: Schema-Smith/schemasmith-deploy@v2.7.2
   with:
     mode: deploy
     product-path: ./schema
@@ -151,7 +151,7 @@ Run SchemaQuench in a workflow with the **SchemaSmith Deploy** action — WhatIf
     password: ${{ secrets.DB_PASSWORD }}
 ```
 
-The action fetches the matching self-contained binary for the runner OS at run time — no runtime install. **Pinning a release tag (`@v2.7.0` above) is recommended for production** — a tag pins both the action and the CLI version it runs; `@main` tracks the latest action instead (the `version` input defaults from the ref).
+The action fetches the matching self-contained binary for the runner OS at run time — no runtime install. **Pinning a release tag (`@v2.7.2` above) is recommended for production** — a tag pins both the action and the CLI version it runs; `@main` tracks the latest action instead (the `version` input defaults from the ref).
 
 - **Inputs:** `version`, `mode` (`deploy` / `whatif` / `validate` / `test-connection` / `preview-targets`), `product-path`, `server`, `user`, `password` (passed via env, never on the command line), `extra-args` (raw `--Key:value` passthrough — port, template/database/schema filters, `Drop*` toggles, connection properties, and more).
 - **Outputs:** `exit-code`, `log-dir`, `summary-path` (the `SchemaQuench - Summary.md`/`.json` — e.g. post a WhatIf summary as a PR comment).

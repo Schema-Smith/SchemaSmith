@@ -33,9 +33,10 @@ public abstract class MergeScriptHelperSharedTests
     private string _testDb = null!;
     private int _serverVersionNum;
 
-    // JSON_TABLE exists on MySQL 8.0+ / MariaDB 10.6+; below that (MariaDB 10.2-10.5) the merge shreds
-    // @json_data with a recursive CTE instead. 0 = unknown (defaults to JSON_TABLE).
-    private bool UsesJsonTable => _serverVersionNum == 0 || (_serverVersionNum >= 1000 ? _serverVersionNum >= 1006 : _serverVersionNum >= 800);
+    // The row source the product picks: JSON_TABLE on MySQL 8.0+ and MariaDB 10.6+, except the MariaDB patches whose
+    // JSON_TABLE misreads strings, which shred with the recursive CTE used below 10.6.
+    private int _rowSourceVersionNum;
+    private bool UsesJsonTable => MergeScriptHelper.MySqlFamilyHasJsonTable(_rowSourceVersionNum);
 
     // JSON columns are distinguishable from longtext only on MySQL and MariaDB >= 10.4.3 (implicit json_valid
     // CHECK). On MariaDB 10.2-10.4.2 a JSON column is stored as plain longtext with no marker, so it is
@@ -52,6 +53,7 @@ public abstract class MergeScriptHelperSharedTests
         using var versionCmd = _connection.CreateCommand();
         versionCmd.CommandText = "SELECT SchemaSmith_ServerVersionNum()";
         _serverVersionNum = Convert.ToInt32(versionCmd.ExecuteScalar());
+        _rowSourceVersionNum = MergeScriptHelper.RowSourceVersionNumMySql(versionCmd, _serverVersionNum);
     }
 
     // Routes every test's merge build through the detected server version (major*100+minor). Below MySQL 8.0
@@ -156,6 +158,128 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         }
     }
 
+    // Below MariaDB 10.6 a payload over MariaDbShredChunkRows is delivered in chunks, and the chunks were rebuilt from
+    // parsed rows: a DECIMAL beyond double precision lost its tail digits. Each row now goes out as delivered.
+    [Test]
+    public void BuildMergeScript_ChunkedShred_DeliversEachValueExactly()
+    {
+        if (UsesJsonTable)
+            Assert.Ignore("Only the recursive-CTE shred (MariaDB 10.2-10.5) delivers in chunks.");
+        using var command = _connection.CreateCommand();
+        var tableName = $"zz_chunk_{Guid.NewGuid():N}";
+        const string amount = "12345678901234567890.123456789012345678";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT NOT NULL PRIMARY KEY, amt DECIMAL(38,18) NOT NULL, note VARCHAR(40) NOT NULL)";
+            command.ExecuteNonQuery();
+
+            var rowCount = MergeScriptHelper.MariaDbShredChunkRows + 10;
+            var tableData = "[" + string.Join(",", Enumerable.Range(1, rowCount)
+                .Select(i => "{\"id\":" + i + ",\"amt\":" + amount + ",\"note\":\"a \\\"q\\\" b\"}")) + "]";
+            var script = BuildMergeScript(command, _testDb, tableName, tableData, "`id`", true, false, false, false, null!);
+            Assert.That(script, Does.Contain("chunks of up to"), "the test must exercise the chunked path");
+
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{tableName}` WHERE amt = {amount} AND note = 'a \"q\" b'";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(rowCount), "rows whose amount and note arrived exactly");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // The deferred (FK-cycle) builder kept its own column handling, which the single-pass builder had outgrown:
+    // DATETIME/TIME were read without their fraction, BIT arrived as the character '5', a geometry lost its SRID
+    // (fatal on a MySQL SRID column), and a backslash in the payload was read as an escape.
+    [Test]
+    public void BuildDeferredMergeScript_DeliversEveryValueExactly()
+    {
+        if (_serverVersionNum is > 0 and < 800)
+            Assert.Ignore($"Automatic data delivery is gated below MySQL 8.0 (detected {_serverVersionNum}).");
+        using var command = _connection.CreateCommand();
+        var tableName = $"zz_deferred_exact_{Guid.NewGuid():N}";
+        var srid = Platform == Platform.MySQL ? 4326 : 0;
+        try
+        {
+            command.CommandText = $@"
+CREATE TABLE `{_testDb}`.`{tableName}` (
+    id INT PRIMARY KEY,
+    ParentId INT NULL,
+    dt6 DATETIME(6) NULL,
+    t3 TIME(3) NULL,
+    b BIT(8) NULL,
+    pt POINT {(srid == 0 ? "" : $"SRID {srid} ")}NULL,
+    note VARCHAR(40) NULL,
+    CONSTRAINT `fk_{tableName}_self` FOREIGN KEY (ParentId) REFERENCES `{_testDb}`.`{tableName}`(id)
+)";
+            command.ExecuteNonQuery();
+
+            var tableData = "[{\"id\":1,\"ParentId\":1,\"dt6\":\"2024-03-05T10:11:12.123456\",\"t3\":\"01:02:03.456\",\"b\":165,"
+                            + "\"pt\":\"POINT(1 2)\",\"pt.STSrid\":" + srid + ",\"note\":\"a\\\\b \\\"q\\\"\"}]";
+            var script = DeferredMergeBuilder.Build(new MergeScriptHelperAdapter(Platform), command, "MySQL", _testDb, tableName,
+                tableData, "`id`", false, new List<string> { "ParentId" });
+
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT CONCAT_WS(',',
+                IF(dt6 <=> '2024-03-05 10:11:12.123456', NULL, 'dt6'), IF(t3 <=> '01:02:03.456', NULL, 't3'),
+                IF(b + 0 <=> 165, NULL, 'b'), IF(ST_AsText(pt) = 'POINT(1 2)' AND ST_SRID(pt) = {srid}, NULL, 'pt'),
+                IF(note <=> CONCAT('a', CHAR(92), 'b ""q""'), NULL, 'note'), IF(ParentId IS NULL, NULL, 'ParentId'))
+                FROM `{_testDb}`.`{tableName}` WHERE id = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.Empty,
+                "the list names each column that did not arrive as delivered (ParentId is deferred, so pass 1 leaves it NULL)");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // Without JSON_TABLE (MariaDB 10.2-10.5) the shred hands every value over as text, and text into a BIT column is
+    // stored as its character codes: 165 arrived as 0x31.
+    [Test]
+    public void BuildMergeScript_BitColumn_DeliversItsNumber()
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"zz_bit_{Guid.NewGuid():N}";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, b BIT(8) NULL, b1 BIT(1) NULL)";
+            command.ExecuteNonQuery();
+
+            var script = BuildMergeScript(command, _testDb, tableName, "[{\"id\":1,\"b\":165,\"b1\":1},{\"id\":2,\"b\":0,\"b1\":0}]",
+                "`id`", true, false, false, false, null!);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT GROUP_CONCAT(id, ':', b + 0, ':', b1 + 0 ORDER BY id) FROM `{_testDb}`.`{tableName}`";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1:165:1,2:0:0"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void BuildDeferredMergeScript_TextColumn_UsesTextInJsonTableAndCanBeExecuted()
     {
@@ -186,7 +310,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
 
             // TEXT must be read as TEXT in JSON_TABLE, not an oversized CHAR that MariaDB rejects.
             // (MariaDB 10.2-10.5 uses the recursive-CTE shred instead of JSON_TABLE.)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`Notes` TEXT PATH '$.Notes'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain("`Notes` LONGTEXT CHARACTER SET utf8mb4 PATH '$.Notes'"));
 
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
                          .Where(b => !string.IsNullOrWhiteSpace(b)))
@@ -262,8 +386,8 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         if (UsesJsonTable)
         {
             Assert.That(script, Does.Contain("JSON_TABLE("));
-            Assert.That(script, Does.Contain("`first_name` VARCHAR(45) PATH '$.first_name'"));
-            Assert.That(script, Does.Contain("`last_name` VARCHAR(45) PATH '$.last_name'"));
+            Assert.That(script, Does.Contain("`first_name` VARCHAR(45) CHARACTER SET utf8mb4 PATH '$.first_name'"));
+            Assert.That(script, Does.Contain("`last_name` VARCHAR(45) CHARACTER SET utf8mb4 PATH '$.last_name'"));
         }
         else
         {
@@ -288,7 +412,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
 
         // Assert
         Assert.That(script, Does.Contain($"INSERT IGNORE INTO `{_testDb}`.`country`"));
-        if (UsesJsonTable) Assert.That(script, Does.Contain("`country` VARCHAR(50) PATH '$.country'"));
+        if (UsesJsonTable) Assert.That(script, Does.Contain("`country` VARCHAR(50) CHARACTER SET utf8mb4 PATH '$.country'"));
         // AUTO_INCREMENT columns are included to preserve original IDs
         Assert.That(script, Does.Contain("`country_id`"));
     }
@@ -384,7 +508,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
                 tableData, "`id`", true, false, false, false, null!);
 
             // JSON_TABLE should read geometry as TEXT (WKT string)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`location` TEXT PATH '$.location'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain("`location` LONGTEXT CHARACTER SET utf8mb4 PATH '$.location'"));
 
             // JSON_TABLE must also read the "<col>.STSrid" companion the extractors emit beside the WKT
             if (UsesJsonTable)
@@ -473,7 +597,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
                 tableData, "`id`", true, false, false, false, null!);
 
             // JSON_TABLE should read blob as TEXT (Base64 string)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`picture` TEXT PATH '$.picture'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain("`picture` LONGTEXT CHARACTER SET utf8mb4 PATH '$.picture'"));
 
             // SELECT should convert Base64 back to binary
             Assert.That(script, Does.Contain("FROM_BASE64(`picture`)"));
@@ -609,6 +733,45 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         finally
         {
             command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // MariaDB names its JSON column check after the column, and CHECK names are per table there. A text column in
+    // another table whose own check carries that same name was read as JSON, so its plain-text values went through
+    // the JSON path.
+    [Test]
+    public void BuildMergeScript_TextColumnSharingACheckNameWithAnotherTablesJsonColumn_StaysText()
+    {
+        using var command = _connection.CreateCommand();
+        var suffix = Guid.NewGuid().ToString("N")[..12];
+        var textTable = $"_test_ckt_{suffix}";
+        var jsonTable = $"_test_ckj_{suffix}";
+
+        try
+        {
+            command.CommandText = $@"
+                CREATE TABLE `{_testDb}`.`{jsonTable}` (id INT PRIMARY KEY, payload JSON);
+                CREATE TABLE `{_testDb}`.`{textTable}` (id INT PRIMARY KEY, payload TEXT,
+                    CONSTRAINT payload CHECK (CHAR_LENGTH(payload) > 0))";
+            command.ExecuteNonQuery();
+
+            var script = BuildMergeScript(command, _testDb, textTable,
+                @"[{""id"":1,""payload"":""plain text, not JSON""}]", "`id`", true, false, false, false, null!);
+
+            Assert.That(script, Does.Not.Contain("JSON_EXTRACT(VALUES(`payload`)"));
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+            command.CommandText = $"SELECT payload FROM `{_testDb}`.`{textTable}` WHERE id = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("plain text, not JSON"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{textTable}`, `{_testDb}`.`{jsonTable}`";
             command.ExecuteNonQuery();
         }
     }

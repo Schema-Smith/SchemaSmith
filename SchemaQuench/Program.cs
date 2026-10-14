@@ -21,8 +21,16 @@ public static class Program
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;
         var config = ConfigHelper.GetAppSettingsAndUserSecrets("SchemaQuench", LogFactory.GetLogger("ProgressLog").Info);
-        CommandLineParser.WarnOnUnrecognizedArguments(KnownArguments, LogFactory.GetLogger("ProgressLog").Warn);
-        ConfigHelper.CheckStartupSettings(config, LogFactory.GetLogger("ProgressLog").Warn);
+        try
+        {
+            CommandLineParser.RefuseUnrecognizedArguments(KnownArguments);
+            ConfigHelper.CheckStartupSettings(config, LogFactory.GetLogger("ProgressLog").Warn);
+        }
+        catch (RunFailedException e)
+        {
+            LogBackup.FailedRunExit("SchemaQuench", e);
+            return;
+        }
         SettingsContract.WarnOnUnrecognizedKeys(config, SettingsTool.SchemaQuench, LogFactory.GetLogger("ProgressLog").Warn);
 
         RegisterCheckpointing();
@@ -41,13 +49,31 @@ public static class Program
             return;
         }
 
-        var productQuench = new ProductQuench();
+        ProductQuench productQuench;
+        try
+        {
+            productQuench = new ProductQuench();
+        }
+        catch (RunFailedException e)
+        {
+            LogBackup.FailedRunExit("SchemaQuench", e);
+            return;
+        }
 
         var testConnection = CommandLineParser.ContainsSwitch("TestConnection");
         var previewTargets = CommandLineParser.ContainsSwitch("PreviewTargets");
         if (testConnection || previewTargets)
         {
-            var ok = productQuench.RunPreFlight(previewTargets);
+            bool ok;
+            try
+            {
+                ok = productQuench.RunPreFlight(previewTargets);
+            }
+            catch (RunFailedException e)
+            {
+                LogBackup.FailedRunExit("SchemaQuench", e);
+                return;
+            }
             LogBackup.BackupLogsAndExit("SchemaQuench", ok ? 0 : 2);
             return;
         }
@@ -75,13 +101,22 @@ public static class Program
             LogBackup.BackupLogsAndExit("SchemaQuench", 2);
             return;
         }
+        catch (RunFailedException e)
+        {
+            // A failed validation, product script, version check or refused target: the run is over, the user can fix
+            // it, and checkpoints stay for --ResumeQuench.
+            LogBackup.FailedRunExit("SchemaQuench", e);
+            return;
+        }
 
         // Clean up checkpoint files only on a clean success — a failed run must preserve
         // checkpoints so the next invocation can resume.
         if (!productQuench.Failed)
         {
             CleanupCheckpoints();
-            LogBackup.BackupLogsAndExit("SchemaQuench");
+            // 1 when a feature was downgraded on a target that lacks it: the deploy finished, but not everything the
+            // package declares is in place. The summary lists each downgrade.
+            LogBackup.BackupLogsAndExit("SchemaQuench", productQuench.Incomplete ? 1 : 0);
         }
         else
         {
@@ -125,7 +160,7 @@ public static class Program
 
     private static readonly string[] KnownArguments =
     {
-        "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle"
+        "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle", "WhatIf"
     };
 
     private static void ToolSpecificSwitches()
@@ -136,6 +171,7 @@ public static class Program
         Console.WriteLine("  --ResumeQuench                   Resume from an existing checkpoint if one is present.");
         Console.WriteLine("  --CheckpointDirectory:<path>     Directory for checkpoint files (default: %TEMP%/schemaquench-checkpoints).");
         Console.WriteLine("  --ForceReKindle                  Re-deploy the SchemaSmith helper procedures this run even if the in-database kindle stamp is current.");
+        Console.WriteLine("  --WhatIf                         Dry run: report what would change and change nothing of yours (same as the WhatIfONLY setting).");
         Console.WriteLine("  --WhatIfDetail:<mode>            WhatIf console verbosity: concise | normal (default) | verbose. Concise collapses each section's per-script lines into per-category counts. Does not affect the WhatIf summary file.");
         Console.WriteLine("  --report:<basepath>              Write the deployment summary to <basepath>.json and <basepath>.md instead of the log directory. Give the path without an extension.");
     }

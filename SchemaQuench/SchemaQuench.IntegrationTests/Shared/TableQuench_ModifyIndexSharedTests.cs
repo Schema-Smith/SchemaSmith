@@ -150,6 +150,84 @@ public abstract class TableQuench_ModifyIndexSharedTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // MySQL needs an index for a foreign key's columns, so the index the key uses cannot simply be dropped (1553)
+    // while a deploy changes it -- whether the package keeps the key or removes it in the same deploy.
+    // A new definition that no longer leads with the key's column cannot serve it: the index is kept as it is, the
+    // deploy goes on, and a later deploy changes it once the key no longer needs it.
+    [TestCase(true, "ParentId,Id", "ParentId,Id", TestName = "ChangingAnIndexAForeignKeyUses_Deploys_KeyKept")]
+    [TestCase(false, "ParentId,Id", "ParentId,Id", TestName = "ChangingAnIndexAForeignKeyUses_Deploys_KeyRemoved")]
+    [TestCase(true, "Id,ParentId", "ParentId", TestName = "ChangingAnIndexAForeignKeyUses_Deploys_KeyStillNeedsTheOldColumns")]
+    public void ChangingAnIndexAForeignKeyUses_Deploys(bool keepForeignKey, string declaredColumns, string expectedColumns)
+    {
+        var db = $"ModIdxFk_{Guid.NewGuid():N}"[..20];
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            cmd.CommandText = $@"
+CREATE DATABASE `{db}`;
+CREATE TABLE `{db}`.`Parent` (`Id` INT NOT NULL PRIMARY KEY);
+CREATE TABLE `{db}`.`Child` (`Id` INT NOT NULL PRIMARY KEY, `ParentId` INT NOT NULL,
+  INDEX `IX_Child_ParentId` (`ParentId`),
+  CONSTRAINT `FK_Child_Parent` FOREIGN KEY (`ParentId`) REFERENCES `{db}`.`Parent` (`Id`));
+INSERT INTO `{_mainDb}`.SchemaSmith_ProductOwnership (ProductName, TemplateName, ObjectSchema, ObjectType, ObjectName)
+VALUES ('{_productName}', '', '{db}', 'TABLE', 'Parent'), ('{_productName}', '', '{db}', 'TABLE', 'Child'),
+       ('{_productName}', '', '{db}', 'INDEX', 'Child.IX_Child_ParentId'),
+       ('{_productName}', '', '{db}', 'FOREIGN KEY', 'Child.FK_Child_Parent');";
+            cmd.ExecuteNonQuery();
+
+            var foreignKeys = keepForeignKey
+                ? """[ { "Name": "FK_Child_Parent", "Columns": "ParentId", "RelatedTable": "Parent", "RelatedColumns": "Id" } ]"""
+                : "[]";
+            var json = $$"""
+            [
+                { "Name": "Parent", "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false } ],
+                  "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "Id" } ] },
+                { "Name": "Child",
+                  "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "ParentId", "DataType": "INT", "Nullable": false } ],
+                  "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "Id" },
+                               { "Name": "IX_Child_ParentId", "IndexColumns": "{{declaredColumns}}" } ],
+                  "ForeignKeys": {{foreignKeys}} }
+            ]
+            """;
+
+            Assert.DoesNotThrow(() =>
+            {
+                foreach (var call in new[]
+                         {
+                             $"SchemaSmith_ParseTableJson('{db}', '{json.Replace("'", "''")}')",
+                             $"SchemaSmith_MissingTableAndColumnQuench('{db}', 0)",
+                             $"SchemaSmith_ModifiedTableQuench('{_productName}', '{db}', 0, 0, 1, 1, 1, 1, 0, 1, 1)",
+                             $"SchemaSmith_MissingIndexesAndConstraintsQuench('{_productName}', '{db}', 0, 1)",
+                             $"SchemaSmith_ForeignKeyQuench('{_productName}', '{db}', 0, 1, 1)"
+                         })
+                {
+                    cmd.CommandText = $"CALL `{_mainDb}`.{call}";
+                    cmd.ExecuteNonQuery();
+                }
+            }, "changing an index a foreign key uses must not stop the deploy");
+
+            cmd.CommandText = $@"SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',') FROM INFORMATION_SCHEMA.STATISTICS
+                                  WHERE TABLE_SCHEMA = '{db}' AND TABLE_NAME = 'Child' AND INDEX_NAME = 'IX_Child_ParentId'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo(expectedColumns),
+                "the index takes its declared columns when they still serve the key, and is kept as it is when not");
+            cmd.CommandText = $@"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+                                  WHERE TABLE_SCHEMA = '{db}' AND TABLE_NAME = 'Child' AND CONSTRAINT_NAME = 'FK_Child_Parent'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(keepForeignKey ? 1 : 0),
+                keepForeignKey ? "the declared foreign key must still be there" : "the removed foreign key must be gone");
+        }
+        finally
+        {
+            cmd.CommandText = $@"DROP DATABASE IF EXISTS `{db}`;
+DELETE FROM `{_mainDb}`.SchemaSmith_ProductOwnership WHERE ObjectSchema = '{db}';";
+            cmd.ExecuteNonQuery();
+            conn.Close();
+        }
+    }
+
     [OneTimeSetUp]
     public void Setup()
     {

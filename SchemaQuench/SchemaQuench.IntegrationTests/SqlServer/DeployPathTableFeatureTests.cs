@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading;
 using log4net;
 using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json.Linq;
 using NSubstitute;
 using NUnit.Framework;
 using Schema.DataAccess;
@@ -37,6 +38,22 @@ public class DeployPathTableFeatureTests
     private string _beforeScript;
     private bool _nextDeployFails;
 
+    // A new database costs CREATE DATABASE, sp_cdc_enable_db, a full kindle and a cold plan compile on the first
+    // deploy -- most of a scenario. Scenarios differ only in the database setup, the policy and the ingest encoding the
+    // forge was kindled with, so one database per combination is reused, and each scenario starts by removing what
+    // the previous one left (ResetProbe).
+    private readonly Dictionary<(string Setup, string Policy, bool XmlIngest), string> _sharedDatabases = new();
+
+    [OneTimeTearDown]
+    public void DropSharedDatabases()
+    {
+        if (_sharedDatabases.Count == 0) return;
+        using var conn = OpenMaster();
+        using var cmd = conn.CreateCommand();
+        foreach (var db in _sharedDatabases.Values) DropDatabase(cmd, db);
+        _sharedDatabases.Clear();
+    }
+
     [Test]
     public void ACdcTable_IsEnabledRotatedAndDisabled_ByARealDeploy()
     {
@@ -47,12 +64,14 @@ public class DeployPathTableFeatureTests
             Assert.That(IsTrackedByCdc(cmd), Is.True, "a new EnableCDC table must be tracked after a real deploy");
             Assert.That(NewestInstanceColumns(cmd), Is.EqualTo(new[] { "A", "Id", "Twice" }),
                 "the capture instance must cover every declared column, computed ones included");
+            Assert.That(CdcChanges(), Is.EqualTo(new[] { "created" }), "the summary must record CDC being enabled");
 
             // 2. A column change rotates to an instance that includes the new column.
             deploy(CdcTable(enableCdc: true, extraColumn: true));
             Assert.That(NewestInstanceColumns(cmd), Is.EqualTo(new[] { "A", "B", "Id", "Twice" }),
                 "a column change must rotate to a capture instance that includes the new column");
             Assert.That(InstanceCount(cmd), Is.EqualTo(2), "rotation keeps the old instance for the operator to drain");
+            Assert.That(CdcChanges(), Is.EqualTo(new[] { "modified" }), "the summary must record the rotation");
 
             // 3. Leaving EnableCDC out leaves the table's CDC as it is: no disable, no rotation. It used to be disabled,
             //    losing the change table and its history, which nothing could rebuild.
@@ -63,7 +82,18 @@ public class DeployPathTableFeatureTests
             // 4. Only an explicit false turns it off.
             deploy(CdcTable(enableCdc: false, extraColumn: true));
             Assert.That(IsTrackedByCdc(cmd), Is.False, "EnableCDC false must disable CDC on the table");
+            // One row per capture instance: the rotation left two, and each is disabled.
+            Assert.That(CdcChanges(), Is.EqualTo(new[] { "dropped", "dropped" }), "the summary must record CDC being disabled");
         });
+    }
+
+    // The CDC change rows the last deploy's summary recorded for the probe table.
+    private static List<string> CdcChanges()
+    {
+        var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+        return ((JArray)summary.SelectToken("objectChanges.details") ?? [])
+            .Where(d => (string)d["objectType"] == "changeDataCapture" && ((string)d["objectName"]).Contains("DeployProbe"))
+            .Select(d => (string)d["action"]).ToList();
     }
 
     // #426. SQL Server defaults @supports_net_changes to ON once the table has a primary key, and since the #420 move a
@@ -125,6 +155,26 @@ public class DeployPathTableFeatureTests
         }, expectFailure: true);
     }
 
+    // "RelatedTable": "sales.Customer" was placed whole behind the default schema ([dbo].[sales.Customer]) and the deploy
+    // failed. A full deploy, not the procedure alone, because the prefix is read when the package loads.
+    [Test]
+    public void AForeignKeyWithASchemaQualifiedRelatedTable_ReferencesThatSchema()
+    {
+        const string setup = "EXEC('CREATE SCHEMA sales'); CREATE TABLE sales.Customer ([Id] INT NOT NULL CONSTRAINT [PK_Customer] PRIMARY KEY);";
+        RunScenario("DeployFkSchema", setup, (deploy, db, cmd) =>
+        {
+            deploy("""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                               { "Name": "[CustomerId]", "DataType": "INT", "Nullable": true } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ],
+                  "ForeignKeys": [ { "Name": "[FK_DeployProbe_Customer]", "Columns": "[CustomerId]", "RelatedTable": "sales.Customer", "RelatedColumns": "[Id]" } ] }
+                """);
+            cmd.CommandText = "SELECT OBJECT_SCHEMA_NAME(referenced_object_id) + '.' + OBJECT_NAME(referenced_object_id) FROM sys.foreign_keys WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("sales.Customer"));
+        }, freshDatabase: true);
+    }
+
     [Test]
     public void CdcDeclaredOnADatabaseWithoutCdc_IsRecordedAsDowngraded_ByARealDeploy()
     {
@@ -135,7 +185,7 @@ public class DeployPathTableFeatureTests
             // Asserted on the log, not on SchemaSmith.ChangeAudit: a real deploy reads its session's audit rows into the
             // deployment summary and then deletes them, so the table is empty afterwards whether or not the degrade ran.
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database")));
-        });
+        }, expectIncomplete: true);
     }
 
     // Under 'fail' the refusal must come before anything is created. The degrade runs in the ingest batch ahead of
@@ -168,7 +218,7 @@ public class DeployPathTableFeatureTests
             deploy(CdcTable(enableCdc: true, extraColumn: false));
             Assert.That(IsTrackedByCdc(cmd), Is.True, "the first deploy must track the table once the Before script has enabled CDC");
             _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("CDC skipped")));
-        }, policy: policy);
+        }, policy: policy, freshDatabase: true);
     }
 
     [TestCase("warn")]
@@ -188,7 +238,7 @@ public class DeployPathTableFeatureTests
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1),
                 "the first deploy must track the table once the Before script has enabled Change Tracking");
             _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("Change Tracking skipped")));
-        }, policy: policy);
+        }, policy: policy, freshDatabase: true);
     }
 
     // Deferring the judgement past the Before slot must not lose it: a Before script that leaves CDC off still
@@ -202,7 +252,7 @@ public class DeployPathTableFeatureTests
             deploy(CdcTable(enableCdc: true, extraColumn: false));
             Assert.That(IsTrackedByCdc(cmd), Is.False);
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database")));
-        });
+        }, expectIncomplete: true);
     }
 
     [Test]
@@ -434,6 +484,31 @@ public class DeployPathTableFeatureTests
         });
     }
 
+    // An index-only template renames and drops indexes in its own procedure, so it needs the same refusal.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AnIndexACaptureInstanceUses_IsRefusedByAnIndexOnlyTemplate(bool xmlIngest)
+    {
+        RunScenario("DeployCdcIdxOnly", setupDatabase: "EXEC sys.sp_cdc_enable_db", (deploy, db, cmd) =>
+        {
+            cmd.CommandText = """
+                CREATE TABLE dbo.DeployProbe (Id INT NOT NULL CONSTRAINT PK_DeployProbe PRIMARY KEY, A INT NULL);
+                EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'DeployProbe', @role_name = NULL;
+                """;
+            cmd.ExecuteNonQuery();
+
+            _nextDeployFails = true;
+            deploy(CdcTable(enableCdc: null, extraColumn: false, primaryKeyName: "[PK_DeployProbe_Renamed]"));
+            var logged = _progressLog.ReceivedCalls().Concat(_errorLog.ReceivedCalls())
+                .Select(c => c.GetArguments().FirstOrDefault()?.ToString() ?? "");
+            Assert.That(logged.Any(m => m.Contains("CDC identifies rows by an index this deploy would drop or rename")
+                                        && m.Contains("[PK_DeployProbe] (renamed, named by dbo_DeployProbe)")), Is.True,
+                "refused by its own message before the index-only deploy renames the index");
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'PK_DeployProbe'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the index must keep its name");
+        }, templateExtra: ", \"IndexOnlyTableQuenches\": true", xmlIngest: xmlIngest);
+    }
+
     // A new clustered index displaces the existing one whatever its name, even when the package no longer declares it
     // and is not set to drop it -- so the clustered index a capture instance uses is refused there too.
     [Test]
@@ -467,6 +542,30 @@ public class DeployPathTableFeatureTests
             Assert.That(NewestInstanceColumns(cmd), Is.EqualTo(new[] { "A", "B", "Id", "Twice" }));
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("forced by Target:CompatEncoding")));
         }, templateExtra: ", \"CdcSupportsNetChanges\": true", xmlIngest: true);
+    }
+
+    // A deploy that dies part-way leaves its session's ChangeAudit rows behind, and SQL Server recycles session ids, so
+    // the next deploy to get that id read them as its own and put them in its summary. Seeding every likely id makes
+    // the reuse certain.
+    [Test]
+    public void ChangeAuditRowsLeftByAnotherSession_AreNotReportedAsThisDeploysChanges()
+    {
+        RunScenario("DeployStaleAudit", setupDatabase: null, (deploy, db, cmd) =>
+        {
+            cmd.CommandText = "INSERT SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) "
+                              + "SELECT TOP (2000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), 'table', 'dbo.PhantomFromAnotherSession', 'created' "
+                              + "FROM sys.all_columns a CROSS JOIN sys.all_columns b";
+            cmd.ExecuteNonQuery();
+
+            deploy(CdcTable(enableCdc: null, extraColumn: false));
+
+            var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+            var reported = ((JArray)summary.SelectToken("objectChanges.details") ?? [])
+                .Select(d => (string)d["objectName"]).ToList();
+            Assert.That(reported, Has.Some.Contains("DeployProbe"), "precondition: the summary carries this deploy's own changes");
+            Assert.That(reported, Has.None.Contains("PhantomFromAnotherSession"),
+                "rows another session left behind must not be reported as this deploy's changes");
+        });
     }
 
     [Test]
@@ -544,33 +643,43 @@ public class DeployPathTableFeatureTests
                   : """{ "Name": "[IX_DeployProbe]", "IndexColumns": "[Id]" }""")}} ] }
         """;
 
+    // freshDatabase: the scenario reconfigures the database itself (a Before script that enables CDC or Change
+    // Tracking), so a shared one would carry that into the next scenario.
     private void RunScenario(string prefix, string setupDatabase, Action<Action<string>, string, IDbCommand> body,
-                             string templateExtra = "", bool expectFailure = false, string policy = "warn", bool xmlIngest = false)
+                             string templateExtra = "", bool expectFailure = false, string policy = "warn", bool xmlIngest = false,
+                             bool expectIncomplete = false, bool freshDatabase = false)
     {
-        var db = prefix + "_" + Guid.NewGuid().ToString("N")[..12];
         var tempDir = Path.Join(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
+        var key = (setupDatabase ?? "", policy, xmlIngest);
 
         lock (FactoryContainer.SharedLockObject)
         {
             SetupSharedMocks();
             var config = FactoryContainer.Resolve<IConfigurationRoot>();
-            var connProps = ConnectionString.ReadProperties(config, "Target:ConnectionProperties");
-            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
-                ConnectionString.Build(Platform.SqlServer, config["Target:Server"], "master",
-                    config["Target:User"], config["Target:Password"], config["Target:Port"], connProps));
-            conn.Open();
+            using var conn = OpenMaster();
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 300;
             var savedPath = config["SchemaPackagePath"];
             var savedEncoding = config["Target:CompatEncoding"];
+            var shared = !freshDatabase && _sharedDatabases.ContainsKey(key);
+            var db = shared ? _sharedDatabases[key] : prefix + "_" + Guid.NewGuid().ToString("N")[..12];
 
             try
             {
-                cmd.CommandText = $"CREATE DATABASE [{db}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
-                cmd.ExecuteNonQuery();
-                conn.ChangeDatabase(db);
-                if (setupDatabase != null) ExecuteWithDeadlockRetry(cmd, setupDatabase);
-                ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, policy: policy);
+                if (shared)
+                {
+                    conn.ChangeDatabase(db);
+                    ResetProbe(cmd);
+                }
+                else
+                {
+                    cmd.CommandText = $"CREATE DATABASE [{db}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
+                    cmd.ExecuteNonQuery();
+                    if (!freshDatabase) _sharedDatabases[key] = db;
+                    conn.ChangeDatabase(db);
+                    if (setupDatabase != null) ExecuteWithDeadlockRetry(cmd, setupDatabase);
+                    ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, policy: policy);
+                }
                 config["SchemaPackagePath"] = tempDir;
                 // The encoding is chosen during version detection, which SkipKindlingForge also skips.
                 if (xmlIngest) config["Target:CompatEncoding"] = "legacy";
@@ -579,10 +688,21 @@ public class DeployPathTableFeatureTests
                 {
                     WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript);
                     _environment.ClearReceivedCalls();
+                    var reportBase = Path.Join(tempDir, "summary");
+                    if (expectIncomplete) _environment.CommandLine.Returns($"SchemaQuench.exe --report:{reportBase}");
                     Program.Main(xmlIngest ? [] : ["SkipKindlingForge"]);
+                    if (expectIncomplete) _environment.CommandLine.Returns("");
                     var fails = expectFailure || _nextDeployFails;
                     _nextDeployFails = false;
                     if (fails) _environment.Received().Exit(Arg.Is<int>(code => code != 0));
+                    else if (expectIncomplete)
+                    {
+                        _environment.Received(1).Exit(1);
+                        _environment.DidNotReceive().Exit(Arg.Is<int>(code => code > 1));
+                        var summary = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(reportBase + ".json"));
+                        Assert.That(summary.SelectToken("run.outcome")?.ToString(), Is.EqualTo("Incomplete"),
+                            "a run that downgraded a feature must say Incomplete in its summary, not only in its exit code");
+                    }
                     else _environment.DidNotReceive().Exit(Arg.Is<int>(code => code != 0));
                 }, db, cmd);
             }
@@ -590,15 +710,7 @@ public class DeployPathTableFeatureTests
             {
                 config["SchemaPackagePath"] = savedPath;
                 config["Target:CompatEncoding"] = savedEncoding;
-                try
-                {
-                    conn.ChangeDatabase("master");
-                    cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN "
-                                      + $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-                    cmd.ExecuteNonQuery();
-                }
-                catch (DbException) { /* best-effort cleanup */ }
-                catch (InvalidOperationException) { /* connection already unusable */ }
+                if (freshDatabase) DropDatabase(cmd, db);
                 conn.Close();
                 LogFactory.Clear();
                 FactoryContainer.Unregister<IEnvironment>();
@@ -607,6 +719,47 @@ public class DeployPathTableFeatureTests
             }
         }
     }
+
+    private static IDbConnection OpenMaster()
+    {
+        var config = FactoryContainer.Resolve<IConfigurationRoot>();
+        var connProps = ConnectionString.ReadProperties(config, "Target:ConnectionProperties");
+        var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
+            ConnectionString.Build(Platform.SqlServer, config["Target:Server"], "master",
+                config["Target:User"], config["Target:Password"], config["Target:Port"], connProps));
+        conn.Open();
+        return conn;
+    }
+
+    private static void DropDatabase(IDbCommand cmd, string db)
+    {
+        try
+        {
+            cmd.Connection!.ChangeDatabase("master");
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
+        }
+        // Cleanup must not fail the test, but a database it leaves behind keeps running (a CDC capture job), so say so.
+        catch (DbException e) { TestContext.Progress.WriteLine($"WARNING: test database {db} was not dropped: {e.Message}"); }
+        catch (InvalidOperationException e) { TestContext.Progress.WriteLine($"WARNING: test database {db} was not dropped: {e.Message}"); }
+    }
+
+    // Everything a scenario can leave in a shared database: the probe table with its capture instances, Change Tracking
+    // and history table, and SchemaSmith's own per-object state, so the next scenario deploys as if into a new one.
+    // Run at the start rather than the end, so a scenario that failed half-way cannot leak into the next.
+    private static void ResetProbe(IDbCommand cmd) => ExecuteWithDeadlockRetry(cmd, """
+        IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND is_tracked_by_cdc = 1)
+            EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'DeployProbe', @capture_instance = N'all';
+        IF EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe'))
+            ALTER TABLE dbo.DeployProbe DISABLE CHANGE_TRACKING;
+        IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND temporal_type = 2)
+            ALTER TABLE dbo.DeployProbe SET (SYSTEM_VERSIONING = OFF);
+        IF OBJECT_ID('dbo.DeployProbe') IS NOT NULL DROP TABLE dbo.DeployProbe;
+        IF OBJECT_ID('dbo.DeployProbe_Archive') IS NOT NULL DROP TABLE dbo.DeployProbe_Archive;
+        DELETE SchemaSmith.ChangeAudit;
+        DELETE SchemaSmith.ExpressionMap;
+        DELETE SchemaSmith.ProductOwnership;
+        DELETE SchemaSmith.CompletedMigrationScripts;
+        """);
 
     // sp_cdc_enable_db writes database-wide replication metadata and can be chosen as a deadlock victim against a
     // sibling fixture's DDL; retrying is what the CDC fixture does for the same reason.

@@ -40,6 +40,42 @@ public class SettingsContractTests
         Assert.That(unrecognized, Is.Empty);
     }
 
+    // SchemaTongs and DataTongs connect with Target:* when no Source:* is given, so those keys are read -- the warning
+    // that they "will have no effect" was false.
+    [TestCase(SettingsTool.SchemaTongs)]
+    [TestCase(SettingsTool.DataTongs)]
+    public void TheTongsTargetConnectionFallbacks_AreRecognized(SettingsTool tool)
+    {
+        var unrecognized = SettingsContract.UnrecognizedKeys(
+            Config(("Target:Platform", "SqlServer"), ("Target:Server", "srv"), ("Target:User", "u"), ("Target:Password", "p"),
+                   ("Target:Port", "1433"), ("Target:IntegratedSecurity", "false"), ("Target:ConnectionProperties:Encrypt", "true")),
+            tool);
+
+        Assert.That(unrecognized, Is.Empty);
+    }
+
+    [Test]
+    public void DataTongsReadsTheTargetCompatEncodingFallback()
+    {
+        Assert.That(SettingsContract.UnrecognizedKeys(Config(("Target:Platform", "SqlServer"), ("Target:CompatEncoding", "Xml")),
+            SettingsTool.DataTongs), Is.Empty);
+    }
+
+    // ScriptTokens are read only by a Product load, which neither Tongs tool performs; LogHygiene is read by the shared
+    // configuration logger, so every tool reads it.
+    [Test]
+    public void ScriptTokensAndLogHygiene_AreClaimedByTheToolsThatReadThem()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SettingsContract.AcceptedKeys(SettingsTool.SchemaTongs), Does.Not.Contain(SettingsKeys.ScriptTokens));
+            Assert.That(SettingsContract.AcceptedKeys(SettingsTool.DataTongs), Does.Not.Contain(SettingsKeys.ScriptTokens));
+            Assert.That(SettingsContract.AcceptedKeys(SettingsTool.SchemaQuench), Does.Contain(SettingsKeys.ScriptTokens));
+            foreach (var tool in Enum.GetValues<SettingsTool>())
+                Assert.That(SettingsContract.AcceptedKeys(tool), Does.Contain(SettingsKeys.LogHygiene), tool.ToString());
+        });
+    }
+
     [Test]
     public void ForeignTopLevelSection_IsIgnored()
     {

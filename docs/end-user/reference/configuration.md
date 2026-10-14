@@ -25,6 +25,8 @@ SchemaSmith is flexible about how you pass switches -- pick whichever style feel
 
 Switch names are **case-insensitive** -- `--logpath`, `--LogPath`, and `--LOGPATH` all do the same thing.
 
+**An argument the tool does not recognize stops the run before anything connects** -- a misspelled switch, or a value written with a space instead of `:` or `=` (`--LogPath ./logs`). The tool names the argument, exits `2`, and changes nothing. Settings keys are different: an unrecognized key in a settings file is reported as a warning (below), because a settings file may be shared across tool versions.
+
 Values that contain spaces must be quoted:
 
 ```
@@ -48,6 +50,7 @@ Every SchemaSmith CLI tool recognizes these switches. They're processed before a
 | `--LogPath:<path>` | | Directory for log files and backup subdirectories. Defaults to the tool's executable directory. |
 | `--ConnectionString:<connstr>` | | Full ADO.NET / Npgsql / MySqlConnector connection string appropriate to the target platform. When provided, this bypasses all individual connection settings (`Server`, `Port`, `User`, `Password`, `ConnectionProperties`). |
 | `--Encrypt` / `--NoEncrypt` | | Force transport encryption on or off using the right property per engine (SQL Server `Encrypt`, PostgreSQL `SSL Mode`, MySQL/MariaDB `SslMode`). Wins over `ConnectionProperties`. Applies to SchemaQuench, SchemaTongs, and DataTongs. |
+| `--ExitNonZeroOnWarning` | | Exit `1` instead of `0` when the run finished but logged a warning, for pipelines that treat warnings as failures. Never lowers or replaces a failure code. Also available as the `ExitNonZeroOnWarning` setting. All four tools. |
 
 ### Examples
 
@@ -511,10 +514,12 @@ SchemaSmith surfaces the database engine's informational output -- notices, prin
 | Code | Condition | Recommended action |
 |---|---|---|
 | `0` | Normal completion | None -- the operation succeeded. |
-| `1` | Finished, but did not produce everything asked: DataTongs skipped a table (it does not exist in the source, has no key columns, or its `KeyColumns` are malformed) | The skipped tables and the reason for each are in the progress log and the error log. Fix the table list or the source, and re-run. |
-| `2` | Failed: SchemaQuench -- one or more database quenches failed; SchemaTongs -- one or more tables failed to extract; DataTongs -- one or more tables failed to extract | Check the progress and error logs for what failed and why. Fix the cause and re-run. |
-| `3` | Unhandled exception | An unexpected error occurred. The exception is logged to both the progress and error logs before exit. Report the error with the log contents if the cause isn't obvious. |
+| `1` | Finished, but did not produce everything asked: SchemaQuench downgraded a feature the target lacks, under `UnsupportedFeaturePolicy: warn` (listed in the deployment summary); DataTongs skipped a table (it does not exist in the source, has no key columns, or its `KeyColumns` are malformed), left out a column whose type cannot be delivered, did not write a merge script because the MySQL source is older than 8.0, or could not wire a script's data token (see [DataTongs -- Exit code](datatongs.md#exit-code)); SchemaTongs left an object out of the package (invalid or skipped script, encrypted module, empty definition) | The skipped tables or objects and the reason for each are in the progress log (and, for DataTongs, the error log). Fix the cause and re-run. |
+| `2` | Failed, for a reason you can fix: a command-line argument was not recognized, a required setting is missing (such as the platform), the package cannot be loaded, a validation script, product script or version check failed, a target was refused, or a `TemplateTargets` rule was broken. Also: SchemaQuench -- one or more database quenches failed; SchemaTongs -- one or more tables failed to extract; DataTongs -- one or more tables failed to extract; SchemaShears -- the patch request cannot be built (missing source or manifest, output already exists, unknown drop category) | Check the progress and error logs for what failed and why. Fix the cause and re-run. |
+| `3` | Unhandled exception -- a defect in the tool | An unexpected error occurred. The exception is logged to both the progress and error logs before exit. Please report it with the log contents. |
 | `4` | Log backup failure | The tool completed its main work but couldn't back up the log files. Check directory permissions and disk space in the log directory. The base log files may still be readable even though the backup failed. |
+
+`--ExitNonZeroOnWarning` (or the `ExitNonZeroOnWarning` setting) turns a `0` into a `1` when the run logged a warning; every other code is unchanged.
 
 ---
 
