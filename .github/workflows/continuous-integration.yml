@@ -1,6 +1,9 @@
 name: CI
 
 on:
+  # A release cut from a tag runs on a branch CI never sees by push or pull request; the gate needs
+  # this commit's own check-runs, so the workflow can be started by hand on that branch.
+  workflow_dispatch:
   push:
     branches: [main]
     paths-ignore:
