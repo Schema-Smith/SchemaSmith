@@ -55,6 +55,16 @@
     "ShouldApplyExpression": {
       "type": "string"
     },
+    "TimeZone": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "Optional. The time zone the schedule is read in, e.g. \"+05:00\". Omitted: the event takes the deploying session's zone and the server's value is not compared."
+    },
+    "SqlMode": {
+      "type": "string",
+      "maxLength": 1024,
+      "description": "Optional. The sql_mode the event body runs under, written as the engine reports it. Omitted: the event takes the deploying session's mode and the server's value is not compared."
+    },
     "Extensions": {}
   },
   "additionalProperties": false,
