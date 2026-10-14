@@ -145,7 +145,7 @@ SELECT ProductName, Total = SUM(Quantity)
 GO
 ```
 
-The key detail: `CREATE OR ALTER`. This is idempotent. It works whether the procedure exists or not. No `IF EXISTS ... DROP` guard. No separate create-vs-alter logic. SchemaQuench runs the script as-is, and the database engine handles the rest. PostgreSQL uses `CREATE OR REPLACE FUNCTION` / `CREATE OR REPLACE PROCEDURE` for the same effect; MySQL uses `DROP ... IF EXISTS` followed by `CREATE ...` as a single idempotent pair. SchemaSmith's helper procedures smooth over the platform differences so your script files stay focused on the business logic.
+The key detail: `CREATE OR ALTER`. This is idempotent. It works whether the procedure exists or not. No `IF EXISTS ... DROP` guard. No separate create-vs-alter logic. SchemaQuench runs the script as-is, and the database engine handles the rest. PostgreSQL uses `CREATE OR REPLACE FUNCTION` / `CREATE OR REPLACE PROCEDURE` for the same effect; MySQL uses `DROP ... IF EXISTS` followed by `CREATE ...` as a single idempotent pair. SchemaSmith's helper procedures smooth over the platform differences so your script files stay focused on the business logic. One version caveat: SQL Server accepts `CREATE OR ALTER` from 2016 SP1. For a package that must deploy below that, have SchemaTongs write the scripts with `ShouldCast:ModuleSyntax` set to `Legacy`, a guarded `CREATE` stub followed by `ALTER` that every supported version runs; `--Validate` warns when a package's `MinimumVersion` admits an older server and its scripts still use `CREATE OR ALTER`.
 
 Views work the same way. Here's a SQL Server view in the `Views/` folder:
 

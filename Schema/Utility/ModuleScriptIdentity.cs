@@ -11,9 +11,10 @@ namespace Schema.Utility;
 public enum ModuleKind { View, Function, Procedure, Trigger, Event }
 
 /// <summary>
-/// The one module a script creates, read from its CREATE statement, so the deploy can ask the engine how it renders
-/// that object. A script with no CREATE, with more than one, or creating something the engine's rendering does not
-/// cover has no identity and always runs.
+/// The one module a script creates, read from its CREATE statement (or, on SQL Server, the ALTER that carries the body
+/// in the legacy guarded-stub form), so the deploy can ask the engine how it renders that object. A script with no
+/// such statement, with more than one, or creating something the engine's rendering does not cover has no identity
+/// and always runs. String literals are blanked first, so a stub inside EXEC('...') is not a second statement.
 /// </summary>
 public sealed class ModuleScriptIdentity
 {
@@ -30,7 +31,7 @@ public sealed class ModuleScriptIdentity
     private const string MySqlToken = @"(`[^`]+`|""[^""]+""|[\w$]+)";
 
     private static readonly Regex SqlServerCreate = new(
-        $@"(?<!\w)CREATE\s+(OR\s+ALTER\s+)?(?<kind>PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\s+(?<name>{SqlServerToken}(\s*\.\s*{SqlServerToken})?)(?<rest>[\s\S]*)",
+        $@"(?<!\w)(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)(?<kind>PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\s+(?<name>{SqlServerToken}(\s*\.\s*{SqlServerToken})?)(?<rest>[\s\S]*)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex PostgreSqlCreate = new(
         $@"(?<!\w)CREATE\s+(OR\s+REPLACE\s+)?(CONSTRAINT\s+)?(?<kind>PROCEDURE|FUNCTION|VIEW|TRIGGER)\s+(?<name>{PostgreSqlToken}(\s*\.\s*{PostgreSqlToken})?)(?<rest>[\s\S]*)",

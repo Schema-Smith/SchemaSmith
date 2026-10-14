@@ -377,6 +377,81 @@ public class SchemaTongsTests
         }
     }
 
+    private string CastOneProcedure(string moduleSyntax)
+    {
+        SetUpMocks();
+        var overrides = new Dictionary<string, string>
+        {
+            ["ShouldCast:Tables"] = "false",
+            ["ShouldCast:Schemas"] = "false",
+            ["ShouldCast:UserDefinedTypes"] = "false",
+            ["ShouldCast:Functions"] = "false",
+            ["ShouldCast:Views"] = "false",
+            ["ShouldCast:Procedures"] = "true",
+            ["ShouldCast:TableTriggers"] = "false",
+            ["ShouldCast:Catalogs"] = "false",
+            ["ShouldCast:StopLists"] = "false",
+            ["ShouldCast:DDLTriggers"] = "false",
+            ["ShouldCast:XMLSchemaCollections"] = "false"
+        };
+        if (moduleSyntax != null) overrides["ShouldCast:ModuleSyntax"] = moduleSyntax;
+        RegisterConfig(Platform.SqlServer, overrides);
+        RegisterConnectionFactory(Platform.SqlServer);
+
+        var listReader = Substitute.For<IDataReader>();
+        var listCount = 0;
+        listReader.Read().Returns(_ => listCount++ < 1, _ => false);
+        listReader.GetString(0).Returns("dbo");
+        listReader.GetString(1).Returns("MyProc");
+        var defReader = Substitute.For<IDataReader>();
+        defReader.Read().Returns(true, false);
+        defReader.IsDBNull(0).Returns(false);
+        defReader.GetString(0).Returns("CREATE PROCEDURE dbo.MyProc AS BEGIN SELECT 1 END");
+        defReader.GetBoolean(1).Returns(true);
+        defReader.GetBoolean(2).Returns(true);
+        var extReader = Substitute.For<IDataReader>();
+        extReader.Read().Returns(false);
+        _command.StubReaders(listReader, defReader, extReader);
+
+        string written = null;
+        _fileWrapper.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("dbo.MyProc.sql")), Arg.Any<string>())).Do(ci => written = ci.ArgAt<string>(1));
+        new SchemaTongs(Platform.SqlServer).CastTemplate();
+        return written;
+    }
+
+    [Test]
+    public void CastTemplate_SqlServer_LegacyModuleSyntax_WritesAGuardedStubAndAlter()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var written = CastOneProcedure("legacy");
+
+            Assert.That(written, Is.Not.Null, "the procedure script was not written");
+            Assert.That(written, Does.Contain("IF OBJECT_ID(N'[dbo].[MyProc]') IS NULL EXEC('CREATE PROCEDURE [dbo].[MyProc] AS RETURN')\r\nGO\r\n\r\nALTER PROCEDURE [dbo].[MyProc] AS BEGIN SELECT 1 END"));
+            Assert.That(written, Does.Not.Contain("CREATE OR ALTER"));
+            _progressLog.DidNotReceive().Warn(Arg.Is<string>(s => s.Contains("ModuleSyntax")));
+
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
+    [Test]
+    public void CastTemplate_SqlServer_MistypedModuleSyntax_WarnsAndWritesCreateOrAlter()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var written = CastOneProcedure("Legcay");
+
+            Assert.That(written, Is.Not.Null, "the procedure script was not written");
+            Assert.That(written, Does.Contain("CREATE OR ALTER PROCEDURE [dbo].[MyProc]"));
+            _progressLog.Received().Warn(Arg.Is<string>(s => s.Contains("ShouldCast:ModuleSyntax 'Legcay'") && s.Contains("CreateOrAlter or Legacy")));
+
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
     [Test]
     public void CastTemplate_SqlServer_ProceduresOnly_CastsProcedures()
     {

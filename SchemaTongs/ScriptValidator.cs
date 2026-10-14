@@ -27,13 +27,21 @@ internal class ScriptValidator
     {
         var tempName = "_validate_" + Guid.NewGuid().ToString("N")[..12];
         var pattern = GetCreatePattern(platform);
-        var match = pattern.Match(script);
+        // The legacy SQL Server form carries its CREATE inside an EXEC string; the statement to rename is the one outside
+        // any literal, and a blanked literal keeps every index where it was.
+        var searchable = platform.GetBasePlatform() == Platform.SqlServer ? StringLiteral.Replace(script, m => new string(' ', m.Length)) : script;
+        var match = pattern.Match(searchable);
         if (!match.Success)
             return new RewriteResult { Success = false };
 
         var nameGroup = match.Groups["name"];
         var quotedTemp = QuoteTempName(tempName, platform);
-        var rewritten = script[..nameGroup.Index] + quotedTemp + script[(nameGroup.Index + nameGroup.Length)..];
+        // The legacy form's ALTER is validated as a CREATE: the temporary object never exists.
+        var alter = match.Groups["alter"];
+        var head = alter.Success
+            ? script[..alter.Index] + "CREATE " + script[(alter.Index + alter.Length)..nameGroup.Index]
+            : script[..nameGroup.Index];
+        var rewritten = head + quotedTemp + script[(nameGroup.Index + nameGroup.Length)..];
         var kind = match.Groups["kind"].Value.ToUpperInvariant();
 
         // An extracted MySQL-family script opens with the real object's DROP ... IF EXISTS. Run as written during
@@ -169,7 +177,7 @@ internal class ScriptValidator
         return platform.GetBasePlatform() switch
         {
             Platform.SqlServer => new Regex(
-                @"CREATE\s+(OR\s+ALTER\s+)?(?<kind>FUNCTION|VIEW|PROCEDURE)\s+(\[\w+\]\.)?(?<name>\[\w+\]|\w+)",
+                @"(?:CREATE\s+(OR\s+ALTER\s+)?|(?<alter>ALTER\s+))(?<kind>FUNCTION|VIEW|PROCEDURE|PROC)\b\s+(\[\w+\]\.)?(?<name>\[\w+\]|\w+)",
                 RegexOptions.IgnoreCase | RegexOptions.Singleline),
             Platform.PostgreSQL => new Regex(
                 @"CREATE\s+(OR\s+REPLACE\s+)?(?<kind>FUNCTION|VIEW|PROCEDURE|AGGREGATE)\s+(" + @"""[\w]+""\.|[\w]+\.)?(?<name>""[\w]+""|[\w]+)",
@@ -186,6 +194,8 @@ internal class ScriptValidator
     private static readonly Regex MySqlDropPattern = new(
         @"DROP\s+(?<kind>FUNCTION|VIEW|PROCEDURE)\s+(IF\s+EXISTS\s+)?(?<name>`[^`]+`|""[^""]+""|[\w]+)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex StringLiteral = new(@"N?'(?:[^']|'')*'", RegexOptions.Compiled | RegexOptions.Singleline);
 
     private static string QuoteTempName(string tempName, Platform platform)
     {

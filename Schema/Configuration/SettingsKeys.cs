@@ -117,6 +117,8 @@ public static class SettingsKeys
         [ReadBy(SettingsTool.DataTongs)]
         public const string MergeUpdate = "ShouldCast:MergeUpdate";
         [ReadBy(SettingsTool.SchemaTongs)]
+        public const string ModuleSyntax = "ShouldCast:ModuleSyntax";
+        [ReadBy(SettingsTool.SchemaTongs)]
         public const string ObjectList = "ShouldCast:ObjectList";
         [ReadBy(SettingsTool.DataTongs)]
         public const string OutputContentFiles = "ShouldCast:OutputContentFiles";

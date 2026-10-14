@@ -119,6 +119,7 @@ public class SchemaTongs
     // JSON model via ModelXmlSerializer.FromIngestXml. Resolved per source in CastSqlServerObjects from
     // best-effort version detection (defaults to Json when the version is unknown).
     private IngestEncoding _ingestEncoding = IngestEncoding.Json;
+    private ModuleSyntax _moduleSyntax = ModuleSyntax.CreateOrAlter;
 
     public SchemaTongs(Platform platform)
     {
@@ -565,6 +566,7 @@ public class SchemaTongs
                 _includeIndexedViews = config[SettingsKeys.ShouldCast.IndexedViews]?.ToLower() != "false";
                 _includeSequences = config[SettingsKeys.ShouldCast.Sequences]?.ToLower() != "false";
                 _includeSynonyms = config[SettingsKeys.ShouldCast.Synonyms]?.ToLower() != "false";
+                _moduleSyntax = ReadModuleSyntax(config[SettingsKeys.ShouldCast.ModuleSyntax]);
                 break;
 
             case Platform.PostgreSQL:
@@ -1949,6 +1951,9 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
 
             definition = Regex.Replace(definition, @"(?<=\bAS[ \t]*\r\n)([ \t]*)(?=\S)", "$1\r\n");
 
+            if (_moduleSyntax == ModuleSyntax.Legacy)
+                definition = ConvertToLegacyModuleForm(definition, null, triggerName);
+
             var extProps = GetExtendedProperties(command, "TRIGGER", triggerName);
 
             var ansiNulls = usesAnsiNulls ? "ON" : "OFF";
@@ -2056,6 +2061,57 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
         return result;
     }
 
+    private ModuleSyntax ReadModuleSyntax(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return ModuleSyntax.CreateOrAlter;
+        if (Enum.TryParse<ModuleSyntax>(value.Trim(), true, out var syntax) && Enum.IsDefined(syntax)) return syntax;
+        _progressLog.Warn($"ShouldCast:ModuleSyntax '{value}' is not CreateOrAlter or Legacy; modules are written with CREATE OR ALTER.");
+        return ModuleSyntax.CreateOrAlter;
+    }
+
+    // The form every supported version accepts: a guarded stub creates the object when it is missing, then ALTER carries
+    // the real body. The stub mirrors the kind, a function's shape and a trigger's first event, because ALTER cannot
+    // change those and the stub must be creatable wherever the real object is. A null schema is a database trigger.
+    internal static string ConvertToLegacyModuleForm(string definition, string schemaName, string objectName, string parentTableName = null)
+    {
+        var header = Regex.Match(definition, @"(?<!\w)CREATE\s+(OR\s+ALTER\s+)?(?<kind>PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\b", RegexOptions.IgnoreCase);
+        if (!header.Success) return definition;
+
+        var name = $"[{Identifier.EscapeDelimited(objectName, Platform.SqlServer)}]";
+        var qualified = schemaName == null ? name : $"[{Identifier.EscapeDelimited(schemaName, Platform.SqlServer)}].{name}";
+        var guard = $"IF OBJECT_ID(N'{EscapeSql(qualified)}') IS NULL";
+        string stub;
+        switch (header.Groups["kind"].Value.ToUpperInvariant())
+        {
+            case "VIEW":
+                stub = $"CREATE VIEW {qualified} AS SELECT 1 AS x";
+                break;
+            case "FUNCTION":
+                stub = Regex.IsMatch(definition, @"\bRETURNS\s+@\w+\s+TABLE\b", RegexOptions.IgnoreCase) ? $"CREATE FUNCTION {qualified}() RETURNS @t TABLE (x INT) AS BEGIN RETURN END"
+                    : Regex.IsMatch(definition, @"\bRETURNS\s+TABLE\b", RegexOptions.IgnoreCase) ? $"CREATE FUNCTION {qualified}() RETURNS TABLE AS RETURN SELECT 1 AS x"
+                    : $"CREATE FUNCTION {qualified}() RETURNS INT AS BEGIN RETURN 0 END";
+                break;
+            case "TRIGGER" when parentTableName != null:
+            {
+                var firing = Regex.Match(definition, @"\b(?<mode>AFTER|FOR|INSTEAD\s+OF)\s+(?<event>INSERT|UPDATE|DELETE)\b", RegexOptions.IgnoreCase);
+                var mode = firing.Success && firing.Groups["mode"].Value.StartsWith("INSTEAD", StringComparison.OrdinalIgnoreCase) ? "INSTEAD OF" : "AFTER";
+                var firstEvent = firing.Success ? firing.Groups["event"].Value.ToUpperInvariant() : "INSERT";
+                stub = $"CREATE TRIGGER {qualified} ON [{Identifier.EscapeDelimited(schemaName, Platform.SqlServer)}].[{Identifier.EscapeDelimited(parentTableName, Platform.SqlServer)}] {mode} {firstEvent} AS RETURN";
+                break;
+            }
+            case "TRIGGER":
+                guard = $"IF NOT EXISTS (SELECT 1 FROM sys.triggers WHERE parent_class = 0 AND name = N'{EscapeSql(objectName)}')";
+                stub = $"CREATE TRIGGER {qualified} ON DATABASE FOR DDL_DATABASE_LEVEL_EVENTS AS RETURN";
+                break;
+            default:
+                stub = $"CREATE PROCEDURE {qualified} AS RETURN";
+                break;
+        }
+
+        var altered = definition[..header.Index] + "ALTER " + header.Groups["kind"].Value + definition[(header.Index + header.Length)..];
+        return $"{guard} EXEC('{EscapeSql(stub)}')\r\nGO\r\n\r\n{altered}";
+    }
+
     internal string ScriptSqlServerProgrammableObject(IDbCommand command, string schemaName, string objectName,
         string level1Type, string level2Type = null, string level2ParentName = null)
     {
@@ -2103,6 +2159,9 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
         definition = ConvertToCreateOrAlter(definition, schemaName, objectName);
 
         definition = Regex.Replace(definition, @"(?<=\bAS[ \t]*\r\n)([ \t]*)(?=\S)", "$1\r\n");
+
+        if (_moduleSyntax == ModuleSyntax.Legacy)
+            definition = ConvertToLegacyModuleForm(definition, schemaName, objectName, level2ParentName);
 
         var level1Name = level2Type != null ? level2ParentName : objectName;
         var extPropsLevel1Type = level2Type != null ? "TABLE" : level1Type;

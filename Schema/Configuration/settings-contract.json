@@ -73,6 +73,7 @@
       "ShouldCast:Functions",
       "ShouldCast:IndexedViews",
       "ShouldCast:MaterializedViews",
+      "ShouldCast:ModuleSyntax",
       "ShouldCast:ObjectList",
       "ShouldCast:Procedures",
       "ShouldCast:Publications",

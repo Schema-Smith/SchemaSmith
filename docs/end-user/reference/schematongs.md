@@ -160,6 +160,8 @@ For the full explanation of configuration loading, environment variable mapping,
     "DDLTriggers": true,
     "XMLSchemaCollections": true,
     "IndexedViews": true,
+    "Synonyms": true,
+    "ModuleSyntax": "CreateOrAlter",
 
     "DomainTypes": true,
     "EnumTypes": true,
@@ -249,6 +251,8 @@ Control exactly what gets cast from the database. Each object type can be indivi
 | `DDLTriggers` | `true` | Database-level DDL triggers |
 | `XMLSchemaCollections` | `true` | XML schema collections |
 | `IndexedViews` | `true` | Indexed (materialized) view definitions as JSON files |
+| `Synonyms` | `true` | Synonyms |
+| `ModuleSyntax` | `CreateOrAlter` | The statement form module scripts are written in: `CreateOrAlter` (SQL Server 2016 SP1 and later) or `Legacy` (every supported version). See [ModuleSyntax](#modulesyntax). |
 
 **What the SQL Server scripts carry.** A table type is written with its identity, computed columns, defaults, a `COLLATE` that differs from the database's, its named indexes (`HASH`, `INCLUDE` and filter forms included), `IGNORE_DUP_KEY` and `MEMORY_OPTIMIZED` (2014+). A sequence keeps its type's precision, an alias type's name and an explicit `CACHE` or `NO CACHE`. A full-text catalog keeps `ACCENT_SENSITIVITY` and `AS DEFAULT`. A module renamed with `sp_rename` still carries its old name in its stored text; SchemaTongs writes it under the current name and logs a warning naming the old one, so review the body for references to it.
 
@@ -605,6 +609,17 @@ All check constraints are promoted to named entries in the table's `CheckConstra
 If the config specifies a different style than what is already in `Product.json`, SchemaTongs logs a warning and extracts using the style from the existing product file. To change styles on an existing product, update `Product.json` directly.
 
 ---
+
+## ModuleSyntax
+
+`ShouldCast:ModuleSyntax` chooses the statement form every SQL Server module script is written in: views, functions, procedures, table triggers and database DDL triggers.
+
+| Value | Written form | Runs on |
+|---|---|---|
+| `CreateOrAlter` (default) | `CREATE OR ALTER <kind> ...` | SQL Server 2016 SP1 (`13.0.4001`) and later |
+| `Legacy` | `IF OBJECT_ID(...) IS NULL EXEC('CREATE <kind> ... stub')`, `GO`, then `ALTER <kind>` with the full body | Every supported version, 2008 included |
+
+Use `Legacy` when the package will deploy to a server below 2016 SP1, where `CREATE OR ALTER` is a syntax error. The stub mirrors the object's kind, a function's shape (scalar, inline or multi-statement table) and a trigger's firing mode and first event, because `ALTER` cannot change those; the `ALTER` then carries the real definition. A guarded stub needs no `IF EXISTS ... DROP`, so a redeploy never removes the object. `--Validate` warns (`SS-VER-002`) when a package's `MinimumVersion` admits a pre-SP1 build and its scripts still use `CREATE OR ALTER`. Script validation, schema-template extraction and SchemaQuench's unchanged-object skip treat both forms alike.
 
 ## ScriptDynamicDependencyRemovalForFunctions
 

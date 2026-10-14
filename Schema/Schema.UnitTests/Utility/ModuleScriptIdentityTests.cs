@@ -40,6 +40,23 @@ public class ModuleScriptIdentityTests
         Assert.That((id.Kind, id.Schema, id.Name, id.TableSchema, id.TableName), Is.EqualTo((ModuleKind.Trigger, "dbo", "trg_Audit", "dbo", "Orders")));
     }
 
+    // The legacy form SchemaTongs writes for servers below 2016 SP1: the CREATE sits inside an EXEC string, so the
+    // ALTER is the statement that names the module.
+    [Test]
+    public void SqlServer_LegacyForm_GuardedStubThenAlter_IsTheOneModule()
+    {
+        var id = Parse(Platform.SqlServer,
+            "IF OBJECT_ID(N'[dbo].[p]') IS NULL EXEC('CREATE PROCEDURE [dbo].[p] AS RETURN')",
+            "ALTER PROCEDURE [dbo].[p] AS SELECT 1");
+        Assert.That((id?.Kind, id?.Schema, id?.Name), Is.EqualTo((ModuleKind.Procedure, "dbo", "p")), "the legacy form must be stamped like any other module");
+    }
+
+    [Test]
+    public void SqlServer_CreateThenAlterOutsideAString_IsTwoStatements_AndSoNone()
+    {
+        Assert.That(Parse(Platform.SqlServer, "CREATE VIEW dbo.v AS SELECT 1 AS x", "ALTER VIEW dbo.v AS SELECT 2 AS x"), Is.Null);
+    }
+
     [Test]
     public void PostgreSql_OrReplaceFunction_QuotedSchema()
     {

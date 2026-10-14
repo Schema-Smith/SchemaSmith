@@ -69,6 +69,30 @@ public class ScriptValidatorTests
         Assert.That(result.RewrittenScript, Does.Not.Contain("[MyView]"));
     }
 
+    // The legacy form keeps its CREATE inside an EXEC string, where the source's object already exists, and its ALTER is
+    // what has to compile: it is validated as a CREATE of the temporary name.
+    [Test]
+    public void RewriteWithTempName_SqlServer_LegacyForm_ValidatesTheAlterAsACreate_AndLeavesTheStubAlone()
+    {
+        var script = "IF OBJECT_ID(N'[dbo].[vw_MyView]') IS NULL EXEC('CREATE VIEW [dbo].[vw_MyView] AS SELECT 1 AS x')\r\nGO\r\n\r\nALTER VIEW [dbo].[vw_MyView]\nAS\nSELECT 1 AS Col";
+        var result = _validator.RewriteWithTempName(script, Platform.SqlServer);
+
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.RewrittenScript, Does.StartWith("IF OBJECT_ID(N'[dbo].[vw_MyView]') IS NULL EXEC('CREATE VIEW [dbo].[vw_MyView] AS SELECT 1 AS x')"));
+        Assert.That(result.RewrittenScript, Does.Match(@"CREATE VIEW \[dbo\]\.\[_validate_[a-f0-9]+\]\nAS\nSELECT 1 AS Col"));
+        Assert.That(result.RewrittenScript, Does.Not.Contain("ALTER VIEW"));
+        Assert.That(result.ObjectKind, Is.EqualTo("VIEW"));
+    }
+
+    [Test]
+    public void RewriteWithTempName_SqlServer_ProcShorthand_RewritesCorrectly()
+    {
+        var result = _validator.RewriteWithTempName("CREATE OR ALTER PROC [dbo].[usp_MyProc]\nAS\nSELECT 1", Platform.SqlServer);
+
+        Assert.That(result.Success, Is.True, "CREATE PROC is the shorthand SQL Server itself stores");
+        Assert.That(result.RewrittenScript, Does.Match(@"CREATE OR ALTER PROC \[dbo\]\.\[_validate_[a-f0-9]+\]"));
+    }
+
     #endregion
 
     #region RewriteWithTempName — PostgreSQL

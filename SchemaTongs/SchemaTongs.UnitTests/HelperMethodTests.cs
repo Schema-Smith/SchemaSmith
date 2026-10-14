@@ -255,6 +255,79 @@ public class HelperMethodTests
 
     #endregion
 
+    #region ConvertToLegacyModuleForm Tests
+
+    // The form every supported version accepts: a guarded stub creates the object when it is missing, then ALTER carries
+    // the real body. The stub must be creatable wherever the real object is, so it mirrors the kind and shape.
+    [Test]
+    public void ConvertToLegacyModuleForm_View_GuardedStubThenAlter()
+    {
+        var result = SchemaTongs.ConvertToLegacyModuleForm("CREATE OR ALTER VIEW [dbo].[MyView] AS SELECT 1 AS Col", "dbo", "MyView");
+        Assert.That(result, Is.EqualTo(
+            "IF OBJECT_ID(N'[dbo].[MyView]') IS NULL EXEC('CREATE VIEW [dbo].[MyView] AS SELECT 1 AS x')\r\nGO\r\n\r\n" +
+            "ALTER VIEW [dbo].[MyView] AS SELECT 1 AS Col"));
+    }
+
+    [TestCase("CREATE OR ALTER PROC [dbo].[P] AS BEGIN END", "P",
+        "CREATE PROCEDURE [dbo].[P] AS RETURN", "ALTER PROC [dbo].[P] AS BEGIN END", TestName = "ConvertToLegacyModuleForm_ProcShorthand")]
+    [TestCase("CREATE OR ALTER PROCEDURE [dbo].[P] @a INT AS SELECT @a", "P",
+        "CREATE PROCEDURE [dbo].[P] AS RETURN", "ALTER PROCEDURE [dbo].[P] @a INT AS SELECT @a", TestName = "ConvertToLegacyModuleForm_Procedure")]
+    [TestCase("CREATE OR ALTER FUNCTION [dbo].[F](@a INT) RETURNS INT AS BEGIN RETURN @a END", "F",
+        "CREATE FUNCTION [dbo].[F]() RETURNS INT AS BEGIN RETURN 0 END", "ALTER FUNCTION [dbo].[F](@a INT) RETURNS INT AS BEGIN RETURN @a END", TestName = "ConvertToLegacyModuleForm_ScalarFunction")]
+    [TestCase("CREATE OR ALTER FUNCTION [dbo].[F]() RETURNS TABLE AS RETURN (SELECT 1 AS x)", "F",
+        "CREATE FUNCTION [dbo].[F]() RETURNS TABLE AS RETURN SELECT 1 AS x", "ALTER FUNCTION [dbo].[F]() RETURNS TABLE AS RETURN (SELECT 1 AS x)", TestName = "ConvertToLegacyModuleForm_InlineTableFunction")]
+    [TestCase("CREATE OR ALTER FUNCTION [dbo].[F]() RETURNS @t TABLE (x INT) AS BEGIN INSERT @t VALUES (1) RETURN END", "F",
+        "CREATE FUNCTION [dbo].[F]() RETURNS @t TABLE (x INT) AS BEGIN RETURN END", "ALTER FUNCTION [dbo].[F]() RETURNS @t TABLE (x INT) AS BEGIN INSERT @t VALUES (1) RETURN END", TestName = "ConvertToLegacyModuleForm_MultiStatementTableFunction")]
+    public void ConvertToLegacyModuleForm_StubMatchesTheKindAndShape(string definition, string name, string expectedStub, string expectedAlter)
+    {
+        var result = SchemaTongs.ConvertToLegacyModuleForm(definition, "dbo", name);
+        Assert.That(result, Is.EqualTo($"IF OBJECT_ID(N'[dbo].[{name}]') IS NULL EXEC('{expectedStub}')\r\nGO\r\n\r\n{expectedAlter}"));
+    }
+
+    // ALTER FUNCTION cannot change a function's kind, so a stub of the wrong shape would wedge the script.
+    [TestCase("CREATE OR ALTER TRIGGER [dbo].[T] ON [dbo].[Orders] AFTER INSERT AS SELECT 1", "AFTER INSERT")]
+    [TestCase("CREATE OR ALTER TRIGGER [dbo].[T] ON [dbo].[Orders] FOR UPDATE, DELETE AS SELECT 1", "AFTER UPDATE")]
+    [TestCase("CREATE OR ALTER TRIGGER [dbo].[T] ON [dbo].[vOrders] INSTEAD OF DELETE AS SELECT 1", "INSTEAD OF DELETE")]
+    public void ConvertToLegacyModuleForm_TableTrigger_StubMirrorsTheModeAndFirstEvent(string definition, string expectedStubEvent)
+    {
+        var result = SchemaTongs.ConvertToLegacyModuleForm(definition, "dbo", "T", definition.Contains("vOrders") ? "vOrders" : "Orders");
+        var table = definition.Contains("vOrders") ? "vOrders" : "Orders";
+        Assert.That(result, Is.EqualTo(
+            $"IF OBJECT_ID(N'[dbo].[T]') IS NULL EXEC('CREATE TRIGGER [dbo].[T] ON [dbo].[{table}] {expectedStubEvent} AS RETURN')\r\nGO\r\n\r\n" +
+            definition.Replace("CREATE OR ALTER TRIGGER", "ALTER TRIGGER")));
+    }
+
+    [Test]
+    public void ConvertToLegacyModuleForm_DatabaseTrigger_GuardsOnSysTriggers()
+    {
+        var result = SchemaTongs.ConvertToLegacyModuleForm("CREATE OR ALTER TRIGGER [Audit] ON DATABASE FOR CREATE_TABLE AS SELECT 1", null, "Audit");
+        Assert.That(result, Is.EqualTo(
+            "IF NOT EXISTS (SELECT 1 FROM sys.triggers WHERE parent_class = 0 AND name = N'Audit') EXEC('CREATE TRIGGER [Audit] ON DATABASE FOR DDL_DATABASE_LEVEL_EVENTS AS RETURN')\r\nGO\r\n\r\n" +
+            "ALTER TRIGGER [Audit] ON DATABASE FOR CREATE_TABLE AS SELECT 1"));
+    }
+
+    [Test]
+    public void ConvertToLegacyModuleForm_KeepsALeadingComment_WithTheAlter()
+    {
+        var result = SchemaTongs.ConvertToLegacyModuleForm("-- why\r\nCREATE PROCEDURE [dbo].[P] AS RETURN 1", "dbo", "P");
+        Assert.That(result, Does.EndWith("GO\r\n\r\n-- why\r\nALTER PROCEDURE [dbo].[P] AS RETURN 1"));
+    }
+
+    [Test]
+    public void ConvertToLegacyModuleForm_EscapesAQuoteInTheNameInsideTheExecString()
+    {
+        var result = SchemaTongs.ConvertToLegacyModuleForm("CREATE OR ALTER VIEW [dbo].[O'Brien] AS SELECT 1 AS x", "dbo", "O'Brien");
+        Assert.That(result, Does.StartWith("IF OBJECT_ID(N'[dbo].[O''Brien]') IS NULL EXEC('CREATE VIEW [dbo].[O''Brien] AS SELECT 1 AS x')"));
+    }
+
+    [Test]
+    public void ConvertToLegacyModuleForm_NoModuleHeader_IsUnchanged()
+    {
+        Assert.That(SchemaTongs.ConvertToLegacyModuleForm("-- nothing here", "dbo", "X"), Is.EqualTo("-- nothing here"));
+    }
+
+    #endregion
+
     #region FormatXmlInScript Tests
 
     [Test]
