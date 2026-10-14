@@ -190,7 +190,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
                     Is.EqualTo("fk_fkref_code"), $"deploy {deploy}: the foreign key must survive");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT CAST(INDEX_NAME AS BINARY)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(parent)} AND INDEX_NAME <> 'PRIMARY'"),
-                    Is.EqualTo(IsMariaDb(cmd) ? "UX_FkRef_Code" : "ux_fkref_code"), $"deploy {deploy}: one unique index on the parent");
+                    Is.EqualTo("ux_fkref_code"), $"deploy {deploy}: one unique index on the parent");
                 Assert.That(Scalar(cmd, $"SELECT COUNT(*) FROM `{child}`"), Is.EqualTo("1"), $"deploy {deploy}: the rows must survive");
             }
         }
@@ -199,8 +199,6 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             CleanUp(cmd, product, child, parent);
         }
     }
-
-    private static bool IsMariaDb(IDbCommand cmd) => Scalar(cmd, "SELECT VERSION() LIKE '%MariaDB%'") == "1";
 
     private static void ClearStatusMessages(IDbCommand cmd) =>
         Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
@@ -402,9 +400,9 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
                     $"deploy {deploy}: re-spelling the index a foreign key depends on must not abort the deploy");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
                     Is.EqualTo("fk_fkback_parent"), $"deploy {deploy}: the foreign key must survive");
-                // MySQL renames in place; MariaDB cannot drop the index the key needs, so it keeps the live spelling.
+                // MySQL renames in place; MariaDB replaces the index in one statement, which the key accepts.
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT CAST(INDEX_NAME AS BINARY)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(child)} AND INDEX_NAME <> 'PRIMARY'"),
-                    Is.EqualTo(IsMariaDb(cmd) ? "IX_FkBack_Parent" : "ix_fkback_parent"), $"deploy {deploy}: exactly one index backs the key");
+                    Is.EqualTo("ix_fkback_parent"), $"deploy {deploy}: exactly one index backs the key");
                 Assert.That(Scalar(cmd, $"SELECT COUNT(*) FROM `{child}`"), Is.EqualTo("1"), $"deploy {deploy}: the rows must survive");
             }
         }

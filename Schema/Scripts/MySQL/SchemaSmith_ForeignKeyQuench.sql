@@ -353,7 +353,7 @@ BEGIN
             SUBSTRING_INDEX(po.ObjectName, '.', -1) AS ConstraintName
         FROM SchemaSmith_ProductOwnership po
         WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-          AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+          AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
           AND po.ObjectType COLLATE utf8mb4_unicode_ci = _utf8mb4'FOREIGN KEY' COLLATE utf8mb4_unicode_ci
           -- Not in current definition
           AND NOT EXISTS (
@@ -400,7 +400,7 @@ BEGIN
             SUBSTRING_INDEX(po.ObjectName, '.', -1) AS ConstraintName
         FROM SchemaSmith_ProductOwnership po
         WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-          AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+          AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
           AND po.ObjectType COLLATE utf8mb4_unicode_ci = _utf8mb4'FOREIGN KEY' COLLATE utf8mb4_unicode_ci
           -- Not in current definition
           AND NOT EXISTS (
@@ -479,9 +479,9 @@ BEGIN
             -- Remove dropped FKs from ProductOwnership
             DELETE po FROM SchemaSmith_ProductOwnership po
             INNER JOIN _SchemaSmith_FKsToDrop ftd
-                ON po.ObjectName COLLATE utf8mb4_unicode_ci = CONCAT(ftd.TableName, '.', ftd.ConstraintName) COLLATE utf8mb4_unicode_ci
+                ON SchemaSmith_OwnedNameMatches(po.ObjectName, ftd.TableName, ftd.ConstraintName) = 1
             WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-              AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+              AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
               AND po.ObjectType COLLATE utf8mb4_unicode_ci = _utf8mb4'FOREIGN KEY' COLLATE utf8mb4_unicode_ci;
         END IF;
 

@@ -102,14 +102,14 @@ BEGIN
         -- JSON_REMOVE pass below, so only protected tables carry "PreventDrop": true. Read from ProductOwnership. #270
         'PreventDrop', CASE WHEN EXISTS (SELECT 1 FROM SchemaSmith_ProductOwnership po
                                           WHERE po.ObjectType = 'TABLE'
-                                            AND CONVERT(po.ObjectSchema USING utf8mb4) = CONVERT(p_Schema USING utf8mb4)
-                                            AND CONVERT(po.ObjectName USING utf8mb4) = CONVERT(p_Table USING utf8mb4)
+                                            AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_Schema)
+                                            AND SchemaSmith_IdentifierKey(po.ObjectName) = SchemaSmith_IdentifierKey(p_Table)
                                             AND COALESCE(po.PreventDrop, 0) = 1)
                             THEN TRUE ELSE NULL END
     ) INTO v_json
     FROM INFORMATION_SCHEMA.TABLES t
     WHERE t.TABLE_SCHEMA = p_Schema
-      AND t.TABLE_NAME = p_Table
+      AND t.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(t.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
       -- MariaDB reports a system-versioned table as 'SYSTEM VERSIONED', not 'BASE TABLE'. Filtering on
       -- BASE TABLE alone silently omitted such a table from the extracted package -- no error, no warning,
       -- and the deploy-side twin of this filter was fixed separately. MySQL never reports this type.
@@ -193,7 +193,7 @@ BEGIN
             'CharacterSet', c.CHARACTER_SET_NAME,
             'Collation', CASE
                 WHEN c.COLLATION_NAME = (SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES
-                                         WHERE TABLE_SCHEMA = p_Schema AND TABLE_NAME = p_Table)
+                                         WHERE TABLE_SCHEMA = p_Schema AND TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table))
                 THEN NULL  -- Don't include if same as table default
                 ELSE c.COLLATION_NAME
             END,
@@ -220,7 +220,7 @@ BEGIN
     ), ']') INTO v_columns
     FROM INFORMATION_SCHEMA.COLUMNS c
     WHERE c.TABLE_SCHEMA = p_Schema
-      AND c.TABLE_NAME = p_Table
+      AND c.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
       -- A system-versioned table's row-start/row-end columns are generated and maintained by the engine.
       -- Extracting them as ordinary columns would have the apply path try to manage them on re-deploy.
       -- Only the explicit authoring form exposes them at all; the implicit form hides them. Isolated in a
@@ -303,12 +303,12 @@ BEGIN
                    s.INDEX_NAME AS idx_name
             FROM INFORMATION_SCHEMA.STATISTICS s
             WHERE s.TABLE_SCHEMA = p_Schema
-              AND s.TABLE_NAME = p_Table
+              AND s.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
               AND s.INDEX_TYPE != 'FULLTEXT'
               -- A period column is left out of Columns, so an index must not name it either: the package would not
               -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
               AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
-            GROUP BY s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
+            GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
         ) idx_subquery;
     ELSE
         SELECT CONCAT('[', IFNULL(GROUP_CONCAT(idx_json ORDER BY idx_name SEPARATOR ','), ''), ']') INTO v_indexes
@@ -333,12 +333,12 @@ BEGIN
                    s.INDEX_NAME AS idx_name
             FROM INFORMATION_SCHEMA.STATISTICS s
             WHERE s.TABLE_SCHEMA = p_Schema
-              AND s.TABLE_NAME = p_Table
+              AND s.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
               AND s.INDEX_TYPE != 'FULLTEXT'
               -- A period column is left out of Columns, so an index must not name it either: the package would not
               -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
               AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
-            GROUP BY s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
+            GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
         ) idx_subquery;
     END IF;
 
@@ -352,7 +352,7 @@ BEGIN
                 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu2
                 WHERE kcu2.CONSTRAINT_SCHEMA = p_Schema
                   AND kcu2.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
-                  AND kcu2.TABLE_NAME = p_Table
+                  AND kcu2.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(kcu2.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
             ),
             'RelatedTableSchema', CASE
                 WHEN rc.UNIQUE_CONSTRAINT_SCHEMA = p_Schema THEN ''
@@ -364,7 +364,7 @@ BEGIN
                 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu3
                 WHERE kcu3.CONSTRAINT_SCHEMA = p_Schema
                   AND kcu3.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
-                  AND kcu3.TABLE_NAME = p_Table
+                  AND kcu3.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(kcu3.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
             ),
             'DeleteAction', rc.DELETE_RULE,
             'UpdateAction', rc.UPDATE_RULE
@@ -377,7 +377,7 @@ BEGIN
           -- Foreign-key names are unique per table from MariaDB 12.1, so the name alone matches other tables' keys.
           AND tc.TABLE_NAME = rc.TABLE_NAME
         WHERE tc.TABLE_SCHEMA = p_Schema
-          AND tc.TABLE_NAME = p_Table
+          AND tc.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
           AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
     ) fk_subquery;
 
@@ -399,7 +399,7 @@ JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
   ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
   AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME', SchemaSmith_CheckTableJoin(), '
 WHERE tc.TABLE_SCHEMA = @v_ccSchema
-  AND tc.TABLE_NAME = @v_ccTable
+  AND tc.TABLE_NAME = @v_ccTable AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(@v_ccTable)
   AND tc.CONSTRAINT_TYPE = ''CHECK''');
         PREPARE stmt FROM @v_ccSql;
         EXECUTE stmt;
@@ -420,9 +420,9 @@ WHERE tc.TABLE_SCHEMA = @v_ccSchema
                s.INDEX_NAME AS ft_name
         FROM INFORMATION_SCHEMA.STATISTICS s
         WHERE s.TABLE_SCHEMA = p_Schema
-          AND s.TABLE_NAME = p_Table
+          AND s.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
           AND s.INDEX_TYPE = 'FULLTEXT'
-        GROUP BY s.INDEX_NAME
+        GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME
     ) ft_subquery;
 
     -- Combine all into final JSON. Nest the JSON-text vars as JSON values via JSON_EXTRACT(x,'$')

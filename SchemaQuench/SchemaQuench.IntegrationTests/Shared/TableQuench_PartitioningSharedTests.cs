@@ -661,6 +661,81 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
 ]
 """;
 
+    // LIST COLUMNS values are strings, and 'east' and 'EAST' route different rows. The values were compared upper-cased,
+    // so a value changed only in case passed as unchanged and the package silently disagreed with the table.
+    [Test]
+    public void TableQuench_AListValueChangedOnlyInCase_IsRefusedByName()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartListProduct_{uid}";
+        var table = $"PartListTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'east'"), productName: product);
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'east'"), productName: product),
+                "an unchanged list redeploys");
+
+            Assert.Throws<MySqlException>(() => RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'EAST'"), productName: product));
+        }
+        finally
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    // The engine reports the keyword in capitals; a package spelling it in lowercase declares the same partition.
+    [Test]
+    public void TableQuench_ALowercaseMaxValue_RedeploysUnchanged()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartMaxProduct_{uid}";
+        var table = $"PartMaxTable_{uid}";
+        var partitions = """[ { "Name": "p0", "Values": "100" }, { "Name": "pmax", "Values": "maxvalue" } ]""";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithRangePartitions(table, partitions), productName: product);
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithRangePartitions(table, partitions), productName: product));
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    private static string WithListColumnsPartitions(string table, string eastValue) => $$"""
+[
+  {
+    "Name": "{{table}}",
+    "Columns": [
+      { "Name": "`Id`",  "DataType": "int", "Nullable": false },
+      { "Name": "`Region`", "DataType": "varchar(10)", "Nullable": false }
+    ],
+    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`,`Region`" } ],
+    "Partitioning": {
+      "Method": "LIST COLUMNS",
+      "Expression": "Region",
+      "Partitions": [ { "Name": "p_east", "Values": "{{eastValue}}" }, { "Name": "p_west", "Values": "'west'" } ]
+    }
+  }
+]
+""";
+
     // RANGE partitioning with a caller-supplied partition list, so a test can declare a layout differing
     // from the deployed one by exactly one partition. WithRangePartitioning above hard-codes p0/p1/pmax,
     // and a MAXVALUE tail cannot be appended to -- several tests below need a list without one.

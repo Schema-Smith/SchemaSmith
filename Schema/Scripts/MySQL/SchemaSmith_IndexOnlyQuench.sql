@@ -138,8 +138,6 @@ BEGIN
         IndexComment VARCHAR(1024),
         TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
-        LeadColumn VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
-        FkBacked TINYINT NOT NULL DEFAULT 0,
         PRIMARY KEY (TableName, IndexName),
         KEY ix_idxsnap_key (TableKey, IndexKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -156,7 +154,7 @@ BEGIN
     -- only executes at 8.0.13+ and never on 5.7/MariaDB; see GenerateTableJson.sql for the full
     -- explanation) or the compare below never converges.
     IF SchemaSmith_SupportsFunctionalIndex() = 1 THEN
-        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment, LeadColumn)
+        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4),
                CONVERT(s.INDEX_NAME USING utf8mb4),
                MAX(s.NON_UNIQUE),
@@ -177,13 +175,12 @@ BEGIN
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
-               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4),
-               CONVERT(MAX(CASE WHEN s.SEQ_IN_INDEX = 1 THEN s.COLUMN_NAME END) USING utf8mb4)
+               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
          WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
-         GROUP BY s.TABLE_NAME, s.INDEX_NAME;
+         GROUP BY CAST(s.TABLE_NAME AS BINARY), CAST(s.INDEX_NAME AS BINARY), s.TABLE_NAME, s.INDEX_NAME;
     ELSE
-        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment, LeadColumn)
+        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4),
                CONVERT(s.INDEX_NAME USING utf8mb4),
                MAX(s.NON_UNIQUE),
@@ -195,11 +192,10 @@ BEGIN
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
-               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4),
-               CONVERT(MAX(CASE WHEN s.SEQ_IN_INDEX = 1 THEN s.COLUMN_NAME END) USING utf8mb4)
+               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
          WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
-         GROUP BY s.TABLE_NAME, s.INDEX_NAME;
+         GROUP BY CAST(s.TABLE_NAME AS BINARY), CAST(s.INDEX_NAME AS BINARY), s.TABLE_NAME, s.INDEX_NAME;
     END IF;
 
     -- Names-only copy: STEP 1 references the snapshot twice in one statement (main join + the
@@ -209,33 +205,6 @@ BEGIN
        SET TableKey = SchemaSmith_IdentifierKey(TableName),
            IndexKey = SchemaSmith_NameKeyCI(IndexName);
 
-    -- MariaDB converges a case-only index spelling by drop and re-create, which the engine refuses (1553) for an
-    -- index a foreign key depends on. Mark every index that leads with a foreign key's leading column, on either
-    -- side of the key, so that step leaves its spelling alone rather than abort the deploy over a cosmetic
-    -- difference. MySQL renames instead, so it skips the catalog read.
-    IF VERSION() LIKE '%MariaDB%' THEN
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
-        CREATE TEMPORARY TABLE _SchemaSmith_FkLeadColumns (
-            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
-            ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
-            PRIMARY KEY (TableKey, ColumnKey)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
-        SELECT SchemaSmith_IdentifierKey(k.TABLE_NAME), SchemaSmith_NameKeyCI(k.COLUMN_NAME)
-          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
-         WHERE k.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.TABLE_SCHEMA) = v_DbKey
-           AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
-        INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
-        SELECT SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_NAME), SchemaSmith_NameKeyCI(k.REFERENCED_COLUMN_NAME)
-          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
-         WHERE k.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_SCHEMA) = v_DbKey
-           AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
-        UPDATE _SchemaSmith_IdxDetectSnap snap
-          JOIN _SchemaSmith_FkLeadColumns f
-            ON f.TableKey = snap.TableKey AND f.ColumnKey = SchemaSmith_NameKeyCI(snap.LeadColumn)
-           SET snap.FkBacked = 1;
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
-    END IF;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectNames;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxDetectNames (
@@ -434,8 +403,9 @@ BEGIN
       AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1
       -- Check if definition differs (columns, uniqueness, or index type)
       AND (
-          -- Spelled differently only in case, on MariaDB (see the case-only spelling step above)
-          (VERSION() LIKE '%MariaDB%' AND snap.FkBacked = 0 AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY))
+          -- Spelled differently only in case, on MariaDB, which converges it by drop and re-create. One a foreign key needs is
+          -- respelled by the one-statement swap below (1553 sends it there).
+          (VERSION() LIKE '%MariaDB%' AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY))
           -- Or columns differ
           OR CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
           -- Or uniqueness differs
@@ -564,15 +534,15 @@ BEGIN
             SUBSTRING_INDEX(po.ObjectName, '.', -1)
         FROM SchemaSmith_ProductOwnership po
         INNER JOIN _SchemaSmith_Tables t
-            ON CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
+            ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
         LEFT JOIN _SchemaSmith_WouldDropDefIdx di
-            ON CONVERT(di.TableName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-            AND CONVERT(di.IndexName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
+            ON SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+            AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
         LEFT JOIN _SchemaSmith_WouldDropIdxCat ei
-            ON CONVERT(ei.TableName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-            AND CONVERT(ei.IndexName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
+            ON SchemaSmith_IdentifierKey(ei.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+            AND SchemaSmith_NameKeyCI(ei.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
         WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-          AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+          AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
           AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci
           -- Per-table tightening (the env/product gate is removed for capture)
           AND COALESCE(t.DropIndexesRemovedFromProduct, 1) = 1
@@ -583,8 +553,8 @@ BEGIN
           -- Not a renamed index
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE r.TableName = SUBSTRING_INDEX(po.ObjectName, '.', 1)
-                AND r.OldIndexName = SUBSTRING_INDEX(po.ObjectName, '.', -1)
+              WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+                AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
           )
           -- Verify index actually exists (snapshot bridge)
           AND ei.IndexName IS NOT NULL;
@@ -594,24 +564,24 @@ BEGIN
         SELECT CONVERT(ei.TableName USING utf8mb4), CONVERT(ei.IndexName USING utf8mb4)
         FROM _SchemaSmith_WouldDropIdxCat ei
         INNER JOIN _SchemaSmith_Tables t
-            ON CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
+            ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(ei.TableName)
         WHERE UPPER(ei.IndexName COLLATE utf8mb4_unicode_ci) != 'PRIMARY' COLLATE utf8mb4_unicode_ci
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_WouldDropDefIdx di
-              WHERE CONVERT(di.TableName USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
-                AND CONVERT(di.IndexName USING utf8mb4) = CONVERT(ei.IndexName USING utf8mb4)
+              WHERE SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
           )
           AND NOT EXISTS (
               SELECT 1 FROM SchemaSmith_ProductOwnership po
               WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-                AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
                 AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci
-                AND po.ObjectName COLLATE utf8mb4_unicode_ci = CONCAT(ei.TableName, '.', ei.IndexName) COLLATE utf8mb4_unicode_ci
+                AND SchemaSmith_OwnedNameMatches(po.ObjectName, ei.TableName, ei.IndexName) = 1
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE CONVERT(r.TableName USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
-                AND CONVERT(r.OldIndexName USING utf8mb4) = CONVERT(ei.IndexName USING utf8mb4)
+              WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
           );
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -681,15 +651,15 @@ BEGIN
                 COALESCE(ei.NonUnique = 0, 0) AS IsUnique
             FROM SchemaSmith_ProductOwnership po
             INNER JOIN _SchemaSmith_Tables t
-                ON CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
+                ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
             LEFT JOIN _SchemaSmith_DefinedIndexes di
-                ON CONVERT(di.TableName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-                AND CONVERT(di.IndexName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
+                ON SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+                AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
             LEFT JOIN _SchemaSmith_IdxOnlyIdx ei
-                ON CONVERT(ei.TableName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-                AND CONVERT(ei.IndexName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
+                ON SchemaSmith_IdentifierKey(ei.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+                AND SchemaSmith_NameKeyCI(ei.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
             WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-              AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+              AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
               AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci
               -- Per-table tightening (the env/product gate is the enclosing IF)
               AND COALESCE(t.DropIndexesRemovedFromProduct, 1) = 1
@@ -700,8 +670,8 @@ BEGIN
               -- Not a renamed index
               AND NOT EXISTS (
                   SELECT 1 FROM _SchemaSmith_IndexRenames r
-                  WHERE r.TableName = SUBSTRING_INDEX(po.ObjectName, '.', 1)
-                    AND r.OldIndexName = SUBSTRING_INDEX(po.ObjectName, '.', -1)
+                  WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+                    AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
               )
               -- Verify index actually exists (snapshot bridge)
               AND ei.IndexName IS NOT NULL;
@@ -716,24 +686,24 @@ BEGIN
             SELECT CONVERT(ei.TableName USING utf8mb4), CONVERT(ei.IndexName USING utf8mb4), COALESCE(ei.NonUnique = 0, 0)
             FROM _SchemaSmith_IdxOnlyIdx ei
             INNER JOIN _SchemaSmith_Tables t
-                ON CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
+                ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(ei.TableName)
             WHERE UPPER(ei.IndexName COLLATE utf8mb4_unicode_ci) != 'PRIMARY' COLLATE utf8mb4_unicode_ci
               AND NOT EXISTS (
                   SELECT 1 FROM _SchemaSmith_DefinedIndexes di
-                  WHERE CONVERT(di.TableName USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
-                    AND CONVERT(di.IndexName USING utf8mb4) = CONVERT(ei.IndexName USING utf8mb4)
+                  WHERE SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                    AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
               )
               AND NOT EXISTS (
                   SELECT 1 FROM SchemaSmith_ProductOwnership po
                   WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-                    AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                    AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
                     AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci
-                    AND po.ObjectName COLLATE utf8mb4_unicode_ci = CONCAT(ei.TableName, '.', ei.IndexName) COLLATE utf8mb4_unicode_ci
+                    AND SchemaSmith_OwnedNameMatches(po.ObjectName, ei.TableName, ei.IndexName) = 1
               )
               AND NOT EXISTS (
                   SELECT 1 FROM _SchemaSmith_IndexRenames r
-                  WHERE CONVERT(r.TableName USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
-                    AND CONVERT(r.OldIndexName USING utf8mb4) = CONVERT(ei.IndexName USING utf8mb4)
+                  WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                    AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
               );
         END IF;
 
@@ -790,9 +760,9 @@ BEGIN
             -- Remove dropped indexes from ProductOwnership
             DELETE po FROM SchemaSmith_ProductOwnership po
             INNER JOIN _SchemaSmith_IndexesToDrop itd
-                ON po.ObjectName COLLATE utf8mb4_unicode_ci = CONCAT(itd.TableName, '.', itd.IndexName) COLLATE utf8mb4_unicode_ci
+                ON SchemaSmith_OwnedNameMatches(po.ObjectName, itd.TableName, itd.IndexName) = 1
             WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-              AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+              AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
               AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci;
         END IF;
 
