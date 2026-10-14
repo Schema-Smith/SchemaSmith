@@ -1,10 +1,8 @@
 DROP PROCEDURE IF EXISTS `SalesByCategory`;
+SET @ss_saved_sql_mode = @@SESSION.sql_mode;
+SET SESSION sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';
 DELIMITER //
-CREATE PROCEDURE `SalesByCategory` (IN p_CategoryName varchar(15),IN p_OrdYear varchar(4))
-  LANGUAGE SQL
-  NOT DETERMINISTIC
-  CONTAINS SQL
-  SQL SECURITY DEFINER
+CREATE PROCEDURE `SalesByCategory`(IN p_CategoryName varchar(15),IN p_OrdYear varchar(4))
 BEGIN
 
 IF p_OrdYear IS NULL THEN
@@ -28,3 +26,4 @@ ORDER BY `ProductName`;
 
 END //
 DELIMITER ;
+SET SESSION sql_mode = @ss_saved_sql_mode;

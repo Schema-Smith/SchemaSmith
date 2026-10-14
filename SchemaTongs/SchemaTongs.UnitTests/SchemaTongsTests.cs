@@ -1645,19 +1645,20 @@ public class SchemaTongsTests
             });
             RegisterConnectionFactory(Platform.MySQL);
 
-            var reader = Substitute.For<IDataReader>();
-            var callCount = 0;
-            reader.Read().Returns(_ => callCount++ < 1, _ => false);
-            reader["Folder"].Returns("Functions");
-            reader["FullName"].Returns("my_func");
-            reader["Code"].Returns("CREATE FUNCTION my_func() RETURNS INT RETURN 1;");
-            _command.StubReaders(reader);
+            var names = Substitute.For<IDataReader>();
+            var nameCalls = 0;
+            names.Read().Returns(_ => nameCalls++ < 1, _ => false);
+            names.GetString(0).Returns("my_func");
+            var shown = ShowCreateRow("Create Function", "CREATE DEFINER=`root`@`localhost` FUNCTION `my_func`() RETURNS int RETURN 1");
+            _command.StubReaders(names, shown);
 
             var tongs = new SchemaTongs(Platform.MySQL);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
             _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Function Scripts")));
-            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_func.sql")), Arg.Any<string>());
+            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_func.sql")),
+                Arg.Is<string>(c => c.StartsWith("DROP FUNCTION IF EXISTS `my_func`;") && c.Contains("SET SESSION sql_mode = 'STRICT_TRANS_TABLES';")
+                                    && c.Contains("DELIMITER //") && c.Contains("CREATE FUNCTION `my_func`()") && !c.Contains("DEFINER=")));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -1682,19 +1683,19 @@ public class SchemaTongsTests
             });
             RegisterConnectionFactory(Platform.MySQL);
 
-            var reader = Substitute.For<IDataReader>();
-            var callCount = 0;
-            reader.Read().Returns(_ => callCount++ < 1, _ => false);
-            reader["Folder"].Returns("Views");
-            reader["FullName"].Returns("my_view");
-            reader["Code"].Returns("CREATE VIEW my_view AS SELECT 1;");
-            _command.StubReaders(reader);
+            var names = Substitute.For<IDataReader>();
+            var nameCalls = 0;
+            names.Read().Returns(_ => nameCalls++ < 1, _ => false);
+            names.GetString(0).Returns("my_view");
+            var shown = ShowCreateRow("Create View", "CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `my_view` AS select 1 AS `1`");
+            _command.StubReaders(names, shown);
 
             var tongs = new SchemaTongs(Platform.MySQL);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
             _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting View Scripts")));
-            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_view.sql")), Arg.Any<string>());
+            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_view.sql")),
+                Arg.Is<string>(c => c.StartsWith("CREATE OR REPLACE ALGORITHM=UNDEFINED SQL SECURITY DEFINER VIEW `my_view` AS") && !c.Contains("DEFINER=") && !c.Contains("DROP VIEW")));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -1719,19 +1720,19 @@ public class SchemaTongsTests
             });
             RegisterConnectionFactory(Platform.MySQL);
 
-            var reader = Substitute.For<IDataReader>();
-            var callCount = 0;
-            reader.Read().Returns(_ => callCount++ < 1, _ => false);
-            reader["Folder"].Returns("Procedures");
-            reader["FullName"].Returns("my_proc");
-            reader["Code"].Returns("CREATE PROCEDURE my_proc() BEGIN END;");
-            _command.StubReaders(reader);
+            var names = Substitute.For<IDataReader>();
+            var nameCalls = 0;
+            names.Read().Returns(_ => nameCalls++ < 1, _ => false);
+            names.GetString(0).Returns("my_proc");
+            var shown = ShowCreateRow("Create Procedure", "CREATE DEFINER=`root`@`localhost` PROCEDURE `my_proc`() BEGIN END");
+            _command.StubReaders(names, shown);
 
             var tongs = new SchemaTongs(Platform.MySQL);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
             _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Stored Procedure Scripts")));
-            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_proc.sql")), Arg.Any<string>());
+            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_proc.sql")),
+                Arg.Is<string>(c => c.StartsWith("DROP PROCEDURE IF EXISTS `my_proc`;") && c.Contains("CREATE PROCEDURE `my_proc`()") && !c.Contains("DEFINER=")));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -1756,23 +1757,44 @@ public class SchemaTongsTests
             });
             RegisterConnectionFactory(Platform.MySQL);
 
-            var reader = Substitute.For<IDataReader>();
-            var callCount = 0;
-            reader.Read().Returns(_ => callCount++ < 1, _ => false);
-            reader["Folder"].Returns("Triggers");
-            reader["FullName"].Returns("my_trigger");
-            reader["Code"].Returns("CREATE TRIGGER my_trigger BEFORE INSERT ON t FOR EACH ROW BEGIN END;");
-            _command.StubReaders(reader);
+            var names = Substitute.For<IDataReader>();
+            var nameCalls = 0;
+            names.Read().Returns(_ => nameCalls++ < 1, _ => false);
+            names.GetString(0).Returns("my_trigger");
+            names.GetString(1).Returns("t");
+            names.GetString(2).Returns("BEFORE");
+            names.GetString(3).Returns("INSERT");
+            names.GetValue(4).Returns(1);
+            var shown = ShowCreateRow("SQL Original Statement", "CREATE DEFINER=`root`@`localhost` TRIGGER my_trigger BEFORE INSERT ON t FOR EACH ROW BEGIN END");
+            _command.StubReaders(names, shown);
 
             var tongs = new SchemaTongs(Platform.MySQL);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
             _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Trigger Scripts")));
-            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_trigger.sql")), Arg.Any<string>());
+            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_trigger.sql")),
+                Arg.Is<string>(c => c.StartsWith("DROP TRIGGER IF EXISTS `my_trigger`;") && c.Contains("CREATE TRIGGER my_trigger BEFORE INSERT ON t FOR EACH ROW BEGIN END //") && !c.Contains("DEFINER=")));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
         }
+    }
+
+    // The second reader of each SHOW CREATE extraction: one row with the DDL column and the object's sql_mode.
+    private static IDataReader ShowCreateRow(string createColumn, string create)
+    {
+        var row = Substitute.For<IDataReader>();
+        var calls = 0;
+        row.Read().Returns(_ => calls++ < 1, _ => false);
+        row.FieldCount.Returns(3);
+        row.GetName(0).Returns("Name");
+        row.GetName(1).Returns("sql_mode");
+        row.GetName(2).Returns(createColumn);
+        row.GetOrdinal(createColumn).Returns(2);
+        row.IsDBNull(Arg.Any<int>()).Returns(false);
+        row.GetString(1).Returns("STRICT_TRANS_TABLES");
+        row.GetString(2).Returns(create);
+        return row;
     }
 
     [Test]

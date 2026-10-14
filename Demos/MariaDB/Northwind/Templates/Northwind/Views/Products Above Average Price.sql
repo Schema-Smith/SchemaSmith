@@ -1,3 +1,1 @@
-DROP VIEW IF EXISTS `Products Above Average Price`;
-CREATE VIEW `Products Above Average Price` AS
-select `northwind`.`Products`.`ProductName` AS `ProductName`,`northwind`.`Products`.`UnitPrice` AS `UnitPrice` from `northwind`.`Products` where (`northwind`.`Products`.`UnitPrice` > (select avg(`northwind`.`Products`.`UnitPrice`) from `northwind`.`Products`))
+CREATE OR REPLACE ALGORITHM=UNDEFINED SQL SECURITY DEFINER VIEW `Products Above Average Price` AS select `Products`.`ProductName` AS `ProductName`,`Products`.`UnitPrice` AS `UnitPrice` from `Products` where `Products`.`UnitPrice` > (select avg(`Products`.`UnitPrice`) from `Products`);

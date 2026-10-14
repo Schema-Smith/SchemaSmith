@@ -1,11 +1,10 @@
 DROP FUNCTION IF EXISTS `get_customer_balance`;
+SET @ss_saved_sql_mode = @@SESSION.sql_mode;
+SET SESSION sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';
 DELIMITER //
-CREATE FUNCTION `get_customer_balance` (p_customer_id int,p_effective_date datetime)
-  RETURNS decimal(5,2)
-  LANGUAGE SQL
-  DETERMINISTIC
-  READS SQL DATA
-  SQL SECURITY DEFINER
+CREATE FUNCTION `get_customer_balance`(p_customer_id int,p_effective_date datetime) RETURNS decimal(5,2)
+    READS SQL DATA
+    DETERMINISTIC
 BEGIN
 
        
@@ -44,3 +43,4 @@ BEGIN
   RETURN v_rentfees + v_overfees - v_payments;
 END //
 DELIMITER ;
+SET SESSION sql_mode = @ss_saved_sql_mode;

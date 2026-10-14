@@ -1,3 +1,1 @@
-DROP VIEW IF EXISTS `Summary of Sales by Quarter`;
-CREATE VIEW `Summary of Sales by Quarter` AS
-select `northwind`.`Orders`.`ShippedDate` AS `ShippedDate`,`northwind`.`Orders`.`OrderID` AS `OrderID`,`northwind`.`Order Subtotals`.`Subtotal` AS `Subtotal` from (`northwind`.`Orders` join `northwind`.`Order Subtotals` on((`northwind`.`Orders`.`OrderID` = `northwind`.`Order Subtotals`.`OrderID`))) where (`northwind`.`Orders`.`ShippedDate` is not null)
+CREATE OR REPLACE ALGORITHM=UNDEFINED SQL SECURITY DEFINER VIEW `Summary of Sales by Quarter` AS select `Orders`.`ShippedDate` AS `ShippedDate`,`Orders`.`OrderID` AS `OrderID`,`Order Subtotals`.`Subtotal` AS `Subtotal` from (`Orders` join `Order Subtotals` on(`Orders`.`OrderID` = `Order Subtotals`.`OrderID`)) where `Orders`.`ShippedDate` is not null;

@@ -1,14 +1,9 @@
--- Renames a recycled table back to its original name and clears its registry entry.
--- Called by SchemaSmith_CustomTableRestore; can also be called directly to recover a
--- specific recycled copy by name. Structure (indexes, foreign keys) beyond what rode along
--- with the rename is NOT restored here — a subsequent quench reconciles it from the package.
 DROP PROCEDURE IF EXISTS `recyclebin_RestoreTable`;
+SET @ss_saved_sql_mode = @@SESSION.sql_mode;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION';
 DELIMITER //
 CREATE PROCEDURE `recyclebin_RestoreTable`(IN p_RecycledName VARCHAR(128))
-  LANGUAGE SQL
-  NOT DETERMINISTIC
-  MODIFIES SQL DATA
-  SQL SECURITY DEFINER
+    MODIFIES SQL DATA
 rt: BEGIN
   DECLARE v_orig_schema VARCHAR(64);
   DECLARE v_orig_name   VARCHAR(64);
@@ -43,3 +38,4 @@ rt: BEGIN
   DELETE FROM recyclebin_Registry WHERE RecycledName = p_RecycledName;
 END //
 DELIMITER ;
+SET SESSION sql_mode = @ss_saved_sql_mode;

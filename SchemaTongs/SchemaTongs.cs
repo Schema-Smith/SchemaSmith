@@ -2950,90 +2950,205 @@ SELECT mv.schemaname, mv.matviewname
     private void ScriptMySqlFunctions(IDbCommand command, string targetSchema)
     {
         _progressLog.Info("Casting Function Scripts");
-        // EXTERNAL_LANGUAGE is NULL on MariaDB for SQL routines (MySQL reports 'SQL'), and one NULL
-        // operand nulls the whole || chain, yielding an empty script file. ORDINAL_POSITION 0 is the
-        // function's return value, excluded explicitly rather than relying on GROUP_CONCAT skipping
-        // its NULL PARAMETER_NAME — which is why the parameter columns must NOT be COALESCEd.
+        _stats.Functions = ScriptMySqlRoutines(command, targetSchema, "FUNCTION", "Functions", ScriptObjectType.Functions);
+    }
+
+    private void ScriptMySqlProcedures(IDbCommand command, string targetSchema)
+    {
+        _progressLog.Info("Casting Stored Procedure Scripts");
+        _stats.Procedures = ScriptMySqlRoutines(command, targetSchema, "PROCEDURE", "Procedures", ScriptObjectType.Procedures);
+    }
+
+    // Views, routines and triggers are written from SHOW CREATE, the engine's own DDL, rather than rebuilt from
+    // INFORMATION_SCHEMA fragments: the fragments lost parameter modes, charsets, quoted names, defaults, aggregates,
+    // multi-event and UPDATE OF triggers, trigger order, COMMENT, SQL_MODE and the view options, and VIEW_DEFINITION
+    // qualified every reference with the source database so a deployed view read the source. SHOW CREATE leaves a
+    // reference to the CURRENT database unqualified and a cross-database one qualified, which is why the extraction
+    // connection is opened on the source database.
+    private int ScriptMySqlRoutines(IDbCommand command, string targetSchema, string kind, string folder, ScriptObjectType objectType)
+    {
         command.CommandText = $@"
-SELECT 'Functions' AS Folder,
-       ROUTINE_NAME AS FullName,
-       'DROP FUNCTION IF EXISTS `' || ROUTINE_NAME || '`;\nDELIMITER //\n' ||
-       'CREATE FUNCTION `' || ROUTINE_NAME || '` (' ||
-       COALESCE((SELECT GROUP_CONCAT(PARAMETER_NAME || ' ' || DTD_IDENTIFIER ORDER BY ORDINAL_POSITION SEPARATOR ',')
-                   FROM INFORMATION_SCHEMA.PARAMETERS p
-                   WHERE p.SPECIFIC_NAME = r.ROUTINE_NAME
-                     AND p.ROUTINE_TYPE = r.ROUTINE_TYPE
-                     AND p.SPECIFIC_SCHEMA = r.ROUTINE_SCHEMA
-                     AND p.ORDINAL_POSITION > 0), '') || ')\n  RETURNS ' || DTD_IDENTIFIER ||
-       '\n' || '  LANGUAGE ' || COALESCE(EXTERNAL_LANGUAGE, 'SQL') ||
-       '\n' || CASE WHEN IS_DETERMINISTIC = 'Yes' THEN '  DETERMINISTIC' ELSE '  NOT DETERMINISTIC' END ||
-       CASE WHEN NULLIF(SQL_DATA_ACCESS, '') IS NOT NULL THEN '\n  ' || SQL_DATA_ACCESS ELSE '' END ||
-       '\n' || '  SQL SECURITY ' || SECURITY_TYPE ||
-       '\n' || ROUTINE_DEFINITION || ' //\nDELIMITER ;' AS Code
-  FROM INFORMATION_SCHEMA.ROUTINES r
+SELECT ROUTINE_NAME
+  FROM INFORMATION_SCHEMA.ROUTINES
   WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
-    AND ROUTINE_TYPE = 'FUNCTION'
+    AND ROUTINE_TYPE = '{kind}'
     AND ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
-";
-        _stats.Functions = PerformMySqlCasting(command, "Functions");
+  ORDER BY ROUTINE_NAME";
+        var createColumn = kind == "FUNCTION" ? "Create Function" : "Create Procedure";
+        return ScriptMySqlShowCreateObjects(command, ReadNames(command), folder, objectType, name =>
+        {
+            var shown = ShowCreate(command, kind, targetSchema, name, createColumn);
+            return shown == null ? null : WrapMySqlDelimitedScript(kind, name, shown.Value.SqlMode, StripDefiner(shown.Value.Create));
+        });
     }
 
     private void ScriptMySqlViews(IDbCommand command, string targetSchema)
     {
         _progressLog.Info("Casting View Scripts");
         command.CommandText = $@"
-SELECT 'Views' AS Folder,
-       TABLE_NAME AS FullName,
-       'DROP VIEW IF EXISTS `' || TABLE_NAME || '`;\nCREATE VIEW `' || TABLE_NAME || '` AS\n' || VIEW_DEFINITION AS Code
+SELECT TABLE_NAME
   FROM INFORMATION_SCHEMA.VIEWS
   WHERE TABLE_SCHEMA = '{EscapeSql(targetSchema)}'
     AND TABLE_NAME NOT LIKE 'SchemaSmith\_%'
-";
-        _stats.Views = PerformMySqlCasting(command, "Views");
-    }
-
-    private void ScriptMySqlProcedures(IDbCommand command, string targetSchema)
-    {
-        _progressLog.Info("Casting Stored Procedure Scripts");
-        // See ScriptMySqlFunctions: EXTERNAL_LANGUAGE is NULL on MariaDB and would null the whole
-        // || chain, writing a 0-byte script.
-        command.CommandText = $@"
-SELECT 'Procedures' AS Folder,
-       ROUTINE_NAME AS FullName,
-       'DROP PROCEDURE IF EXISTS `' || ROUTINE_NAME || '`;\nDELIMITER //\n' ||
-       'CREATE PROCEDURE `' || ROUTINE_NAME || '` (' ||
-       COALESCE((SELECT GROUP_CONCAT(PARAMETER_MODE || ' ' || PARAMETER_NAME || ' ' || DTD_IDENTIFIER ORDER BY ORDINAL_POSITION SEPARATOR ',')
-                   FROM INFORMATION_SCHEMA.PARAMETERS p
-                   WHERE p.SPECIFIC_NAME = r.ROUTINE_NAME
-                     AND p.ROUTINE_TYPE = r.ROUTINE_TYPE
-                     AND p.SPECIFIC_SCHEMA = r.ROUTINE_SCHEMA
-                     AND p.ORDINAL_POSITION > 0), '') || ')' ||
-       '\n' || '  LANGUAGE ' || COALESCE(EXTERNAL_LANGUAGE, 'SQL') ||
-       '\n' || CASE WHEN IS_DETERMINISTIC = 'Yes' THEN '  DETERMINISTIC' ELSE '  NOT DETERMINISTIC' END ||
-       CASE WHEN NULLIF(SQL_DATA_ACCESS, '') IS NOT NULL THEN '\n  ' || SQL_DATA_ACCESS ELSE '' END ||
-       '\n' || '  SQL SECURITY ' || SECURITY_TYPE ||
-       '\n' || ROUTINE_DEFINITION || ' //\nDELIMITER ;' AS Code
-  FROM INFORMATION_SCHEMA.ROUTINES r
-  WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
-    AND ROUTINE_TYPE = 'PROCEDURE'
-    AND ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
-";
-        _stats.Procedures = PerformMySqlCasting(command, "Procedures");
+  ORDER BY TABLE_NAME";
+        // CREATE OR REPLACE: no window with the view missing, and a failed replace leaves the old view in place.
+        // A view stores no sql_mode, so there is nothing to pin.
+        _stats.Views = ScriptMySqlShowCreateObjects(command, ReadNames(command), "Views", ScriptObjectType.Views, name =>
+        {
+            var shown = ShowCreate(command, "VIEW", targetSchema, name, "Create View");
+            if (shown == null) return null;
+            var create = StripDefiner(shown.Value.Create);
+            return Regex.Replace(create, @"^CREATE\s+(?!OR\s+REPLACE\b)", "CREATE OR REPLACE ", RegexOptions.IgnoreCase) + ";\n";
+        });
     }
 
     private void ScriptMySqlTriggers(IDbCommand command, string targetSchema)
     {
         _progressLog.Info("Casting Trigger Scripts");
         command.CommandText = $@"
-SELECT 'Triggers' AS Folder,
-       TRIGGER_NAME AS FullName,
-       'DROP TRIGGER IF EXISTS `' || TRIGGER_NAME || '`;\nDELIMITER //\nCREATE TRIGGER `' || TRIGGER_NAME || '`\n  ' || ACTION_TIMING || ' ' || EVENT_MANIPULATION || '\n  ON `' || EVENT_OBJECT_TABLE || '` ' ||
-       '\n  FOR EACH ' || ACTION_ORIENTATION || ' \nBEGIN\n' || ACTION_STATEMENT || ';\nEND //\nDELIMITER ;' AS Code
+SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION, ACTION_ORDER
   FROM INFORMATION_SCHEMA.TRIGGERS
   WHERE TRIGGER_SCHEMA = '{EscapeSql(targetSchema)}'
     AND TRIGGER_NAME NOT LIKE 'SchemaSmith\_%'
-";
-        _stats.Triggers = PerformMySqlCasting(command, "Triggers");
+  ORDER BY TRIGGER_NAME";
+        var triggers = new List<(string Name, string Table, string Timing, string[] Events, int Order)>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+                triggers.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                    reader.GetString(3).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                    Convert.ToInt32(reader.GetValue(4))));
+        }
+
+        // Without the TRIGGER privilege the catalog does not list the triggers at all, so there is nothing to skip and
+        // warn about one by one; an empty list from an account without the privilege is said once.
+        if (triggers.Count == 0 && !HasMySqlPrivilege(command, "TRIGGER", targetSchema))
+            _progressLog.Warn("  No triggers were listed, and the extracting account has no TRIGGER privilege on this database, so any it has are invisible to it.");
+
+        // SHOW CREATE TRIGGER returns the statement as the user wrote it, which never carries FOLLOWS / PRECEDES:
+        // the order lives only in ACTION_ORDER, so the clause is rebuilt from the trigger one position earlier in
+        // the same table, timing and event.
+        string Predecessor((string Name, string Table, string Timing, string[] Events, int Order) t) =>
+            t.Order <= 1 ? null
+                : triggers.Where(o => o.Name != t.Name && o.Table == t.Table && o.Timing == t.Timing && o.Order == t.Order - 1
+                                      && o.Events.Intersect(t.Events, StringComparer.OrdinalIgnoreCase).Any())
+                           .Select(o => o.Name).Distinct().ToList() is { Count: 1 } one ? one[0] : null;
+
+        _stats.Triggers = ScriptMySqlShowCreateObjects(command, triggers.Select(t => t.Name).ToList(), "Triggers", ScriptObjectType.Triggers, name =>
+        {
+            var shown = ShowCreate(command, "TRIGGER", targetSchema, name, "SQL Original Statement");
+            if (shown == null) return null;
+            var create = StripDefiner(shown.Value.Create);
+            var predecessor = Predecessor(triggers.First(t => t.Name == name));
+            if (predecessor != null && !Regex.IsMatch(create, @"\bFOR\s+EACH\s+ROW\s+(FOLLOWS|PRECEDES)\b", RegexOptions.IgnoreCase))
+                create = Regex.Replace(create, @"\bFOR\s+EACH\s+ROW\b", m => $"{m.Value} FOLLOWS `{predecessor.Replace("`", "``")}`", RegexOptions.IgnoreCase, TimeSpan.FromSeconds(5));
+            return WrapMySqlDelimitedScript("TRIGGER", name, shown.Value.SqlMode, create);
+        });
+    }
+
+    // Global, database-level or table-level; a privilege held through a role is not seen, so a false "no" is possible
+    // and the warning that uses this is advisory.
+    private static bool HasMySqlPrivilege(IDbCommand command, string privilege, string database)
+    {
+        command.CommandText = $@"
+SELECT COUNT(*)
+  FROM (SELECT GRANTEE, PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.USER_PRIVILEGES
+        UNION ALL
+        SELECT GRANTEE, PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.SCHEMA_PRIVILEGES WHERE TABLE_SCHEMA = '{EscapeSql(database)}'
+        UNION ALL
+        SELECT GRANTEE, PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.TABLE_PRIVILEGES WHERE TABLE_SCHEMA = '{EscapeSql(database)}') p
+  WHERE p.PRIVILEGE_TYPE = '{privilege}'
+    AND p.GRANTEE = CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''', SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''')";
+        return Convert.ToInt32(command.ExecuteScalar()) > 0;
+    }
+
+    private static List<string> ReadNames(IDbCommand command)
+    {
+        var names = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) names.Add(reader.GetString(0));
+        return names;
+    }
+
+    // Null when the server will not show the definition: SHOW CREATE PROCEDURE / FUNCTION returns a NULL body to an
+    // account that is not the definer and lacks global SELECT (SHOW_ROUTINE on 8.0.20+, SELECT on mysql.proc on
+    // MariaDB); SHOW CREATE VIEW and TRIGGER refuse outright (1142) without SHOW VIEW / TRIGGER. The caller logs it.
+    private (string Create, string SqlMode)? ShowCreate(IDbCommand command, string kind, string database, string name, string createColumn)
+    {
+        command.CommandText = $"SHOW CREATE {kind} `{database.Replace("`", "``")}`.`{name.Replace("`", "``")}`";
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        var create = reader.GetOrdinal(createColumn) is var c && !reader.IsDBNull(c) ? reader.GetString(c) : null;
+        if (string.IsNullOrWhiteSpace(create)) return null;
+        var modeOrdinal = Enumerable.Range(0, reader.FieldCount).FirstOrDefault(i => reader.GetName(i).Equals("sql_mode", StringComparison.OrdinalIgnoreCase), -1);
+        var mode = modeOrdinal >= 0 && !reader.IsDBNull(modeOrdinal) ? reader.GetString(modeOrdinal) : "";
+        return (create, mode);
+    }
+
+    // The deploying account becomes the definer, as it always has. Under ANSI_QUOTES the engine renders the clause
+    // with double quotes; a bare user@host form is possible too.
+    private static readonly Regex DefinerClause = new(
+        @"\bDEFINER\s*=\s*(`[^`]*`|""[^""]*""|[^\s@`""]+)@(`[^`]*`|""[^""]*""|\S+)\s+",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    internal static string StripDefiner(string create) => DefinerClause.Replace(create, "", 1);
+
+    // SHOW CREATE renders a routine or trigger in the sql_mode it was created under (double-quoted identifiers
+    // under ANSI_QUOTES, Oracle syntax under ORACLE), and the engine runs its body under that mode, so the script
+    // sets it before the CREATE and restores the session's own mode after. Backticks are valid under every mode,
+    // so the DROP needs no pin.
+    internal static string WrapMySqlDelimitedScript(string kind, string name, string sqlMode, string create)
+    {
+        var quoted = $"`{name.Replace("`", "``")}`";
+        return string.Join("\n",
+            $"DROP {kind} IF EXISTS {quoted};",
+            "SET @ss_saved_sql_mode = @@SESSION.sql_mode;",
+            $"SET SESSION sql_mode = '{EscapeSql(sqlMode ?? "")}';",
+            "DELIMITER //",
+            $"{create.TrimEnd()} //",
+            "DELIMITER ;",
+            "SET SESSION sql_mode = @ss_saved_sql_mode;",
+            "");
+    }
+
+    // Validation runs after the object's own SHOW CREATE reader is closed: a second command on the connection while
+    // a reader is open is a protocol error, which is how validation used to end the run.
+    private int ScriptMySqlShowCreateObjects(IDbCommand command, List<string> names, string folder, ScriptObjectType objectType, Func<string, string> buildScript)
+    {
+        if (names.Count == 0) return 0;
+        var castPath = GetCastPath(objectType, folder);
+        DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
+        var count = 0;
+        foreach (var name in names)
+        {
+            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
+            var fileName = ResolveOutputPath(castPath, EncodeFullName(name, ".sql"));
+            if (ShouldSkipKnownBadScript(fileName)) { count++; continue; }
+
+            string script;
+            try
+            {
+                script = buildScript(name);
+            }
+            catch (MySqlException ex) when (ex.Number is 1142 or 1227 or 1305 or 1360)
+            {
+                script = null;
+                _progressLog.Warn($"  Skipping {folder}/{name}: {ex.Message}");
+            }
+            if (script == null)
+            {
+                _progressLog.Warn($"  Skipping {folder}/{name}: the server did not return its definition (the extracting account cannot see it)");
+                _stats.SkippedObjects++;
+                continue;
+            }
+
+            var body = RewriteSqlBodyForSchemaTemplate(script, fileName);
+            _progressLog.Info($"  Casting {name}");
+            FileWrapper.GetFromFactory().WriteAllText(fileName, body);
+            ValidateAndHandleScript(command.Connection, fileName, body, objectType);
+            count++;
+        }
+        return count;
     }
 
     /// <summary>
@@ -3290,30 +3405,6 @@ SELECT TABLE_SCHEMA, TABLE_NAME
         {
             connectionJson.Close();
         }
-    }
-
-    private int PerformMySqlCasting(IDbCommand command, string castType)
-    {
-        var count = 0;
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
-        {
-            var castPath = Path.Combine(_templatePath, reader["Folder"].ToString());
-            DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
-            var fullName = reader["FullName"].ToString();
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(fullName.ToLower()) && !_objectsToCast.Contains(Identifier.SplitQualifiedName(fullName, _platform).Name.ToLower())) continue;
-
-            var fileName = ResolveOutputPath(castPath, EncodeFullName(fullName, ".sql"));
-            if (ShouldSkipKnownBadScript(fileName)) { count++; continue; }
-            var script = string.Join("\r\n", reader["Code"].ToString());
-            _progressLog.Info($"  Casting {fullName}");
-            FileWrapper.GetFromFactory().WriteAllText(fileName, script);
-            var folderName = reader["Folder"].ToString();
-            var objectType = ScriptFolderTypeInference.InferFromFolderName(folderName);
-            ValidateAndHandleScript(command.Connection, fileName, script, objectType);
-            count++;
-        }
-        return count;
     }
 
     #endregion

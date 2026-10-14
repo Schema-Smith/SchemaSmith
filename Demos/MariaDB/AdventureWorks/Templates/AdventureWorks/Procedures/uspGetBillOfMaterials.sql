@@ -1,10 +1,8 @@
 DROP PROCEDURE IF EXISTS `uspGetBillOfMaterials`;
+SET @ss_saved_sql_mode = @@SESSION.sql_mode;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION';
 DELIMITER //
-CREATE PROCEDURE `uspGetBillOfMaterials` (IN p_StartProductID int,IN p_CheckDate datetime)
-  LANGUAGE SQL
-  NOT DETERMINISTIC
-  CONTAINS SQL
-  SQL SECURITY DEFINER
+CREATE PROCEDURE `uspGetBillOfMaterials`(IN p_StartProductID int,IN p_CheckDate datetime)
 BEGIN
     
     
@@ -37,3 +35,4 @@ BEGIN
     ORDER BY b.`BOMLevel`, b.`ProductAssemblyID`, b.`ComponentID`;
 END //
 DELIMITER ;
+SET SESSION sql_mode = @ss_saved_sql_mode;
