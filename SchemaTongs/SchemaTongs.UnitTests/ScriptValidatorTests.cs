@@ -13,6 +13,9 @@ public class ScriptValidatorTests
 {
     private ScriptValidator _validator;
 
+    // What the driver throws: the MySQL-family validator catches the database's errors, not every exception.
+    private sealed class ServerErrorException(string message) : System.Data.Common.DbException(message);
+
     [SetUp]
     public void SetUp()
     {
@@ -118,6 +121,68 @@ public class ScriptValidatorTests
         Assert.That(result.RewrittenScript, Does.Contain("RETURNS INT"));
     }
 
+    // The extracted script opens with the real object's DROP. Validating that line as written would drop the
+    // source's object, and no rollback restores DDL on this family -- so the DROP is renamed with the CREATE.
+    [Test]
+    public void RewriteWithTempName_MySQL_RenamesTheDropWithTheCreate_AndNothingElse()
+    {
+        var script = "DROP FUNCTION IF EXISTS `my_func`;\nSET SESSION sql_mode = 'STRICT_TRANS_TABLES';\nDELIMITER //\n" +
+                     "CREATE FUNCTION `my_func`(x INT)\nRETURNS INT\nBEGIN RETURN my_func_helper(x); END //\nDELIMITER ;";
+        var result = _validator.RewriteWithTempName(script, Platform.MySQL);
+
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.RewrittenScript, Does.Match(@"DROP FUNCTION IF EXISTS `_validate_[a-f0-9]+`;"));
+        Assert.That(result.RewrittenScript, Does.Match(@"CREATE FUNCTION `_validate_[a-f0-9]+`\(x INT\)"));
+        Assert.That(result.RewrittenScript, Does.Not.Contain("`my_func`"));
+        Assert.That(result.RewrittenScript, Does.Contain("my_func_helper(x)"));
+        Assert.That(result.ObjectKind, Is.EqualTo("FUNCTION"));
+    }
+
+    [Test]
+    public void RewriteWithTempName_MySQL_OrReplaceViewWithOptions_RewritesCorrectly()
+    {
+        var script = "CREATE OR REPLACE ALGORITHM=MERGE SQL SECURITY INVOKER VIEW `v_opts` AS select `t`.`x` AS `x` from `t` WITH CASCADED CHECK OPTION";
+        var result = _validator.RewriteWithTempName(script, Platform.MySQL);
+
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.RewrittenScript, Does.Match(@"CREATE OR REPLACE ALGORITHM=MERGE SQL SECURITY INVOKER VIEW `_validate_[a-f0-9]+` AS select"));
+        Assert.That(result.ObjectKind, Is.EqualTo("VIEW"));
+    }
+
+    [Test]
+    public void RewriteWithTempName_MySQL_DualityView_RewritesCorrectly()
+    {
+        var script = "CREATE OR REPLACE ALGORITHM=UNDEFINED SQL SECURITY DEFINER JSON RELATIONAL DUALITY VIEW `dv` AS select json_duality_object('_id':`t`.`x`) AS `d` from `t`";
+        var result = _validator.RewriteWithTempName(script, Platform.MySQL);
+
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.RewrittenScript, Does.Match(@"JSON RELATIONAL DUALITY VIEW `_validate_[a-f0-9]+` AS select"));
+        Assert.That(result.ObjectKind, Is.EqualTo("VIEW"));
+    }
+
+    [Test]
+    public void RewriteWithTempName_MySQL_AggregateFunction_RewritesCorrectly()
+    {
+        var script = "DROP FUNCTION IF EXISTS `f_agg`;\nDELIMITER //\nCREATE AGGREGATE FUNCTION `f_agg`(x INT) RETURNS int(11)\nBEGIN RETURN 1; END //\nDELIMITER ;";
+        var result = _validator.RewriteWithTempName(script, Platform.MySQL);
+
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.RewrittenScript, Does.Match(@"CREATE AGGREGATE FUNCTION `_validate_[a-f0-9]+`\(x INT\)"));
+        Assert.That(result.RewrittenScript, Does.Match(@"DROP FUNCTION IF EXISTS `_validate_[a-f0-9]+`;"));
+    }
+
+    // SHOW CREATE renders a routine created under ANSI_QUOTES with double-quoted identifiers.
+    [Test]
+    public void RewriteWithTempName_MySQL_AnsiQuotedDefinerAndName_RewritesCorrectly()
+    {
+        var script = "DROP FUNCTION IF EXISTS `f_mode`;\nCREATE DEFINER=\"root\"@\"localhost\" FUNCTION \"f_mode\"(a VARCHAR(10)) RETURNS varchar(20)\nRETURN a";
+        var result = _validator.RewriteWithTempName(script, Platform.MySQL);
+
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.RewrittenScript, Does.Match("CREATE DEFINER=\"root\"@\"localhost\" FUNCTION `_validate_[a-f0-9]+`\\(a VARCHAR"));
+        Assert.That(result.RewrittenScript, Does.Match(@"DROP FUNCTION IF EXISTS `_validate_[a-f0-9]+`;"));
+    }
+
     #endregion
 
     #region RewriteWithTempName — Edge Cases
@@ -178,24 +243,90 @@ public class ScriptValidatorTests
         Assert.That(result, Is.Null);
     }
 
+    // CREATE TRIGGER is not a preparable statement on MySQL or MariaDB, so a PREPARE wrapper can never parse one,
+    // and a temporary trigger would sit live on the source table while it is checked. Triggers are not validated.
     [Test]
-    public void GenerateParseOnlyWrapper_MySQL_Trigger_GeneratesPrepare()
+    public void GenerateParseOnlyWrapper_MySQL_Trigger_ReturnsNull()
     {
         var script = "CREATE TRIGGER my_trigger AFTER INSERT ON my_table FOR EACH ROW BEGIN INSERT INTO log VALUES(NEW.id); END";
-        var result = _validator.GenerateParseOnlyWrapper(script, Platform.MySQL);
+        Assert.That(_validator.GenerateParseOnlyWrapper(script, Platform.MySQL), Is.Null);
+    }
 
-        Assert.That(result, Is.Not.Null);
-        Assert.That(result, Does.Contain("PREPARE _validate_stmt FROM"));
-        Assert.That(result, Does.Contain("DEALLOCATE PREPARE _validate_stmt;"));
+    #endregion
+
+    #region ValidateScript — MySQL
+
+    [Test]
+    public void ValidateScript_MySQL_Trigger_IsSkipped()
+    {
+        var connection = Substitute.For<IDbConnection>();
+
+        var result = _validator.ValidateScript(connection, "CREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW SET NEW.x = 1", ScriptObjectType.Triggers, Platform.MySQL);
+
+        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.Skipped, Is.True);
+        connection.DidNotReceive().CreateCommand();
+    }
+
+    // No transaction on this family: DDL commits implicitly, so the temp object is dropped explicitly instead,
+    // and DELIMITER blocks are split the way the deploy splits them rather than sent to the server as text.
+    [Test]
+    public void ValidateScript_MySQL_RunsTheBatchesWithoutATransaction_AndDropsTheTempObject()
+    {
+        var connection = Substitute.For<IDbConnection>();
+        var command = Substitute.For<IDbCommand>();
+        connection.CreateCommand().Returns(command);
+        var sent = new System.Collections.Generic.List<string>();
+        command.When(c => c.CommandText = Arg.Any<string>()).Do(ci => sent.Add(ci.ArgAt<string>(0)));
+
+        var script = "DROP FUNCTION IF EXISTS `f`;\nSET @ss_saved_sql_mode = @@SESSION.sql_mode;\nSET SESSION sql_mode = 'STRICT_TRANS_TABLES';\n" +
+                     "DELIMITER //\nCREATE FUNCTION `f`(x INT) RETURNS INT\nDETERMINISTIC\nBEGIN RETURN x; END //\nDELIMITER ;\nSET SESSION sql_mode = @ss_saved_sql_mode;";
+        var result = _validator.ValidateScript(connection, script, ScriptObjectType.Functions, Platform.MySQL);
+
+        Assert.That(result.IsValid, Is.True);
+        connection.DidNotReceive().BeginTransaction();
+        Assert.That(sent, Has.Count.EqualTo(6));
+        Assert.That(sent[0], Does.Match(@"^DROP FUNCTION IF EXISTS `_validate_[a-f0-9]+`;$"));
+        Assert.That(sent[3], Does.StartWith("CREATE FUNCTION `_validate_"));
+        Assert.That(sent[3], Does.Contain("BEGIN RETURN x; END"));
+        Assert.That(sent[4], Is.EqualTo("SET SESSION sql_mode = @ss_saved_sql_mode;"));
+        Assert.That(sent[5], Does.Match(@"^DROP FUNCTION IF EXISTS `_validate_[a-f0-9]+`$"), "the temp object is dropped last");
+        Assert.That(sent, Has.None.Contains("DELIMITER"));
+        Assert.That(sent, Has.None.Contains("`f`"), "the source's own object is never named");
     }
 
     [Test]
-    public void GenerateParseOnlyWrapper_MySQL_EscapesSingleQuotes()
+    public void ValidateScript_MySQL_DropsTheTempObjectAndRestoresTheMode_EvenWhenTheCreateFails()
     {
-        var script = "CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW BEGIN INSERT INTO log VALUES('test'); END";
-        var result = _validator.GenerateParseOnlyWrapper(script, Platform.MySQL);
+        var connection = Substitute.For<IDbConnection>();
+        var command = Substitute.For<IDbCommand>();
+        connection.CreateCommand().Returns(command);
+        var sent = new System.Collections.Generic.List<string>();
+        command.When(c => c.CommandText = Arg.Any<string>()).Do(ci => sent.Add(ci.ArgAt<string>(0)));
+        command.When(c => c.ExecuteNonQuery()).Do(ci =>
+        {
+            if (command.CommandText.StartsWith("CREATE")) throw new ServerErrorException("near 'order int(11))'");
+        });
 
-        Assert.That(result, Does.Contain("''test''"));
+        var script = "DROP PROCEDURE IF EXISTS `p`;\nSET @ss_saved_sql_mode = @@SESSION.sql_mode;\nSET SESSION sql_mode = 'ANSI_QUOTES';\n" +
+                     "DELIMITER //\nCREATE PROCEDURE `p`(order INT)\nSELECT 1 //\nDELIMITER ;\nSET SESSION sql_mode = @ss_saved_sql_mode;";
+        var result = _validator.ValidateScript(connection, script, ScriptObjectType.Procedures, Platform.MySQL);
+
+        Assert.That(result.IsValid, Is.False);
+        Assert.That(result.ErrorMessage, Does.Contain("near 'order int(11))'"));
+        Assert.That(sent[^2], Is.EqualTo("SET SESSION sql_mode = @ss_saved_sql_mode;"), "the session mode is restored after a failed CREATE");
+        Assert.That(sent[^1], Does.Match(@"^DROP PROCEDURE IF EXISTS `_validate_[a-f0-9]+`$"));
+    }
+
+    [Test]
+    public void ValidateScript_MySQL_UnrecognisedCreate_ReturnsError()
+    {
+        var connection = Substitute.For<IDbConnection>();
+
+        var result = _validator.ValidateScript(connection, "SELECT 1", ScriptObjectType.Functions, Platform.MySQL);
+
+        Assert.That(result.IsValid, Is.False);
+        connection.DidNotReceive().CreateCommand();
     }
 
     #endregion
