@@ -60,7 +60,16 @@ BEGIN TRY
     IF @v_OldNameBare <> ''
     BEGIN
         DECLARE @v_OldQualifiedName NVARCHAR(1000) = QUOTENAME(@v_SchemaBare) + '.' + QUOTENAME(@v_OldNameBare);
-        IF OBJECT_ID(@v_OldQualifiedName, 'U') IS NOT NULL AND OBJECT_ID(@v_QualifiedName, 'U') IS NOT NULL
+        -- On a case-insensitive database an OldName differing only in case resolves to the table itself: respell it.
+        IF OBJECT_ID(@v_OldQualifiedName, 'U') = OBJECT_ID(@v_QualifiedName, 'U')
+        BEGIN
+            IF OBJECT_NAME(OBJECT_ID(@v_QualifiedName, 'U')) COLLATE Latin1_General_BIN2 <> @v_NameBare COLLATE Latin1_General_BIN2
+            BEGIN
+                DECLARE @v_TableRespellFrom NVARCHAR(1000) = @v_SchemaBare + '.' + OBJECT_NAME(OBJECT_ID(@v_QualifiedName, 'U'));
+                EXEC sp_rename @v_TableRespellFrom, @v_NameBare;
+            END
+        END
+        ELSE IF OBJECT_ID(@v_OldQualifiedName, 'U') IS NOT NULL AND OBJECT_ID(@v_QualifiedName, 'U') IS NOT NULL
         BEGIN
             -- Name the objects. Refusing is right, but an operator told only that "a" table clashes has
             -- to go find which; PostgreSQL has always interpolated them and THROW takes a variable
@@ -163,7 +172,7 @@ BEGIN TRY
         -- across the whole SQL Server support range -- no version gate needed.
         DECLARE @v_ColRenameIdx INT = 1;
         DECLARE @v_ColRenameCount INT = (SELECT COUNT(*) FROM @v_Columns WHERE OldNameBare <> '');
-        DECLARE @v_ColRenameOld NVARCHAR(500), @v_ColRenameNew NVARCHAR(500), @v_ColRenameFrom NVARCHAR(1000);
+        DECLARE @v_ColRenameOld NVARCHAR(500), @v_ColRenameNew NVARCHAR(500), @v_ColRenameFrom NVARCHAR(1000), @v_ColRenameExisting SYSNAME;
         WHILE @v_ColRenameIdx <= @v_ColRenameCount
         BEGIN
             SELECT @v_ColRenameOld = OldNameBare, @v_ColRenameNew = ColumnNameBare
@@ -171,7 +180,17 @@ BEGIN TRY
                       FROM @v_Columns WHERE OldNameBare <> '') x
              WHERE Rn = @v_ColRenameIdx;
 
-            IF COLUMNPROPERTY(OBJECT_ID(@v_QualifiedName), @v_ColRenameOld, 'AllowsNull') IS NOT NULL
+            -- On a case-insensitive database an OldName differing only in case resolves to the column itself: respell it.
+            SET @v_ColRenameExisting = (SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(@v_QualifiedName) AND name = @v_ColRenameNew);
+            IF COLUMNPROPERTY(OBJECT_ID(@v_QualifiedName), @v_ColRenameOld, 'ColumnId') = COLUMNPROPERTY(OBJECT_ID(@v_QualifiedName), @v_ColRenameNew, 'ColumnId')
+            BEGIN
+                IF @v_ColRenameExisting COLLATE Latin1_General_BIN2 <> @v_ColRenameNew COLLATE Latin1_General_BIN2
+                BEGIN
+                    SET @v_ColRenameFrom = @v_SchemaBare + '.' + @v_NameBare + '.' + @v_ColRenameExisting;
+                    EXEC sp_rename @v_ColRenameFrom, @v_ColRenameNew, 'COLUMN';
+                END
+            END
+            ELSE IF COLUMNPROPERTY(OBJECT_ID(@v_QualifiedName), @v_ColRenameOld, 'AllowsNull') IS NOT NULL
                AND COLUMNPROPERTY(OBJECT_ID(@v_QualifiedName), @v_ColRenameNew, 'AllowsNull') IS NOT NULL
             BEGIN
                 DECLARE @v_ColClashMsg NVARCHAR(2048) =
