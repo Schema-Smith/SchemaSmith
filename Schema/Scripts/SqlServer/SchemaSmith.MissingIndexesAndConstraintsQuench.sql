@@ -53,58 +53,6 @@ BEGIN TRY
         FROM #Columns c WITH (NOLOCK)
         WHERE c.NewColumn = 1 AND RTRIM(ISNULL(c.[ComputedExpression], '')) <> ''
 
-  -- Filegroup placement (#filegroups): a NEW index/constraint declaring a filegroup name that does not
-  -- exist on this target must fail loudly BEFORE any DDL runs, naming both the index and the filegroup --
-  -- same contract as the table-create check in MissingTableAndColumnQuench.sql. Only indexes not yet
-  -- present are checked; an already-existing index's declared vs. deployed filegroup is the "move"
-  -- question, handled in ModifiedTableQuench.
-  RAISERROR('Validate declared index filegroups exist', 10, 100) WITH NOWAIT
-  IF EXISTS (SELECT 1
-               FROM #Indexes i WITH (NOLOCK)
-               WHERE i.[FileGroup] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
-                 AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
-  BEGIN
-    DECLARE @v_IdxFGIndex NVARCHAR(1510), @v_IdxFGName NVARCHAR(500)
-    SELECT TOP 1 @v_IdxFGIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxFGName = i.[FileGroup]
-      FROM #Indexes i WITH (NOLOCK)
-      WHERE i.[FileGroup] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
-        AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
-    RAISERROR('Index %s declares filegroup %s, which does not exist on this database. SchemaSmith does not create filegroups -- create it on the target first, or correct the declared name.', 16, 1, @v_IdxFGIndex, @v_IdxFGName)
-  END
-
-  -- Partition placement (#partitioning, K1): the scheme must exist, same contract as the filegroup check
-  -- above -- SchemaSmith creates neither a filegroup nor a partition function/scheme.
-  RAISERROR('Validate declared index partition schemes exist', 10, 100) WITH NOWAIT
-  IF EXISTS (SELECT 1
-               FROM #Indexes i WITH (NOLOCK)
-               WHERE i.[PartitionScheme] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme])))
-  BEGIN
-    DECLARE @v_IdxPsIndex NVARCHAR(1510), @v_IdxPsName NVARCHAR(500)
-    SELECT TOP 1 @v_IdxPsIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxPsName = i.[PartitionScheme]
-      FROM #Indexes i WITH (NOLOCK)
-      WHERE i.[PartitionScheme] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]))
-    RAISERROR('Index %s declares partition scheme %s, which does not exist on this database. SchemaSmith does not create partition functions or schemes -- create them on the target first, or correct the declared name.', 16, 1, @v_IdxPsIndex, @v_IdxPsName)
-  END
-
-  -- Both or neither, the index twin of the table-level pair check in MissingTableAndColumnQuench: ON
-  -- <scheme> with no column is a syntax error naming nothing useful.
-  IF EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
-              WHERE (i.[PartitionScheme] IS NOT NULL AND i.[PartitionColumn] IS NULL)
-                 OR (i.[PartitionScheme] IS NULL AND i.[PartitionColumn] IS NOT NULL))
-  BEGIN
-    DECLARE @v_IdxPsHalf NVARCHAR(1510), @v_IdxPsHalfMissing NVARCHAR(30)
-    SELECT TOP 1 @v_IdxPsHalf = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName],
-                 @v_IdxPsHalfMissing = CASE WHEN i.[PartitionColumn] IS NULL THEN 'PartitionColumn' ELSE 'PartitionScheme' END
-      FROM #Indexes i WITH (NOLOCK)
-      WHERE (i.[PartitionScheme] IS NOT NULL AND i.[PartitionColumn] IS NULL)
-         OR (i.[PartitionScheme] IS NULL AND i.[PartitionColumn] IS NOT NULL)
-    RAISERROR('Index %s declares one half of a partition placement but not the other -- %s is missing. PartitionScheme and PartitionColumn are declared together or not at all.', 16, 1, @v_IdxPsHalf, @v_IdxPsHalfMissing)
-  END
-
   RAISERROR('Add Missing Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Creating ' + CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + CASE WHEN RTRIM(ISNULL(i.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(i.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1

@@ -588,6 +588,126 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCCeilin
         conn.Close();
     }
 
+    [Test]
+    public void ARefusedDeploy_LeavesEveryOtherTablesKeysAndIndexesInPlace()
+    {
+        // #511: the ceiling refusal used to run after the indexes over the changing columns were dropped, so a table that
+        // merely shared the deploy with a CDC table at its limit lost its primary key until a later deploy succeeded.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.CDCCeilingTest (Id INT IDENTITY(1,1) NOT NULL, Val NVARCHAR(100) NULL)
+CREATE TABLE dbo.CDCCeilingPlain (Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_CDCCeilingPlain PRIMARY KEY, Val NVARCHAR(100) NULL)
+CREATE INDEX IX_CDCCeilingPlain_Val ON dbo.CDCCeilingPlain (Val)
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCCeilingTest', @role_name = NULL";
+        ExecuteWithDeadlockRetry(cmd);
+        try
+        {
+            RunTableQuenchProc(cmd, "[" + CeilingPackage(withExtra: false) + "," + PlainPackage("INT") + "]");
+            Assert.That(InstanceCount(cmd, "CDCCeilingTest"), Is.EqualTo(2), "the first change rotates to a second instance");
+
+            // The ceiling is hit by a column CHANGE (a new column is refused earlier, before the column pass), as in the report.
+            var ex = Assert.Catch<Exception>(() => RunTableQuenchProc(cmd, "[" + CeilingPackage(withExtra: false).Replace("NVARCHAR(100)", "NVARCHAR(200)") + "," + PlainPackage("BIGINT") + "]"));
+            Assert.That(ex!.Message, Does.Contain("CDC capture-instance limit reached"));
+            var idType = GetColumnDataType(cmd, "CDCCeilingPlain", "Id");
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.CDCCeilingPlain') AND [name] IN ('PK_CDCCeilingPlain', 'IX_CDCCeilingPlain_Val')";
+            Assert.Multiple(() =>
+            {
+                Assert.That((int)cmd.ExecuteScalar(), Is.EqualTo(2), "the refusal must come before the plain table's key and index are dropped");
+                Assert.That(idType, Is.EqualTo("INT IDENTITY(1, 1)"), "and before its column is altered");
+            });
+        }
+        finally
+        {
+            DropCdcTable(cmd, "CDCCeilingTest");
+            cmd.CommandText = "DROP TABLE IF EXISTS dbo.CDCCeilingPlain";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static string PlainPackage(string idType) => $$"""
+          {
+              "Schema": "[dbo]",
+              "Name": "[CDCCeilingPlain]",
+              "Columns": [
+                  {"Name": "[Id]", "DataType": "{{idType}} IDENTITY(1, 1)", "Nullable": false},
+                  {"Name": "[Val]", "DataType": "NVARCHAR(100)", "Nullable": true}
+              ],
+              "Indexes": [
+                  {"Name": "[PK_CDCCeilingPlain]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]"},
+                  {"Name": "[IX_CDCCeilingPlain_Val]", "IndexColumns": "[Val]"}
+              ]
+          }
+          """;
+
+    [Test]
+    public void AColumnOptionToggle_DoesNotRotateTheCaptureInstance_AndIsNotRefusedAtTheCeiling()
+    {
+        // #509: NOT FOR REPLICATION, ROWGUIDCOL and a mask change nothing the capture instance sees (its columns and their
+        // types), so none of them rotates it, and none is refused when both instance slots are in use.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.CDCToggleTest (Id INT IDENTITY(1,1) NOT FOR REPLICATION NOT NULL, Rg UNIQUEIDENTIFIER ROWGUIDCOL NULL, Email VARCHAR(20) MASKED WITH (FUNCTION = 'email()') NULL)
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCToggleTest', @role_name = NULL";
+        ExecuteWithDeadlockRetry(cmd);
+        try
+        {
+            RunTableQuenchProc(cmd, TogglePackage(notForReplication: false, extraColumn: false));
+            Assert.Multiple(() =>
+            {
+                Assert.That(InstanceCount(cmd, "CDCToggleTest"), Is.EqualTo(1), "dropping the three options must not rotate");
+                Assert.That(ColumnOptions(cmd), Is.EqualTo("0,0,0"), "but must drop them (is_not_for_replication, is_rowguidcol, is_masked)");
+            });
+
+            RunTableQuenchProc(cmd, TogglePackage(notForReplication: false, extraColumn: true));
+            Assert.That(InstanceCount(cmd, "CDCToggleTest"), Is.EqualTo(2), "a new column still rotates, which puts the table at the ceiling");
+
+            RunTableQuenchProc(cmd, TogglePackage(notForReplication: true, extraColumn: true));
+            Assert.Multiple(() =>
+            {
+                Assert.That(InstanceCount(cmd, "CDCToggleTest"), Is.EqualTo(2), "an option toggle at the ceiling is applied, not refused");
+                Assert.That(ColumnOptions(cmd), Is.EqualTo("1,0,0"));
+            });
+        }
+        finally
+        {
+            DropCdcTable(cmd, "CDCToggleTest");
+        }
+    }
+
+    private static string ColumnOptions(IDbCommand cmd)
+    {
+        cmd.CommandText = @"SELECT CONVERT(VARCHAR(1), ic.is_not_for_replication) + ',' + CONVERT(VARCHAR(1), rg.is_rowguidcol) + ',' + CONVERT(VARCHAR(1), ISNULL(mc.is_masked, 0))
+  FROM sys.identity_columns ic
+  JOIN sys.columns rg ON rg.[object_id] = ic.[object_id] AND rg.[name] = 'Rg'
+  LEFT JOIN sys.masked_columns mc ON mc.[object_id] = ic.[object_id] AND mc.[name] = 'Email'
+ WHERE ic.[object_id] = OBJECT_ID('dbo.CDCToggleTest')";
+        return (string)cmd.ExecuteScalar();
+    }
+
+    private static string TogglePackage(bool notForReplication, bool extraColumn)
+    {
+        var nfr = notForReplication ? " NOT FOR REPLICATION" : "";
+        var extra = extraColumn ? ", {\"Name\": \"[Extra]\", \"DataType\": \"INT\", \"Nullable\": true}" : "";
+        return $$"""
+          {
+              "Schema": "[dbo]",
+              "Name": "[CDCToggleTest]",
+              "EnableCDC": true,
+              "Columns": [
+                  {"Name": "[Id]", "DataType": "INT IDENTITY(1, 1){{nfr}}", "Nullable": false},
+                  {"Name": "[Rg]", "DataType": "UNIQUEIDENTIFIER", "Nullable": true},
+                  {"Name": "[Email]", "DataType": "VARCHAR(20)", "Nullable": true}{{extra}}
+              ]
+          }
+          """;
+    }
+
     private static string CeilingPackage(bool withExtra) => withExtra
         ? """
           {

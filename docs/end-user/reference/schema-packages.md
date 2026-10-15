@@ -696,6 +696,8 @@ Types this affects in practice: MariaDB `UUID` (10.7+), MySQL `VECTOR` (9.0+), S
 
 `CheckExpression`, `ComputedExpression`, `Persisted`, `Sparse`, `IsColumnSet`, `Collation`, `DataMaskFunction`, `AnsiPadding`, `FileStream` (see [FILESTREAM (SQL Server)](#filestream-sql-server)). Identity is part of the `DataType` string (`INT IDENTITY(1,1)`); `ROWGUIDCOL` likewise (`UNIQUEIDENTIFIER ROWGUIDCOL`).
 
+A change to a column's definition and a change to one of its options (`ROWGUIDCOL`, `NOT FOR REPLICATION`, `DataMaskFunction`) are applied in separate statements, in one deploy. A mask or `ROWGUIDCOL` the package keeps survives a definition change: SQL Server drops a mask with the old definition and will not alter a `ROWGUIDCOL` column, so the deploy takes the option off, alters the column, and puts it back.
+
 A bound rule or default (`sp_bindrule` / `sp_bindefault`, deprecated since SQL Server 2005) is not part of the package. SchemaTongs writes the column without it and logs a warning naming the rule or default, so a package extracted from such a table still deploys; a column's own `Default` constraint is unaffected.
 
 `IsColumnSet: true` declares `COLUMN_SET FOR ALL_SPARSE_COLUMNS` -- an XML column that aggregates the table's sparse columns. Available at the SQL Server 2008 floor, alongside `Sparse`. Adding a column set and the sparse columns it aggregates together in one deploy always works, whether the table is new or already exists. **Known limitation:** converting an *already-deployed* plain column into a column set in the same deploy that also introduces a brand-new sparse column is not supported -- the new sparse column commits before the conversion runs, and SQL Server refuses a column set on a table that already has a sparse column. The conversion works on its own (no new sparse columns in the same deploy, and none pre-existing on the table); combined with a new sparse column, it fails with SQL Server's own error.
@@ -1342,9 +1344,11 @@ SQL Server's answer is to allow **two capture instances per table** so a new one
 
 The same rotation happens whenever a tracked table's newest capture instance does not capture exactly the table's current columns, even when the deploy changed none. That catches a column a previous deploy added but never got to capture -- because it stopped partway, say -- and an instance created before its computed columns existed.
 
+A change to a column option alone -- `NOT FOR REPLICATION`, `ROWGUIDCOL`, a `DataMaskFunction` -- changes nothing the capture instance records (its columns and their types), so it is applied without a rotation, and is not refused while both slots are in use.
+
 > **Action required:** Retiring the old instance is your call, not SchemaSmith's -- only you know when your readers have drained it. Drop it with `EXEC sys.sp_cdc_disable_table @source_schema = N'<schema>', @source_name = N'<table>', @capture_instance = N'<name>'`.
 
-> **Warning:** Because the old instance occupies one of the two slots, a **second** column change before you drop it has nowhere to rotate to. SchemaSmith refuses that deploy **before touching any column**, naming the tables at the limit and the command to clear them, so nothing is left half-applied. Drop the drained instance and re-run. If a table's newest instance is missing columns while both slots are in use, the deploy warns instead, naming the table.
+> **Warning:** Because the old instance occupies one of the two slots, a **second** column change before you drop it has nowhere to rotate to. SchemaSmith refuses that deploy **before changing or dropping anything**, on that table or any other in the deploy, naming the tables at the limit and the command to clear them, so nothing is left half-applied. Drop the drained instance and re-run. If a table's newest instance is missing columns while both slots are in use, the deploy warns instead, naming the table.
 
 Setting `EnableCDC` to `false` disables capture on the table outright, which drops its capture instances and their history. That is a deliberate opt-out rather than a side effect of a schema change, so it takes an explicit `false`: a table that leaves `EnableCDC` out keeps whatever CDC it has, and SchemaTongs writes `EnableCDC` only for a tracked table.
 

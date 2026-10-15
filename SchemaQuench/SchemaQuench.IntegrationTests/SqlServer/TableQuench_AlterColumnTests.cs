@@ -471,6 +471,57 @@ public class TableQuench_AlterColumnTests : BaseTableQuenchTests
     }
 
     [Test]
+    public void TableQuench_AppliesATypeChangeAndAColumnOptionChangeInOneDeploy()
+    {
+        // #510: a definition change and a NOT FOR REPLICATION / ROWGUIDCOL / mask change on the same column used to be one
+        // ALTER COLUMN carrying only the option, so the type change was silently skipped until the next deploy.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "CREATE TABLE dbo.TypeAndOption (Id INT IDENTITY(1,1) NOT FOR REPLICATION NOT NULL CONSTRAINT PK_TypeAndOption PRIMARY KEY, Email VARCHAR(10) MASKED WITH (FUNCTION = 'email()') NULL, "
+                        + "Rg UNIQUEIDENTIFIER ROWGUIDCOL NULL, Note VARCHAR(10) MASKED WITH (FUNCTION = 'default()') NULL)";
+        cmd.ExecuteNonQuery();
+        try
+        {
+            RunTableQuenchProc(cmd, """
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[TypeAndOption]",
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "BIGINT IDENTITY(1, 1)", "Nullable": false},
+                        {"Name": "[Email]", "DataType": "VARCHAR(20)", "Nullable": true},
+                        {"Name": "[Rg]", "DataType": "UNIQUEIDENTIFIER ROWGUIDCOL", "Nullable": false},
+                        {"Name": "[Note]", "DataType": "VARCHAR(20)", "Nullable": true, "DataMaskFunction": "default()"}
+                    ],
+                    "Indexes": [{"Name": "[PK_TypeAndOption]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]"}]
+                }
+                """);
+            var idType = GetColumnDataType(cmd, "TypeAndOption", "Id");
+            var emailType = GetColumnDataType(cmd, "TypeAndOption", "Email");
+            var rgType = GetColumnDataType(cmd, "TypeAndOption", "Rg");
+            var noteType = GetColumnDataType(cmd, "TypeAndOption", "Note");
+            cmd.CommandText = @"SELECT CONVERT(VARCHAR(1), ISNULL((SELECT is_masked FROM sys.masked_columns WHERE [object_id] = OBJECT_ID('dbo.TypeAndOption') AND [name] = 'Email'), 0))
+                                     + ',' + ISNULL((SELECT masking_function FROM sys.masked_columns WHERE [object_id] = OBJECT_ID('dbo.TypeAndOption') AND [name] = 'Note'), '-')
+                                     + ',' + CONVERT(VARCHAR(1), (SELECT is_nullable FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.TypeAndOption') AND [name] = 'Rg'))";
+            var state = (string)cmd.ExecuteScalar();
+            Assert.Multiple(() =>
+            {
+                Assert.That(idType, Is.EqualTo("BIGINT IDENTITY(1, 1)"), "the type change and the option change both land in one deploy");
+                Assert.That(emailType, Is.EqualTo("VARCHAR(20)"));
+                Assert.That(rgType, Is.EqualTo("UNIQUEIDENTIFIER ROWGUIDCOL"), "a ROWGUIDCOL column is altered by taking the flag off and putting it back");
+                Assert.That(noteType, Is.EqualTo("VARCHAR(20)"));
+                Assert.That(state, Is.EqualTo("0,default(),0"), "the dropped mask is gone, the kept mask survives the widening (SQL Server drops it with the definition), and Rg is NOT NULL");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = "DROP TABLE IF EXISTS dbo.TypeAndOption";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    [Test]
     public void TableQuench_ShouldModifyColumnCollation()
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);

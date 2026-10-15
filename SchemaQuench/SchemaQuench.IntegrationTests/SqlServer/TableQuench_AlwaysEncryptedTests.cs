@@ -337,6 +337,70 @@ public class TableQuench_AlwaysEncryptedTests : BaseTableQuenchTests
         }
     }
 
+    [Test]
+    public void ShouldBlockEncryptionTypeChange_BeforeAnyOtherTableIsTouched()
+    {
+        // #511: the guard used to fire from inside the column swap, after the indexes over every changing column in the
+        // deploy had been dropped. A plain table sharing the deploy keeps its key and its column.
+        using var conn = new SqlConnection(AeConnectionString());
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DROP TABLE IF EXISTS dbo.AeBlockOrder; DROP TABLE IF EXISTS dbo.AeBlockOrderPlain";
+        cmd.ExecuteNonQuery();
+        try
+        {
+            cmd.CommandText = $@"
+                CREATE TABLE dbo.AeBlockOrder (
+                  Id INT NOT NULL,
+                  Secret NVARCHAR(50) COLLATE Latin1_General_BIN2
+                    ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = {Cek}, ENCRYPTION_TYPE = DETERMINISTIC,
+                                    ALGORITHM = '{Algo}') NOT NULL);
+                CREATE TABLE dbo.AeBlockOrderPlain (Id INT NOT NULL CONSTRAINT PK_AeBlockOrderPlain PRIMARY KEY, Val NVARCHAR(10) NULL)";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "INSERT dbo.AeBlockOrder (Id, Secret) VALUES (@id, @secret)";
+            cmd.Parameters.Add(new SqlParameter("@id", SqlDbType.Int) { Value = 1 });
+            cmd.Parameters.Add(new SqlParameter("@secret", SqlDbType.NVarChar, 50) { Value = "DetSecret" });
+            cmd.ExecuteNonQuery();
+            cmd.Parameters.Clear();
+
+            var json = $$$"""
+                [
+                  {
+                    "Schema": "[dbo]",
+                    "Name": "[AeBlockOrder]",
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                        {"Name": "[Secret]", "DataType": "NVARCHAR(50)", "Nullable": false, "Collation": "Latin1_General_BIN2",
+                         "EncryptionType": "RANDOMIZED", "EncryptionKey": "[TestCEK]", "EncryptionAlgorithm": "{{{Algo}}}"}
+                    ]
+                  },
+                  {
+                    "Schema": "[dbo]",
+                    "Name": "[AeBlockOrderPlain]",
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "BIGINT", "Nullable": false},
+                        {"Name": "[Val]", "DataType": "NVARCHAR(10)", "Nullable": true}
+                    ],
+                    "Indexes": [{"Name": "[PK_AeBlockOrderPlain]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]"}]
+                  }
+                ]
+                """;
+
+            var ex = Assert.Throws<SqlException>(() => RunTableQuenchProc(cmd, json));
+            cmd.CommandText = "SELECT CONVERT(VARCHAR(1), (SELECT COUNT(*) FROM sys.key_constraints WHERE [name] = 'PK_AeBlockOrderPlain')) + ',' + (SELECT TYPE_NAME(system_type_id) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.AeBlockOrderPlain') AND [name] = 'Id')";
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain("Always Encrypted").IgnoreCase);
+                Assert.That(cmd.ExecuteScalar(), Is.EqualTo("1,int"), "the plain table's key and column are untouched: the guard fired before the first drop");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = "DROP TABLE IF EXISTS dbo.AeBlockOrder; DROP TABLE IF EXISTS dbo.AeBlockOrderPlain";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     /// <summary>
     /// SCENARIO C (blocked): initial encryption of a populated PLAINTEXT column raises the same
     /// fail-closed guard error. The column is left plaintext and UNTOUCHED.

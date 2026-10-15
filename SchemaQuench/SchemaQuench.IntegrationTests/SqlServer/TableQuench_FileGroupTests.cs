@@ -250,6 +250,43 @@ END";
     }
 
     [Test]
+    public void TableQuench_DeclaredIndexFileGroupDiffersFromDeployed_RefusesBeforeDroppingAnything()
+    {
+        // #511: the move check used to run after the foreign keys the package no longer declares were dropped, so a
+        // refused deploy had already taken them. It now runs before the first drop.
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"FGIdxOrderProduct_{uid}";
+        var table = $"FGIdxOrderTable_{uid}";
+
+        using var conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithTableAndIndexOnDifferentFileGroups(table, null, FileGroupA), productName: product);
+            cmd.CommandText = $"ALTER TABLE [dbo].[{table}] ADD [ParentId] INT NULL; ALTER TABLE [dbo].[{table}] ADD CONSTRAINT [FK_{table}_Parent] FOREIGN KEY ([ParentId]) REFERENCES [dbo].[{table}] ([Id]);";
+            cmd.ExecuteNonQuery();
+
+            var ex = Assert.Throws<SqlException>(() => RunTableQuenchProc(cmd, WithTableAndIndexOnDifferentFileGroups(table, null, FileGroupB), productName: product));
+            cmd.CommandText = $"SELECT CONVERT(VARCHAR(1), (SELECT COUNT(*) FROM sys.foreign_keys WHERE [name] = 'FK_{table}_Parent')) + ',' + CONVERT(VARCHAR(1), (SELECT COUNT(*) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.{table}') AND [name] = 'ParentId'))";
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain(FileGroupB), "the move is refused");
+                Assert.That(cmd.ExecuteScalar(), Is.EqualTo("1,1"), "and the undeclared foreign key and column are still there: the refusal came first");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS [dbo].[{table}];";
+            cmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+
+    [Test]
     public void TableQuench_NoFileGroupDeclared_IsCompletelyUnaffected()
     {
         // Backward-compat guard: the state of every existing package. A table/index declaring no

@@ -430,18 +430,7 @@ BEGIN TRY
                         THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = ''' + [EncryptionAlgorithm] + ''')'
                         ELSE '' END
               END AS [ColumnScript],
-         CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) = '' 
-              THEN CASE WHEN [DataType] LIKE '%ROWGUIDCOL%' AND sc.is_rowguidcol = 0 THEN ' ADD ROWGUIDCOL' ELSE '' END +
-                   CASE WHEN [DataType] NOT LIKE '%ROWGUIDCOL%' AND sc.is_rowguidcol = 1 THEN ' DROP ROWGUIDCOL' ELSE '' END +
-                   CASE WHEN [DataType] LIKE '%NOT FOR REPLICATION%' AND ident.is_not_for_replication = 0 THEN ' ADD NOT FOR REPLICATION' ELSE '' END +
-                   CASE WHEN [DataType] NOT LIKE '%NOT FOR REPLICATION%' AND ident.is_not_for_replication = 1 THEN ' DROP NOT FOR REPLICATION' ELSE '' END +
-                   CASE WHEN cm.ExistingMaskFn IS NOT NULL AND ([DataMaskFunction] = '' OR cm.ExistingMaskFn COLLATE DATABASE_DEFAULT <> [DataMaskFunction]) THEN ' DROP MASKED' ELSE '' END +
-                   CASE WHEN [DataMaskFunction] <> '' AND cm.ExistingMaskFn IS NULL THEN ' ADD MASKED WITH (FUNCTION = ''' + [DataMaskFunction] + ''')' ELSE '' END +
-                   CASE WHEN [DataMaskFunction] <> '' AND cm.ExistingMaskFn COLLATE DATABASE_DEFAULT <> [DataMaskFunction]
-                        THEN '; ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ALTER COLUMN ' + c.[ColumnName] + ' ADD MASKED WITH (FUNCTION = ''' + [DataMaskFunction] + ''')'
-                        ELSE '' END
-              ELSE ''
-              END AS [SpecialColumnScript],
+         [SpecialColumnScript] = x.[OptionsBefore] + x.[OptionsAfter],
          CAST(CASE WHEN cc.[definition] IS NOT NULL OR RTRIM(ISNULL([ComputedExpression], '')) <> ''
                      OR (ident.column_id IS NULL AND [DataType] LIKE '%IDENTITY%') -- switching to identity... requires drop and recreate column
                      -- A column set cannot be altered in place (Microsoft docs: "The column set column cannot
@@ -465,7 +454,8 @@ BEGIN TRY
                         AND RTRIM(ISNULL([ComputedExpression], '')) = '') -- identity removal (data-preserving swap)
                     OR (ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> [EncryptionType]) -- encryption change (data-preserving swap)
                    THEN 1 ELSE 0 END AS BIT) AS MustSwapColumn,
-         CAST(0 AS BIT) AS DropOnly
+         CAST(0 AS BIT) AS DropOnly,
+         d.[DefinitionChanged], x.[OptionsBefore], x.[OptionsAfter]
     INTO #ColumnChanges
     FROM #Tables t WITH (NOLOCK)
     JOIN #Columns c WITH (NOLOCK) ON c.[Schema] = t.[Schema] 
@@ -493,39 +483,61 @@ BEGIN TRY
     LEFT JOIN sys.computed_columns cc ON c.ColumnName COLLATE DATABASE_DEFAULT = QUOTENAME(cc.[name])
                                                    AND cc.[object_id] = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
     LEFT JOIN #ColMeta cm ON cm.[object_id] = sc.[object_id] AND cm.column_id = sc.column_id
+    -- The definition test first, then the column options around it, so the WHERE can ask for either (#510): a row
+    -- exists when the definition differs or an option does (ROWGUIDCOL, NOT FOR REPLICATION, a mask), and
+    -- [DefinitionChanged] says which. An option-only change then neither re-states the definition nor counts as a change
+    -- the CDC capture instance can see (#509): the option is compared on its own, and the type comparison ignores the
+    -- two tokens that spell one.
+    CROSS APPLY (SELECT [DefinitionChanged] = CAST(CASE WHEN ((RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+                                                     CASE WHEN sc.xml_collection_id <> 0
+                                                          THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) + '' FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
+                                                          END,
+                                                     sc.is_rowguidcol) +
+                                                CASE WHEN ident.column_id IS NOT NULL
+                                                     THEN ' IDENTITY(' + CONVERT(NVARCHAR(20), ident.seed_value) + ', ' + CONVERT(NVARCHAR(20), ident.increment_value) + ')' +
+                                                          CASE WHEN ident.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
+                                                     ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'), ' ROWGUIDCOL', ''), ' NOT FOR REPLICATION', '')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), '(CONTENT ', '('), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'), ' ROWGUIDCOL', ''), ' NOT FOR REPLICATION', ''))
+                  -- A computed column's nullability belongs to the engine unless the package states one: it is derivable from
+                  -- the expression, and only a PERSISTED column can be declared NOT NULL at all. Comparing an OMITTED value
+                  -- here re-added every such column on every deploy, and (once the emit side agreed with it) dropped an
+                  -- existing nullable column and failed to put it back on a table whose rows made the expression NULL.
+                  OR (CASE WHEN c.Nullable = 1 THEN 'YES' ELSE 'NO' END <> ic.IS_NULLABLE
+                      AND (RTRIM(ISNULL(c.[ComputedExpression], '')) = ''
+                           OR (c.[Persisted] = 1 AND c.[NullableDeclared] IS NOT NULL)))
+                  OR (ISNULL(SchemaSmith.fn_StripParenWrapping(cc.[definition]), '') <> ISNULL(c.ComputedExpression, '')
+                      -- #242: same question as the check constraints. A computed column has no normalisation at all, so
+                      -- every non-trivial expression was dropped and re-added on every deploy -- a table rewrite when
+                      -- the column is PERSISTED.
+                      AND SchemaSmith.fn_ExpressionMapUnchanged(c.[Schema], c.[TableName], 'COLUMN', c.[ColumnName],
+                            'computed', c.ComputedExpression, cc.[definition]) = 0)
+                  OR ISNULL(cc.is_persisted, 0) <> ISNULL(c.[Persisted], 0))
+                  OR sc.is_sparse <> [Sparse]
+                  OR sc.is_column_set <> [IsColumnSet]
+                  OR (c.[PaddingApplies] = 1 AND c.[AnsiPadding] IS NOT NULL AND sc.is_ansi_padded <> c.[AnsiPadding])
+                  OR ([Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') <> [Collation])
+                  OR ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> [EncryptionType]
+                  OR (ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> 'NONE' AND (ISNULL(cm.ExistingEncAlgo, '') COLLATE DATABASE_DEFAULT <> [EncryptionAlgorithm] OR ISNULL(cm.ExistingEncKeyDb, '') COLLATE DATABASE_DEFAULT <> [EncryptionKey])) THEN 1 ELSE 0 END AS BIT)) d
+    -- Each option is its own ALTER COLUMN (two in one statement is a syntax error), split around the definition change:
+    -- SQL Server will not alter a ROWGUIDCOL column, so the flag comes off before and goes back after; a definition
+    -- change drops a mask by itself, so the declared mask is added back after (and not dropped before); NOT FOR
+    -- REPLICATION survives the change and is toggled on its own. Probed on 2022.
+    CROSS APPLY (SELECT
+                   [OptionsBefore] =
+                     CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) = ''
+                          THEN CASE WHEN sc.is_rowguidcol = 1 AND ([DataType] NOT LIKE '%ROWGUIDCOL%' OR d.[DefinitionChanged] = 1) THEN 'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ALTER COLUMN ' + c.[ColumnName] + ' DROP ROWGUIDCOL;' + CHAR(13) + CHAR(10) ELSE '' END +
+                               CASE WHEN [DataType] NOT LIKE '%NOT FOR REPLICATION%' AND ident.is_not_for_replication = 1 THEN 'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ALTER COLUMN ' + c.[ColumnName] + ' DROP NOT FOR REPLICATION;' + CHAR(13) + CHAR(10) ELSE '' END +
+                               CASE WHEN d.[DefinitionChanged] = 0 AND cm.ExistingMaskFn IS NOT NULL AND ([DataMaskFunction] = '' OR cm.ExistingMaskFn COLLATE DATABASE_DEFAULT <> [DataMaskFunction]) THEN 'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ALTER COLUMN ' + c.[ColumnName] + ' DROP MASKED;' + CHAR(13) + CHAR(10) ELSE '' END
+                          ELSE '' END,
+                   [OptionsAfter] =
+                     CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) = ''
+                          THEN CASE WHEN [DataType] LIKE '%ROWGUIDCOL%' AND (sc.is_rowguidcol = 0 OR d.[DefinitionChanged] = 1) THEN 'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ALTER COLUMN ' + c.[ColumnName] + ' ADD ROWGUIDCOL;' + CHAR(13) + CHAR(10) ELSE '' END +
+                               CASE WHEN [DataType] LIKE '%NOT FOR REPLICATION%' AND ident.is_not_for_replication = 0 THEN 'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ALTER COLUMN ' + c.[ColumnName] + ' ADD NOT FOR REPLICATION;' + CHAR(13) + CHAR(10) ELSE '' END +
+                               CASE WHEN [DataMaskFunction] <> '' AND (cm.ExistingMaskFn IS NULL OR cm.ExistingMaskFn COLLATE DATABASE_DEFAULT <> [DataMaskFunction] OR d.[DefinitionChanged] = 1)
+                                    THEN 'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ALTER COLUMN ' + c.[ColumnName] + ' ADD MASKED WITH (FUNCTION = ''' + [DataMaskFunction] + ''');' + CHAR(13) + CHAR(10)
+                                    ELSE '' END
+                          ELSE '' END) x
     WHERE t.NewTable = 0
-      -- A computed column's type is derived from its expression and cannot be stated in DDL, so a declared DataType
-      -- is never applied; comparing it could only re-add the column forever. Its changes are the expression's.
-      AND ((RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
-                                           CASE WHEN sc.xml_collection_id <> 0
-                                                THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) + '' FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
-                                                END,
-                                           sc.is_rowguidcol) +
-                                      CASE WHEN ident.column_id IS NOT NULL
-                                           THEN ' IDENTITY(' + CONVERT(NVARCHAR(20), ident.seed_value) + ', ' + CONVERT(NVARCHAR(20), ident.increment_value) + ')' +
-                                                CASE WHEN ident.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
-                                           ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), '(CONTENT ', '('), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
-        -- A computed column's nullability belongs to the engine unless the package states one: it is derivable from
-        -- the expression, and only a PERSISTED column can be declared NOT NULL at all. Comparing an OMITTED value
-        -- here re-added every such column on every deploy, and (once the emit side agreed with it) dropped an
-        -- existing nullable column and failed to put it back on a table whose rows made the expression NULL.
-        OR (CASE WHEN c.Nullable = 1 THEN 'YES' ELSE 'NO' END <> ic.IS_NULLABLE
-            AND (RTRIM(ISNULL(c.[ComputedExpression], '')) = ''
-                 OR (c.[Persisted] = 1 AND c.[NullableDeclared] IS NOT NULL)))
-        OR (ISNULL(SchemaSmith.fn_StripParenWrapping(cc.[definition]), '') <> ISNULL(c.ComputedExpression, '')
-            -- #242: same question as the check constraints. A computed column has no normalisation at all, so
-            -- every non-trivial expression was dropped and re-added on every deploy -- a table rewrite when
-            -- the column is PERSISTED.
-            AND SchemaSmith.fn_ExpressionMapUnchanged(c.[Schema], c.[TableName], 'COLUMN', c.[ColumnName],
-                  'computed', c.ComputedExpression, cc.[definition]) = 0)
-        OR ISNULL(cc.is_persisted, 0) <> ISNULL(c.[Persisted], 0))
-        OR sc.is_sparse <> [Sparse]
-        OR sc.is_column_set <> [IsColumnSet]
-        OR (c.[PaddingApplies] = 1 AND c.[AnsiPadding] IS NOT NULL AND sc.is_ansi_padded <> c.[AnsiPadding])
-        OR ISNULL(cm.ExistingMaskFn, '') COLLATE DATABASE_DEFAULT <> [DataMaskFunction]
-        OR ([Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') <> [Collation])
-        OR ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> [EncryptionType]
-        OR (ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> 'NONE' AND (ISNULL(cm.ExistingEncAlgo, '') COLLATE DATABASE_DEFAULT <> [EncryptionAlgorithm] OR ISNULL(cm.ExistingEncKeyDb, '') COLLATE DATABASE_DEFAULT <> [EncryptionKey]))
+      AND (d.[DefinitionChanged] = 1 OR x.[OptionsBefore] + x.[OptionsAfter] <> '')
   
   -- ALTER COLUMN pads a char/varchar/binary/varbinary column whatever the session's ANSI_PADDING, so a column declared
   -- unpadded is replaced instead: added under ANSI_PADDING OFF, copied, and swapped in. A change carried by
@@ -538,7 +550,7 @@ BEGIN TRY
       AND cc.MustDropAndRecreate = 0 AND cc.DropOnly = 0 AND RTRIM(cc.[SpecialColumnScript]) = ''
 
   RAISERROR('Detect Computed Columns Impacted by Other Column Changes', 10, 100) WITH NOWAIT
-  INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly])
+  INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly], [DefinitionChanged], [OptionsBefore], [OptionsAfter])
     -- An unchanged computed column that reads a column being altered has to come off first: SQL Server refuses the
     -- ALTER COLUMN while anything accesses the column (5074). It is dropped and added back by the computed-column
     -- passes below. Dependencies come from sys.sql_expression_dependencies, which names the exact column a computed
@@ -548,7 +560,7 @@ BEGIN TRY
            [ColumnScript] = 'AS (' + ComputedExpression + ')' + CASE WHEN c.[Persisted] = 1 THEN ' PERSISTED' ELSE '' END
                                                               + CASE WHEN c.[Persisted] = 1 AND c.[NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END,
            [SpecialColumnScript] = '',
-           MustDropAndRecreate = CAST(1 AS BIT), MustSwapColumn = CAST(0 AS BIT), [DropOnly] = CAST(0 AS BIT)
+           MustDropAndRecreate = CAST(1 AS BIT), MustSwapColumn = CAST(0 AS BIT), [DropOnly] = CAST(0 AS BIT), [DefinitionChanged] = CAST(1 AS BIT), [OptionsBefore] = '', [OptionsAfter] = ''
       FROM #ColumnChanges cc WITH (NOLOCK)
       JOIN sys.columns changed ON changed.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
                               AND QUOTENAME(changed.[name]) = cc.[ColumnName] COLLATE DATABASE_DEFAULT
@@ -586,8 +598,8 @@ BEGIN TRY
             OR c.generated_always_type IN (7, 8, 9, 10)'
 
   RAISERROR('Detect Column Drops', 10, 100) WITH NOWAIT
-  INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly])
-    SELECT t.[Schema], [TableName] = t.[Name], [ColumnName] = QUOTENAME(COLUMN_NAME), '', '', 0, 0, 1
+  INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly], [DefinitionChanged], [OptionsBefore], [OptionsAfter])
+    SELECT t.[Schema], [TableName] = t.[Name], [ColumnName] = QUOTENAME(COLUMN_NAME), '', '', 0, 0, 1, 1, '', ''
       FROM #Tables t WITH (NOLOCK)
       JOIN INFORMATION_SCHEMA.COLUMNS ON t.[Schema] COLLATE DATABASE_DEFAULT = QUOTENAME(TABLE_SCHEMA)
                                                    AND t.[Name] COLLATE DATABASE_DEFAULT = QUOTENAME(TABLE_NAME) 
@@ -728,6 +740,232 @@ BEGIN TRY
                                        AND tail.[ColumnName] = later.[ColumnName] AND tail.[DropOnly] = 0
                                        AND (tail.MustSwapColumn = 1 OR tail.MustDropAndRecreate = 1)))
      AND NOT EXISTS (SELECT 1 FROM #RebuildOrderMismatch m WHERE m.[Schema] = cc.[Schema] AND m.[TableName] = cc.[TableName])
+
+  -- Every refusal before the first drop (#511). A refused deploy used to leave behind whatever the steps before the
+  -- refusal had already dropped -- the primary keys and indexes over the changing columns, foreign keys the package no
+  -- longer declares, full-text indexes -- until a later deploy succeeded. Everything a refusal needs is known once the
+  -- column changes are detected, so every check that can end the deploy runs here and the steps below only change things.
+  RAISERROR('Verify CDC Capture-Instance Headroom For Tables With Column Changes', 10, 100) WITH NOWAIT
+  -- CDC deliberately stays ON through the column work. Disabling it here used to drop the capture
+  -- instance outright, discarding every captured change a downstream reader had not yet consumed.
+  -- A second instance is created after the column work instead (rotation), and SQL Server permits
+  -- only two per table -- so refuse up front rather than failing partway through the column work.
+  -- A declared CdcFilegroup the newest capture instance is not on is a rotation reason too (#417): it can only be
+  -- honoured by a new instance, and a new instance is exactly what a column change already creates. The same
+  -- ceiling applies, for the same reason. So is a declared CdcSupportsNetChanges the newest instance does not have (#426):
+  -- SQL Server fixes it per capture instance and cannot alter it in place. And so is a declared CdcIndexName the newest
+  -- instance does not identify rows by: the index may be created by this deploy, and CdcQuench runs after it exists.
+  -- TableQuench owns #CdcRotate: the rotation itself runs in SchemaSmith.CdcQuench, after every column exists.
+  IF OBJECT_ID('tempdb..#CdcRotate') IS NULL
+    {{CdcRotateTable}}
+  IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
+  BEGIN
+    DECLARE @v_DefaultFilegroup SYSNAME = (SELECT [name] FROM sys.filegroups WHERE is_default = 1)
+
+    IF OBJECT_ID('tempdb..#CdcCandidates') IS NOT NULL DROP TABLE #CdcCandidates
+    SELECT t.[Schema], t.[Name],
+           Instances = (SELECT COUNT(*) FROM cdc.change_tables c WITH (NOLOCK) WHERE c.source_object_id = st.[object_id]),
+           newest.capture_instance AS NewestInstance,
+           -- The catalog reports NULL for "the default filegroup"; resolve it so a comparison never passes on NULL.
+           ISNULL(newest.filegroup_name, @v_DefaultFilegroup) AS NewestFilegroup,
+           newest.filegroup_name AS NewestFilegroupRaw,
+           SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) AS DeclaredFilegroup,
+           newest.supports_net_changes AS NewestNetChanges,
+           t.CdcSupportsNetChanges AS DeclaredNetChanges,
+           newest.index_name AS NewestIndexName,
+           SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName) AS DeclaredIndexName,
+           -- An option-only change (NOT FOR REPLICATION, ROWGUIDCOL, a mask) leaves the captured columns and their types as they
+           -- are, so it neither rotates nor is refused at the ceiling (#509).
+           ColumnChange = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.[DefinitionChanged] = 1)
+                                              OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1)
+                                            THEN 1 ELSE 0 END)
+      INTO #CdcCandidates
+      FROM #Tables t WITH (NOLOCK)
+      JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name, ct.supports_net_changes, ct.index_name
+                     FROM cdc.change_tables ct WITH (NOLOCK)
+                    WHERE ct.source_object_id = st.[object_id]
+                    ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
+      WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
+
+    -- Unset means unmanaged: only a DECLARED filegroup can mismatch.
+    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, NewNetChanges, NewIndexName, Reason)
+      SELECT [Schema], [Name], NewestInstance,
+             -- A rotation keeps the filegroup it is not told to change: the declared one, else where the old
+             -- instance already is. Omitting it (the pre-#417 behaviour) moved a DBA-placed instance to the default.
+             COALESCE(DeclaredFilegroup, NewestFilegroupRaw),
+             -- The same for net changes: the declared value, else the old instance's own (#426).
+             COALESCE(DeclaredNetChanges, NewestNetChanges),
+             -- And the index rows are identified by: the declared one, else the old instance's own.
+             COALESCE(DeclaredIndexName, NewestIndexName),
+             CASE WHEN ColumnChange = 1 THEN 'column'
+                  WHEN DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup THEN 'filegroup'
+                  WHEN DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges THEN 'netchanges'
+                  ELSE 'index' END
+        FROM #CdcCandidates
+       WHERE Instances = 1
+         AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup)
+              OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges)
+              OR (DeclaredIndexName IS NOT NULL AND DeclaredIndexName <> ISNULL(NewestIndexName, '')))
+
+    DECLARE @v_CdcAtCeiling NVARCHAR(MAX) =
+      STUFF((SELECT ', ' + [Schema] + '.' + [Name]
+               FROM #CdcCandidates
+              WHERE Instances >= 2
+                AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup)
+                     OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges)
+                     OR (DeclaredIndexName IS NOT NULL AND DeclaredIndexName <> ISNULL(NewestIndexName, '')))
+               FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+    IF @v_CdcAtCeiling IS NOT NULL
+      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column, CdcFilegroup, CdcSupportsNetChanges or CdcIndexName change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
+  END
+
+  -- Always Encrypted changes on an existing column cannot be performed server-side on a standard (non-enclave)
+  -- deployment: the server holds no Column Master Key and cannot re-encrypt data. Refused in WhatIf too, so the
+  -- impossibility is visible in a preview. The operator uses the Before/After full-table rebuild instead.
+  IF EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.MustSwapColumn = 1 AND cc.[ColumnScript] LIKE '%ENCRYPTED WITH%')
+  BEGIN
+    DECLARE @v_AeSchema NVARCHAR(256), @v_AeTable NVARCHAR(256), @v_AeColumn NVARCHAR(256)
+    SELECT TOP 1 @v_AeSchema = cc.[Schema], @v_AeTable = cc.[TableName], @v_AeColumn = SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName])
+      FROM #ColumnChanges cc WITH (NOLOCK)
+      WHERE cc.MustSwapColumn = 1 AND cc.[ColumnScript] LIKE '%ENCRYPTED WITH%'
+      ORDER BY cc.[Schema], cc.[TableName], cc.[ColumnName]
+    RAISERROR('Always Encrypted: in-place encryption change on %s.%s.[%s] cannot be performed on a standard (non-enclave) server. Use Before/After migration scripts to rebuild the table with the target encryption settings and copy data client-side over a Column Encryption Setting=Enabled connection.', 16, 1, @v_AeSchema, @v_AeTable, @v_AeColumn)
+  END
+
+  -- The live placement of every declared index, for the two move checks below. #ExistingIndexes is collected only after
+  -- the first drops, so the checks read their own table here.
+  IF OBJECT_ID('tempdb..#IndexPlacement') IS NOT NULL DROP TABLE #IndexPlacement
+  SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(si.[Name] AS NVARCHAR(500)),
+         -- NULL when the data space is a partition scheme, which is exactly when [xPartitionScheme] is populated instead:
+         -- the two are mutually exclusive because an index lives on ONE data space.
+         [xFileGroup] = fg.[name],
+         [xPartitionScheme] = pds.[name],
+         -- The column is read alongside the scheme because the same scheme applied to a different column is a different
+         -- physical layout.
+         [xPartitionColumn] = (SELECT pc.[name]
+                                 FROM sys.index_columns pic
+                                 JOIN sys.columns pc ON pc.[object_id] = pic.[object_id] AND pc.column_id = pic.column_id
+                                WHERE pic.[object_id] = si.[object_id] AND pic.index_id = si.index_id
+                                  AND pic.partition_ordinal = 1)
+    INTO #IndexPlacement
+    FROM #Tables t WITH (NOLOCK)
+    JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+                       AND si.index_id > 0 AND si.is_hypothetical = 0 AND si.is_disabled = 0
+    LEFT JOIN sys.filegroups fg ON fg.data_space_id = si.data_space_id
+    LEFT JOIN sys.data_spaces pds ON pds.data_space_id = si.data_space_id AND pds.[type] = 'PS'
+    WHERE t.NewTable = 0
+
+  -- Filegroup placement (#filegroups): an EXISTING index (found live, still declared by name) whose
+  -- declared filegroup differs from where it is currently deployed is a MOVE -- same "error, don't rebuild"
+  -- contract as the table-level check in MissingTableAndColumnQuench. Declared NULL means "the database's own default filegroup",
+  -- so an ordinary index with FileGroup unset never trips this against a live index already on the default.
+  RAISERROR('Validate declared index filegroup matches deployed', 10, 100) WITH NOWAIT
+  IF EXISTS (SELECT 1
+               FROM #IndexPlacement ei WITH (NOLOCK)
+               JOIN #Indexes i WITH (NOLOCK) ON ei.[xSchema] = i.[Schema]
+                                            AND ei.[xTableName] = i.[TableName]
+                                            AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
+               WHERE ei.[xFileGroup] IS NOT NULL AND i.[FileGroup] IS NOT NULL
+                 AND SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]) <> ei.[xFileGroup])
+  BEGIN
+    DECLARE @v_IdxMoveIndex NVARCHAR(1510), @v_IdxMoveDeclared NVARCHAR(500), @v_IdxMoveLive NVARCHAR(500)
+    SELECT TOP 1 @v_IdxMoveIndex = ei.[xSchema] + '.' + ei.[xTableName] + '.' + ei.[xIndexName],
+                 @v_IdxMoveDeclared = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]),
+                 @v_IdxMoveLive = ei.[xFileGroup]
+      FROM #IndexPlacement ei WITH (NOLOCK)
+      JOIN #Indexes i WITH (NOLOCK) ON ei.[xSchema] = i.[Schema]
+                                   AND ei.[xTableName] = i.[TableName]
+                                   AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
+      WHERE ei.[xFileGroup] IS NOT NULL AND i.[FileGroup] IS NOT NULL
+        AND SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]) <> ei.[xFileGroup]
+    RAISERROR('Index %s declares filegroup %s, but is currently deployed on filegroup %s. SchemaSmith does not move an existing index to a different filegroup (that is a rebuild) -- migrate it manually, or correct the declared filegroup to match.', 16, 1, @v_IdxMoveIndex, @v_IdxMoveDeclared, @v_IdxMoveLive)
+  END
+
+  -- Partition placement (#partitioning, K1): the index-level twin of the table check in MissingTableAndColumnQuench, and refused for
+  -- the same reason -- rebuilding an index onto a different scheme rewrites the whole index. Placement is
+  -- deliberately absent from [IndexScript], so without this an index whose declared scheme changed would be
+  -- SILENTLY left where it is: the ordinary drop-and-recreate path cannot see a difference it never
+  -- compares.
+  RAISERROR('Validate declared index partition scheme matches deployed', 10, 100) WITH NOWAIT
+  IF EXISTS (SELECT 1
+               FROM #IndexPlacement ei WITH (NOLOCK)
+               JOIN #Indexes i WITH (NOLOCK) ON ei.[xSchema] = i.[Schema]
+                                            AND ei.[xTableName] = i.[TableName]
+                                            AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
+               WHERE i.[PartitionScheme] IS NOT NULL
+                 AND (ei.[xPartitionScheme] IS NULL
+                      OR SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]) <> ei.[xPartitionScheme]
+                      OR (ei.[xPartitionColumn] IS NOT NULL
+                          AND SchemaSmith.fn_StripBracketWrapping(i.[PartitionColumn]) <> ei.[xPartitionColumn])))
+  BEGIN
+    DECLARE @v_IdxPsIndex NVARCHAR(1510), @v_IdxPsDeclared NVARCHAR(1010), @v_IdxPsLive NVARCHAR(1010)
+    SELECT TOP 1 @v_IdxPsIndex = ei.[xSchema] + '.' + ei.[xTableName] + '.' + ei.[xIndexName],
+                 @v_IdxPsDeclared = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]) + '(' + SchemaSmith.fn_StripBracketWrapping(i.[PartitionColumn]) + ')',
+                 @v_IdxPsLive = ISNULL(ei.[xPartitionScheme] + '(' + ISNULL(ei.[xPartitionColumn], '?') + ')', 'filegroup ' + ISNULL(ei.[xFileGroup], 'the database default'))
+      FROM #IndexPlacement ei WITH (NOLOCK)
+      JOIN #Indexes i WITH (NOLOCK) ON ei.[xSchema] = i.[Schema]
+                                   AND ei.[xTableName] = i.[TableName]
+                                   AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
+      WHERE i.[PartitionScheme] IS NOT NULL
+        AND (ei.[xPartitionScheme] IS NULL
+             OR SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]) <> ei.[xPartitionScheme]
+             OR (ei.[xPartitionColumn] IS NOT NULL
+                 AND SchemaSmith.fn_StripBracketWrapping(i.[PartitionColumn]) <> ei.[xPartitionColumn]))
+    RAISERROR('Index %s declares partition placement %s, but is currently deployed on %s. SchemaSmith does not move an existing index onto or between partition schemes -- that rebuilds the whole index. Migrate it manually, or correct the declaration to match.', 16, 1, @v_IdxPsIndex, @v_IdxPsDeclared, @v_IdxPsLive)
+  END
+
+  -- Filegroup placement (#filegroups): a NEW index/constraint declaring a filegroup name that does not
+  -- exist on this target must fail loudly BEFORE any DDL runs, naming both the index and the filegroup --
+  -- same contract as the table-create check in MissingTableAndColumnQuench.sql. Only indexes not yet
+  -- present are checked; an already-existing index's declared vs. deployed filegroup is the "move"
+  -- question, checked below.
+  RAISERROR('Validate declared index filegroups exist', 10, 100) WITH NOWAIT
+  IF EXISTS (SELECT 1
+               FROM #Indexes i WITH (NOLOCK)
+               WHERE i.[FileGroup] IS NOT NULL
+                 AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
+                 AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
+  BEGIN
+    DECLARE @v_IdxFGIndex NVARCHAR(1510), @v_IdxFGName NVARCHAR(500)
+    SELECT TOP 1 @v_IdxFGIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxFGName = i.[FileGroup]
+      FROM #Indexes i WITH (NOLOCK)
+      WHERE i.[FileGroup] IS NOT NULL
+        AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
+        AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
+    RAISERROR('Index %s declares filegroup %s, which does not exist on this database. SchemaSmith does not create filegroups -- create it on the target first, or correct the declared name.', 16, 1, @v_IdxFGIndex, @v_IdxFGName)
+  END
+
+  -- Partition placement (#partitioning, K1): the scheme must exist, same contract as the filegroup check
+  -- above -- SchemaSmith creates neither a filegroup nor a partition function/scheme.
+  RAISERROR('Validate declared index partition schemes exist', 10, 100) WITH NOWAIT
+  IF EXISTS (SELECT 1
+               FROM #Indexes i WITH (NOLOCK)
+               WHERE i.[PartitionScheme] IS NOT NULL
+                 AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme])))
+  BEGIN
+    DECLARE @v_IdxPsNewIndex NVARCHAR(1510), @v_IdxPsNewName NVARCHAR(500)
+    SELECT TOP 1 @v_IdxPsNewIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxPsNewName = i.[PartitionScheme]
+      FROM #Indexes i WITH (NOLOCK)
+      WHERE i.[PartitionScheme] IS NOT NULL
+        AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]))
+    RAISERROR('Index %s declares partition scheme %s, which does not exist on this database. SchemaSmith does not create partition functions or schemes -- create them on the target first, or correct the declared name.', 16, 1, @v_IdxPsNewIndex, @v_IdxPsNewName)
+  END
+
+  -- Both or neither, the index twin of the table-level pair check in MissingTableAndColumnQuench: ON
+  -- <scheme> with no column is a syntax error naming nothing useful.
+  IF EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
+              WHERE (i.[PartitionScheme] IS NOT NULL AND i.[PartitionColumn] IS NULL)
+                 OR (i.[PartitionScheme] IS NULL AND i.[PartitionColumn] IS NOT NULL))
+  BEGIN
+    DECLARE @v_IdxPsHalf NVARCHAR(1510), @v_IdxPsHalfMissing NVARCHAR(30)
+    SELECT TOP 1 @v_IdxPsHalf = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName],
+                 @v_IdxPsHalfMissing = CASE WHEN i.[PartitionColumn] IS NULL THEN 'PartitionColumn' ELSE 'PartitionScheme' END
+      FROM #Indexes i WITH (NOLOCK)
+      WHERE (i.[PartitionScheme] IS NOT NULL AND i.[PartitionColumn] IS NULL)
+         OR (i.[PartitionScheme] IS NULL AND i.[PartitionColumn] IS NOT NULL)
+    RAISERROR('Index %s declares one half of a partition placement but not the other -- %s is missing. PartitionScheme and PartitionColumn are declared together or not at all.', 16, 1, @v_IdxPsHalf, @v_IdxPsHalfMissing)
+  END
 
   RAISERROR('Check for SCHEMABINDING dependents blocking column changes', 10, 100) WITH NOWAIT
   -- SQL Server refuses ALTER COLUMN while a SCHEMABINDING module references the column, with error 4922
@@ -1149,22 +1387,9 @@ BEGIN TRY
   SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(si.[Name] AS NVARCHAR(500)),
          IsConstraint = CAST(CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1 THEN 1 ELSE 0 END AS BIT),
          IsUnique = si.is_unique, IsClustered = CAST(CASE WHEN si.[type_desc] = 'CLUSTERED' THEN 1 ELSE 0 END AS BIT), [FillFactor] = ISNULL(NULLIF(si.fill_factor, 0), 100),
-         -- Filegroup placement (#filegroups): the index's LIVE filegroup name, for the declared-vs-deployed
-         -- move check below. Deliberately NOT folded into [IndexScript] -- that string drives #IndexChanges'
-         -- drop+recreate detection, and a placement difference must ERROR, never trigger a silent rebuild
-         -- via the ordinary "index definition changed" path. NULL when data_space_id is a partition scheme
-         -- rather than a plain filegroup, which is exactly when [xPartitionScheme] below is populated
-         -- instead -- the two are mutually exclusive because an index lives on ONE data space.
-         [xFileGroup] = fg.[name],
-         -- Partition placement (#partitioning, K1): the same read for a scheme, kept out of [IndexScript]
-         -- for the same reason. The column is read alongside the scheme because the same scheme applied to
-         -- a different column is a different physical layout.
-         [xPartitionScheme] = pds.[name],
-         [xPartitionColumn] = (SELECT pc.[name]
-                                 FROM sys.index_columns pic
-                                 JOIN sys.columns pc ON pc.[object_id] = pic.[object_id] AND pc.column_id = pic.column_id
-                                WHERE pic.[object_id] = si.[object_id] AND pic.index_id = si.index_id
-                                  AND pic.partition_ordinal = 1),
+         -- Placement (filegroup, partition scheme) is deliberately NOT in [IndexScript]: that string drives #IndexChanges'
+         -- drop+recreate detection, and a placement difference must ERROR (the move checks above, on #IndexPlacement),
+         -- never trigger a silent rebuild via the ordinary "index definition changed" path.
          -- MIXED declares "leave the compression as it is", so the change comparison reads the live value for it.
          [LiveCompression] = ISNULL(p.[data_compression_desc], 'NONE') COLLATE DATABASE_DEFAULT,
          IndexScript = 'CREATE ' +
@@ -1215,8 +1440,6 @@ BEGIN TRY
                                                     WHERE gic.[object_id] = si.[object_id] AND gic.index_id = si.index_id AND g.graph_type = 1)
     LEFT JOIN sys.partitions p ON p.[object_id] = si.[object_id]
                                             AND p.index_id = si.index_id
-    LEFT JOIN sys.filegroups fg ON fg.data_space_id = si.data_space_id
-    LEFT JOIN sys.data_spaces pds ON pds.data_space_id = si.data_space_id AND pds.[type] = 'PS'
     CROSS APPLY (SELECT [WithOptions] =
                    CASE WHEN (si.[type] NOT IN (5, 6) AND ISNULL(p.[data_compression_desc], 'NONE') COLLATE DATABASE_DEFAULT IN ('NONE', 'ROW', 'PAGE'))
                              OR (si.[type] IN (5, 6) AND ISNULL(p.[data_compression_desc], 'NONE') COLLATE DATABASE_DEFAULT IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
@@ -1225,65 +1448,6 @@ BEGIN TRY
                    CASE WHEN si.is_padded = 1 THEN ', PAD_INDEX=ON' ELSE '' END) o
     WHERE t.NewTable = 0
       AND NOT EXISTS (SELECT * FROM sys.xml_indexes xi WHERE xi.[object_id] = si.[object_id] AND xi.index_id = si.index_id)
-
-  -- Filegroup placement (#filegroups): an EXISTING index (found live, still declared by name) whose
-  -- declared filegroup differs from where it is currently deployed is a MOVE -- same "error, don't rebuild"
-  -- contract as the table-level check above. Declared NULL means "the database's own default filegroup",
-  -- so an ordinary index with FileGroup unset never trips this against a live index already on the default.
-  RAISERROR('Validate declared index filegroup matches deployed', 10, 100) WITH NOWAIT
-  IF EXISTS (SELECT 1
-               FROM #ExistingIndexes ei WITH (NOLOCK)
-               JOIN #Indexes i WITH (NOLOCK) ON ei.[xSchema] = i.[Schema]
-                                            AND ei.[xTableName] = i.[TableName]
-                                            AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
-               WHERE ei.[xFileGroup] IS NOT NULL AND i.[FileGroup] IS NOT NULL
-                 AND SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]) <> ei.[xFileGroup])
-  BEGIN
-    DECLARE @v_IdxMoveIndex NVARCHAR(1510), @v_IdxMoveDeclared NVARCHAR(500), @v_IdxMoveLive NVARCHAR(500)
-    SELECT TOP 1 @v_IdxMoveIndex = ei.[xSchema] + '.' + ei.[xTableName] + '.' + ei.[xIndexName],
-                 @v_IdxMoveDeclared = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]),
-                 @v_IdxMoveLive = ei.[xFileGroup]
-      FROM #ExistingIndexes ei WITH (NOLOCK)
-      JOIN #Indexes i WITH (NOLOCK) ON ei.[xSchema] = i.[Schema]
-                                   AND ei.[xTableName] = i.[TableName]
-                                   AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
-      WHERE ei.[xFileGroup] IS NOT NULL AND i.[FileGroup] IS NOT NULL
-        AND SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]) <> ei.[xFileGroup]
-    RAISERROR('Index %s declares filegroup %s, but is currently deployed on filegroup %s. SchemaSmith does not move an existing index to a different filegroup (that is a rebuild) -- migrate it manually, or correct the declared filegroup to match.', 16, 1, @v_IdxMoveIndex, @v_IdxMoveDeclared, @v_IdxMoveLive)
-  END
-
-  -- Partition placement (#partitioning, K1): the index-level twin of the table check above, and refused for
-  -- the same reason -- rebuilding an index onto a different scheme rewrites the whole index. Placement is
-  -- deliberately absent from [IndexScript], so without this an index whose declared scheme changed would be
-  -- SILENTLY left where it is: the ordinary drop-and-recreate path cannot see a difference it never
-  -- compares.
-  RAISERROR('Validate declared index partition scheme matches deployed', 10, 100) WITH NOWAIT
-  IF EXISTS (SELECT 1
-               FROM #ExistingIndexes ei WITH (NOLOCK)
-               JOIN #Indexes i WITH (NOLOCK) ON ei.[xSchema] = i.[Schema]
-                                            AND ei.[xTableName] = i.[TableName]
-                                            AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
-               WHERE i.[PartitionScheme] IS NOT NULL
-                 AND (ei.[xPartitionScheme] IS NULL
-                      OR SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]) <> ei.[xPartitionScheme]
-                      OR (ei.[xPartitionColumn] IS NOT NULL
-                          AND SchemaSmith.fn_StripBracketWrapping(i.[PartitionColumn]) <> ei.[xPartitionColumn])))
-  BEGIN
-    DECLARE @v_IdxPsIndex NVARCHAR(1510), @v_IdxPsDeclared NVARCHAR(1010), @v_IdxPsLive NVARCHAR(1010)
-    SELECT TOP 1 @v_IdxPsIndex = ei.[xSchema] + '.' + ei.[xTableName] + '.' + ei.[xIndexName],
-                 @v_IdxPsDeclared = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]) + '(' + SchemaSmith.fn_StripBracketWrapping(i.[PartitionColumn]) + ')',
-                 @v_IdxPsLive = ISNULL(ei.[xPartitionScheme] + '(' + ISNULL(ei.[xPartitionColumn], '?') + ')', 'filegroup ' + ISNULL(ei.[xFileGroup], 'the database default'))
-      FROM #ExistingIndexes ei WITH (NOLOCK)
-      JOIN #Indexes i WITH (NOLOCK) ON ei.[xSchema] = i.[Schema]
-                                   AND ei.[xTableName] = i.[TableName]
-                                   AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
-      WHERE i.[PartitionScheme] IS NOT NULL
-        AND (ei.[xPartitionScheme] IS NULL
-             OR SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]) <> ei.[xPartitionScheme]
-             OR (ei.[xPartitionColumn] IS NOT NULL
-                 AND SchemaSmith.fn_StripBracketWrapping(i.[PartitionColumn]) <> ei.[xPartitionColumn]))
-    RAISERROR('Index %s declares partition placement %s, but is currently deployed on %s. SchemaSmith does not move an existing index onto or between partition schemes -- that rebuilds the whole index. Migrate it manually, or correct the declaration to match.', 16, 1, @v_IdxPsIndex, @v_IdxPsDeclared, @v_IdxPsLive)
-  END
 
   RAISERROR('Detect Index Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexChanges') IS NOT NULL DROP TABLE #IndexChanges
@@ -1728,79 +1892,6 @@ BEGIN TRY
       SELECT DISTINCT @@SPID, 'constraint', fc.[Schema] + '.' + fc.[TableName] + '.' + fc.CheckName, 'wouldDrop'
         FROM #ChecksToDropForChanges fc WITH (NOLOCK)
 
-  RAISERROR('Verify CDC Capture-Instance Headroom For Tables With Column Changes', 10, 100) WITH NOWAIT
-  -- CDC deliberately stays ON through the column work. Disabling it here used to drop the capture
-  -- instance outright, discarding every captured change a downstream reader had not yet consumed.
-  -- A second instance is created after the column work instead (rotation), and SQL Server permits
-  -- only two per table -- so refuse up front rather than failing partway through the column work.
-  -- A declared CdcFilegroup the newest capture instance is not on is a rotation reason too (#417): it can only be
-  -- honoured by a new instance, and a new instance is exactly what a column change already creates. The same
-  -- ceiling applies, for the same reason. So is a declared CdcSupportsNetChanges the newest instance does not have (#426):
-  -- SQL Server fixes it per capture instance and cannot alter it in place. And so is a declared CdcIndexName the newest
-  -- instance does not identify rows by: the index may be created by this deploy, and CdcQuench runs after it exists.
-  -- TableQuench owns #CdcRotate: the rotation itself runs in SchemaSmith.CdcQuench, after every column exists.
-  IF OBJECT_ID('tempdb..#CdcRotate') IS NULL
-    {{CdcRotateTable}}
-  IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
-  BEGIN
-    DECLARE @v_DefaultFilegroup SYSNAME = (SELECT [name] FROM sys.filegroups WHERE is_default = 1)
-
-    IF OBJECT_ID('tempdb..#CdcCandidates') IS NOT NULL DROP TABLE #CdcCandidates
-    SELECT t.[Schema], t.[Name],
-           Instances = (SELECT COUNT(*) FROM cdc.change_tables c WITH (NOLOCK) WHERE c.source_object_id = st.[object_id]),
-           newest.capture_instance AS NewestInstance,
-           -- The catalog reports NULL for "the default filegroup"; resolve it so a comparison never passes on NULL.
-           ISNULL(newest.filegroup_name, @v_DefaultFilegroup) AS NewestFilegroup,
-           newest.filegroup_name AS NewestFilegroupRaw,
-           SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) AS DeclaredFilegroup,
-           newest.supports_net_changes AS NewestNetChanges,
-           t.CdcSupportsNetChanges AS DeclaredNetChanges,
-           newest.index_name AS NewestIndexName,
-           SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName) AS DeclaredIndexName,
-           ColumnChange = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
-                                              OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1)
-                                            THEN 1 ELSE 0 END)
-      INTO #CdcCandidates
-      FROM #Tables t WITH (NOLOCK)
-      JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-      CROSS APPLY (SELECT TOP 1 ct.capture_instance, ct.filegroup_name, ct.supports_net_changes, ct.index_name
-                     FROM cdc.change_tables ct WITH (NOLOCK)
-                    WHERE ct.source_object_id = st.[object_id]
-                    ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
-      WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
-
-    -- Unset means unmanaged: only a DECLARED filegroup can mismatch.
-    INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, NewNetChanges, NewIndexName, Reason)
-      SELECT [Schema], [Name], NewestInstance,
-             -- A rotation keeps the filegroup it is not told to change: the declared one, else where the old
-             -- instance already is. Omitting it (the pre-#417 behaviour) moved a DBA-placed instance to the default.
-             COALESCE(DeclaredFilegroup, NewestFilegroupRaw),
-             -- The same for net changes: the declared value, else the old instance's own (#426).
-             COALESCE(DeclaredNetChanges, NewestNetChanges),
-             -- And the index rows are identified by: the declared one, else the old instance's own.
-             COALESCE(DeclaredIndexName, NewestIndexName),
-             CASE WHEN ColumnChange = 1 THEN 'column'
-                  WHEN DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup THEN 'filegroup'
-                  WHEN DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges THEN 'netchanges'
-                  ELSE 'index' END
-        FROM #CdcCandidates
-       WHERE Instances = 1
-         AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup)
-              OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges)
-              OR (DeclaredIndexName IS NOT NULL AND DeclaredIndexName <> ISNULL(NewestIndexName, '')))
-
-    DECLARE @v_CdcAtCeiling NVARCHAR(MAX) =
-      STUFF((SELECT ', ' + [Schema] + '.' + [Name]
-               FROM #CdcCandidates
-              WHERE Instances >= 2
-                AND (ColumnChange = 1 OR (DeclaredFilegroup IS NOT NULL AND DeclaredFilegroup <> NewestFilegroup)
-                     OR (DeclaredNetChanges IS NOT NULL AND DeclaredNetChanges <> NewestNetChanges)
-                     OR (DeclaredIndexName IS NOT NULL AND DeclaredIndexName <> ISNULL(NewestIndexName, '')))
-               FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-    IF @v_CdcAtCeiling IS NOT NULL
-      RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column, CdcFilegroup, CdcSupportsNetChanges or CdcIndexName change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
-  END
-
   RAISERROR('Swap Columns Requiring Data-Preserving Replacement', 10, 100) WITH NOWAIT
   DECLARE @v_SwapSchema NVARCHAR(256), @v_SwapTable NVARCHAR(256), @v_SwapColumn NVARCHAR(256), @v_SwapColumnScript NVARCHAR(MAX), @v_SwapPaddingOff BIT
   DECLARE swap_cursor CURSOR LOCAL FAST_FORWARD FOR
@@ -1815,47 +1906,36 @@ BEGIN TRY
   WHILE @@FETCH_STATUS = 0
   BEGIN
     DECLARE @v_TempColName NVARCHAR(256) = @v_SwapColumn + '_swap_temp'
-    -- Extract data type without NULL/NOT NULL (used only by non-encrypted path, but declared here to avoid re-declare in cursor loop)
+    -- The data type without NULL/NOT NULL
     DECLARE @v_SwapDataType NVARCHAR(MAX) = RTRIM(REPLACE(REPLACE(@v_SwapColumnScript, ' NOT NULL', ''), ' NULL', ''))
-    -- Always Encrypted changes on existing columns cannot be performed server-side on a standard
-    -- (non-enclave) deployment: the server holds no Column Master Key and cannot re-encrypt data.
-    -- Fail closed immediately — before any DDL — in both live and WhatIf mode so the impossibility
-    -- is visible in previews. The operator must use the Before/After full-table rebuild instead.
-    IF @v_SwapColumnScript LIKE '%ENCRYPTED WITH%'
+    -- Non-encrypted swap: add as NULL, copy data, then enforce NOT NULL if needed
+    -- Each step must execute separately so SQL Server can resolve column names after ADD
+    -- Step 1: Add temp column as NULL (can't add NOT NULL to non-empty table without default)
+    -- An unpadded NOT NULL replacement takes a temporary default instead, because step 3's ALTER COLUMN would pad it.
+    DECLARE @v_SwapDefaultName NVARCHAR(256) = QUOTENAME(LEFT('DF_SchemaSmith_PadSwap_' + @v_TempColName, 128))
+    DECLARE @v_SwapNotNullOff BIT = CASE WHEN @v_SwapPaddingOff = 1 AND @v_SwapColumnScript LIKE '%NOT NULL%' THEN 1 ELSE 0 END
+    SET @v_SQL = 'RAISERROR(''  Swapping column ' + @v_SwapSchema + '.' + @v_SwapTable + '.' + QUOTENAME(@v_SwapColumn) + ' (data-preserving replacement)'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                 CASE WHEN @v_SwapPaddingOff = 1 THEN 'SET ANSI_PADDING OFF;' + CHAR(13) + CHAR(10) ELSE '' END +
+                 'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' ADD ' + QUOTENAME(@v_TempColName) + ' ' + @v_SwapDataType +
+                 CASE WHEN @v_SwapNotNullOff = 1
+                      THEN ' NOT NULL CONSTRAINT ' + @v_SwapDefaultName + ' DEFAULT ' + CASE WHEN @v_SwapDataType LIKE '%BINARY%' THEN '0x' ELSE '''''' END
+                      ELSE ' NULL' END + ';'
+    IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+    -- Step 2: Copy data from original to temp
+    SET @v_SQL = 'UPDATE ' + @v_SwapSchema + '.' + @v_SwapTable + ' SET ' + QUOTENAME(@v_TempColName) + ' = ' + QUOTENAME(@v_SwapColumn) + ';'
+    IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+    -- Step 3: If original was NOT NULL, enforce it on the temp column now that data is copied
+    IF @v_SwapNotNullOff = 1
     BEGIN
-      RAISERROR('Always Encrypted: in-place encryption change on %s.%s.[%s] cannot be performed on a standard (non-enclave) server. Use Before/After migration scripts to rebuild the table with the target encryption settings and copy data client-side over a Column Encryption Setting=Enabled connection.', 16, 1, @v_SwapSchema, @v_SwapTable, @v_SwapColumn)
+      SET @v_SQL = 'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' DROP CONSTRAINT ' + @v_SwapDefaultName + ';'
+      IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
     END
-    ELSE
+    ELSE IF @v_SwapColumnScript LIKE '%NOT NULL%'
     BEGIN
-      -- Non-encrypted swap: add as NULL, copy data, then enforce NOT NULL if needed
-      -- Each step must execute separately so SQL Server can resolve column names after ADD
-      -- Step 1: Add temp column as NULL (can't add NOT NULL to non-empty table without default)
-      -- An unpadded NOT NULL replacement takes a temporary default instead, because step 3's ALTER COLUMN would pad it.
-      DECLARE @v_SwapDefaultName NVARCHAR(256) = QUOTENAME(LEFT('DF_SchemaSmith_PadSwap_' + @v_TempColName, 128))
-      DECLARE @v_SwapNotNullOff BIT = CASE WHEN @v_SwapPaddingOff = 1 AND @v_SwapColumnScript LIKE '%NOT NULL%' THEN 1 ELSE 0 END
-      SET @v_SQL = 'RAISERROR(''  Swapping column ' + @v_SwapSchema + '.' + @v_SwapTable + '.' + QUOTENAME(@v_SwapColumn) + ' (data-preserving replacement)'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                   CASE WHEN @v_SwapPaddingOff = 1 THEN 'SET ANSI_PADDING OFF;' + CHAR(13) + CHAR(10) ELSE '' END +
-                   'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' ADD ' + QUOTENAME(@v_TempColName) + ' ' + @v_SwapDataType +
-                   CASE WHEN @v_SwapNotNullOff = 1
-                        THEN ' NOT NULL CONSTRAINT ' + @v_SwapDefaultName + ' DEFAULT ' + CASE WHEN @v_SwapDataType LIKE '%BINARY%' THEN '0x' ELSE '''''' END
-                        ELSE ' NULL' END + ';'
+      SET @v_SQL = 'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' ALTER COLUMN ' + QUOTENAME(@v_TempColName) + ' ' + @v_SwapColumnScript + ';'
       IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-      -- Step 2: Copy data from original to temp
-      SET @v_SQL = 'UPDATE ' + @v_SwapSchema + '.' + @v_SwapTable + ' SET ' + QUOTENAME(@v_TempColName) + ' = ' + QUOTENAME(@v_SwapColumn) + ';'
-      IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-      -- Step 3: If original was NOT NULL, enforce it on the temp column now that data is copied
-      IF @v_SwapNotNullOff = 1
-      BEGIN
-        SET @v_SQL = 'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' DROP CONSTRAINT ' + @v_SwapDefaultName + ';'
-        IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-      END
-      ELSE IF @v_SwapColumnScript LIKE '%NOT NULL%'
-      BEGIN
-        SET @v_SQL = 'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' ALTER COLUMN ' + QUOTENAME(@v_TempColName) + ' ' + @v_SwapColumnScript + ';'
-        IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-      END
     END
-    -- Step 4: Drop original column (shared for both paths)
+    -- Step 4: Drop original column
     SET @v_SQL = 'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' DROP COLUMN ' + QUOTENAME(@v_SwapColumn) + ';'
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
     -- Step 5: Rename temp to original
@@ -2333,8 +2413,13 @@ BEGIN TRY
 
   RAISERROR('Alter Modified Columns', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering Column ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ColumnName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + cc.[Schema] + '.' + cc.[TableName] + ' ALTER COLUMN ' + cc.[ColumnName] + ' ' +
-                                  CASE WHEN RTRIM([SpecialColumnScript]) <> '' THEN [SpecialColumnScript] ELSE [ColumnScript] END + ';' + CHAR(13) + CHAR(10) +
+                                  -- The options SQL Server wants off first, the definition when it changed, then the options to put on or
+                                  -- back (#510): each its own ALTER COLUMN.
+                                  [OptionsBefore] +
+                                  CASE WHEN [DefinitionChanged] = 1
+                                       THEN 'ALTER TABLE ' + cc.[Schema] + '.' + cc.[TableName] + ' ALTER COLUMN ' + cc.[ColumnName] + ' ' + [ColumnScript] + ';' + CHAR(13) + CHAR(10)
+                                       ELSE '' END +
+                                  [OptionsAfter] +
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''column'', ''' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ColumnName] + ''', ''modified'');' AS NVARCHAR(MAX))
                            FROM #ColumnChanges cc WITH (NOLOCK)
                            WHERE [MustDropAndRecreate] = 0
