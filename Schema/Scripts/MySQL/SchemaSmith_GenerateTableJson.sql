@@ -184,6 +184,8 @@ BEGIN
             -- (Scripts/MariaDb/SchemaSmith_ColumnSrid.sql) always returns NULL. See
             -- SchemaSmith_SupportsColumnSrid for the full per-engine rationale.
             'Srid', SchemaSmith_ColumnSrid(p_Schema, p_Table, c.COLUMN_NAME),
+            -- MariaDB only (NULL on MySQL, and stripped below so a MySQL package never carries a key its model rejects).
+            'CheckExpression', SchemaSmith_ColumnLevelCheck(p_Schema, p_Table, c.COLUMN_NAME),
             'Generated', CASE
                 WHEN c.EXTRA LIKE '%VIRTUAL GENERATED%' THEN 'VIRTUAL'
                 WHEN c.EXTRA LIKE '%STORED GENERATED%' THEN 'STORED'
@@ -199,7 +201,9 @@ BEGIN
             END,
             'Description', CASE WHEN c.COLUMN_COMMENT = '' THEN NULL ELSE c.COLUMN_COMMENT END
         ), CASE WHEN c.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%'
-                THEN '$.___dummy___' ELSE '$.WithoutSystemVersioning' END)
+                THEN '$.___dummy___' ELSE '$.WithoutSystemVersioning' END,
+           CASE WHEN SchemaSmith_ColumnLevelCheck(p_Schema, p_Table, c.COLUMN_NAME) IS NOT NULL
+                THEN '$.___dummy2___' ELSE '$.CheckExpression' END)
         -- Alphabetical, matching SQL Server and PostgreSQL. Ordinal order made the same table extract
         -- differently depending on which engine it came from, so a package re-extracted elsewhere showed
         -- a whole-file diff that was pure noise. Name order is also stable against a source table whose
@@ -400,7 +404,12 @@ JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
   AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME', SchemaSmith_CheckTableJoin(), '
 WHERE tc.TABLE_SCHEMA = @v_ccSchema
   AND tc.TABLE_NAME = @v_ccTable AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(@v_ccTable)
-  AND tc.CONSTRAINT_TYPE = ''CHECK''');
+  AND tc.CONSTRAINT_TYPE = ''CHECK''',
+  -- A MariaDB check named after a column of the table is that column's own (column-level) check, written on the column above.
+  IF(VERSION() LIKE '%MariaDB%', '
+  AND NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS col
+                   WHERE col.TABLE_SCHEMA = tc.TABLE_SCHEMA AND col.TABLE_NAME = tc.TABLE_NAME
+                     AND SchemaSmith_NameKeyCI(col.COLUMN_NAME) = SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME))', ''));
         PREPARE stmt FROM @v_ccSql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;

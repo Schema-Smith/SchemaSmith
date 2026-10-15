@@ -1259,15 +1259,16 @@ A column-level check is a **round-trip** concern, not just a formatting preferen
 
 | Engine | Column-level `CheckExpression` | Notes |
 |---|---|---|
-| SQL Server | Authored and extracted | `sys.check_constraints.parent_column_id` records that a check was declared on a column, so the split is exact. |
+| SQL Server | Authored and extracted | A single-column check SQL Server named itself (`CK__Orders__Qty__…`) is the column's `CheckExpression`; a check with a name of its own stays in `CheckConstraints` under that name, even on one column, so the name survives extraction. A second system-named check on the same column is a `CheckConstraints` entry too. |
 | PostgreSQL | Authored and extracted | A check named `CK_<table>_<column>` referencing exactly one column extracts onto that column. |
-| MySQL / MariaDB | Table-level only | The catalog cannot attribute a check to a column. |
+| MariaDB | Authored and extracted | MariaDB names a column-level check after its column, so a check with a column's name is that column's `CheckExpression`: it rides the column definition (`CREATE`, `ADD` and `MODIFY COLUMN` carry it, a `MODIFY` without it removes it) and is never dropped as an undeclared table-level check. `--Validate` stops a `CheckConstraints` entry named like a column (`SS-CHK-002`), which MariaDB itself refuses from 10.11.19 / 11.4.13 / 13.0.2. |
+| MySQL | Table-level only | The catalog cannot attribute a check to a column. |
 
 **PostgreSQL -- why the name matters.** PostgreSQL stores a column constraint and a table constraint identically (its documentation calls the column form "only a notational convenience"), so referencing one column is not evidence a check was *authored* column-level. Extraction therefore routes a single-column check onto its column only when it already carries the generated `CK_<table>_<column>` name. A check you named yourself -- `chk_status_positive` -- stays in `CheckConstraints` and keeps that name. This is deliberate: demoting it would rename it to the generated form on the next deploy, dropping and recreating the constraint on every run.
 
 **MySQL / MariaDB -- table-level only.** `INFORMATION_SCHEMA.CHECK_CONSTRAINTS` exposes a constraint's name and clause with no link back to a column, so a column-level check cannot be extracted as one -- it would come back table-level and change the package's shape on every cast. Author MySQL and MariaDB checks in the `CheckConstraints` array.
 
-> **Retired in 2.7.0.** A column `CheckExpression` is no longer accepted on MySQL or MariaDB: a package that still carries one fails to load, naming the property and the file, so move it to the table's `CheckConstraints` (the constraint the old alias created was named `CK_<table>_<column>` — keep that name and nothing changes on the server). Nothing is dropped silently: the deploy stops before it does anything.
+> **Retired in 2.7.0 on MySQL (and back on MariaDB in 2.8).** A column `CheckExpression` is no longer accepted on MySQL: a package that still carries one fails to load, naming the property and the file, so move it to the table's `CheckConstraints` (the constraint the old alias created was named `CK_<table>_<column>` — keep that name and nothing changes on the server). Nothing is dropped silently: the deploy stops before it does anything.
 
 ---
 

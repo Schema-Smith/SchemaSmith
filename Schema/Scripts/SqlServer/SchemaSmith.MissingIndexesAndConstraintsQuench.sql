@@ -443,10 +443,14 @@ BEGIN TRY
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', ''' + REPLACE(c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ' (check)', '''', '''''') + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #Columns c WITH (NOLOCK)
                            WHERE RTRIM(ISNULL(c.[CheckExpression], '')) <> ''
+                             -- A check the package declares by name on the same column is its own entry, not this one.
                              AND NOT EXISTS (SELECT *
                                                FROM sys.check_constraints sc
                                                WHERE sc.[parent_object_id] = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
-                                                 AND COL_NAME(sc.parent_object_id, sc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]))
+                                                 AND COL_NAME(sc.parent_object_id, sc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
+                                                 AND NOT EXISTS (SELECT * FROM #CheckConstraints cc WITH (NOLOCK)
+                                                                  WHERE cc.[Schema] = c.[Schema] AND cc.[TableName] = c.[TableName]
+                                                                    AND SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName]) = sc.[name] COLLATE DATABASE_DEFAULT))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
   

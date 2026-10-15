@@ -460,6 +460,11 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
               SELECT 1 FROM _SchemaSmith_CheckConstraints c
               WHERE c.TableKey = tc.TableKey
                 AND c.ConstraintKey = tc.ConstraintKey)
+          -- A MariaDB check named after a column of the table is that column's own (column-level) check: the column
+          -- carries it, MODIFY COLUMN converges it, and a drop by name fails outright for the JSON auto-check (1091).
+          AND NOT (VERSION() LIKE '%MariaDB%'
+                   AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns col
+                                WHERE col.TableKey = tc.TableKey AND col.ColumnKey = tc.ConstraintKey))
 ;
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -512,6 +517,11 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
               SELECT 1 FROM _SchemaSmith_CheckConstraints c
               WHERE c.TableKey = tc.TableKey
                 AND c.ConstraintKey = tc.ConstraintKey)
+          -- A MariaDB check named after a column of the table is that column's own (column-level) check: the column
+          -- carries it, MODIFY COLUMN converges it, and a drop by name fails outright for the JSON auto-check (1091).
+          AND NOT (VERSION() LIKE '%MariaDB%'
+                   AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns col
+                                WHERE col.TableKey = tc.TableKey AND col.ColumnKey = tc.ConstraintKey))
 
           -- MariaDB backs an application-time period with a CHECK constraint named after the period
           -- (`start < end`), indistinguishable from a user check constraint in the catalog -- same

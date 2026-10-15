@@ -216,10 +216,16 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                                ELSE '' END AS [DataType],                   
                        CAST(CASE WHEN c.IS_NULLABLE = 'YES' THEN 1 ELSE 0 END AS BIT) AS [Nullable],
 		               NULLIF(SchemaSmith.fn_StripParenWrapping(COLUMN_DEFAULT), 'NULL') AS [Default],
-                       (SELECT SchemaSmith.fn_StripParenWrapping([definition])
+                       -- A single-column check SQL Server named itself (CK__...) is the column's CheckExpression; one with a
+                       -- name of its own stays in CheckConstraints under that name, which the fold used to lose. TOP 1 by
+                       -- name: a second system-named check on the same column goes to CheckConstraints too, rather than
+                       -- failing the scalar subquery.
+                       (SELECT TOP 1 SchemaSmith.fn_StripParenWrapping([definition])
                           FROM sys.check_constraints
                           WHERE parent_object_id = st.[object_id]
-                            AND parent_column_id = sc.column_id) AS [CheckExpression],
+                            AND parent_column_id = sc.column_id
+                            AND is_system_named = 1
+                          ORDER BY [name]) AS [CheckExpression],
                        SchemaSmith.fn_StripParenWrapping(cc.[definition]) AS ComputedExpression,
                        ISNULL(cc.is_persisted, CAST(0 AS BIT)) AS [Persisted],
                        sc.is_sparse AS [Sparse],
@@ -424,7 +430,12 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', cc.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.check_constraints cc
           WHERE parent_object_id = st.[object_id]
-            AND parent_column_id = 0
+            -- Table-level, or bound to a column but not the one system-named check that column's CheckExpression carries.
+            AND (parent_column_id = 0
+                 OR cc.[name] <> ISNULL((SELECT TOP 1 x.[name] FROM sys.check_constraints x
+                                   WHERE x.parent_object_id = cc.parent_object_id AND x.parent_column_id = cc.parent_column_id
+                                     AND x.is_system_named = 1
+                                   ORDER BY x.[name]), ''))
           ORDER BY [Name]
           FOR JSON AUTO) AS [CheckConstraints],
        (SELECT FullTextCatalog = QUOTENAME((SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),

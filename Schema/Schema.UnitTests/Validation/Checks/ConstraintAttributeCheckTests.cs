@@ -3,6 +3,7 @@
 using System.Linq;
 using NUnit.Framework;
 using Schema.Domain;
+using Schema.Domain.MySQL;
 using Schema.Domain.PostgreSQL;
 using Schema.Validation;
 using Schema.Validation.Checks;
@@ -75,4 +76,34 @@ public class ConstraintAttributeCheckTests
     [TestCase(Platform.MariaDb)]
     public void OtherEngines_AreNotChecked(Platform platform) =>
         Assert.That(new ConstraintAttributeCheck().Run(Context(platform, new Table { Name = "orders" })), Is.Empty);
+
+    private static MySqlTable MariaDbTableWith(string checkName)
+    {
+        var table = new MySqlTable { Name = "`orders`" };
+        table.Columns.Add(new MySqlColumn { Name = "`qty`", DataType = "INT" });
+        table.CheckConstraints.Add(new CheckConstraint { Name = checkName, Expression = "`qty` > 0" });
+        return table;
+    }
+
+    [Test]
+    public void OnMariaDb_ACheckNamedLikeAColumn_IsAnError_NamingBoth()
+    {
+        var findings = new ConstraintAttributeCheck().Run(Context(Platform.MariaDb, MariaDbTableWith("`Qty`"))).ToList();
+
+        Assert.That(findings, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings[0].Code, Is.EqualTo("SS-CHK-002"));
+            Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+            Assert.That(findings[0].Message, Does.Contain("`Qty`").And.Contain("`qty`").And.Contain("CheckExpression"));
+        });
+    }
+
+    [Test]
+    public void OnMariaDb_ACheckWithItsOwnName_IsClean() =>
+        Assert.That(new ConstraintAttributeCheck().Run(Context(Platform.MariaDb, MariaDbTableWith("ck_orders_qty"))), Is.Empty);
+
+    [Test]
+    public void OnMySql_ACheckNamedLikeAColumn_IsNotReported_SinceMySqlHasNoColumnLevelCheck() =>
+        Assert.That(new ConstraintAttributeCheck().Run(Context(Platform.MySQL, MariaDbTableWith("`qty`"))), Is.Empty);
 }

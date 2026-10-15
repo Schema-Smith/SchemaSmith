@@ -210,6 +210,49 @@ EXEC sys.sp_addextendedproperty 'Description', 'Table level check constraint', '
     }
 
     [Test]
+    public void ANamedSingleColumnCheck_KeepsItsName_ASystemNamedOne_IsTheColumnsExpression_AndTwoOnOneColumn_DoNotFail()
+    {
+        // SS-114 and SS-062: every check bound to one column used to fold into that column's CheckExpression, losing a
+        // user's name, and a second check on the same column failed the scalar subquery. Only a check SQL Server named
+        // itself is the column's; anything else is a CheckConstraints entry under its own name.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.CheckLevel (
+    Qty INT NOT NULL CHECK (Qty >= 0),
+    Price INT NOT NULL,
+    Other INT NULL CHECK (Other <> 0),
+    Twice INT NULL CHECK (Twice > 0),
+    CONSTRAINT [CK_CheckLevel_Price] CHECK (Price > 0)
+);
+-- SQL Server allows one inline column check; a second one, named or not, is added afterwards and binds to the column all the same.
+ALTER TABLE dbo.CheckLevel ADD CONSTRAINT [CK_CheckLevel_OtherNamed] CHECK (Other < 100);
+ALTER TABLE dbo.CheckLevel ADD CHECK (Twice < 10);";
+        cmd.ExecuteNonQuery();
+
+        var result = GenerateTable(cmd, "dbo", "CheckLevel");
+
+        SqlServerColumn Column(string name) => (SqlServerColumn)result.Columns.Single(c => c.Name == $"[{name}]");
+        // Added by ALTER TABLE, so its generated name carries no column part: find it by what it reads.
+        var secondOnTwice = result.CheckConstraints.Single(c => c.Expression.Contains("[Twice]") && c.Name.StartsWith("[CK__", StringComparison.Ordinal));
+        Assert.Multiple(() =>
+        {
+            Assert.That(Column("Qty").CheckExpression, Is.EqualTo("[Qty]>=(0)"), "a system-named check is the column's");
+            Assert.That(Column("Price").CheckExpression, Is.Null, "a named check on one column is not folded");
+            Assert.That(Column("Other").CheckExpression, Is.EqualTo("[Other]<>(0)"), "the system-named one of two is the column's");
+            Assert.That(result.CheckConstraints.Select(c => c.Name).OrderBy(n => n, StringComparer.Ordinal),
+                Is.EqualTo(new[] { "[CK_CheckLevel_OtherNamed]", "[CK_CheckLevel_Price]", secondOnTwice.Name }.OrderBy(n => n, StringComparer.Ordinal)),
+                "the named ones keep their names, and the second system-named check on Twice is an entry under its generated name");
+            Assert.That(result.CheckConstraints.Single(c => c.Name == "[CK_CheckLevel_Price]").Expression, Is.EqualTo("[Price]>(0)"));
+            Assert.That(new[] { Column("Twice").CheckExpression, secondOnTwice.Expression }.OrderBy(x => x, StringComparer.Ordinal),
+                Is.EqualTo(new[] { "[Twice]<(10)", "[Twice]>(0)" }), "both checks on Twice survive, one each way");
+        });
+
+        conn.Close();
+    }
+
+    [Test]
     public void ShouldGenerateCorrectJsonForStatistics()
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);

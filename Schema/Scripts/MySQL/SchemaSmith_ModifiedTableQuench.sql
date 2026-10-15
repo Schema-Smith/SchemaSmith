@@ -872,6 +872,13 @@ BEGIN
               AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
           OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
           OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
+          OR (VERSION() LIKE '%MariaDB%'
+              AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+              AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                    'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
+                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
       )
     GROUP BY c.TableName;
 
@@ -1235,6 +1242,13 @@ BEGIN
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
               OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
+          OR (VERSION() LIKE '%MariaDB%'
+              AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+              AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                    'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
+                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
           );
 
         -- #363: WhatIf twin of the ELSE-branch 'column'/'modified' audit; same source/predicate, wouldModify.
@@ -1312,6 +1326,13 @@ BEGIN
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
               OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
+          OR (VERSION() LIKE '%MariaDB%'
+              AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+              AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                    'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
+                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
           );
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Modify columns');
@@ -1408,6 +1429,13 @@ BEGIN
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
               OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
+          OR (VERSION() LIKE '%MariaDB%'
+              AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+              AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                    'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
+                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
           );
 
         -- Object-change audit (#243 E5): one row per column about to be modified. Same join +
@@ -1488,6 +1516,13 @@ BEGIN
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
               OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
+          OR (VERSION() LIKE '%MariaDB%'
+              AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+              AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                    'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
+                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
           );
 
         -- Materialize: fold each table's column modifications into one multi-clause ALTER, then drain.
@@ -1569,6 +1604,13 @@ BEGIN
               -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
               -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
               OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
+          OR (VERSION() LIKE '%MariaDB%'
+              AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+              AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                    'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
+                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
           )
         GROUP BY c.TableName;
 

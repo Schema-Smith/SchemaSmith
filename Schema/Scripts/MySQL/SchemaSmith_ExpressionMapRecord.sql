@@ -51,11 +51,16 @@ proc: BEGIN
         SELECT COUNT(*) FROM SchemaSmith_ExpressionMap em
          WHERE CAST(em.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
            AND CAST(em.EngineVersion AS BINARY) != CAST(VERSION() AS BINARY)
-           AND ((em.ObjectKind = 'COLUMN' AND em.Slot = 'generated'
-                 AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
-                              WHERE CAST(SchemaSmith_StripBacktickWrapping(c.TableName) AS BINARY) = CAST(em.ObjectTable AS BINARY)
-                                AND CAST(SchemaSmith_StripBacktickWrapping(c.ColumnName) AS BINARY) = CAST(em.ObjectName AS BINARY)
-                                AND CAST(c.GeneratedExpression AS BINARY) = CAST(em.AuthoredText AS BINARY)))
+           -- One visit of _SchemaSmith_Columns: a TEMPORARY table cannot be opened twice in a statement (1137), so the
+           -- generated-expression branch and the MariaDB column-level check branch share it.
+           AND (EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
+                         WHERE CAST(SchemaSmith_StripBacktickWrapping(c.TableName) AS BINARY) = CAST(em.ObjectTable AS BINARY)
+                           AND CAST(SchemaSmith_StripBacktickWrapping(c.ColumnName) AS BINARY) = CAST(em.ObjectName AS BINARY)
+                           AND ((em.ObjectKind = 'COLUMN' AND em.Slot = 'generated'
+                                 AND CAST(c.GeneratedExpression AS BINARY) = CAST(em.AuthoredText AS BINARY))
+                                -- a MariaDB column-level check is recorded under its column's name
+                                OR (em.ObjectKind = 'CHECK' AND em.Slot = 'expression'
+                                    AND CAST(c.CheckExpression AS BINARY) = CAST(em.AuthoredText AS BINARY))))
              OR (em.ObjectKind = 'CHECK' AND em.Slot = 'expression'
                  AND EXISTS (SELECT 1 FROM _SchemaSmith_CheckConstraints k
                               WHERE CAST(SchemaSmith_StripBacktickWrapping(k.TableName) AS BINARY) = CAST(em.ObjectTable AS BINARY)
@@ -106,6 +111,33 @@ proc: BEGIN
                CanonicalText = VALUES(CanonicalText),
                EngineVersion = VALUES(EngineVersion),
                UpdatedUtc = VALUES(UpdatedUtc)');
+        PREPARE stmt FROM @v_emSql;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+
+        -- MariaDB column-level checks, recorded under the column's name, which is also the constraint's.
+        IF VERSION() LIKE '%MariaDB%' THEN
+            INSERT INTO SchemaSmith_ExpressionMap
+                (ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot, AuthoredText, CanonicalText,
+                 PlatformName, EngineVersion, CompatLevel, UpdatedUtc)
+            SELECT p_DatabaseName,
+                   SchemaSmith_StripBacktickWrapping(c.TableName),
+                   'CHECK',
+                   SchemaSmith_StripBacktickWrapping(c.ColumnName),
+                   'expression',
+                   c.CheckExpression,
+                   SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))),
+                   'MySQL', VERSION(), NULL, UTC_TIMESTAMP(3)
+              FROM _SchemaSmith_Columns c
+             WHERE IFNULL(TRIM(c.CheckExpression), '') != ''
+               AND SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) IS NOT NULL
+                ON DUPLICATE KEY UPDATE
+                   AuthoredText = VALUES(AuthoredText),
+                   CanonicalText = VALUES(CanonicalText),
+                   EngineVersion = VALUES(EngineVersion),
+                   UpdatedUtc = VALUES(UpdatedUtc);
+        END IF;
+        SET @v_emSql = 'SELECT 1';
         PREPARE stmt FROM @v_emSql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;

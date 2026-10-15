@@ -618,6 +618,8 @@ public static class ForgeKindler
                 new("SchemaSmith_ColumnOnUpdateClause.sql"),
                 new("SchemaSmith_IndexIsVisible.sql"),
                 new("SchemaSmith_ColumnSrid.sql"),
+                // NULL on MySQL; the MariaDb override reads the check MariaDB names after the column (its column-level check).
+                new("SchemaSmith_ColumnLevelCheck.sql"),
                 new("SchemaSmith_IsSystemTimePeriodColumn.sql"),
                 new("SchemaSmith_SetSystemVersioningAlterHistory.sql"),
                 new("SchemaSmith_TablePeriodsJson.sql"),

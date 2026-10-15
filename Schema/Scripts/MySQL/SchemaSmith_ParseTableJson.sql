@@ -258,6 +258,8 @@ BEGIN
         IsAutoIncrement TINYINT DEFAULT 0,
         GeneratedExpression TEXT DEFAULT NULL,
         GeneratedType VARCHAR(10) DEFAULT NULL,
+        -- MariaDB only: a column-level CHECK, named after the column by the engine. NULL on MySQL, whose model has no such key.
+        CheckExpression TEXT DEFAULT NULL,
         CharacterSet VARCHAR(50) DEFAULT NULL,
         Collation VARCHAR(100) DEFAULT NULL,
         IsInvisible TINYINT DEFAULT 0,
@@ -287,7 +289,7 @@ BEGIN
                AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables st WHERE st.TableName = SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Name'))))) THEN
                 INSERT INTO _SchemaSmith_Columns (
                     TableName, ColumnName, OrdinalPosition, DataType, IsNullable, NullableDeclared, DefaultValue, OnUpdateCurrentTimestamp,
-                    IsAutoIncrement, GeneratedExpression, GeneratedType,
+                    IsAutoIncrement, GeneratedExpression, GeneratedType, CheckExpression,
                     CharacterSet, Collation, IsInvisible, IsWithoutSystemVersioning, Srid, Comment, OldName, NewColumn, ShouldApply, ShouldApplyExpression, VariantName
                 )
                 SELECT
@@ -307,6 +309,9 @@ BEGIN
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].AutoIncrement'))), 0) AS IsAutoIncrement,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].GenerationExpression'))) AS GeneratedExpression,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Generated'))) AS GeneratedType,
+                    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                        NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].CheckExpression')))), ''),
+                        '_utf8mb4', ''), '_utf8mb3', ''), '_utf8', ''), '_latin1', ''), '_binary', ''), '\\''', '''') AS CheckExpression,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].CharacterSet'))) AS CharacterSet,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Collation'))) AS Collation,
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Invisible'))), 0) AS IsInvisible,
@@ -656,7 +661,11 @@ BEGIN
         -- suppressing it at this single build point degrades a declared column safely everywhere rather
         -- than failing the statement. #408
         CASE WHEN IsWithoutSystemVersioning = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
-             THEN ' WITHOUT SYSTEM VERSIONING' ELSE '' END
+             THEN ' WITHOUT SYSTEM VERSIONING' ELSE '' END,
+        -- MariaDB's column-level check rides the column definition, so CREATE, ADD and MODIFY all carry it and a
+        -- MODIFY without it removes it. MySQL has no column-level check and its model never supplies one.
+        CASE WHEN CheckExpression IS NOT NULL AND TRIM(CheckExpression) != '' AND VERSION() LIKE '%MariaDB%'
+             THEN CONCAT(' CHECK (', CheckExpression, ')') ELSE '' END
     );
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Calculate generated column dependencies');
