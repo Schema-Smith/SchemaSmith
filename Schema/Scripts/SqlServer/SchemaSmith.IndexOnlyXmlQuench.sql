@@ -98,8 +98,25 @@ BEGIN TRY
       [UpdateFillFactor] = CONVERT(BIT, CASE LOWER(idx.value('(UpdateFillFactor/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [ShouldApplyExpression] = idx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = idx.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
-      [Description] = COALESCE(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), idx.value('(Extensions/ExtendedProperties/MS_Description/text())[1]', 'NVARCHAR(MAX)'))
+      [Description] = COALESCE(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), idx.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'))
       ) i;
+
+  -- Each index's Extensions.ExtendedProperties bag, one row per name, for ExtendedPropertyQuench.
+  IF OBJECT_ID('tempdb..#ExtendedProperties') IS NOT NULL DROP TABLE #ExtendedProperties
+  CREATE TABLE #ExtendedProperties
+  (
+    [ObjectType] NVARCHAR(20) COLLATE DATABASE_DEFAULT NOT NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [ObjectName] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [Name] NVARCHAR(128) COLLATE DATABASE_DEFAULT NOT NULL,
+    [Value] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
+  )
+  INSERT INTO #ExtendedProperties ([ObjectType], [Schema], [TableName], [ObjectName], [Name], [Value])
+  SELECT 'index', t.[Schema], t.[Name], idx.value('(Name/text())[1]', 'NVARCHAR(500)'), p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/Indexes') AS Y(idx)
+    CROSS APPLY idx.nodes('Extensions/ExtendedProperties/p') AS P(p)
 
   -- Identify Indexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('DELETE FROM #Indexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX))
@@ -1053,7 +1070,7 @@ BEGIN TRY
         WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
 
   -- Index descriptions, once every index exists.
-  EXEC SchemaSmith.DescriptionQuench @WhatIf = @WhatIf, @IndexesOnly = 1
+  EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf = @WhatIf, @IndexesOnly = 1
 
   -- #242: record here, not in the caller -- this proc's temp tables are gone the moment it returns.
   EXEC SchemaSmith.ExpressionMapRecord @WhatIf

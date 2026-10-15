@@ -102,6 +102,24 @@ BEGIN TRY
       [LegacyDescription] NVARCHAR(MAX) '$.Extensions.ExtendedProperties.MS_Description'
       ) i;
 
+  -- Each index's Extensions.ExtendedProperties bag, one row per name, for ExtendedPropertyQuench.
+  IF OBJECT_ID('tempdb..#ExtendedProperties') IS NOT NULL DROP TABLE #ExtendedProperties
+  CREATE TABLE #ExtendedProperties
+  (
+    [ObjectType] NVARCHAR(20) COLLATE DATABASE_DEFAULT NOT NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [ObjectName] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [Name] NVARCHAR(128) COLLATE DATABASE_DEFAULT NOT NULL,
+    [Value] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
+  )
+  INSERT INTO #ExtendedProperties ([ObjectType], [Schema], [TableName], [ObjectName], [Name], [Value])
+  SELECT 'index', t.[Schema], t.[Name], i.[Name], ep.[key], ep.[value]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(t.[Indexes]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) i
+    CROSS APPLY OPENJSON(i.[Eps]) ep
+   WHERE i.[Eps] IS NOT NULL
+
   -- Identify Indexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #Indexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
     FROM #Indexes WITH (NOLOCK)
@@ -1032,7 +1050,7 @@ BEGIN TRY
         WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
 
   -- Index descriptions, once every index exists.
-  EXEC SchemaSmith.DescriptionQuench @WhatIf = @WhatIf, @IndexesOnly = 1
+  EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf = @WhatIf, @IndexesOnly = 1
 
   -- #242: record here, not in the caller -- this proc's temp tables are gone the moment it returns.
   EXEC SchemaSmith.ExpressionMapRecord @WhatIf

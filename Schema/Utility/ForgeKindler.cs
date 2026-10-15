@@ -430,7 +430,7 @@ public static class ForgeKindler
                 new("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"),
                 // Declared descriptions (MS_Description), converged once every table, column and index exists.
                 // Must precede TableQuench and IndexOnlyQuench, which CALL it.
-                new("SchemaSmith.DescriptionQuench.sql"),
+                new("SchemaSmith.ExtendedPropertyQuench.sql"),
                 // Must follow MissingIndexesAndConstraintsQuench: enabling change tracking requires a
                 // primary key, which a table created in the same run does not have until that pass.
                 new("SchemaSmith.ChangeTrackingQuench.sql"),

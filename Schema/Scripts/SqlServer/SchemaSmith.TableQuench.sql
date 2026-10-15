@@ -45,8 +45,6 @@ BEGIN TRY
   EXEC SchemaSmith.ModifiedTableQuench @ProductName = @ProductName, @WhatIf = @WhatIf, @DropUnknownIndexes = @DropUnknownIndexes, @DropTablesRemovedFromProduct = @DropTablesRemovedFromProduct, @DropSchemaBoundDependents = @DropSchemaBoundDependents,
                                        @RebuildPolicyMode = @RebuildPolicyMode, @RebuildPolicyThreshold = @RebuildPolicyThreshold, @RebuildPolicyOnOrderMismatch = @RebuildPolicyOnOrderMismatch
   EXEC SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName, @WhatIf
-  -- After the passes above: a description is a property of an object that must already exist.
-  EXEC SchemaSmith.DescriptionQuench @WhatIf
   -- Also after the indexes/constraints pass, and for a closely related reason: SQL Server refuses a
   -- FILESTREAM column unless the table already has a ROWGUIDCOL column covered by a unique CONSTRAINT.
   EXEC SchemaSmith.FileStreamColumnQuench @WhatIf
@@ -56,6 +54,9 @@ BEGIN TRY
   -- which for a table created in this same run does not exist until the line above has run.
   EXEC SchemaSmith.ChangeTrackingQuench @WhatIf
   EXEC SchemaSmith.ForeignKeyQuench @ProductName, @WhatIf
+  -- After every pass that creates an object: an extended property, a description included, belongs to something
+  -- that must already exist, and a foreign key's only exists from the line above.
+  EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf
   -- #242: last, so anything the passes above created is recorded on this run rather than churning once more.
   EXEC SchemaSmith.ExpressionMapRecord @WhatIf
   SET NOCOUNT OFF

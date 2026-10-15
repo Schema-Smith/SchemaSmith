@@ -28,7 +28,7 @@ namespace Schema.Utility
         {
             // Wrap the array under the singular item property so Json.NET emits one repeated element per entry,
             // then give the whole thing the requested root element.
-            var wrapped = "{\"" + itemElement + "\":" + modelJsonArray + "}";
+            var wrapped = "{\"" + itemElement + "\":" + EncodeExtendedProperties(modelJsonArray) + "}";
             var doc = JsonText.ToXDocument(wrapped, rootElement);
             return doc!.ToString(SaveOptions.DisableFormatting);
         }
@@ -41,7 +41,7 @@ namespace Schema.Utility
         /// <param name="rootElement">The XML root element name (e.g. <c>Table</c>).</param>
         public static string ToIngestXmlObject(string modelJsonObject, string rootElement)
         {
-            var doc = JsonText.ToXDocument(modelJsonObject, rootElement);
+            var doc = JsonText.ToXDocument(EncodeExtendedProperties(modelJsonObject), rootElement);
             return doc!.ToString(SaveOptions.DisableFormatting);
         }
 
@@ -68,6 +68,43 @@ namespace Schema.Utility
             var obj = JsonText.ParseObject(json);
             RebuildExtendedProperties(obj);
             return obj.ToString(Newtonsoft.Json.Formatting.None);
+        }
+
+        // The inverse of RebuildExtendedProperties: an extended property's name is a sysname that need not be an
+        // XML element name, so the bag goes out as <ExtendedProperties><p n="Name">Value</p>...</ExtendedProperties>,
+        // the form GenerateTableXml emits and the XML-tier parse reads.
+        private static string EncodeExtendedProperties(string json)
+        {
+            var token = JsonText.Parse(json);
+            EncodeExtendedProperties(token);
+            return token.ToString(Newtonsoft.Json.Formatting.None);
+        }
+
+        private static void EncodeExtendedProperties(JToken node)
+        {
+            switch (node)
+            {
+                case JObject o:
+                    foreach (var prop in o.Properties().ToList())
+                    {
+                        if (prop.Name == "ExtendedProperties" && prop.Value is JObject bag)
+                        {
+                            var entries = new JArray();
+                            foreach (var entry in bag.Properties())
+                                entries.Add(entry.Value.Type == JTokenType.Null
+                                    ? new JObject { ["@n"] = entry.Name }
+                                    : new JObject { ["@n"] = entry.Name, ["#text"] = entry.Value.ToString() });
+                            prop.Value = new JObject { ["p"] = entries };
+                        }
+                        else
+                            EncodeExtendedProperties(prop.Value);
+                    }
+                    break;
+                case JArray a:
+                    foreach (var item in a)
+                        EncodeExtendedProperties(item);
+                    break;
+            }
         }
 
         private static void RebuildExtendedProperties(JToken node)

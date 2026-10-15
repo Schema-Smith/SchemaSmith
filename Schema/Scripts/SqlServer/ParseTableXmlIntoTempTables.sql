@@ -75,7 +75,7 @@
          [PreventDrop] = ISNULL(CONVERT(BIT, CASE LOWER(t.value('(PreventDrop/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END), 0),
          -- Omitted stays NULL (leave the database's description alone), '' stays '' (remove it); an MS_Description
          -- left inside Extensions.ExtendedProperties, where extraction used to put it, still counts.
-         [Description] = COALESCE(t.value('(Description/text())[1]', 'NVARCHAR(MAX)'), t.value('(Extensions/ExtendedProperties/MS_Description/text())[1]', 'NVARCHAR(MAX)'))
+         [Description] = COALESCE(t.value('(Description/text())[1]', 'NVARCHAR(MAX)'), t.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'))
     INTO #TableDefinitions
     FROM @v_TableXml.nodes('/Tables/Table') AS X(t);
 
@@ -172,7 +172,7 @@
       [ShouldApplyExpression] = col.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = col.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
       [OldName] = col.value('(OldName/text())[1]', 'NVARCHAR(500)'),
-      [Description] = COALESCE(col.value('(Description/text())[1]', 'NVARCHAR(MAX)'), col.value('(Extensions/ExtendedProperties/MS_Description/text())[1]', 'NVARCHAR(MAX)'))
+      [Description] = COALESCE(col.value('(Description/text())[1]', 'NVARCHAR(MAX)'), col.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'))
       ) c;
 
   -- Identify Columns to skip based on ShouldApply expression (scoped by [_RowId]) — identical to JSON twin.
@@ -234,7 +234,7 @@
       [UpdateFillFactor] = CONVERT(BIT, CASE LOWER(idx.value('(UpdateFillFactor/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [ShouldApplyExpression] = idx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = idx.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
-      [Description] = COALESCE(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), idx.value('(Extensions/ExtendedProperties/MS_Description/text())[1]', 'NVARCHAR(MAX)'))
+      [Description] = COALESCE(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), idx.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'))
       ) i;
 
   -- Identify Indexes to skip based on ShouldApply expression (scoped by [_RowId]) — identical to JSON twin.
@@ -329,6 +329,44 @@
       [ShouldApplyExpression] = cc.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = cc.value('(VariantName/text())[1]', 'NVARCHAR(128)')
       ) c;
+
+  -- Every component's Extensions.ExtendedProperties bag, one row per name. The ingest XML carries the bag as
+  -- <ExtendedProperties><p n="Name">Value</p>...</ExtendedProperties>, because a property's name need not be an
+  -- element name. ExtendedPropertyQuench matches the rows to the components that survive the ShouldApply pruning.
+  IF OBJECT_ID('tempdb..#ExtendedProperties') IS NOT NULL DROP TABLE #ExtendedProperties
+  CREATE TABLE #ExtendedProperties
+  (
+    [ObjectType] NVARCHAR(20) COLLATE DATABASE_DEFAULT NOT NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [ObjectName] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [Name] NVARCHAR(128) COLLATE DATABASE_DEFAULT NOT NULL,
+    [Value] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
+  )
+  INSERT INTO #ExtendedProperties ([ObjectType], [Schema], [TableName], [ObjectName], [Name], [Value])
+  SELECT 'table', t.[Schema], t.[Name], NULL, p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/Extensions/ExtendedProperties/p') AS P(p)
+  UNION ALL
+  SELECT 'column', t.[Schema], t.[Name], col.value('(Name/text())[1]', 'NVARCHAR(500)'), p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/Columns') AS Y(col)
+    CROSS APPLY col.nodes('Extensions/ExtendedProperties/p') AS P(p)
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], idx.value('(Name/text())[1]', 'NVARCHAR(500)'), p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/Indexes') AS Y(idx)
+    CROSS APPLY idx.nodes('Extensions/ExtendedProperties/p') AS P(p)
+  UNION ALL
+  SELECT 'foreignKey', t.[Schema], t.[Name], fk.value('(Name/text())[1]', 'NVARCHAR(500)'), p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/ForeignKeys') AS Y(fk)
+    CROSS APPLY fk.nodes('Extensions/ExtendedProperties/p') AS P(p)
+  UNION ALL
+  SELECT 'constraint', t.[Schema], t.[Name], cc.value('(Name/text())[1]', 'NVARCHAR(500)'), p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/CheckConstraints') AS Y(cc)
+    CROSS APPLY cc.nodes('Extensions/ExtendedProperties/p') AS P(p)
 
   -- Identify CheckConstraints to skip based on ShouldApply expression (scoped by [_RowId]) — identical to JSON twin.
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'DELETE FROM #CheckConstraints WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');'

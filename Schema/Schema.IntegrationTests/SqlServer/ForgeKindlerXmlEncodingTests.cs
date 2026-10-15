@@ -344,7 +344,7 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
                 Assert.That(Ep(", N'INDEX', N'IX_XmlDesc_V'"), Is.EqualTo("the lookup"));
             });
 
-            // An extended property that is not a description is extraction-only: it comes back from the database, not from the package.
+            // A property added outside the package comes back in the bag on extraction, beside the description.
             cmd.CommandText = "EXEC sys.sp_addextendedproperty @name=N'OwningTeam', @value=N'Billing', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'TABLE', @level1name=N'XmlDesc', @level2type=N'COLUMN', @level2name=N'V'";
             cmd.ExecuteNonQuery();
             cmd.CommandText = "EXEC SchemaSmith.GenerateTableXml @p_Schema='dbo', @p_Table='XmlDesc'";
@@ -368,6 +368,56 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
         finally
         {
             DropTables(cmd, "dbo.XmlDesc");
+        }
+
+        conn.Close();
+    }
+
+    [Test]
+    public void TableQuench_XmlTier_AppliesExtendedPropertyBags_IncludingASpacedName()
+    {
+        // The ingest XML carries each bag as <ExtendedProperties><p n="Name">Value</p></ExtendedProperties>, because
+        // a property's name need not be an element name, and the XML twin shreds that form on every component.
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            var json = "[{\"Schema\": \"[dbo]\", \"Name\": \"[XmlEp]\", \"Extensions\": {\"ExtendedProperties\": {\"My Note\": \"a & b < c\", \"OwningTeam\": \"Billing\"}},"
+                + "\"Columns\": ["
+                + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false, \"Extensions\": {\"ExtendedProperties\": {\"Classification\": \"Key\"}}},"
+                + "{\"Name\": \"[ParentId]\", \"DataType\": \"INT\", \"Nullable\": true},"
+                + "{\"Name\": \"[Qty]\", \"DataType\": \"INT\", \"Nullable\": true}"
+                + "],"
+                + "\"Indexes\": [{\"Name\": \"[PK_XmlEp]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"},"
+                + "{\"Name\": \"[IX_XmlEp_Qty]\", \"IndexColumns\": \"[Qty]\", \"Extensions\": {\"ExtendedProperties\": {\"IdxNote\": \"hot\"}}}],"
+                + "\"ForeignKeys\": [{\"Name\": \"[FK_XmlEp_Parent]\", \"Columns\": \"[ParentId]\", \"RelatedTableSchema\": \"[dbo]\", \"RelatedTable\": \"[XmlEp]\", \"RelatedColumns\": \"[Id]\", \"Extensions\": {\"ExtendedProperties\": {\"FkNote\": \"self\"}}}],"
+                + "\"CheckConstraints\": [{\"Name\": \"[CK_XmlEp_Qty]\", \"Expression\": \"[Qty] >= 0\", \"Extensions\": {\"ExtendedProperties\": {\"CkNote\": \"non-negative\"}}}]"
+                + "}]";
+            var xml = ModelXmlSerializer.ToIngestXml(json, "Tables", "Table");
+            Assert.That(xml, Does.Contain("<p n=\"My Note\">"), "the ingest encoding must carry the name as an attribute");
+            cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlEp', @TableDefinitions = N'{xml.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+
+            string Ep(string name, string level2)
+            {
+                cmd.CommandText = $"SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'{name}', N'SCHEMA', N'dbo', N'TABLE', N'XmlEp'{level2})";
+                return cmd.ExecuteScalar() as string;
+            }
+            Assert.Multiple(() =>
+            {
+                Assert.That(Ep("My Note", ", default, default"), Is.EqualTo("a & b < c"));
+                Assert.That(Ep("OwningTeam", ", default, default"), Is.EqualTo("Billing"));
+                Assert.That(Ep("Classification", ", N'COLUMN', N'Id'"), Is.EqualTo("Key"));
+                Assert.That(Ep("IdxNote", ", N'INDEX', N'IX_XmlEp_Qty'"), Is.EqualTo("hot"));
+                Assert.That(Ep("FkNote", ", N'CONSTRAINT', N'FK_XmlEp_Parent'"), Is.EqualTo("self"));
+                Assert.That(Ep("CkNote", ", N'CONSTRAINT', N'CK_XmlEp_Qty'"), Is.EqualTo("non-negative"));
+            });
+        }
+        finally
+        {
+            DropTables(cmd, "dbo.XmlEp");
         }
 
         conn.Close();

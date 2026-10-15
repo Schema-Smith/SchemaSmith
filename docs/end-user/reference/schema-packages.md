@@ -1929,9 +1929,24 @@ A table, column, index, indexed view, materialized view, sequence, enum type and
 - **SQL Server and PostgreSQL:** an omitted `Description` is not managed. Whatever the database has stays, so a package that never mentions descriptions never touches the ones a DBA wrote, and a re-created indexed or materialized view keeps the comment it had.
 - **MySQL and MariaDB:** the comment is part of the object's definition, so an omitted `Description` clears a comment the server has, exactly as the engine's own `CREATE TABLE` would. This is how `Comment` has always behaved there.
 
-**Extraction writes `Description`.** SchemaTongs reads the description back under that key on every engine. On SQL Server, `MS_Description` is the one extended property with a key of its own; every other extended property on a table, column or index is still recorded under `Extensions.ExtendedProperties`, where SchemaQuench reads it as custom metadata and does not deploy it.
+**Extraction writes `Description`.** SchemaTongs reads the description back under that key on every engine. On SQL Server, `MS_Description` is the one extended property with a key of its own; every other extended property is recorded under `Extensions.ExtendedProperties` and deploys from there (below).
 
 **Older spellings still deploy.** `Comment` on a MySQL or MariaDB table, column, index, full-text index or event, and a SQL Server `MS_Description` left inside `Extensions.ExtendedProperties` (where extraction used to put it), are read as the description when `Description` is absent. `--Validate` reports each (`SS-DESC-002`) and stops a package whose two spellings disagree (`SS-DESC-001`), since the deploy would apply `Description` and ignore the other. Re-extracting the package rewrites the old spelling.
+
+**Extended properties (SQL Server).** Every other extended property lives in the component's `Extensions.ExtendedProperties`, keyed by name, on a table, column, index, foreign key or check constraint:
+
+```json
+{
+  "Name": "[Orders]",
+  "Extensions": { "ExtendedProperties": { "OwningTeam": "Billing", "Data Classification": "Confidential" } },
+  "Columns": [
+    { "Name": "[CardNumber]", "DataType": "VARCHAR(19)", "Nullable": true,
+      "Extensions": { "ExtendedProperties": { "Data Classification": "PCI" } } }
+  ]
+}
+```
+
+A declared property is added, a changed value is updated in place, and `""` or `null` removes it. A name the package does not mention is left alone, as an omitted `Description` is, so a package that lists only `OwningTeam` never touches the properties a DBA added. `MS_Description` on a table, column or index is `Description` and does not belong here; a foreign key or check constraint has no `Description` key, so its `MS_Description` is set from here like any other name. The names SchemaSmith stamps for itself (`ProductName`, `PreventDrop`, `SchemaSmith_SuspendedHistory`) are never taken from a package. SchemaTongs writes every property it finds, so a re-extracted package carries what the database has. Statistics cannot carry an extended property on any version, and a check constraint on a single column is extracted as that column's `CheckExpression`, which has none.
 
 ---
 
