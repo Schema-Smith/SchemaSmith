@@ -44,6 +44,7 @@ DECLARE
   v_TableRaw TEXT;
   v_Qualified TEXT;
   v_ObjectName TEXT;
+  v_PreserveSql TEXT;
   v_Oid OID;
   v_BlockedReason TEXT;
   v_ShadowRaw TEXT;
@@ -424,6 +425,10 @@ BEGIN
   -- name with its rows and its inbound keys.
   v_DropOldSql := 'DROP TABLE ' || v_OldQualified || ';' || COALESCE(CHR(10) || v_SeqRenameSql, '');
 
+  -- What the swap strips: the ACL, owner and comments sit on the relation, and the one renamed out is the one that
+  -- has them. Captured now, put back on the replacement after the swap.
+  v_PreserveSql := "SchemaSmith"."CapturePermissions"(v_SchemaRaw, v_TableRaw, 'TABLE');
+
   ----------------------------------------------------------------------------------------------------
   -- 7. WHATIF -- print, execute nothing.
   ----------------------------------------------------------------------------------------------------
@@ -436,6 +441,7 @@ BEGIN
     CALL "SchemaSmith"."ExecuteOrDebug"(v_SeqRestoreSql, TRUE);
     CALL "SchemaSmith"."ExecuteOrDebug"(v_SwapSql, TRUE);
     CALL "SchemaSmith"."ExecuteOrDebug"(v_DropOldSql, TRUE);
+    CALL "SchemaSmith"."ReapplyPermissions"(v_PreserveSql, 'table', v_ObjectName, TRUE);
 
     INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
       VALUES (pg_backend_pid(), 'table', v_ObjectName, 'wouldRebuild');
@@ -483,6 +489,7 @@ BEGIN
   CALL "SchemaSmith"."ExecuteOrDebug"(v_SeqRestoreSql, FALSE);
   CALL "SchemaSmith"."ExecuteOrDebug"(v_SwapSql, FALSE);
   CALL "SchemaSmith"."ExecuteOrDebug"(v_DropOldSql, FALSE);
+  CALL "SchemaSmith"."ReapplyPermissions"(v_PreserveSql, 'table', v_ObjectName, FALSE);
 
   INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
     VALUES (pg_backend_pid(), 'table', v_ObjectName, 'rebuilt');

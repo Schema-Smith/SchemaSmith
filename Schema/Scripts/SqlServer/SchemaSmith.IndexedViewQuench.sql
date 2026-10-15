@@ -193,6 +193,9 @@ BEGIN
     DECLARE @defn NVARCHAR(MAX), @indexJson NVARCHAR(MAX), @variantName NVARCHAR(128);
     DECLARE @existingDef NVARCHAR(MAX), @existingObjectId INT;
     DECLARE @needsRecreate BIT, @needsIndexUpdate BIT;
+    -- What DROP VIEW takes with it and the package does not carry: permissions and extended properties, put back
+    -- once the view is created again.
+    DECLARE @preserveSql NVARCHAR(MAX), @ivQualified NVARCHAR(300);
 
     DECLARE view_cursor CURSOR LOCAL FAST_FORWARD FOR
         SELECT v.ViewSchema, v.ViewName, v.Definition, v.IndexJson, v.VariantName FROM @Views v;
@@ -203,6 +206,8 @@ BEGIN
     BEGIN
         SET @needsRecreate = 0;
         SET @needsIndexUpdate = 0;
+        SET @preserveSql = NULL;
+        SET @ivQualified = QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName);
         SET @existingObjectId = NULL;
 
         -- Check if view exists
@@ -246,6 +251,7 @@ BEGIN
                 FROM sys.indexes i WHERE i.object_id = @existingObjectId AND i.type = 1;
                 IF @clDropSql IS NOT NULL AND @WhatIf = 0 EXEC sp_executesql @clDropSql;
 
+                EXEC SchemaSmith.CapturePermissions @Schema = @ivSchema, @Name = @ivName, @Script = @preserveSql OUTPUT;
                 SET @sql = 'DROP VIEW ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName);
                 IF @WhatIf = 0 EXEC sp_executesql @sql;
             END
@@ -271,6 +277,7 @@ BEGIN
                     SELECT 1 FROM sys.extended_properties WHERE major_id = @newObjectId AND minor_id = 0 AND name = 'SchemaSmith_Product')
                     EXEC sp_addextendedproperty 'SchemaSmith_Product', @ProductName, 'SCHEMA', @ivSchema, 'VIEW', @ivName;
             END;
+            EXEC SchemaSmith.ReapplyPermissions @Script = @preserveSql, @ObjectType = 'view', @ObjectName = @ivQualified, @WhatIf = @WhatIf;
         END;
 
         -- Create/update indexes

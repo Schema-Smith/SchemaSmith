@@ -785,4 +785,54 @@ END $$;";
 
         conn.Close();
     }
+
+    [Test]
+    public void DefinitionChange_KeepsPrivilegesOwnerAndComments_OnTheRecreatedView()
+    {
+        var role = "mv_perm_" + Guid.NewGuid().ToString("N")[..8];
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            EnsureViewDropped(cmd);
+            EnsureViewExists(cmd);
+            cmd.CommandText = $@"
+CREATE ROLE ""{role}"" NOLOGIN;
+GRANT SELECT ON public.mv_test TO ""{role}"";
+COMMENT ON MATERIALIZED VIEW public.mv_test IS 'kept view';
+COMMENT ON COLUMN public.mv_test.id IS 'kept column';
+ALTER MATERIALIZED VIEW public.mv_test OWNER TO ""{role}"";";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "SELECT 'public.mv_test'::regclass::oid::bigint";
+            var oidBefore = (long)cmd.ExecuteScalar()!;
+
+            RunMaterializedViewQuench(cmd, ViewDefinitionWithWhereClause());
+
+            cmd.CommandText = "SELECT 'public.mv_test'::regclass::oid::bigint";
+            Assert.That((long)cmd.ExecuteScalar()!, Is.Not.EqualTo(oidBefore), "A definition change drops and re-creates the view; without that the assertions below are vacuous.");
+            Assert.Multiple(() =>
+            {
+                cmd.CommandText = $"SELECT has_table_privilege('{role}', 'public.mv_test', 'SELECT')";
+                Assert.That(cmd.ExecuteScalar() as bool?, Is.True, "DROP MATERIALIZED VIEW takes the ACL with it, so the re-created view has to get the grant back.");
+                cmd.CommandText = "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'public.mv_test'::regclass";
+                Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo(role), "The view is re-created by the deploying role, so the original owner has to be put back.");
+                cmd.CommandText = "SELECT obj_description('public.mv_test'::regclass, 'pg_class')";
+                Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("kept view"), "the view comment is not in the package, so the re-create has to carry it");
+                cmd.CommandText = "SELECT col_description('public.mv_test'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.mv_test'::regclass AND attname = 'id'))";
+                Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("kept column"), "a column comment has to come across too");
+            });
+        }
+        finally
+        {
+            try
+            {
+                cmd.CommandText = $@"DROP OWNED BY ""{role}""; DROP ROLE IF EXISTS ""{role}"";";
+                cmd.ExecuteNonQuery();
+            }
+            catch (NpgsqlException) { /* best-effort cleanup must not mask a test result */ }
+        }
+        conn.Close();
+    }
 }

@@ -297,6 +297,11 @@ BEGIN
 
   DECLARE @v_DropOldSql NVARCHAR(MAX) = 'DROP TABLE ' + @v_OldQualified + ';'
 
+  -- What the swap strips: permissions, an owner and extended properties sit on the object, and the object renamed
+  -- out is the one that has them. Captured now, put back on the replacement after the swap.
+  DECLARE @v_PreserveSql NVARCHAR(MAX)
+  EXEC SchemaSmith.CapturePermissions @Schema = @v_SchemaRaw, @Name = @v_TableRaw, @Script = @v_PreserveSql OUTPUT
+
   ----------------------------------------------------------------------------------------------------
   -- 7. WHATIF -- print, execute nothing.
   ----------------------------------------------------------------------------------------------------
@@ -309,6 +314,7 @@ BEGIN
     EXEC SchemaSmith.PrintWithNoWait @v_ReseedSql
     EXEC SchemaSmith.PrintWithNoWait @v_SwapSql
     EXEC SchemaSmith.PrintWithNoWait @v_DropOldSql
+    EXEC SchemaSmith.ReapplyPermissions @Script = @v_PreserveSql, @ObjectType = 'table', @ObjectName = @v_Qualified, @WhatIf = 1
 
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
       VALUES (@@SPID, 'table', @v_Qualified, 'wouldRebuild')
@@ -382,6 +388,7 @@ BEGIN
 
     EXEC(@v_SwapSql)
     EXEC(@v_DropOldSql)
+    EXEC SchemaSmith.ReapplyPermissions @Script = @v_PreserveSql, @ObjectType = 'table', @ObjectName = @v_Qualified, @WhatIf = 0
 
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
       VALUES (@@SPID, 'table', @v_Qualified, 'rebuilt')

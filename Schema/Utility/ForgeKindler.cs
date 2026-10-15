@@ -407,6 +407,11 @@ public static class ForgeKindler
                 new("SchemaSmith.PrintWithNoWait.sql"),
                 new("SchemaSmith.RecordWouldChanges.sql"),
                 new("SchemaSmith.CdcPreflight.sql"),
+                // What a drop or a swap takes off an object and the package does not carry. Must follow
+                // PrintWithNoWait (the WhatIf output) and precede RebuildTable and the view quench, which call the
+                // pair around the drop.
+                new("SchemaSmith.CapturePermissions.sql"),
+                new("SchemaSmith.ReapplyPermissions.sql"),
                 // Must follow fn_RebuildBlockedReason (it calls it to refuse) and PrintWithNoWait (its
                 // WhatIf output), and precede the quench procedures that will elect a rebuild.
                 new("SchemaSmith.RebuildTable.sql"),
@@ -473,6 +478,10 @@ public static class ForgeKindler
                 new("SchemaSmith.StatisticsExpressionColumns.sql"),
                 new("SchemaSmith.StripLeadingSelect.sql"),
                 new("SchemaSmith.RebuildBlockedReason.sql"),
+                // What a drop or a swap takes off an object and the package does not carry. Must follow
+                // ExecuteOrDebug and precede RebuildTable and MaterializedViewQuench, which call the pair.
+                new("SchemaSmith.CapturePermissions.sql"),
+                new("SchemaSmith.ReapplyPermissions.sql"),
                 // Must follow RebuildBlockedReason (it calls it to refuse) and ExecuteOrDebug (its
                 // execute/preview path), and precede the quench procedures that will elect a rebuild.
                 new("SchemaSmith.RebuildTable.sql"),
@@ -606,6 +615,9 @@ public static class ForgeKindler
                 new("SchemaSmith_DropCheckClause.sql"),
                 new("SchemaSmith_IndexInvisibleClause.sql"),
                 new("SchemaSmith_RebuildBlockedReason.sql"),
+                // The grants a DROP takes off a routine, captured and put back around a script that drops it.
+                new("SchemaSmith_CapturePermissions.sql"),
+                new("SchemaSmith_ReapplyPermissions.sql"),
                 // Must follow SchemaSmith_RebuildBlockedReason (it calls it to refuse) and the identifier
                 // helpers above, and precede the quench procedures that will elect a rebuild.
                 new("SchemaSmith_RebuildTable.sql"),

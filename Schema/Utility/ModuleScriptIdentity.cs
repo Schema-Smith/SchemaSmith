@@ -40,6 +40,15 @@ public sealed class ModuleScriptIdentity
         $@"(?<!\w)CREATE\s+(OR\s+REPLACE\s+)?(ALGORITHM\s*=\s*\w+\s+)?(DEFINER\s*=\s*\S+\s+)?(SQL\s+SECURITY\s+\w+\s+)?(AGGREGATE\s+)?(?<kind>PROCEDURE|FUNCTION|VIEW|TRIGGER|EVENT)\s+(?<name>{MySqlToken}(\s*\.\s*{MySqlToken})?)(?<rest>[\s\S]*)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex StringLiteral = new(@"N?'(?:[^']|'')*'", RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex SqlServerDrop = new(
+        $@"(?<!\w)DROP\s+(?<kind>PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\s+(?:IF\s+EXISTS\s+)?(?<name>{SqlServerToken}(\s*\.\s*{SqlServerToken})?)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex PostgreSqlDrop = new(
+        $@"(?<!\w)DROP\s+(?<kind>PROCEDURE|FUNCTION|VIEW|TRIGGER)\s+(?:IF\s+EXISTS\s+)?(?<name>{PostgreSqlToken}(\s*\.\s*{PostgreSqlToken})?)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex MySqlDrop = new(
+        $@"(?<!\w)DROP\s+(?<kind>PROCEDURE|FUNCTION|VIEW|TRIGGER|EVENT)\s+(?:IF\s+EXISTS\s+)?(?<name>{MySqlToken}(\s*\.\s*{MySqlToken})?)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public static ModuleScriptIdentity Parse(IReadOnlyList<string> batches, Platform platform)
     {
@@ -60,14 +69,7 @@ public sealed class ModuleScriptIdentity
         if (matches.Count != 1) return null;
 
         var match = matches[0];
-        var kind = match.Groups["kind"].Value.ToUpperInvariant() switch
-        {
-            "PROC" or "PROCEDURE" => ModuleKind.Procedure,
-            "FUNCTION" => ModuleKind.Function,
-            "VIEW" => ModuleKind.View,
-            "TRIGGER" => ModuleKind.Trigger,
-            _ => ModuleKind.Event
-        };
+        var kind = KindOf(match.Groups["kind"].Value);
         var (schema, name) = SplitName(match.Groups["name"].Value, basePlatform);
         string tableSchema = null, tableName = null;
         if (kind == ModuleKind.Trigger)
@@ -80,6 +82,41 @@ public sealed class ModuleScriptIdentity
 
         return new ModuleScriptIdentity { Kind = kind, Schema = schema, Name = name, TableSchema = tableSchema, TableName = tableName };
     }
+
+    /// <summary>
+    /// True when the script drops the module it creates. Such a script takes the module's grants with it, so the
+    /// quench captures them before it runs and puts them back after. String literals are left in on purpose: a DROP
+    /// inside an EXEC string still drops, and capturing when nothing was lost costs nothing, while missing a drop
+    /// loses the grants.
+    /// </summary>
+    public static bool DropsModule(IReadOnlyList<string> batches, Platform platform)
+    {
+        var identity = Parse(batches, platform);
+        if (identity == null) return false;
+        var basePlatform = platform.GetBasePlatform();
+        var pattern = basePlatform switch
+        {
+            Platform.SqlServer => SqlServerDrop,
+            Platform.PostgreSQL => PostgreSqlDrop,
+            Platform.MySQL => MySqlDrop,
+            _ => null
+        };
+        if (pattern == null) return false;
+        // A quoted PostgreSQL identifier keeps its case; the other engines do not distinguish.
+        var comparison = basePlatform == Platform.PostgreSQL ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        return batches.SelectMany(b => pattern.Matches(b ?? "").Cast<Match>())
+            .Any(m => KindOf(m.Groups["kind"].Value) == identity.Kind
+                      && string.Equals(SplitName(m.Groups["name"].Value, basePlatform).Name, identity.Name, comparison));
+    }
+
+    private static ModuleKind KindOf(string word) => word.ToUpperInvariant() switch
+    {
+        "PROC" or "PROCEDURE" => ModuleKind.Procedure,
+        "FUNCTION" => ModuleKind.Function,
+        "VIEW" => ModuleKind.View,
+        "TRIGGER" => ModuleKind.Trigger,
+        _ => ModuleKind.Event
+    };
 
     private static (string Schema, string Name) SplitName(string qualified, Platform basePlatform)
     {

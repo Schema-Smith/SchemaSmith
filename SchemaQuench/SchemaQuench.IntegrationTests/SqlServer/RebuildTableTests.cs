@@ -534,4 +534,105 @@ DELETE FROM SchemaSmith.ChangeAudit WHERE ObjectName = '[dbo].[RebuildWhatIf]';"
         Exec(cmd, "DROP TABLE IF EXISTS dbo.RebuildWhatIf");
         conn.Close();
     }
+
+    // ---- permissions and extended properties survive ----------------------
+
+    private static List<string> GrantsFor(IDbCommand cmd, string table, string user) => Strings(cmd, $@"
+SELECT p.state_desc COLLATE DATABASE_DEFAULT + ' ' + p.permission_name COLLATE DATABASE_DEFAULT + ISNULL(' (' + c.name COLLATE DATABASE_DEFAULT + ')', '') + ' TO ' + USER_NAME(p.grantee_principal_id) COLLATE DATABASE_DEFAULT
+  FROM sys.database_permissions p
+  LEFT JOIN sys.columns c ON c.object_id = p.major_id AND c.column_id = p.minor_id
+ WHERE p.class = 1 AND p.major_id = OBJECT_ID('dbo.{table}') AND p.grantee_principal_id = USER_ID('{user}')
+ ORDER BY 1");
+
+    private static List<string> ExtendedPropertiesOf(IDbCommand cmd, string table) => Strings(cmd, $@"
+SELECT ISNULL(c.name COLLATE DATABASE_DEFAULT + ':', '') + ep.name COLLATE DATABASE_DEFAULT + '=' + CONVERT(NVARCHAR(200), ep.value) COLLATE DATABASE_DEFAULT
+  FROM sys.extended_properties ep
+  LEFT JOIN sys.columns c ON c.object_id = ep.major_id AND c.column_id = ep.minor_id
+ WHERE ep.class = 1 AND ep.major_id = OBJECT_ID('dbo.{table}') AND ep.name <> 'SchemaSmith_Product'
+ ORDER BY 1");
+
+    private static int AuditRows(IDbCommand cmd, string table, string action) =>
+        Int(cmd, $"SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE ObjectName = '[dbo].[{table}]' AND ActionType = '{action}'");
+
+    private static string TwoColumnJson(string table) => $$"""
+        {
+            "Schema": "[dbo]",
+            "Name": "[{{table}}]",
+            "Columns": [
+                {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                {"Name": "[Val]", "DataType": "NVARCHAR(50)", "Nullable": true}
+            ]
+        }
+        """;
+
+    private static void CreateGrantedTable(IDbCommand cmd, string table)
+    {
+        Exec(cmd, $@"
+IF USER_ID('rb_perm_user') IS NULL CREATE USER rb_perm_user WITHOUT LOGIN;
+DROP TABLE IF EXISTS dbo.{table};
+DELETE FROM SchemaSmith.ChangeAudit WHERE ObjectName = '[dbo].[{table}]';
+CREATE TABLE dbo.{table} (Id INT NOT NULL, Val NVARCHAR(50) NULL);
+INSERT INTO dbo.{table} (Id, Val) VALUES (1, 'one');
+GRANT SELECT ON dbo.{table} TO rb_perm_user;
+GRANT INSERT ON dbo.{table} TO rb_perm_user WITH GRANT OPTION;
+DENY DELETE ON dbo.{table} TO rb_perm_user;
+GRANT UPDATE ([Val]) ON dbo.{table} TO rb_perm_user;
+EXEC sp_addextendedproperty 'MS_Description', 'kept table', 'SCHEMA', 'dbo', 'TABLE', '{table}';
+EXEC sp_addextendedproperty 'MS_Description', 'kept column', 'SCHEMA', 'dbo', 'TABLE', '{table}', 'COLUMN', 'Val';");
+    }
+
+    [Test]
+    public void Rebuild_KeepsPermissionsAndExtendedProperties_AndAuditsTheReapply()
+    {
+        using var conn = OpenMainDb();
+        using var cmd = conn.CreateCommand();
+        CreateGrantedTable(cmd, "RebuildKeepsGrants");
+
+        var grantsBefore = GrantsFor(cmd, "RebuildKeepsGrants", "rb_perm_user");
+        var propertiesBefore = ExtendedPropertiesOf(cmd, "RebuildKeepsGrants");
+        Assert.Multiple(() =>
+        {
+            Assert.That(grantsBefore, Has.Count.EqualTo(4), "setup: the four permissions must be on the table before the rebuild, or the comparison below is vacuous");
+            Assert.That(propertiesBefore, Has.Count.EqualTo(2), "setup: both extended properties must be on the table before the rebuild");
+        });
+        var objectIdBefore = Int(cmd, "SELECT OBJECT_ID('dbo.RebuildKeepsGrants')");
+
+        Rebuild(cmd, TwoColumnJson("RebuildKeepsGrants"), "RebuildKeepsGrants");
+
+        Assert.That(Int(cmd, "SELECT OBJECT_ID('dbo.RebuildKeepsGrants')"), Is.Not.EqualTo(objectIdBefore),
+            "The table must actually have been replaced, or everything below passes on a procedure that did nothing.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(GrantsFor(cmd, "RebuildKeepsGrants", "rb_perm_user"), Is.EqualTo(grantsBefore),
+                "sp_rename keeps a permission on the renamed-out original, so the replacement starts with none: every GRANT, "
+                + "DENY, grant option and column permission has to be put back on it.");
+            Assert.That(ExtendedPropertiesOf(cmd, "RebuildKeepsGrants"), Is.EqualTo(propertiesBefore),
+                "Extended properties on the table and its columns are not in the package, so the rebuild is the only thing that can carry them.");
+            Assert.That(AuditRows(cmd, "RebuildKeepsGrants", "reapplied"), Is.EqualTo(1),
+                "The run manifest has to say the permissions were put back.");
+        });
+    }
+
+    [Test]
+    public void Rebuild_WhatIf_ReportsThePermissionsItWouldReapply_AndTouchesNothing()
+    {
+        using var conn = OpenMainDb();
+        using var cmd = conn.CreateCommand();
+        CreateGrantedTable(cmd, "RebuildWhatIfGrants");
+        var grantsBefore = GrantsFor(cmd, "RebuildWhatIfGrants", "rb_perm_user");
+        var propertiesBefore = ExtendedPropertiesOf(cmd, "RebuildWhatIfGrants");
+        var objectIdBefore = Int(cmd, "SELECT OBJECT_ID('dbo.RebuildWhatIfGrants')");
+
+        Rebuild(cmd, TwoColumnJson("RebuildWhatIfGrants"), "RebuildWhatIfGrants", whatIf: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Int(cmd, "SELECT OBJECT_ID('dbo.RebuildWhatIfGrants')"), Is.EqualTo(objectIdBefore), "WhatIf must not rebuild");
+            Assert.That(GrantsFor(cmd, "RebuildWhatIfGrants", "rb_perm_user"), Is.EqualTo(grantsBefore), "WhatIf must not touch a permission");
+            Assert.That(ExtendedPropertiesOf(cmd, "RebuildWhatIfGrants"), Is.EqualTo(propertiesBefore), "WhatIf must not touch an extended property");
+            Assert.That(AuditRows(cmd, "RebuildWhatIfGrants", "wouldReapply"), Is.EqualTo(1),
+                "The preview lists the permissions the real run would put back, from the same capture.");
+            Assert.That(AuditRows(cmd, "RebuildWhatIfGrants", "reapplied"), Is.EqualTo(0), "WhatIf records nothing as done");
+        });
+    }
 }

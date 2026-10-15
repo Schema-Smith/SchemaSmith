@@ -2427,7 +2427,10 @@ SET NOCOUNT ON
                     continue;
                 }
 
+                var captured = CaptureModulePermissions(destCmd, script);
                 QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
+                if (captured != null && script.HasBeenQuenched && script.Error == null && script.Outcome == ScriptOutcome.Applied)
+                    ReapplyModulePermissions(destCmd, script, captured);
                 if (script.HasBeenQuenched)
                 {
                     _checkpointing.MarkScriptCompleted(DbScope, slot.ToString(), script.LogPath);
@@ -2467,7 +2470,12 @@ SET NOCOUNT ON
         {
             lastQuenchCount = templateObjects.Count(s => !s.HasBeenQuenched);
             foreach (var script in templateObjects.Where(s => !s.HasBeenQuenched))
+            {
+                var captured = CaptureModulePermissions(destCmd, script);
                 QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
+                if (captured != null && script.HasBeenQuenched && script.Error == null && script.Outcome == ScriptOutcome.Applied)
+                    ReapplyModulePermissions(destCmd, script, captured);
+            }
         }
 
         _debugFileLocation = "";
@@ -2536,6 +2544,89 @@ SET NOCOUNT ON
             return false;
         }
     }
+
+    #region Permissions around a dropped module
+
+    // A script that drops its module takes the module's grants with it (and, on SQL Server, its extended properties).
+    // They are captured before the script runs and put back after it; under WhatIf the capture is only reported. The
+    // first capture is kept per script, because a retry pass after a failed attempt may find the module already gone.
+    private readonly Dictionary<SqlScript, string> _capturedModulePermissions = new();
+
+    private string CaptureModulePermissions(IDbCommand destCmd, SqlScript script)
+    {
+        if (destCmd == null || !ModuleScriptIdentity.DropsModule(script.Batches, _product.Platform)) return null;
+        if (_capturedModulePermissions.TryGetValue(script, out var kept)) return kept;
+        var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
+        if (identity.Kind is not (ModuleKind.Procedure or ModuleKind.Function or ModuleKind.View)) return null;
+        var basePlatform = _product.Platform.GetBasePlatform();
+        // MySQL keys a view's grants by name, so a dropped view keeps them with no help.
+        if (basePlatform == Platform.MySQL && identity.Kind == ModuleKind.View) return null;
+        try
+        {
+            destCmd.CommandText = basePlatform switch
+            {
+                Platform.SqlServer => $"DECLARE @s NVARCHAR(MAX); EXEC SchemaSmith.CapturePermissions @Schema = N'{EscapeSqlLiteral(identity.Schema)}', @Name = N'{EscapeSqlLiteral(identity.Name)}', @Script = @s OUTPUT; SELECT @s;",
+                Platform.PostgreSQL => $"SELECT \"SchemaSmith\".\"CapturePermissions\"('{EscapeSqlLiteral(identity.Schema)}', '{EscapeSqlLiteral(identity.Name)}', '{ModuleKindWord(identity.Kind)}')",
+                _ => $"CALL SchemaSmith_CapturePermissions('{EscapeMySqlLiteral(_databaseName)}', '{EscapeMySqlLiteral(identity.Name)}', '{ModuleKindWord(identity.Kind)}')"
+            };
+            var value = destCmd.ExecuteScalar();
+            var captured = value == null || value is DBNull ? null : value.ToString();
+            if (captured != null) _capturedModulePermissions[script] = captured;
+            return captured;
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // No capture procedure (kindling suppressed on a database that never had one): the script runs as before.
+            return null;
+        }
+    }
+
+    private void ReapplyModulePermissions(IDbCommand destCmd, SqlScript script, string captured)
+    {
+        var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
+        var objectType = identity.Kind.ToString().ToLowerInvariant();
+        var objectName = ModuleAuditName(identity);
+        try
+        {
+            destCmd.CommandText = _product.Platform.GetBasePlatform() switch
+            {
+                Platform.SqlServer => $"EXEC SchemaSmith.ReapplyPermissions @Script = N'{EscapeSqlLiteral(captured)}', @ObjectType = N'{objectType}', @ObjectName = N'{EscapeSqlLiteral(objectName)}', @WhatIf = 0",
+                Platform.PostgreSQL => $"CALL \"SchemaSmith\".\"ReapplyPermissions\"('{EscapeSqlLiteral(captured)}', '{objectType}', '{EscapeSqlLiteral(objectName)}', FALSE)",
+                _ => $"CALL SchemaSmith_ReapplyPermissions('{EscapeMySqlLiteral(captured)}', '{objectType}', '{EscapeMySqlLiteral(objectName)}', 0)"
+            };
+            destCmd.ExecuteNonQuery();
+            _capturedModulePermissions.Remove(script);
+            // The procedure records 'reapplied' on this session, which is not the one the table work is drained from.
+            DrainChangeAudit(destCmd);
+        }
+        catch (System.Data.Common.DbException ex)
+        {
+            script.Error = new Exception($"The script applied, but the grants its DROP took off {objectName} could not be put back: {ex.Message}", ex);
+        }
+    }
+
+    private string ModuleAuditName(ModuleScriptIdentity identity) => _product.Platform.GetBasePlatform() switch
+    {
+        Platform.SqlServer => $"[{identity.Schema}].[{identity.Name}]",
+        Platform.PostgreSQL => QuoteIdent(identity.Schema) + "." + QuoteIdent(identity.Name),
+        _ => identity.Name
+    };
+
+    // quote_ident's rule: a plain lower-case identifier stays bare.
+    private static string QuoteIdent(string name) =>
+        System.Text.RegularExpressions.Regex.IsMatch(name ?? "", "^[a-z_][a-z0-9_]*$") ? name : "\"" + (name ?? "").Replace("\"", "\"\"") + "\"";
+
+    private static string ModuleKindWord(ModuleKind kind) => kind switch
+    {
+        ModuleKind.Procedure => "PROCEDURE",
+        ModuleKind.Function => "FUNCTION",
+        _ => "VIEW"
+    };
+
+    // A MySQL literal reads a backslash as an escape unless NO_BACKSLASH_ESCAPES is on.
+    private static string EscapeMySqlLiteral(string value) => (value ?? "").Replace("\\", "\\\\").Replace("'", "''");
+
+    #endregion
 
     #region Unchanged-module stamps
 
@@ -2964,6 +3055,13 @@ SET NOCOUNT ON
             }
             entries.Add(new WhatIfConsoleEntry("apply", "APPLY", script.LogPath));
             WhatIf?.Record(WhatIfCategory.Apply, LogPrefix, script.LogPath);
+            if (CaptureModulePermissions(destCmd, script) != null)
+            {
+                var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
+                var name = ModuleAuditName(identity);
+                SafeProgressLog($"    Would re-apply the grants on {name} after {script.LogPath}");
+                ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldReapply");
+            }
         }
         foreach (var line in WhatIfConsoleFormatter.Render(entries, WhatIfConsoleDetail))
             SafeProgressLog(line);

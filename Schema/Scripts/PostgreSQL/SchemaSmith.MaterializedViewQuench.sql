@@ -21,6 +21,7 @@ AS $$
 DECLARE
   view_json TEXT = CASE WHEN LEFT(p_ViewDefinitions, 1) = '[' THEN p_ViewDefinitions ELSE '[' || p_ViewDefinitions || ']' END;
   sql_script TEXT = '';
+  preserved RECORD;
 BEGIN
   -- Ensure temp_tables exists for FixupMaterializedViewOwnership
   -- (may not exist if product has no tables, IndexOnlyTableQuenches=true, or UpdateTables=false)
@@ -87,23 +88,15 @@ BEGIN
   RAISE NOTICE 'Materialized View Diff — Drop Changed/Removed';
 
   -- Drop indexes on views that will be dropped (changed definition or removed from product)
-  sql_script = '';
-  SELECT STRING_AGG('DROP INDEX IF EXISTS "' || n.nspname || '"."' || i.relname || '";', CHR(10))
-    INTO sql_script
-    -- Fence to this iteration's schema: pg_matviews.definition is pg_get_viewdef(oid), which OPENS
-    -- the relation. Reading a *sibling* tenant's mat-view definition races with that sibling's
-    -- concurrent DROP MATERIALIZED VIEW under parallel fan-out and errors XX000 "could not open
-    -- relation with OID". The OFFSET 0 fence guarantees the schema filter runs before pg_get_viewdef.
-    FROM (SELECT schemaname, matviewname, definition
-            FROM pg_matviews
-            WHERE p_SchemaName = '' OR schemaname = p_SchemaName
-            OFFSET 0) mv
-    JOIN pg_class c ON c.relname = mv.matviewname
-                   AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = mv.schemaname)
-                   AND c.relkind = 'm'
-    JOIN pg_index idx ON idx.indrelid = c.oid
-    JOIN pg_class i ON i.oid = idx.indexrelid
-    JOIN pg_namespace n ON n.oid = i.relnamespace
+  -- The views this pass drops: the product's that the package no longer declares, and the declared ones whose
+  -- definition changed. Decided once here, used by the index drop, the view drop and the capture.
+  DROP TABLE IF EXISTS temp_mv_to_drop;
+  CREATE TEMPORARY TABLE temp_mv_to_drop AS
+    SELECT mv.schemaname, mv.matviewname
+      FROM (SELECT schemaname, matviewname, definition
+              FROM pg_matviews
+             WHERE p_SchemaName = '' OR schemaname = p_SchemaName
+             OFFSET 0) mv
     WHERE (
       -- View removed from product. Strict on template_name (legacy '' rows excluded).
       -- p_SchemaName non-empty (schema-template iteration) further restricts to the
@@ -126,6 +119,32 @@ BEGIN
                  AND NOT "SchemaSmith"."ExpressionMapUnchanged"(t."Schema", t."Name", 'MATVIEW', t."Name",
                        'definition', t."Definition", mv.definition))
     );
+
+  -- What the drop takes with it and the package does not carry: the ACL, owner and comments of each view, put back
+  -- after the create pass below.
+  DROP TABLE IF EXISTS temp_mv_preserved;
+  CREATE TEMPORARY TABLE temp_mv_preserved AS
+    SELECT d.schemaname, d.matviewname, "SchemaSmith"."CapturePermissions"(d.schemaname, d.matviewname, 'MATERIALIZED VIEW') AS script
+      FROM temp_mv_to_drop d;
+
+  sql_script = '';
+  SELECT STRING_AGG('DROP INDEX IF EXISTS "' || n.nspname || '"."' || i.relname || '";', CHR(10))
+    INTO sql_script
+    -- Fence to this iteration's schema: pg_matviews.definition is pg_get_viewdef(oid), which OPENS
+    -- the relation. Reading a *sibling* tenant's mat-view definition races with that sibling's
+    -- concurrent DROP MATERIALIZED VIEW under parallel fan-out and errors XX000 "could not open
+    -- relation with OID". The OFFSET 0 fence guarantees the schema filter runs before pg_get_viewdef.
+    FROM (SELECT schemaname, matviewname, definition
+            FROM pg_matviews
+            WHERE p_SchemaName = '' OR schemaname = p_SchemaName
+            OFFSET 0) mv
+    JOIN pg_class c ON c.relname = mv.matviewname
+                   AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = mv.schemaname)
+                   AND c.relkind = 'm'
+    JOIN pg_index idx ON idx.indrelid = c.oid
+    JOIN pg_class i ON i.oid = idx.indexrelid
+    JOIN pg_namespace n ON n.oid = i.relnamespace
+    WHERE EXISTS (SELECT 1 FROM temp_mv_to_drop d WHERE d.schemaname = mv.schemaname AND d.matviewname = mv.matviewname);
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
   -- Drop changed/removed views
@@ -140,28 +159,7 @@ BEGIN
             FROM pg_matviews
             WHERE p_SchemaName = '' OR schemaname = p_SchemaName
             OFFSET 0) mv
-    WHERE (
-      -- View removed from product. Strict on template_name (legacy '' rows excluded).
-      -- p_SchemaName non-empty (schema-template iteration) further restricts to the
-      -- iterations schema so other tenants views are never dropped.
-      EXISTS (SELECT 1 FROM "SchemaSmith"."ProductOwnership" po
-               WHERE po."Schema" = mv.schemaname AND po."TableName" = mv.matviewname
-                 AND po."IndexName" IS NULL AND po."ProductName" = p_ProductName
-                 AND po.template_name = p_TemplateName
-                 AND (p_SchemaName = '' OR po."Schema" = p_SchemaName))
-      AND NOT EXISTS (SELECT 1 FROM temp_materialized_views t
-                       WHERE t."Schema" = mv.schemaname AND t."Name" = mv.matviewname)
-    ) OR (
-      -- View definition changed
-      EXISTS (SELECT 1 FROM temp_materialized_views t
-               WHERE t."Schema" = mv.schemaname AND t."Name" = mv.matviewname
-                 AND UPPER(REGEXP_REPLACE(TRIM(RTRIM(RTRIM(t."Definition"), ';')), '\s+', ' ', 'g')) != UPPER(REGEXP_REPLACE(TRIM(RTRIM(RTRIM(mv.definition), ';')), '\s+', ' ', 'g'))
-                 -- #242: PostgreSQL rewrites a matview body when it stores it (schema-qualifying, re-aliasing),
-                 -- so a hand-authored body never matches and the view was rebuilt on every deploy -- which
-                 -- re-runs its query. Ask what was actually applied before calling it a change.
-                 AND NOT "SchemaSmith"."ExpressionMapUnchanged"(t."Schema", t."Name", 'MATVIEW', t."Name",
-                       'definition', t."Definition", mv.definition))
-    );
+    WHERE EXISTS (SELECT 1 FROM temp_mv_to_drop d WHERE d.schemaname = mv.schemaname AND d.matviewname = mv.matviewname);
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
   -- Create missing materialized views (new or just dropped because definition changed)
@@ -181,6 +179,20 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM pg_matviews mv
                        WHERE mv.schemaname = t."Schema" AND mv.matviewname = t."Name");
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
+  -- Put back what the drop took, on each view the create pass brought back; a view the package no longer declares
+  -- stays dropped and gets nothing.
+  FOR preserved IN
+    SELECT p.schemaname, p.matviewname, p.script
+      FROM temp_mv_preserved p
+     WHERE p.script IS NOT NULL
+       AND EXISTS (SELECT 1 FROM temp_materialized_views t WHERE t."Schema" = p.schemaname AND t."Name" = p.matviewname)
+     ORDER BY p.schemaname, p.matviewname
+  LOOP
+    CALL "SchemaSmith"."ReapplyPermissions"(preserved.script, 'matview', quote_ident(preserved.schemaname) || '.' || quote_ident(preserved.matviewname), p_WhatIf);
+  END LOOP;
+  DROP TABLE IF EXISTS temp_mv_preserved;
+  DROP TABLE IF EXISTS temp_mv_to_drop;
 
   -- #242: record what each body was applied with, after the create pass, so a view created moments ago is
   -- recorded on this run rather than rebuilding once more on the next.

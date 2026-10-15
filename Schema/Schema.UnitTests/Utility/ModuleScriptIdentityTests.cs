@@ -115,4 +115,76 @@ public class ModuleScriptIdentityTests
         var id = Parse(Platform.SqlServer, "CREATE OR ALTER PROCEDURE dbo.p AS EXEC('CREATE VIEW v AS SELECT 1')");
         Assert.That((id.Kind, id.Name), Is.EqualTo((ModuleKind.Procedure, "p")));
     }
+
+    // A script that drops the module it creates loses the module's grants on every engine, so the quench captures
+    // them before such a script and puts them back after it. Only a DROP of the module's own kind and name counts; a
+    // DROP inside a string executed later still drops, so literals are not blanked here -- capturing when nothing
+    // was lost is harmless, missing a drop is not.
+    private static bool Drops(Platform platform, params string[] batches) =>
+        ModuleScriptIdentity.DropsModule(new List<string>(batches), platform);
+
+    [Test]
+    public void DropsModule_SqlServer_GuardedDropThenCreate_IsTrue()
+    {
+        Assert.That(Drops(Platform.SqlServer,
+            "IF OBJECT_ID(N'[dbo].[p]') IS NOT NULL DROP PROCEDURE [dbo].[p]",
+            "CREATE PROCEDURE [dbo].[p] AS SELECT 1"), Is.True);
+    }
+
+    [Test]
+    public void DropsModule_SqlServer_CreateOrAlter_AndTheLegacyStubForm_AreFalse()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Drops(Platform.SqlServer, "CREATE OR ALTER PROCEDURE dbo.p AS SELECT 1"), Is.False, "CREATE OR ALTER keeps permissions");
+            Assert.That(Drops(Platform.SqlServer,
+                "IF OBJECT_ID(N'[dbo].[p]') IS NULL EXEC('CREATE PROCEDURE [dbo].[p] AS RETURN')",
+                "ALTER PROCEDURE [dbo].[p] AS SELECT 1"), Is.False, "the legacy form alters in place");
+        });
+    }
+
+    [Test]
+    public void DropsModule_SqlServer_DropInsideAnExecString_StillCounts()
+    {
+        Assert.That(Drops(Platform.SqlServer, "EXEC('DROP VIEW dbo.v')", "CREATE VIEW dbo.v AS SELECT 1 AS x"), Is.True);
+    }
+
+    [Test]
+    public void DropsModule_DropOfAnotherObject_OrAnotherKind_IsFalse()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Drops(Platform.SqlServer, "DROP TABLE dbo.v_old", "CREATE VIEW dbo.v AS SELECT 1 AS x"), Is.False, "a different object");
+            Assert.That(Drops(Platform.SqlServer, "DROP PROCEDURE dbo.v", "CREATE VIEW dbo.v AS SELECT 1 AS x"), Is.False, "the same name as a different kind");
+            Assert.That(Drops(Platform.PostgreSQL, "DROP FUNCTION IF EXISTS public.f_other(integer);", "CREATE FUNCTION public.f(a integer) RETURNS integer LANGUAGE sql AS $$ SELECT a $$;"), Is.False, "a different function");
+        });
+    }
+
+    [Test]
+    public void DropsModule_PostgreSql_DropIfExistsThenCreate_IsTrue_CreateOrReplace_IsFalse()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Drops(Platform.PostgreSQL, "DROP FUNCTION IF EXISTS public.f(integer);\nCREATE FUNCTION public.f(a integer) RETURNS integer LANGUAGE sql AS $$ SELECT a $$;"), Is.True);
+            Assert.That(Drops(Platform.PostgreSQL, "DROP PROCEDURE IF EXISTS \"Sales\".\"P\"();\nCREATE PROCEDURE \"Sales\".\"P\"() LANGUAGE sql AS $$ SELECT 1 $$;"), Is.True, "quoted names");
+            Assert.That(Drops(Platform.PostgreSQL, "CREATE OR REPLACE FUNCTION public.f(a integer) RETURNS integer LANGUAGE sql AS $$ SELECT a $$;"), Is.False, "CREATE OR REPLACE keeps the ACL");
+        });
+    }
+
+    [Test]
+    public void DropsModule_MySql_DropIfExistsThenCreate_IsTrue_MariaDbCreateOrReplace_IsFalse()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Drops(Platform.MySQL, "DROP PROCEDURE IF EXISTS `p`;", "CREATE PROCEDURE `p`() SELECT 1"), Is.True);
+            Assert.That(Drops(Platform.MariaDb, "DROP FUNCTION IF EXISTS f;", "CREATE FUNCTION f(a INT) RETURNS INT DETERMINISTIC RETURN a + 1"), Is.True);
+            Assert.That(Drops(Platform.MariaDb, "CREATE OR REPLACE PROCEDURE `p`() SELECT 1"), Is.False, "MariaDB keeps the grants across CREATE OR REPLACE");
+        });
+    }
+
+    [Test]
+    public void DropsModule_WithoutARecognisableModule_IsFalse()
+    {
+        Assert.That(Drops(Platform.SqlServer, "DROP PROCEDURE dbo.p"), Is.False, "no CREATE: nothing is re-created, nothing to put grants back on");
+    }
 }

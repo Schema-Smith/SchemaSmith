@@ -614,4 +614,149 @@ INSERT INTO ""{schema}"".""WhatIf"" (""Id"", ""Val"") VALUES (1, 'one'), (2, 'tw
         Exec(cmd, $@"DROP SCHEMA ""{schema}"" CASCADE;");
         conn.Close();
     }
+
+    // ---- privileges, owner and comments survive ----------------------------
+
+    private static List<string> PrivilegesFor(IDbCommand cmd, string schema, string table, string role) => Strings(cmd, $@"
+SELECT x.privilege_type || CASE WHEN x.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END || COALESCE(' (' || x.col || ')', '')
+  FROM (SELECT (aclexplode(c.relacl)).*, NULL::text AS col FROM pg_class c WHERE c.oid = '""{schema}"".""{table}""'::regclass
+        UNION ALL
+        SELECT (aclexplode(a.attacl)).*, a.attname::text FROM pg_attribute a WHERE a.attrelid = '""{schema}"".""{table}""'::regclass AND a.attacl IS NOT NULL) x
+ WHERE x.grantee = (SELECT oid FROM pg_roles WHERE rolname = '{role}')
+ ORDER BY 1");
+
+    private static string OwnerOf(IDbCommand cmd, string schema, string table) =>
+        Scalar(cmd, $@"SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = '""{schema}"".""{table}""'::regclass")?.ToString();
+
+    private static string TableComment(IDbCommand cmd, string schema, string table) =>
+        Scalar(cmd, $@"SELECT obj_description('""{schema}"".""{table}""'::regclass, 'pg_class')")?.ToString();
+
+    private static string ColumnComment(IDbCommand cmd, string schema, string table, string column) =>
+        Scalar(cmd, $@"SELECT col_description('""{schema}"".""{table}""'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = '""{schema}"".""{table}""'::regclass AND attname = '{column}'))")?.ToString();
+
+    private static int AuditRows(IDbCommand cmd, string schema, string table, string action) =>
+        Int(cmd, $@"SELECT COUNT(*) FROM ""SchemaSmith"".""ChangeAudit"" WHERE ""ObjectName"" LIKE '%{schema}%' AND ""ObjectName"" LIKE '%{table}%' AND ""ActionType"" = '{action}'");
+
+    private static string TwoColumnJson(string schema, string table) => $$"""
+        {
+            "Schema": "{{schema}}",
+            "Name": "{{table}}",
+            "Columns": [
+                {"Name": "Id", "DataType": "INT", "Nullable": false},
+                {"Name": "Val", "DataType": "TEXT", "Nullable": true}
+            ]
+        }
+        """;
+
+    private static void CreateGrantedTable(IDbCommand cmd, string schema, string role)
+    {
+        Exec(cmd, $@"
+CREATE ROLE ""{role}"" NOLOGIN;
+CREATE SCHEMA ""{schema}"";
+CREATE TABLE ""{schema}"".""KeepsGrants"" (""Id"" INT NOT NULL, ""Val"" TEXT NULL);
+INSERT INTO ""{schema}"".""KeepsGrants"" (""Id"", ""Val"") VALUES (1, 'one');
+GRANT SELECT ON ""{schema}"".""KeepsGrants"" TO ""{role}"";
+GRANT INSERT ON ""{schema}"".""KeepsGrants"" TO ""{role}"" WITH GRANT OPTION;
+GRANT UPDATE (""Val"") ON ""{schema}"".""KeepsGrants"" TO ""{role}"";
+COMMENT ON TABLE ""{schema}"".""KeepsGrants"" IS 'kept table';
+COMMENT ON COLUMN ""{schema}"".""KeepsGrants"".""Val"" IS 'kept column';");
+    }
+
+    private static void DropRoleAndSchema(IDbCommand cmd, string schema, string role)
+    {
+        try
+        {
+            Exec(cmd, $@"DROP SCHEMA IF EXISTS ""{schema}"" CASCADE;");
+            Exec(cmd, $@"DROP OWNED BY ""{role}""; DROP ROLE IF EXISTS ""{role}"";");
+        }
+        catch (NpgsqlException) { /* best-effort cleanup must not mask a test result */ }
+    }
+
+    [Test]
+    public void Rebuild_KeepsPrivilegesAndComments_AndAuditsTheReapply()
+    {
+        var schema = NewSchema("RbPerm");
+        var role = "rb_perm_" + Guid.NewGuid().ToString("N")[..8];
+        using var conn = OpenMainDb();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            CreateGrantedTable(cmd, schema, role);
+            var before = PrivilegesFor(cmd, schema, "KeepsGrants", role);
+            Assert.That(before, Has.Count.EqualTo(3), "setup: the three privileges must be on the table before the rebuild, or the comparison below is vacuous");
+            var oidBefore = Oid(cmd, schema, "KeepsGrants");
+
+            Rebuild(cmd, TwoColumnJson(schema, "KeepsGrants"), schema, "KeepsGrants");
+
+            Assert.That(Oid(cmd, schema, "KeepsGrants"), Is.Not.EqualTo(oidBefore),
+                "The table must actually have been replaced, or everything below passes on a procedure that did nothing.");
+            Assert.Multiple(() =>
+            {
+                Assert.That(PrivilegesFor(cmd, schema, "KeepsGrants", role), Is.EqualTo(before),
+                    "ALTER TABLE RENAME keeps the ACL on the renamed-out original, so the replacement starts with none: every "
+                    + "privilege, grant option and column privilege has to be put back on it.");
+                Assert.That(TableComment(cmd, schema, "KeepsGrants"), Is.EqualTo("kept table"), "the table comment is not in the package, so the rebuild has to carry it");
+                Assert.That(ColumnComment(cmd, schema, "KeepsGrants", "Val"), Is.EqualTo("kept column"), "a column comment has to come across too");
+                Assert.That(AuditRows(cmd, schema, "KeepsGrants", "reapplied"), Is.EqualTo(1), "The run manifest has to say the privileges were put back.");
+            });
+        }
+        finally
+        {
+            DropRoleAndSchema(cmd, schema, role);
+        }
+    }
+
+    [Test]
+    public void Rebuild_KeepsTheOwner()
+    {
+        var schema = NewSchema("RbOwner");
+        var role = "rb_owner_" + Guid.NewGuid().ToString("N")[..8];
+        using var conn = OpenMainDb();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            CreateGrantedTable(cmd, schema, role);
+            Exec(cmd, $@"ALTER TABLE ""{schema}"".""KeepsGrants"" OWNER TO ""{role}"";");
+            Assert.That(OwnerOf(cmd, schema, "KeepsGrants"), Is.EqualTo(role), "setup: the role must own the table before the rebuild");
+
+            Rebuild(cmd, TwoColumnJson(schema, "KeepsGrants"), schema, "KeepsGrants");
+
+            Assert.That(OwnerOf(cmd, schema, "KeepsGrants"), Is.EqualTo(role),
+                "The shadow is created by the deploying role, so the original owner has to be put back on the replacement.");
+        }
+        finally
+        {
+            DropRoleAndSchema(cmd, schema, role);
+        }
+    }
+
+    [Test]
+    public void Rebuild_WhatIf_ReportsThePrivilegesItWouldReapply_AndTouchesNothing()
+    {
+        var schema = NewSchema("RbPermWhatIf");
+        var role = "rb_perm_" + Guid.NewGuid().ToString("N")[..8];
+        using var conn = OpenMainDb();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            CreateGrantedTable(cmd, schema, role);
+            var before = PrivilegesFor(cmd, schema, "KeepsGrants", role);
+            var oidBefore = Oid(cmd, schema, "KeepsGrants");
+
+            Rebuild(cmd, TwoColumnJson(schema, "KeepsGrants"), schema, "KeepsGrants", whatIf: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Oid(cmd, schema, "KeepsGrants"), Is.EqualTo(oidBefore), "WhatIf must not rebuild");
+                Assert.That(PrivilegesFor(cmd, schema, "KeepsGrants", role), Is.EqualTo(before), "WhatIf must not touch a privilege");
+                Assert.That(AuditRows(cmd, schema, "KeepsGrants", "wouldReapply"), Is.EqualTo(1),
+                    "The preview lists the privileges the real run would put back, from the same capture.");
+                Assert.That(AuditRows(cmd, schema, "KeepsGrants", "reapplied"), Is.EqualTo(0), "WhatIf records nothing as done");
+            });
+        }
+        finally
+        {
+            DropRoleAndSchema(cmd, schema, role);
+        }
+    }
 }

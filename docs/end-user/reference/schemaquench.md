@@ -1034,6 +1034,28 @@ Most of a package does not change between two deployments, yet every view, funct
 
 > **A module the engine rewrites is still unchanged.** The rendering is compared only with the engine's own earlier rendering of the same object, never with the script text, so an engine that reformats a body, expands a `*` or re-quotes identifiers does not cause a re-run. Only a rendering that differs from the one recorded after the script last applied does.
 
+## Preserved Permissions
+
+Some changes can only be made by replacing an object: a table whose declared shape needs a rebuild is replaced under its own name, and an indexed view or materialized view whose definition changed is dropped and created again. The replacement is built from the package, and the package does not declare who may read the table or what its columns are documented as -- so everything of that kind used to be gone after the deploy, with a successful exit code.
+
+**What is carried.** Before the drop or the swap SchemaQuench captures what sits on the object and is not in the package, and puts it back once the replacement exists:
+
+| Engine | Carried across |
+|---|---|
+| SQL Server | `GRANT` and `DENY` on the object and its columns, `WITH GRANT OPTION`, an owner set on the object (`ALTER AUTHORIZATION`), and extended properties on the object and its columns |
+| PostgreSQL | the ACL on the relation or routine and on each column, the owner, and `COMMENT ON` the object and its columns |
+| MySQL, MariaDB | the grants on a procedure or function |
+
+MySQL and MariaDB key a table's grants by name, so a rebuilt table keeps them without help; only a routine's grants are lost by a `DROP`, and only those are captured.
+
+**Where it applies.** Around a table rebuild, around the drop and re-create of an indexed view (SQL Server) and a materialized view (PostgreSQL), and around any object script that drops its own procedure, function or view before creating it -- the `DROP PROCEDURE IF EXISTS ... CREATE PROCEDURE` form that MySQL and MariaDB require, or the same shape on another engine. A script that alters in place (`CREATE OR ALTER`, `CREATE OR REPLACE`) loses nothing and needs nothing.
+
+**What you see.** The log names the object as its permissions are put back, and the run manifest records a `reapplied` row for it. Under `WhatIf` the statements are printed and the manifest records `wouldReapply` instead.
+
+**Limits.** An extended property value is written back as text. A MySQL or MariaDB deploy user that cannot read `mysql.procs_priv` cannot see a routine's grants; the run says so and the deploy continues without them.
+
+---
+
 ---
 
 ## DropTablesRemovedFromProduct
