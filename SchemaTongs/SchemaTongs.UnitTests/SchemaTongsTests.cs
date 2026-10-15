@@ -2121,8 +2121,10 @@ public class SchemaTongsTests
             var tongs = new SchemaTongs(Platform.MariaDb);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
-            _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Sequence Scripts")));
-            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_seq.sql")), Arg.Any<string>());
+            _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Sequences")));
+            // Declared JSON, not a script: the deploy converges it and never resets it.
+            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_seq.json")), Arg.Is<string>(j => j.Contains("\"Name\": \"my_seq\"")));
+            _fileWrapper.DidNotReceive().WriteAllText(Arg.Is<string>(s => s.Contains("my_seq.sql")), Arg.Any<string>());
 
             FactoryContainer.Clear();
             LogFactory.Clear();

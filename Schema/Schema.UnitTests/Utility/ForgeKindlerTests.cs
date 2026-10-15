@@ -503,7 +503,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_RespellIndexColumns (a key part naming its column in another case).
                 // + Kindling_ScriptStamp_Table (the unchanged-module stamp: the script text hash and the engine rendering hash
         //   recorded after a successful object script, read before the next run of the same script).
-        Assert.That(mysql.Length, Is.EqualTo(80));
+        // +1 on the MySQL family = SequenceQuench (declared MariaDB sequences; the MySQL file only refuses).
+        Assert.That(mysql.Length, Is.EqualTo(81));
     }
 
     [Test]

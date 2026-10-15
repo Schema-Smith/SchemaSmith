@@ -571,6 +571,8 @@ public static class ForgeKindler
                 // means DROP + CREATE, so a false "changed" would reset its schedule on every deploy.
                 new("SchemaSmith_EventMatches.sql"),
                 new("SchemaSmith_EventQuench.sql"),
+                // Declared sequences (MariaDB 10.3+): the MariaDb override converges them, the MySQL file refuses them.
+                new("SchemaSmith_SequenceQuench.sql"),
                 new("SchemaSmith_GenerateEventJson.sql"),
                 new("SchemaSmith_SupportsApplicationTimePeriods.sql"),
                 // Gates the per-column WITHOUT SYSTEM VERSIONING clause (#408). MariaDB-only, like the

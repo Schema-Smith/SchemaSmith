@@ -661,6 +661,9 @@ public sealed class CoherenceCheck : ISchemaCheck
             if (!string.IsNullOrEmpty(sequence.Schema)) yield return ("Sequence schema", sequence.Schema);
         }
 
+        foreach (var sequence in template.MariaDbSequences)
+            yield return ("Sequence", sequence.Name);
+
         foreach (var domain in template.DomainTypes)
         {
             yield return ("Domain type", domain.Name);
@@ -1050,7 +1053,7 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         foreach (var finding in CoexistenceFindings(
                      template, "Sequences", DuplicateSequenceCode, "Sequence",
-                     template.Sequences.Select(s => (s.Schema, s.Name)),
+                     template.Sequences.Select(s => (s.Schema, s.Name)).Concat(template.MariaDbSequences.Select(s => ((string)null, s.Name))),
                      "Two authoring paths for one object leave it ambiguous which one is in charge"))
             yield return finding;
     }

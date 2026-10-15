@@ -155,6 +155,14 @@ namespace Schema.Capabilities
             rows.Add(new("application-time-period", "Application-time period", Platform.MariaDb,
                 1004, "MariaDB 10.4.3", null, DegradeKind.Reduced, "table without its PERIOD FOR clause"));
 
+            // Declared sequences (Sequences/*.json) arrived with CREATE SEQUENCE in MariaDB 10.3; below it a declared
+            // one is skipped. CREATE SEQUENCE ... AS <type> is 11.5+; below it every sequence is a signed bigint.
+            // MySQL has no sequence at any version, so neither row has a MySQL twin.
+            rows.Add(new("sequence", "Declared sequence", Platform.MariaDb,
+                1003, "MariaDB 10.3", null, DegradeKind.Skip, "sequence (MariaDB 10.3)"));
+            rows.Add(new("sequence-type", "Sequence data type", Platform.MariaDb,
+                1105, "MariaDB 11.5", null, DegradeKind.Reduced, "sequence type (MariaDB 11.5)"));
+
             // Per-column history exclusion (MariaDB WITHOUT SYSTEM VERSIONING, #408). Same shape as the
             // period row above: MySQL has no system versioning at any version, so
             // SchemaSmith_SupportsSystemVersioning() is an unconditional 0 there and MySQL gets no row.

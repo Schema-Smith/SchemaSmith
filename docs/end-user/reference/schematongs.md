@@ -279,6 +279,7 @@ Control exactly what gets cast from the database. Each object type can be indivi
 
 - **A routine or trigger script sets the object's own `sql_mode` around its `CREATE`** and restores the session's mode afterwards. The server renders the text in that mode (double-quoted identifiers under `ANSI_QUOTES`, Oracle syntax under `ORACLE`) and runs the body under it, so the deployed object keeps it whatever mode the target server runs.
 - **A trigger's `FOLLOWS` is rebuilt from the catalog's `ACTION_ORDER`.** `SHOW CREATE TRIGGER` returns the statement as it was written, which never carries the order. A follower whose file sorts before its predecessor fails on the deploy's first pass and is created on the retry pass.
+- **A MariaDB sequence is written as declared JSON in `Sequences/`**, its options read from `SHOW CREATE SEQUENCE` and its current value never, so the deploy converges each attribute in place and never resets it (see [Sequence JSON Format](schema-packages.md#sequence-json-format-postgresql-mariadb)). A column default of `nextval(`db`.`s`)` is written with the bare sequence name, so the package deploys to any database.
 
 A view is written as `CREATE OR REPLACE VIEW`, so a view that fails to deploy leaves the previous view in place. A reference to a table in the same database is written unqualified, and a reference to another database keeps its qualifier, so the package deploys to a database of any name.
 

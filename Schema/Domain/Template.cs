@@ -289,6 +289,10 @@ namespace Schema.Domain
         [JsonIgnore]
         public List<PostgreSqlSequence> Sequences { get; } = [];
 
+        // Sequences, MariaDB (10.3+). The same folder, read as MariaDbSequence; MySQL has no sequence at any version.
+        [JsonIgnore]
+        public List<MariaDbSequence> MariaDbSequences { get; } = [];
+
         [JsonIgnore]
         public string SequenceSchema { get; set; } = "[]";
 
@@ -432,6 +436,7 @@ namespace Schema.Domain
             clone.DomainTypeSchema = DomainTypeSchema;
             clone.EnumTypeSchema = EnumTypeSchema;
             clone.Sequences.AddRange(Sequences);
+            clone.MariaDbSequences.AddRange(MariaDbSequences);
             clone.SequenceSchema = SequenceSchema;
             clone.MaterializedViewSchema = MaterializedViewSchema;
             clone.EventSchema = EventSchema;
@@ -680,7 +685,7 @@ namespace Schema.Domain
             EnumTypeSchema = JArray.FromObject(EnumTypes).ToString();
             tokens.Add(new("EnumTypeSchema", EnumTypeSchema.Replace("'", "''")));
 
-            SequenceSchema = JArray.FromObject(Sequences).ToString();
+            SequenceSchema = MariaDbSequences.Count > 0 ? JArray.FromObject(MariaDbSequences).ToString() : JArray.FromObject(Sequences).ToString();
             tokens.Add(new("SequenceSchema", SequenceSchema.Replace("'", "''")));
 
             IndexedViewSchema = JArray.FromObject(IndexedViews).ToString();
@@ -850,7 +855,7 @@ namespace Schema.Domain
         /// <summary>Loads DECLARATIVE sequences from the Sequences/ folder; *.sql there still runs scripted.</summary>
         private void LoadSequences(Platform platform, bool tolerateComponentLoadErrors)
         {
-            if (platform != Platform.PostgreSQL) return;
+            if (platform != Platform.PostgreSQL && platform != Platform.MariaDb) return;
             var path = Path.Join(Path.GetDirectoryName(FilePath) ?? "", "Sequences");
             if (!ProductDirectoryWrapper.GetFromFactory().Exists(path)) return;
             var files = ProductDirectoryWrapper.GetFromFactory()
@@ -861,8 +866,12 @@ namespace Schema.Domain
                 try
                 {
                     var json = ProductFileWrapper.GetFromFactory().ReadAllText(f);
-                    Sequences.Add(JsonConvert.DeserializeObject<PostgreSqlSequence>(json, PlatformDeserializer.StrictSettings)
-                                  ?? throw new JsonSerializationException("Failed to deserialize sequence"));
+                    if (platform == Platform.MariaDb)
+                        MariaDbSequences.Add(JsonConvert.DeserializeObject<MariaDbSequence>(json, PlatformDeserializer.StrictSettings)
+                                             ?? throw new JsonSerializationException("Failed to deserialize sequence"));
+                    else
+                        Sequences.Add(JsonConvert.DeserializeObject<PostgreSqlSequence>(json, PlatformDeserializer.StrictSettings)
+                                      ?? throw new JsonSerializationException("Failed to deserialize sequence"));
                 }
                 // prepush-allow: generic-catch -- any load failure must surface wrapped with the file that caused it
                 catch (Exception e) when (!tolerateComponentLoadErrors)

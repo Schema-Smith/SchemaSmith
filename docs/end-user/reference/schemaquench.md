@@ -499,6 +499,8 @@ The schema model itself parses on every supported version — a version-agnostic
 | **Application-time period** (`PERIOD FOR`) | MariaDB 10.4.3 (MySQL: no equivalent at any version) | creates the table without the period + records a downgrade |
 | **Table-level system versioning** (`WITH SYSTEM VERSIONING`) | MariaDB 10.3 (MySQL: no equivalent) | creates an ordinary, non-versioned table + records a downgrade |
 | **Per-column history exclusion** (`WITHOUT SYSTEM VERSIONING`) | MariaDB 10.3.4 (MySQL: no equivalent) | creates the column without the exclusion + records a downgrade — the column survives, the exclusion does not |
+| **Declared sequence** (`Sequences/*.json`) | MariaDB 10.3 (MySQL: no equivalent at any version) | skips the sequence + records a downgrade |
+| **Sequence data type** (`DataType` other than `bigint`) | MariaDB 11.5 | creates the sequence as a signed `bigint` + records a downgrade |
 
 > **A `DEFAULT` expression below MySQL 8.0.13 costs you the column, not the default.** Every other degrade in this table relaxes an aspect and keeps the object; this one skips the whole column, so under the default `warn` the deploy succeeds and a column your package declares is simply not there. If any table targets MySQL below 8.0.13 and uses an expression default, either give it a literal default or set `Target:UnsupportedFeaturePolicy=fail`.
 

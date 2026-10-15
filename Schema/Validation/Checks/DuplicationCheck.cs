@@ -105,6 +105,7 @@ public sealed class DuplicationCheck : ISchemaCheck
         return CheckNamedGroup(template.EnumTypes, e => Qualified(e.Schema, e.Name), e => e.ShouldApplyExpression, e => e.VariantName, "enum type", location)
             .Concat(CheckNamedGroup(template.DomainTypes, d => Qualified(d.Schema, d.Name), d => d.ShouldApplyExpression, d => d.VariantName, "domain type", location))
             .Concat(CheckNamedGroup(template.Sequences, s => Qualified(s.Schema, s.Name), s => s.ShouldApplyExpression, s => s.VariantName, "sequence", location))
+            .Concat(CheckNamedGroup(template.MariaDbSequences, s => s.Name, s => s.ShouldApplyExpression, s => s.VariantName, "sequence", location))
             .Concat(CheckNamedGroup(template.MaterializedViews, v => Qualified(v.Schema, v.Name), v => v.ShouldApplyExpression, v => v.VariantName, "materialized view", location))
             .Concat(CheckNamedGroup(template.IndexedViews, v => Qualified(v.Schema, v.Name), v => v.ShouldApplyExpression, v => v.VariantName, "indexed view", location))
             .Concat(CheckNamedGroup(template.Events, e => e.Name, e => e.ShouldApplyExpression, e => e.VariantName, "event", location));

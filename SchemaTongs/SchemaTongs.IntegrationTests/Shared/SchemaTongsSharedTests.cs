@@ -396,8 +396,11 @@ public abstract class SchemaTongsSharedTests
         cmd.CommandText = "CREATE OR REPLACE SEQUENCE TestSeq START WITH 100 INCREMENT BY 1";
         cmd.ExecuteNonQuery();
 
+        string json = null;
         string script = null;
         var file = Substitute.For<IFile>();
+        file.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("Sequences") && s.EndsWithIgnoringCase("TestSeq.json")), Arg.Any<string>()))
+            .Do(ci => json = ci.ArgAt<string>(1));
         file.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("Sequences") && s.EndsWithIgnoringCase("TestSeq.sql")), Arg.Any<string>()))
             .Do(ci => script = ci.ArgAt<string>(1));
         try
@@ -414,7 +417,13 @@ public abstract class SchemaTongsSharedTests
                 FactoryContainer.Clear();
                 LogFactory.Clear();
             }
-            Assert.That(script, Is.Not.Null, "the sequence must be extracted");
+            Assert.Multiple(() =>
+            {
+                Assert.That(json, Is.Not.Null, "the sequence must be extracted as declared JSON");
+                Assert.That(script, Is.Null, "a sequence is no longer written as a script");
+            });
+            Assert.That(json, Does.Contain("\"Start\": 100").And.Not.Contain("MinValue").And.Not.Contain("next"),
+                "the file carries what the author chose and never the current value: " + json);
 
             cmd.CommandText = "SELECT NEXTVAL(TestSeq)";
             Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(100));
@@ -422,11 +431,11 @@ public abstract class SchemaTongsSharedTests
             cmd.ExecuteScalar();
             for (var deploy = 0; deploy < 2; deploy++)
             {
-                cmd.CommandText = script;
+                cmd.CommandText = $"CALL SchemaSmith_SequenceQuench('{_integrationDb}', '[{json.Replace("'", "''")}]', 0)";
                 cmd.ExecuteNonQuery();
             }
             cmd.CommandText = "SELECT NEXTVAL(TestSeq)";
-            Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(102), "running the extracted script must not reset the sequence: " + script);
+            Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(102), "deploying the extracted sequence must not reset it: " + json);
         }
         finally
         {

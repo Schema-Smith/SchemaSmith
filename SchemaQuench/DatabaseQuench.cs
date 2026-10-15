@@ -700,7 +700,7 @@ public class DatabaseQuench
 
                 // Step: Sequences (PostgreSQL only). Also before tables -- a column DEFAULT can call
                 // nextval() on one.
-                if (_product.Platform == Platform.PostgreSQL && _template.Sequences.Count > 0)
+                if ((_product.Platform == Platform.PostgreSQL && _template.Sequences.Count > 0) || (_product.Platform == Platform.MariaDb && _template.MariaDbSequences.Count > 0))
                 {
                     var sequenceSw = Stopwatch.StartNew();
                     _checkpointing.Track(DbScope, "SequenceQuench", () => QuenchSequences(effectiveTableCmd));
@@ -2034,11 +2034,18 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
     /// </summary>
     internal void QuenchSequences(IDbCommand tableCommand)
     {
-        if (_product.Platform != Platform.PostgreSQL) return;
+        if (_product.Platform != Platform.PostgreSQL && _product.Platform != Platform.MariaDb) return;
         var sequences = IterationSequenceSchema;
         if (string.IsNullOrWhiteSpace(sequences) || sequences.Trim() == "[]") return;
 
         SafeProgressLog("  Quenching sequences");
+        if (_product.Platform == Platform.MariaDb)
+        {
+            tableCommand.CommandText = $"CALL SchemaSmith_SequenceQuench('{EscapeMySqlLiteral(_databaseName)}', '{EscapeMySqlLiteral(sequences)}', {_whatIfOnly})";
+            _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Sequences"), tableCommand.CommandText);
+            tableCommand.ExecuteNonQuery();
+            return;
+        }
         tableCommand.CommandText =
             $@"CALL ""SchemaSmith"".""SequenceQuench""('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(sequences)}', {_whatIfOnly});";
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Sequences"), tableCommand.CommandText);

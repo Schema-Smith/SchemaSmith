@@ -3374,16 +3374,14 @@ SELECT EVENT_NAME
     }
 
     /// <summary>
-    /// MariaDb-only: MySQL has no SEQUENCE object, so this is reached only when the caller's
-    /// _includeSequences flag is true, which LoadShouldCastSettings gates to Platform.MariaDb.
-    /// Two-step like ExtractMySqlTableDefinitions above (list, then per-item) rather than the
-    /// generic PerformMySqlCasting single-query shape — SHOW CREATE SEQUENCE needs a per-sequence
-    /// round trip, and MariaDB's own DDL-generation is the most reliable source for sequence options
-    /// (increment/min/max/cache/cycle) rather than hand-reconstructing them from INFORMATION_SCHEMA.
+    /// MariaDB sequences are written as declared JSON (MariaDbSequence) rather than a scripted CREATE: the deploy
+    /// converges every attribute in place and never moves the current value, which a script could not promise.
+    /// SHOW CREATE SEQUENCE is the source: it is the engine's own rendering of the options, and the current value is
+    /// not in it. A .sql file in Sequences/ still deploys as before.
     /// </summary>
     private void ScriptMariaDbSequences(IDbCommand command, string targetSchema)
     {
-        _progressLog.Info("Casting Sequence Scripts");
+        _progressLog.Info("Casting Sequences");
         command.CommandText = $@"
 SELECT TABLE_NAME
   FROM INFORMATION_SCHEMA.TABLES
@@ -3415,16 +3413,49 @@ SELECT TABLE_NAME
                 createStatement = reader.GetString(1); // "Create Table" column carries the CREATE SEQUENCE DDL
             }
 
-            // The script runs on every deploy, so it must leave an existing sequence where it is: CREATE OR REPLACE
-            // reset it to its START value each time, and NEXTVAL handed out numbers it had already given.
-            var script = createStatement.Replace("CREATE SEQUENCE", "CREATE SEQUENCE IF NOT EXISTS");
-
-            var fileName = ResolveOutputPath(castPath, EncodeFullName(name, ".sql"));
-            script = RewriteSqlBodyForSchemaTemplate(script, fileName);
-            _progressLog.Info($"  Casting {fileName}");
-            FileWrapper.GetFromFactory().WriteAllText(fileName, script);
+            var sequence = ParseMariaDbSequence(name, createStatement);
+            var file = ResolveOutputPath(castPath, EncodeFullName(name, ".json"));
+            _progressLog.Info($"  Cast Json for sequence {name}");
+            WritePackageObject(file, sequence, "sequences");
             _stats.Sequences++;
         }
+    }
+
+    // SHOW CREATE SEQUENCE renders, in this order: CREATE SEQUENCE `s` [as <type>] start with N minvalue N maxvalue N
+    // increment by N cache N cycle|nocycle ENGINE=... . MariaDB's own defaults are left out of the file, so it says only
+    // what the author chose: minvalue 1 and maxvalue 9223372036854775806 for an ascending sequence (the mirror for a
+    // descending one), and a start equal to the lower (upper) bound.
+    internal static MariaDbSequence ParseMariaDbSequence(string name, string createStatement)
+    {
+        long Number(string keyword, long fallback)
+        {
+            var m = Regex.Match(createStatement, $@"\b{keyword}\s+(?<n>-?\d+)", RegexOptions.IgnoreCase);
+            return m.Success ? long.Parse(m.Groups["n"].Value, System.Globalization.CultureInfo.InvariantCulture) : fallback;
+        }
+
+        var sequence = new MariaDbSequence { Name = name };
+        var type = Regex.Match(createStatement, @"\bas\s+(?<type>\w+(?:\s+unsigned)?)\s+start\b", RegexOptions.IgnoreCase);
+        if (type.Success) sequence.DataType = type.Groups["type"].Value.ToLowerInvariant();
+        sequence.Increment = Number("increment by", 1);
+        sequence.Cache = Number("cache", 1000);
+        sequence.Cycle = Regex.IsMatch(createStatement, @"\scycle\b", RegexOptions.IgnoreCase);
+        var ascending = sequence.Increment > 0;
+        var min = Number("minvalue", ascending ? 1 : -9223372036854775807);
+        var max = Number("maxvalue", ascending ? 9223372036854775806 : -1);
+        var start = Number("start with", ascending ? min : max);
+        if (min != (ascending ? 1 : -9223372036854775807)) sequence.MinValue = min;
+        if (max != (ascending ? 9223372036854775806 : -1)) sequence.MaxValue = max;
+        if (start != (ascending ? min : max)) sequence.Start = start;
+        return sequence;
+    }
+
+    // The catalog qualifies a sequence default with the database (nextval(`db`.`s`)); the package carries the bare
+    // name so it deploys to any database, and the deploy compares defaults without the qualifier.
+    internal static void StripSequenceDatabase(Table table, string database)
+    {
+        var qualified = new Regex(@"nextval\(`" + Regex.Escape(database) + "`\\.`", RegexOptions.IgnoreCase);
+        foreach (var column in table.Columns)
+            if (column.Default != null) column.Default = qualified.Replace(column.Default, "nextval(`");
     }
 
     private void ExtractMySqlTableDefinitions(IDbCommand command, string targetSchema)
@@ -3532,6 +3563,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                             ImportTableHelper.PreserveListOrder(tableObj, original, _objectOrder);
                     }
 
+                    if (_platform == Platform.MariaDb) StripSequenceDatabase(tableObj, targetSchema);
                     WritePackageObject(filename, tableObj, "tables");
                     _stats.Tables++;
                 }

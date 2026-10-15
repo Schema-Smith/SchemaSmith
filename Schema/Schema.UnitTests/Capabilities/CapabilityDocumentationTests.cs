@@ -97,6 +97,8 @@ public class CapabilityDocumentationTests
         ["MariaDb/column-history-exclusion"] = "**Per-column history exclusion**",
         ["MariaDb/table-system-versioning"] = "**Table-level system versioning**",
         ["MariaDb/long-unique-key"] = "**Long unique key**",
+        ["MariaDb/sequence"] = "**Declared sequence**",
+        ["MariaDb/sequence-type"] = "**Sequence data type**",
     };
 
     private static string RepoRoot()

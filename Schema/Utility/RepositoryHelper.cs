@@ -353,6 +353,7 @@ public static class RepositoryHelper
         // every shared shape but would hand MariaDB the MySQL table schema and lose the MariaDB-only
         // properties MariaDbTable exists to carry.
         if (objectPart == "tables" && platform == Platform.MariaDb) return typeof(MariaDbTable);
+        if (objectPart == "sequences" && platform == Platform.MariaDb) return typeof(MariaDbSequence);
 
         return (objectPart, platform.GetBasePlatform()) switch
         {
@@ -394,7 +395,8 @@ public static class RepositoryHelper
             files.Add($"domaintypes.{platformName}.schema");
         if (platform == Platform.PostgreSQL)
             files.Add($"enumtypes.{platformName}.schema");
-        if (platform == Platform.PostgreSQL)
+        // Sequences: PostgreSQL, and MariaDB (10.3+); MySQL has none at any version.
+        if (platform == Platform.PostgreSQL || platform == Platform.MariaDb)
             files.Add($"sequences.{platformName}.schema");
         return files.ToArray();
     }

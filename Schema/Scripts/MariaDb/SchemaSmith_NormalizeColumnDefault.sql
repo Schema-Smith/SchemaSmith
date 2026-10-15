@@ -38,7 +38,10 @@ BEGIN
 
     -- 3. Unquoted keyword/function/number: upper-case and drop an empty () argument list so
     --    current_timestamp() folds to CURRENT_TIMESTAMP (a precision arg like (6) is preserved).
-    RETURN UPPER(REPLACE(p_Default, '()', ''));
+    -- The catalog qualifies a sequence default with the database (nextval(`db`.`s`)); a package declares the bare
+    -- name so it deploys to any database, and extraction writes it that way, so the qualifier is dropped here.
+    -- Bracket classes rather than backslash escapes, so the pattern reads the same under every sql_mode.
+    RETURN UPPER(REPLACE(REGEXP_REPLACE(p_Default, 'nextval[(]`[^`]+`[.]`', 'nextval(`'), '()', ''));
 END //
 
 DELIMITER ;

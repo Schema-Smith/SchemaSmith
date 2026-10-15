@@ -41,6 +41,8 @@ namespace Schema.UnitTests.Capabilities
             "table without its PERIOD FOR clause",
             "table without its WITH SYSTEM VERSIONING clause",
             "column without its WITHOUT SYSTEM VERSIONING clause",
+            "sequence (MariaDB 10.3)",
+            "sequence type (MariaDB 11.5)",
             "CDC (database not enabled)",
             "Change Tracking (database not enabled)",
             "FILESTREAM (server or filegroup not available)",

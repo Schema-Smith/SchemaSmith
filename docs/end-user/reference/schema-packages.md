@@ -1645,7 +1645,7 @@ supported, both can live in one package, and existing scripted packages need no 
 
 | Object type | Folder | Engine |
 |---|---|---|
-| Sequences | `Sequences/` | PostgreSQL |
+| Sequences | `Sequences/` | PostgreSQL / MariaDB |
 | Domain types | `Domain Types/` | PostgreSQL |
 | Enum types | `Enum Types/` | PostgreSQL |
 | Scheduled events | `Events/` | MySQL / MariaDB |
@@ -1673,9 +1673,9 @@ engine. Each is documented in full in its own section below.
 | Enum type | added values, ordering | **Removing a value is reported, never performed** — PostgreSQL cannot remove one without recreating the type, which would drop every column using it |
 | Scheduled event | schedule, body, status | **Removal reaches only events SchemaSmith created**, and only with `DropEventsRemovedFromProduct` on — one made by hand is never touched |
 
-## Sequence JSON Format (PostgreSQL)
+## Sequence JSON Format (PostgreSQL, MariaDB)
 
-Sequences live in the `Sequences/` directory of each template, which accepts both `.json` (declared and converged) and `.sql` (scripted, exactly as before).
+Sequences live in the `Sequences/` directory of each template, which accepts both `.json` (declared and converged) and `.sql` (scripted, exactly as before). The PostgreSQL form is below; MariaDB's differences follow it.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
@@ -1701,6 +1701,18 @@ Sequences live in the `Sequences/` directory of each template, which accepts bot
   "Start": 1000,
   "Increment": 1,
   "Cache": 1,
+  "Cycle": false
+}
+```
+
+**MariaDB** (10.3 and later; MySQL has no sequence at any version) declares the same properties with these differences: there is no `Schema`, because a MariaDB schema is the database; `DataType` is an integer type (`tinyint`, `smallint`, `mediumint`, `int` or `bigint`, optionally `unsigned`) and needs MariaDB 11.5, below which every sequence is a signed `bigint` and another type is recorded as a downgrade; `Cache` defaults to `1000`, as it does in MariaDB; and an omitted `Start`, `MinValue` or `MaxValue` is left to the engine at creation and never compared afterwards. Lowering `MaxValue` below the position a running sequence has already reserved (its cache, 1000 values by default) is the one attribute change the engine does not take quietly: a cycling sequence wraps to `MinValue` on its next value and a non-cycling one errors, which is MariaDB's rule rather than SchemaSmith's. A column that defaults to a sequence is declared with the bare name, `nextval(`invoice_number_seq`)`, which is how SchemaTongs writes it: the catalog qualifies it with the database, and a package has to deploy to any database.
+
+```json
+{
+  "Name": "invoice_number_seq",
+  "Start": 1000,
+  "Increment": 1,
+  "Cache": 1000,
   "Cycle": false
 }
 ```

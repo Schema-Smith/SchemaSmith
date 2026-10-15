@@ -90,7 +90,9 @@ public sealed class TableFileNameCheck : ISchemaCheck
     }
 
     private static bool IsUnderModeledFolder(string path, Platform platform) =>
-        ModeledFolders.Any(m => m.Platform == platform.GetBasePlatform() && IsUnderFolder(path, m.Folder));
+        ModeledFolders.Any(m => m.Platform == platform.GetBasePlatform() && IsUnderFolder(path, m.Folder))
+        // MariaDB alone of its family reads Sequences/*.json (Template.LoadSequences), so it is keyed on the exact platform.
+        || (platform == Platform.MariaDb && IsUnderFolder(path, "Sequences"));
 
     private static bool IsUnderFolder(string path, string folder) =>
         path.Split('\\', '/').Any(segment => segment.Equals(folder, StringComparison.Ordinal));
