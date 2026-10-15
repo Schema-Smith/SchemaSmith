@@ -263,7 +263,7 @@
           },
           "Enforced": {
             "type": "boolean",
-            "description": "false declares the constraint NOT ENFORCED (PostgreSQL 18): it is kept but not checked. Below 18 it deploys enforced under UnsupportedFeaturePolicy. Omitted means enforced, and a deploy enforces a constraint someone stopped enforcing."
+            "description": "false declares the constraint NOT ENFORCED (PostgreSQL 18): it is kept but not checked. Below 18 it deploys enforced under UnsupportedFeaturePolicy. Omitted means enforced. PostgreSQL cannot alter a check constraint's enforceability, so a change drops and re-creates it."
           },
           "Validated": {
             "type": "boolean",
