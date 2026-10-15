@@ -500,6 +500,7 @@ Every table definition file declares exactly one table. The shared properties be
 | Property | Type | Default | Required | Description |
 |---|---|---|---|---|
 | `Name` | string | | Yes | Table name. Use the platform's quote style: `[Customer]` (SQL Server), `"customer"` (PostgreSQL), `` `customer` `` (MySQL). Bare names are also accepted. |
+| `Description` | string | | No | A description stored on the table itself: the `MS_Description` extended property on SQL Server, `COMMENT ON TABLE` on PostgreSQL, the table `COMMENT` on MySQL and MariaDB. See [Descriptions](#descriptions). |
 | `Columns` | array | `[]` | Yes | Column definitions. See [Columns](#columns). |
 | `Indexes` | array | `[]` | No | Index and constraint definitions. See [Indexes](#indexes). |
 | `ForeignKeys` | array | `[]` | No | Foreign key definitions. See [Foreign Keys](#foreign-keys). |
@@ -576,7 +577,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | `RowFormat` | string | `null` | Row format: `"DYNAMIC"`, `"COMPACT"`, `"COMPRESSED"`, or `"REDUNDANT"`. |
 | `CharacterSet` | string | `null` | Default character set for the table. |
 | `Collation` | string | `null` | Default collation for the table. |
-| `Comment` | string | `null` | Table comment. |
+| `Comment` | string | `null` | **Deprecated** alias of the shared `Description`. Still deploys; `--Validate` reports it (`SS-DESC-002`), and SchemaTongs writes `Description`. |
 | `AutoIncrementValue` | ulong | `null` | Initial auto-increment seed value. Applied at quench time using set-if-higher semantics: the seed is only raised, never lowered (MySQL clamps a below-current value to max+1, so skipping the statement avoids phantom DDL on every quench). |
 | `FullTextIndexes` | array | `[]` | Full-text index definitions (MySQL supports multiple per table). See [Full-Text Indexes (MySQL)](#full-text-indexes-mysql). |
 | `Compression` | string | `null` | **MySQL only.** InnoDB transparent page compression: `"zlib"`, `"lz4"` or `"none"`. Cannot be combined with `RowFormat: "COMPRESSED"` — MySQL refuses that with error 1031, and `--Validate` reports `SS-CO-001` first. Applied when the table is created; a server whose data directory cannot punch holes creates it uncompressed under the [unsupported-feature policy](schemaquench.md#mysql--mariadb). MariaDB spells this `PageCompressed`. |
@@ -596,7 +597,7 @@ MariaDB tables carry every MySQL property above, plus the ones below for feature
 | `RowFormat` | string | `null` | Row format: `"DYNAMIC"`, `"COMPACT"`, `"COMPRESSED"`, or `"REDUNDANT"`. |
 | `CharacterSet` | string | `null` | Default character set for the table. |
 | `Collation` | string | `null` | Default collation for the table. |
-| `Comment` | string | `null` | Table comment. |
+| `Comment` | string | `null` | **Deprecated** alias of the shared `Description`. Still deploys; `--Validate` reports it (`SS-DESC-002`), and SchemaTongs writes `Description`. |
 | `AutoIncrementValue` | ulong | `null` | Initial auto-increment seed value. Applied at quench time using set-if-higher semantics: the seed is only raised, never lowered (MariaDB clamps a below-current value to max+1, so skipping the statement avoids phantom DDL on every quench). |
 | `FullTextIndexes` | array | `[]` | Full-text index definitions (MariaDB supports multiple per table). See [Full-Text Indexes (MySQL)](#full-text-indexes-mysql). |
 | `IsSystemVersioned` | bool | `false` | The table keeps its own row history (`WITH SYSTEM VERSIONING`, MariaDB 10.3+). **Deployed, not just extracted:** a new table is created `WITH SYSTEM VERSIONING`, and an existing ordinary table that starts declaring it converges through `ALTER TABLE … ADD SYSTEM VERSIONING`. Detected from `INFORMATION_SCHEMA.TABLES.TABLE_TYPE`, which answers for both authoring forms. **Removing it is refused by name** — MariaDB's `DROP SYSTEM VERSIONING` purges the accumulated row history rather than switching the attribute off, so SchemaSmith stops instead, and **the refusal fires under `--WhatIf` too**. Extraction only writes the property when it is true, so that refusal reaches you only after a deliberate hand-edit. Requires MariaDB 10.3; below that, and on MySQL at any version, the clause is dropped and the degrade is reported through [`Target:UnsupportedFeaturePolicy`](configuration.md). |
@@ -671,6 +672,7 @@ Every entry in the `Columns` array defines one column. The shared shape is small
 | `DataType` | string | | Platform-appropriate data type with precision/scale/length. SQL Server: `NVARCHAR(50)`, `INT IDENTITY(1,1)`. PostgreSQL: `VARCHAR(50)`, `INTEGER GENERATED ALWAYS AS IDENTITY`. MySQL: `VARCHAR(50)`, `INT AUTO_INCREMENT`. |
 | `Nullable` | bool | `false` | Whether the column allows NULL. |
 | `Default` | string | | Default constraint expression -- e.g., `"getdate()"` (SQL Server), `"now()"` (PostgreSQL), `"CURRENT_TIMESTAMP"` (MySQL). |
+| `Description` | string | | The column's description: `MS_Description` on SQL Server, `COMMENT ON COLUMN` on PostgreSQL, the column `COMMENT` on MySQL and MariaDB. See [Descriptions](#descriptions). |
 | `ShouldApplyExpression` | string | | Conditional inclusion. See [Conditional Application](#conditional-application). |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `OldName` | string | `""` | Previous column name for rename detection. Clear after the rename has deployed everywhere. |
@@ -724,7 +726,7 @@ to the end of the table, as an identity removal does.
 
 ### MySQL column extras
 
-`GenerationExpression`, `CharacterSet`, `Collation`, `Comment`, and `AutoIncrement` (bool) for an `AUTO_INCREMENT` column -- or spell it in `DataType` (`INT AUTO_INCREMENT`).
+`GenerationExpression`, `CharacterSet`, `Collation`, and `AutoIncrement` (bool) for an `AUTO_INCREMENT` column (`Comment` is the deprecated alias of the shared `Description`) -- or spell it in `DataType` (`INT AUTO_INCREMENT`).
 
 `DataType` accepts the engine's synonyms, and a column declared with one is not changed again on the next deploy: `INTEGER`, `BOOL`/`BOOLEAN`, `DEC`/`NUMERIC`/`FIXED`, `REAL`, `DOUBLE PRECISION`, `FLOAT4`/`FLOAT8`, `INT1`-`INT8`, `MIDDLEINT`, `LONG`/`LONG VARCHAR`/`LONG VARBINARY`, `CHARACTER`/`CHARACTER VARYING`, and the national types (`NVARCHAR`, `NCHAR`, `NATIONAL CHAR`/`VARCHAR`), which mean `utf8mb3` unless the column declares a `CharacterSet`. A bare `DECIMAL`, `CHAR`, `BIT` or `BINARY` means its default length (`DECIMAL(10,0)`, length 1). `GEOMETRYCOLLECTION` and `GEOMCOLLECTION` are the same type.
 
@@ -922,6 +924,7 @@ Every entry in the `Indexes` array defines an index or key constraint on the tab
 | `IndexColumns` | string | | Comma-separated column names with optional sort direction. |
 | `IncludeColumns` | string | | Comma-separated INCLUDE/covering columns where supported. |
 | `FilterExpression` | string | | Filtered/partial index WHERE clause. |
+| `Description` | string | | The index's description: `MS_Description` on the index or its key constraint on SQL Server, `COMMENT ON INDEX` on PostgreSQL, the index `COMMENT` on MySQL and MariaDB. See [Descriptions](#descriptions). |
 | `ShouldApplyExpression` | string | | Conditional inclusion. See [Conditional Application](#conditional-application). |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `Extensions` | object | `null` | Custom metadata. See [Custom Properties](custom-properties.md). |
@@ -1500,7 +1503,8 @@ MySQL allows **multiple** full-text indexes per table, so the property is `FullT
 | `Name` | string | Index name. |
 | `Columns` | string | Comma-separated column names. |
 | `Parser` | string | Optional parser name (e.g., `"ngram"`). |
-| `Comment` | string | Index comment. |
+| `Description` | string | The index's `COMMENT`. See [Descriptions](#descriptions). |
+| `Comment` | string | **Deprecated** alias of `Description`. Still deploys; `--Validate` reports it (`SS-DESC-002`). |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `Extensions` | object | Custom metadata. |
@@ -1610,6 +1614,7 @@ Indexed views are defined as JSON files in the `Indexed Views/` directory of eac
 | `Name` | string | View name. |
 | `Schema` | string | Schema name. Defaults to `"dbo"`. |
 | `Definition` | string | The complete view definition SQL (the SELECT statement). |
+| `Description` | string | The view's `MS_Description` extended property. See [Descriptions](#descriptions). |
 | `Indexes` | array | Indexes on the view. An indexed view must have a unique clustered index. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
@@ -1688,6 +1693,7 @@ Sequences live in the `Sequences/` directory of each template, which accepts bot
 | `MaxValue` | long | `null` | Omit for the type's natural maximum. |
 | `Cache` | long | `1` | Values pre-allocated per session. Higher is faster but leaves larger gaps after a crash. |
 | `Cycle` | bool | `false` | Wrap to `MinValue` after `MaxValue` instead of erroring. |
+| `Description` | string | `null` | **PostgreSQL.** `COMMENT ON SEQUENCE`. A MariaDB sequence has no comment, so the key is not offered there. See [Descriptions](#descriptions). |
 
 **The current value is never managed.** A sequence's position records which numbers have already been handed out, so it is data rather than schema. If a deploy reset it, the next insert would re-issue keys already in use. `Start` only applies when the sequence is created; SchemaSmith never issues `RESTART`, and extraction never captures the current value.
 
@@ -1734,6 +1740,7 @@ Domain types live in the `Domain Types/` directory of each template, which accep
 | `Default` | string | `null` | Default applied to a column of this domain that declares no default of its own. Converges in place. |
 | `CheckConstraints` | array | `[]` | Named `CHECK` constraints — `{ "Name": "...", "Expression": "VALUE > 0" }`. Write the predicate alone, without the surrounding `CHECK (…)`. |
 | `Collation` | string | `null` | The domain's collation when it differs from the base type's, such as `"C"`; one in another schema is written delimited, as `"sales"."ci"`. Create-time only: PostgreSQL cannot alter it, so a change is refused rather than attempted. Leave it out and it is not checked. |
+| `Description` | string | `null` | `COMMENT ON DOMAIN`. See [Descriptions](#descriptions). |
 
 **Constraints converge as a set.** One the package declares and the server lacks is added; one the server has and the package no longer declares is dropped. Dropping is safe here in a way removing an enum value is not — it removes a validation rule, destroys no data, and cascades to nothing.
 
@@ -1769,6 +1776,7 @@ Enum types live in the `Enum Types/` directory of each template, which accepts *
 | `Name` | string | | Type name. Required. |
 | `Schema` | string | `"public"` | Schema name. |
 | `Values` | array of string | | The labels, **in order**. Required. |
+| `Description` | string | `null` | `COMMENT ON TYPE`. See [Descriptions](#descriptions). |
 
 **Order matters.** PostgreSQL sorts and compares enum values by declared position, not alphabetically, so a value you add in the middle of the list is added in the middle of the type — not appended.
 
@@ -1846,7 +1854,8 @@ Existing packages need no change. Declaring the same event both ways is reported
 | `Ends` | string | `null` | Optional end of the recurrence window. |
 | `Status` | string | `"ENABLE"` | `"ENABLE"`, `"DISABLE"` or `"DISABLE ON SLAVE"`. Read the same way as `ScheduleType`, and any other value stops the deploy — falling back to `ENABLE` would switch on an event the package meant to leave off. |
 | `Preserve` | bool | `false` | When true the event survives its last run instead of dropping itself. Matches the engine default (`NOT PRESERVE`). |
-| `Comment` | string | `null` | Event comment. |
+| `Description` | string | `null` | The event's `COMMENT`. An omitted value clears a comment the server has, as the engine's own DDL does. |
+| `Comment` | string | `null` | **Deprecated** alias of `Description`. Still deploys; `--Validate` reports it (`SS-DESC-002`). |
 | `TimeZone` | string | `null` | The time zone `Starts`, `Ends` and `ExecuteAt` are read in, as the engine stores it: an offset such as `"+05:00"`, or a named zone on a server with time-zone tables. The deploy sets it on its session around the `CREATE` and restores the session's own zone. Omitted, the event takes the deploying session's zone and the server's value is not compared. SchemaTongs writes it unless the event's zone is `SYSTEM`. |
 | `SqlMode` | string | `null` | The `sql_mode` the body runs under, written as the engine reports it (`SELECT @@sql_mode` after `SET`; the engine canonicalises the list). Compared as a set of flags, so the order does not matter. The deploy sets it around the `CREATE` and restores the session's own mode. Omitted, the event takes the deploying session's mode and the server's value is not compared. SchemaTongs always writes it. |
 
@@ -1874,6 +1883,7 @@ Materialized views live in the `Materialized Views/` directory of each template.
 | `Name` | string | | View name. |
 | `Schema` | string | `"public"` | Schema name. |
 | `Definition` | string | | The complete view definition SQL. |
+| `Description` | string | `null` | `COMMENT ON MATERIALIZED VIEW`. See [Descriptions](#descriptions). |
 | `WithData` | bool | `true` | Whether the materialized view is populated immediately. Set to `false` for `WITH NO DATA`. |
 | `Tablespace` | string | `null` | Optional tablespace. |
 | `AccessMethod` | string | `null` | Storage access method. |
@@ -1901,6 +1911,25 @@ Materialized views live in the `Materialized Views/` directory of each template.
 ```
 
 A materialized view that should be skipped for non-production environments is one `ShouldApplyExpression` away.
+
+## Descriptions
+
+A table, column, index, indexed view, materialized view, sequence, enum type and domain type can carry a `Description`. It is one key on every engine, stored where the engine keeps such things:
+
+| Engine | Where `Description` lives |
+|---|---|
+| SQL Server | The `MS_Description` extended property, the one SSMS and most documentation tools read. On an index that backs a primary key or unique constraint it sits on the constraint. |
+| PostgreSQL | `COMMENT ON TABLE` / `COLUMN` / `INDEX` / `MATERIALIZED VIEW` / `SEQUENCE` / `TYPE` / `DOMAIN`. |
+| MySQL, MariaDB | The `COMMENT` clause of the table, column, index, full-text index or event. |
+
+**Three states, and the engines differ on one of them.** A declared description is set, and a changed one is updated in place without rebuilding anything. `"Description": ""` removes it. An *omitted* `Description` means something different on SQL Server and PostgreSQL than on MySQL and MariaDB:
+
+- **SQL Server and PostgreSQL:** an omitted `Description` is not managed. Whatever the database has stays, so a package that never mentions descriptions never touches the ones a DBA wrote, and a re-created indexed or materialized view keeps the comment it had.
+- **MySQL and MariaDB:** the comment is part of the object's definition, so an omitted `Description` clears a comment the server has, exactly as the engine's own `CREATE TABLE` would. This is how `Comment` has always behaved there.
+
+**Extraction writes `Description`.** SchemaTongs reads the description back under that key on every engine. On SQL Server, `MS_Description` is the one extended property with a key of its own; every other extended property on a table, column or index is still recorded under `Extensions.ExtendedProperties`, where SchemaQuench reads it as custom metadata and does not deploy it.
+
+**Older spellings still deploy.** `Comment` on a MySQL or MariaDB table, column, index, full-text index or event, and a SQL Server `MS_Description` left inside `Extensions.ExtendedProperties` (where extraction used to put it), are read as the description when `Description` is absent. `--Validate` reports each (`SS-DESC-002`) and stops a package whose two spellings disagree (`SS-DESC-001`), since the deploy would apply `Description` and ignore the other. Re-extracting the package rewrites the old spelling.
 
 ---
 

@@ -531,10 +531,11 @@ EXEC sys.sp_addextendedproperty 'MS_Description', 'An index', 'SCHEMA', [dbo], '
             // ProductName should be filtered from all EP locations
             Assert.That(json, Does.Not.Contain("ProductName"));
 
-            // User EPs should still be present
-            Assert.That(result.Extensions?["ExtendedProperties"]?["MS_Description"]?.ToString(), Is.EqualTo("A test table"));
-            Assert.That(result.Columns[0].Extensions?["ExtendedProperties"]?["MS_Description"]?.ToString(), Is.EqualTo("An integer column"));
-            Assert.That(result.Indexes[0].Extensions?["ExtendedProperties"]?["MS_Description"]?.ToString(), Is.EqualTo("An index"));
+            // MS_Description has a key of its own and stays out of the bag.
+            Assert.That(result.Description, Is.EqualTo("A test table"));
+            Assert.That(result.Columns[0].Description, Is.EqualTo("An integer column"));
+            Assert.That(result.Indexes[0].Description, Is.EqualTo("An index"));
+            Assert.That(json, Does.Not.Contain("MS_Description"), "it is Description now, not an entry in ExtendedProperties");
         });
 
         conn.Close();

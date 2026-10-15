@@ -48,6 +48,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                    WHEN 'x' THEN 'EXTENDED'
                                    ELSE 'DEFAULT' END AS "Storage",
                                "SchemaSmith"."ColumnCompression"(a.attrelid, a.attnum) AS "Compression",
+                               COL_DESCRIPTION(a.attrelid, a.attnum) AS "Description",
                                '' AS "ShouldApplyExpression",
                                '' AS "OldName"
                           FROM information_schema.columns c
@@ -108,7 +109,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                -- extracts byte-identically to before this shipped.
                                (SELECT JSON_OBJECT_AGG(SPLIT_PART(opt, '=', 1), SPLIT_PART(opt, '=', 2))
                                   FROM UNNEST(i.reloptions) AS o(opt)
-                                 WHERE opt NOT LIKE 'fillfactor=%') AS "StorageParameters"
+                                 WHERE opt NOT LIKE 'fillfactor=%') AS "StorageParameters",
+                               OBJ_DESCRIPTION(i.oid, 'pg_class') AS "Description"
                           FROM pg_index idx
                           JOIN pg_class i ON i.oid = idx.indexrelid
                           LEFT JOIN pg_catalog.pg_constraint con ON con.conrelid = idx.indrelid AND con.conname = i.relname AND con.contype IN ('p', 'u', 'x')
@@ -238,7 +240,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                     END AS "ReplicaIdentityIndex",
                -- Same 0-means-default rule as the index block above. Closes the asymmetry with
                -- materialized views, which have carried Tablespace since they shipped.
-               (SELECT ts.spcname FROM pg_tablespace ts WHERE ts.oid = rls.reltablespace) AS "Tablespace"
+               (SELECT ts.spcname FROM pg_tablespace ts WHERE ts.oid = rls.reltablespace) AS "Tablespace",
+               OBJ_DESCRIPTION(rls.oid, 'pg_class') AS "Description"
           FROM information_schema.tables t
           JOIN pg_class rls ON rls.relname = t.table_name
                            AND rls.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = t.table_schema)

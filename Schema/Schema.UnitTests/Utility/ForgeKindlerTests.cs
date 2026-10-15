@@ -336,7 +336,7 @@ public class ForgeKindlerTests
         //   the package does not carry -- grants, owner, comments, extended properties -- captured before and put back after).
         // +2 on SQL Server = CaptureSignatures + ReapplySignatures (a changed module's signatures, captured before the
         //   ALTER that strips them and applied again after it).
-        Assert.That(sqlServer.Length, Is.EqualTo(54));
+        Assert.That(sqlServer.Length, Is.EqualTo(55));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -374,7 +374,7 @@ public class ForgeKindlerTests
         // + RecordWouldChanges (WhatIf writes the change rows a quench script carries, as previews).
                 // + Kindling_ScriptStamp_Table (the unchanged-module stamp: the script text hash and the engine rendering hash
         //   recorded after a successful object script, read before the next run of the same script).
-        Assert.That(postgres.Length, Is.EqualTo(56));
+        Assert.That(postgres.Length, Is.EqualTo(57));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor

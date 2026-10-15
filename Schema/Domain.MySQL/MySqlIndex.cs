@@ -16,6 +16,8 @@ namespace Schema.Domain.MySQL
         [DefaultValue(true)]
         public bool Visible { get; set; } = true;
 
+        // TRANSITIONAL (Comment is the pre-2.8 spelling of Description on MySQL and MariaDB; roadmap WS-13 tracks its removal)
+        [SchemaProperty(Deprecated = true, Description = "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002).")]
         [JsonProperty(Order = 102)]
         public string Comment { get; set; }
     }

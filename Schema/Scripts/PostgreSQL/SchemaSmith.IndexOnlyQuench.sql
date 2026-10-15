@@ -73,6 +73,7 @@ BEGIN
            -- ParseTableJsonIntoTempTables makes, so every index column has to be declared in both.
            COALESCE(celem ->> 'Tablespace', '') AS "Tablespace",
            COALESCE(celem ->> 'FilterExpression', '') AS "FilterExpression",
+           celem ->> 'Description' AS "Description",
            COALESCE((celem ->> 'Deferrable')::BOOLEAN, false) AS "Deferrable",
            COALESCE((celem ->> 'InitiallyDeferred')::BOOLEAN, false) AS "InitiallyDeferred",
            -- Below PG15 NULLS NOT DISTINCT does not exist: the effective column drives compare + emit
@@ -530,6 +531,9 @@ BEGIN
                         WHERE ste.stxname = ts."Name")
       AND NOT ("SchemaSmith"."ServerVersionNum"() < 14 AND ts."StatisticsColumns" LIKE '%(%');
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
+  -- Index descriptions, once every index exists.
+  CALL "SchemaSmith"."DescriptionQuench"(p_WhatIf, true);
 
   -- #242: record what the index-only pass applied.
   CALL "SchemaSmith"."ExpressionMapRecord"(p_WhatIf);

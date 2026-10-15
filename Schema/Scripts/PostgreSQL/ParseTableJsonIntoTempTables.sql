@@ -38,6 +38,8 @@
            -- SECOND deploy, in packages that never mentioned placement.
            COALESCE(elem ->> 'Tablespace', '') AS "Tablespace",
            COALESCE(elem ->> 'PersistenceType', '') AS "PersistenceType",
+           -- NULL when omitted (leave the database's comment alone), '' when the package asks for it removed.
+           elem ->> 'Description' AS "Description",
            -- Empty string means "not declared, leave the server alone", the AccessMethod convention. #407
            COALESCE(UPPER(elem ->> 'ReplicaIdentity'), '') AS "ReplicaIdentity",
            COALESCE(elem ->> 'ReplicaIdentityIndex', '') AS "ReplicaIdentityIndex",
@@ -82,6 +84,7 @@
            (celem ->> 'Nullable') IS NOT NULL AS "NullableDeclared",
            COALESCE(celem ->> 'Default', '') AS "Default",
            COALESCE(celem ->> 'Collation', '') AS "Collation",
+           celem ->> 'Description' AS "Description",
            -- An expression is only ever a generated column on PostgreSQL, so an omitted Generated beside one means
            -- ALWAYS. Reading it as NEVER built a plain column that every later comparison then read as generated.
            CASE WHEN NULLIF(celem ->> 'Generated', '') IS NOT NULL THEN celem ->> 'Generated'
@@ -269,6 +272,7 @@
            COALESCE(celem ->> 'AccessMethod', 'btree') AS "AccessMethod",
            COALESCE(celem ->> 'Tablespace', '') AS "Tablespace",
            COALESCE(celem ->> 'FilterExpression', '') AS "FilterExpression",
+           celem ->> 'Description' AS "Description",
            COALESCE((celem ->> 'Deferrable')::BOOLEAN, false) AS "Deferrable",
            COALESCE((celem ->> 'InitiallyDeferred')::BOOLEAN, false) AS "InitiallyDeferred",
            -- Below PG15 NULLS NOT DISTINCT does not exist: the effective column drives compare + emit

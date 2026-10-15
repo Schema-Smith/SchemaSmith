@@ -428,6 +428,9 @@ public static class ForgeKindler
                 new("SchemaSmith.CdcIndexGuard.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 new("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"),
+                // Declared descriptions (MS_Description), converged once every table, column and index exists.
+                // Must precede TableQuench and IndexOnlyQuench, which CALL it.
+                new("SchemaSmith.DescriptionQuench.sql"),
                 // Must follow MissingIndexesAndConstraintsQuench: enabling change tracking requires a
                 // primary key, which a table created in the same run does not have until that pass.
                 new("SchemaSmith.ChangeTrackingQuench.sql"),
@@ -495,6 +498,9 @@ public static class ForgeKindler
                 new("SchemaSmith.BuildExistingIndexesSnapshot.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 new("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"),
+                // Declared descriptions (COMMENT ON), converged once every table, column and index exists.
+                // Must precede TableQuench and IndexOnlyQuench, which CALL it.
+                new("SchemaSmith.DescriptionQuench.sql"),
                 // Must follow MissingIndexesAndConstraintsQuench: REPLICA IDENTITY USING INDEX names an
                 // index, which a table created in the same run does not have until that pass.
                 new("SchemaSmith.ReplicaIdentityQuench.sql"),

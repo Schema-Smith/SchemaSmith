@@ -86,6 +86,10 @@ namespace Schema.Domain.PostgreSQL
         [JsonProperty(Order = 7, NullValueHandling = NullValueHandling.Ignore)]
         public string Collation { get; set; }
 
+        [SchemaProperty(Description = "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it.")]
+        [JsonProperty(Order = 8, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
         [JsonProperty(Order = 10, NullValueHandling = NullValueHandling.Ignore)]
         public string ShouldApplyExpression { get; set; }
 

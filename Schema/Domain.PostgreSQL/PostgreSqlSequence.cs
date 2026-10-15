@@ -45,6 +45,10 @@ namespace Schema.Domain.PostgreSQL
         [JsonProperty(Order = 4, NullValueHandling = NullValueHandling.Ignore)]
         public long? Start { get; set; }
 
+        [SchemaProperty(Description = "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it.")]
+        [JsonProperty(Order = 13, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
         [SchemaProperty(Description = "Step between values. Negative for a descending sequence.")]
         [JsonProperty(Order = 5)]
         [DefaultValue(1L)]

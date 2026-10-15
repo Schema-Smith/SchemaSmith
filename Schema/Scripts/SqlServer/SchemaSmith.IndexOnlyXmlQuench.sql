@@ -74,7 +74,7 @@ BEGIN TRY
                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''
                                ORDER BY SchemaSmith.fn_SafeBracketWrap([value]) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0),
-         i.[ShouldApplyExpression], i.[VariantName]
+         i.[ShouldApplyExpression], i.[VariantName], i.[Description]
     INTO #Indexes
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/Indexes') AS Y(idx)
@@ -97,7 +97,8 @@ BEGIN TRY
       [PartitionColumn] = idx.value('(PartitionColumn/text())[1]', 'NVARCHAR(500)'),
       [UpdateFillFactor] = CONVERT(BIT, CASE LOWER(idx.value('(UpdateFillFactor/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [ShouldApplyExpression] = idx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
-      [VariantName] = idx.value('(VariantName/text())[1]', 'NVARCHAR(128)')
+      [VariantName] = idx.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
+      [Description] = COALESCE(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), idx.value('(Extensions/ExtendedProperties/MS_Description/text())[1]', 'NVARCHAR(MAX)'))
       ) i;
 
   -- Identify Indexes to skip based on ShouldApply expression (scoped by [_RowId])
@@ -1050,6 +1051,9 @@ BEGIN TRY
       SELECT @@SPID, 'fullTextIndex', fi.[Schema] + '.' + fi.[TableName], 'wouldCreate'
         FROM #FullTextIndexes fi WITH (NOLOCK)
         WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
+
+  -- Index descriptions, once every index exists.
+  EXEC SchemaSmith.DescriptionQuench @WhatIf = @WhatIf, @IndexesOnly = 1
 
   -- #242: record here, not in the caller -- this proc's temp tables are gone the moment it returns.
   EXEC SchemaSmith.ExpressionMapRecord @WhatIf

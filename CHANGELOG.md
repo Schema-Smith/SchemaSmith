@@ -14,6 +14,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Added
 
+- **`Description` on tables, columns, indexes, indexed views, materialized views, sequences, enum types and domain types: one key on every engine.** It is the `MS_Description` extended property on SQL Server, `COMMENT ON` on PostgreSQL and the `COMMENT` clause on MySQL and MariaDB. SchemaQuench sets a declared description, updates a changed one in place without rebuilding the object, and removes one declared as `""`. On SQL Server and PostgreSQL an omitted `Description` leaves the database's own alone, so a package that never mentions descriptions never touches the ones a DBA wrote. SchemaTongs writes `Description` on every engine, and a SQL Server `MS_Description` no longer lands inside `Extensions.ExtendedProperties`. `--Validate` reports the older spellings (`SS-DESC-002`) and stops a package whose two spellings disagree (`SS-DESC-001`).
 - **`--Validate` checks a full-text index's `KeyIndex` (`SS-FT-001`, SQL Server).** SQL Server builds a full-text index only over an unfiltered unique index on a single `NOT NULL` column, and refuses anything else with error 7653 when the deploy creates it. A `KeyIndex` naming no declared index, or one that is not unique, has more than one key column, has a filter, or has a nullable key column, is now an error before the deploy, as `CdcIndexName` already was.
 - **`--ExitNonZeroOnWarning` on every tool.** With the switch, or the `ExitNonZeroOnWarning` setting, a run that would exit `0` but logged a warning exits `1`, for pipelines that treat warnings as failures. Failure codes are unchanged.
 - **`--Validate` reports a PostgreSQL name longer than 63 bytes (`SS-IDENT-002`).** PostgreSQL truncates such a name with only a notice, so the object was created under a shorter name and the next deploy, looking for the declared one, failed creating it again. The limit is in bytes, so a name in multi-byte characters reaches it sooner than its length suggests.
@@ -43,6 +44,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Deprecated
 
+- **`Comment` on a MySQL or MariaDB table, column, index, full-text index or event is now `Description`.** The old key still deploys and `--Validate` reports it (`SS-DESC-002`); re-extracting with SchemaTongs rewrites it. A SQL Server `MS_Description` left inside `Extensions.ExtendedProperties` by an older extraction is honoured the same way.
 - **`ShouldCast:ScriptDynamicDependencyRemovalForFunctions` does nothing and SchemaTongs warns when it is set.** The preamble it wrote dropped every object whose definition mentioned the function's name on every deploy, and could not run on a database with a CHECK constraint that referenced the function. The deploy now drops only the schema-bound dependents a changed module is blocked by, once, and puts them back (see Added). Remove the setting.
 
 ### Fixed

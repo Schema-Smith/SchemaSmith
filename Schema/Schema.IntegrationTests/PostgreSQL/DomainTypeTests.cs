@@ -329,4 +329,29 @@ public class DomainTypeTests
                 "a preview with side effects is the worst of both");
         });
     }
+
+    private static string Comment(IDbCommand cmd, string name)
+    {
+        cmd.CommandText = "SELECT OBJ_DESCRIPTION(t.oid, 'pg_type') FROM pg_type t WHERE t.typname = '" + name + "' AND t.typtype = 'd'";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    [Test]
+    public void ADeclaredDescription_IsSet_ChangedInPlace_LeftAloneWhenOmitted_AndRemovedByAnEmptyString()
+    {
+        OnDb(cmd =>
+        {
+            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"money_d\", \"DataType\": \"numeric(10,2)\", \"Description\": \"an amount\" }]");
+            Assert.That(Comment(cmd, "money_d"), Is.EqualTo("an amount"), "set on create");
+
+            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"money_d\", \"DataType\": \"numeric(10,2)\", \"Description\": \"an amount in dollars\" }]");
+            Assert.That(Comment(cmd, "money_d"), Is.EqualTo("an amount in dollars"), "a change converges in place");
+
+            Deploy(cmd, Package("money_d", "numeric(10,2)"));
+            Assert.That(Comment(cmd, "money_d"), Is.EqualTo("an amount in dollars"), "omitted means the comment is not managed, so the database's stays");
+
+            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"money_d\", \"DataType\": \"numeric(10,2)\", \"Description\": \"\" }]");
+            Assert.That(Comment(cmd, "money_d"), Is.Null, "an empty string is the request to remove it");
+        });
+    }
 }

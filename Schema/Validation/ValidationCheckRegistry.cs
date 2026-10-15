@@ -21,6 +21,7 @@ public static class ValidationCheckRegistry
         new DeprecationCheck(),
         new SequenceScriptCheck(),
         new ModuleSyntaxCheck(),
+        new DescriptionCheck(),
         new JsonSchemaCheck()
     };
 }

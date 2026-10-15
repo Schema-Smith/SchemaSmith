@@ -368,6 +368,8 @@ An "orphan" might be a script for an object that was genuinely removed from the 
 
 Custom metadata you've attached to your tables under [`Extensions`](custom-properties.md) is preserved across re-extractions. When SchemaTongs writes a table file, it checks whether a previous file existed for the same table and copies the previous `Extensions` content forward onto the freshly extracted table.
 
+One entry is not carried: a SQL Server `MS_Description` left inside `ExtendedProperties` by an older extraction. That value is `Description` now, read fresh from the database on every extraction, so the stale copy is dropped rather than left to disagree with it (see [Descriptions](schema-packages.md#descriptions)).
+
 The preservation pass uses the component's `Name` (with quote/bracket characters stripped, case-insensitive). For columns and the table itself, matching also falls back to `OldName`, so renamed components keep their custom metadata as long as you set `OldName` correctly before the rename is deployed.
 
 | Component | Matched By | All Platforms |

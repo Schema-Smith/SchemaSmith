@@ -45,7 +45,8 @@ BEGIN
                                            ORDER BY c.conname)
                              FROM pg_constraint c
                             WHERE c.contypid = ty.oid
-                              AND c.contype = 'c'), '[]'::JSON) AS "CheckConstraints"
+                              AND c.contype = 'c'), '[]'::JSON) AS "CheckConstraints",
+                 OBJ_DESCRIPTION(ty.oid, 'pg_type') AS "Description"
             FROM pg_type ty
             JOIN pg_namespace n ON n.oid = ty.typnamespace
            WHERE ty.typtype = 'd'

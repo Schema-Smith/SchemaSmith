@@ -51,7 +51,7 @@ BEGIN
         'RowFormat', t.ROW_FORMAT,
         'CharacterSet', SUBSTRING_INDEX(t.TABLE_COLLATION, '_', 1),
         'Collation', t.TABLE_COLLATION,
-        'Comment', CASE WHEN t.TABLE_COMMENT = '' THEN NULL ELSE t.TABLE_COMMENT END,
+        'Description', CASE WHEN t.TABLE_COMMENT = '' THEN NULL ELSE t.TABLE_COMMENT END,
         'AutoIncrementValue', t.AUTO_INCREMENT,
         -- These four live ONLY in CREATE_OPTIONS, a single free-text blob, which is why they share one
         -- parser and are read together. NULL (stripped by the JSON_REMOVE pass) when absent, so a table
@@ -197,7 +197,7 @@ BEGIN
                 THEN NULL  -- Don't include if same as table default
                 ELSE c.COLLATION_NAME
             END,
-            'Comment', CASE WHEN c.COLUMN_COMMENT = '' THEN NULL ELSE c.COLUMN_COMMENT END
+            'Description', CASE WHEN c.COLUMN_COMMENT = '' THEN NULL ELSE c.COLUMN_COMMENT END
         ), CASE WHEN c.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%'
                 THEN '$.___dummy___' ELSE '$.WithoutSystemVersioning' END)
         -- Alphabetical, matching SQL Server and PostgreSQL. Ordinal order made the same table extract
@@ -298,7 +298,7 @@ BEGIN
                     SEPARATOR ','
                 ),
                 'Visible', CASE WHEN SchemaSmith_IndexIsVisible(p_Schema, p_Table, s.INDEX_NAME) = 1 THEN TRUE ELSE FALSE END,
-                'Comment', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
+                'Description', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
             ) AS idx_json,
                    s.INDEX_NAME AS idx_name
             FROM INFORMATION_SCHEMA.STATISTICS s
@@ -328,7 +328,7 @@ BEGIN
                     SEPARATOR ','
                 ),
                 'Visible', CASE WHEN SchemaSmith_IndexIsVisible(p_Schema, p_Table, s.INDEX_NAME) = 1 THEN TRUE ELSE FALSE END,
-                'Comment', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
+                'Description', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
             ) AS idx_json,
                    s.INDEX_NAME AS idx_name
             FROM INFORMATION_SCHEMA.STATISTICS s
@@ -415,7 +415,7 @@ WHERE tc.TABLE_SCHEMA = @v_ccSchema
         SELECT JSON_OBJECT(
             'Name', s.INDEX_NAME,
             'Columns', GROUP_CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME) ORDER BY s.SEQ_IN_INDEX SEPARATOR ','),
-            'Comment', CASE WHEN MAX(s.INDEX_COMMENT) = '' THEN NULL ELSE MAX(s.INDEX_COMMENT) END
+            'Description', CASE WHEN MAX(s.INDEX_COMMENT) = '' THEN NULL ELSE MAX(s.INDEX_COMMENT) END
         ) AS ft_json,
                s.INDEX_NAME AS ft_name
         FROM INFORMATION_SCHEMA.STATISTICS s
@@ -445,7 +445,7 @@ WHERE tc.TABLE_SCHEMA = @v_ccSchema
 
     -- Remove null values for cleaner output
     SET v_json = JSON_REMOVE(v_json,
-        CASE WHEN JSON_EXTRACT(v_json, '$.Comment') IS NULL THEN '$.Comment' ELSE '$.___dummy___' END,
+        CASE WHEN JSON_EXTRACT(v_json, '$.Description') IS NULL THEN '$.Description' ELSE '$.___dummy___' END,
         CASE WHEN JSON_EXTRACT(v_json, '$.AutoIncrementValue') IS NULL THEN '$.AutoIncrementValue' ELSE '$.___dummy___' END,
         CASE WHEN JSON_EXTRACT(v_json, '$.RowFormat') IS NULL THEN '$.RowFormat' ELSE '$.___dummy___' END,
         CASE WHEN COALESCE(JSON_TYPE(JSON_EXTRACT(v_json, '$.PreventDrop')), 'NULL') = 'NULL' THEN '$.PreventDrop' ELSE '$.___dummy___' END,

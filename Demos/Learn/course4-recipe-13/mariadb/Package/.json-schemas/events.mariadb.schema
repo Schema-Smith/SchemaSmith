@@ -45,7 +45,13 @@
     },
     "Comment": {
       "type": "string",
-      "maxLength": 2048
+      "maxLength": 2048,
+      "description": "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002)."
+    },
+    "Description": {
+      "type": "string",
+      "maxLength": 2048,
+      "description": "Optional. The event's COMMENT. An omitted value clears a comment the server has, as the engine's own DDL does."
     },
     "VariantName": {
       "type": "string",

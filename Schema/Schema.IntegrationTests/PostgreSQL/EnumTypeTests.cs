@@ -288,4 +288,29 @@ public class EnumTypeTests
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
     }
+
+    private static string Comment(IDbCommand cmd, string name)
+    {
+        cmd.CommandText = "SELECT OBJ_DESCRIPTION(t.oid, 'pg_type') FROM pg_type t WHERE t.typname = '" + name + "'";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    [Test]
+    public void ADeclaredDescription_IsSet_ChangedInPlace_LeftAloneWhenOmitted_AndRemovedByAnEmptyString()
+    {
+        OnDb(cmd =>
+        {
+            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"mood_t\", \"Values\": [\"sad\", \"happy\"], \"Description\": \"how it feels\" }]");
+            Assert.That(Comment(cmd, "mood_t"), Is.EqualTo("how it feels"), "set on create");
+
+            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"mood_t\", \"Values\": [\"sad\", \"happy\"], \"Description\": \"how it feels today\" }]");
+            Assert.That(Comment(cmd, "mood_t"), Is.EqualTo("how it feels today"), "a change converges in place");
+
+            Deploy(cmd, Package("mood_t", "sad", "happy"));
+            Assert.That(Comment(cmd, "mood_t"), Is.EqualTo("how it feels today"), "omitted means the comment is not managed, so the database's stays");
+
+            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"mood_t\", \"Values\": [\"sad\", \"happy\"], \"Description\": \"\" }]");
+            Assert.That(Comment(cmd, "mood_t"), Is.Null, "an empty string is the request to remove it");
+        });
+    }
 }

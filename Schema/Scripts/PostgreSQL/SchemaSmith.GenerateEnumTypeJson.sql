@@ -20,7 +20,8 @@ BEGIN
                  ty.typname AS "Name",
                  (SELECT JSON_AGG(e.enumlabel ORDER BY e.enumsortorder)
                     FROM pg_enum e
-                   WHERE e.enumtypid = ty.oid) AS "Values"
+                   WHERE e.enumtypid = ty.oid) AS "Values",
+                 OBJ_DESCRIPTION(ty.oid, 'pg_type') AS "Description"
             FROM pg_type ty
             JOIN pg_namespace n ON n.oid = ty.typnamespace
            WHERE ty.typtype = 'e'

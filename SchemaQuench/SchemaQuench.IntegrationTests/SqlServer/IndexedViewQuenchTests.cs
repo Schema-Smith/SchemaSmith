@@ -1115,4 +1115,40 @@ EXEC sp_addextendedproperty 'MS_Description', 'kept column', 'SCHEMA', '{_schema
 
         conn.Close();
     }
+
+    private static string ViewDefinitionWithDescription(string description) =>
+        ViewDefinitionWithTwoIndexes().Replace("\"Name\":\"[vTestSummary]\",", "\"Name\":\"[vTestSummary]\",\"Description\":\"" + description + "\",");
+
+    private string ViewDescription(IDbCommand cmd)
+    {
+        cmd.CommandText = $"SELECT CONVERT(NVARCHAR(MAX), ep.value) FROM sys.extended_properties ep WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.name = 'MS_Description' AND ep.major_id = OBJECT_ID('[{_schema}].[vTestSummary]')";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    [Test]
+    public void ADeclaredDescription_IsSet_ChangedInPlace_LeftAloneWhenOmitted_AndRemovedByAnEmptyString()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithDescription("the summary"));
+        Assert.That(ViewDescription(cmd), Is.EqualTo("the summary"), "set on create");
+        cmd.CommandText = $"SELECT OBJECT_ID('[{_schema}].[vTestSummary]')";
+        var objectId = (int)cmd.ExecuteScalar()!;
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithDescription("the nightly summary"));
+        Assert.That(ViewDescription(cmd), Is.EqualTo("the nightly summary"), "a change converges in place");
+        cmd.CommandText = $"SELECT OBJECT_ID('[{_schema}].[vTestSummary]')";
+        Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(objectId), "a description change never re-creates the view");
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
+        Assert.That(ViewDescription(cmd), Is.EqualTo("the nightly summary"), "omitted means the description is not managed, so the database's stays");
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithDescription(""));
+        Assert.That(ViewDescription(cmd), Is.Null, "an empty string is the request to remove it");
+        EnsureViewDropped(cmd);
+    }
 }

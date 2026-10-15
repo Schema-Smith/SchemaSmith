@@ -304,4 +304,29 @@ public class SequenceTests
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
     }
+
+    private static string Comment(IDbCommand cmd, string name)
+    {
+        cmd.CommandText = "SELECT OBJ_DESCRIPTION(c.oid, 'pg_class') FROM pg_class c WHERE c.relname = '" + name + "' AND c.relkind = 'S'";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    [Test]
+    public void ADeclaredDescription_IsSet_ChangedInPlace_LeftAloneWhenOmitted_AndRemovedByAnEmptyString()
+    {
+        OnDb(cmd =>
+        {
+            Deploy(cmd, Package("seq_desc", ", \"Description\": \"counts things\""));
+            Assert.That(Comment(cmd, "seq_desc"), Is.EqualTo("counts things"), "set on create");
+
+            Deploy(cmd, Package("seq_desc", ", \"Description\": \"counts it's things\""));
+            Assert.That(Comment(cmd, "seq_desc"), Is.EqualTo("counts it's things"), "a change converges in place, quotes included");
+
+            Deploy(cmd, Package("seq_desc"));
+            Assert.That(Comment(cmd, "seq_desc"), Is.EqualTo("counts it's things"), "omitted means the comment is not managed, so the database's stays");
+
+            Deploy(cmd, Package("seq_desc", ", \"Description\": \"\""));
+            Assert.That(Comment(cmd, "seq_desc"), Is.Null, "an empty string is the request to remove it");
+        });
+    }
 }

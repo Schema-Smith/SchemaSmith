@@ -32,6 +32,10 @@ namespace Schema.Domain.PostgreSQL
         [DefaultValue(true)]
         public bool WithData { get; set; } = true;
 
+        [SchemaProperty(Description = "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it.")]
+        [JsonProperty(Order = 9, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
         [JsonProperty(Order = 5)]
         public string Tablespace { get; set; }
 

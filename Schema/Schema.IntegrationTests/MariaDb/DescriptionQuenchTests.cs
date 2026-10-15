@@ -4,17 +4,17 @@ using NUnit.Framework;
 using Schema.Domain;
 using Schema.IntegrationTests.Shared;
 
-namespace Schema.IntegrationTests.MySQL;
+namespace Schema.IntegrationTests.MariaDb;
 
 /// <summary>
-/// MySQL binding of the shared table/column/index COMMENT round-trip and drift tests.
+/// MariaDb binding of the shared table/column/index Description round-trip and drift tests.
 /// </summary>
-[Category("MySQL")]
+[Category("MariaDb")]
 [TestFixture]
 [Category("Integration")]
-public class CommentQuenchTests : CommentQuenchSharedTests
+public class DescriptionQuenchTests : DescriptionQuenchSharedTests
 {
-    protected override Platform Platform => Platform.MySQL;
+    protected override Platform Platform => Platform.MariaDb;
     protected override string MainDb => FixtureSetup.MainDb;
     protected override string MainConnectionString => FixtureSetup.GetMainDbConnectionString();
 }

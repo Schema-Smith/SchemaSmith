@@ -72,7 +72,10 @@
          [RebuildPolicyThreshold] = t.value('(RebuildPolicy/Threshold/text())[1]', 'INT'),
          [RebuildPolicyOnOrderMismatch] = CONVERT(BIT, CASE LOWER(t.value('(RebuildPolicy/OnOrderMismatch/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
          [RebuildPolicySpecified] = CONVERT(BIT, t.exist('RebuildPolicy/*/text()')),
-         [PreventDrop] = ISNULL(CONVERT(BIT, CASE LOWER(t.value('(PreventDrop/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END), 0)
+         [PreventDrop] = ISNULL(CONVERT(BIT, CASE LOWER(t.value('(PreventDrop/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END), 0),
+         -- Omitted stays NULL (leave the database's description alone), '' stays '' (remove it); an MS_Description
+         -- left inside Extensions.ExtendedProperties, where extraction used to put it, still counts.
+         [Description] = COALESCE(t.value('(Description/text())[1]', 'NVARCHAR(MAX)'), t.value('(Extensions/ExtendedProperties/MS_Description/text())[1]', 'NVARCHAR(MAX)'))
     INTO #TableDefinitions
     FROM @v_TableXml.nodes('/Tables/Table') AS X(t);
 
@@ -88,7 +91,7 @@
          CONVERT(BIT, CASE WHEN OBJECT_ID([Schema] + '.' + [Name], 'U') IS NULL AND OBJECT_ID([Schema] + '.' + [OldName], 'U') IS NULL THEN 1 ELSE 0 END) AS NewTable,
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified],
-         ISNULL([PreventDrop], 0) AS [PreventDrop]
+         ISNULL([PreventDrop], 0) AS [PreventDrop], [Description]
     INTO #Tables
     FROM #TableDefinitions WITH (NOLOCK);
 
@@ -144,7 +147,7 @@
                    CASE WHEN ISNULL(Nullable, 0) = 1 THEN ' NULL' ELSE ' NOT NULL' END +
                    CASE WHEN RTRIM(ISNULL([Default], '')) <> '' THEN ' DEFAULT ' + [Default] ELSE '' END
               END AS [ColumnScript],
-         c.[ShouldApplyExpression], c.[VariantName]
+         c.[ShouldApplyExpression], c.[VariantName], c.[Description]
     INTO #Columns
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/Columns') AS Y(col)
@@ -168,7 +171,8 @@
       [EncryptionAlgorithm] = col.value('(EncryptionAlgorithm/text())[1]', 'NVARCHAR(500)'),
       [ShouldApplyExpression] = col.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = col.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
-      [OldName] = col.value('(OldName/text())[1]', 'NVARCHAR(500)')
+      [OldName] = col.value('(OldName/text())[1]', 'NVARCHAR(500)'),
+      [Description] = COALESCE(col.value('(Description/text())[1]', 'NVARCHAR(MAX)'), col.value('(Extensions/ExtendedProperties/MS_Description/text())[1]', 'NVARCHAR(MAX)'))
       ) c;
 
   -- Identify Columns to skip based on ShouldApply expression (scoped by [_RowId]) — identical to JSON twin.
@@ -204,7 +208,7 @@
                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''
                                ORDER BY SchemaSmith.fn_SafeBracketWrap([value]) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0),
-         i.[ShouldApplyExpression], i.[VariantName]
+         i.[ShouldApplyExpression], i.[VariantName], i.[Description]
     INTO #Indexes
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/Indexes') AS Y(idx)
@@ -229,7 +233,8 @@
       [BucketCount] = idx.value('(BucketCount/text())[1]', 'INT'),
       [UpdateFillFactor] = CONVERT(BIT, CASE LOWER(idx.value('(UpdateFillFactor/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [ShouldApplyExpression] = idx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
-      [VariantName] = idx.value('(VariantName/text())[1]', 'NVARCHAR(128)')
+      [VariantName] = idx.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
+      [Description] = COALESCE(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), idx.value('(Extensions/ExtendedProperties/MS_Description/text())[1]', 'NVARCHAR(MAX)'))
       ) i;
 
   -- Identify Indexes to skip based on ShouldApply expression (scoped by [_RowId]) — identical to JSON twin.

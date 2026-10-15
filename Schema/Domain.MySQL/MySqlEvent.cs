@@ -85,7 +85,12 @@ namespace Schema.Domain.MySQL
         [JsonProperty(Order = 9)]
         public bool Preserve { get; set; }
 
-        [SchemaProperty(MaxLength = 2048)]
+        [SchemaProperty(MaxLength = 2048, Description = "Optional. The event's COMMENT. An omitted value clears a comment the server has, as the engine's own DDL does.")]
+        [JsonProperty(Order = 10, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
+        // TRANSITIONAL (Comment is the pre-2.8 spelling of Description on MySQL and MariaDB; roadmap WS-13 tracks its removal)
+        [SchemaProperty(MaxLength = 2048, Deprecated = true, Description = "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002).")]
         [JsonProperty(Order = 10, NullValueHandling = NullValueHandling.Ignore)]
         public string Comment { get; set; }
 

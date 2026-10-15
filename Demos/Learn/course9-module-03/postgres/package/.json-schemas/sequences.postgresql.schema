@@ -52,6 +52,10 @@
       "type": "string",
       "description": "Unlogged for a sequence that skips the write-ahead log (PostgreSQL 15+), or Logged. Left out, the sequence is created logged and an existing one's persistence is not changed."
     },
+    "Description": {
+      "type": "string",
+      "description": "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it."
+    },
     "Extensions": {}
   },
   "additionalProperties": false,

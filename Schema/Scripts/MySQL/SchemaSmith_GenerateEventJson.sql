@@ -63,7 +63,7 @@ BEGIN
             -- just wrote. CAST(... AS JSON) fixes it on MySQL but does not exist on MariaDB. The
             -- comparison form yields a real boolean on both. Verified on 8.0 and 11.4.
             'Preserve', e.ON_COMPLETION = 'PRESERVE',
-            'Comment', CASE WHEN e.EVENT_COMMENT = '' THEN NULL ELSE e.EVENT_COMMENT END,
+            'Description', CASE WHEN e.EVENT_COMMENT = '' THEN NULL ELSE e.EVENT_COMMENT END,
             'TimeZone', CASE WHEN e.TIME_ZONE = 'SYSTEM' THEN NULL ELSE e.TIME_ZONE END,
             'SqlMode', e.SQL_MODE
         ),
@@ -77,7 +77,7 @@ BEGIN
              THEN '$.Starts' ELSE '$.___dummy___' END,
         CASE WHEN e.ENDS IS NULL THEN '$.Ends' ELSE '$.___dummy___' END,
         CASE WHEN e.TIME_ZONE = 'SYSTEM' THEN '$.TimeZone' ELSE '$.___dummy___' END,
-        CASE WHEN COALESCE(e.EVENT_COMMENT, '') = '' THEN '$.Comment' ELSE '$.___dummy___' END
+        CASE WHEN COALESCE(e.EVENT_COMMENT, '') = '' THEN '$.Description' ELSE '$.___dummy___' END
     ) AS EventJson
     FROM INFORMATION_SCHEMA.EVENTS e
     WHERE e.EVENT_SCHEMA = p_Schema

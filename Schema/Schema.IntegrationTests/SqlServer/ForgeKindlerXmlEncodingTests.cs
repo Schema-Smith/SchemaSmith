@@ -306,4 +306,70 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
         }
         conn.Close();
     }
+
+    [Test]
+    public void TableQuench_XmlTier_AppliesDescriptions_AndGenerateTableXml_ReadsThemBack()
+    {
+        // The XML twin shreds Description, and the legacy MS_Description inside Extensions, through its own
+        // .value() list; the JSON path proving it says nothing about this one.
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            var json = "[{\"Schema\": \"[dbo]\", \"Name\": \"[XmlDesc]\", \"Description\": \"the table\","
+                + "\"Columns\": ["
+                + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false, \"Description\": \"the key\"},"
+                + "{\"Name\": \"[V]\", \"DataType\": \"INT\", \"Nullable\": true, \"Extensions\": {\"ExtendedProperties\": {\"MS_Description\": \"from the bag\"}}}"
+                + "],"
+                + "\"Indexes\": [{\"Name\": \"[PK_XmlDesc]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\", \"Description\": \"the key index\"},"
+                + "{\"Name\": \"[IX_XmlDesc_V]\", \"IndexColumns\": \"[V]\", \"Description\": \"the lookup\"}]"
+                + "}]";
+            var xml = ModelXmlSerializer.ToIngestXml(json, "Tables", "Table");
+            cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlDesc', @TableDefinitions = N'{xml.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+
+            string Ep(string level2)
+            {
+                cmd.CommandText = "SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'SCHEMA', N'dbo', N'TABLE', N'XmlDesc'" + level2 + ")";
+                return cmd.ExecuteScalar() as string;
+            }
+            Assert.Multiple(() =>
+            {
+                Assert.That(Ep(", default, default"), Is.EqualTo("the table"));
+                Assert.That(Ep(", N'COLUMN', N'Id'"), Is.EqualTo("the key"));
+                Assert.That(Ep(", N'COLUMN', N'V'"), Is.EqualTo("from the bag"), "the pre-2.8 spelling still deploys on the XML tier");
+                Assert.That(Ep(", N'CONSTRAINT', N'PK_XmlDesc'"), Is.EqualTo("the key index"));
+                Assert.That(Ep(", N'INDEX', N'IX_XmlDesc_V'"), Is.EqualTo("the lookup"));
+            });
+
+            // An extended property that is not a description is extraction-only: it comes back from the database, not from the package.
+            cmd.CommandText = "EXEC sys.sp_addextendedproperty @name=N'OwningTeam', @value=N'Billing', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'TABLE', @level1name=N'XmlDesc', @level2type=N'COLUMN', @level2name=N'V'";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "EXEC SchemaSmith.GenerateTableXml @p_Schema='dbo', @p_Table='XmlDesc'";
+            var sb = new System.Text.StringBuilder();
+            using (var reader = cmd.ExecuteReader())
+                while (reader.Read())
+                    sb.Append(reader.GetValue(0)?.ToString());
+            var table = PlatformDeserializer.DeserializeTable(ModelXmlSerializer.FromIngestXml(sb.ToString()), Platform.SqlServer);
+            var v = table.Columns.Single(c => c.Name == "[V]");
+            Assert.Multiple(() =>
+            {
+                Assert.That(table.Description, Is.EqualTo("the table"));
+                Assert.That(table.Columns.Single(c => c.Name == "[Id]").Description, Is.EqualTo("the key"));
+                Assert.That(v.Description, Is.EqualTo("from the bag"), "read back as Description, whichever spelling put it there");
+                Assert.That(table.Indexes.Single(i => i.Name == "[PK_XmlDesc]").Description, Is.EqualTo("the key index"));
+                Assert.That(table.Indexes.Single(i => i.Name == "[IX_XmlDesc_V]").Description, Is.EqualTo("the lookup"));
+                Assert.That(((JObject)table.Extensions)?["ExtendedProperties"]?["MS_Description"], Is.Null, "it has a key of its own now");
+                Assert.That((string)((JObject)v.Extensions)?["ExtendedProperties"]?["OwningTeam"], Is.EqualTo("Billing"), "the rest of the bag is untouched");
+            });
+        }
+        finally
+        {
+            DropTables(cmd, "dbo.XmlDesc");
+        }
+
+        conn.Close();
+    }
 }

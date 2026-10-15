@@ -835,4 +835,36 @@ ALTER MATERIALIZED VIEW public.mv_test OWNER TO ""{role}"";";
         }
         conn.Close();
     }
+
+    private static string ViewDefinitionWithDescription(string description) =>
+        ViewDefinitionWithIndex().Replace("\"Name\":\"mv_test\",", "\"Name\":\"mv_test\",\"Description\":\"" + description + "\",");
+
+    private static string ViewComment(IDbCommand cmd)
+    {
+        cmd.CommandText = "SELECT obj_description('public.mv_test'::regclass, 'pg_class')";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    [Test]
+    public void ADeclaredDescription_IsSet_ChangedInPlace_LeftAloneWhenOmitted_AndRemovedByAnEmptyString()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithDescription("the rollup"));
+        Assert.That(ViewComment(cmd), Is.EqualTo("the rollup"), "set on create");
+
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithDescription("the nightly rollup"));
+        Assert.That(ViewComment(cmd), Is.EqualTo("the nightly rollup"), "a change converges in place, without a rebuild");
+
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithIndex());
+        Assert.That(ViewComment(cmd), Is.EqualTo("the nightly rollup"), "omitted means the comment is not managed, so the database's stays");
+
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithDescription(""));
+        Assert.That(ViewComment(cmd), Is.Null, "an empty string is the request to remove it");
+        EnsureViewDropped(cmd);
+    }
 }

@@ -38,7 +38,8 @@ BEGIN
          COALESCE(elem ->> 'Tablespace', '') AS "Tablespace",
          COALESCE(elem ->> 'AccessMethod', 'heap') AS "AccessMethod",
          COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
-         COALESCE(elem ->> 'VariantName', '') AS "VariantName"
+         COALESCE(elem ->> 'VariantName', '') AS "VariantName",
+         elem ->> 'Description' AS "Description"
   FROM my_views, JSON_ARRAY_ELEMENTS(arr) AS elem;
 
   -- Evaluate ShouldApplyExpression: remove views whose expression evaluates to false
@@ -230,6 +231,24 @@ BEGIN
         OR em."CanonicalText" != EXCLUDED."CanonicalText"
         OR em."EngineVersion" != EXCLUDED."EngineVersion";
   END IF;
+
+
+  -- The declared description, once the object exists. '' removes the comment; an omitted one leaves whatever is there.
+  RAISE NOTICE 'Fixup Materialized View Descriptions';
+  SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of materialized view ' ||
+                    REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+                    'COMMENT ON MATERIALIZED VIEW "' || t."Schema" || '"."' || t."Name" || '" IS ' ||
+                    CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
+                    'VALUES (pg_backend_pid(), ''materialized view'', ''' || REPLACE(t."Schema" || '.' || t."Name", '''', '''''') || ''', ''modified'');', CHR(10))
+    INTO sql_script
+    FROM temp_materialized_views t
+    JOIN pg_class c ON c.relname = t."Name" AND c.relkind = 'm'
+                   AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t."Schema")
+   WHERE t."Description" IS NOT NULL
+     AND COALESCE(OBJ_DESCRIPTION(c.oid, 'pg_class'), '') IS DISTINCT FROM t."Description";
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- Handle indexes
   CALL "SchemaSmith"."MissingMaterializedViewIndexesQuench"(p_WhatIf, p_UpdateFillFactor);

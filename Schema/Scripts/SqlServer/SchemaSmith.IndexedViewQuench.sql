@@ -32,10 +32,11 @@ BEGIN
         Definition NVARCHAR(MAX),
         IndexJson NVARCHAR(MAX),
         VariantName NVARCHAR(128),
-        ShouldApplyExpression NVARCHAR(MAX)
+        ShouldApplyExpression NVARCHAR(MAX),
+        Description NVARCHAR(MAX)
     );
 
-    INSERT INTO @Views ([_RowId], ViewSchema, ViewName, Definition, IndexJson, VariantName, ShouldApplyExpression)
+    INSERT INTO @Views ([_RowId], ViewSchema, ViewName, Definition, IndexJson, VariantName, ShouldApplyExpression, Description)
     SELECT
         ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
         [SchemaSmith].[fn_StripBracketWrapping](v.[Schema]),
@@ -43,7 +44,8 @@ BEGIN
         v.[Definition],
         v.[Indexes],
         v.[VariantName],
-        v.[ShouldApplyExpression]
+        v.[ShouldApplyExpression],
+        v.[Description]
     FROM OPENJSON(@IndexedViewSchema)
     WITH (
         [Schema] NVARCHAR(200) '$.Schema',
@@ -51,7 +53,8 @@ BEGIN
         [Definition] NVARCHAR(MAX) '$.Definition',
         [Indexes] NVARCHAR(MAX) '$.Indexes' AS JSON,
         [VariantName] NVARCHAR(128) '$.VariantName',
-        [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression'
+        [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
+        [Description] NVARCHAR(MAX) '$.Description'
     ) v;
 
     -- Evaluate ShouldApplyExpression per-target: remove views whose expression is false.
@@ -190,7 +193,7 @@ BEGIN
     DEALLOCATE remove_cursor;
 
     -- Process new and changed views
-    DECLARE @defn NVARCHAR(MAX), @indexJson NVARCHAR(MAX), @variantName NVARCHAR(128);
+    DECLARE @defn NVARCHAR(MAX), @indexJson NVARCHAR(MAX), @variantName NVARCHAR(128), @description NVARCHAR(MAX);
     DECLARE @existingDef NVARCHAR(MAX), @existingObjectId INT;
     DECLARE @needsRecreate BIT, @needsIndexUpdate BIT;
     -- What DROP VIEW takes with it and the package does not carry: permissions and extended properties, put back
@@ -198,10 +201,10 @@ BEGIN
     DECLARE @preserveSql NVARCHAR(MAX), @ivQualified NVARCHAR(300);
 
     DECLARE view_cursor CURSOR LOCAL FAST_FORWARD FOR
-        SELECT v.ViewSchema, v.ViewName, v.Definition, v.IndexJson, v.VariantName FROM @Views v;
+        SELECT v.ViewSchema, v.ViewName, v.Definition, v.IndexJson, v.VariantName, v.Description FROM @Views v;
 
     OPEN view_cursor;
-    FETCH NEXT FROM view_cursor INTO @ivSchema, @ivName, @defn, @indexJson, @variantName;
+    FETCH NEXT FROM view_cursor INTO @ivSchema, @ivName, @defn, @indexJson, @variantName, @description;
     WHILE @@FETCH_STATUS = 0
     BEGIN
         SET @needsRecreate = 0;
@@ -477,7 +480,31 @@ BEGIN
             END;
         END;
 
-        FETCH NEXT FROM view_cursor INTO @ivSchema, @ivName, @defn, @indexJson, @variantName;
+        -- The declared description, once the view exists. '' removes it; an omitted one leaves whatever is there.
+        IF @description IS NOT NULL
+        BEGIN
+            DECLARE @existingDescription NVARCHAR(MAX), @descriptionFound BIT;
+            SET @existingDescription = NULL;
+            SET @descriptionFound = 0;
+            SELECT @existingDescription = CONVERT(NVARCHAR(MAX), ep.[value]), @descriptionFound = 1
+              FROM sys.extended_properties ep
+             WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.[name] = 'MS_Description' AND ep.major_id = OBJECT_ID(@ivQualified);
+            IF (@description = '' AND @descriptionFound = 1)
+               OR (@description <> '' AND (@descriptionFound = 0 OR @existingDescription <> @description COLLATE Latin1_General_BIN2))
+            BEGIN
+                SET @sql = CASE WHEN @description = '' THEN 'EXEC sp_dropextendedproperty @name = N''MS_Description'', '
+                                WHEN @descriptionFound = 1 THEN 'EXEC sp_updateextendedproperty @name = N''MS_Description'', @value = N''' + REPLACE(@description, '''', '''''') + ''', '
+                                ELSE 'EXEC sp_addextendedproperty @name = N''MS_Description'', @value = N''' + REPLACE(@description, '''', '''''') + ''', ' END +
+                           '@level0type = N''SCHEMA'', @level0name = N''' + REPLACE(@ivSchema, '''', '''''') + ''', @level1type = N''VIEW'', @level1name = N''' + REPLACE(@ivName, '''', '''''') + '''';
+                SET @msg = N'  ' + CASE WHEN @description = '' THEN N'Removing' ELSE N'Setting' END + N' the description of indexed view ' + @ivSchema + N'.' + @ivName;
+                EXEC [SchemaSmith].[PrintWithNoWait] @msg;
+                IF @WhatIf = 0 EXEC sp_executesql @sql;
+                INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+                  VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldModify' ELSE 'modified' END);
+            END;
+        END;
+
+        FETCH NEXT FROM view_cursor INTO @ivSchema, @ivName, @defn, @indexJson, @variantName, @description;
     END;
     CLOSE view_cursor;
     DEALLOCATE view_cursor;

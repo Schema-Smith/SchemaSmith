@@ -17,6 +17,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(mv))
                ts.spcname AS "Tablespace",
                am.amname AS "AccessMethod",
                '' AS "ShouldApplyExpression",
+               OBJ_DESCRIPTION(c.oid, 'pg_class') AS "Description",
                (SELECT COALESCE(JSON_AGG(ROW_TO_JSON(sub)), '[]'::json)
                   FROM (SELECT i.relname AS "Name",
                                idx.indisunique AS "Unique",

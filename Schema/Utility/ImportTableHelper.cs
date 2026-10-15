@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using Newtonsoft.Json.Linq;
 using Schema.Domain;
 using Schema.Domain.MySQL;
 using Schema.Domain.PostgreSQL;
@@ -265,7 +266,10 @@ public static class ImportTableHelper
     {
         if (current == null) return;
         if (original.Extensions != null)
+        {
             current.Extensions = original.Extensions.DeepClone();
+            RetireLegacyMsDescription(current);
+        }
 
         // Authored-only properties are copied by reflection, not enumerated. Enumerating is what let
         // UpdateFillFactor, SampleSize and the whole Drop*RemovedFromProduct family go missing: each was a
@@ -280,6 +284,16 @@ public static class ImportTableHelper
         CarryForward(original, current, "VariantName");
         if (copyOldName)
             CarryForward(original, current, "OldName");
+    }
+
+    // Extraction used to leave a SQL Server MS_Description inside ExtendedProperties. It is Description now, read
+    // fresh from the database, so the old copy is not carried forward to disagree with it (SS-DESC-001).
+    private static void RetireLegacyMsDescription(DynamicBase current)
+    {
+        if (current.GetType().GetProperty("Description") == null) return;
+        if (current.Extensions is not JObject extensions || extensions["ExtendedProperties"] is not JObject properties) return;
+        if (properties.Remove("MS_Description") && properties.Count == 0) extensions.Remove("ExtendedProperties");
+        if (extensions.Count == 0) current.Extensions = null;
     }
 
     private static void CarryForward(DynamicBase original, DynamicBase current, string propertyName)

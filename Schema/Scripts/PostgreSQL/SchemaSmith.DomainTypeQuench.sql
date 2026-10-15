@@ -47,7 +47,8 @@ BEGIN
          elem ->> 'Default' AS "Default",
          NULLIF(TRIM(elem ->> 'Collation'), '') AS "Collation",
          COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
-         elem -> 'CheckConstraints' AS "CheckConstraints"
+         elem -> 'CheckConstraints' AS "CheckConstraints",
+         elem ->> 'Description' AS "Description"
     FROM src, JSON_ARRAY_ELEMENTS(arr) AS elem;
 
   -- Evaluate ShouldApplyExpression BEFORE the constraints are flattened below: drop domain types whose
@@ -325,6 +326,23 @@ BEGIN
     JOIN pg_constraint c ON c.contypid = ty.oid AND c.contype = 'c'
    WHERE NOT EXISTS (SELECT 1 FROM temp_domain_checks ck
                       WHERE ck."Schema" = t."Schema" AND ck."Name" = t."Name" AND ck."ConstraintName" = c.conname);
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
+
+  -- The declared description, once the object exists. '' removes the comment; an omitted one leaves whatever is there.
+  RAISE NOTICE 'Fixup Domain Type Descriptions';
+  SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of domain type ' ||
+                    REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+                    'COMMENT ON DOMAIN "' || t."Schema" || '"."' || t."Name" || '" IS ' ||
+                    CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
+                    'VALUES (pg_backend_pid(), ''domain type'', ''' || REPLACE(t."Schema" || '.' || t."Name", '''', '''''') || ''', ''modified'');', CHR(10))
+    INTO sql_script
+    FROM temp_domain_types t
+    JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
+    JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
+   WHERE t."Description" IS NOT NULL
+     AND COALESCE(OBJ_DESCRIPTION(ty.oid, 'pg_type'), '') IS DISTINCT FROM t."Description";
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
   IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 END $$;

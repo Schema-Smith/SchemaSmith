@@ -49,6 +49,10 @@
       "type": "string",
       "description": "The domain's collation, when it differs from the base type's. Create-time only: PostgreSQL cannot alter it, so a change is refused rather than attempted. Omit it to leave the collation unchecked."
     },
+    "Description": {
+      "type": "string",
+      "description": "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it."
+    },
     "ShouldApplyExpression": {
       "type": "string"
     },
