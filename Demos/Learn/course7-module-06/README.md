@@ -6,7 +6,7 @@ This is the reporting capstone of Course 7. Module 5 taught you to *hunt* a fail
 
 ## Before you start
 
-> **Engine floor:** on your own server this lab needs **SQL Server 2016+** (it uses `CREATE OR ALTER`). Other engines run it at any supported version. The Docker sandbox is already above the floor.
+> **Engine floor:** on your own server this lab needs **SQL Server 2017+** (it uses `CREATE OR ALTER`, which 2016 only gained in SP1). Other engines run it at any supported version. The Docker sandbox is already above the floor.
 
 - The [sandbox](../docker) is up and verified (all four engines healthy).
 - The fleet exists — run [`../course7-setup`](../course7-setup) once if you haven't already (`fleet_tenant_001`–`005` on every engine).
