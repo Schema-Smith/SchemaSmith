@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using Schema.Domain;
 using SchemaQuench.IntegrationTests.Shared;
@@ -38,4 +39,25 @@ public class UnchangedModuleSkipTests : UnchangedModuleSkipSharedTests
         "DROP TRIGGER IF EXISTS [dbo].[tr_unchanged]", "DROP VIEW IF EXISTS [dbo].[v_unchanged]", "DROP FUNCTION IF EXISTS [dbo].[f_unchanged]",
         "DROP PROCEDURE IF EXISTS [dbo].[p_unchanged]", "DROP TABLE IF EXISTS [dbo].[unchanged_t]"
     ];
+    // A trigger's enabled state and first/last order are not in its definition; both are part of what the stamp compares,
+    // so a change made on the server by hand brings the script back.
+    [Test]
+    public void ATriggerDisabledOrReorderedOnTheServer_IsReapplied()
+    {
+        Deploy();
+        var second = Deploy().Outcomes;
+        Assert.That(second["Triggers"], Is.EqualTo(ScriptOutcome.Unchanged), Describe(second));
+
+        Exec("DISABLE TRIGGER [dbo].[tr_unchanged] ON [dbo].[unchanged_t]");
+        var afterDisable = Deploy().Outcomes;
+        Assert.That(afterDisable["Triggers"], Is.EqualTo(ScriptOutcome.Applied), "a trigger disabled by hand must be re-applied: " + Describe(afterDisable));
+
+        Deploy();
+        Exec("EXEC sp_settriggerorder @triggername = N'[dbo].[tr_unchanged]', @order = N'First', @stmttype = N'INSERT'");
+        var afterReorder = Deploy().Outcomes;
+        Assert.That(afterReorder["Triggers"], Is.EqualTo(ScriptOutcome.Applied), "a trigger reordered by hand must be re-applied: " + Describe(afterReorder));
+    }
+
+    private static string Describe(Dictionary<string, ScriptOutcome> outcomes) => string.Join(", ", outcomes.Select(kv => $"{kv.Key}={kv.Value}"));
+
 }

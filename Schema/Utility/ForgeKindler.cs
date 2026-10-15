@@ -412,6 +412,9 @@ public static class ForgeKindler
                 // pair around the drop.
                 new("SchemaSmith.CapturePermissions.sql"),
                 new("SchemaSmith.ReapplyPermissions.sql"),
+                // A changed module's signatures, captured before the ALTER that strips them and applied again after.
+                new("SchemaSmith.CaptureSignatures.sql"),
+                new("SchemaSmith.ReapplySignatures.sql"),
                 // Must follow fn_RebuildBlockedReason (it calls it to refuse) and PrintWithNoWait (its
                 // WhatIf output), and precede the quench procedures that will elect a rebuild.
                 new("SchemaSmith.RebuildTable.sql"),

@@ -1724,6 +1724,7 @@ SELECT s.name AS TableSchema, pt.name AS TableName, tr.name AS TriggerName
         {
             var sql = ScriptSqlServerProgrammableObject(command, tableSchema, triggerName, "TRIGGER", "TRIGGER", tableName);
             if (sql == null) continue;
+            sql += SqlServerTriggerTail(command, tableSchema, tableName, triggerName);
 
             var escapedSchema = Regex.Escape(tableSchema);
             var escapedTable = Regex.Escape(tableName);
@@ -1835,6 +1836,37 @@ SELECT stopword, language
         }
     }
 
+    // A trigger's enabled state and its first/last order are not part of its definition, so a disabled trigger or one
+    // set first or last came back enabled and unordered on the next deploy. The tail carries that state in its own
+    // batches after the module.
+    private string SqlServerTriggerTail(IDbCommand command, string tableSchema, string tableName, string triggerName)
+    {
+        var trigger = $"[{Identifier.EscapeDelimited(tableSchema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(triggerName, Platform.SqlServer)}]";
+        var table = $"[{Identifier.EscapeDelimited(tableSchema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(tableName, Platform.SqlServer)}]";
+        command.CommandText = $@"
+SELECT tr.is_disabled,
+       OBJECTPROPERTY(tr.object_id, 'ExecIsFirstInsertTrigger'), OBJECTPROPERTY(tr.object_id, 'ExecIsLastInsertTrigger'),
+       OBJECTPROPERTY(tr.object_id, 'ExecIsFirstUpdateTrigger'), OBJECTPROPERTY(tr.object_id, 'ExecIsLastUpdateTrigger'),
+       OBJECTPROPERTY(tr.object_id, 'ExecIsFirstDeleteTrigger'), OBJECTPROPERTY(tr.object_id, 'ExecIsLastDeleteTrigger')
+  FROM sys.triggers tr
+ WHERE tr.object_id = OBJECT_ID(N'{EscapeSql(trigger)}')";
+        bool disabled;
+        var flags = new int[6];
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read()) return "";
+            disabled = reader.GetBoolean(0);
+            for (var i = 0; i < flags.Length; i++) flags[i] = reader.IsDBNull(i + 1) ? 0 : reader.GetInt32(i + 1);
+        }
+
+        var tail = "";
+        if (disabled) tail += $"DISABLE TRIGGER {trigger} ON {table}\r\nGO\r\n";
+        var orders = new[] { ("First", "INSERT", flags[0]), ("Last", "INSERT", flags[1]), ("First", "UPDATE", flags[2]), ("Last", "UPDATE", flags[3]), ("First", "DELETE", flags[4]), ("Last", "DELETE", flags[5]) };
+        foreach (var (order, statement, set) in orders)
+            if (set == 1) tail += $"EXEC sp_settriggerorder @triggername = N'{EscapeSql(trigger)}', @order = N'{order}', @stmttype = N'{statement}'\r\nGO\r\n";
+        return tail.Length == 0 ? "" : "\r\n" + tail;
+    }
+
     private void ScriptSqlServerDDLTriggers(IDbCommand command)
     {
         _progressLog.Info("Casting Database DDL Trigger Scripts");
@@ -1861,7 +1893,7 @@ SELECT tr.name AS TriggerName
         foreach (var triggerName in triggers)
         {
             command.CommandText = $@"
-SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
+SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier, tr.is_disabled
   FROM sys.sql_modules sm
   JOIN sys.triggers tr ON sm.object_id = tr.object_id
  WHERE tr.parent_class = 0 AND tr.name = '{EscapeSql(triggerName)}'";
@@ -1869,6 +1901,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
             string definition = null;
             bool usesAnsiNulls = true;
             bool usesQuotedIdentifier = true;
+            bool disabled = false;
 
             using (var reader = command.ExecuteReader())
             {
@@ -1883,6 +1916,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
                     definition = reader.GetString(0);
                     usesAnsiNulls = reader.GetBoolean(1);
                     usesQuotedIdentifier = reader.GetBoolean(2);
+                    disabled = reader.GetBoolean(3);
                 }
             }
 
@@ -1919,6 +1953,8 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
 
             if (extProps.Length > 0)
                 sql += extProps + "\r\nGO\r\n";
+            if (disabled)
+                sql += $"\r\nDISABLE TRIGGER [{Identifier.EscapeDelimited(triggerName, Platform.SqlServer)}] ON DATABASE\r\nGO\r\n";
 
             var fileName = ResolveOutputPath(castPath, EncodeFileName(triggerName, ".sql"));
             if (ShouldSkipKnownBadScript(fileName)) { _stats.DDLTriggers++; continue; }

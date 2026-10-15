@@ -542,6 +542,14 @@ A server on setting `1` or `2` has two consequences worth knowing:
 - **Extraction:** SchemaTongs run against a server on setting `1` writes lowercase table names, because the server holds no other spelling. Setting `2` keeps the declared spelling.
 - **Case-colliding tables:** a template that declares two tables whose names differ only in case is refused (exit code `2`) on a server on setting `1` or `2`, before any database is touched -- the server would hold one table for both. Variants gated by `ShouldApplyExpression` are not a collision. [`--Validate`](validate.md) reports such a pair as `SS-DUP-001` whatever the target.
 
+### Triggers and views on MySQL and MariaDB
+
+Two things a deploy does on this family that the other engines do not, because the engines give no other way:
+
+- **A changed trigger is dropped and created again.** Neither engine can alter a trigger in place, so a trigger script is `DROP TRIGGER IF EXISTS` followed by `CREATE TRIGGER`, and a row written to the table between the two statements is not seen by the trigger. The window is one statement wide and exists only on a deploy that changes the trigger: an unchanged script is not re-run (see [Unchanged Object Scripts](#unchanged-object-scripts)). Deploy a trigger change when the table is quiet, or inside the maintenance window the change already needs.
+- **A redeployed view belongs to the deploying account.** `CREATE OR REPLACE VIEW` records the account that ran it as the view's `DEFINER`, so a view created by one account and redeployed by another changes definer, and with it whose privileges a `SQL SECURITY DEFINER` view runs under. A view whose script carries an explicit `DEFINER` clause keeps it, provided the deploying account may set it.
+
+
 ### Server settings on MySQL and MariaDB
 
 A MySQL or MariaDB server can be configured in ways that change how SQL is read and how columns and data behave.
@@ -1074,6 +1082,14 @@ A chain is handled deepest-first: a view bound to a view bound to the changed fu
 **What stops the deploy.** A dependent the package does not declare -- a view someone created by hand, an index on the computed column the JSON does not list -- or an encrypted module, which nothing could recreate. The deploy stops before anything is dropped, and the error names each one and what would make it declared. Nothing is ever dropped on the strength of a name match alone.
 
 **What you see.** The log names each dependent as it is dropped and the manifest records it as `dropped`; under `WhatIf` the run lists what it would drop as `wouldDrop`, or warns that it would stop and why. An unchanged module is never altered, so none of this happens on a deploy that changes nothing.
+
+---
+
+## Signed Modules
+
+`ALTER` strips a SQL Server module's signatures, and the private key that made them cannot be read, so a signature cannot be scripted into a package. On SQL Server the deploy looks at a module's signatures (`sys.crypt_properties`) before its script runs, and after the change applies it signs the module again with every certificate or asymmetric key whose private key is encrypted by the database master key, which the server can use without a password. The manifest records that as `resigned` (`wouldResign` under `WhatIf`).
+
+A key whose private key is absent or password-protected cannot be used that way. The change still applies, and the run warns by name that the module needs signing by hand. An unchanged module is never altered, so its signatures are never touched.
 
 ---
 

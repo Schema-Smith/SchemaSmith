@@ -2429,6 +2429,7 @@ SET NOCOUNT ON
                 }
 
                 var captured = CaptureModulePermissions(destCmd, script);
+                var signatures = CaptureModuleSignatures(destCmd, script);
                 QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
                 if (script.Error != null && TryClearSchemaBoundDependents(destCmd, script, out var droppedModuleScripts))
                 {
@@ -2437,6 +2438,8 @@ SET NOCOUNT ON
                 }
                 if (captured != null && script.HasBeenQuenched && script.Error == null && script.Outcome == ScriptOutcome.Applied)
                     ReapplyModulePermissions(destCmd, script, captured);
+                if (signatures != null && script.HasBeenQuenched && script.Error == null && script.Outcome == ScriptOutcome.Applied)
+                    ReapplyModuleSignatures(destCmd, script, signatures);
                 if (script.HasBeenQuenched)
                 {
                     _checkpointing.MarkScriptCompleted(DbScope, slot.ToString(), script.LogPath);
@@ -2478,6 +2481,7 @@ SET NOCOUNT ON
             foreach (var script in templateObjects.Where(s => !s.HasBeenQuenched))
             {
                 var captured = CaptureModulePermissions(destCmd, script);
+                var signatures = CaptureModuleSignatures(destCmd, script);
                 QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
                 if (script.Error != null && TryClearSchemaBoundDependents(destCmd, script, out var droppedModuleScripts))
                 {
@@ -2486,6 +2490,8 @@ SET NOCOUNT ON
                 }
                 if (captured != null && script.HasBeenQuenched && script.Error == null && script.Outcome == ScriptOutcome.Applied)
                     ReapplyModulePermissions(destCmd, script, captured);
+                if (signatures != null && script.HasBeenQuenched && script.Error == null && script.Outcome == ScriptOutcome.Applied)
+                    ReapplyModuleSignatures(destCmd, script, signatures);
             }
         }
 
@@ -2691,6 +2697,57 @@ SET NOCOUNT ON
         }
         _indexedViewPermissions.Clear();
     }
+
+    #endregion
+
+    #region Signatures of a changed module
+
+    // ALTER strips a module's signatures, and the private key behind them cannot be scripted. Before a SQL Server module
+    // script runs, the signatures a master-key-protected certificate or asymmetric key can make again are captured;
+    // after the change applies they are made again, and the ones no key the server holds can make are warned about.
+    private sealed record ModuleSignatures(string Script, string Unsignable);
+
+    private ModuleSignatures CaptureModuleSignatures(IDbCommand destCmd, SqlScript script)
+    {
+        if (destCmd == null || _product.Platform.GetBasePlatform() != Platform.SqlServer) return null;
+        var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
+        if (identity == null) return null;
+        try
+        {
+            destCmd.CommandText = $"DECLARE @s NVARCHAR(MAX), @u NVARCHAR(MAX); EXEC SchemaSmith.CaptureSignatures @Schema = N'{EscapeSqlLiteral(identity.Schema)}', @Name = N'{EscapeSqlLiteral(identity.Name)}', @Script = @s OUTPUT, @Unsignable = @u OUTPUT; SELECT @s, @u;";
+            using var reader = destCmd.ExecuteReader();
+            if (!reader.Read()) return null;
+            var captured = reader.IsDBNull(0) ? null : reader.GetString(0);
+            var unsignable = reader.IsDBNull(1) ? null : reader.GetString(1);
+            return captured == null && unsignable == null ? null : new ModuleSignatures(captured, unsignable);
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // No capture procedure (kindling suppressed on a database that never had one): the script runs as before.
+            return null;
+        }
+    }
+
+    private void ReapplyModuleSignatures(IDbCommand destCmd, SqlScript script, ModuleSignatures signatures)
+    {
+        var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
+        var objectName = ModuleAuditName(identity);
+        if (signatures.Unsignable != null) WarnUnsignable(objectName, signatures.Unsignable);
+        if (signatures.Script == null) return;
+        try
+        {
+            destCmd.CommandText = $"EXEC SchemaSmith.ReapplySignatures @Script = N'{EscapeSqlLiteral(signatures.Script)}', @ObjectType = N'{identity.Kind.ToString().ToLowerInvariant()}', @ObjectName = N'{EscapeSqlLiteral(objectName)}', @WhatIf = 0";
+            destCmd.ExecuteNonQuery();
+            DrainChangeAudit(destCmd);
+        }
+        catch (System.Data.Common.DbException ex)
+        {
+            script.Error = new Exception($"The script applied, but {objectName} could not be signed again: {ex.Message}", ex);
+        }
+    }
+
+    private void WarnUnsignable(string objectName, string keys) =>
+        _progressLog.Warn($"{objectName} was signed by {keys}, whose private key is not encrypted by the database master key, so SchemaQuench cannot sign it again after the change. Sign it by hand.");
 
     #endregion
 
@@ -3210,6 +3267,17 @@ SET NOCOUNT ON
                 var name = ModuleAuditName(identity);
                 SafeProgressLog($"    Would re-apply the grants on {name} after {script.LogPath}");
                 ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldReapply");
+            }
+            if (CaptureModuleSignatures(destCmd, script) is { } signatures)
+            {
+                var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
+                var name = ModuleAuditName(identity);
+                if (signatures.Script != null)
+                {
+                    SafeProgressLog($"    Would sign {name} again after {script.LogPath}");
+                    ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldResign");
+                }
+                if (signatures.Unsignable != null) WarnUnsignable(name, signatures.Unsignable);
             }
             if (SchemaBoundPlanFor(destCmd, script) is { } plan)
             {

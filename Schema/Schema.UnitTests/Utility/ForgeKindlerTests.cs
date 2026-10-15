@@ -334,7 +334,9 @@ public class ForgeKindlerTests
         //   recorded after a successful object script, read before the next run of the same script).
         // +2 on every platform = CapturePermissions + ReapplyPermissions (what a drop or a swap takes off an object and
         //   the package does not carry -- grants, owner, comments, extended properties -- captured before and put back after).
-        Assert.That(sqlServer.Length, Is.EqualTo(52));
+        // +2 on SQL Server = CaptureSignatures + ReapplySignatures (a changed module's signatures, captured before the
+        //   ALTER that strips them and applied again after it).
+        Assert.That(sqlServer.Length, Is.EqualTo(54));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns

@@ -46,9 +46,11 @@ public static class ModuleDefinitionReader
     private static string ReadSqlServer(IDbCommand command, ModuleScriptIdentity id)
     {
         var qualified = $"[{id.Schema.Replace("]", "]]")}].[{id.Name.Replace("]", "]]")}]";
-        // A trigger's enabled state is not in its definition, so it is part of the rendering.
+        // A trigger's enabled state and its first/last order are not in its definition, so they are part of the rendering.
         var state = id.Kind == ModuleKind.Trigger
             ? " + '|' + ISNULL((SELECT CONVERT(VARCHAR(1), t.is_disabled) FROM sys.triggers t WHERE t.object_id = sm.object_id), '')"
+              + string.Concat(new[] { "ExecIsFirstInsertTrigger", "ExecIsLastInsertTrigger", "ExecIsFirstUpdateTrigger", "ExecIsLastUpdateTrigger", "ExecIsFirstDeleteTrigger", "ExecIsLastDeleteTrigger" }
+                  .Select(property => $" + '|' + ISNULL(CONVERT(VARCHAR(1), OBJECTPROPERTY(sm.object_id, '{property}')), '')"))
             : "";
         return Scalar(command, $"SELECT sm.definition{state} FROM sys.sql_modules sm WHERE sm.object_id = OBJECT_ID(N{Lit(qualified)})");
     }
