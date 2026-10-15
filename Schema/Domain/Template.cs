@@ -666,31 +666,32 @@ namespace Schema.Domain
                 }
             });
 
+            // The schema tokens are stored RAW, like the template-named {{TableSchema_<Template>}} tokens (#301):
+            // every consumer -- the script folders and the identification scripts -- goes through SqlScript.TokenReplace,
+            // which doubles quotes when the token sits inside a string literal. Pre-escaping here escaped them twice (#507).
             TableSchema = JArray.FromObject(Tables).ToString();
-            tokens.Add(new("TableSchema", TableSchema.Replace("'", "''")));
-            // A2: XML twin, pre-escaped identically to the JSON sibling (added via the same non-escaping
-            // substitution path here, so it must pre-escape single quotes for safe SQL string embedding).
-            tokens.Add(new("TableXml", TableXml.Replace("'", "''")));
+            tokens.Add(new("TableSchema", TableSchema));
+            tokens.Add(new("TableXml", TableXml));
 
             MaterializedViewSchema = JArray.FromObject(MaterializedViews).ToString();
-            tokens.Add(new("MaterializedViewSchema", MaterializedViewSchema.Replace("'", "''")));
-            tokens.Add(new("MaterializedViewXml", MaterializedViewXml.Replace("'", "''")));
+            tokens.Add(new("MaterializedViewSchema", MaterializedViewSchema));
+            tokens.Add(new("MaterializedViewXml", MaterializedViewXml));
 
             EventSchema = JArray.FromObject(Events).ToString();
-            tokens.Add(new("EventSchema", EventSchema.Replace("'", "''")));
+            tokens.Add(new("EventSchema", EventSchema));
 
             DomainTypeSchema = JArray.FromObject(DomainTypes).ToString();
-            tokens.Add(new("DomainTypeSchema", DomainTypeSchema.Replace("'", "''")));
+            tokens.Add(new("DomainTypeSchema", DomainTypeSchema));
 
             EnumTypeSchema = JArray.FromObject(EnumTypes).ToString();
-            tokens.Add(new("EnumTypeSchema", EnumTypeSchema.Replace("'", "''")));
+            tokens.Add(new("EnumTypeSchema", EnumTypeSchema));
 
             SequenceSchema = MariaDbSequences.Count > 0 ? JArray.FromObject(MariaDbSequences).ToString() : JArray.FromObject(Sequences).ToString();
-            tokens.Add(new("SequenceSchema", SequenceSchema.Replace("'", "''")));
+            tokens.Add(new("SequenceSchema", SequenceSchema));
 
             IndexedViewSchema = JArray.FromObject(IndexedViews).ToString();
-            tokens.Add(new("IndexedViewSchema", IndexedViewSchema.Replace("'", "''")));
-            tokens.Add(new("IndexedViewXml", IndexedViewXml.Replace("'", "''")));
+            tokens.Add(new("IndexedViewSchema", IndexedViewSchema));
+            tokens.Add(new("IndexedViewXml", IndexedViewXml));
 
             if (ScriptFolders.Count == 0) ScriptFolders.AddRange(GetDefaultTemplateFolders(platform, IsSchemaTemplate));
 
