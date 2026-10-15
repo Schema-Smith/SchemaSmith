@@ -6,6 +6,7 @@
 -- as 'reapplied' -- or, under WhatIf, prints it and records 'wouldReapply'. Nothing happens for a NULL script.
 CREATE OR REPLACE PROCEDURE "SchemaSmith"."ReapplyPermissions"(p_Script TEXT, p_ObjectType TEXT, p_ObjectName TEXT, p_WhatIf BOOLEAN)
     LANGUAGE plpgsql
+  SET jit = 'off'
 AS $$
 BEGIN
   IF NULLIF(p_Script, '') IS NULL THEN
