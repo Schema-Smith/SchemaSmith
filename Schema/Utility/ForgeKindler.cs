@@ -620,6 +620,10 @@ public static class ForgeKindler
                 new("SchemaSmith_ColumnSrid.sql"),
                 // NULL on MySQL; the MariaDb override reads the check MariaDB names after the column (its column-level check).
                 new("SchemaSmith_ColumnLevelCheck.sql"),
+                // The check MariaDB adds to a JSON column itself (NULL on MySQL and below MariaDB 10.4.3), and whether a
+                // live column is that shape: the generator folds it to JSON, the parse compares a declared JSON with it.
+                new("SchemaSmith_JsonAliasCheck.sql"),
+                new("SchemaSmith_IsJsonAliasColumn.sql"),
                 new("SchemaSmith_IsSystemTimePeriodColumn.sql"),
                 new("SchemaSmith_SetSystemVersioningAlterHistory.sql"),
                 new("SchemaSmith_TablePeriodsJson.sql"),

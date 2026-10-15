@@ -126,8 +126,12 @@ BEGIN
         -- every MySQL package, whose schema does not declare it and would reject it. #408
         JSON_REMOVE(JSON_OBJECT(
             'Name', SchemaSmith_QuoteIdentifier(c.COLUMN_NAME),
-            -- Without MariaDB's /* mariadb-5.3 */ storage-format note, which is not part of the type.
-            'DataType', TRIM(REPLACE(c.COLUMN_TYPE, ' /* mariadb-5.3 */', '')),
+            -- Without MariaDB's /* mariadb-5.3 */ storage-format note, which is not part of the type. MariaDB renders a
+            -- JSON column as longtext utf8mb4_bin with a json_valid check named after the column; that shape is the
+            -- package's JSON, with no check, character set or collation of its own (never on MySQL, whose JSON column
+            -- reports json, and never below MariaDB 10.4.3, where there is no check to recognise it by).
+            'DataType', CASE WHEN SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 1 THEN 'JSON'
+                             ELSE TRIM(REPLACE(c.COLUMN_TYPE, ' /* mariadb-5.3 */', '')) END,
             'Nullable', CASE WHEN c.IS_NULLABLE = 'YES' THEN TRUE ELSE FALSE END,
             -- SchemaSmith_NormalizeColumnDefault folds MariaDB's divergent COLUMN_DEFAULT reporting
             -- (literal 'NULL' marker, quoted string values, current_timestamp() with parens) to the
@@ -185,15 +189,18 @@ BEGIN
             -- SchemaSmith_SupportsColumnSrid for the full per-engine rationale.
             'Srid', SchemaSmith_ColumnSrid(p_Schema, p_Table, c.COLUMN_NAME),
             -- MariaDB only (NULL on MySQL, and stripped below so a MySQL package never carries a key its model rejects).
-            'CheckExpression', SchemaSmith_ColumnLevelCheck(p_Schema, p_Table, c.COLUMN_NAME),
+            'CheckExpression', CASE WHEN SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 1 THEN NULL
+                                    ELSE SchemaSmith_ColumnLevelCheck(p_Schema, p_Table, c.COLUMN_NAME) END,
             'Generated', CASE
                 WHEN c.EXTRA LIKE '%VIRTUAL GENERATED%' THEN 'VIRTUAL'
                 WHEN c.EXTRA LIKE '%STORED GENERATED%' THEN 'STORED'
                 ELSE NULL
             END,
             'GenerationExpression', CASE WHEN c.GENERATION_EXPRESSION = '' THEN NULL ELSE c.GENERATION_EXPRESSION END,
-            'CharacterSet', c.CHARACTER_SET_NAME,
+            'CharacterSet', CASE WHEN SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 1 THEN NULL
+                                 ELSE c.CHARACTER_SET_NAME END,
             'Collation', CASE
+                WHEN SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 1 THEN NULL
                 WHEN c.COLLATION_NAME = (SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES
                                          WHERE TABLE_SCHEMA = p_Schema AND TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table))
                 THEN NULL  -- Don't include if same as table default
@@ -203,6 +210,7 @@ BEGIN
         ), CASE WHEN c.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%'
                 THEN '$.___dummy___' ELSE '$.WithoutSystemVersioning' END,
            CASE WHEN SchemaSmith_ColumnLevelCheck(p_Schema, p_Table, c.COLUMN_NAME) IS NOT NULL
+                 AND SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 0
                 THEN '$.___dummy2___' ELSE '$.CheckExpression' END)
         -- Alphabetical, matching SQL Server and PostgreSQL. Ordinal order made the same table extract
         -- differently depending on which engine it came from, so a package re-extracted elsewhere showed

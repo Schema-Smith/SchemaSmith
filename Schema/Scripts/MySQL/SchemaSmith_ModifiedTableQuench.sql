@@ -803,6 +803,35 @@ BEGIN
     -- in WhatIf: nothing is actually rebuilt in a preview, so a previewed rebuild is listed alongside
     -- the in-place statements it would have replaced. The preview is honest about the rebuild -- the
     -- 'wouldRebuild' audit row and the full printed sequence are both there -- and no statement runs.
+    -- MariaDB names a column-level check after its column, so a TABLE-level check with a column's name is a shape the
+    -- engine never makes on its own: it is what a redeploy of a package extracted before the column-level check was
+    -- modelled created. It is not the column's check -- a JSON column with only that reads as text (JSON_OBJECT returns
+    -- the value as an escaped string) -- and from 11.4.13 / 13.0.2 it blocks a MODIFY that carries the column's own
+    -- check with a duplicate-name error (1826). The name-based compare cannot see it; CHECK_CONSTRAINTS.LEVEL can,
+    -- from 10.5 -- read through dynamic SQL, because the column does not exist below that and a static mention
+    -- fails at CREATE PROCEDURE. Empty on MySQL and below 10.5, so every consumer is a no-op there.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_TableLevelColumnChecks;
+    CREATE TEMPORARY TABLE _SchemaSmith_TableLevelColumnChecks (
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableKey, ColumnKey)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    IF VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1005 THEN
+        SET @exec_sql = CONCAT(
+            'INSERT IGNORE INTO _SchemaSmith_TableLevelColumnChecks (TableKey, ColumnKey, TableName, ConstraintName) ',
+            'SELECT col.TableKey, col.ColumnKey, CONVERT(cc.TABLE_NAME USING utf8mb4), CONVERT(cc.CONSTRAINT_NAME USING utf8mb4) ',
+            'FROM INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc ',
+            'JOIN _SchemaSmith_Columns col ON col.TableKey = SchemaSmith_IdentifierKey(cc.TABLE_NAME) ',
+            '                            AND col.ColumnKey = SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) ',
+            'WHERE SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = SchemaSmith_IdentifierKey(', QUOTE(p_DatabaseName), ') ',
+            '  AND cc.LEVEL = ''Table''');
+        PREPARE stmt FROM @exec_sql;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
+
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildFacts;
     CREATE TEMPORARY TABLE _SchemaSmith_RebuildFacts (
         TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
@@ -838,11 +867,11 @@ BEGIN
           ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
            AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
           -- STEP 3's set: any declared attribute differs from the live one.
-          OR CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
+          OR CASE WHEN UPPER(c.CompareDataType) LIKE 'ENUM%' OR UPPER(c.CompareDataType) LIKE 'SET%'
                     OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                  THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
+                  THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.CompareDataType) AS BINARY)
                   ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
-                    != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
+                    != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.CompareDataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
           OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
           OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
           OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
@@ -874,11 +903,16 @@ BEGIN
           OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           OR (VERSION() LIKE '%MariaDB%'
               AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
-                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CompareCheckExpression), '') AS BINARY)
               AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
                     'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
-                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(c.CompareCheckExpression, ''),
                     COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
+          -- A TABLE-level check carrying the column's name, which the name-based compare above cannot tell from the
+          -- column's own: the column is modified so its own check replaces it (see _SchemaSmith_TableLevelColumnChecks).
+          OR (c.CompareCheckExpression IS NOT NULL
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_TableLevelColumnChecks tl
+                           WHERE tl.TableKey = c.TableKey AND tl.ColumnKey = c.ColumnKey))
       )
     GROUP BY c.TableName;
 
@@ -1153,6 +1187,20 @@ BEGIN
     -- doesn't support that via ALTER MODIFY - those are handled in Step 3.5
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Modify columns');
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+                      ' DROP CONSTRAINT `', REPLACE(tl.ConstraintName, '`', '``'), '`')
+        FROM _SchemaSmith_TableLevelColumnChecks tl
+        JOIN _SchemaSmith_Columns c ON c.TableKey = tl.TableKey AND c.ColumnKey = tl.ColumnKey
+        JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        WHERE t.NewTable = 0 AND c.NewColumn = 0 AND c.CompareCheckExpression IS NOT NULL
+        ORDER BY c.TableName, c.ColumnName;
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'constraint', CONCAT(tl.TableName, '.', tl.ConstraintName), 'wouldDrop'
+        FROM _SchemaSmith_TableLevelColumnChecks tl
+        JOIN _SchemaSmith_Columns c ON c.TableKey = tl.TableKey AND c.ColumnKey = tl.ColumnKey
+        JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        WHERE t.NewTable = 0 AND c.NewColumn = 0 AND c.CompareCheckExpression IS NOT NULL;
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -1186,11 +1234,11 @@ BEGIN
               -- case-sensitive DATA, so they compare keyword-case-insensitively but
               -- value-case-sensitively (BINARY) via SchemaSmith_UpperDataType — the whitespace/
               -- synonym normalization would wrongly fold a real value-case change.
-              CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
+              CASE WHEN UPPER(c.CompareDataType) LIKE 'ENUM%' OR UPPER(c.CompareDataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.CompareDataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
-                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
+                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.CompareDataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               -- Default value changes (strip outer single quotes from JSON default for comparison,
@@ -1244,11 +1292,16 @@ BEGIN
               OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           OR (VERSION() LIKE '%MariaDB%'
               AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
-                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CompareCheckExpression), '') AS BINARY)
               AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
                     'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
-                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(c.CompareCheckExpression, ''),
                     COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
+          -- A TABLE-level check carrying the column's name, which the name-based compare above cannot tell from the
+          -- column's own: the column is modified so its own check replaces it (see _SchemaSmith_TableLevelColumnChecks).
+          OR (c.CompareCheckExpression IS NOT NULL
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_TableLevelColumnChecks tl
+                           WHERE tl.TableKey = c.TableKey AND tl.ColumnKey = c.ColumnKey))
           );
 
         -- #363: WhatIf twin of the ELSE-branch 'column'/'modified' audit; same source/predicate, wouldModify.
@@ -1275,11 +1328,11 @@ BEGIN
           -- current default is left in place rather than emitting a MODIFY that would hit a syntax error.
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)
           AND (
-              CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
+              CASE WHEN UPPER(c.CompareDataType) LIKE 'ENUM%' OR UPPER(c.CompareDataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.CompareDataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
-                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
+                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.CompareDataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
@@ -1328,14 +1381,27 @@ BEGIN
               OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           OR (VERSION() LIKE '%MariaDB%'
               AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
-                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CompareCheckExpression), '') AS BINARY)
               AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
                     'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
-                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(c.CompareCheckExpression, ''),
                     COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
+          -- A TABLE-level check carrying the column's name, which the name-based compare above cannot tell from the
+          -- column's own: the column is modified so its own check replaces it (see _SchemaSmith_TableLevelColumnChecks).
+          OR (c.CompareCheckExpression IS NOT NULL
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_TableLevelColumnChecks tl
+                           WHERE tl.TableKey = c.TableKey AND tl.ColumnKey = c.ColumnKey))
           );
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Modify columns');
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  Drop check constraint: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+                      ' DROP CONSTRAINT `', REPLACE(tl.ConstraintName, '`', '``'), '`')
+        FROM _SchemaSmith_TableLevelColumnChecks tl
+        JOIN _SchemaSmith_Columns c ON c.TableKey = tl.TableKey AND c.ColumnKey = tl.ColumnKey
+        JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        WHERE t.NewTable = 0 AND c.NewColumn = 0 AND c.CompareCheckExpression IS NOT NULL
+        ORDER BY c.TableName, c.ColumnName;
 
         -- Per-column progress messages, set-based (preserves the per-column "ALTER TABLE ...
         -- MODIFY COLUMN ..." single-column text, even though execution below folds multiple
@@ -1373,11 +1439,11 @@ BEGIN
               -- case-sensitive DATA, so they compare keyword-case-insensitively but
               -- value-case-sensitively (BINARY) via SchemaSmith_UpperDataType — the whitespace/
               -- synonym normalization would wrongly fold a real value-case change.
-              CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
+              CASE WHEN UPPER(c.CompareDataType) LIKE 'ENUM%' OR UPPER(c.CompareDataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.CompareDataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
-                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
+                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.CompareDataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               -- Default value changes (strip outer single quotes from JSON default for comparison,
@@ -1431,11 +1497,16 @@ BEGIN
               OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           OR (VERSION() LIKE '%MariaDB%'
               AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
-                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CompareCheckExpression), '') AS BINARY)
               AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
                     'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
-                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(c.CompareCheckExpression, ''),
                     COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
+          -- A TABLE-level check carrying the column's name, which the name-based compare above cannot tell from the
+          -- column's own: the column is modified so its own check replaces it (see _SchemaSmith_TableLevelColumnChecks).
+          OR (c.CompareCheckExpression IS NOT NULL
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_TableLevelColumnChecks tl
+                           WHERE tl.TableKey = c.TableKey AND tl.ColumnKey = c.ColumnKey))
           );
 
         -- Object-change audit (#243 E5): one row per column about to be modified. Same join +
@@ -1465,11 +1536,11 @@ BEGIN
           -- current default is left in place rather than emitting a MODIFY that would hit a syntax error.
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)
           AND (
-              CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
+              CASE WHEN UPPER(c.CompareDataType) LIKE 'ENUM%' OR UPPER(c.CompareDataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.CompareDataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
-                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
+                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.CompareDataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
@@ -1518,17 +1589,38 @@ BEGIN
               OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           OR (VERSION() LIKE '%MariaDB%'
               AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
-                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CompareCheckExpression), '') AS BINARY)
               AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
                     'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
-                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(c.CompareCheckExpression, ''),
                     COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
+          -- A TABLE-level check carrying the column's name, which the name-based compare above cannot tell from the
+          -- column's own: the column is modified so its own check replaces it (see _SchemaSmith_TableLevelColumnChecks).
+          OR (c.CompareCheckExpression IS NOT NULL
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_TableLevelColumnChecks tl
+                           WHERE tl.TableKey = c.TableKey AND tl.ColumnKey = c.ColumnKey))
           );
 
         -- Materialize: fold each table's column modifications into one multi-clause ALTER, then drain.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColStmts;
         CREATE TEMPORARY TABLE _SchemaSmith_ModifyColStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        -- The same-named table-level check goes first (a lower RowId drains first): from MariaDB 11.4.13 / 13.0.2 the
+        -- MODIFY below is refused with it in place (1826), and below that the two coexist and the column stays text.
+        INSERT INTO _SchemaSmith_ModifyColStmts (Stmt)
+        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+                      ' DROP CONSTRAINT `', REPLACE(tl.ConstraintName, '`', '``'), '`')
+        FROM _SchemaSmith_TableLevelColumnChecks tl
+        JOIN _SchemaSmith_Columns c ON c.TableKey = tl.TableKey AND c.ColumnKey = tl.ColumnKey
+        JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        WHERE t.NewTable = 0 AND c.NewColumn = 0 AND c.CompareCheckExpression IS NOT NULL
+        ORDER BY c.TableName, c.ColumnName;
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'constraint', CONCAT(tl.TableName, '.', tl.ConstraintName), 'dropped'
+        FROM _SchemaSmith_TableLevelColumnChecks tl
+        JOIN _SchemaSmith_Columns c ON c.TableKey = tl.TableKey AND c.ColumnKey = tl.ColumnKey
+        JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        WHERE t.NewTable = 0 AND c.NewColumn = 0 AND c.CompareCheckExpression IS NOT NULL;
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO _SchemaSmith_ModifyColStmts (Stmt)
@@ -1553,11 +1645,11 @@ BEGIN
           -- current default is left in place rather than emitting a MODIFY that would hit a syntax error.
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)
           AND (
-              CASE WHEN UPPER(c.DataType) LIKE 'ENUM%' OR UPPER(c.DataType) LIKE 'SET%'
+              CASE WHEN UPPER(c.CompareDataType) LIKE 'ENUM%' OR UPPER(c.CompareDataType) LIKE 'SET%'
                      OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.DataType) AS BINARY)
+                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.CompareDataType) AS BINARY)
                    ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
-                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
+                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.CompareDataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
               OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
               OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
               OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
@@ -1606,11 +1698,16 @@ BEGIN
               OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
           OR (VERSION() LIKE '%MariaDB%'
               AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
-                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CheckExpression), '') AS BINARY)
+                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CompareCheckExpression), '') AS BINARY)
               AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
                     'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
-                    COALESCE(c.CheckExpression, ''),
+                    COALESCE(c.CompareCheckExpression, ''),
                     COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
+          -- A TABLE-level check carrying the column's name, which the name-based compare above cannot tell from the
+          -- column's own: the column is modified so its own check replaces it (see _SchemaSmith_TableLevelColumnChecks).
+          OR (c.CompareCheckExpression IS NOT NULL
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_TableLevelColumnChecks tl
+                           WHERE tl.TableKey = c.TableKey AND tl.ColumnKey = c.ColumnKey))
           )
         GROUP BY c.TableName;
 
@@ -1624,6 +1721,7 @@ BEGIN
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColStmts;
     END IF;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_TableLevelColumnChecks;
 
     -- =======================
     -- STEP 3.5: GENERATED STATUS CHANGES (via DROP+ADD)

@@ -508,7 +508,8 @@ public class ForgeKindlerTests
         //   recorded after a successful object script, read before the next run of the same script).
         // +1 on the MySQL family = SequenceQuench (declared MariaDB sequences; the MySQL file only refuses).
         // +1 on the MySQL family = ColumnLevelCheck (NULL on MySQL; MariaDb override reads the column-level check).
-        Assert.That(mysql.Length, Is.EqualTo(82));
+        // +2 on the MySQL family = JsonAliasCheck + IsJsonAliasColumn (MariaDB's rendering of a JSON column).
+        Assert.That(mysql.Length, Is.EqualTo(84));
     }
 
     [Test]

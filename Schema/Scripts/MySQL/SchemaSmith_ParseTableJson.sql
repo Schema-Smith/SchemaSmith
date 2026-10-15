@@ -260,6 +260,11 @@ BEGIN
         GeneratedType VARCHAR(10) DEFAULT NULL,
         -- MariaDB only: a column-level CHECK, named after the column by the engine. NULL on MySQL, whose model has no such key.
         CheckExpression TEXT DEFAULT NULL,
+        -- The comparison's view of DataType and CheckExpression. On MariaDB a declared JSON is the engine's longtext with
+        -- the json_valid check it adds itself, so the live column is compared with that shape while ColumnScript keeps
+        -- the declared JSON; everywhere else these are the declared values.
+        CompareDataType VARCHAR(100) DEFAULT NULL,
+        CompareCheckExpression TEXT DEFAULT NULL,
         CharacterSet VARCHAR(50) DEFAULT NULL,
         Collation VARCHAR(100) DEFAULT NULL,
         IsInvisible TINYINT DEFAULT 0,
@@ -586,6 +591,16 @@ BEGIN
        AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
        AND isc.CHARACTER_SET_NAME IS NOT NULL
        AND TRIM(c.DataType) REGEXP '^(var)?char|^(tiny|medium|long)?text|^enum|^set';
+
+    -- After every rewrite of DataType above. A declared JSON on MariaDB is compared with the engine's own rendering
+    -- (longtext, plus the json_valid check it adds from 10.4.3 -- NULL below, where it adds none); a column that
+    -- declares a check of its own keeps that as the comparison.
+    UPDATE _SchemaSmith_Columns
+       SET CompareDataType = CASE WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON' THEN 'LONGTEXT' ELSE DataType END,
+           CompareCheckExpression = CASE WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON'
+                                          AND (CheckExpression IS NULL OR TRIM(CheckExpression) = '')
+                                         THEN SchemaSmith_JsonAliasCheck(SchemaSmith_StripBacktickWrapping(ColumnName))
+                                         ELSE CheckExpression END;
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Build column scripts');
 
