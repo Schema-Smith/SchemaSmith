@@ -433,10 +433,20 @@ public sealed class CoherenceCheck : ISchemaCheck
                     (periodNames.Count == 0 ? " (the table declares none)" : "") + ": MariaDB declares a temporal key over a period, named last.");
         }
 
+        // A SQL Server graph table's pseudo-columns are key parts a package can name without declaring them:
+        // $node_id on a node table; $edge_id, $from_id and $to_id on an edge table.
+        var graphPseudoColumns = (table as SqlServerTable)?.GraphType switch
+        {
+            "Node" => new[] { "$node_id" },
+            "Edge" => new[] { "$edge_id", "$from_id", "$to_id" },
+            _ => Array.Empty<string>()
+        };
+
         var hasPrefixKeyParts = table is MySqlTable;
         foreach (var column in keyParts.Take(lastPartIsPeriod ? keyParts.Count - 1 : keyParts.Count).Select(StripOrderingSuffix)
                      .Select(column => hasPrefixKeyParts ? StripPrefixLength(column) : column)
                      .Where(column => !IsExpressionKeyPart(column))
+                     .Where(column => !graphPseudoColumns.Contains(NormalizeIdentifier(column), StringComparer.OrdinalIgnoreCase))
                      .Where(column => !localColumnNames.Contains(NormalizeIdentifier(column))))
             yield return new Finding(Severity.Error, IndexColumnCode, Category, location,
                 $"Index column '{column}' referenced in IndexColumns does not exist on table '{table.Name}'.");

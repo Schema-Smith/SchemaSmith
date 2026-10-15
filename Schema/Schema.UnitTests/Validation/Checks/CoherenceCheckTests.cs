@@ -1055,6 +1055,24 @@ public class CoherenceCheckTests
     }
 
     [Test]
+    public void GraphPseudoColumns_AreKeyParts_OnTheTableKindThatHasThem()
+    {
+        var edge = new SqlServerTable
+        {
+            Name = "Knows",
+            Schema = "dbo",
+            GraphType = "Edge",
+            Columns = { new SqlServerColumn { Name = "Since", DataType = "date" } },
+            Indexes = { new SqlServerIndex { Name = "IX_Knows_From", IndexColumns = "$from_id,$to_id" } }
+        };
+        Assert.That(new CoherenceCheck().Run(Context(TemplateWithTables("T", edge))).Where(f => f.Code == "SS-IDX-001"), Is.Empty);
+
+        edge.GraphType = "Node";
+        Assert.That(new CoherenceCheck().Run(Context(TemplateWithTables("T", edge))).Count(f => f.Code == "SS-IDX-001"), Is.EqualTo(2),
+            "a node table has $node_id, not $from_id or $to_id");
+    }
+
+    [Test]
     public void IndexColumnMissing_IsError()
     {
         var table = new SqlServerTable

@@ -1173,8 +1173,9 @@ BEGIN TRY
                        CASE WHEN si.[type] IN (5, 6) THEN 'COLUMNSTORE ' ELSE '' END + 
                        'INDEX ' + QUOTENAME(si.[Name]) + ' ON ' + t.[Schema] + '.' + t.[Name] + 
                        CASE WHEN si.[type] NOT IN (5, 6)
-                            THEN ' (' + STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
+                            THEN ' (' + STUFF((SELECT ',' + CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                                            FROM sys.index_columns ic
+                                           LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
                                            WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0
                                            ORDER BY key_ordinal FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') + ')' +
                                  CASE WHEN EXISTS (SELECT * FROM sys.index_columns ic WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1)
@@ -1207,6 +1208,11 @@ BEGIN TRY
                                      AND is_disabled = 0
                                      -- A kind a package cannot declare is neither compared nor dropped. XML (3) has its own scan.
                                      AND si.[type] IN (3, {{RenderableIndexTypes}})
+                                     -- The engine's own GRAPH_UNIQUE_INDEX_<guid> over a graph table's graph_id column
+                                     -- is neither compared nor dropped: no package can declare it.
+                                     AND NOT EXISTS (SELECT 1 FROM sys.index_columns gic
+                                                     JOIN #GraphKeyParts g ON g.[object_id] = gic.[object_id] AND g.column_id = gic.column_id
+                                                    WHERE gic.[object_id] = si.[object_id] AND gic.index_id = si.index_id AND g.graph_type = 1)
     LEFT JOIN sys.partitions p ON p.[object_id] = si.[object_id]
                                             AND p.index_id = si.index_id
     LEFT JOIN sys.filegroups fg ON fg.data_space_id = si.data_space_id

@@ -51,6 +51,8 @@ public class GraphTableXmlExtractionTests
 
         Exec("CREATE TABLE dbo.XmlGraphPerson (Id INT NOT NULL PRIMARY KEY, Name NVARCHAR(50) NULL) AS NODE");
         Exec("CREATE TABLE dbo.XmlGraphKnows (Since DATE NULL) AS EDGE");
+        Exec("CREATE TABLE dbo.XmlGraphRoad (Km INT NULL) AS EDGE");
+        Exec("CREATE INDEX IX_XmlGraphRoad_From ON dbo.XmlGraphRoad ($from_id, $to_id)");
         Exec("CREATE TABLE dbo.XmlPlain (Id INT NOT NULL PRIMARY KEY, node_id_like NVARCHAR(10) NULL)");
     }
 
@@ -90,6 +92,18 @@ public class GraphTableXmlExtractionTests
         while (reader.Read())
             if (!reader.IsDBNull(0)) sb.Append(reader.GetValue(0));
         return sb.ToString();
+    }
+
+    [Test]
+    public void TheXmlTier_WritesAnIndexOverTheFromAndToIds_UnderThoseNames()
+    {
+        var xml = Extract("XmlGraphRoad");
+        Assert.Multiple(() =>
+        {
+            Assert.That(xml, Does.Contain("<Name>[IX_XmlGraphRoad_From]</Name>"), "the user's index is extracted on the XML tier too");
+            Assert.That(xml, Does.Contain("<IndexColumns>$from_id,$to_id</IndexColumns>"), "under the two names a package can carry:\n" + xml);
+            Assert.That(xml, Does.Not.Contain("GRAPH_UNIQUE_INDEX"), "and the engine's own index is not");
+        });
     }
 
     [Test]

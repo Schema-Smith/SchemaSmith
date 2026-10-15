@@ -189,6 +189,12 @@
     WHERE NOT EXISTS (SELECT * FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = #TableDefinitions.[Schema] AND c.[TableName] = #TableDefinitions.[Name])
 
   RAISERROR('Parse Indexes from Xml', 10, 100) WITH NOWAIT
+  -- Graph key parts (#graph): an index over $from_id / $to_id is four hidden columns in the catalog; the staging
+  -- table maps them back to the two names a package can write, and marks the graph_id column no package can.
+  IF OBJECT_ID('tempdb..#GraphKeyParts') IS NOT NULL DROP TABLE #GraphKeyParts
+  CREATE TABLE #GraphKeyParts ([object_id] INT NOT NULL, [column_id] INT NOT NULL, [graph_type] INT NOT NULL, [PseudoName] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL)
+  EXEC SchemaSmith.StageGraphKeyParts
+
   IF OBJECT_ID('tempdb..#Indexes') IS NOT NULL DROP TABLE #Indexes
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), [CompressionType] = ISNULL(NULLIF(RTRIM(i.[CompressionType]), ''), 'NONE'), [XmlCompression] = ISNULL(i.[XmlCompression], 0), [PrimaryKey] = ISNULL(i.[PrimaryKey], 0),

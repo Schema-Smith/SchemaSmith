@@ -158,6 +158,12 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 12
   EXEC sp_executesql N'SELECT @p_Mo = ISNULL(is_memory_optimized, 0), @p_Dur = CASE WHEN is_memory_optimized = 1 THEN durability_desc END FROM sys.tables WHERE [object_id] = @p_ObjId',
     N'@p_ObjId INT, @p_Mo BIT OUTPUT, @p_Dur NVARCHAR(20) OUTPUT', @p_ObjId = @v_ObjectId, @p_Mo = @v_MemoryOptimized OUTPUT, @p_Dur = @v_Durability OUTPUT
 
+-- Graph key parts (#graph): an index over $from_id / $to_id is four hidden columns in the catalog; the staging
+-- table maps them back to the two names a package can write, and marks the graph_id column no package can.
+IF OBJECT_ID('tempdb..#GraphKeyParts') IS NOT NULL DROP TABLE #GraphKeyParts
+CREATE TABLE #GraphKeyParts ([object_id] INT NOT NULL, [column_id] INT NOT NULL, [graph_type] INT NOT NULL, [PseudoName] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL)
+EXEC SchemaSmith.StageGraphKeyParts
+
 CREATE TABLE #GraphCols ([column_id] INT NOT NULL)
 IF SchemaSmith.fn_ServerMajorVersion() >= 14
   EXEC sp_executesql N'INSERT INTO #GraphCols ([column_id]) SELECT column_id FROM sys.columns WHERE graph_type IS NOT NULL AND [object_id] = @p_ObjId',
@@ -382,8 +388,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                CASE WHEN fill_factor = 100 THEN 0 ELSE fill_factor END AS [FillFactor],
                CASE WHEN ignore_dup_key = 1 THEN 'true' ELSE 'false' END AS [IgnoreDuplicateKey],
                CASE WHEN is_padded = 1 THEN 'true' ELSE 'false' END AS [PadIndex],
-               STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
+               STUFF((SELECT ',' + CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                   FROM sys.index_columns ic
+                  LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0
                   ORDER BY key_ordinal FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS [IndexColumns],
                STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id))
@@ -407,11 +414,11 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
             AND is_hypothetical = 0
             AND is_disabled = 0
             AND index_id > 0
-            -- GRAPH_UNIQUE_INDEX_<guid> over the graph_id column: excluding the columns alone
-            -- would leave an index pointing at one that is no longer declared.
+            -- GRAPH_UNIQUE_INDEX_<guid> over the graph_id column, which no package can declare. An index a user
+            -- made over $from_id / $to_id renders its key parts as those names (#GraphKeyParts) and stays.
             AND NOT EXISTS (SELECT 1 FROM sys.index_columns gic
-                            JOIN #GraphCols g WITH (NOLOCK) ON g.[column_id] = gic.column_id
-                           WHERE gic.[object_id] = si.[object_id] AND gic.index_id = si.index_id)
+                            JOIN #GraphKeyParts g ON g.[object_id] = gic.[object_id] AND g.column_id = gic.column_id
+                           WHERE gic.[object_id] = si.[object_id] AND gic.index_id = si.index_id AND g.graph_type = 1)
           ORDER BY [Name]
           FOR XML PATH('Indexes'), TYPE),
        (SELECT 'true' AS [@json:Array],

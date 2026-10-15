@@ -40,6 +40,12 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
 -- dynamic and guarded. It takes the NEWEST capture instance first and only then asks whether its filegroup is
 -- a non-default one -- filtering to non-default first would report an older instance's placement. NULL (the
 -- catalog's "default filegroup") and the default itself both extract no key, so existing packages are unchanged.
+-- Graph key parts (#graph): an index over $from_id / $to_id is four hidden columns in the catalog; the staging
+-- table maps them back to the two names a package can write, and marks the graph_id column no package can.
+IF OBJECT_ID('tempdb..#GraphKeyParts') IS NOT NULL DROP TABLE #GraphKeyParts
+CREATE TABLE #GraphKeyParts ([object_id] INT NOT NULL, [column_id] INT NOT NULL, [graph_type] INT NOT NULL, [PseudoName] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL)
+EXEC SchemaSmith.StageGraphKeyParts
+
 DECLARE @v_CdcFilegroup NVARCHAR(260) = NULL
 IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   EXEC sp_executesql N'
@@ -339,8 +345,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                CASE WHEN fill_factor = 100 THEN 0 ELSE fill_factor END AS [FillFactor],
                CONVERT(BIT, ignore_dup_key) AS [IgnoreDuplicateKey],
                CONVERT(BIT, is_padded) AS [PadIndex],
-               (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
+               (SELECT STRING_AGG(CAST(CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
                   FROM sys.index_columns ic
+                  LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0) AS [IndexColumns],
                (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY index_column_id)
                   FROM sys.index_columns ic
@@ -363,15 +370,14 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
             AND is_hypothetical = 0
             AND is_disabled = 0
             AND index_id > 0
-            -- A graph table also gets a system-generated GRAPH_UNIQUE_INDEX_<guid> over its
-            -- graph_id column. Both names carry a per-table GUID, so emitting the index is the
-            -- same undeployable-package problem as emitting the column, and excluding the columns
-            -- alone leaves an index pointing at one that is no longer declared.
+            -- A graph table also gets a system-generated GRAPH_UNIQUE_INDEX_<guid> over its graph_id column.
+            -- Both names carry a per-table GUID, so emitting that index is the same undeployable-package
+            -- problem as emitting the column. An index a user made over $from_id / $to_id is a different
+            -- thing: its key parts render as those names (#GraphKeyParts), which deploy anywhere.
             AND NOT EXISTS (SELECT 1 FROM sys.index_columns gic
-                            JOIN sys.columns gc
-                              ON gc.[object_id] = gic.[object_id] AND gc.column_id = gic.column_id
+                            JOIN #GraphKeyParts gc ON gc.[object_id] = gic.[object_id] AND gc.column_id = gic.column_id
                            WHERE gic.[object_id] = si.[object_id] AND gic.index_id = si.index_id
-                             AND gc.graph_type IS NOT NULL)
+                             AND gc.graph_type = 1)
           ORDER BY [Name]
           FOR JSON AUTO) AS [Indexes],
        (SELECT QUOTENAME(i.[name] COLLATE DATABASE_DEFAULT) AS [Name],

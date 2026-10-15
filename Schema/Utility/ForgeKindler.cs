@@ -404,6 +404,8 @@ public static class ForgeKindler
                 new("SchemaSmith.DegradeUnsupportedFullText.sql"),
                 new("SchemaSmith.DegradeDatabaseToggles.sql"),
                 new("SchemaSmith.DegradeUnsupportedFeatures.sql"),
+                // Fills the caller's #GraphKeyParts: the graph columns behind a $from_id / $to_id key part (2017+, dynamic).
+                new("SchemaSmith.StageGraphKeyParts.sql"),
                 new("SchemaSmith.PrintWithNoWait.sql"),
                 new("SchemaSmith.RecordWouldChanges.sql"),
                 new("SchemaSmith.CdcPreflight.sql"),

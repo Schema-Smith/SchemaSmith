@@ -935,6 +935,8 @@ Every entry in the `Indexes` array defines an index or key constraint on the tab
 
 ### SQL Server index extras
 
+On a graph table, an index can name the engine's pseudo-columns as key parts: `$node_id` on a node table, `$edge_id`, `$from_id` and `$to_id` on an edge table (`"IndexColumns": "$from_id,$to_id"`, bare, as `CREATE INDEX` takes them). SchemaTongs writes such an index under those names; the GUID-suffixed columns SQL Server stores it over never reach the package, and the engine's own `GRAPH_UNIQUE_INDEX` is neither extracted nor dropped as an unknown index.
+
 `CompressionType` (NONE/ROW/PAGE), `Clustered`, `ColumnStore`, `FillFactor`, `UpdateFillFactor`,
 `FileGroup`, `PartitionScheme`, `PartitionColumn`, `IgnoreDuplicateKey`, `PadIndex`, `BucketCount`.
 

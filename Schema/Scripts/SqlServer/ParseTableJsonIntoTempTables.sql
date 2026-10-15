@@ -292,6 +292,12 @@
     [NotForReplication] BIT NULL
   )
 
+  -- Graph key parts (#graph): an index over $from_id / $to_id is four hidden columns in the catalog; the staging
+  -- table maps them back to the two names a package can write, and marks the graph_id column no package can.
+  IF OBJECT_ID('tempdb..#GraphKeyParts') IS NOT NULL DROP TABLE #GraphKeyParts
+  CREATE TABLE #GraphKeyParts ([object_id] INT NOT NULL, [column_id] INT NOT NULL, [graph_type] INT NOT NULL, [PseudoName] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL)
+  EXEC SchemaSmith.StageGraphKeyParts
+
   DROP TABLE IF EXISTS #Statistics
   -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
   -- verified: declaring it explicitly is what lets the INSERT be parameterized later.

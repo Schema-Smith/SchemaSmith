@@ -337,7 +337,8 @@ public class ForgeKindlerTests
         // +2 on SQL Server = CaptureSignatures + ReapplySignatures (a changed module's signatures, captured before the
         //   ALTER that strips them and applied again after it).
         // +1 on SQL Server = ConstraintStateQuench (a foreign key's and check constraint's Enforced / Validated state).
-        Assert.That(sqlServer.Length, Is.EqualTo(56));
+        // +1 on SQL Server = StageGraphKeyParts (the graph columns behind a $from_id / $to_id key part, for every renderer).
+        Assert.That(sqlServer.Length, Is.EqualTo(57));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
