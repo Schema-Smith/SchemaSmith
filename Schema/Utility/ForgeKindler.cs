@@ -439,6 +439,8 @@ public static class ForgeKindler
                 new("SchemaSmith.FileStreamColumnQuench.sql"),
                 new("SchemaSmith.CdcQuench.sql"),
                 new("SchemaSmith.ForeignKeyQuench.sql"),
+                // Edge constraints (2019), after the foreign keys and once every node table exists; floor-safe (dynamic reads).
+                new("SchemaSmith.EdgeConstraintQuench.sql"),
                 new("SchemaSmith.ConstraintStateQuench.sql"),
                 new("SchemaSmith.TableQuench.sql", ReplaceParseJson: true),
                 new("SchemaSmith.IndexOnlyQuench.sql"),

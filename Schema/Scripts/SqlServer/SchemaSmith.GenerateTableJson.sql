@@ -71,6 +71,22 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_en
      ORDER BY ct.create_date DESC, ct.[object_id] DESC;',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Net BIT OUTPUT, @p_Idx NVARCHAR(260) OUTPUT',
     @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Net = @v_CdcNetChanges OUTPUT, @p_Idx = @v_CdcIndexName OUTPUT
+-- Edge constraints (#graph, 2019+). sys.edge_constraints is read through a version-guarded dynamic statement into
+-- a temp table the static SELECT below reads, so this proc CREATEs on 2017 where the view does not exist. One row per
+-- clause; the constraint's own attributes repeat on each.
+IF OBJECT_ID('tempdb..#EdgeConstraintsCat') IS NOT NULL DROP TABLE #EdgeConstraintsCat
+CREATE TABLE #EdgeConstraintsCat ([ConstraintName] NVARCHAR(500) COLLATE DATABASE_DEFAULT NOT NULL, [DeleteAction] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+                                  [ClauseNumber] INT NOT NULL, [FromTable] NVARCHAR(500) COLLATE DATABASE_DEFAULT NOT NULL, [ToTable] NVARCHAR(500) COLLATE DATABASE_DEFAULT NOT NULL)
+IF SchemaSmith.fn_ServerMajorVersion() >= 15
+  EXEC sp_executesql N'
+    INSERT INTO #EdgeConstraintsCat ([ConstraintName], [DeleteAction], [ClauseNumber], [FromTable], [ToTable])
+    SELECT ec.[name], CASE WHEN ec.delete_referential_action = 1 THEN ''CASCADE'' END, cl.clause_number,
+           QUOTENAME(OBJECT_SCHEMA_NAME(cl.from_object_id)) + ''.'' + QUOTENAME(OBJECT_NAME(cl.from_object_id)),
+           QUOTENAME(OBJECT_SCHEMA_NAME(cl.to_object_id)) + ''.'' + QUOTENAME(OBJECT_NAME(cl.to_object_id))
+      FROM sys.edge_constraints ec
+      JOIN sys.edge_constraint_clauses cl ON cl.[object_id] = ec.[object_id]
+     WHERE ec.parent_object_id = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table))',
+    N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128)', @p_Schema = @p_Schema, @p_Table = @p_Table
 {{CollectSelectiveXmlIndexes}}
 SELECT [Line] FROM SchemaSmith.fn_FormatJson(REPLACE(REPLACE(REPLACE((
 SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
@@ -444,6 +460,16 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                    ORDER BY x.[name]), ''))
           ORDER BY [Name]
           FOR JSON AUTO) AS [CheckConstraints],
+       (SELECT QUOTENAME(ec.[ConstraintName]) AS [Name],
+               (SELECT c.[FromTable], c.[ToTable]
+                  FROM #EdgeConstraintsCat c WITH (NOLOCK)
+                 WHERE c.[ConstraintName] = ec.[ConstraintName]
+                 ORDER BY c.[ClauseNumber]
+                 FOR JSON PATH) AS [Clauses],
+               ec.[DeleteAction]
+          FROM (SELECT DISTINCT [ConstraintName], [DeleteAction] FROM #EdgeConstraintsCat WITH (NOLOCK)) ec
+          ORDER BY [Name]
+          FOR JSON PATH) AS [EdgeConstraints],
        (SELECT FullTextCatalog = QUOTENAME((SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
                KeyIndex = QUOTENAME((SELECT i.[Name] FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
                ChangeTracking = change_tracking_state_desc,

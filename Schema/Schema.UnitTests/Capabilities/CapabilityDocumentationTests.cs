@@ -46,6 +46,7 @@ public class CapabilityDocumentationTests
         // ---- SQL Server, version gated ----
         ["SqlServer/temporal"] = "**Temporal tables**",
         ["SqlServer/graph-table"] = "**Graph tables**",
+        ["SqlServer/edge-constraint"] = "**Edge constraints**",
         ["SqlServer/ledger-table"] = "**Ledger tables**",
         ["SqlServer/xml-compression"] = "**XML compression**",
         ["SqlServer/data-masking"] = "**Dynamic data masking**",

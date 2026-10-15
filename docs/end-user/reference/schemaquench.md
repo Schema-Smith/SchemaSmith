@@ -465,6 +465,7 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 | **Writable nonclustered columnstore** | SQL Server 2016 | skips the index + records a downgrade. On 2012 and 2014 a nonclustered columnstore index makes its table read-only, so creating it would change what the application can do. An index already on the table is left in place |
 | **Clustered columnstore beside rowstore indexes** | SQL Server 2016 | skips the columnstore index and keeps the rowstore indexes, which carry keys and uniqueness + records a downgrade. SQL Server 2014 refuses the combination. An index already on the table is left in place |
 | **Graph tables** (`NODE` / `EDGE`) | SQL Server 2017 | creates the table with all its declared columns, *without* graph semantics + records a downgrade |
+| **Edge constraints** (`EdgeConstraints` on an edge table) | SQL Server 2019 | creates the edge table without the constraint + records a downgrade |
 | **Ledger tables** | SQL Server 2022 | creates an ordinary table + records a downgrade. The direction is deliberate: a ledger table cannot be converted or dropped afterwards, so not creating one is far easier to recover from than creating one by accident |
 | **XML compression** | SQL Server 2022 | creates the table or index without the compression clause + records a downgrade. Nothing an application can observe changes — only the storage saving is lost |
 

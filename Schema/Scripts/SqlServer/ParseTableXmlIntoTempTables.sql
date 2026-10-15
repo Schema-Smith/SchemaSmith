@@ -326,6 +326,37 @@
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   EXEC(@v_SQL)
 
+  RAISERROR('Parse Edge Constraints from Xml', 10, 100) WITH NOWAIT
+  IF OBJECT_ID('tempdb..#EdgeConstraints') IS NOT NULL DROP TABLE #EdgeConstraints
+  -- Edge constraints (#graph, SQL Server 2019); the JSON twin's shape and ClauseSet rule, read from the XML form.
+  SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
+         [Schema] = SchemaSmith.fn_SafeBracketWrap(t.[Schema]), [TableName] = SchemaSmith.fn_SafeBracketWrap(t.[Name]), [ConstraintName] = SchemaSmith.fn_SafeBracketWrap(e.[ConstraintName]),
+         [DeleteAction] = CASE WHEN UPPER(RTRIM(ISNULL(e.[DeleteAction], ''))) = 'CASCADE' THEN 'CASCADE' ELSE 'NO ACTION' END,
+         [ClauseSet] = cs.[ClauseSet],
+         e.[ShouldApplyExpression], e.[VariantName]
+    INTO #EdgeConstraints
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/EdgeConstraints') AS Y(ec)
+    -- The clauses as a sorted set, each "[s].[from] TO [s].[to]"; a bare table name is in the edge table's own schema.
+    CROSS APPLY (SELECT [ClauseSet] = STUFF((SELECT ', ' + ISNULL(QUOTENAME(PARSENAME(cl.value('(FromTable/text())[1]', 'NVARCHAR(500)'), 2)), SchemaSmith.fn_SafeBracketWrap(t.[Schema])) + '.' + QUOTENAME(PARSENAME(cl.value('(FromTable/text())[1]', 'NVARCHAR(500)'), 1)) + ' TO ' +
+                                                       ISNULL(QUOTENAME(PARSENAME(cl.value('(ToTable/text())[1]', 'NVARCHAR(500)'), 2)), SchemaSmith.fn_SafeBracketWrap(t.[Schema])) + '.' + QUOTENAME(PARSENAME(cl.value('(ToTable/text())[1]', 'NVARCHAR(500)'), 1))
+                                             FROM Y.ec.nodes('Clauses') AS Z(cl)
+                                             ORDER BY ISNULL(QUOTENAME(PARSENAME(cl.value('(FromTable/text())[1]', 'NVARCHAR(500)'), 2)), SchemaSmith.fn_SafeBracketWrap(t.[Schema])) + '.' + QUOTENAME(PARSENAME(cl.value('(FromTable/text())[1]', 'NVARCHAR(500)'), 1)) + ' TO ' +
+                                                      ISNULL(QUOTENAME(PARSENAME(cl.value('(ToTable/text())[1]', 'NVARCHAR(500)'), 2)), SchemaSmith.fn_SafeBracketWrap(t.[Schema])) + '.' + QUOTENAME(PARSENAME(cl.value('(ToTable/text())[1]', 'NVARCHAR(500)'), 1))
+                                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')) cs
+    CROSS APPLY (SELECT
+      [ConstraintName] = ec.value('(Name/text())[1]', 'NVARCHAR(500)'),
+      [DeleteAction] = ec.value('(DeleteAction/text())[1]', 'NVARCHAR(20)'),
+      [ShouldApplyExpression] = ec.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
+      [VariantName] = ec.value('(VariantName/text())[1]', 'NVARCHAR(128)')
+      ) e;
+
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('DELETE FROM #EdgeConstraints WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX))
+                           FROM #EdgeConstraints WITH (NOLOCK)
+                           WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  EXEC(@v_SQL)
+
   RAISERROR('Parse Table Level Check Constraints from Xml', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#CheckConstraints') IS NOT NULL DROP TABLE #CheckConstraints
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),

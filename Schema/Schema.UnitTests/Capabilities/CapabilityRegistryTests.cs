@@ -26,6 +26,7 @@ namespace Schema.UnitTests.Capabilities
             "data compression (Enterprise edition below SQL Server 2016 SP1)",
             "columnstore index (Enterprise edition below SQL Server 2016 SP1)",
             "graph table (SQL Server 2017)",
+            "edge constraint (SQL Server 2019)",
             "ledger table (SQL Server 2022)",
             "XML compression (SQL Server 2022)",
             "data masking (SQL Server 2016)",

@@ -84,6 +84,7 @@
     [FullTextIndex] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [ForeignKeys] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [CheckConstraints] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [EdgeConstraints] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
     [GraphType] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
@@ -298,6 +299,22 @@
   CREATE TABLE #GraphKeyParts ([object_id] INT NOT NULL, [column_id] INT NOT NULL, [graph_type] INT NOT NULL, [PseudoName] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL)
   EXEC SchemaSmith.StageGraphKeyParts
 
+
+  DROP TABLE IF EXISTS #EdgeConstraints
+  -- Edge constraints (#graph, SQL Server 2019). ClauseSet is the CONNECTION clauses as emitted and compared: each
+  -- "[s].[from] TO [s].[to]", sorted, comma-separated, so declaration order never counts as a change.
+  CREATE TABLE #EdgeConstraints
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [ConstraintName] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [DeleteAction] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+    [ClauseSet] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+  )
+
   DROP TABLE IF EXISTS #Statistics
   -- Shape measured from tempdb against the SELECT INTO this replaces, then round-trip
   -- verified: declaring it explicitly is what lets the INSERT be parameterized later.
@@ -391,7 +408,7 @@
     THROW 51000, @v_Msg, 1;
   END
 
-  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description])
+  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description])
   -- INGEST ONLY -- raw values straight off the shred. Every transform that used to live in this
   -- SELECT moved to the NORMALIZE pass below, so a second ingestion path (C# bulk-loading these rows
   -- instead of shredding JSON) gets the identical treatment from one definition rather than a
@@ -409,7 +426,7 @@
          [CdcFilegroup],
          [CdcSupportsNetChanges],
          [CdcIndexName],
-         [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints],
+         [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints],
          [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName],
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch],
@@ -440,6 +457,7 @@
 	  [FullTextIndex] NVARCHAR(MAX) '$.FullTextIndex' AS JSON,
       [ForeignKeys] NVARCHAR(MAX) '$.ForeignKeys' AS JSON,
       [CheckConstraints] NVARCHAR(MAX) '$.CheckConstraints' AS JSON,
+      [EdgeConstraints] NVARCHAR(MAX) '$.EdgeConstraints' AS JSON,
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName',
       [EnableCDC] BIT '$.EnableCDC',
@@ -1030,6 +1048,31 @@
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
   
+  RAISERROR('Parse Edge Constraints from Json', 10, 100) WITH NOWAIT
+  INSERT INTO #EdgeConstraints ([_RowId], [Schema], [TableName], [ConstraintName], [DeleteAction], [ClauseSet], [ShouldApplyExpression], [VariantName])
+  SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
+         SchemaSmith.fn_SafeBracketWrap(t.[Schema]), SchemaSmith.fn_SafeBracketWrap(t.[Name]), SchemaSmith.fn_SafeBracketWrap(e.[ConstraintName]),
+         CASE WHEN UPPER(RTRIM(ISNULL(e.[DeleteAction], ''))) = 'CASCADE' THEN 'CASCADE' ELSE 'NO ACTION' END,
+         -- A bare table name is in the edge table's own schema, as SQL Server resolves it; a qualified one keeps its schema.
+         (SELECT STRING_AGG(CAST(x.[Clause] AS NVARCHAR(MAX)), ', ') WITHIN GROUP (ORDER BY x.[Clause])
+            FROM OPENJSON(e.[Clauses]) WITH ([FromTable] NVARCHAR(500) '$.FromTable', [ToTable] NVARCHAR(500) '$.ToTable') c
+            CROSS APPLY (SELECT [Clause] = ISNULL(QUOTENAME(PARSENAME(c.[FromTable], 2)), SchemaSmith.fn_SafeBracketWrap(t.[Schema])) + '.' + QUOTENAME(PARSENAME(c.[FromTable], 1)) + ' TO ' +
+                                            ISNULL(QUOTENAME(PARSENAME(c.[ToTable], 2)), SchemaSmith.fn_SafeBracketWrap(t.[Schema])) + '.' + QUOTENAME(PARSENAME(c.[ToTable], 1))) x),
+         e.[ShouldApplyExpression], e.[VariantName]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(EdgeConstraints) WITH (
+      [ConstraintName] NVARCHAR(500) '$.Name',
+      [DeleteAction] NVARCHAR(20) '$.DeleteAction',
+      [Clauses] NVARCHAR(MAX) '$.Clauses' AS JSON,
+      [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
+      [VariantName] NVARCHAR(128) '$.VariantName'
+      ) e;
+
+  SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #EdgeConstraints WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
+    FROM #EdgeConstraints WITH (NOLOCK)
+    WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
+  EXEC(@v_SQL)
+
   RAISERROR('Parse Statistics from Json', 10, 100) WITH NOWAIT
   INSERT INTO #Statistics ([_RowId], [Schema], [TableName], [StatisticName], [SampleSize], [FilterExpression], [Columns], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),

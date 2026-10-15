@@ -628,6 +628,60 @@
       "type": "string",
       "pattern": "^(?:Off|AppendOnly|Updatable)$"
     },
+    "EdgeConstraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Clauses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "FromTable": {
+                  "type": "string",
+                  "description": "The node table the edge starts at, schema-qualified ([dbo].[Person]) or bare (the edge table's own schema)."
+                },
+                "ToTable": {
+                  "type": "string",
+                  "description": "The node table the edge ends at, schema-qualified or bare."
+                },
+                "Extensions": {}
+              },
+              "additionalProperties": false,
+              "required": [
+                "FromTable",
+                "ToTable"
+              ]
+            },
+            "description": "The CONNECTION clauses, each a from-node table and a to-node table (schema-qualified, or the edge table's own schema). Order does not matter."
+          },
+          "DeleteAction": {
+            "type": "string",
+            "pattern": "^(?:NO ACTION|CASCADE)$",
+            "description": "ON DELETE action when a connected node row is deleted: NO ACTION (the default) refuses the delete while an edge connects the node; CASCADE deletes the edges too."
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Clauses"
+        ]
+      },
+      "description": "SQL Server 2019+, on a table whose GraphType is Edge: which node tables the edges may connect (CONNECTION clauses) and what a delete of a connected node does. Below 2019 the constraint is skipped and a downgrade recorded."
+    },
     "TextImageFileGroup": {
       "type": "string"
     },

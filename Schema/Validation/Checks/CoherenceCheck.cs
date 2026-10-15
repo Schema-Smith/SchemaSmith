@@ -37,6 +37,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RebuildThresholdCode = "SS-TBL-001";
     private const string IgnoredThresholdCode = "SS-TBL-002";
+    private const string EdgeConstraintTableKindCode = "SS-TBL-003";
+    private const string EdgeConstraintNodeCode = "SS-TBL-004";
     private const string RlsWithoutPoliciesCode = "SS-RLS-001";
     private const string PoliciesWithoutRlsCode = "SS-RLS-002";
     private const string ReplicaIdentityIndexMissingCode = "SS-RI-001";
@@ -119,6 +121,7 @@ public sealed class CoherenceCheck : ISchemaCheck
                 findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
 
             findings.AddRange(CheckBackfill(table, location));
+            findings.AddRange(CheckEdgeConstraints(table, location, tablesByKey));
             findings.AddRange(CheckCharsetWithoutCollation(table, location));
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
             findings.AddRange(CheckRowLevelSecurity(table, location));
@@ -273,6 +276,39 @@ public sealed class CoherenceCheck : ISchemaCheck
                   + "2020 does not resolve. A major version number (13, 16) also works."
                 : " Use a numeric version such as " + (product.Platform.GetBasePlatform() == Platform.MySQL
                     ? "'8.0' or '10.6'." : "'12' or '16'.")));
+    }
+
+    /// <summary>
+    /// An edge constraint lives on an edge table and connects node tables. The table kind is an error (SQL Server
+    /// refuses the constraint by name); a clause naming a table the package does not declare as a node is a warning,
+    /// since the deploy succeeds when the node table already exists on the target.
+    /// </summary>
+    private static IEnumerable<Finding> CheckEdgeConstraints(Table table, string tableLocation,
+        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey)
+    {
+        if (table is not SqlServerTable { EdgeConstraints.Count: > 0 } sqlTable) yield break;
+        var schema = NormalizedSchema(table);
+        foreach (var constraint in sqlTable.EdgeConstraints)
+        {
+            var location = $"{tableLocation} / EdgeConstraint '{constraint.Name}'";
+            if (!string.Equals(sqlTable.GraphType, "Edge", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return new Finding(Severity.Error, EdgeConstraintTableKindCode, Category, location,
+                    $"Table '{table.Name}' declares an edge constraint but its GraphType is '{sqlTable.GraphType ?? "None"}': only an edge table (GraphType \"Edge\") can carry one.");
+                continue;
+            }
+            foreach (var clause in constraint.Clauses ?? [])
+                foreach (var name in new[] { clause.FromTable, clause.ToTable }.Where(n => !string.IsNullOrWhiteSpace(n)))
+                {
+                    var parts = SplitNames(name.Replace(".", ","));
+                    var key = (parts.Count > 1 ? IdentityKey(parts[0]) : schema, IdentityKey(parts[^1]));
+                    if (tablesByKey.TryGetValue(key, out var targets) && targets.OfType<SqlServerTable>().Any(x => string.Equals(x.GraphType, "Node", StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    var resolvedSchema = parts.Count > 1 ? NormalizeIdentifier(parts[0]) : NormalizeIdentifier((table as IDeliverableTable)?.Schema ?? "");
+                    yield return new Finding(Severity.Warning, EdgeConstraintNodeCode, Category, location,
+                        $"Clause table '{name}' is not a node table in the package (resolved '{resolvedSchema}.{NormalizeIdentifier(parts[^1])}'). The deploy succeeds only if a node table of that name already exists on the target.");
+                }
+        }
     }
 
     /// <summary>

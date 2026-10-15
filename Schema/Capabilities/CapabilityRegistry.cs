@@ -39,6 +39,10 @@ namespace Schema.Capabilities
             // declared columns -- only the node/edge semantics are lost.
             rows.Add(new("graph-table", "Graph tables (NODE/EDGE)", Platform.SqlServer,
                 14, "SQL Server 2017", null, DegradeKind.Reduced, "graph table (SQL Server 2017)"));
+            // An edge table's CONNECTION constraints arrived two years after graph tables; below 2019 the table deploys
+            // without them.
+            rows.Add(new("edge-constraint", "Edge constraints (CONNECTION)", Platform.SqlServer,
+                15, "SQL Server 2019", null, DegradeKind.Skip, "edge constraint (SQL Server 2019)"));
 
             // Reduced for the same reason as graph, and the direction matters more here: a ledger table
             // cannot be converted or dropped afterwards, so NOT creating one is far easier to recover

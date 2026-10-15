@@ -103,6 +103,14 @@ namespace Schema.Domain.SqlServer
         [JsonProperty(Order = 104)]
         public List<Statistic> Statistics { get; set; } = [];
 
+        // Edge constraints (SQL Server 2019): only on an edge table. Created in the foreign-key pass, once every node
+        // table exists; a change to the clauses or the action is a drop and re-create, as there is no ALTER.
+        [SchemaProperty(Description = "SQL Server 2019+, on a table whose GraphType is Edge: which node tables the edges may connect (CONNECTION clauses) and what a delete of a connected node does. Below 2019 the constraint is skipped and a downgrade recorded.")]
+        [JsonProperty(Order = 117)]
+        public List<EdgeConstraint> EdgeConstraints { get; set; } = [];
+
+        public bool ShouldSerializeEdgeConstraints() => EdgeConstraints is { Count: > 0 };
+
         [JsonProperty(Order = 105)]
         [JsonConverter(typeof(FullTextIndexListJsonConverter))]
         [SchemaProperty(SingleOrArray = true)]

@@ -82,6 +82,28 @@ BEGIN
     END
   END
 
+  -- Edge constraints (CONNECTION) -- SQL Server 2019 (major 15). Below it the clause is not syntax; the edge table
+  -- itself deploys (2017 has graph tables), without the constraint -- a Skip, the table keeping its shape and data.
+  IF @v_major < 15 AND EXISTS (SELECT 1 FROM #EdgeConstraints WITH (NOLOCK))
+  BEGIN
+    IF @v_policy = 'fail'
+    BEGIN
+      SET @v_list = STUFF((SELECT ', ' + e.[Schema] + '.' + e.[TableName] + '.' + e.[ConstraintName] FROM #EdgeConstraints e WITH (NOLOCK)
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      SET @v_msg = 'Edge constraints require SQL Server 2019 (detected major ' +
+                   CONVERT(NVARCHAR(10), @v_major) + '); constraint(s): ' + LEFT(@v_list, 1800) + '.'
+      RAISERROR(@v_msg, 16, 1)
+    END
+    ELSE
+    BEGIN
+      INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT @@SPID, 'edge constraint (SQL Server 2019)', e.[Schema] + '.' + e.[TableName] + '.' + e.[ConstraintName], 'downgraded'
+          FROM #EdgeConstraints e WITH (NOLOCK)
+      RAISERROR('  Edge constraint skipped: requires SQL Server 2019 - the edge table deploys without it (downgraded)', 10, 100) WITH NOWAIT
+      DELETE FROM #EdgeConstraints
+    END
+  END
+
   -- XML compression -- SQL Server 2022 (major 16). Below it the clause is a parser error, so the emit
   -- sites gate on the same version and this block only reports what they suppressed. Clearing it
   -- deploys the table or index uncompressed: the schema is identical and only the storage saving is

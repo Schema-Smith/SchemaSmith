@@ -1054,6 +1054,44 @@ public class CoherenceCheckTests
         Assert.That(findings[0].Category, Is.EqualTo("Coherence"));
     }
 
+    private static SqlServerTable EdgeWithConstraint(string graphType, string fromTable = "[dbo].[Person]", string toTable = "City") => new()
+    {
+        Name = "Knows",
+        Schema = "dbo",
+        GraphType = graphType,
+        Columns = { new SqlServerColumn { Name = "Since", DataType = "date" } },
+        EdgeConstraints = { new EdgeConstraint { Name = "EC_Knows", Clauses = { new EdgeConstraintClause { FromTable = fromTable, ToTable = toTable } } } }
+    };
+
+    private static SqlServerTable NodeTable(string name) => new()
+    {
+        Name = name, Schema = "dbo", GraphType = "Node", Columns = { new SqlServerColumn { Name = "Id", DataType = "int" } }
+    };
+
+    [Test]
+    public void AnEdgeConstraint_OnAnEdgeTable_ConnectingDeclaredNodes_IsClean()
+    {
+        var findings = new CoherenceCheck().Run(Context(TemplateWithTables("T", NodeTable("Person"), NodeTable("City"), EdgeWithConstraint("Edge"))));
+        Assert.That(findings.Where(f => f.Code.StartsWith("SS-TBL")), Is.Empty);
+    }
+
+    [Test]
+    public void AnEdgeConstraint_OnANodeTable_IsError()
+    {
+        var findings = new CoherenceCheck().Run(Context(TemplateWithTables("T", NodeTable("Person"), NodeTable("City"), EdgeWithConstraint("Node")))).ToList();
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-TBL-003" }));
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+    }
+
+    [Test]
+    public void AnEdgeConstraint_NamingATableThatIsNotADeclaredNode_IsWarning()
+    {
+        var findings = new CoherenceCheck().Run(Context(TemplateWithTables("T", NodeTable("Person"), EdgeWithConstraint("Edge", toTable: "Country")))).ToList();
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-TBL-004" }));
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Warning));
+        Assert.That(findings[0].Message, Does.Contain("'Country'").And.Contain("dbo.Country"));
+    }
+
     [Test]
     public void GraphPseudoColumns_AreKeyParts_OnTheTableKindThatHasThem()
     {
