@@ -193,18 +193,18 @@ namespace Schema.UnitTests.Domain
             // escaped again by TokenReplace when the script put them inside a literal, so every quote in the JSON
             // arrived doubled. The template-named {{TableSchema_<Template>}} tokens were already stored raw (#301).
             var templateJson = @"{ ""Name"": ""Main"", ""DatabaseIdentificationScript"": ""SELECT N'{{TableSchema}}' AS a, {{TableSchema}} AS b"" }";
-            var templatePath = Path.Combine("C:", "products", "Templates", "Main", "Template.json");
+            var templatePath = Path.Join("C:", "products", "Templates", "Main", "Template.json");
             _mockFile.Exists(templatePath).Returns(true);
             _mockFile.ReadAllText(templatePath).Returns(templateJson);
 
-            var tablesPath = Path.Combine("C:", "products", "Templates", "Main", "Tables");
+            var tablesPath = Path.Join("C:", "products", "Templates", "Main", "Tables");
             _mockDirectory.Exists(tablesPath).Returns(true);
-            var tableFile = Path.Combine(tablesPath, "dbo.Quoted.json");
+            var tableFile = Path.Join(tablesPath, "dbo.Quoted.json");
             _mockDirectory.GetFiles(tablesPath, "*.json", SearchOption.AllDirectories).Returns(new[] { tableFile });
             _mockFile.Exists(tableFile).Returns(true);
             _mockFile.ReadAllText(tableFile).Returns(@"{ ""Name"": ""[Quoted]"", ""Columns"": [ { ""Name"": ""[Id]"", ""DataType"": ""INT"", ""Nullable"": false, ""Default"": ""'0'"" } ] }");
 
-            var template = Template.Load("Main", new Product { Name = "TestProduct", Platform = Platform.SqlServer, FilePath = Path.Combine("C:", "products", "Product.json") });
+            var template = Template.Load("Main", new Product { Name = "TestProduct", Platform = Platform.SqlServer, FilePath = Path.Join("C:", "products", "Product.json") });
 
             var script = template.DatabaseIdentificationScript;
             Assert.Multiple(() =>
