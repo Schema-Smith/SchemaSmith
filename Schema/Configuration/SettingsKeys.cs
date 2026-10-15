@@ -134,6 +134,7 @@ public static class SettingsKeys
         public const string SaveInvalidScripts = "ShouldCast:SaveInvalidScripts";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string Schemas = "ShouldCast:Schemas";
+        // TRANSITIONAL (deprecated in 2.8, read only to warn; delete two releases past 2.8 GA with the SchemaTongs field).
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string ScriptDynamicDependencyRemovalForFunctions = "ShouldCast:ScriptDynamicDependencyRemovalForFunctions";
         [ReadBy(SettingsTool.SchemaTongs)]

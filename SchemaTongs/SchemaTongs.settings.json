@@ -49,7 +49,7 @@
         "ObjectList": "", // Comma-separated list of specific objects to extract (blank = all)
         "ValidateScripts": false, // Validate extracted scripts against the source database
         "SaveInvalidScripts": true, // Save invalid scripts as .sqlerror files (if false, invalid scripts are discarded)
-        "ScriptDynamicDependencyRemovalForFunctions": false,
+        "ScriptDynamicDependencyRemovalForFunctions": false, // Deprecated and ignored; SchemaTongs warns when it is true
 
         // SQL Server and PostgreSQL
         "Schemas": true,

@@ -100,7 +100,8 @@ public abstract class ObjectScriptDeployFixture
 
     protected void WriteFile(string folder, string fileName, string text) => File.WriteAllText(Path.Join(TemplateDir, folder, fileName), text);
 
-    protected DeployResult Deploy(bool skipUnchanged = true, bool whatIf = false, bool runTwice = false)
+    /// <param name="expectSuccess">False for a deploy that is meant to stop: the result is returned instead of asserted on.</param>
+    protected DeployResult Deploy(bool skipUnchanged = true, bool whatIf = false, bool runTwice = false, bool expectSuccess = true)
     {
         var checkpointDir = Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
         lock (FactoryContainer.SharedLockObject)
@@ -146,7 +147,7 @@ public abstract class ObjectScriptDeployFixture
                 quench.Execute();
                 var scripts = quench.IterationObjectScripts.Concat(quench.IterationAfterTablesObjectScripts).ToList();
                 var errors = scripts.Where(s => s.Error != null).Select(s => $"{Path.GetFileName(s.LogPath)}: {s.Error.Message}");
-                Assert.That(quench.QuenchSuccessful, Is.True, "the deploy must succeed; script errors: " + string.Join(" | ", errors)
+                if (expectSuccess) Assert.That(quench.QuenchSuccessful, Is.True, "the deploy must succeed; script errors: " + string.Join(" | ", errors)
                     + "\nlog: " + string.Join("\n", log.Where(l => l != null && (l.StartsWith("ERROR") || l.StartsWith("WARN") || l.Contains("Quenching")))));
 
                 var outcomes = new Dictionary<string, ScriptOutcome>();

@@ -78,6 +78,8 @@ public class SchemaTongs
     private bool _includeFullTextStopLists;
     private bool _includeDDLTriggers;
     private bool _includeXmlSchemaCollections;
+    // TRANSITIONAL (ScriptDynamicDependencyRemovalForFunctions, deprecated in 2.8): the setting is read only to warn
+    // that it does nothing. Delete the field, the warning and the SettingsKeys entry two releases past 2.8 GA.
     private bool _scriptDynamicDependencyRemovalForFunctions;
     private bool _includeIndexedViews;
     private bool _includeSynonyms;
@@ -563,6 +565,9 @@ public class SchemaTongs
                 _includeDDLTriggers = config[SettingsKeys.ShouldCast.DdlTriggers]?.ToLower() != "false";
                 _includeXmlSchemaCollections = config[SettingsKeys.ShouldCast.XmlSchemaCollections]?.ToLower() != "false";
                 _scriptDynamicDependencyRemovalForFunctions = config[SettingsKeys.ShouldCast.ScriptDynamicDependencyRemovalForFunctions]?.ToLower() == "true";
+                if (_scriptDynamicDependencyRemovalForFunctions)
+                    _progressLog.Warn("ShouldCast:ScriptDynamicDependencyRemovalForFunctions is deprecated and does nothing: SchemaQuench drops the schema-bound " +
+                                      "dependents a changed function blocks on and later steps put them back. Remove the setting.");
                 _includeIndexedViews = config[SettingsKeys.ShouldCast.IndexedViews]?.ToLower() != "false";
                 _includeSequences = config[SettingsKeys.ShouldCast.Sequences]?.ToLower() != "false";
                 _includeSynonyms = config[SettingsKeys.ShouldCast.Synonyms]?.ToLower() != "false";
@@ -1579,59 +1584,6 @@ SELECT s.name AS SchemaName, o.name AS ObjectName, CONVERT(BIT, ISNULL(sm.is_sch
         {
             var sql = ScriptSqlServerProgrammableObject(command, schema, name, "FUNCTION");
             if (sql == null) continue;
-
-            if (_scriptDynamicDependencyRemovalForFunctions)
-            {
-                var dependencyBlock =
-                    $"\r\nDECLARE @v_SearchTerm VARCHAR(2000) = '%{name}%'\r\n" +
-                    "DECLARE @v_SQL VARCHAR(MAX) = (SELECT STRING_AGG(Task, ';' + CHAR(13) + CHAR(10)) \r\n" +
-                    "                                 FROM (SELECT 'ALTER TABLE [' + OBJECT_SCHEMA_NAME(cc.parent_object_id) + '].[' + OBJECT_NAME(cc.parent_object_id) + '] DROP CONSTRAINT IF EXISTS [' + OBJECT_NAME(cc.[name]) + ']' AS Task\r\n" +
-                    "                                         FROM sys.check_constraints cc\r\n" +
-                    "                                         WHERE cc.[definition] LIKE @v_SearchTerm\r\n" +
-                    "                                            OR EXISTS (SELECT *\r\n" +
-                    "                                                         FROM sys.computed_columns cc2\r\n" +
-                    "                                                         WHERE cc2.[definition] LIKE @v_SearchTerm\r\n" +
-                    "                                                           AND cc2.[object_id] = cc.parent_object_id\r\n" +
-                    "                                                           AND cc2.column_id = cc.parent_column_id)\r\n" +
-                    "                                       UNION ALL\r\n" +
-                    "                                       SELECT 'ALTER TABLE [' + OBJECT_SCHEMA_NAME(dc.parent_object_id) + '].[' + OBJECT_NAME(dc.parent_object_id) + '] DROP CONSTRAINT IF EXISTS [' + OBJECT_NAME(dc.[name]) + ']'\r\n" +
-                    "                                         FROM sys.default_constraints dc\r\n" +
-                    "                                         WHERE dc.[definition] LIKE @v_SearchTerm\r\n" +
-                    "                                            OR EXISTS (SELECT *\r\n" +
-                    "                                                         FROM sys.computed_columns cc\r\n" +
-                    "                                                         WHERE cc.[definition] LIKE @v_SearchTerm\r\n" +
-                    "                                                           AND cc.[object_id] = dc.parent_object_id\r\n" +
-                    "                                                           AND cc.column_id = dc.parent_column_id)\r\n" +
-                    "                                       UNION ALL\r\n" +
-                    "                                       SELECT 'ALTER TABLE [' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '] DROP CONSTRAINT IF EXISTS [' + OBJECT_NAME(fk.[name]) + ']'\r\n" +
-                    "                                         FROM sys.foreign_keys fk\r\n" +
-                    "                                         WHERE EXISTS (SELECT *\r\n" +
-                    "                                                         FROM sys.computed_columns cc\r\n" +
-                    "                                                         JOIN sys.foreign_key_columns fc ON fk.[object_id] = fk.[object_id]\r\n" +
-                    "                                                                                        AND ((fc.parent_object_id = cc.[object_id] AND fc.parent_column_id = cc.column_id)\r\n" +
-                    "                                                                                          OR (fc.referenced_object_id = cc.[object_id] AND fc.referenced_column_id = cc.column_id))\r\n" +
-                    "                                                         WHERE cc.[definition] LIKE @v_SearchTerm)\r\n" +
-                    "                                       UNION ALL\r\n" +
-                    "                                       SELECT 'DROP INDEX IF EXISTS [' + si.[name] + '] ON [' + OBJECT_SCHEMA_NAME(si.[object_id]) + '].[' + OBJECT_NAME(si.[object_id]) + ']'\r\n" +
-                    "                                         FROM sys.indexes si\r\n" +
-                    "                                         WHERE si.filter_definition LIKE @v_SearchTerm\r\n" +
-                    "                                            OR EXISTS (SELECT *\r\n" +
-                    "                                                         FROM sys.computed_columns cc\r\n" +
-                    "                                                         JOIN sys.index_columns ic ON ic.[object_id] = si.[object_id]\r\n" +
-                    "                                                                                  AND ic.index_id = si.index_id\r\n" +
-                    "                                                                                  AND ic.column_id = cc.column_id\r\n" +
-                    "                                                         WHERE cc.[definition] LIKE @v_SearchTerm\r\n" +
-                    "                                                           AND cc.[object_id] = si.[object_id])\r\n" +
-                    "                                       UNION ALL\r\n" +
-                    "                                       SELECT 'ALTER TABLE [' + OBJECT_SCHEMA_NAME(cc.[object_id]) + '].[' + OBJECT_NAME(cc.[object_id]) + '] DROP COLUMN IF EXISTS [' + cc.[name] + ']'\r\n" +
-                    "                                         FROM sys.computed_columns cc\r\n" +
-                    "                                         WHERE cc.[definition] LIKE @v_SearchTerm) x) + ';'\r\n" +
-                    "EXEC(@v_SQL) -- Remove any dependencies before updating the function\r\n" +
-                    "GO\r\n";
-
-                var firstGoEnd = sql.IndexOf("GO\r\n\r\n") + 4;
-                sql = sql.Substring(0, firstGoEnd) + dependencyBlock + sql.Substring(firstGoEnd);
-            }
 
             if (schemaBound) DirectoryWrapper.GetFromFactory().CreateDirectory(sbCastPath);
             var fileName = ResolveOutputPath(schemaBound ? sbCastPath : castPath, EncodeObjectFileName(schema, name, ".sql"));

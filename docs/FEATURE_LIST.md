@@ -186,7 +186,7 @@ Programmable objects — procedures, functions, triggers, views — deploy via `
 | Rules | n/a | ✓ | n/a | n/a | `Rules/` |
 | Events (scheduled) | n/a | n/a | ✓ | ✓ | `Events/` |
 | Dependency-aware retry on Objects slot | ✓ | ✓ | ✓ | ✓ | Up to 4 passes |
-| Auto dependency drop / recreate for functions | ✓ | ✓ | ✓ | ✓ | `ScriptDynamicDependencyRemovalForFunctions` |
+| Schema-bound dependents of a changed module dropped and put back | ✓ | n/a | n/a | n/a | Declared dependents only; undeclared ones stop the deploy by name |
 | `CREATE OR ALTER` formatting on extraction | ✓ | ✓ | ✓ | ✓ | Where engine supports it |
 | Idempotency-test second pass | ✓ | ✓ | ✓ | ✓ | `RunScriptsTwice` |
 
@@ -260,7 +260,6 @@ The extraction engine. Reads a live database into a versioned schema package usi
 | Auto-exclusion of system / SchemaSmith objects | ✓ | ✓ | ✓ | ✓ | Objects under `sys` / `INFORMATION_SCHEMA` (SQL Server), `pg_*` / `information_schema` (PG), `mysql` / `information_schema` / `performance_schema` / `sys` (MySQL), and the `SchemaSmith` infrastructure schema. `dbo` (SQL Server) and `public` (PG) are extracted normally — they're user schemas, not system. |
 | Encrypted object skip + warn | ✓ | n/a | n/a | n/a | NULL `sys.sql_modules.definition` |
 | Replication-artifact exclusion | ✓ | n/a | n/a | n/a | `MSPeer_`, `MSPub_` |
-| Dynamic function-dependency drop / recreate scripting | ✓ | ✓ | ✓ | ✓ | `ScriptDynamicDependencyRemovalForFunctions` |
 | Filesystem-illegal character percent-encoding | ✓ | ✓ | ✓ | ✓ | |
 
 ## DataTongs — Data MERGE Generation

@@ -913,6 +913,7 @@ public class DatabaseQuench
                     {
                         var indexedViewQuenchSw = Stopwatch.StartNew();
                         _checkpointing.Track(DbScope, "IndexedViewQuench", () => QuenchIndexedViews(effectiveTableCmd));
+                        ReapplyStashedIndexedViewPermissions(effectiveTableCmd);
                         indexedViewQuenchSw.Stop();
                         RunTiming?.Record(LogPrefix, _databaseName, "IndexedViewQuench", indexedViewQuenchSw.ElapsedMilliseconds, 0);
                     }
@@ -2429,6 +2430,11 @@ SET NOCOUNT ON
 
                 var captured = CaptureModulePermissions(destCmd, script);
                 QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
+                if (script.Error != null && TryClearSchemaBoundDependents(destCmd, script, out var droppedModuleScripts))
+                {
+                    QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
+                    if (script.Error == null) RecreateDroppedModules(destCmd, droppedModuleScripts, showErrors);
+                }
                 if (captured != null && script.HasBeenQuenched && script.Error == null && script.Outcome == ScriptOutcome.Applied)
                     ReapplyModulePermissions(destCmd, script, captured);
                 if (script.HasBeenQuenched)
@@ -2473,6 +2479,11 @@ SET NOCOUNT ON
             {
                 var captured = CaptureModulePermissions(destCmd, script);
                 QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
+                if (script.Error != null && TryClearSchemaBoundDependents(destCmd, script, out var droppedModuleScripts))
+                {
+                    QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
+                    if (script.Error == null) RecreateDroppedModules(destCmd, droppedModuleScripts, showErrors);
+                }
                 if (captured != null && script.HasBeenQuenched && script.Error == null && script.Outcome == ScriptOutcome.Applied)
                     ReapplyModulePermissions(destCmd, script, captured);
             }
@@ -2544,6 +2555,144 @@ SET NOCOUNT ON
             return false;
         }
     }
+
+    #region Schema-bound dependents of a changed module
+
+    // SQL Server refuses to alter a module that a schema-bound object references (3729). The catalog lists the
+    // dependents and the package says which are its own; those are dropped so the change can apply, and the run puts
+    // them back -- a scripted module right after the change, a constraint, column or indexed view by the pass that
+    // owns it. One the package does not declare stops the deploy by name, before anything is dropped.
+    // SQL Server only: SCHEMABINDING has no counterpart on PostgreSQL or MySQL.
+    private readonly List<(string ObjectName, string Script)> _indexedViewPermissions = new();
+
+    private static bool IsBlockedBySchemaBinding(Exception error) => error switch
+    {
+        SqlServerErrorException { Number: 3729 } => true,
+        SqlException { Number: 3729 } => true,
+        _ => false
+    };
+
+    private SchemaBoundPlan SchemaBoundPlanFor(IDbCommand destCmd, SqlScript script)
+    {
+        if (destCmd == null || _product.Platform.GetBasePlatform() != Platform.SqlServer) return null;
+        var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
+        if (identity == null || identity.Kind is not (ModuleKind.Function or ModuleKind.View)) return null;
+        List<SchemaBoundDependent> dependents;
+        try
+        {
+            dependents = SchemaBoundDependents.Read(destCmd, identity.Schema, identity.Name);
+        }
+        catch (System.Data.Common.DbException)
+        {
+            return null;
+        }
+        return dependents.Count == 0 ? null : SchemaBoundDependents.Plan(dependents, DeclaredObjectsOfIteration());
+    }
+
+    private bool TryClearSchemaBoundDependents(IDbCommand destCmd, SqlScript script, out List<SqlScript> droppedModuleScripts)
+    {
+        droppedModuleScripts = [];
+        if (!IsBlockedBySchemaBinding(script.Error)) return false;
+        var plan = SchemaBoundPlanFor(destCmd, script);
+        if (plan == null) return false;
+        var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
+        if (!plan.CanProceed)
+        {
+            script.Error = new Exception(SchemaBoundDependents.BlockedMessage(identity.Schema, identity.Name, plan), script.Error);
+            return false;
+        }
+        try
+        {
+            foreach (var drop in plan.Drops)
+            {
+                SafeProgressLog($"    Dropping {drop.Dependent.Display}: it is bound to {identity.Schema}.{identity.Name}, which {script.LogPath} changes; the run puts it back");
+                if (drop.Dependent.Kind == SchemaBoundDependentKind.IndexedView) StashIndexedViewPermissions(destCmd, drop.Dependent);
+                foreach (var statement in drop.Statements)
+                {
+                    destCmd.CommandText = statement;
+                    destCmd.ExecuteNonQuery();
+                }
+                ChangeAudit?.Record(drop.AuditType, drop.AuditName, "dropped");
+                if (drop.Dependent.Kind == SchemaBoundDependentKind.Module)
+                    droppedModuleScripts.AddRange(ScriptsCreating(drop.Dependent.Schema, drop.Dependent.Name));
+            }
+        }
+        catch (System.Data.Common.DbException ex)
+        {
+            script.Error = new Exception($"Could not drop a schema-bound dependent of {identity.Schema}.{identity.Name}: {ex.Message}", ex);
+            return false;
+        }
+        script.Error = null;
+        return true;
+    }
+
+    // Deepest-first was the drop order, so the scripts come back innermost-first. A script that already ran in this
+    // run keeps its quenched state; one from a later slot runs again there and finds the module unchanged.
+    private void RecreateDroppedModules(IDbCommand destCmd, List<SqlScript> scripts, bool showErrors)
+    {
+        foreach (var dependent in Enumerable.Reverse(scripts))
+        {
+            var wasQuenched = dependent.HasBeenQuenched;
+            QuenchOneScript(destCmd, dependent, _runScriptsTwice, showErrors);
+            if (dependent.Error != null) continue;
+            dependent.HasBeenQuenched = wasQuenched;
+            dependent.Outcome = ScriptOutcome.Applied;
+            if (ProbeScriptStamp(destCmd, dependent, DatabaseScriptSlot.AfterTablesObject) is { } stamp) RecordScriptStamp(destCmd, stamp);
+        }
+    }
+
+    private List<SqlScript> ScriptsCreating(string schema, string name)
+    {
+        var key = DeclaredObjects.Key(schema, name);
+        return _iteration.ObjectScripts.Concat(_iteration.AfterTablesObjectScripts)
+            .Where(s => ModuleScriptIdentity.Parse(s.Batches, _product.Platform) is { } id && DeclaredObjects.Key(id.Schema, id.Name) == key)
+            .ToList();
+    }
+
+    // What this iteration declares, read from the resolved JSON so a schema template's substituted names count.
+    private DeclaredObjects DeclaredObjectsOfIteration()
+    {
+        var modules = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var script in _iteration.ObjectScripts.Concat(_iteration.AfterTablesObjectScripts))
+            if (ModuleScriptIdentity.Parse(script.Batches, _product.Platform) is { } id) modules.Add(DeclaredObjects.Key(id.Schema, id.Name));
+        var indexedViews = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var view in JsonObjects(IterationIndexedViewSchema))
+            indexedViews.Add(DeclaredObjects.Key(view["Schema"]?.ToString() ?? "dbo", view["Name"]?.ToString()));
+        var tables = new Dictionary<string, DeclaredTable>(StringComparer.Ordinal);
+        foreach (var table in JsonObjects(IterationTableSchema))
+        {
+            tables[DeclaredObjects.Key(table["Schema"]?.ToString() ?? "dbo", table["Name"]?.ToString())] = new DeclaredTable(
+                new HashSet<string>((table["CheckConstraints"] as JArray ?? []).Select(c => DeclaredObjects.Bare(c["Name"]?.ToString()))),
+                new HashSet<string>((table["Columns"] as JArray ?? []).Where(c => !string.IsNullOrWhiteSpace(c["ComputedExpression"]?.ToString())).Select(c => DeclaredObjects.Bare(c["Name"]?.ToString()))),
+                new HashSet<string>((table["Indexes"] as JArray ?? []).Select(i => DeclaredObjects.Bare(i["Name"]?.ToString()))));
+        }
+        return new DeclaredObjects(modules, indexedViews, tables);
+    }
+
+    private static IEnumerable<JObject> JsonObjects(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        var token = JToken.Parse(json);
+        return token is JArray array ? array.OfType<JObject>() : token is JObject single ? [single] : [];
+    }
+
+    private void StashIndexedViewPermissions(IDbCommand destCmd, SchemaBoundDependent view)
+    {
+        destCmd.CommandText = $"DECLARE @s NVARCHAR(MAX); EXEC SchemaSmith.CapturePermissions @Schema = N'{EscapeSqlLiteral(view.Schema)}', @Name = N'{EscapeSqlLiteral(view.Name)}', @Script = @s OUTPUT; SELECT @s;";
+        if (destCmd.ExecuteScalar() is string script && script.Length > 0) _indexedViewPermissions.Add(($"[{view.Schema}].[{view.Name}]", script));
+    }
+
+    private void ReapplyStashedIndexedViewPermissions(IDbCommand tableCommand)
+    {
+        foreach (var (name, script) in _indexedViewPermissions)
+        {
+            tableCommand.CommandText = $"EXEC SchemaSmith.ReapplyPermissions @Script = N'{EscapeSqlLiteral(script)}', @ObjectType = N'view', @ObjectName = N'{EscapeSqlLiteral(name)}', @WhatIf = 0";
+            tableCommand.ExecuteNonQuery();
+        }
+        _indexedViewPermissions.Clear();
+    }
+
+    #endregion
 
     #region Permissions around a dropped module
 
@@ -3061,6 +3210,17 @@ SET NOCOUNT ON
                 var name = ModuleAuditName(identity);
                 SafeProgressLog($"    Would re-apply the grants on {name} after {script.LogPath}");
                 ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldReapply");
+            }
+            if (SchemaBoundPlanFor(destCmd, script) is { } plan)
+            {
+                var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
+                if (!plan.CanProceed)
+                    _progressLog.Warn("    The real run would stop at " + script.LogPath + ": " + SchemaBoundDependents.BlockedMessage(identity.Schema, identity.Name, plan));
+                foreach (var drop in plan.Drops)
+                {
+                    SafeProgressLog($"    Would drop {drop.Dependent.Display} before re-applying {script.LogPath}; the run would put it back");
+                    ChangeAudit?.Record(drop.AuditType, drop.AuditName, "wouldDrop");
+                }
             }
         }
         foreach (var line in WhatIfConsoleFormatter.Render(entries, WhatIfConsoleDetail))

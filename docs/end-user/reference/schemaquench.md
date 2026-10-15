@@ -1056,6 +1056,27 @@ MySQL and MariaDB key a table's grants by name, so a rebuilt table keeps them wi
 
 ---
 
+## Schema-Bound Dependents
+
+SQL Server will not alter a module while a schema-bound object references it: a view or function created `WITH SCHEMABINDING`, a CHECK constraint, a computed column or an indexed view that calls it locks it in place, and `CREATE OR ALTER` fails with error 3729. On the other engines a function change never locks a dependent, so this section is SQL Server only.
+
+**What the deploy does.** When a changed function or view is refused that way, SchemaQuench lists the dependents from the catalog, drops the ones the package declares, applies the change, and puts them back in the same run:
+
+| Dependent | Counts as declared when | Put back by |
+|---|---|---|
+| A schema-bound view or function | the package scripts it, normally in the `SchemaBound Views` or `SchemaBound Functions` folder | the deploy, right after the change |
+| A CHECK constraint | the table's JSON declares it | the table pass |
+| A computed column and the indexes on it | the table's JSON declares the column and every index | the table pass |
+| An indexed view | the package declares it | the indexed-view pass, with its permissions re-applied |
+
+A chain is handled deepest-first: a view bound to a view bound to the changed function comes out before the inner one and goes back after it.
+
+**What stops the deploy.** A dependent the package does not declare -- a view someone created by hand, an index on the computed column the JSON does not list -- or an encrypted module, which nothing could recreate. The deploy stops before anything is dropped, and the error names each one and what would make it declared. Nothing is ever dropped on the strength of a name match alone.
+
+**What you see.** The log names each dependent as it is dropped and the manifest records it as `dropped`; under `WhatIf` the run lists what it would drop as `wouldDrop`, or warns that it would stop and why. An unchanged module is never altered, so none of this happens on a deploy that changes nothing.
+
+---
+
 ---
 
 ## DropTablesRemovedFromProduct

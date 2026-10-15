@@ -2800,5 +2800,83 @@ public class SchemaTongsTests
         }
     }
 
+    private string CastOneFunction(Dictionary<string, string> extraOverrides)
+    {
+        SetUpMocks();
+        var overrides = new Dictionary<string, string>
+        {
+            ["ShouldCast:Tables"] = "false",
+            ["ShouldCast:Schemas"] = "false",
+            ["ShouldCast:UserDefinedTypes"] = "false",
+            ["ShouldCast:Functions"] = "true",
+            ["ShouldCast:Views"] = "false",
+            ["ShouldCast:Procedures"] = "false",
+            ["ShouldCast:TableTriggers"] = "false",
+            ["ShouldCast:Catalogs"] = "false",
+            ["ShouldCast:StopLists"] = "false",
+            ["ShouldCast:DDLTriggers"] = "false",
+            ["ShouldCast:XMLSchemaCollections"] = "false"
+        };
+        foreach (var kv in extraOverrides) overrides[kv.Key] = kv.Value;
+        RegisterConfig(Platform.SqlServer, overrides);
+        RegisterConnectionFactory(Platform.SqlServer);
+
+        var listReader = Substitute.For<IDataReader>();
+        var listCount = 0;
+        listReader.Read().Returns(_ => listCount++ < 1, _ => false);
+        listReader.GetString(0).Returns("dbo");
+        listReader.GetString(1).Returns("MyFunction");
+        listReader.GetBoolean(2).Returns(false);
+        var defReader = Substitute.For<IDataReader>();
+        defReader.Read().Returns(true, false);
+        defReader.IsDBNull(0).Returns(false);
+        defReader.GetString(0).Returns("CREATE FUNCTION dbo.MyFunction() RETURNS INT AS BEGIN RETURN 1 END");
+        defReader.GetBoolean(1).Returns(true);
+        defReader.GetBoolean(2).Returns(true);
+        var extReader = Substitute.For<IDataReader>();
+        extReader.Read().Returns(false);
+        _command.StubReaders(listReader, defReader, extReader);
+
+        string written = null;
+        _fileWrapper.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("dbo.MyFunction.sql")), Arg.Any<string>())).Do(ci => written = ci.ArgAt<string>(1));
+        new SchemaTongs(Platform.SqlServer).CastTemplate();
+        return written;
+    }
+
+    // The preamble dropped every object whose definition mentioned the function's name, on every deploy, and could not
+    // run on a database with a CHECK that referenced the function. SchemaQuench now drops the schema-bound dependents a
+    // changed module actually blocks on and later steps put them back, so the setting does nothing but say so.
+    [Test]
+    public void CastTemplate_SqlServer_ScriptDynamicDependencyRemovalForFunctions_IsADeprecatedNoOp()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var written = CastOneFunction(new Dictionary<string, string> { ["ShouldCast:ScriptDynamicDependencyRemovalForFunctions"] = "true" });
+
+            Assert.That(written, Is.Not.Null, "the function script was not written");
+            Assert.Multiple(() =>
+            {
+                Assert.That(written, Does.Not.Contain("@v_SearchTerm"), "no dependency-removal preamble may be written");
+                Assert.That(written, Does.Contain("FUNCTION").And.Contain("MyFunction"), "the function script itself is still written");
+            });
+            _progressLog.Received(1).Warn(Arg.Is<string>(s => s.Contains("ScriptDynamicDependencyRemovalForFunctions") && s.Contains("deprecated")));
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
+    [Test]
+    public void CastTemplate_SqlServer_WithoutTheDeprecatedSetting_DoesNotWarn()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var written = CastOneFunction(new Dictionary<string, string>());
+            Assert.That(written, Does.Not.Contain("@v_SearchTerm"));
+            _progressLog.DidNotReceive().Warn(Arg.Is<string>(s => s.Contains("ScriptDynamicDependencyRemovalForFunctions")));
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
     #endregion
 }
