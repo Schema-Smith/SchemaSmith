@@ -481,6 +481,8 @@ public static class ForgeKindler
                 new("SchemaSmith.ServerVersionNum.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.IndexNullsNotDistinct.sql"),
+                new("SchemaSmith.ConstraintEnforced.sql"),
+                new("SchemaSmith.CheckPredicate.sql"),
                 new("SchemaSmith.ColumnCompression.sql"),
                 new("SchemaSmith.StatisticsExpressionColumns.sql"),
                 new("SchemaSmith.StripLeadingSelect.sql"),
@@ -506,6 +508,7 @@ public static class ForgeKindler
                 // index, which a table created in the same run does not have until that pass.
                 new("SchemaSmith.ReplicaIdentityQuench.sql"),
                 new("SchemaSmith.ForeignKeyQuench.sql"),
+                new("SchemaSmith.ConstraintStateQuench.sql"),
                 new("SchemaSmith.TableQuench.sql", ReplaceParseJson: true),
                 // Same {{ParseJson}} body as TableQuench, exposed on its own so SchemaQuench can hand the
                 // model over as an argument instead of escaping it into an anonymous DO block.

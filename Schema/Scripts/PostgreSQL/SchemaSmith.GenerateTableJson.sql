@@ -136,6 +136,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                CASE con.confupdtype WHEN 'a' THEN '' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' END AS "UpdateAction",
                                COALESCE(con.condeferrable, FALSE) AS "Deferrable",
                                COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred",
+                               COALESCE(con.convalidated, TRUE) AS "Validated",
+                               "SchemaSmith"."ConstraintEnforced"(con.oid) AS "Enforced",
                                CASE con.confmatchtype
                                     WHEN 'f' THEN 'FULL'
                                     WHEN 'p' THEN 'PARTIAL'
@@ -150,10 +152,13 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                           ORDER BY con.conname) sub) AS "ForeignKeys",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))
                   FROM (SELECT con.conname AS "Name",
-                               "SchemaSmith"."StripParenWrapping"(SUBSTRING(pg_catalog.PG_GET_CONSTRAINTDEF(con.oid) FROM 6)) AS "Expression",
+                               -- pg_get_constraintdef renders the state suffixes after the predicate; they are attributes,
+                               -- not expression text, so they are stripped here and read from the catalog flags below.
+                               "SchemaSmith"."CheckPredicate"(con.oid) AS "Expression",
                                '' AS "ShouldApplyExpression",
-                               COALESCE(con.condeferrable, FALSE) AS "Deferrable",
-                               COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred"
+                               COALESCE(con.convalidated, TRUE) AS "Validated",
+                               COALESCE(con.connoinherit, FALSE) AS "NoInherit",
+                               "SchemaSmith"."ConstraintEnforced"(con.oid) AS "Enforced"
                         FROM pg_catalog.pg_constraint con
                           WHERE con.conrelid = ('"' || t.table_schema || '"."' || t.table_name || '"')::regclass
                             AND con.contype = 'c'

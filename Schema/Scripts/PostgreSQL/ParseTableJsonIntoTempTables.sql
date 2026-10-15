@@ -319,6 +319,9 @@
            COALESCE(celem ->> 'Expression', '') AS "Expression",
            COALESCE((celem ->> 'Deferrable')::BOOLEAN, false) AS "Deferrable",
            COALESCE((celem ->> 'InitiallyDeferred')::BOOLEAN, false) AS "InitiallyDeferred",
+           COALESCE((celem ->> 'Enforced')::BOOLEAN, true) AS "Enforced",
+           COALESCE((celem ->> 'Validated')::BOOLEAN, true) AS "Validated",
+           COALESCE((celem ->> 'NoInherit')::BOOLEAN, false) AS "NoInherit",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName"
       FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
@@ -351,7 +354,9 @@
            COALESCE(NULLIF(celem ->> 'UpdateAction', 'NO ACTION'), '') AS "UpdateAction",
            COALESCE((celem ->> 'Deferrable')::BOOLEAN, false) AS "Deferrable",
            COALESCE((celem ->> 'InitiallyDeferred')::BOOLEAN, false) AS "InitiallyDeferred",
-           celem ->> 'MatchType' AS "MatchType"
+           celem ->> 'MatchType' AS "MatchType",
+           COALESCE((celem ->> 'Enforced')::BOOLEAN, true) AS "Enforced",
+           COALESCE((celem ->> 'Validated')::BOOLEAN, true) AS "Validated"
     FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
       CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'ForeignKeys')::JSON) AS celem(value);
 

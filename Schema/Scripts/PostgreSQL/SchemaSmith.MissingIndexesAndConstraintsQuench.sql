@@ -507,11 +507,28 @@ BEGIN
           AND EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class rc ON rc.oid = a.attrelid JOIN pg_namespace nn ON nn.oid = rc.relnamespace WHERE nn.nspname = tc."TableSchema" AND rc.relname = tc."TableName" AND a.attname = tc."Name" AND a.attnum > 0 AND NOT a.attisdropped AND NOT a.atthasdef);
   END IF;
 
+  -- Unsupported-feature policy: NOT ENFORCED requires PostgreSQL 18. Below it the clause is omitted here and in
+  -- ForeignKeyQuench (the constraint deploys enforced); 'fail' aborts before anything is created, naming the
+  -- constraints; 'warn' (default) is recorded by ConstraintStateQuench once the constraints exist, one downgraded
+  -- manifest row each.
+  IF "SchemaSmith"."ServerVersionNum"() < 18 AND "SchemaSmith"."UnsupportedFeaturePolicy"() = 'fail'
+     AND (EXISTS (SELECT 1 FROM temp_checks WHERE NOT "Enforced") OR EXISTS (SELECT 1 FROM temp_fks WHERE NOT "Enforced")) THEN
+    RAISE EXCEPTION 'NOT ENFORCED constraints require PostgreSQL 18 (detected major %); constraint(s): %',
+      "SchemaSmith"."ServerVersionNum"(),
+      (SELECT STRING_AGG("TableSchema" || '.' || "TableName" || '.' || "Name", ', ')
+         FROM (SELECT "TableSchema", "TableName", "Name" FROM temp_checks WHERE NOT "Enforced"
+               UNION ALL SELECT "TableSchema", "TableName", "Name" FROM temp_fks WHERE NOT "Enforced") x);
+  END IF;
+
   RAISE NOTICE 'Add Missing Check Constraints';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing check constraint ' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
+                    -- NO INHERIT and NOT ENFORCED are part of the definition; NOT VALID is the ADD option that leaves the
+                    -- existing rows unchecked. A NOT ENFORCED constraint is not validated by definition, so NOT VALID is
+                    -- left off it. PostgreSQL rejects DEFERRABLE on a CHECK, so the deprecated keys are never emitted.
                     'ALTER TABLE  "' || tc."TableSchema" || '"."' || tc."TableName" || '" ADD CONSTRAINT "' || tc."Name" || '" CHECK (' || tc."Expression" || ')' ||
-                    CASE WHEN tc."Deferrable" THEN ' DEFERRABLE' ELSE '' END ||
-                    CASE WHEN tc."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE '' END || ';' || CHR(10) ||
+                    CASE WHEN tc."NoInherit" THEN ' NO INHERIT' ELSE '' END ||
+                    CASE WHEN NOT tc."Enforced" AND "SchemaSmith"."ServerVersionNum"() >= 18 THEN ' NOT ENFORCED' ELSE '' END ||
+                    CASE WHEN NOT tc."Validated" AND NOT (NOT tc."Enforced" AND "SchemaSmith"."ServerVersionNum"() >= 18) THEN ' NOT VALID' ELSE '' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || ''', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_checks tc

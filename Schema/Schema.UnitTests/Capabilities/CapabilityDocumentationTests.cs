@@ -75,6 +75,7 @@ public class CapabilityDocumentationTests
         ["PostgreSQL/table-access-method"] = "**Table access method**",
         ["PostgreSQL/drop-expression"] = "**Removing a column's generation**",
         ["PostgreSQL/virtual-generated-column"] = "**`VIRTUAL` generated columns**",
+        ["PostgreSQL/not-enforced-constraint"] = "**`NOT ENFORCED` constraints**",
 
         // ---- MySQL ----
         ["MySQL/invisible-index"] = "**Invisible index**",

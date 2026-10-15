@@ -537,7 +537,9 @@ BEGIN
              -- stripped and could never compare equal, while CHECK ((length(tag) > 0)) did.
              -- StripParenWrapping counts balanced parens instead of pattern-matching a fixed depth,
              -- so it is right for both shapes. SUBSTRING(... FROM 6) drops the leading "CHECK ".
-             "SchemaSmith"."StripParenWrapping"(SUBSTRING(pg_catalog.PG_GET_CONSTRAINTDEF(con.oid) FROM 6)) AS "Expression"
+             "SchemaSmith"."CheckPredicate"(con.oid) AS "Expression",
+             COALESCE(con.connoinherit, FALSE) AS "NoInherit",
+             "SchemaSmith"."ConstraintEnforced"(con.oid) AS "Enforced"
         FROM temp_tables t
         JOIN pg_catalog.pg_constraint con ON con.conrelid = to_regclass('"' || t."Schema" || '"' ||  '.' || '"' ||  t."Name" || '"')
         WHERE con.contype = 'c';
@@ -726,6 +728,11 @@ BEGIN
                           WHERE ec."TableSchema" = c."TableSchema"
                             AND ec."TableName" = c."TableName"
                             AND ec."CheckName" = c."Name"
+                            -- NO INHERIT and, on a check, NOT ENFORCED are create-time state (PostgreSQL cannot alter a check's
+                            -- enforceability): a change is a drop and re-create. Below 18 a check is always enforced, so a
+                            -- declared false is the degrade, not a difference.
+                            AND ec."NoInherit" = c."NoInherit"
+                            AND ec."Enforced" = (c."Enforced" OR "SchemaSmith"."ServerVersionNum"() < 18)
                             AND (ec."Expression" = c."Expression"
                                  -- #242: PostgreSQL rewrites what it stores, so ask what was applied before calling the text a change.
                                  OR "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'CHECK', c."Name",

@@ -198,6 +198,14 @@
             "type": "string",
             "pattern": "^(?:FULL|PARTIAL|SIMPLE)$"
           },
+          "Enforced": {
+            "type": "boolean",
+            "description": "false declares the key NOT ENFORCED (PostgreSQL 18): it is kept but not checked. Below 18 it deploys enforced under UnsupportedFeaturePolicy. Omitted means enforced, and a deploy enforces a key someone stopped enforcing."
+          },
+          "Validated": {
+            "type": "boolean",
+            "description": "false creates the key NOT VALID, so the rows already in the table are not checked. true over a NOT VALID key validates it, which fails when any row violates it. Omitted means validated."
+          },
           "Extensions": {}
         },
         "additionalProperties": false,
@@ -229,10 +237,24 @@
             "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
           },
           "Deferrable": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Deprecated: PostgreSQL rejects DEFERRABLE on a CHECK constraint, and the deploy no longer emits it. Remove the key."
           },
           "InitiallyDeferred": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Deprecated: PostgreSQL rejects INITIALLY DEFERRED on a CHECK constraint, and the deploy no longer emits it. Remove the key."
+          },
+          "Enforced": {
+            "type": "boolean",
+            "description": "false declares the constraint NOT ENFORCED (PostgreSQL 18): it is kept but not checked. Below 18 it deploys enforced under UnsupportedFeaturePolicy. Omitted means enforced, and a deploy enforces a constraint someone stopped enforcing."
+          },
+          "Validated": {
+            "type": "boolean",
+            "description": "false creates the constraint NOT VALID, so the rows already in the table are not checked. true over a NOT VALID constraint validates it, which fails when any row violates it. Omitted means validated."
+          },
+          "NoInherit": {
+            "type": "boolean",
+            "description": "NO INHERIT: the constraint is not inherited by child tables. Create-time only, so a change drops and re-creates the constraint."
           },
           "Extensions": {}
         },

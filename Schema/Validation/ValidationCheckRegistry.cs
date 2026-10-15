@@ -22,6 +22,7 @@ public static class ValidationCheckRegistry
         new SequenceScriptCheck(),
         new ModuleSyntaxCheck(),
         new DescriptionCheck(),
+        new ConstraintAttributeCheck(),
         new JsonSchemaCheck()
     };
 }

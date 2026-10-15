@@ -65,7 +65,8 @@ BEGIN
   CREATE TEMPORARY TABLE temp_domain_checks AS
   SELECT t."Schema", t."Name",
          c ->> 'Name' AS "ConstraintName",
-         c ->> 'Expression' AS "Expression"
+         c ->> 'Expression' AS "Expression",
+         COALESCE((c ->> 'Validated')::BOOLEAN, true) AS "Validated"
     FROM temp_domain_types t,
          JSON_ARRAY_ELEMENTS(COALESCE(t."CheckConstraints", '[]'::JSON)) AS c;
 
@@ -223,7 +224,7 @@ BEGIN
   RAISE NOTICE 'Add Missing Domain Constraints';
   SELECT STRING_AGG('RAISE NOTICE ''  Add constraint ' || ck."ConstraintName" || ' on domain type ' || ck."Schema" || '.' || ck."Name" || ''';' || CHR(10) ||
                     'ALTER DOMAIN "' || ck."Schema" || '"."' || ck."Name" || '" ADD CONSTRAINT "' || ck."ConstraintName" ||
-                    '" CHECK (' || ck."Expression" || ');' || CHR(10) ||
+                    '" CHECK (' || ck."Expression" || ')' || CASE WHEN NOT ck."Validated" THEN ' NOT VALID' ELSE '' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                     'VALUES (pg_backend_pid(), ''domain constraint'', ''' || ck."Schema" || '.' || ck."Name" || '.' || ck."ConstraintName" || ''', ''created'');', CHR(10))
     INTO sql_script
@@ -232,6 +233,23 @@ BEGIN
     JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = ck."Schema"
    WHERE NOT EXISTS (SELECT 1 FROM pg_constraint c
                       WHERE c.contypid = ty.oid AND c.contype = 'c' AND c.conname = ck."ConstraintName");
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
+
+  -- A constraint added NOT VALID and now declared validated: VALIDATE CONSTRAINT checks the stored values, and fails
+  -- when one violates it -- the engine reporting the truth. The other direction changes nothing: a validated
+  -- constraint cannot be un-validated.
+  RAISE NOTICE 'Validate Domain Constraints';
+  SELECT STRING_AGG('RAISE NOTICE ''  Validate constraint ' || ck."ConstraintName" || ' on domain type ' || ck."Schema" || '.' || ck."Name" || ''';' || CHR(10) ||
+                    'ALTER DOMAIN "' || ck."Schema" || '"."' || ck."Name" || '" VALIDATE CONSTRAINT "' || ck."ConstraintName" || '";' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
+                    'VALUES (pg_backend_pid(), ''domain constraint'', ''' || ck."Schema" || '.' || ck."Name" || '.' || ck."ConstraintName" || ''', ''modified'');', CHR(10))
+    INTO sql_script
+    FROM temp_domain_checks ck
+    JOIN pg_type ty ON ty.typname = ck."Name" AND ty.typtype = 'd'
+    JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = ck."Schema"
+    JOIN pg_constraint c ON c.contypid = ty.oid AND c.contype = 'c' AND c.conname = ck."ConstraintName"
+   WHERE ck."Validated" AND NOT c.convalidated;
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
   IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
@@ -299,7 +317,8 @@ BEGIN
                                AND pt.typname = '_ss_domain_check_probe'
                                AND pt.typnamespace = PG_MY_TEMP_SCHEMA()
                WHERE pc.contype = 'c') probe
-        JOIN (SELECT c.conname, PG_GET_CONSTRAINTDEF(c.oid) AS def
+        -- The live definition may carry NOT VALID (an attribute, converged above); the probe is always valid.
+        JOIN (SELECT c.conname, REGEXP_REPLACE(PG_GET_CONSTRAINTDEF(c.oid), '\s+NOT VALID\s*$', '', 'i') AS def
                 FROM pg_constraint c
                 JOIN pg_type ty2 ON ty2.oid = c.contypid AND ty2.typname = dom."Name" AND ty2.typtype = 'd'
                 JOIN pg_namespace n2 ON n2.oid = ty2.typnamespace AND n2.nspname = dom."Schema"

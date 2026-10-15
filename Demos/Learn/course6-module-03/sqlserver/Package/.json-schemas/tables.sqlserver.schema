@@ -254,6 +254,18 @@
           "RelatedTableSchema": {
             "type": "string"
           },
+          "Enforced": {
+            "type": "boolean",
+            "description": "false disables the key (ALTER TABLE ... NOCHECK CONSTRAINT): it stays defined but is not checked. Omitted means enforced, and a deploy re-enables a key someone disabled."
+          },
+          "Validated": {
+            "type": "boolean",
+            "description": "false creates the key WITH NOCHECK, so the rows already in the table are not checked and the key is untrusted. true over an untrusted key re-checks those rows, which fails when any violate it. Omitted means validated."
+          },
+          "NotForReplication": {
+            "type": "boolean",
+            "description": "NOT FOR REPLICATION: the key is not checked when a replication agent applies changes. Create-time only, so a change drops and re-creates the key."
+          },
           "Extensions": {}
         },
         "additionalProperties": false,
@@ -283,6 +295,18 @@
             "type": "string",
             "maxLength": 128,
             "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Enforced": {
+            "type": "boolean",
+            "description": "false disables the constraint (ALTER TABLE ... NOCHECK CONSTRAINT): it stays defined but is not checked. Omitted means enforced, and a deploy re-enables a constraint someone disabled."
+          },
+          "Validated": {
+            "type": "boolean",
+            "description": "false creates the constraint WITH NOCHECK, so the rows already in the table are not checked and the constraint is untrusted. true over an untrusted constraint re-checks those rows, which fails when any violate it. Omitted means validated."
+          },
+          "NotForReplication": {
+            "type": "boolean",
+            "description": "NOT FOR REPLICATION: the constraint is not checked when a replication agent applies changes. Create-time only, so a change drops and re-creates the constraint."
           },
           "Extensions": {}
         },

@@ -96,6 +96,10 @@ namespace Schema.Capabilities
             // policy-routed degrade with no row here, invisible to every consumer that drives off this list.
             rows.Add(new("virtual-generated-column", "VIRTUAL generated columns", Platform.PostgreSQL,
                 18, "PostgreSQL 18", null, DegradeKind.Skip, "VIRTUAL generated column (PG18)"));
+            // A CHECK or foreign key declared Enforced: false. Below 18 the constraint deploys enforced -- the object is
+            // created, with the one attribute the server cannot express left off.
+            rows.Add(new("not-enforced-constraint", "NOT ENFORCED constraints", Platform.PostgreSQL,
+                18, "PostgreSQL 18", null, DegradeKind.Reduced, "NOT ENFORCED constraint (PG18)"));
 
             // ---- MySQL (comparable major*100+minor via SchemaSmith_ServerVersionNum) ------------------------
             rows.Add(new("invisible-index", "Invisible index", Platform.MySQL,

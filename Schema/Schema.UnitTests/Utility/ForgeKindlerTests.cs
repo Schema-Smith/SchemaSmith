@@ -375,7 +375,9 @@ public class ForgeKindlerTests
         // + RecordWouldChanges (WhatIf writes the change rows a quench script carries, as previews).
                 // + Kindling_ScriptStamp_Table (the unchanged-module stamp: the script text hash and the engine rendering hash
         //   recorded after a successful object script, read before the next run of the same script).
-        Assert.That(postgres.Length, Is.EqualTo(57));
+        // +3 on PostgreSQL = ConstraintEnforced (PG18-adaptive conenforced read) + CheckPredicate (one read of a live check's
+        //   predicate for extraction, compare and the expression map) + ConstraintStateQuench (Enforced / Validated state).
+        Assert.That(postgres.Length, Is.EqualTo(60));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor

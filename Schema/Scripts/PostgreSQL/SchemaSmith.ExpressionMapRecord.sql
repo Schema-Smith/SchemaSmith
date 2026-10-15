@@ -40,7 +40,7 @@ BEGIN
   -- recognised by the CK_<table>_<column> name the create pass gives it.
   INSERT INTO temp_expression_map_declared
     SELECT c."TableSchema", c."TableName", 'CHECK', c."Name", 'expression', c."Expression",
-           "SchemaSmith"."StripParenWrapping"(SUBSTRING(pg_catalog.PG_GET_CONSTRAINTDEF(con.oid) FROM 6))
+           "SchemaSmith"."CheckPredicate"(con.oid)
       FROM temp_checks c
       JOIN pg_catalog.pg_constraint con
         ON con.conrelid = to_regclass('"' || c."TableSchema" || '"."' || c."TableName" || '"')
@@ -50,7 +50,7 @@ BEGIN
 
   INSERT INTO temp_expression_map_declared
     SELECT col."TableSchema", col."TableName", 'CHECK', con.conname, 'expression', col."CheckExpression",
-           "SchemaSmith"."StripParenWrapping"(SUBSTRING(pg_catalog.PG_GET_CONSTRAINTDEF(con.oid) FROM 6))
+           "SchemaSmith"."CheckPredicate"(con.oid)
       FROM temp_columns col
       JOIN pg_catalog.pg_constraint con
         ON con.conrelid = to_regclass('"' || col."TableSchema" || '"."' || col."TableName" || '"')

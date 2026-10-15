@@ -1015,6 +1015,9 @@ Referential integrity lives in the table JSON alongside columns and indexes, not
 | `RelatedColumns` | string | | Comma-separated referenced column names. |
 | `DeleteAction` | string | `null` | `"NO ACTION"`, `"CASCADE"`, `"SET NULL"`, `"SET DEFAULT"`, or `"RESTRICT"` where supported. |
 | `UpdateAction` | string | `null` | Same values as `DeleteAction`. |
+| `Enforced` | bool | `true` | **SQL Server and PostgreSQL.** `false` keeps the key defined but not checked: `NOCHECK CONSTRAINT` on SQL Server; `NOT ENFORCED` on PostgreSQL 18, and below 18 the key deploys enforced and the deployment summary records a downgrade (`UnsupportedFeaturePolicy`). Converges in place. Omitted means enforced, so a deploy re-enables a key someone disabled by hand. |
+| `Validated` | bool | `true` | **SQL Server and PostgreSQL.** `false` creates the constraint without checking the rows already in the table (`WITH NOCHECK` on SQL Server, `NOT VALID` on PostgreSQL), which leaves it untrusted. `true` over such a constraint re-checks those rows (`WITH CHECK CHECK CONSTRAINT` / `VALIDATE CONSTRAINT`), and the deploy fails if any violate it -- the engine reporting the truth. A validated constraint cannot be un-validated, so `false` over one changes nothing. |
+| `NotForReplication` | bool | `false` | **SQL Server only.** `NOT FOR REPLICATION`: the constraint is not checked when a replication agent applies changes. Create-time state, so a change drops and re-creates the constraint. |
 | `MatchType` | string | `"FULL"` | **PostgreSQL only.** `"FULL"`, `"SIMPLE"` or `"PARTIAL"` -- how a multi-column key with some NULL columns is matched. Note the default is `FULL`, not PostgreSQL's own `SIMPLE`: with `FULL`, a row whose key is only partly NULL is rejected rather than escaping the check. |
 | `ShouldApplyExpression` | string | | Conditional inclusion. |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
@@ -1238,11 +1241,17 @@ Table-level check constraints in the `CheckConstraints` array. Used when `CheckC
 |---|---|---|---|
 | `Name` | string | | Constraint name. |
 | `Expression` | string | | Boolean SQL expression. |
+| `Enforced` | bool | `true` | **SQL Server and PostgreSQL.** `false` keeps the constraint defined but not checked: `NOCHECK CONSTRAINT` on SQL Server, converged in place; `NOT ENFORCED` on PostgreSQL 18, where a check's enforceability cannot be altered, so a change drops and re-creates it. Below PostgreSQL 18 the constraint deploys enforced and the deployment summary records a downgrade (`UnsupportedFeaturePolicy`). Omitted means enforced. |
+| `Validated` | bool | `true` | **SQL Server and PostgreSQL.** `false` creates the constraint without checking the rows already in the table (`WITH NOCHECK` on SQL Server, `NOT VALID` on PostgreSQL), which leaves it untrusted. `true` over such a constraint re-checks those rows (`WITH CHECK CHECK CONSTRAINT` / `VALIDATE CONSTRAINT`), and the deploy fails if any violate it -- the engine reporting the truth. A validated constraint cannot be un-validated, so `false` over one changes nothing. |
+| `NotForReplication` | bool | `false` | **SQL Server only.** `NOT FOR REPLICATION`: the constraint is not checked when a replication agent applies changes. Create-time state, so a change drops and re-creates the constraint. |
+| `NoInherit` | bool | `false` | **PostgreSQL only.** `NO INHERIT`: child tables do not inherit the constraint. Create-time state, so a change drops and re-creates it. |
 | `ShouldApplyExpression` | string | | Conditional inclusion. |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `Extensions` | object | `null` | Custom metadata. |
 
 When `CheckConstraintStyle` is `"ColumnLevel"` (the default), single-column check constraints are written as `CheckExpression` on the column instead. Multi-column constraints always use the `CheckConstraints` array.
+
+SchemaTongs reads the state keys back, so a disabled, untrusted, `NOT VALID`, `NO INHERIT` or `NOT FOR REPLICATION` constraint round-trips as it is; a constraint in its ordinary state carries none of them. `Deferrable` and `InitiallyDeferred` on a PostgreSQL check constraint are deprecated: PostgreSQL has never accepted `DEFERRABLE` on a CHECK, the deploy no longer emits it, and `--Validate` stops a package that sets one (`SS-CHK-001`).
 
 ### Per-platform behavior
 
@@ -1740,7 +1749,7 @@ Domain types live in the `Domain Types/` directory of each template, which accep
 | `DataType` | string | | The underlying type, with its modifier where it has one — `integer`, `character varying(20)`, `numeric(10,2)`. Required. **Create-time only** — see below. |
 | `NotNull` | bool | `false` | Converges in place via `ALTER DOMAIN … SET/DROP NOT NULL`. |
 | `Default` | string | `null` | Default applied to a column of this domain that declares no default of its own. Converges in place. |
-| `CheckConstraints` | array | `[]` | Named `CHECK` constraints — `{ "Name": "...", "Expression": "VALUE > 0" }`. Write the predicate alone, without the surrounding `CHECK (…)`. |
+| `CheckConstraints` | array | `[]` | Named `CHECK` constraints — `{ "Name": "...", "Expression": "VALUE > 0" }`. Write the predicate alone, without the surrounding `CHECK (…)`. `"Validated": false` adds the constraint `NOT VALID`, so the values already stored in the domain's columns are not checked; `true` over such a constraint validates it and the deploy fails if any value violates it. Omitted means validated. |
 | `Collation` | string | `null` | The domain's collation when it differs from the base type's, such as `"C"`; one in another schema is written delimited, as `"sales"."ci"`. Create-time only: PostgreSQL cannot alter it, so a change is refused rather than attempted. Leave it out and it is not checked. |
 | `Description` | string | `null` | `COMMENT ON DOMAIN`. See [Descriptions](#descriptions). |
 

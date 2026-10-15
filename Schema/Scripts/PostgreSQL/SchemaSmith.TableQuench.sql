@@ -50,6 +50,8 @@ BEGIN
   CALL "SchemaSmith"."DescriptionQuench"(p_WhatIf);
   CALL "SchemaSmith"."ReplicaIdentityQuench"(p_WhatIf);
   CALL "SchemaSmith"."ForeignKeyQuench"(p_WhatIf);
+  -- After the keys exist: enforcement and validation are state on a constraint that must already be there.
+  CALL "SchemaSmith"."ConstraintStateQuench"(p_WhatIf);
   CALL "SchemaSmith"."FixupTableOwnership"(p_ProductName, p_WhatIf);
   CALL "SchemaSmith"."FixupIndexOwnership"(p_ProductName, p_WhatIf);
   -- #242: last, so anything the passes above created is recorded on this run rather than churning once more.
