@@ -19,7 +19,22 @@ CREATE OR REPLACE FUNCTION "SchemaSmith"."GenerateTableJSON"(p_Schema varchar(20
 AS $function$
 DECLARE result_string TEXT;
         skipped_fk RECORD;
+        invalid_not_null RECORD;
 BEGIN
+-- PostgreSQL 18 records a NOT NULL constraint in pg_constraint (contype 'n'), and it can be NOT VALID: the rows are not
+-- yet checked. The package carries only the column's Nullable, which deploys SET NOT NULL and fails while a row holds
+-- NULL -- the engine telling the truth about data the constraint has not vouched for. Said at extraction, where the
+-- package is made. On every earlier version no row has that contype and the loop is empty.
+FOR invalid_not_null IN SELECT con.conname, a.attname
+                          FROM pg_catalog.pg_constraint con
+                          JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
+                         WHERE con.conrelid = ('"' || p_Schema || '"."' || p_Table || '"')::regclass
+                           AND con.contype = 'n'
+                           AND NOT con.convalidated
+                         ORDER BY con.conname LOOP
+  RAISE WARNING 'NOT NULL constraint %.%.% on column % is NOT VALID: the package declares the column NOT NULL and the deploy sets it so, which fails while any row holds NULL. Validate the constraint or fix the rows before deploying.',
+    p_Schema, p_Table, invalid_not_null.conname, invalid_not_null.attname;
+END LOOP;
 -- A temporal foreign key (PostgreSQL 18, FOREIGN KEY (..., PERIOD p) REFERENCES ... (..., PERIOD q)) is not modelled:
 -- written as a plain key it would deploy as one, which is a different constraint, so it is left out and said so.
 -- The warning reaches the SchemaTongs log through the connection's notice channel.
@@ -148,6 +163,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                     AND a.attnum = element) AS "RelatedColumns",
                                '' AS "ShouldApplyExpression",
                                CASE con.confdeltype WHEN 'a' THEN '' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' END AS "DeleteAction",
+                               "SchemaSmith"."ForeignKeySetNullColumns"(con.oid) AS "SetNullColumns",
                                CASE con.confupdtype WHEN 'a' THEN '' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' END AS "UpdateAction",
                                COALESCE(con.condeferrable, FALSE) AS "Deferrable",
                                COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred",

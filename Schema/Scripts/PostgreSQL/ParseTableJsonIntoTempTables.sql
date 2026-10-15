@@ -362,7 +362,12 @@
            COALESCE((celem ->> 'InitiallyDeferred')::BOOLEAN, false) AS "InitiallyDeferred",
            celem ->> 'MatchType' AS "MatchType",
            COALESCE((celem ->> 'Enforced')::BOOLEAN, true) AS "Enforced",
-           COALESCE((celem ->> 'Validated')::BOOLEAN, true) AS "Validated"
+           COALESCE((celem ->> 'Validated')::BOOLEAN, true) AS "Validated",
+           -- ON DELETE SET NULL (columns) is PostgreSQL 15: the effective list drives compare + emit (empty below 15,
+           -- where a plain SET NULL sets every column, so an old target neither churns nor emits the clause); the
+           -- declared one drives the unsupported-feature policy. Written as the catalog reads it back: no spaces.
+           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 15 THEN REGEXP_REPLACE(COALESCE(celem ->> 'SetNullColumns', ''), '\s*,\s*', ',', 'g') ELSE '' END AS "SetNullColumns",
+           REGEXP_REPLACE(COALESCE(celem ->> 'SetNullColumns', ''), '\s*,\s*', ',', 'g') AS "SetNullColumnsDeclared"
     FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
       CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'ForeignKeys')::JSON) AS celem(value);
 

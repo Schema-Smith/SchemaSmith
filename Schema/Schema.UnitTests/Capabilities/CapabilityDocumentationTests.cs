@@ -70,6 +70,7 @@ public class CapabilityDocumentationTests
         // ---- PostgreSQL ----
         ["PostgreSQL/nulls-not-distinct"] = "**`NULLS NOT DISTINCT`**",
         ["PostgreSQL/temporal-key"] = "**`WITHOUT OVERLAPS`**",
+        ["PostgreSQL/set-null-columns"] = "**`ON DELETE SET NULL (columns)`**",
         ["PostgreSQL/unlogged-sequence"] = "**Unlogged sequence**",
         ["PostgreSQL/expression-statistics"] = "**Expression statistics**",
         ["PostgreSQL/column-compression"] = "**Per-column compression**",

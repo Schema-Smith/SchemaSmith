@@ -30,6 +30,23 @@ public class ConstraintAttributeCheckTests
     }
 
     [Test]
+    public void AConstraintNamedLikeTheEnginesNotNullConstraint_IsAWarning()
+    {
+        var table = new PostgreSqlTable { Name = "orders" };
+        table.Columns.Add(new PostgreSqlColumn { Name = "qty", DataType = "integer" });
+        table.CheckConstraints.Add(new PostgreSqlCheckConstraint { Name = "orders_qty_not_null", Expression = "qty IS NOT NULL" });
+        table.ForeignKeys.Add(new PostgreSqlForeignKey { Name = "orders_customer_not_null", Columns = "qty", RelatedTable = "customers", RelatedColumns = "id" });
+        var findings = new ConstraintAttributeCheck().Run(Context(Platform.PostgreSQL, table)).ToList();
+        Assert.That(findings, Has.Count.EqualTo(1), "the foreign key names a column the table does not have, so only the check matches");
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings[0].Severity, Is.EqualTo(Severity.Warning));
+            Assert.That(findings[0].Code, Is.EqualTo("SS-COL-003"));
+            Assert.That(findings[0].Message, Does.Contain("orders_qty_not_null").And.Contain("qty"));
+        });
+    }
+
+    [Test]
     public void ADeferrableCheck_IsAnError_NamingTheConstraintAndTheKey()
     {
         var findings = new ConstraintAttributeCheck().Run(Context(Platform.PostgreSQL,

@@ -12,6 +12,25 @@ AS $$
 DECLARE
   sql_script TEXT = '';
 BEGIN
+  -- Unsupported-feature policy: ON DELETE SET NULL (columns) is PostgreSQL 15. Below it the key is created with a plain
+  -- SET NULL, which sets every key column; 'fail' aborts before anything is created, 'warn' (default) records one
+  -- downgraded manifest row per key.
+  IF "SchemaSmith"."ServerVersionNum"() < 15 THEN
+    IF "SchemaSmith"."UnsupportedFeaturePolicy"() = 'fail'
+       AND EXISTS (SELECT 1 FROM temp_fks WHERE "SetNullColumnsDeclared" <> '') THEN
+      RAISE EXCEPTION 'ON DELETE SET NULL (columns) requires PostgreSQL 15 (detected major %); key(s): %',
+        "SchemaSmith"."ServerVersionNum"(),
+        (SELECT STRING_AGG("TableSchema" || '.' || "TableName" || '.' || "Name", ', ')
+           FROM temp_fks WHERE "SetNullColumnsDeclared" <> '');
+    ELSE
+      INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+        SELECT pg_backend_pid(), 'ON DELETE SET NULL (columns) (PG15)',
+               "TableSchema" || '.' || "TableName" || '.' || "Name", 'downgraded'
+          FROM temp_fks
+          WHERE "SetNullColumnsDeclared" <> '';
+    END IF;
+  END IF;
+
   RAISE NOTICE 'Add Missing Foreign Keys';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing foreign key ' || fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name" || CASE WHEN COALESCE(fk."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(fk."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
                     'ALTER TABLE  "' || fk."TableSchema" || '"."' || fk."TableName" || '" ADD CONSTRAINT "' || fk."Name" || '" FOREIGN KEY (' || "SchemaSmith"."QuoteColumnList"(fk."Columns") || ')' ||
@@ -19,6 +38,8 @@ BEGIN
                     CASE WHEN NULLIF(fk."MatchType", '') IS NOT NULL THEN ' MATCH ' || fk."MatchType" ELSE '' END ||
                     -- The referential actions precede DEFERRABLE in the grammar; after it they are a syntax error.
                     CASE WHEN NULLIF(fk."DeleteAction", '') IS NOT NULL THEN ' ON DELETE ' || fk."DeleteAction" ELSE '' END ||
+                    -- The subset SET NULL applies to (15+); a plain SET NULL sets every key column.
+                    CASE WHEN fk."DeleteAction" = 'SET NULL' AND NULLIF(fk."SetNullColumns", '') IS NOT NULL THEN ' (' || "SchemaSmith"."QuoteColumnList"(fk."SetNullColumns") || ')' ELSE '' END ||
                     CASE WHEN NULLIF(fk."UpdateAction", '') IS NOT NULL THEN ' ON UPDATE ' || fk."UpdateAction" ELSE '' END ||
                     CASE WHEN fk."Deferrable" THEN ' DEFERRABLE' ELSE '' END ||
                     CASE WHEN fk."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE '' END ||

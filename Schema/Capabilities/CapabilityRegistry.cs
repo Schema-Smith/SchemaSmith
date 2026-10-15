@@ -104,6 +104,10 @@ namespace Schema.Capabilities
             // is created over the same columns as a plain one.
             rows.Add(new("temporal-key", "Temporal key (WITHOUT OVERLAPS)", Platform.PostgreSQL,
                 18, "PostgreSQL 18", null, DegradeKind.Skip, "WITHOUT OVERLAPS (PG18)"));
+            // ON DELETE SET NULL (col, ...) names the subset a delete nulls. Below 15 the key is created with a plain
+            // SET NULL, which nulls every key column: the same action over more columns.
+            rows.Add(new("set-null-columns", "ON DELETE SET NULL over a subset of the key's columns", Platform.PostgreSQL,
+                15, "PostgreSQL 15", null, DegradeKind.Reduced, "ON DELETE SET NULL (columns) (PG15)"));
 
             // ---- MySQL (comparable major*100+minor via SchemaSmith_ServerVersionNum) ------------------------
             rows.Add(new("invisible-index", "Invisible index", Platform.MySQL,

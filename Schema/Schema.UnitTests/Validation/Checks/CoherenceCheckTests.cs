@@ -128,6 +128,51 @@ public class CoherenceCheckTests
         Assert.That(RunOnMaria(MariaRates("`id`,`p`", withoutOverlaps: true, unique: false)).Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-002" }));
     }
 
+    // ---- ON DELETE SET NULL (columns) (SS-FK-007) ----
+
+    private static Schema.Domain.PostgreSQL.PostgreSqlTable PgChild(string setNullColumns, string deleteAction = "SET NULL") => new()
+    {
+        Name = "child",
+        Schema = "public",
+        Columns =
+        {
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" },
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "parent_id", DataType = "integer" },
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "parent_code", DataType = "integer" }
+        },
+        ForeignKeys =
+        {
+            new Schema.Domain.PostgreSQL.PostgreSqlForeignKey
+            {
+                Name = "fk_child_parent", Columns = "parent_id,parent_code", RelatedTableSchema = "public", RelatedTable = "parent",
+                RelatedColumns = "id,code", DeleteAction = deleteAction, SetNullColumns = setNullColumns
+            }
+        }
+    };
+
+    [Test]
+    public void SetNullColumns_OverASubsetOfTheKey_WithSetNull_IsClean()
+    {
+        Assert.That(RunOnPgTable(PgChild("parent_id")).Where(f => f.Code == "SS-FK-007"), Is.Empty);
+    }
+
+    [Test]
+    public void SetNullColumns_WithoutSetNull_IsError()
+    {
+        var findings = RunOnPgTable(PgChild("parent_id", deleteAction: "CASCADE")).Where(f => f.Code == "SS-FK-007").ToList();
+        Assert.That(findings, Has.Exactly(1).Items);
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+        Assert.That(findings[0].Message, Does.Contain("CASCADE"));
+    }
+
+    [Test]
+    public void SetNullColumns_NamingAColumnOutsideTheKey_IsError()
+    {
+        var findings = RunOnPgTable(PgChild("parent_id,id")).Where(f => f.Code == "SS-FK-007").ToList();
+        Assert.That(findings, Has.Exactly(1).Items);
+        Assert.That(findings[0].Message, Does.Contain("'id'"));
+    }
+
     [Test]
     public void PostgreSqlTemporalKey_OnAUniqueIndexThatIsNotAConstraint_IsError()
     {

@@ -516,6 +516,8 @@ BEGIN
                 WHERE a.attrelid = frel.oid
                   AND a.attnum = element) AS "RelatedColumns",
              CASE con.confdeltype WHEN 'a' THEN '' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' END AS "DeleteAction",
+             -- The subset a SET NULL applies to (15+; empty below, where the declared value is folded to empty too).
+             "SchemaSmith"."ForeignKeySetNullColumns"(con.oid) AS "SetNullColumns",
              CASE con.confupdtype WHEN 'a' THEN '' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' END AS "UpdateAction"
         FROM temp_tables t
         JOIN pg_catalog.pg_constraint con ON con.conrelid = to_regclass('"' || t."Schema" || '"' ||  '.' || '"' ||  t."Name" || '"')
@@ -618,7 +620,8 @@ BEGIN
                                 AND ek."RelatedTable" = fk."RelatedTable"
                                 AND ek."RelatedColumns" = fk."RelatedColumns"
                                 AND ek."DeleteAction" = fk."DeleteAction"
-                                AND ek."UpdateAction" = fk."UpdateAction")
+                                AND ek."UpdateAction" = fk."UpdateAction"
+                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", ''))
             AND NOT EXISTS (SELECT 1
                               FROM temp_fks fk2
                               WHERE ek."TableSchema" = fk2."TableSchema"
@@ -644,7 +647,8 @@ BEGIN
                             AND ek."RelatedTable" = fk."RelatedTable"
                             AND ek."RelatedColumns" = fk."RelatedColumns"
                             AND ek."DeleteAction" = fk."DeleteAction"
-                            AND ek."UpdateAction" = fk."UpdateAction")
+                            AND ek."UpdateAction" = fk."UpdateAction"
+                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", ''))
         -- Split modified vs removed: a same-named FK whose definition changed is dropped
         -- unconditionally (the create-missing pass recreates it); a FK whose name is gone
         -- from the product is a by-absence removal, gated by the cascade flag.
@@ -673,7 +677,8 @@ BEGIN
                                 AND ek."RelatedTable" = fk."RelatedTable"
                                 AND ek."RelatedColumns" = fk."RelatedColumns"
                                 AND ek."DeleteAction" = fk."DeleteAction"
-                                AND ek."UpdateAction" = fk."UpdateAction")
+                                AND ek."UpdateAction" = fk."UpdateAction"
+                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", ''))
             AND (EXISTS (SELECT 1
                            FROM temp_fks fk2
                            WHERE ek."TableSchema" = fk2."TableSchema"

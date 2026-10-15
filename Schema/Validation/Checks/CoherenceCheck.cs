@@ -29,6 +29,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string RelatedColumnCode = "SS-FK-004";
     private const string CardinalityCode = "SS-FK-005";
     private const string ForeignKeyNameReusedCode = "SS-FK-006";
+    private const string SetNullColumnsCode = "SS-FK-007";
     private const string IndexColumnCode = "SS-IDX-001";
     private const string TemporalKeyShapeCode = "SS-IDX-002";
     private const string TemporalKeyPeriodCode = "SS-IDX-003";
@@ -204,6 +205,18 @@ public sealed class CoherenceCheck : ISchemaCheck
         if (fkColumns.Count != fkRelatedColumns.Count)
             yield return new Finding(Severity.Error, CardinalityCode, Category, location,
                 $"Columns has {fkColumns.Count} entries but RelatedColumns has {fkRelatedColumns.Count} — FK column lists must be the same length.");
+
+        // SetNullColumns is the subset ON DELETE SET NULL applies to: it needs that action, and names only key columns.
+        if (fk is PostgreSqlForeignKey { SetNullColumns: not null } pgFk && !string.IsNullOrWhiteSpace(pgFk.SetNullColumns))
+        {
+            if (!string.Equals(NormalizeAction(fk.DeleteAction), "SET NULL", StringComparison.OrdinalIgnoreCase))
+                yield return new Finding(Severity.Error, SetNullColumnsCode, Category, location,
+                    $"SetNullColumns is set but DeleteAction is '{fk.DeleteAction ?? "NO ACTION"}': the subset applies to ON DELETE SET NULL alone, so set DeleteAction to SET NULL or remove SetNullColumns.");
+            var keyColumns = fkColumns.Select(NormalizeIdentifier).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var column in SplitNames(pgFk.SetNullColumns).Where(column => !keyColumns.Contains(NormalizeIdentifier(column))))
+                yield return new Finding(Severity.Error, SetNullColumnsCode, Category, location,
+                    $"SetNullColumns names '{column}', which is not one of the key's Columns: only a key column can be set to NULL on delete.");
+        }
 
         var (schema, name) = ResolveRelatedTarget(table, fk);
 
@@ -491,6 +504,9 @@ public sealed class CoherenceCheck : ISchemaCheck
     // PostgreSQL identifier (folds to lower case) and a "quoted" one (case-sensitive) are compared
     // case-insensitively too — a deliberate slight loosening: the failure mode this check should have
     // is a missed nit, never a false error on a valid package.
+    private static string NormalizeAction(string action) =>
+        System.Text.RegularExpressions.Regex.Replace((action ?? "").Trim(), @"\s+", " ").ToUpperInvariant();
+
     private static string NormalizeIdentifier(string identifier)
     {
         var trimmed = (identifier ?? "").Trim();

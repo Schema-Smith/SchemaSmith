@@ -483,6 +483,8 @@ public static class ForgeKindler
                 new("SchemaSmith.IndexNullsNotDistinct.sql"),
                 // PG18-adaptive conperiod read: a primary key or unique constraint declared WITHOUT OVERLAPS.
                 new("SchemaSmith.ConstraintWithoutOverlaps.sql"),
+                // PG15-adaptive confdelsetcols read: the columns an ON DELETE SET NULL (col, ...) applies to.
+                new("SchemaSmith.ForeignKeySetNullColumns.sql"),
                 new("SchemaSmith.ConstraintEnforced.sql"),
                 new("SchemaSmith.CheckPredicate.sql"),
                 new("SchemaSmith.ColumnCompression.sql"),

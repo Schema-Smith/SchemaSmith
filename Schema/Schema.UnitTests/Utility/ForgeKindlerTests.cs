@@ -378,7 +378,8 @@ public class ForgeKindlerTests
         // +3 on PostgreSQL = ConstraintEnforced (PG18-adaptive conenforced read) + CheckPredicate (one read of a live check's
         //   predicate for extraction, compare and the expression map) + ConstraintStateQuench (Enforced / Validated state).
         // +1 on PostgreSQL = ConstraintWithoutOverlaps (PG18-adaptive conperiod read for temporal keys).
-        Assert.That(postgres.Length, Is.EqualTo(61));
+        // +1 on PostgreSQL = ForeignKeySetNullColumns (PG15-adaptive confdelsetcols read).
+        Assert.That(postgres.Length, Is.EqualTo(62));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor

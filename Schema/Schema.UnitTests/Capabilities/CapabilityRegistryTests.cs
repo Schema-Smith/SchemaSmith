@@ -34,6 +34,7 @@ namespace Schema.UnitTests.Capabilities
             "NULLS NOT DISTINCT (PG15)",
             "NOT ENFORCED constraint (PG18)",
             "WITHOUT OVERLAPS (PG18)",
+            "ON DELETE SET NULL (columns) (PG15)",
             "UNLOGGED sequence (PG15)",
             "expression statistics (PG14)",
             "per-column compression (PG14)",
