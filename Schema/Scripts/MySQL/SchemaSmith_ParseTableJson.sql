@@ -908,6 +908,8 @@ BEGIN
         TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Expression TEXT NOT NULL,
+        -- 0 declares NOT ENFORCED (MySQL 8.0.16+; MariaDB has no such state). Omitted is enforced.
+        Enforced TINYINT NOT NULL DEFAULT 1,
         ShouldApply TINYINT DEFAULT 1,
         ShouldApplyExpression VARCHAR(4000) DEFAULT NULL,
         VariantName VARCHAR(128) DEFAULT NULL,
@@ -922,7 +924,7 @@ BEGIN
         WHILE v_ChkInnerIdx < v_ChkInnerCnt DO
             IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Name'))) IS NOT NULL
                AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables st WHERE st.TableName = SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].Name'))))) THEN
-                INSERT INTO _SchemaSmith_CheckConstraints (TableName, ConstraintName, Expression, ShouldApply, ShouldApplyExpression, VariantName)
+                INSERT INTO _SchemaSmith_CheckConstraints (TableName, ConstraintName, Expression, ShouldApply, ShouldApplyExpression, VariantName, Enforced)
                 SELECT
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].Name')))) AS TableName,
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Name')))) AS ConstraintName,
@@ -940,7 +942,8 @@ BEGIN
                         '\\''', '''') AS Expression,
                     1 AS ShouldApply,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].ShouldApplyExpression')))), '') AS ShouldApplyExpression,
-                    NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].VariantName')))), '') AS VariantName;
+                    NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].VariantName')))), '') AS VariantName,
+                    IF(LOWER(COALESCE(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Enforced'))), 'true')) = 'false', 0, 1) AS Enforced;
             END IF;
             SET v_ChkInnerIdx = v_ChkInnerIdx + 1;
         END WHILE;

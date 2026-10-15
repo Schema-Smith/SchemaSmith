@@ -168,7 +168,8 @@ namespace Schema.Domain
             {
                 Platform.SqlServer => typeof(SqlServerCheckConstraint),
                 Platform.PostgreSQL => typeof(PostgreSqlCheckConstraint),
-                Platform.MySQL => typeof(CheckConstraint),
+                Platform.MySQL => typeof(MySqlCheckConstraint),
+                // MariaDB has no enforcement state on a check, so it keeps the base shape.
                 Platform.MariaDb => typeof(CheckConstraint),
                 _ => throw new ArgumentOutOfRangeException(nameof(platform), platform, $"Unsupported platform: {platform}")
             };

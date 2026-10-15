@@ -363,11 +363,15 @@ JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
     ON cc.CONSTRAINT_SCHEMA = @v_mcDbCi AND SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = @v_mcDbKey
     AND SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) = c.ConstraintKey', SchemaSmith_CheckTableJoin(), '
-WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4)) AS BINARY)
+WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4)) AS BINARY)
     != CAST(SchemaSmith_NormalizeCheckExpression(c.Expression) AS BINARY)
   AND SchemaSmith_ExpressionMapUnchanged(@v_mcDbName, SchemaSmith_StripBacktickWrapping(c.TableName),
         ''CHECK'', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ''expression'',
-        c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0');
+        c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0)',
+        -- NOT ENFORCED is part of the definition, so a changed Enforced is a modified check (MySQL only: MariaDB
+        -- has no ENFORCED column, and the mention would be fatal there).
+        IF(VERSION() LIKE '%MariaDB%', '', '
+   OR ((tc.ENFORCED = ''NO'') <> (c.Enforced = 0))'));
         PREPARE stmt FROM @v_mcSql1;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
@@ -379,25 +383,31 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`')
         FROM _SchemaSmith_ModifiedChecks;
+        -- WhatIf twin of the 'constraint'/'dropped' audit in the ELSE branch; same source.
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'constraint', CONCAT(TableName, '.', ConstraintName), 'wouldDrop'
+        FROM _SchemaSmith_ModifiedChecks;
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop modified check constraints');
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropModChkStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_DropModChkStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_DropModChkStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_DropModChkStmts (LogMsg, Stmt)
+        INSERT INTO _SchemaSmith_DropModChkStmts (LogMsg, Stmt, AuditName)
         SELECT
             CONCAT('  Drop modified check constraint: ', TableName, '.', ConstraintName),
-            CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`')
+            CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`'),
+            CONCAT(TableName, '.', ConstraintName)
         FROM _SchemaSmith_ModifiedChecks;
 
         SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts);
         WHILE @ss_id IS NOT NULL DO
-            SELECT LogMsg, Stmt INTO @ss_log, @exec_sql FROM _SchemaSmith_DropModChkStmts WHERE RowId = @ss_id;
+            SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_DropModChkStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
+            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'constraint', @ss_auditname, 'dropped');
             SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts WHERE RowId > @ss_id);
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropModChkStmts;
@@ -621,7 +631,7 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' ADD CONSTRAINT ', c.ConstraintName,
-                      ' CHECK (', c.Expression, ')')
+                      ' CHECK (', c.Expression, ')', IF(c.Enforced = 0 AND VERSION() NOT LIKE '%MariaDB%', ' NOT ENFORCED', ''))
         FROM _SchemaSmith_CheckConstraints c
         WHERE NOT EXISTS (
             SELECT 1 FROM _SchemaSmith_ChkExist tc
@@ -653,7 +663,9 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
             CONCAT(
                 'ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                 ' ADD CONSTRAINT ', c.ConstraintName,
-                ' CHECK (', c.Expression, ')'
+                ' CHECK (', c.Expression, ')',
+                -- NOT ENFORCED is part of the definition (MySQL 8.0.16+, the CHECK gate itself); a change re-creates.
+                IF(c.Enforced = 0 AND VERSION() NOT LIKE '%MariaDB%', ' NOT ENFORCED', '')
             ),
             CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName))
         FROM _SchemaSmith_CheckConstraints c

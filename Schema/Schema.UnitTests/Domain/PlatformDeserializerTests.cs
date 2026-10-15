@@ -434,7 +434,7 @@ namespace Schema.UnitTests.Domain
         }
 
         [Test]
-        public void DeserializeCheckConstraint_MySQL_ReturnsBaseCheckConstraint()
+        public void DeserializeCheckConstraint_MySQL_ReturnsMySqlCheckConstraint()
         {
             var json = JsonConvert.SerializeObject(new CheckConstraint
             {
@@ -445,7 +445,7 @@ namespace Schema.UnitTests.Domain
             var result = PlatformDeserializer.DeserializeCheckConstraint(json, Platform.MySQL);
 
             Assert.That(result, Is.InstanceOf<CheckConstraint>());
-            Assert.That(result.GetType(), Is.EqualTo(typeof(CheckConstraint)));
+            Assert.That(result.GetType(), Is.EqualTo(typeof(MySqlCheckConstraint)));
         }
 
         #endregion
@@ -582,7 +582,8 @@ namespace Schema.UnitTests.Domain
 
         [TestCase(Platform.SqlServer, typeof(SqlServerCheckConstraint))]
         [TestCase(Platform.PostgreSQL, typeof(PostgreSqlCheckConstraint))]
-        [TestCase(Platform.MySQL, typeof(CheckConstraint))]
+        [TestCase(Platform.MySQL, typeof(MySqlCheckConstraint))]
+        [TestCase(Platform.MariaDb, typeof(CheckConstraint))]
         public void GetCheckConstraintType_ReturnsCorrectType(Platform platform, System.Type expectedType)
         {
             Assert.That(PlatformDeserializer.GetCheckConstraintType(platform), Is.EqualTo(expectedType));
