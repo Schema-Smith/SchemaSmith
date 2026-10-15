@@ -672,7 +672,7 @@ BEGIN TRY
     JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(di.[Schema] + '.' + di.[TableName]) AND si.[name] = di.[IndexName] COLLATE DATABASE_DEFAULT
     JOIN sys.foreign_keys fk ON fk.referenced_object_id = si.[object_id] AND fk.key_index_id = si.index_id
     WHERE 1 = 1
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Kept ' + REPLACE(REPLACE(k.[Schema] + '.' + k.[TableName] + '.' + k.[IndexName], '''', ''''''), '%', '%%') +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  WARNING: Kept ' + REPLACE(REPLACE(k.[Schema] + '.' + k.[TableName] + '.' + k.[IndexName], '''', ''''''), '%', '%%') +
                                   ' as it is: foreign key ' + REPLACE(REPLACE(k.[KeyName], '''', ''''''), '%', '%%') + ' references it'', 10, 100) WITH NOWAIT;'
                            FROM #IndexesKeptForForeignKeys k WITH (NOLOCK)
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')

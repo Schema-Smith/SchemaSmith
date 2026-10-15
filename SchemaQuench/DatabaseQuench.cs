@@ -2304,7 +2304,7 @@ SET NOCOUNT ON
                 using var sessionCmd = connection.CreateCommand();
                 sessionCmd.CommandText = "SELECT CONNECTION_ID()";
                 var sessionId = Convert.ToInt64(sessionCmd.ExecuteScalar());
-                _statusMonitor = new StatusMessageMonitor(connectionString, sessionId, msg => SafeProgressLog($"    {msg}"));
+                _statusMonitor = new StatusMessageMonitor(connectionString, sessionId, msg => LogServerMessage($"    {msg}"));
             }
             catch
             {
@@ -3218,7 +3218,7 @@ SET NOCOUNT ON
             {
                 var verboseLogging = FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.VerboseLogging]?.ToLower() == "true";
                 if (verboseLogging || err.State == 100)
-                    SafeProgressLog($"      {err.Message}");
+                    LogServerMessage($"      {err.Message}");
             }
         }
     }
@@ -3227,16 +3227,38 @@ SET NOCOUNT ON
     {
         var verboseLogging = FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.VerboseLogging]?.ToLower() == "true";
         if (ShouldLogPostgreSqlNotice(e.Notice.MessageText, e.Notice.Where, verboseLogging))
-            SafeProgressLog($"      {e.Notice.MessageText}");
+            LogServerMessage($"      {e.Notice.MessageText}");
     }
 
     // SchemaSmith's own routines report progress through RAISE NOTICE, so those always log, as SQL Server's state-100
-    // messages do. A notice raised by anything else -- a user script's DO block or function -- logs only with
-    // VerboseLogging. The context names the innermost routine first: PL/pgSQL function "SchemaSmith"."X"(...) line N.
+    // messages do. Most are raised from a block the routine builds and EXECUTEs, and the context names the innermost
+    // frame first -- PL/pgSQL function inline_code_block line N at RAISE -- with the routine further down the chain, so
+    // it is looked for anywhere in it. A notice raised by anything else -- a user script's DO block or function -- has
+    // no SchemaSmith frame and logs only with VerboseLogging.
     internal static bool ShouldLogPostgreSqlNotice(string messageText, string where, bool verboseLogging)
     {
         if (messageText.EndsWith("does not exist, skipping") || messageText.EndsWith("already exists, skipping")) return false;
-        return verboseLogging || (where?.StartsWith("PL/pgSQL function \"SchemaSmith\".", StringComparison.Ordinal) ?? false);
+        return verboseLogging || (where?.Contains("PL/pgSQL function \"SchemaSmith\".", StringComparison.Ordinal) ?? false);
+    }
+
+    // A message a SchemaSmith routine raises with a WARNING: prefix names a declared change the deploy did not apply,
+    // or a state the next deploy will not fix. It is logged as a warning so ExitNonZeroOnWarning sees it; every other
+    // server message is progress.
+    internal static bool IsServerWarning(string message) =>
+        message != null && message.TrimStart().StartsWith("WARNING:", StringComparison.Ordinal);
+
+    internal void LogServerMessage(string msg)
+    {
+        if (!IsServerWarning(msg))
+        {
+            SafeProgressLog(msg);
+            return;
+        }
+        lock (_lockObject)
+        {
+            _progressLog.Warn($"{LogPrefix} {msg}");
+            FailureCtx.Log(msg);
+        }
     }
 
     #endregion

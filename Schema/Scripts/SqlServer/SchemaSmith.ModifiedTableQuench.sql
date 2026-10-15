@@ -1515,7 +1515,7 @@ BEGIN TRY
                        WHERE SchemaSmith.fn_StripBracketWrapping(k.[Schema]) = OBJECT_SCHEMA_NAME(fk.parent_object_id) COLLATE DATABASE_DEFAULT
                          AND SchemaSmith.fn_StripBracketWrapping(k.[TableName]) = OBJECT_NAME(fk.parent_object_id) COLLATE DATABASE_DEFAULT
                          AND SchemaSmith.fn_StripBracketWrapping(k.[KeyName]) = fk.[name] COLLATE DATABASE_DEFAULT)
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Kept ' + REPLACE(REPLACE(k.[Schema] + '.' + k.[TableName] + '.' + k.[IndexName], '''', ''''''), '%', '%%') +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  WARNING: Kept ' + REPLACE(REPLACE(k.[Schema] + '.' + k.[TableName] + '.' + k.[IndexName], '''', ''''''), '%', '%%') +
                                   ' as it is: foreign key ' + REPLACE(REPLACE(k.[KeyName], '''', ''''''), '%', '%%') + ' references it'', 10, 100) WITH NOWAIT;'
                            FROM #IndexesKeptForForeignKeys k WITH (NOLOCK)
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')

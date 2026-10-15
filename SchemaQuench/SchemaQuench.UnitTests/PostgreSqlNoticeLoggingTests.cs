@@ -9,12 +9,22 @@ namespace SchemaQuench.UnitTests;
 public class PostgreSqlNoticeLoggingTests
 {
     private const string FromSchemaSmith = "PL/pgSQL function \"SchemaSmith\".\"ModifiedTableQuench\"(boolean) line 12 at RAISE";
+
+    // Most progress is raised from a block the routine builds and EXECUTEs, so the innermost frame is an inline block
+    // and the routine sits further down the chain.
+    private const string FromSchemaSmithDynamicBlock =
+        "PL/pgSQL function inline_code_block line 3 at RAISE\n" +
+        "SQL statement \"DO $$ BEGIN RAISE NOTICE '  Kept x as it is'; END $$\"\n" +
+        "PL/pgSQL function \"SchemaSmith\".\"ExecuteOrDebug\"(text,boolean) line 16 at EXECUTE\n" +
+        "SQL statement \"CALL \"SchemaSmith\".\"ExecuteOrDebug\"(sql_script, FALSE)\"\n" +
+        "PL/pgSQL function \"SchemaSmith\".\"ModifiedTableQuench\"(boolean) line 1066 at CALL";
     private const string FromUserDoBlock = "PL/pgSQL function inline_code_block line 1 at RAISE";
     private const string FromUserFunction = "PL/pgSQL function userfn() line 1 at RAISE";
 
-    [Test]
-    public void SchemaSmithsOwnNotice_LogsWithoutVerboseLogging() =>
-        Assert.That(DatabaseQuench.ShouldLogPostgreSqlNotice("Add Missing Columns", FromSchemaSmith, false), Is.True);
+    [TestCase(FromSchemaSmith)]
+    [TestCase(FromSchemaSmithDynamicBlock)]
+    public void SchemaSmithsOwnNotice_LogsWithoutVerboseLogging(string where) =>
+        Assert.That(DatabaseQuench.ShouldLogPostgreSqlNotice("Add Missing Columns", where, false), Is.True);
 
     [TestCase(FromUserDoBlock)]
     [TestCase(FromUserFunction)]

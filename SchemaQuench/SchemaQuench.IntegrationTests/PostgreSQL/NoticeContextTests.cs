@@ -33,6 +33,8 @@ public class NoticeContextTests
             CREATE SCHEMA IF NOT EXISTS "SchemaSmith";
             CREATE OR REPLACE FUNCTION "SchemaSmith"."NoticeContextProbe"() RETURNS void LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'own-progress'; END $$;
             SELECT "SchemaSmith"."NoticeContextProbe"();
+            CREATE OR REPLACE PROCEDURE "SchemaSmith"."NoticeContextDynamicProbe"() LANGUAGE plpgsql AS $$ BEGIN EXECUTE 'DO $x$ BEGIN RAISE NOTICE ''own-dynamic''; END $x$'; END $$;
+            CALL "SchemaSmith"."NoticeContextDynamicProbe"();
             DO $$ BEGIN RAISE NOTICE 'user-note'; END $$;
             """;
         cmd.ExecuteNonQuery();
@@ -42,6 +44,8 @@ public class NoticeContextTests
         {
             Assert.That(DatabaseQuench.ShouldLogPostgreSqlNotice("own-progress", notices["own-progress"], verboseLogging: false), Is.True,
                 $"SchemaSmith's notice would be hidden; context was: {notices["own-progress"]}");
+            Assert.That(DatabaseQuench.ShouldLogPostgreSqlNotice("own-dynamic", notices["own-dynamic"], verboseLogging: false), Is.True,
+                $"a notice SchemaSmith raises from a block it builds and EXECUTEs would be hidden; context was: {notices["own-dynamic"]}");
             Assert.That(DatabaseQuench.ShouldLogPostgreSqlNotice("user-note", notices["user-note"], verboseLogging: false), Is.False,
                 $"a user's notice would log without VerboseLogging; context was: {notices["user-note"]}");
         });

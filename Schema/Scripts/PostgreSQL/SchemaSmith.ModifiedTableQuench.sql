@@ -1059,7 +1059,7 @@ BEGIN
           -- A key the package declares is dropped with the constraint and put back by ForeignKeyQuench.
           AND NOT EXISTS (SELECT 1 FROM temp_fks f
                           WHERE f."TableSchema" = fkn.nspname AND f."TableName" = fkr.relname AND f."Name" = fkc.conname);
-    SELECT STRING_AGG('RAISE NOTICE ''  Kept ' || REPLACE(k."TableSchema" || '.' || k."TableName" || '.' || k."IndexName", '''', '''''') ||
+    SELECT STRING_AGG('RAISE WARNING ''  WARNING: Kept ' || REPLACE(k."TableSchema" || '.' || k."TableName" || '.' || k."IndexName", '''', '''''') ||
                       ' as it is: foreign key ' || REPLACE(k."KeyName", '''', '''''') || ' references it'';', CHR(10))
       INTO sql_script
       FROM temp_indexes_kept_for_fks k;

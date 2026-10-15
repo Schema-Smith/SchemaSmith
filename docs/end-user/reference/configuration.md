@@ -1045,7 +1045,7 @@ A `false` at any tier is sticky — it locks the effective value to `false` for 
 
 On SQL Server, an index of a kind a package cannot declare (spatial, JSON, selective XML) is never dropped as unknown: nothing could put it back.
 
-A deploy never drops a foreign key it will not re-create to make way for an index change. An index a foreign key needs is kept as it is, with a message, when the key is outside the package (a full deploy) or when the template is index-only (which never touches foreign keys). This applies to an unknown index, a removed one and a changed one. A later deploy drops or changes the index once no key needs it.
+A deploy never drops a foreign key it will not re-create to make way for an index change. An index a foreign key needs is kept as it is when the key is outside the package (a full deploy) or when the template is index-only (which never touches foreign keys). This applies to an unknown index, a removed one and a changed one. The kept index is reported as a warning naming the key that holds it, so a pipeline that treats a declared change the deploy did not apply as a failure can use `--ExitNonZeroOnWarning`. A later deploy drops or changes the index once no key needs it.
 
 The environment tier is new in this release. Previously `DropUnknownIndexes` was settable only in `Product.json` and `Template.json`. It can now be set or suppressed in `SchemaQuench.settings.json` (or via environment variable) as a deployment-wide guardrail.
 

@@ -1,7 +1,9 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
+using Microsoft.Data.SqlClient;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
@@ -119,6 +121,8 @@ CREATE TABLE dbo.[{t.ById}] (Id INT NOT NULL PRIMARY KEY, ParentId INT NOT NULL,
         conn.Open();
         conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
+        var messages = new List<string>();
+        ((SqlConnection)conn).InfoMessage += (_, e) => { foreach (SqlError err in e.Errors) messages.Add(err.Message); };
         var t = Create(cmd);
         try
         {
@@ -132,6 +136,8 @@ CREATE TABLE dbo.[{t.ById}] (Id INT NOT NULL PRIMARY KEY, ParentId INT NOT NULL,
                                         $"FROM sys.index_columns ic JOIN sys.indexes i ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id " +
                                         $"WHERE i.[object_id] = OBJECT_ID('dbo.[{t.Parent}]') AND i.name = '{t.UqCode}'"),
                     Is.EqualTo("Code"), "a key the deploy will not re-create references it, so it is kept as it is");
+                Assert.That(messages, Has.Some.Matches<string>(m => m.TrimStart().StartsWith("WARNING: Kept ") && m.Contains(t.UqCode) && m.Contains($"FK_{t.ByCode}")),
+                    "a declared change the deploy did not apply is a warning, naming the index and the key that holds it: " + string.Join(" | ", messages));
             });
         }
         finally

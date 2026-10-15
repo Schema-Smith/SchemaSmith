@@ -1,7 +1,9 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
+using Npgsql;
 using Schema.DataAccess;
 using Schema.Domain;
 
@@ -108,6 +110,8 @@ CREATE TABLE public.fksafe_byid_{u} (id integer PRIMARY KEY, parent_id integer N
     {
         using var cmd = Open(out var conn);
         using var _ = conn;
+        var messages = new List<string>();
+        ((NpgsqlConnection)conn).Notice += (_, e) => messages.Add(e.Notice.MessageText);
         var t = Create(cmd);
         var u = t.Suffix;
         try
@@ -120,6 +124,8 @@ CREATE TABLE public.fksafe_byid_{u} (id integer PRIMARY KEY, parent_id integer N
                 Assert.That(ForeignKeys(cmd, t), Is.EqualTo($"fk_byalt_{u},fk_bycode_{u},fk_byid_{u}"));
                 Assert.That(Scalar(cmd, $"SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'uqc_alt_{u}'"),
                     Is.EqualTo("UNIQUE (alt)"), "a key the deploy will not re-create references it, so it is kept as it is");
+                Assert.That(messages, Has.Some.Matches<string>(m => m.TrimStart().StartsWith("WARNING: Kept ") && m.Contains($"uqc_alt_{u}") && m.Contains($"fk_byalt_{u}")),
+                    "a declared change the deploy did not apply is a warning, naming the constraint and the key that holds it: " + string.Join(" | ", messages));
             });
         }
         finally
