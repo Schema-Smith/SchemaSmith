@@ -122,12 +122,28 @@ BEGIN
     END IF;
   END IF;
 
+  IF "SchemaSmith"."ServerVersionNum"() < 18 THEN
+    IF "SchemaSmith"."UnsupportedFeaturePolicy"() = 'fail'
+       AND EXISTS (SELECT 1 FROM temp_indexes WHERE "WithoutOverlapsDeclared") THEN
+      RAISE EXCEPTION 'WITHOUT OVERLAPS requires PostgreSQL 18 (detected major %); key(s): %',
+        "SchemaSmith"."ServerVersionNum"(),
+        (SELECT STRING_AGG("TableSchema" || '.' || "TableName" || '.' || "Name", ', ')
+           FROM temp_indexes WHERE "WithoutOverlapsDeclared");
+    ELSE
+      INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+        SELECT pg_backend_pid(), 'WITHOUT OVERLAPS (PG18)',
+               "TableSchema" || '.' || "TableName" || '.' || "Name", 'downgraded'
+          FROM temp_indexes
+          WHERE "WithoutOverlapsDeclared";
+    END IF;
+  END IF;
+
   RAISE NOTICE 'Add Missing Indexes'; -- Includes Primary Keys and Unique Constraints
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing ' || CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'Constraint ' ELSE 'Index ' END || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || CASE WHEN COALESCE(ti."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ti."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
                     CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey"
                          THEN 'ALTER TABLE "' || ti."TableSchema" || '"."' || ti."TableName" || '" ADD CONSTRAINT "' || ti."Name" || '" ' ||
                               CASE WHEN ti."PrimaryKey" THEN 'PRIMARY KEY ' ELSE 'UNIQUE ' || CASE WHEN ti."NullsNotDistinct" THEN 'NULLS NOT DISTINCT ' ELSE '' END END ||
-                              '(' || "SchemaSmith"."QuoteIndexColumnList"(ti."IndexColumns") || ')' ||
+                              '(' || "SchemaSmith"."QuoteIndexColumnList"(ti."IndexColumns") || CASE WHEN ti."WithoutOverlaps" THEN ' WITHOUT OVERLAPS' ELSE '' END || ')' ||
                               -- INCLUDE and the storage parameters, as the CREATE INDEX branch below emits them.
                               -- Left out, the deployed constraint never matched its declaration, and every deploy
                               -- dropped it CASCADE, taking its inbound foreign keys, and added it back (PG-031).

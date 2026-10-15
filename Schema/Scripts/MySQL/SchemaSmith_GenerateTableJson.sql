@@ -287,14 +287,18 @@ BEGIN
     IF SchemaSmith_SupportsFunctionalIndex() = 1 THEN
         SELECT CONCAT('[', IFNULL(GROUP_CONCAT(idx_json ORDER BY idx_name SEPARATOR ','), ''), ']') INTO v_indexes
         FROM (
-            SELECT JSON_OBJECT(
+            SELECT JSON_REMOVE(JSON_OBJECT(
                 'Name', s.INDEX_NAME,
+                -- MariaDB only (NULL elsewhere and stripped below, so a MySQL package never carries a key its schema does
+                -- not declare): the key is declared WITHOUT OVERLAPS over the period pj names.
+                'WithoutOverlaps', CASE WHEN pj.PeriodJson IS NOT NULL THEN TRUE ELSE NULL END,
                 'PrimaryKey', CASE WHEN s.INDEX_NAME = 'PRIMARY' THEN TRUE ELSE FALSE END,
                 'Unique', CASE WHEN s.NON_UNIQUE = 0 THEN TRUE ELSE FALSE END,
                 'UniqueConstraint', CASE WHEN s.INDEX_NAME = 'PRIMARY' OR s.NON_UNIQUE = 0 THEN TRUE ELSE FALSE END,
                 'IndexType', s.INDEX_TYPE,
-                'IndexColumns', GROUP_CONCAT(
-                    CASE WHEN s.COLUMN_NAME IS NOT NULL THEN
+                'IndexColumns', CONCAT(GROUP_CONCAT(
+                    CASE WHEN s.COLUMN_NAME IS NOT NULL AND pj.PeriodJson IS NOT NULL AND s.COLUMN_NAME IN (JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.StartColumn')), JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.EndColumn'))) THEN NULL
+                         WHEN s.COLUMN_NAME IS NOT NULL THEN
                         CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME),
                             CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')) THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
                             CASE WHEN s.COLLATION = 'D' THEN ' DESC' ELSE '' END
@@ -308,49 +312,65 @@ BEGIN
                     END
                     ORDER BY s.SEQ_IN_INDEX
                     SEPARATOR ','
-                ),
+                ), CASE WHEN pj.PeriodJson IS NOT NULL THEN CONCAT(',', SchemaSmith_QuoteIdentifier(JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.Name')))) ELSE '' END),
                 'Visible', CASE WHEN SchemaSmith_IndexIsVisible(p_Schema, p_Table, s.INDEX_NAME) = 1 THEN TRUE ELSE FALSE END,
                 'Description', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
-            ) AS idx_json,
+            ), CASE WHEN pj.PeriodJson IS NOT NULL THEN '$.___dummy___' ELSE '$.WithoutOverlaps' END) AS idx_json,
                    s.INDEX_NAME AS idx_name
             FROM INFORMATION_SCHEMA.STATISTICS s
+            -- The period a temporal key is declared over (MariaDB 11.4+, where the catalog can say; NULL elsewhere and
+            -- below, where the key reads back as a plain unique key over the period's columns).
+            LEFT JOIN (SELECT DISTINCT s2.INDEX_NAME, SchemaSmith_IndexPeriodJson(p_Schema, p_Table, s2.INDEX_NAME) AS PeriodJson
+                         FROM INFORMATION_SCHEMA.STATISTICS s2
+                        WHERE s2.TABLE_SCHEMA = p_Schema AND s2.TABLE_NAME = p_Table AND s2.NON_UNIQUE = 0) pj
+                   ON pj.INDEX_NAME = s.INDEX_NAME
             WHERE s.TABLE_SCHEMA = p_Schema
               AND s.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
               AND s.INDEX_TYPE != 'FULLTEXT'
               -- A period column is left out of Columns, so an index must not name it either: the package would not
               -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
               AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
-            GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
+            GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT, pj.PeriodJson
         ) idx_subquery;
     ELSE
         SELECT CONCAT('[', IFNULL(GROUP_CONCAT(idx_json ORDER BY idx_name SEPARATOR ','), ''), ']') INTO v_indexes
         FROM (
-            SELECT JSON_OBJECT(
+            SELECT JSON_REMOVE(JSON_OBJECT(
                 'Name', s.INDEX_NAME,
+                -- MariaDB only (NULL elsewhere and stripped below, so a MySQL package never carries a key its schema does
+                -- not declare): the key is declared WITHOUT OVERLAPS over the period pj names.
+                'WithoutOverlaps', CASE WHEN pj.PeriodJson IS NOT NULL THEN TRUE ELSE NULL END,
                 'PrimaryKey', CASE WHEN s.INDEX_NAME = 'PRIMARY' THEN TRUE ELSE FALSE END,
                 'Unique', CASE WHEN s.NON_UNIQUE = 0 THEN TRUE ELSE FALSE END,
                 'UniqueConstraint', CASE WHEN s.INDEX_NAME = 'PRIMARY' OR s.NON_UNIQUE = 0 THEN TRUE ELSE FALSE END,
                 'IndexType', s.INDEX_TYPE,
-                'IndexColumns', GROUP_CONCAT(
+                'IndexColumns', CONCAT(GROUP_CONCAT(
+                    CASE WHEN pj.PeriodJson IS NOT NULL AND s.COLUMN_NAME IN (JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.StartColumn')), JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.EndColumn'))) THEN NULL ELSE
                     CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME),
                         CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')) THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
                         CASE WHEN s.COLLATION = 'D' THEN ' DESC' ELSE '' END
-                    )
+                    ) END
                     ORDER BY s.SEQ_IN_INDEX
                     SEPARATOR ','
-                ),
+                ), CASE WHEN pj.PeriodJson IS NOT NULL THEN CONCAT(',', SchemaSmith_QuoteIdentifier(JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.Name')))) ELSE '' END),
                 'Visible', CASE WHEN SchemaSmith_IndexIsVisible(p_Schema, p_Table, s.INDEX_NAME) = 1 THEN TRUE ELSE FALSE END,
                 'Description', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
-            ) AS idx_json,
+            ), CASE WHEN pj.PeriodJson IS NOT NULL THEN '$.___dummy___' ELSE '$.WithoutOverlaps' END) AS idx_json,
                    s.INDEX_NAME AS idx_name
             FROM INFORMATION_SCHEMA.STATISTICS s
+            -- The period a temporal key is declared over (MariaDB 11.4+, where the catalog can say; NULL elsewhere and
+            -- below, where the key reads back as a plain unique key over the period's columns).
+            LEFT JOIN (SELECT DISTINCT s2.INDEX_NAME, SchemaSmith_IndexPeriodJson(p_Schema, p_Table, s2.INDEX_NAME) AS PeriodJson
+                         FROM INFORMATION_SCHEMA.STATISTICS s2
+                        WHERE s2.TABLE_SCHEMA = p_Schema AND s2.TABLE_NAME = p_Table AND s2.NON_UNIQUE = 0) pj
+                   ON pj.INDEX_NAME = s.INDEX_NAME
             WHERE s.TABLE_SCHEMA = p_Schema
               AND s.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
               AND s.INDEX_TYPE != 'FULLTEXT'
               -- A period column is left out of Columns, so an index must not name it either: the package would not
               -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
               AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
-            GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
+            GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT, pj.PeriodJson
         ) idx_subquery;
     END IF;
 

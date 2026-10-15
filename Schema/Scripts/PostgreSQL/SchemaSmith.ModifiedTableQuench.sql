@@ -949,6 +949,7 @@ BEGIN
                                    ei."IndexName", 'filter', i."FilterExpression", COALESCE(ei."FilterExpression", '')))
                          AND COALESCE(i."AccessMethod", 'btree') = COALESCE(ei."AccessMethod", 'btree')
                          AND COALESCE(i."NullsNotDistinct", false) = COALESCE(ei."NullsNotDistinct", false)
+                         AND COALESCE(i."WithoutOverlaps", false) = COALESCE(ei."WithoutOverlaps", false)
                          AND COALESCE(i."Deferrable", false) = COALESCE(ei."Deferrable", false)
                          AND COALESCE(i."InitiallyDeferred", false) = COALESCE(ei."InitiallyDeferred", false)
                          AND COALESCE(i."StorageParameters", '') = COALESCE(ei."StorageParameters", '')
@@ -995,6 +996,7 @@ BEGIN
                             OR COALESCE(i."FilterExpression", '') != COALESCE(ei."FilterExpression", '')
                             OR COALESCE(i."AccessMethod", 'btree') != COALESCE(ei."AccessMethod", 'btree')
                             OR COALESCE(i."NullsNotDistinct", false) != COALESCE(ei."NullsNotDistinct", false)
+                            OR COALESCE(i."WithoutOverlaps", false) != COALESCE(ei."WithoutOverlaps", false)
                             OR COALESCE(i."Deferrable", false) != COALESCE(ei."Deferrable", false)
                             OR COALESCE(i."InitiallyDeferred", false) != COALESCE(ei."InitiallyDeferred", false)
                             -- A storage-parameter change rebuilds the index (hnsw m and ivfflat lists cannot

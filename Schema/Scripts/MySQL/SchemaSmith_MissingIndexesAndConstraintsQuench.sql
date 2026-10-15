@@ -201,7 +201,7 @@ BEGIN
                            ELSE '' END,
                       'INDEX ', i.IndexName,
                       ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
-                      ' (', i.IndexColumns, ')',
+                      ' (', i.EmitColumns, ')',
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
@@ -264,7 +264,7 @@ BEGIN
                 'INDEX ', i.IndexName,
                 CASE WHEN d.IndexName IS NOT NULL THEN ''
                      ELSE CONCAT(' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName) END,
-                ' (', i.IndexColumns, ')',
+                ' (', i.EmitColumns, ')',
                 CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                      WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                      ELSE '' END,
@@ -465,6 +465,13 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
           AND NOT (VERSION() LIKE '%MariaDB%'
                    AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns col
                                 WHERE col.TableKey = tc.TableKey AND col.ColumnKey = tc.ConstraintKey))
+          -- A check named after one of the table's DECLARED periods is that period's backing constraint (MariaDB
+          -- names it after the period), on every version: the package itself says so, so the catalog's blind spot
+          -- below 11.4 (next clause) does not apply to a period the package manages.
+          AND NOT (VERSION() LIKE '%MariaDB%'
+                   AND EXISTS (SELECT 1 FROM _SchemaSmith_Periods pd
+                                WHERE SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(pd.TableName)) = tc.TableKey
+                                  AND SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(pd.PeriodName)) = tc.ConstraintKey))
 ;
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -522,6 +529,13 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
           AND NOT (VERSION() LIKE '%MariaDB%'
                    AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns col
                                 WHERE col.TableKey = tc.TableKey AND col.ColumnKey = tc.ConstraintKey))
+          -- A check named after one of the table's DECLARED periods is that period's backing constraint (MariaDB
+          -- names it after the period), on every version: the package itself says so, so the catalog's blind spot
+          -- below 11.4 (next clause) does not apply to a period the package manages.
+          AND NOT (VERSION() LIKE '%MariaDB%'
+                   AND EXISTS (SELECT 1 FROM _SchemaSmith_Periods pd
+                                WHERE SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(pd.TableName)) = tc.TableKey
+                                  AND SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(pd.PeriodName)) = tc.ConstraintKey))
 
           -- MariaDB backs an application-time period with a CHECK constraint named after the period
           -- (`start < end`), indistinguishable from a user check constraint in the catalog -- same
@@ -532,9 +546,11 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
           -- by any MariaDB user with one, whether or not SchemaSmith manages the period.
           --
           -- Identified by name against the period reader, which is truthful only from 11.4. Below that
-          -- it returns '[]' and the exclusion cannot fire, so the defect remains on 10.4.3-11.3: nothing
-          -- in that catalog distinguishes the two, and guessing from the check clause would risk
-          -- silently preserving a genuine user constraint that happens to compare two columns.
+          -- it returns '[]' and this exclusion cannot fire; a period the package declares is covered by
+          -- the clause above on every version, so what remains on 10.4.3-11.3 is a period the package
+          -- does not manage: nothing in that catalog distinguishes its check from a user's, and guessing
+          -- from the check clause would risk silently preserving a genuine user constraint that happens
+          -- to compare two columns.
           AND JSON_SEARCH(SchemaSmith_TablePeriodsJson(p_DatabaseName, tc.TableName),
                           'one', tc.ConstraintName, NULL, '$[*].Name') IS NULL;
 

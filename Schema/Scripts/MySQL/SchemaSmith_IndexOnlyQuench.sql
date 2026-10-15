@@ -118,6 +118,24 @@ BEGIN
         END IF;
     END IF;
 
+    -- A key declared WITHOUT OVERLAPS where the engine has no such clause (MariaDB below 10.5.3; MySQL, which has no
+    -- periods) is created over the period's end and start columns instead -- the same columns the engine would list
+    -- for it -- and the downgrade is recorded. Under the fail policy SchemaSmith_RefuseUnsupportedIndexes stopped
+    -- the run before this.
+    IF SchemaSmith_SupportsWithoutOverlaps() = 0
+       AND EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i WHERE i.WithoutOverlaps = 1) THEN
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  Key created over the period''s columns, without WITHOUT OVERLAPS (requires MariaDB 10.5.3, MySQL unsupported - downgraded): ',
+               SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName))
+        FROM _SchemaSmith_Indexes i
+        WHERE i.WithoutOverlaps = 1;
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)',
+               CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)), 'downgraded'
+        FROM _SchemaSmith_Indexes i
+        WHERE i.WithoutOverlaps = 1;
+    END IF;
+
     -- =========================================================================
     -- Detection snapshot: the live index picture read ONCE here so STEP 1 (rename) and STEP 2
     -- (modified) join it instead of re-reading INFORMATION_SCHEMA.STATISTICS per declared index.
@@ -136,6 +154,7 @@ BEGIN
         -- MySQL's index comment ceiling is 1024 characters; MAX() alongside the other per-index
         -- aggregates below since INDEX_COMMENT is constant across a composite index's key parts.
         IndexComment VARCHAR(1024),
+        WithoutOverlaps TINYINT NOT NULL DEFAULT 0,
         TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         PRIMARY KEY (TableName, IndexName),
@@ -204,6 +223,14 @@ BEGIN
     UPDATE _SchemaSmith_IdxDetectSnap
        SET TableKey = SchemaSmith_IdentifierKey(TableName),
            IndexKey = SchemaSmith_NameKeyCI(IndexName);
+    -- Whether a unique key is WITHOUT OVERLAPS is in the catalog from MariaDB 11.4 (KEY_PERIOD_USAGE); below it the
+    -- flag stays 0 and the compare does not read it, so a declared temporal key is compared by its columns alone.
+    IF VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1104 THEN
+        UPDATE _SchemaSmith_IdxDetectSnap
+           SET WithoutOverlaps = 1
+         WHERE NonUnique = 0
+           AND SchemaSmith_IndexPeriodJson(p_DatabaseName, TableName, IndexName) IS NOT NULL;
+    END IF;
 
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectNames;
@@ -263,8 +290,9 @@ BEGIN
             AND s2.IndexKey = i.IndexKey
       )
       -- Old index exists with same columns (compare normalized column list)
-      AND CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) = CAST(snap.NormColumns AS BINARY)
+      AND CAST(SchemaSmith_NormalizeIndexColumns(i.CompareColumns) AS BINARY) = CAST(snap.NormColumns AS BINARY)
       -- Same uniqueness
+      AND NOT (VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1104 AND SchemaSmith_SupportsWithoutOverlaps() = 1 AND (snap.WithoutOverlaps = 1) <> (i.WithoutOverlaps = 1))
       AND i.IsUnique = (snap.NonUnique = 0);
 
     -- Handle renames
@@ -407,9 +435,10 @@ BEGIN
           -- respelled by the one-statement swap below (1553 sends it there).
           (VERSION() LIKE '%MariaDB%' AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY))
           -- Or columns differ
-          OR CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
+          OR CAST(SchemaSmith_NormalizeIndexColumns(i.CompareColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
           -- Or uniqueness differs
           OR i.IsUnique != (snap.NonUnique = 0)
+          OR (VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1104 AND SchemaSmith_SupportsWithoutOverlaps() = 1 AND (snap.WithoutOverlaps = 1) <> (i.WithoutOverlaps = 1))
           -- Or the kind differs, by the rule ModifiedTableQuench uses too
           OR SchemaSmith_IndexTypesMatch(i.IndexType, snap.IndexType, p_DatabaseName, i.TableName) = 0
           -- Or visibility differs (FULLTEXT indexes don't support INVISIBLE, skip them). Below the
@@ -794,7 +823,7 @@ BEGIN
                            ELSE '' END,
                       'INDEX ', i.IndexName,
                       ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
-                      ' (', i.IndexColumns, ')',
+                      ' (', i.EmitColumns, ')',
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
@@ -856,7 +885,7 @@ BEGIN
                            WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE INDEX '
                            ELSE 'INDEX ' END,
                       i.IndexName,
-                      ' (', i.IndexColumns, ')',
+                      ' (', i.EmitColumns, ')',
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,

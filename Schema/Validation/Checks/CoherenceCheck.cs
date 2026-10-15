@@ -30,6 +30,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string CardinalityCode = "SS-FK-005";
     private const string ForeignKeyNameReusedCode = "SS-FK-006";
     private const string IndexColumnCode = "SS-IDX-001";
+    private const string TemporalKeyShapeCode = "SS-IDX-002";
+    private const string TemporalKeyPeriodCode = "SS-IDX-003";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RebuildThresholdCode = "SS-TBL-001";
@@ -390,9 +392,36 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         var location = $"{tableLocation} / Index '{index.Name}'";
         var localColumnNames = ColumnNames(table);
+        var keyParts = SplitNames(index.IndexColumns);
+
+        // A temporal key (WITHOUT OVERLAPS) is a primary key or unique key; on MariaDB its last part names one of the
+        // table's periods rather than a column, so that part is not a missing column.
+        var withoutOverlaps = index switch
+        {
+            PostgreSqlIndex p => p.WithoutOverlaps,
+            MariaDbIndex m => m.WithoutOverlaps,
+            _ => false
+        };
+        var periodNames = table is MariaDbTable mariaDb
+            ? mariaDb.Periods.Select(p => NormalizeIdentifier(p.Name)).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var lastPartIsPeriod = withoutOverlaps && table is MariaDbTable && keyParts.Count > 0
+                               && periodNames.Contains(NormalizeIdentifier(StripOrderingSuffix(keyParts[^1])));
+        if (withoutOverlaps)
+        {
+            var isKey = index.PrimaryKey || (table is MariaDbTable ? index.Unique || index.UniqueConstraint : index.UniqueConstraint);
+            if (!isKey)
+                yield return new Finding(Severity.Error, TemporalKeyShapeCode, Category, location,
+                    $"Index '{index.Name}' sets WithoutOverlaps but is not a primary key or unique " +
+                    (table is MariaDbTable ? "key" : "constraint") + ": WITHOUT OVERLAPS is a clause of those alone, so the key would be created without it.");
+            if (table is MariaDbTable && !lastPartIsPeriod)
+                yield return new Finding(Severity.Error, TemporalKeyPeriodCode, Category, location,
+                    $"Index '{index.Name}' sets WithoutOverlaps but its last IndexColumns part is not one of the table's Periods" +
+                    (periodNames.Count == 0 ? " (the table declares none)" : "") + ": MariaDB declares a temporal key over a period, named last.");
+        }
 
         var hasPrefixKeyParts = table is MySqlTable;
-        foreach (var column in SplitNames(index.IndexColumns).Select(StripOrderingSuffix)
+        foreach (var column in keyParts.Take(lastPartIsPeriod ? keyParts.Count - 1 : keyParts.Count).Select(StripOrderingSuffix)
                      .Select(column => hasPrefixKeyParts ? StripPrefixLength(column) : column)
                      .Where(column => !IsExpressionKeyPart(column))
                      .Where(column => !localColumnNames.Contains(NormalizeIdentifier(column))))

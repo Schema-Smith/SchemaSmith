@@ -100,6 +100,10 @@ namespace Schema.Capabilities
             // created, with the one attribute the server cannot express left off.
             rows.Add(new("not-enforced-constraint", "NOT ENFORCED constraints", Platform.PostgreSQL,
                 18, "PostgreSQL 18", null, DegradeKind.Reduced, "NOT ENFORCED constraint (PG18)"));
+            // A primary key or unique constraint WITHOUT OVERLAPS (temporal key). Below 18 the clause is skipped: the key
+            // is created over the same columns as a plain one.
+            rows.Add(new("temporal-key", "Temporal key (WITHOUT OVERLAPS)", Platform.PostgreSQL,
+                18, "PostgreSQL 18", null, DegradeKind.Skip, "WITHOUT OVERLAPS (PG18)"));
 
             // ---- MySQL (comparable major*100+minor via SchemaSmith_ServerVersionNum) ------------------------
             rows.Add(new("invisible-index", "Invisible index", Platform.MySQL,
@@ -158,6 +162,10 @@ namespace Schema.Capabilities
             // gate compares against; the read gap is documented on MariaDbTable.Periods.
             rows.Add(new("application-time-period", "Application-time period", Platform.MariaDb,
                 1004, "MariaDB 10.4.3", null, DegradeKind.Reduced, "table without its PERIOD FOR clause"));
+            // A unique or primary key WITHOUT OVERLAPS over a period (10.5.3). Below it the key is created over the
+            // period's end and start columns -- what the engine itself lists for a temporal key -- without the clause.
+            rows.Add(new("temporal-key", "Temporal key (WITHOUT OVERLAPS)", Platform.MariaDb,
+                1005, "MariaDB 10.5.3", null, DegradeKind.Reduced, "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)"));
 
             // Declared sequences (Sequences/*.json) arrived with CREATE SEQUENCE in MariaDB 10.3; below it a declared
             // one is skipped. CREATE SEQUENCE ... AS <type> is 11.5+; below it every sequence is a signed bigint.

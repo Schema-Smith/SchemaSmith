@@ -854,6 +854,10 @@ The `SYSTEM_TIME` period is not listed here. MariaDB reports it alongside applic
 table already declares that state through `IsSystemVersioned` — carrying it in both places would let a
 package contradict itself.
 
+A unique key or primary key can be declared over the period: name it last in `IndexColumns` and set
+`WithoutOverlaps: true` on the index (MariaDB 10.5.3+), and rows with the same values in the other key parts
+may not have overlapping periods. See [MySQL index extras](schema-packages.md#mysql-index-extras).
+
 #### DropPeriodsRemovedFromProduct
 
 A period on the table that the package no longer declares is only removed if you ask for it.

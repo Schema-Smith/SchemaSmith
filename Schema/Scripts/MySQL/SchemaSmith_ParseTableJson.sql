@@ -802,6 +802,11 @@ BEGIN
         IsUnique TINYINT DEFAULT 0,
         IndexType VARCHAR(20) DEFAULT 'BTREE',
         IndexColumns TEXT NOT NULL,
+        -- A temporal key (MariaDB): the last key part names a period. CompareColumns is the key as the catalog lists it
+        -- (the period's end and start columns in its place), EmitColumns the key as this target can build it.
+        WithoutOverlaps TINYINT DEFAULT 0,
+        CompareColumns TEXT DEFAULT NULL,
+        EmitColumns TEXT DEFAULT NULL,
         IsVisible TINYINT DEFAULT 1,
         -- MySQL's index comment ceiling is 1024 characters. No pre-validation -- see the Tables
         -- temp table Comment column above for the same convention.
@@ -822,7 +827,7 @@ BEGIN
             IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Name'))) IS NOT NULL
                AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables st WHERE st.TableName = SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Name'))))) THEN
                 INSERT INTO _SchemaSmith_Indexes (
-                    TableName, IndexName, IsPrimaryKey, IsUnique, IndexType, IndexColumns, IsVisible, Comment, ShouldApply, ShouldApplyExpression, VariantName
+                    TableName, IndexName, IsPrimaryKey, IsUnique, IndexType, IndexColumns, WithoutOverlaps, IsVisible, Comment, ShouldApply, ShouldApplyExpression, VariantName
                 )
                 SELECT
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Name')))) AS TableName,
@@ -831,6 +836,7 @@ BEGIN
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Unique'))), SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].PrimaryKey'))), 0) AS IsUnique,
                     COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].IndexType')))), ''), 'BTREE') AS IndexType,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].IndexColumns'))) AS IndexColumns,
+                    COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].WithoutOverlaps'))), 0) AS WithoutOverlaps,
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Visible'))), 1) AS IsVisible,
                     COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Description')))), ''),
                          NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Comment')))), '')) AS Comment,
@@ -1072,6 +1078,23 @@ BEGIN
         END WHILE;
         SET v_PdOuterIdx = v_PdOuterIdx + 1;
     END WHILE;
+
+    -- A temporal key's last part is a period, which the catalog lists as its end and start columns (in that order): that
+    -- is the key's compare form. The emit form keeps the period and adds WITHOUT OVERLAPS where the engine has it
+    -- (MariaDB 10.5.3) and is the compare form below -- the same key over the period's columns, the recorded downgrade.
+    UPDATE _SchemaSmith_Indexes i
+      JOIN _SchemaSmith_Periods pd
+        ON pd.TableName = i.TableName
+       AND SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(pd.PeriodName))
+           = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(TRIM(SUBSTRING_INDEX(i.IndexColumns, ',', -1))))
+       SET i.CompareColumns = CONCAT(SUBSTRING(i.IndexColumns, 1, CHAR_LENGTH(i.IndexColumns) - CHAR_LENGTH(SUBSTRING_INDEX(i.IndexColumns, ',', -1))),
+                                     pd.EndColumn, ',', pd.StartColumn)
+     WHERE i.WithoutOverlaps = 1;
+    UPDATE _SchemaSmith_Indexes
+       SET CompareColumns = COALESCE(CompareColumns, IndexColumns),
+           EmitColumns = CASE WHEN WithoutOverlaps = 1 AND SchemaSmith_SupportsWithoutOverlaps() = 1 THEN CONCAT(IndexColumns, ' WITHOUT OVERLAPS')
+                              WHEN WithoutOverlaps = 1 THEN COALESCE(CompareColumns, IndexColumns)
+                              ELSE IndexColumns END;
 
 
     -- Partitioning (#partitioning, K3): the ORDERED per-partition list. Order is load-bearing -- RANGE

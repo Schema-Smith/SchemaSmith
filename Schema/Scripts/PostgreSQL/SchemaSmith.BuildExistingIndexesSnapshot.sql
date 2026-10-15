@@ -19,6 +19,8 @@ DECLARE
   -- NullsNotDistinct is neutralised to false below 15 (override-aware) in the emit procs; the emitted
   -- index therefore physically lacks the clause, so FALSE-vs-FALSE produces no phantom churn.
   v_nnd_expr TEXT := CASE WHEN (current_setting('server_version_num')::int / 10000) >= 15 THEN 'idx.indnullsnotdistinct' ELSE 'FALSE' END;
+  -- pg_constraint.conperiod (WITHOUT OVERLAPS) is 18+, read the same way for the same reason.
+  v_wo_expr TEXT := CASE WHEN (current_setting('server_version_num')::int / 10000) >= 18 THEN 'COALESCE(con.conperiod, FALSE)' ELSE 'FALSE' END;
 BEGIN
   -- Session-scoped snapshot of existing indexes, consumed by ModifiedTableQuench,
   -- IndexOnlyQuench, and MissingIndexesAndConstraintsQuench. Extracted to one proc so the
@@ -73,6 +75,7 @@ BEGIN
                 ELSE (regexp_match(array_to_string(i.reloptions, ','), 'fillfactor=(\d+)') ) [1] ::int
                 END AS "FillFactor",
            %s AS "NullsNotDistinct",
+           %s AS "WithoutOverlaps",
            -- Storage parameters (the WITH clause), canonicalised to match the declared side: reloptions is
            -- already key=value strings, sorted so order does not matter, with fillfactor removed because
            -- FillFactor above owns it. An index with only fillfactor yields '' here and compares equal to a
@@ -86,5 +89,5 @@ BEGIN
       JOIN pg_index idx ON idx.indrelid = to_regclass('"' || t."Schema" || '"' ||  '.' || '"' ||  t."Name" || '"')
       JOIN pg_class i ON i.oid = idx.indexrelid
       LEFT JOIN pg_catalog.pg_constraint con ON con.contype IN ('p','u') AND con.conrelid = idx.indrelid AND con.conname = i.relname
-  $snapshot$, v_nnd_expr);
+  $snapshot$, v_nnd_expr, v_wo_expr);
 END $$;

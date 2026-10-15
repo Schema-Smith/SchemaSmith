@@ -3380,6 +3380,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- MySQL's index comment ceiling is 1024 characters; MAX() alongside the other per-index
         -- aggregates below since INDEX_COMMENT is constant across a composite index's key parts.
         IndexComment VARCHAR(1024),
+        WithoutOverlaps TINYINT NOT NULL DEFAULT 0,
         TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         PRIMARY KEY (TableName, IndexName),
@@ -3449,6 +3450,14 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     UPDATE _SchemaSmith_IdxDetectSnap
        SET TableKey = SchemaSmith_IdentifierKey(TableName),
            IndexKey = SchemaSmith_NameKeyCI(IndexName);
+    -- Whether a unique key is WITHOUT OVERLAPS is in the catalog from MariaDB 11.4 (KEY_PERIOD_USAGE); below it the
+    -- flag stays 0 and the compare does not read it, so a declared temporal key is compared by its columns alone.
+    IF VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1104 THEN
+        UPDATE _SchemaSmith_IdxDetectSnap
+           SET WithoutOverlaps = 1
+         WHERE NonUnique = 0
+           AND SchemaSmith_IndexPeriodJson(p_DatabaseName, TableName, IndexName) IS NOT NULL;
+    END IF;
 
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectNames;
@@ -3508,8 +3517,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             AND s2.IndexKey = i.IndexKey
       )
       -- Old index exists with same columns (compare normalized column list)
-      AND CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) = CAST(snap.NormColumns AS BINARY)
+      AND CAST(SchemaSmith_NormalizeIndexColumns(i.CompareColumns) AS BINARY) = CAST(snap.NormColumns AS BINARY)
       -- Same uniqueness
+      AND NOT (VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1104 AND SchemaSmith_SupportsWithoutOverlaps() = 1 AND (snap.WithoutOverlaps = 1) <> (i.WithoutOverlaps = 1))
       AND i.IsUnique = (snap.NonUnique = 0);
 
     -- Handle renames
@@ -3651,9 +3661,10 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           -- respelled by the one-statement swap below (1553 sends it there).
           (VERSION() LIKE '%MariaDB%' AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY))
           -- Or columns differ
-          OR CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
+          OR CAST(SchemaSmith_NormalizeIndexColumns(i.CompareColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
           -- Or uniqueness differs
           OR i.IsUnique != (snap.NonUnique = 0)
+          OR (VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1104 AND SchemaSmith_SupportsWithoutOverlaps() = 1 AND (snap.WithoutOverlaps = 1) <> (i.WithoutOverlaps = 1))
           -- Or the kind differs (BTREE, HASH, SPATIAL). This detector never compared it, so a real change of kind
           -- was not applied; SchemaSmith_IndexTypesMatch is also what IndexOnlyQuench uses.
           OR SchemaSmith_IndexTypesMatch(i.IndexType, snap.IndexType, p_DatabaseName, i.TableName) = 0

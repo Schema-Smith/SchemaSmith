@@ -962,6 +962,7 @@ Every entry in the `Indexes` array defines an index or key constraint on the tab
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `NullsNotDistinct` | bool | `false` | On a unique index or unique constraint, treats NULLs as equal, so only one row may hold NULL in the key (`NULLS NOT DISTINCT`). PostgreSQL 15+; below that the clause is dropped per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). |
+| `WithoutOverlaps` | bool | `false` | On a primary key or unique constraint whose last column is a range or multirange: rows with the same values in the other columns may not have overlapping ranges (`WITHOUT OVERLAPS`, a temporal key). The backing index is GiST, which the flag implies -- no `AccessMethod` is needed, and extraction writes none -- and a scalar key column needs the `btree_gist` extension. PostgreSQL 18+; below that the key is created without the clause per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). |
 | `Deferrable` | bool | `false` | `DEFERRABLE` on a primary key or unique constraint. A plain index cannot be deferred, so it applies only to the constraint forms. |
 | `InitiallyDeferred` | bool | `false` | `INITIALLY DEFERRED` on a deferrable primary key or unique constraint: the check waits for commit unless a transaction asks otherwise. |
 | `Clustered` | bool | `false` | Marks the index as the table's cluster index (`ALTER TABLE … CLUSTER ON`), which PostgreSQL's `CLUSTER` command then uses. It does not reorder rows itself. Clearing it runs `SET WITHOUT CLUSTER`. |
@@ -988,6 +989,8 @@ comparison is order-insensitive, because PostgreSQL returns `reloptions` in its 
 ### MySQL index extras
 
 `IndexType` (e.g., `BTREE`, `HASH`), `Visible`/`Invisible` flag where supported.
+
+**MariaDB: temporal keys.** `WithoutOverlaps: true` on a primary key or unique key whose last `IndexColumns` part names one of the table's [`Periods`](configuration.md#application-time-periods) deploys `UNIQUE KEY (col, period WITHOUT OVERLAPS)`: rows with the same values in the other parts may not have overlapping periods (MariaDB 10.5.3+). The catalog lists such a key over the period's end and start columns, and the deploy compares a declared key the same way, so a redeploy leaves it alone on every version. Extraction names the period last and writes the flag from 11.4, where the catalog can say which period a key is over; below that -- the same blind spot the periods themselves have -- it reads back as a plain unique key over those two columns. Below 10.5.3 the key is created over the period's columns without the clause, per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). `--Validate` stops a `WithoutOverlaps` on a key that is not unique (`SS-IDX-002`) or whose last part is not a declared period (`SS-IDX-003`).
 
 ### Examples
 

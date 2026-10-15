@@ -481,6 +481,8 @@ public static class ForgeKindler
                 new("SchemaSmith.ServerVersionNum.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.IndexNullsNotDistinct.sql"),
+                // PG18-adaptive conperiod read: a primary key or unique constraint declared WITHOUT OVERLAPS.
+                new("SchemaSmith.ConstraintWithoutOverlaps.sql"),
                 new("SchemaSmith.ConstraintEnforced.sql"),
                 new("SchemaSmith.CheckPredicate.sql"),
                 new("SchemaSmith.ColumnCompression.sql"),
@@ -624,6 +626,10 @@ public static class ForgeKindler
                 // live column is that shape: the generator folds it to JSON, the parse compares a declared JSON with it.
                 new("SchemaSmith_JsonAliasCheck.sql"),
                 new("SchemaSmith_IsJsonAliasColumn.sql"),
+                // Temporal keys: the gate (MariaDB 10.5.3; MySQL never) and the period a key is declared over (NULL on
+                // MySQL; the MariaDb override reads KEY_PERIOD_USAGE from 11.4).
+                new("SchemaSmith_SupportsWithoutOverlaps.sql"),
+                new("SchemaSmith_IndexPeriodJson.sql"),
                 new("SchemaSmith_IsSystemTimePeriodColumn.sql"),
                 new("SchemaSmith_SetSystemVersioningAlterHistory.sql"),
                 new("SchemaSmith_TablePeriodsJson.sql"),

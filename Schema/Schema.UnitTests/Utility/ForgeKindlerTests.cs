@@ -377,7 +377,8 @@ public class ForgeKindlerTests
         //   recorded after a successful object script, read before the next run of the same script).
         // +3 on PostgreSQL = ConstraintEnforced (PG18-adaptive conenforced read) + CheckPredicate (one read of a live check's
         //   predicate for extraction, compare and the expression map) + ConstraintStateQuench (Enforced / Validated state).
-        Assert.That(postgres.Length, Is.EqualTo(60));
+        // +1 on PostgreSQL = ConstraintWithoutOverlaps (PG18-adaptive conperiod read for temporal keys).
+        Assert.That(postgres.Length, Is.EqualTo(61));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
@@ -509,7 +510,8 @@ public class ForgeKindlerTests
         // +1 on the MySQL family = SequenceQuench (declared MariaDB sequences; the MySQL file only refuses).
         // +1 on the MySQL family = ColumnLevelCheck (NULL on MySQL; MariaDb override reads the column-level check).
         // +2 on the MySQL family = JsonAliasCheck + IsJsonAliasColumn (MariaDB's rendering of a JSON column).
-        Assert.That(mysql.Length, Is.EqualTo(84));
+        // +2 on the MySQL family = SupportsWithoutOverlaps + IndexPeriodJson (temporal keys; MariaDb override reads the catalog).
+        Assert.That(mysql.Length, Is.EqualTo(86));
     }
 
     [Test]

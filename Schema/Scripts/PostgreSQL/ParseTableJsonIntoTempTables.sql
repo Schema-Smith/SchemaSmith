@@ -269,7 +269,9 @@
            COALESCE((celem ->> 'Clustered')::BOOLEAN, false) AS "Clustered",
            REGEXP_REPLACE(COALESCE(celem ->> 'IndexColumns', ''), '\s*,\s*', ',', 'g') AS "IndexColumns",
            COALESCE(celem ->> 'IncludeColumns', '') AS "IncludeColumns",
-           COALESCE(celem ->> 'AccessMethod', 'btree') AS "AccessMethod",
+           -- A temporal key's backing index is GiST, implied by the flag rather than declared.
+           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 18 AND COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) THEN 'gist'
+                ELSE COALESCE(celem ->> 'AccessMethod', 'btree') END AS "AccessMethod",
            COALESCE(celem ->> 'Tablespace', '') AS "Tablespace",
            COALESCE(celem ->> 'FilterExpression', '') AS "FilterExpression",
            celem ->> 'Description' AS "Description",
@@ -280,6 +282,10 @@
            -- declared value drives the unsupported-feature policy (fail | warn-with-downgrade).
            CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 15 THEN COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) ELSE false END AS "NullsNotDistinct",
            COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) AS "NullsNotDistinctDeclared",
+           -- WITHOUT OVERLAPS is PostgreSQL 18: the effective value drives compare + emit (false below 18, so an old
+           -- target neither churns nor emits the clause), the declared value drives the unsupported-feature policy.
+           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 18 THEN COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) ELSE false END AS "WithoutOverlaps",
+           COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) AS "WithoutOverlapsDeclared",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName",
            CASE WHEN p_UpdateFillFactor THEN true ELSE COALESCE((celem ->> 'UpdateFillFactor')::BOOLEAN, false) END AS "UpdateFillFactor",

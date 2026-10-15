@@ -47,7 +47,7 @@ BEGIN
                 GROUP_CONCAT(c.ColumnScript ORDER BY c.OrdinalPosition SEPARATOR ', '),
                 COALESCE(t.AutoIncrementKeyClause, ''),
                 COALESCE(
-                    (SELECT CONCAT(', PRIMARY KEY (', i.IndexColumns, ')')
+                    (SELECT CONCAT(', PRIMARY KEY (', i.EmitColumns, ')')
                      FROM _SchemaSmith_Indexes i
                      WHERE i.TableName = t.TableName AND i.IsPrimaryKey = 1),
                     ''
@@ -417,6 +417,24 @@ BEGIN
         END IF;
     END IF;
 
+    -- A key declared WITHOUT OVERLAPS where the engine has no such clause (MariaDB below 10.5.3; MySQL, which has no
+    -- periods) is created over the period's end and start columns instead -- the same columns the engine would list
+    -- for it -- and the downgrade is recorded. Under the fail policy SchemaSmith_RefuseUnsupportedIndexes stopped
+    -- the run before this.
+    IF SchemaSmith_SupportsWithoutOverlaps() = 0
+       AND EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i WHERE i.WithoutOverlaps = 1) THEN
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  Key created over the period''s columns, without WITHOUT OVERLAPS (requires MariaDB 10.5.3, MySQL unsupported - downgraded): ',
+               SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName))
+        FROM _SchemaSmith_Indexes i
+        WHERE i.WithoutOverlaps = 1;
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)',
+               CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)), 'downgraded'
+        FROM _SchemaSmith_Indexes i
+        WHERE i.WithoutOverlaps = 1;
+    END IF;
+
     -- =========================================================================
     -- Degrade per-column history exclusion below MariaDB 10.3.4 / on MySQL at any version (#408).
     -- Mirrors the application-time-period guard directly above, and for the same reason: ParseTableJson
@@ -541,7 +559,7 @@ BEGIN
                       GROUP_CONCAT(c.ColumnScript ORDER BY c.OrdinalPosition SEPARATOR ', '),
                       COALESCE(t.AutoIncrementKeyClause, ''),
                       COALESCE(
-                          (SELECT CONCAT(', PRIMARY KEY (', i.IndexColumns, ')')
+                          (SELECT CONCAT(', PRIMARY KEY (', i.EmitColumns, ')')
                            FROM _SchemaSmith_Indexes i
                            WHERE i.TableName = t.TableName AND i.IsPrimaryKey = 1),
                           ''

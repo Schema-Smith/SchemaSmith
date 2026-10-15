@@ -68,7 +68,9 @@ BEGIN
            COALESCE((celem ->> 'Clustered')::BOOLEAN, false) AS "Clustered",
            REGEXP_REPLACE(COALESCE(celem ->> 'IndexColumns', ''), '\s*,\s*', ',', 'g') AS "IndexColumns",
            COALESCE(celem ->> 'IncludeColumns', '') AS "IncludeColumns",
-           COALESCE(celem ->> 'AccessMethod', 'btree') AS "AccessMethod",
+           -- A temporal key's backing index is GiST, implied by the flag rather than declared.
+           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 18 AND COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) THEN 'gist'
+                ELSE COALESCE(celem ->> 'AccessMethod', 'btree') END AS "AccessMethod",
            -- IndexOnlyQuench builds its OWN temp_indexes rather than reusing the one
            -- ParseTableJsonIntoTempTables makes, so every index column has to be declared in both.
            COALESCE(celem ->> 'Tablespace', '') AS "Tablespace",
@@ -81,6 +83,10 @@ BEGIN
            -- raw declared value drives the unsupported-feature policy (fail | warn-with-downgrade) below.
            CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 15 THEN COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) ELSE false END AS "NullsNotDistinct",
            COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) AS "NullsNotDistinctDeclared",
+           -- WITHOUT OVERLAPS is PostgreSQL 18: the effective value drives compare + emit (false below 18, so an old
+           -- target neither churns nor emits the clause), the declared value drives the unsupported-feature policy.
+           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 18 THEN COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) ELSE false END AS "WithoutOverlaps",
+           COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) AS "WithoutOverlapsDeclared",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName",
            CASE WHEN p_UpdateFillFactor THEN true ELSE COALESCE((celem ->> 'UpdateFillFactor')::BOOLEAN, false) END AS "UpdateFillFactor",
@@ -127,6 +133,22 @@ BEGIN
                  "TableSchema" || '.' || "TableName" || '.' || "Name", 'downgraded'
             FROM temp_indexes
             WHERE "NullsNotDistinctDeclared";
+      END IF;
+    END IF;
+
+    IF "SchemaSmith"."ServerVersionNum"() < 18 THEN
+      IF "SchemaSmith"."UnsupportedFeaturePolicy"() = 'fail'
+         AND EXISTS (SELECT 1 FROM temp_indexes WHERE "WithoutOverlapsDeclared") THEN
+        RAISE EXCEPTION 'WITHOUT OVERLAPS requires PostgreSQL 18 (detected major %); key(s): %',
+          "SchemaSmith"."ServerVersionNum"(),
+          (SELECT STRING_AGG("TableSchema" || '.' || "TableName" || '.' || "Name", ', ')
+             FROM temp_indexes WHERE "WithoutOverlapsDeclared");
+      ELSE
+        INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+          SELECT pg_backend_pid(), 'WITHOUT OVERLAPS (PG18)',
+                 "TableSchema" || '.' || "TableName" || '.' || "Name", 'downgraded'
+            FROM temp_indexes
+            WHERE "WithoutOverlapsDeclared";
       END IF;
     END IF;
 
@@ -203,6 +225,7 @@ BEGIN
                                    ei."IndexName", 'filter', i."FilterExpression", COALESCE(ei."FilterExpression", '')))
                          AND COALESCE(i."AccessMethod", 'btree') = COALESCE(ei."AccessMethod", 'btree')
                          AND COALESCE(i."NullsNotDistinct", false) = COALESCE(ei."NullsNotDistinct", false)
+                         AND COALESCE(i."WithoutOverlaps", false) = COALESCE(ei."WithoutOverlaps", false)
                          AND COALESCE(i."Deferrable", false) = COALESCE(ei."Deferrable", false)
                          AND COALESCE(i."InitiallyDeferred", false) = COALESCE(ei."InitiallyDeferred", false)
                          AND COALESCE(i."StorageParameters", '') = COALESCE(ei."StorageParameters", '')
@@ -249,6 +272,7 @@ BEGIN
                             OR COALESCE(i."FilterExpression", '') != COALESCE(ei."FilterExpression", '')
                             OR COALESCE(i."AccessMethod", 'btree') != COALESCE(ei."AccessMethod", 'btree')
                             OR COALESCE(i."NullsNotDistinct", false) != COALESCE(ei."NullsNotDistinct", false)
+                            OR COALESCE(i."WithoutOverlaps", false) != COALESCE(ei."WithoutOverlaps", false)
                             OR COALESCE(i."Deferrable", false) != COALESCE(ei."Deferrable", false)
                             OR COALESCE(i."InitiallyDeferred", false) != COALESCE(ei."InitiallyDeferred", false)
                             -- A storage-parameter change (hnsw m, ivfflat lists, brin pages_per_range, ...)
@@ -368,7 +392,7 @@ BEGIN
                                      THEN 'PRIMARY KEY ' 
                                      ELSE 'UNIQUE ' || CASE WHEN ti."NullsNotDistinct" THEN 'NULLS NOT DISTINCT ' ELSE '' END
                                      END ||
-                                '(' || "SchemaSmith"."QuoteIndexColumnList"(ti."IndexColumns") || ')' ||
+                                '(' || "SchemaSmith"."QuoteIndexColumnList"(ti."IndexColumns") || CASE WHEN ti."WithoutOverlaps" THEN ' WITHOUT OVERLAPS' ELSE '' END || ')' ||
                                 -- INCLUDE and the storage parameters, as MissingIndexesAndConstraintsQuench (PG-031).
                                 CASE WHEN NULLIF(ti."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(ti."IncludeColumns") || ')' ELSE '' END ||
                                 -- Positive gate, not a deny-list: an extension AM (e.g. pgvector's hnsw/ivfflat)

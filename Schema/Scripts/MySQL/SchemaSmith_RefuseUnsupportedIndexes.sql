@@ -45,6 +45,22 @@ BEGIN
       SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
     END IF;
   END IF;
+
+  -- Policy-gated, unlike the refusal above: a key declared WITHOUT OVERLAPS where the engine has no such clause
+  -- (MariaDB below 10.5.3; MySQL, which has no periods) can be built over the period's columns instead, so under the
+  -- warn policy the callers record that downgrade and emit it. Under fail it is refused here, before anything is made.
+  IF SchemaSmith_SupportsWithoutOverlaps() = 0 AND SchemaSmith_UnsupportedFeaturePolicy() = 'fail'
+     AND EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i WHERE i.WithoutOverlaps = 1 AND i.ShouldApply = 1) THEN
+    SELECT GROUP_CONCAT(CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName))
+                        ORDER BY i.TableName, i.IndexName SEPARATOR ', ')
+      INTO v_List
+      FROM _SchemaSmith_Indexes i
+     WHERE i.WithoutOverlaps = 1 AND i.ShouldApply = 1;
+    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(),
+      CONCAT('  WITHOUT OVERLAPS requires MariaDB 10.5.3 (MySQL unsupported) (UnsupportedFeaturePolicy=fail): ', v_List));
+    SET @ss_msg = LEFT(CONCAT('WITHOUT OVERLAPS needs MariaDB 10.5.3 (UnsupportedFeaturePolicy=fail): ', v_List), 128);
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+  END IF;
 END //
 
 DELIMITER ;

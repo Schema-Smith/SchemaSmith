@@ -59,6 +59,95 @@ public class CoherenceCheckTests
         return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
     }
 
+    private static Finding[] RunOnMaria(Schema.Domain.MariaDb.MariaDbTable table)
+    {
+        var template = new Template { Name = "T" };
+        template.Tables.Add(table);
+        var product = new Product { Name = "Acme", Platform = Platform.MariaDb, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    private static Finding[] RunOnPgTable(Schema.Domain.PostgreSQL.PostgreSqlTable table)
+    {
+        var template = new Template { Name = "T" };
+        template.Tables.Add(table);
+        var product = new Product { Name = "Acme", Platform = Platform.PostgreSQL, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    // ---- Temporal keys (SS-IDX-002 / SS-IDX-003) ----
+
+    private static Schema.Domain.MariaDb.MariaDbTable MariaRates(string keyColumns, bool withoutOverlaps, bool unique = true, bool withPeriod = true)
+    {
+        var table = new Schema.Domain.MariaDb.MariaDbTable
+        {
+            Name = "`rates`",
+            Columns =
+            {
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "`id`", DataType = "INT" },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "`s`", DataType = "DATE" },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "`e`", DataType = "DATE" }
+            },
+            Indexes = { new Schema.Domain.MariaDb.MariaDbIndex { Name = "`uk_rates`", IndexColumns = keyColumns, Unique = unique, WithoutOverlaps = withoutOverlaps } }
+        };
+        if (withPeriod) table.Periods.Add(new Schema.Domain.MariaDb.TablePeriod { Name = "`p`", StartColumn = "`s`", EndColumn = "`e`" });
+        return table;
+    }
+
+    [Test]
+    public void MariaDbTemporalKey_PeriodNamedLast_IsNotAMissingColumn()
+    {
+        Assert.That(RunOnMaria(MariaRates("`id`,`p`", withoutOverlaps: true)).Where(f => f.Code.StartsWith("SS-IDX")), Is.Empty);
+    }
+
+    [Test]
+    public void MariaDbKey_NamingAPeriod_WithoutTheFlag_IsAMissingColumn()
+    {
+        Assert.That(RunOnMaria(MariaRates("`id`,`p`", withoutOverlaps: false)).Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-001" }));
+    }
+
+    [Test]
+    public void MariaDbTemporalKey_WhoseLastPartIsNotAPeriod_IsError()
+    {
+        var findings = RunOnMaria(MariaRates("`id`,`s`", withoutOverlaps: true));
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-003" }));
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+    }
+
+    [Test]
+    public void MariaDbTemporalKey_OnATableWithNoPeriods_SaysSo()
+    {
+        var findings = RunOnMaria(MariaRates("`id`,`p`", withoutOverlaps: true, withPeriod: false));
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-003", "SS-IDX-001" }));
+        Assert.That(findings[0].Message, Does.Contain("declares none"));
+    }
+
+    [Test]
+    public void MariaDbTemporalKey_ThatIsNotUnique_IsError()
+    {
+        Assert.That(RunOnMaria(MariaRates("`id`,`p`", withoutOverlaps: true, unique: false)).Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-002" }));
+    }
+
+    [Test]
+    public void PostgreSqlTemporalKey_OnAUniqueIndexThatIsNotAConstraint_IsError()
+    {
+        var table = new Schema.Domain.PostgreSQL.PostgreSqlTable
+        {
+            Name = "rates",
+            Schema = "public",
+            Columns =
+            {
+                new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" },
+                new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "valid", DataType = "daterange" }
+            },
+            Indexes = { new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "uq_rates", IndexColumns = "id,valid", Unique = true, WithoutOverlaps = true } }
+        };
+        Assert.That(RunOnPgTable(table).Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-002" }));
+
+        table.Indexes[0].UniqueConstraint = true;
+        Assert.That(RunOnPgTable(table), Is.Empty);
+    }
+
     // ---- Product MinimumVersion the engine cannot resolve (SS-VER-001) ----
     //
     // A declared MinimumVersion the deploy cannot parse aborts the run before any object is touched --

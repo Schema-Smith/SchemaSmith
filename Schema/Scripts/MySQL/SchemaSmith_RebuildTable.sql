@@ -555,7 +555,7 @@ BEGIN
     -- engine's own 1075 -- at step 1, which is fully reversible -- and it is exactly the same failure a
     -- FRESH create of that same declaration would produce. That is a package defect surfaced identically,
     -- so it gets no bespoke pre-check here that would duplicate the engine's own validation.
-    SELECT CONCAT(', PRIMARY KEY (', MAX(i.IndexColumns), ')')
+    SELECT CONCAT(', PRIMARY KEY (', MAX(i.EmitColumns), ')')
       INTO v_PrimaryKeyClause
       FROM _SchemaSmith_Indexes i
      WHERE i.TableKey = v_TableKey

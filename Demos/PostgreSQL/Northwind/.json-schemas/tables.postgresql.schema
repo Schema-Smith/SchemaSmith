@@ -143,6 +143,10 @@
           "StorageParameters": {
             "type": "object"
           },
+          "WithoutOverlaps": {
+            "type": "boolean",
+            "description": "PostgreSQL 18+. On a primary key or unique constraint whose last column is a range or multirange: rows with the same other key values may not have overlapping ranges (WITHOUT OVERLAPS). The backing index is GiST (a scalar key column needs the btree_gist extension). Below 18 the key is created without the clause and a downgrade is recorded."
+          },
           "Extensions": {}
         },
         "additionalProperties": false,

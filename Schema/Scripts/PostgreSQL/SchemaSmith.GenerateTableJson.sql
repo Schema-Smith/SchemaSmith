@@ -18,7 +18,20 @@ CREATE OR REPLACE FUNCTION "SchemaSmith"."GenerateTableJSON"(p_Schema varchar(20
   LANGUAGE plpgsql
 AS $function$
 DECLARE result_string TEXT;
+        skipped_fk RECORD;
 BEGIN
+-- A temporal foreign key (PostgreSQL 18, FOREIGN KEY (..., PERIOD p) REFERENCES ... (..., PERIOD q)) is not modelled:
+-- written as a plain key it would deploy as one, which is a different constraint, so it is left out and said so.
+-- The warning reaches the SchemaTongs log through the connection's notice channel.
+FOR skipped_fk IN SELECT con.conname
+                    FROM pg_catalog.pg_constraint con
+                   WHERE con.conrelid = ('"' || p_Schema || '"."' || p_Table || '"')::regclass
+                     AND con.contype = 'f'
+                     AND "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid)
+                   ORDER BY con.conname LOOP
+  RAISE WARNING 'Foreign key %.%.% uses PERIOD (a temporal foreign key), which is not modelled: left out of the package rather than written as a plain key.',
+    p_Schema, p_Table, skipped_fk.conname;
+END LOOP;
 SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
   INTO result_string
   FROM (SELECT t.table_schema AS "Schema",
@@ -87,7 +100,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                   WHERE a.attrelid = idx.indrelid
                                     AND idx > idx.indnkeyatts
                                     AND a.attnum = element) AS "IncludeColumns",
-                               (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') AS "AccessMethod",
+                               CASE WHEN "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid) THEN NULL
+                                    ELSE (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') END AS "AccessMethod",
                                "SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)) AS "FilterExpression",
                                '' AS "ShouldApplyExpression",
                                CASE WHEN 'fillfactor=100' = ANY(i.reloptions) THEN 100
@@ -95,6 +109,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                     ELSE (REGEXP_MATCH(ARRAY_TO_STRING(i.reloptions, ','), 'fillfactor=(\d+)') ) [1] ::int
                                     END AS "FillFactor",
                                "SchemaSmith"."IndexNullsNotDistinct"(idx.indexrelid) AS "NullsNotDistinct",
+                               "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid) AS "WithoutOverlaps",
                                COALESCE(con.condeferrable, FALSE) AS "Deferrable",
                                COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred",
                                -- reltablespace 0 means "the database default", which is NOT a declared
@@ -149,6 +164,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                           JOIN pg_catalog.pg_namespace fnsp ON fnsp.oid = frel.relnamespace
                           WHERE con.conrelid = ('"' || t.table_schema || '"."' || t.table_name || '"')::regclass
                             AND con.contype = 'f'
+                            AND NOT "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid)
                           ORDER BY con.conname) sub) AS "ForeignKeys",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))
                   FROM (SELECT con.conname AS "Name",

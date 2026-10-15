@@ -69,6 +69,7 @@ public class CapabilityDocumentationTests
 
         // ---- PostgreSQL ----
         ["PostgreSQL/nulls-not-distinct"] = "**`NULLS NOT DISTINCT`**",
+        ["PostgreSQL/temporal-key"] = "**`WITHOUT OVERLAPS`**",
         ["PostgreSQL/unlogged-sequence"] = "**Unlogged sequence**",
         ["PostgreSQL/expression-statistics"] = "**Expression statistics**",
         ["PostgreSQL/column-compression"] = "**Per-column compression**",
@@ -95,6 +96,7 @@ public class CapabilityDocumentationTests
         ["MariaDb/descending-index"] = "**Descending index key parts**",
         ["MariaDb/invisible-column"] = "**Invisible column**",
         ["MariaDb/application-time-period"] = "**Application-time period**",
+        ["MariaDb/temporal-key"] = "**Temporal key**",
         ["MariaDb/column-history-exclusion"] = "**Per-column history exclusion**",
         ["MariaDb/table-system-versioning"] = "**Table-level system versioning**",
         ["MariaDb/long-unique-key"] = "**Long unique key**",
