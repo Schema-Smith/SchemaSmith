@@ -696,6 +696,8 @@ Types this affects in practice: MariaDB `UUID` (10.7+), MySQL `VECTOR` (9.0+), S
 
 `CheckExpression`, `ComputedExpression`, `Persisted`, `Sparse`, `IsColumnSet`, `Collation`, `DataMaskFunction`, `AnsiPadding`, `FileStream` (see [FILESTREAM (SQL Server)](#filestream-sql-server)). Identity is part of the `DataType` string (`INT IDENTITY(1,1)`); `ROWGUIDCOL` likewise (`UNIQUEIDENTIFIER ROWGUIDCOL`).
 
+A bound rule or default (`sp_bindrule` / `sp_bindefault`, deprecated since SQL Server 2005) is not part of the package. SchemaTongs writes the column without it and logs a warning naming the rule or default, so a package extracted from such a table still deploys; a column's own `Default` constraint is unaffected.
+
 `IsColumnSet: true` declares `COLUMN_SET FOR ALL_SPARSE_COLUMNS` -- an XML column that aggregates the table's sparse columns. Available at the SQL Server 2008 floor, alongside `Sparse`. Adding a column set and the sparse columns it aggregates together in one deploy always works, whether the table is new or already exists. **Known limitation:** converting an *already-deployed* plain column into a column set in the same deploy that also introduces a brand-new sparse column is not supported -- the new sparse column commits before the conversion runs, and SQL Server refuses a column set on a table that already has a sparse column. The conversion works on its own (no new sparse columns in the same deploy, and none pre-existing on the table); combined with a new sparse column, it fails with SQL Server's own error.
 
 `BackfillExistingRows: true` populates rows that are **already in the table** when the column is added, using its

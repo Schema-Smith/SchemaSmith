@@ -164,6 +164,28 @@ IF OBJECT_ID('tempdb..#GraphKeyParts') IS NOT NULL DROP TABLE #GraphKeyParts
 CREATE TABLE #GraphKeyParts ([object_id] INT NOT NULL, [column_id] INT NOT NULL, [graph_type] INT NOT NULL, [PseudoName] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL)
 EXEC SchemaSmith.StageGraphKeyParts
 
+-- A bound rule or default (sp_bindrule / sp_bindefault, deprecated since SQL Server 2005) is not modelled. The column is
+-- written without it -- a bound default's text is a CREATE DEFAULT no column can carry -- and the warning says so.
+DECLARE @v_BoundWarning NVARCHAR(2000)
+DECLARE bound_objects CURSOR LOCAL FAST_FORWARD FOR
+  SELECT 'WARNING: Column ' + QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table) + '.' + QUOTENAME(sc.[name]) + ' has the bound ' + b.[Kind] + ' ' +
+         QUOTENAME(OBJECT_SCHEMA_NAME(b.[object_id])) + '.' + QUOTENAME(OBJECT_NAME(b.[object_id])) + ' (' + b.[Procedure] + '), which is not modelled: the column is written without it.'
+    FROM sys.columns sc
+    CROSS APPLY (SELECT [Kind] = 'rule', [Procedure] = 'sp_bindrule', [object_id] = sc.rule_object_id WHERE sc.rule_object_id <> 0
+                 UNION ALL
+                 SELECT 'default', 'sp_bindefault', d.[object_id] FROM sys.objects d WHERE d.[object_id] = sc.default_object_id AND d.parent_object_id = 0) b
+   WHERE sc.[object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table))
+   ORDER BY sc.column_id, b.[Kind]
+OPEN bound_objects
+FETCH NEXT FROM bound_objects INTO @v_BoundWarning
+WHILE @@FETCH_STATUS = 0
+BEGIN
+  RAISERROR('%s', 10, 100, @v_BoundWarning) WITH NOWAIT
+  FETCH NEXT FROM bound_objects INTO @v_BoundWarning
+END
+CLOSE bound_objects
+DEALLOCATE bound_objects
+
 -- Edge constraints (#graph, 2019+). sys.edge_constraints is read through a version-guarded dynamic statement into
 -- a temp table the static SELECT below reads, so this proc CREATEs on 2017 where the view does not exist. One row per
 -- clause; the constraint's own attributes repeat on each.
@@ -301,7 +323,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                                     CASE WHEN ic.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
                                                ELSE '' END AS [DataType],
                        CASE WHEN c.IS_NULLABLE = 'YES' THEN 'true' ELSE 'false' END AS [Nullable],
-		               NULLIF(SchemaSmith.fn_StripParenWrapping(COLUMN_DEFAULT), 'NULL') AS [Default],
+		               -- A bound default (parent_object_id 0) is left out; the warning at the top names it.
+		               CASE WHEN NOT EXISTS (SELECT 1 FROM sys.objects bd WHERE bd.[object_id] = sc.default_object_id AND bd.parent_object_id = 0)
+		                    THEN NULLIF(SchemaSmith.fn_StripParenWrapping(COLUMN_DEFAULT), 'NULL') END AS [Default],
                        -- A single-column check SQL Server named itself (CK__...) is the column's CheckExpression; one with a
                        -- name of its own stays in CheckConstraints under that name, which the fold used to lose. TOP 1 by
                        -- name: a second system-named check on the same column goes to CheckConstraints too, rather than

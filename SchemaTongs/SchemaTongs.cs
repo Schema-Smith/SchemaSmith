@@ -240,13 +240,21 @@ public class SchemaTongs
         var connectionFactory = GetConnectionFactory();
         var connection = connectionFactory.GetDbConnection(connectionString);
         connection.Open();
-        // The extraction routines say what they leave out through RAISE WARNING (a temporal foreign key, for one);
-        // without a listener the message dies in the driver and the package is silently short of it.
+        // The extraction routines say what they leave out through a warning message (a temporal foreign key on
+        // PostgreSQL, a bound rule on SQL Server); without a listener the message dies in the driver and the package
+        // is silently short of it.
         if (connection is NpgsqlConnection npgsql)
             npgsql.Notice += (_, e) =>
             {
                 if (string.Equals(e.Notice.Severity, "WARNING", StringComparison.OrdinalIgnoreCase))
                     _progressLog.Warn($"    WARNING: {e.Notice.MessageText}");
+            };
+        if (connection is SqlConnection sqlServer)
+            sqlServer.InfoMessage += (_, e) =>
+            {
+                foreach (SqlError error in e.Errors)
+                    if (error.Class <= 10 && error.Message.StartsWith("WARNING: ", StringComparison.Ordinal))
+                        _progressLog.Warn($"    {error.Message}");
             };
         return connection;
     }
