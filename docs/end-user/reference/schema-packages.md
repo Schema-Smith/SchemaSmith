@@ -716,7 +716,9 @@ SQL Server pads every column of one whatever `ANSI_PADDING` says.
 SQL Server pads a column whenever it is altered, so a change to a column declared `AnsiPadding: false` -- its length,
 type, nullability or collation -- replaces it rather than altering it: a new column is added unpadded, the data is
 copied across, and the old one is dropped. Its defaults and indexes are put back by the same deploy, and it moves
-to the end of the table, as an identity removal does.
+to the end of the table, as an identity removal does. A table with a [`RebuildPolicy`](configuration.md#rebuildpolicy)
+that sets `OnOrderMismatch` treats that pending move as column-order drift, so the same deploy rebuilds the table
+instead and the column stays where the package declares it.
 
 > **Note:** Microsoft has deprecated `ANSI_PADDING OFF`. Use it to keep a legacy column as it is, not for new design.
 

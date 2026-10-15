@@ -688,7 +688,7 @@ BEGIN TRY
   ----------------------------------------------------------------------------------------------------
   RAISERROR('Detect declared-vs-deployed column order drift', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#DeclaredColumnOrder') IS NOT NULL DROP TABLE #DeclaredColumnOrder
-  SELECT c.[Schema], c.[TableName], [DeclaredPos] = c.[_RowId], [LivePos] = ic.ORDINAL_POSITION
+  SELECT c.[Schema], c.[TableName], c.[ColumnName], [DeclaredPos] = c.[_RowId], [LivePos] = ic.ORDINAL_POSITION
     INTO #DeclaredColumnOrder
     FROM #Columns c WITH (NOLOCK)
     JOIN INFORMATION_SCHEMA.COLUMNS ic
@@ -704,6 +704,30 @@ BEGIN TRY
                                              AND b.[TableName] = a.[TableName]
     WHERE a.[DeclaredPos] < b.[DeclaredPos]
       AND a.[LivePos] > b.[LivePos]
+
+  -- A column this run would swap, or drop and add back -- an identity removal, an encryption change, a column
+  -- declared unpadded, a column set or computed column -- can only come back at the END of the table, so when the
+  -- package declares another column after it the result is the drift the inversion test above finds on the NEXT
+  -- deploy. Counting the pending move now lets OnOrderMismatch rebuild in THIS deploy, with the column where it is
+  -- declared, instead of moving it and rebuilding next time. Nothing changes without OnOrderMismatch: the move runs
+  -- and the column goes to the end, as documented. SQL Server only -- the other engines alter every such change in
+  -- place. A trailing column that is itself moving is not counted as "after", so moves confined to the tail elect
+  -- nothing.
+  INSERT INTO #RebuildOrderMismatch ([Schema], [TableName])
+  SELECT DISTINCT cc.[Schema], cc.[TableName]
+    FROM #ColumnChanges cc WITH (NOLOCK)
+    JOIN #DeclaredColumnOrder moved WITH (NOLOCK)
+      ON moved.[Schema] = cc.[Schema] AND moved.[TableName] = cc.[TableName] AND moved.[ColumnName] = cc.[ColumnName]
+   WHERE cc.[DropOnly] = 0
+     AND (cc.MustSwapColumn = 1 OR cc.MustDropAndRecreate = 1)
+     AND EXISTS (SELECT 1 FROM #DeclaredColumnOrder later WITH (NOLOCK)
+                  WHERE later.[Schema] = cc.[Schema] AND later.[TableName] = cc.[TableName]
+                    AND later.[DeclaredPos] > moved.[DeclaredPos]
+                    AND NOT EXISTS (SELECT 1 FROM #ColumnChanges tail WITH (NOLOCK)
+                                     WHERE tail.[Schema] = later.[Schema] AND tail.[TableName] = later.[TableName]
+                                       AND tail.[ColumnName] = later.[ColumnName] AND tail.[DropOnly] = 0
+                                       AND (tail.MustSwapColumn = 1 OR tail.MustDropAndRecreate = 1)))
+     AND NOT EXISTS (SELECT 1 FROM #RebuildOrderMismatch m WHERE m.[Schema] = cc.[Schema] AND m.[TableName] = cc.[TableName])
 
   RAISERROR('Check for SCHEMABINDING dependents blocking column changes', 10, 100) WITH NOWAIT
   -- SQL Server refuses ALTER COLUMN while a SCHEMABINDING module references the column, with error 4922

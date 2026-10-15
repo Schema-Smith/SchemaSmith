@@ -667,6 +667,10 @@ Two situations make a rebuild the better move:
   A rebuild collapses those into a single copy.
 - **Column order.** Reordering existing columns is not something any supported engine can do in place.
   A rebuild is the only mechanism that can make a deployed table match the order its package declares.
+  On SQL Server a column the deploy must replace rather than alter -- an identity removal, an encryption
+  change, a column-set or computed-column change, a column declared `AnsiPadding: false` -- comes back at
+  the end of the table, so with `OnOrderMismatch` that pending move counts as drift and the same deploy
+  rebuilds instead, keeping the column in place.
 
 | Scope | Where to set | Default |
 |---|---|---|

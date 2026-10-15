@@ -268,8 +268,29 @@ BEGIN
            WHERE fk.referenced_object_id = @v_ObjectId
            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
 
+  -- ANSI_PADDING is fixed when a column is created, and every ALTER COLUMN pads, so the shadow is created the way a
+  -- new table is: under SET ANSI_PADDING OFF when a column is declared unpadded, with the padded character columns
+  -- created alongside it padded again by an ALTER COLUMN that changes nothing else. Without this a rebuild padded
+  -- every column, and the next deploy swapped the unpadded ones to the end of the table to put that right.
+  DECLARE @v_HasPaddingOff BIT = CASE WHEN EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
+                                                    WHERE c.[Schema] = @v_SchemaBr AND c.[TableName] = @v_TableBr
+                                                      AND c.[PaddingApplies] = 1 AND c.[AnsiPadding] = 0) THEN 1 ELSE 0 END
+  DECLARE @v_RepadSql NVARCHAR(MAX)
+  IF @v_HasPaddingOff = 1
+    SELECT @v_RepadSql = STUFF((SELECT '; ALTER TABLE ' + @v_ShadowQualified + ' ALTER COLUMN ' + c.[ColumnName] + ' ' + SchemaSmith.fn_NormalizeDataType(c.[DataType]) +
+                                       CASE WHEN RTRIM(ISNULL(c.[Collation], '')) NOT IN ('IGNORE', '') THEN ' COLLATE ' + c.[Collation] ELSE '' END +
+                                       CASE WHEN ISNULL(c.[Sparse], 0) = 1 THEN ' SPARSE' ELSE '' END +
+                                       CASE WHEN ISNULL(c.[Nullable], 0) = 1 THEN ' NULL' ELSE ' NOT NULL' END
+                                  FROM #Columns c WITH (NOLOCK)
+                                 WHERE c.[Schema] = @v_SchemaBr AND c.[TableName] = @v_TableBr
+                                   AND c.[PaddingApplies] = 1 AND ISNULL(c.[AnsiPadding], 1) = 1
+                                 ORDER BY c.[_RowId]
+                                 FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+
   DECLARE @v_CreateShadowSql NVARCHAR(MAX) =
-    'CREATE TABLE ' + @v_ShadowQualified + ' (' + @v_ShadowColumnList + ');'
+    CASE WHEN @v_HasPaddingOff = 1 THEN 'SET ANSI_PADDING OFF; ' ELSE '' END +
+    'CREATE TABLE ' + @v_ShadowQualified + ' (' + @v_ShadowColumnList + ');' +
+    CASE WHEN @v_HasPaddingOff = 1 THEN ' SET ANSI_PADDING ON;' + ISNULL(' ' + @v_RepadSql + ';', '') ELSE '' END
 
   -- TABLOCKX on the source, held for the life of the transaction: without it a row inserted by another
   -- session AFTER the copy scan and BEFORE the rename is copied nowhere and then dropped with the old
