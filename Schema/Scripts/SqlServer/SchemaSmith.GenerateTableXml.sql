@@ -438,6 +438,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                             ORDER BY fc.constraint_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS [RelatedColumns],
                REPLACE(fk.delete_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT AS [DeleteAction],
                REPLACE(fk.update_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT AS [UpdateAction],
+               CASE WHEN fk.is_disabled = 1 THEN 'false' END AS [Enforced],
+               CASE WHEN fk.is_not_trusted = 1 THEN 'false' END AS [Validated],
+               CASE WHEN fk.is_not_for_replication = 1 THEN 'true' END AS [NotForReplication],
                (SELECT ep.[Name] AS [@n], CONVERT(NVARCHAR(MAX), ep.[Value]) AS [*]
                   FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', fk.[Name]) ep
                   WHERE ep.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)
@@ -469,6 +472,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        (SELECT 'true' AS [@json:Array],
                QUOTENAME([Name]) AS [Name],
                SchemaSmith.fn_StripParenWrapping([definition]) AS [Expression],
+               CASE WHEN cc.is_disabled = 1 THEN 'false' END AS [Enforced],
+               CASE WHEN cc.is_not_trusted = 1 THEN 'false' END AS [Validated],
+               CASE WHEN cc.is_not_for_replication = 1 THEN 'true' END AS [NotForReplication],
                (SELECT ep.[Name] AS [@n], CONVERT(NVARCHAR(MAX), ep.[Value]) AS [*]
                   FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', cc.[Name]) ep
                   WHERE ep.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)

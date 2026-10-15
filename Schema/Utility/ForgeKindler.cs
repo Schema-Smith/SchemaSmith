@@ -437,6 +437,7 @@ public static class ForgeKindler
                 new("SchemaSmith.FileStreamColumnQuench.sql"),
                 new("SchemaSmith.CdcQuench.sql"),
                 new("SchemaSmith.ForeignKeyQuench.sql"),
+                new("SchemaSmith.ConstraintStateQuench.sql"),
                 new("SchemaSmith.TableQuench.sql", ReplaceParseJson: true),
                 new("SchemaSmith.IndexOnlyQuench.sql"),
                 new("SchemaSmith.fn_FormatJson.sql"),

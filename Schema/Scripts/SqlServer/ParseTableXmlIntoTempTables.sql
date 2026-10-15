@@ -279,7 +279,8 @@
          [RelatedColumns] = STUFF((SELECT ',' + SchemaSmith.fn_SafeBracketWrap([value]) FROM SchemaSmith.fn_SplitList(f.[RelatedColumns], ',') WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '' ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          [DeleteAction] = ISNULL(NULLIF(RTRIM([DeleteAction]), ''), 'NO ACTION'),
          [UpdateAction] = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION'),
-         f.[ShouldApplyExpression], f.[VariantName]
+         f.[ShouldApplyExpression], f.[VariantName],
+         [Enforced] = CONVERT(BIT, ISNULL(f.[Enforced], 1)), [Validated] = CONVERT(BIT, ISNULL(f.[Validated], 1)), [NotForReplication] = CONVERT(BIT, ISNULL(f.[NotForReplication], 0))
     INTO #ForeignKeys
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/ForeignKeys') AS Y(fk)
@@ -292,7 +293,10 @@
       [ShouldApplyExpression] = fk.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = fk.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
       [DeleteAction] = fk.value('(DeleteAction/text())[1]', 'NVARCHAR(20)'),
-      [UpdateAction] = fk.value('(UpdateAction/text())[1]', 'NVARCHAR(20)')
+      [UpdateAction] = fk.value('(UpdateAction/text())[1]', 'NVARCHAR(20)'),
+      [Enforced] = CONVERT(BIT, CASE LOWER(fk.value('(Enforced/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
+      [Validated] = CONVERT(BIT, CASE LOWER(fk.value('(Validated/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
+      [NotForReplication] = CONVERT(BIT, CASE LOWER(fk.value('(NotForReplication/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END)
       ) f;
 
   -- I5: post-parse RelatedTableSchema check — identical to JSON twin.
@@ -319,7 +323,8 @@
   RAISERROR('Parse Table Level Check Constraints from Xml', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#CheckConstraints') IS NOT NULL DROP TABLE #CheckConstraints
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         t.[Schema], t.[Name] AS [TableName], c.[ConstraintName], c.[Expression], c.[ShouldApplyExpression], c.[VariantName]
+         t.[Schema], t.[Name] AS [TableName], c.[ConstraintName], c.[Expression], c.[ShouldApplyExpression], c.[VariantName],
+         [Enforced] = CONVERT(BIT, ISNULL(c.[Enforced], 1)), [Validated] = CONVERT(BIT, ISNULL(c.[Validated], 1)), [NotForReplication] = CONVERT(BIT, ISNULL(c.[NotForReplication], 0))
     INTO #CheckConstraints
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/CheckConstraints') AS Y(cc)
@@ -327,7 +332,10 @@
       [ConstraintName] = cc.value('(Name/text())[1]', 'NVARCHAR(500)'),
       [Expression] = cc.value('(Expression/text())[1]', 'NVARCHAR(MAX)'),
       [ShouldApplyExpression] = cc.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
-      [VariantName] = cc.value('(VariantName/text())[1]', 'NVARCHAR(128)')
+      [VariantName] = cc.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
+      [Enforced] = CONVERT(BIT, CASE LOWER(cc.value('(Enforced/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
+      [Validated] = CONVERT(BIT, CASE LOWER(cc.value('(Validated/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
+      [NotForReplication] = CONVERT(BIT, CASE LOWER(cc.value('(NotForReplication/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END)
       ) c;
 
   -- Every component's Extensions.ExtendedProperties bag, one row per name. The ingest XML carries the bag as

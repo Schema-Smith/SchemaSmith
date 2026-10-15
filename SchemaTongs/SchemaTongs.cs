@@ -3687,7 +3687,8 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                         commandJson.CommandText = $@"
 SELECT cc.name AS [Name],
        SchemaSmith.fn_StripParenWrapping(cc.definition) AS [Expression],
-       cc.parent_column_id
+       cc.parent_column_id,
+       cc.is_disabled, cc.is_not_trusted, cc.is_not_for_replication
   FROM sys.check_constraints cc
  WHERE cc.parent_object_id = OBJECT_ID('{EscapeSql(tableSchema)}.{EscapeSql(tableName)}')
  ORDER BY cc.name";
@@ -3696,7 +3697,12 @@ SELECT cc.name AS [Name],
                         using (var ccReader = commandJson.ExecuteReader())
                         {
                             while (ccReader.Read())
-                                allConstraints.Add(new CheckConstraint { Name = $"{ccReader["Name"]}", Expression = $"{ccReader["Expression"]}" });
+                                allConstraints.Add(new SqlServerCheckConstraint
+                                {
+                                    Name = $"{ccReader["Name"]}", Expression = $"{ccReader["Expression"]}",
+                                    Enforced = !(bool)ccReader["is_disabled"], Validated = !(bool)ccReader["is_not_trusted"],
+                                    NotForReplication = (bool)ccReader["is_not_for_replication"]
+                                });
                         }
                         PromoteCheckConstraintsToTableLevel(sqlTable, allConstraints);
                     }

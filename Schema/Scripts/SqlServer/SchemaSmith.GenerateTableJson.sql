@@ -391,6 +391,11 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                             WHERE fk.[object_id] = fc.[constraint_object_id]) AS [RelatedColumns],
                REPLACE(fk.delete_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT AS [DeleteAction],
                REPLACE(fk.update_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT AS [UpdateAction],
+               -- Enforced, Validated and NotForReplication: written only when not the default, so a key in its ordinary
+               -- state carries no attribute keys (FOR JSON leaves a NULL out).
+               CASE WHEN fk.is_disabled = 1 THEN CAST(0 AS BIT) END AS [Enforced],
+               CASE WHEN fk.is_not_trusted = 1 THEN CAST(0 AS BIT) END AS [Validated],
+               CASE WHEN fk.is_not_for_replication = 1 THEN CAST(1 AS BIT) END AS [NotForReplication],
                JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', fk.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.foreign_keys fk
           WHERE fk.parent_object_id = st.[object_id]
@@ -413,6 +418,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
           FOR JSON AUTO) AS [Statistics],
        (SELECT QUOTENAME([Name]) AS [Name],
                SchemaSmith.fn_StripParenWrapping([definition]) AS [Expression],
+               CASE WHEN cc.is_disabled = 1 THEN CAST(0 AS BIT) END AS [Enforced],
+               CASE WHEN cc.is_not_trusted = 1 THEN CAST(0 AS BIT) END AS [Validated],
+               CASE WHEN cc.is_not_for_replication = 1 THEN CAST(1 AS BIT) END AS [NotForReplication],
                JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', cc.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.check_constraints cc
           WHERE parent_object_id = st.[object_id]

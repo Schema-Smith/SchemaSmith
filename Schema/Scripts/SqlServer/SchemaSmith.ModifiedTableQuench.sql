@@ -2062,7 +2062,8 @@ BEGIN TRY
                              WHERE fk.[object_id] = fc.[constraint_object_id]
                              ORDER BY fc.constraint_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') + ')' +
                     ' ON DELETE ' + REPLACE(fk.delete_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT +
-                    ' ON UPDATE ' + REPLACE(fk.update_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT
+                    ' ON UPDATE ' + REPLACE(fk.update_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT +
+                    CASE WHEN fk.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
     INTO #ExistingFKs
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.foreign_keys fk ON fk.parent_object_id = OBJECT_ID(t.[Schema] + '.' + t.[Name]) 
@@ -2078,14 +2079,21 @@ BEGIN TRY
                                       AND ek.[FKName] = SchemaSmith.fn_StripBracketWrapping(fk.[KeyName])
     WHERE ek.FKScript <> '(' + [Columns] + ') REFERENCES ' + [RelatedTableSchema] + '.' + [RelatedTable] + ' (' + [RelatedColumns] + ')' +
                          ' ON DELETE ' + [DeleteAction] +
-                         ' ON UPDATE ' + [UpdateAction]
+                         ' ON UPDATE ' + [UpdateAction] +
+                         CASE WHEN ISNULL(fk.[NotForReplication], 0) = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
   
   RAISERROR('Drop Modified Foreign Keys', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping Foreign Key ' + fc.[Schema] + '.' + fc.[TableName] + '.' + fc.[FKName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'IF OBJECT_ID(''' + fc.[Schema] + '.' + QUOTENAME(fc.[FKName]) + ''') IS NOT NULL ALTER TABLE ' + fc.[Schema] + '.' + fc.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(fc.[FKName]) + ';' AS NVARCHAR(MAX))
+                                  'IF OBJECT_ID(''' + fc.[Schema] + '.' + QUOTENAME(fc.[FKName]) + ''') IS NOT NULL BEGIN ALTER TABLE ' + fc.[Schema] + '.' + fc.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(fc.[FKName]) + ';' +
+                                  ' INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + fc.[Schema] + '.' + fc.[TableName] + '.' + fc.[FKName] + ''', ''dropped''); END' AS NVARCHAR(MAX))
                            FROM #FKChanges fc WITH (NOLOCK)
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  -- WhatIf twin of the embedded 'foreignKey'/'dropped' audit above; same source.
+  IF @WhatIf = 1
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+      SELECT @@SPID, 'foreignKey', fc.[Schema] + '.' + fc.[TableName] + '.' + fc.[FKName], 'wouldDrop'
+        FROM #FKChanges fc WITH (NOLOCK)
   
   RAISERROR('Collect Existing Statistics Definitions', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ExistingStats') IS NOT NULL DROP TABLE #ExistingStats
@@ -2181,7 +2189,8 @@ BEGIN TRY
   SELECT t.[Schema], [TableName] = t.[Name], [CheckName] = ck.[name], 
          [CheckColumn] = CASE WHEN ck.parent_column_id <> 0 THEN COL_NAME(ck.parent_object_id, ck.parent_column_id) ELSE NULL END,
          [CheckDefinition] = SchemaSmith.fn_NormalizeCheckExpression(ck.[definition]),
-         [LiveDefinition] = ck.[definition]
+         [LiveDefinition] = ck.[definition],
+         [NotForReplication] = ck.is_not_for_replication
     INTO #ExistingCheckConstraints
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.check_constraints ck ON ck.[parent_object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
@@ -2214,9 +2223,11 @@ BEGIN TRY
       JOIN #CheckConstraints cc WITH (NOLOCK) ON ec.[Schema] = cc.[Schema]
                                              AND ec.[TableName] = cc.[TableName]
                                              AND ec.[CheckName] = SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName])
-      WHERE ec.[CheckDefinition] <> SchemaSmith.fn_NormalizeCheckExpression(cc.[Expression])
-        AND SchemaSmith.fn_ExpressionMapUnchanged(ec.[Schema], ec.[TableName], 'CHECK', ec.[CheckName],
-              'expression', cc.[Expression], ec.[LiveDefinition]) = 0
+      WHERE (ec.[CheckDefinition] <> SchemaSmith.fn_NormalizeCheckExpression(cc.[Expression])
+             AND SchemaSmith.fn_ExpressionMapUnchanged(ec.[Schema], ec.[TableName], 'CHECK', ec.[CheckName],
+                   'expression', cc.[Expression], ec.[LiveDefinition]) = 0)
+         -- NOT FOR REPLICATION is create-time state: a change is a drop and re-create.
+         OR ec.[NotForReplication] <> ISNULL(cc.[NotForReplication], 0)
   
   RAISERROR('Drop Modified Check Constraints', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping check constraint ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[CheckName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +

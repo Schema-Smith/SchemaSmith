@@ -268,7 +268,11 @@
     [DeleteAction] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
     [UpdateAction] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
-    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    -- NULL on ingest, the default after NORMALIZE (1, 1, 0).
+    [Enforced] BIT NULL,
+    [Validated] BIT NULL,
+    [NotForReplication] BIT NULL
   )
 
   DROP TABLE IF EXISTS #CheckConstraints
@@ -282,7 +286,10 @@
     [ConstraintName] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
     [Expression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
-    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    [Enforced] BIT NULL,
+    [Validated] BIT NULL,
+    [NotForReplication] BIT NULL
   )
 
   DROP TABLE IF EXISTS #Statistics
@@ -890,7 +897,7 @@
   -- (the kindling JSON for SchemaSmith's own bootstrap tables passes a single object).
   -- Post-parse the check is uniform across object / array inputs.
 
-  INSERT INTO #ForeignKeys ([_RowId], [Schema], [TableName], [KeyName], [RelatedTableSchema], [RelatedTable], [Columns], [RelatedColumns], [DeleteAction], [UpdateAction], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #ForeignKeys ([_RowId], [Schema], [TableName], [KeyName], [RelatedTableSchema], [RelatedTable], [Columns], [RelatedColumns], [DeleteAction], [UpdateAction], [ShouldApplyExpression], [VariantName], [Enforced], [Validated], [NotForReplication])
   -- INGEST ONLY -- raw values straight off the shred. Every transform that used to live in this SELECT
   -- moved to the NORMALIZE pass below, so that a second ingestion path (C# bulk-loading these rows
   -- instead of shredding JSON) gets the identical treatment from one definition rather than a
@@ -902,7 +909,8 @@
          f.[RelatedColumns],
          f.[DeleteAction],
          f.[UpdateAction],
-         f.[ShouldApplyExpression], f.[VariantName]
+         f.[ShouldApplyExpression], f.[VariantName],
+         f.[Enforced], f.[Validated], f.[NotForReplication]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(ForeignKeys) WITH (
       [KeyName] NVARCHAR(500) '$.Name',
@@ -913,7 +921,10 @@
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName',
       [DeleteAction] NVARCHAR(20) '$.DeleteAction',
-      [UpdateAction] NVARCHAR(20) '$.UpdateAction'
+      [UpdateAction] NVARCHAR(20) '$.UpdateAction',
+      [Enforced] BIT '$.Enforced',
+      [Validated] BIT '$.Validated',
+      [NotForReplication] BIT '$.NotForReplication'
       ) f;
 
   -- I5: post-parse RelatedTableSchema check. fn_SafeBracketWrap(NULL) returns NULL
@@ -935,7 +946,10 @@
                                   FROM STRING_SPLIT([RelatedColumns], ',')
                                  WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [DeleteAction]      = ISNULL(NULLIF(RTRIM([DeleteAction]), ''), 'NO ACTION'),
-         [UpdateAction]      = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION');
+         [UpdateAction]      = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION'),
+         [Enforced]          = ISNULL([Enforced], 1),
+         [Validated]         = ISNULL([Validated], 1),
+         [NotForReplication] = ISNULL([NotForReplication], 0);
 
   IF EXISTS (SELECT 1 FROM #ForeignKeys WITH (NOLOCK)
                WHERE [RelatedTableSchema] IS NULL OR [RelatedTableSchema] IN ('[]', '[ ]', ''))
@@ -957,15 +971,19 @@
   EXEC(@v_SQL)
 
   RAISERROR('Parse Table Level Check Constraints from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #CheckConstraints ([_RowId], [Schema], [TableName], [ConstraintName], [Expression], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #CheckConstraints ([_RowId], [Schema], [TableName], [ConstraintName], [Expression], [ShouldApplyExpression], [VariantName], [Enforced], [Validated], [NotForReplication])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         t.[Schema], t.[Name] AS [TableName], c.[ConstraintName], c.[Expression], c.[ShouldApplyExpression], c.[VariantName]
+         t.[Schema], t.[Name] AS [TableName], c.[ConstraintName], c.[Expression], c.[ShouldApplyExpression], c.[VariantName],
+         ISNULL(c.[Enforced], 1), ISNULL(c.[Validated], 1), ISNULL(c.[NotForReplication], 0)
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(CheckConstraints) WITH (
       [ConstraintName] NVARCHAR(500) '$.Name',
       [Expression] NVARCHAR(MAX) '$.Expression',
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
-      [VariantName] NVARCHAR(128) '$.VariantName'
+      [VariantName] NVARCHAR(128) '$.VariantName',
+      [Enforced] BIT '$.Enforced',
+      [Validated] BIT '$.Validated',
+      [NotForReplication] BIT '$.NotForReplication'
       ) c;
 
   -- Every component's Extensions.ExtendedProperties bag, one row per name, as written. ExtendedPropertyQuench

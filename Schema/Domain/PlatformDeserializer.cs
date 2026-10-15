@@ -166,7 +166,7 @@ namespace Schema.Domain
         {
             return platform switch
             {
-                Platform.SqlServer => typeof(CheckConstraint),
+                Platform.SqlServer => typeof(SqlServerCheckConstraint),
                 Platform.PostgreSQL => typeof(PostgreSqlCheckConstraint),
                 Platform.MySQL => typeof(CheckConstraint),
                 Platform.MariaDb => typeof(CheckConstraint),

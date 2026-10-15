@@ -336,7 +336,8 @@ public class ForgeKindlerTests
         //   the package does not carry -- grants, owner, comments, extended properties -- captured before and put back after).
         // +2 on SQL Server = CaptureSignatures + ReapplySignatures (a changed module's signatures, captured before the
         //   ALTER that strips them and applied again after it).
-        Assert.That(sqlServer.Length, Is.EqualTo(55));
+        // +1 on SQL Server = ConstraintStateQuench (a foreign key's and check constraint's Enforced / Validated state).
+        Assert.That(sqlServer.Length, Is.EqualTo(56));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns

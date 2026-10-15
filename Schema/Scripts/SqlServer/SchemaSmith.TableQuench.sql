@@ -54,6 +54,8 @@ BEGIN TRY
   -- which for a table created in this same run does not exist until the line above has run.
   EXEC SchemaSmith.ChangeTrackingQuench @WhatIf
   EXEC SchemaSmith.ForeignKeyQuench @ProductName, @WhatIf
+  -- After the keys exist: enforcement and validation are state on a constraint that must already be there.
+  EXEC SchemaSmith.ConstraintStateQuench @WhatIf
   -- After every pass that creates an object: an extended property, a description included, belongs to something
   -- that must already exist, and a foreign key's only exists from the line above.
   EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf
