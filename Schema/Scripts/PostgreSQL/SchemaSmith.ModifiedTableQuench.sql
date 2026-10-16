@@ -1414,6 +1414,14 @@ BEGIN
                   OR COALESCE(ic."GenerationExpression", '') != COALESCE(iec."GenerationExpression", '')
                   OR (COALESCE(ic."Storage", '') != '' AND COALESCE(ic."Storage", '') != COALESCE(iec."Storage", ''))
                   OR (COALESCE(ic."Compression", '') != '' AND COALESCE(ic."Compression", '') != COALESCE(iec."Compression", '')))) || ')'';' || CHR(10) ||
+           -- A column converging to serial needs its sequence first: created and owned by the column here, made the
+           -- default by the ALTER below. IF NOT EXISTS keeps an earlier half-applied run harmless.
+           COALESCE((SELECT STRING_AGG('CREATE SEQUENCE IF NOT EXISTS ' || QUOTE_IDENT(sc."TableSchema") || '.' || QUOTE_IDENT(sc."TableName" || '_' || sc."Name" || '_seq') ||
+                                       ' OWNED BY ' || QUOTE_IDENT(sc."TableSchema") || '.' || QUOTE_IDENT(sc."TableName") || '.' || QUOTE_IDENT(sc."Name") || ';', CHR(10))
+                       FROM temp_columns sc
+                       JOIN temp_existing_columns sec ON sec."TableSchema" = sc."TableSchema" AND sec."TableName" = sc."TableName" AND sec."ColumnName" = sc."Name"
+                      WHERE sc."TableSchema" = c."TableSchema" AND sc."TableName" = c."TableName" AND sc."IsSerial"
+                        AND COALESCE("SchemaSmith"."StripTypeCast"(sc."Default"), '') != COALESCE("SchemaSmith"."StripTypeCast"(sec."Default"), '')) || CHR(10), '') ||
            'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '"' || CHR(10) ||
            STRING_AGG(NULLIF(RTRIM(TRIM(TRAILING ',' FROM
                       CASE WHEN REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') OR COALESCE(c."Collation", '') != COALESCE(ec."Collation", '')

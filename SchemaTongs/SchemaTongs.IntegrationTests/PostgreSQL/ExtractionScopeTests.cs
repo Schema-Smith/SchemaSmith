@@ -27,8 +27,10 @@ public class ExtractionScopeTests
 {
     private string _connectionString = "";
     private string _sourceDb = "";
+    private string _targetDb = "";
     private readonly Dictionary<string, string> _files = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _log = [];
+    private readonly List<string> _deleted = [];
 
     [OneTimeSetUp]
     public void OneTimeSetup()
@@ -36,7 +38,9 @@ public class ExtractionScopeTests
         var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
         _connectionString = ConnectionString.Build(Platform.PostgreSQL, config["PostgreSQL:Server"], "postgres", config["PostgreSQL:User"], config["PostgreSQL:Password"], config["PostgreSQL:Port"],
             ConnectionString.ReadProperties(config, "PostgreSQL:ConnectionProperties"));
-        _sourceDb = $"ScopeSrc_{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid().ToString("N")[..8]}";
+        var unique = $"{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid().ToString("N")[..8]}";
+        _sourceDb = $"ScopeSrc_{unique}";
+        _targetDb = $"ScopeDst_{unique}";
         CreateSource();
         Extract();
     }
@@ -47,8 +51,11 @@ public class ExtractionScopeTests
         using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"DROP DATABASE IF EXISTS \"{_sourceDb}\" WITH (FORCE)";
-        cmd.ExecuteNonQuery();
+        foreach (var db in new[] { _sourceDb, _targetDb })
+        {
+            cmd.CommandText = $"DROP DATABASE IF EXISTS \"{db}\" WITH (FORCE)";
+            cmd.ExecuteNonQuery();
+        }
     }
 
     private IEnumerable<string> Written(string folder) =>
@@ -100,9 +107,56 @@ public class ExtractionScopeTests
         });
     }
 
+    [Test]
+    public void OverloadedRoutines_GetOneFileEach_NamedByTheirSignature_AndBothDeploy()
+    {
+        var functions = Written("Functions").ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(functions, Does.Contain("public.f_over(integer).sql"), "functions written: " + string.Join(", ", functions));
+            Assert.That(functions, Does.Contain("public.f_over(text).sql"), "functions written: " + string.Join(", ", functions));
+            Assert.That(functions, Does.Not.Contain("public.f_over.sql"), "an overloaded name has no un-suffixed file");
+            Assert.That(functions, Does.Contain("public.user_fn.sql"), "a single-signature routine keeps its plain file name");
+            Assert.That(_deleted.Any(d => d.Replace('\\', '/').EndsWith("Functions/public.f_over.sql")), Is.True,
+                "the single-signature file from before the name was overloaded is retired: " + string.Join(", ", _deleted));
+            Assert.That(_log.Any(l => l.Contains("Renamed public.f_over.sql")), Is.True, "the retirement is logged; log: " + string.Join(" | ", _log.Where(l => l.Contains("Renamed"))));
+        });
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_targetDb);
+        using var cmd = conn.CreateCommand();
+        foreach (var name in new[] { "public.f_over(integer).sql", "public.f_over(text).sql" })
+        {
+            cmd.CommandText = _files["Functions/" + name];
+            cmd.ExecuteNonQuery();
+        }
+        cmd.CommandText = "SELECT COUNT(*) FROM pg_proc WHERE proname = 'f_over'";
+        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(2), "both overloads deploy from their own files");
+    }
+
+    [Test]
+    public void ASerialColumn_IsExtractedAsSerial_WithNoDefault_AndAnIdentityColumnStaysIdentity()
+    {
+        Assert.That(Written("Tables"), Does.Contain("ser.json"), "tables written: " + string.Join(", ", Written("Tables")));
+        var ser = _files["Tables/ser.json"];
+        var ida = _files["Tables/ida.json"];
+        Assert.Multiple(() =>
+        {
+            Assert.That(ser, Does.Contain("\"DataType\": \"serial\""), "the column is the engine's own serial declaration, which creates and owns the sequence on deploy:\n" + ser);
+            Assert.That(ser, Does.Not.Contain("nextval"), "no default naming a sequence the package does not contain:\n" + ser);
+            Assert.That(ser.Split("\"Name\": \"id\"").Length - 1, Is.EqualTo(1), "the column is written once, whatever else depends on it (its primary key index does):\n" + ser);
+            Assert.That(ida, Does.Contain("GENERATED ALWAYS AS IDENTITY"), "an identity column is untouched:\n" + ida);
+            Assert.That(ida, Does.Not.Contain("serial"), ida);
+        });
+    }
+
     private void Extract()
     {
         var file = Substitute.For<IFile>();
+        // The package was extracted before f_over was overloaded, so its single-signature file is on disk.
+        file.Exists(Arg.Is<string>(p => p.Replace('\\', '/').EndsWith("Functions/public.f_over.sql"))).Returns(true);
+        file.When(f => f.Delete(Arg.Any<string>())).Do(ci => _deleted.Add(ci.ArgAt<string>(0)));
         file.When(f => f.WriteAllText(Arg.Any<string>(), Arg.Any<string>())).Do(ci =>
         {
             var parts = ci.ArgAt<string>(0).Replace('\\', '/').Split('/');
@@ -143,8 +197,11 @@ public class ExtractionScopeTests
         using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"CREATE DATABASE \"{_sourceDb}\"";
-        cmd.ExecuteNonQuery();
+        foreach (var db in new[] { _sourceDb, _targetDb })
+        {
+            cmd.CommandText = $"CREATE DATABASE \"{db}\"";
+            cmd.ExecuteNonQuery();
+        }
         conn.ChangeDatabase(_sourceDb);
         cmd.CommandText = """
             CREATE EXTENSION pg_trgm;
@@ -156,6 +213,8 @@ public class ExtractionScopeTests
             CREATE TYPE x.ct2 AS (a INT, b TEXT);
             CREATE MATERIALIZED VIEW public.mv1 AS SELECT 1 AS a;
             CREATE FUNCTION public.user_fn() RETURNS INT LANGUAGE sql AS 'SELECT 1';
+            CREATE FUNCTION public.f_over(a INT) RETURNS INT LANGUAGE sql AS 'SELECT a';
+            CREATE FUNCTION public.f_over(a TEXT) RETURNS TEXT LANGUAGE sql AS 'SELECT a';
             CREATE FUNCTION public.row_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
             CREATE TABLE public.plain (id INT NOT NULL PRIMARY KEY);
             CREATE TRIGGER plain_tr BEFORE INSERT ON public.plain FOR EACH ROW EXECUTE FUNCTION public.row_fn();

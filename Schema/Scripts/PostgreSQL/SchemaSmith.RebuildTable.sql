@@ -218,7 +218,7 @@ BEGIN
   -- The insert list and the select list are ONE string by construction: same columns, same order, so they
   -- cannot drift apart into a positional mismatch that would write data into the wrong column.
   ----------------------------------------------------------------------------------------------------
-  SELECT STRING_AGG(quote_ident(c."Name") || ' ' || c."DataType" ||
+  SELECT STRING_AGG(quote_ident(c."Name") || ' ' || CASE WHEN c."IsSerial" THEN c."SerialKeyword" ELSE c."DataType" END ||
            "SchemaSmith"."CollateClause"(c."Collation") ||
            CASE WHEN UPPER(COALESCE(c."Generated", 'NEVER')) LIKE 'GENERATED%IDENTITY%' THEN ' ' || c."Generated" ELSE '' END ||
            CASE WHEN COALESCE(c."Generated", 'NEVER') = 'ALWAYS' AND COALESCE(c."GenerationExpression", '') <> ''
@@ -227,6 +227,7 @@ BEGIN
            CASE WHEN c."Nullable" THEN '' ELSE ' NOT NULL' END ||
            CASE WHEN UPPER(COALESCE(c."Generated", 'NEVER')) NOT LIKE 'GENERATED%IDENTITY%'
                  AND NOT (COALESCE(c."Generated", 'NEVER') = 'ALWAYS' AND COALESCE(c."GenerationExpression", '') <> '')
+                 AND NOT c."IsSerial"
                  AND COALESCE(c."Default", '') <> ''
                 THEN ' DEFAULT ' || c."Default" ELSE '' END,
          ', ' ORDER BY c."_RowId")
@@ -323,8 +324,7 @@ BEGIN
         -- sequence whose column the package no longer declares as identity/serial simply dies with the old
         -- table, and there is nothing on the new one to restore it to.
         AND (UPPER(COALESCE(c."Generated", 'NEVER')) LIKE 'GENERATED%IDENTITY%'
-             OR UPPER(TRIM(COALESCE(c."DataType", ''))) LIKE 'SERIAL%'
-             OR UPPER(TRIM(COALESCE(c."DataType", ''))) IN ('BIGSERIAL', 'SMALLSERIAL'))
+             OR c."IsSerial")
       ORDER BY c."_RowId"
   LOOP
     v_SeqText := pg_get_serial_sequence(v_Qualified, v_Col."ColumnName");

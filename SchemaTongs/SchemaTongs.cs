@@ -2747,7 +2747,10 @@ SELECT CASE p.prokind
             WHEN 'f' THEN CASE WHEN prorettype = (SELECT oid FROM pg_type WHERE typname = 'trigger') THEN 'Trigger ' ELSE '' END || 'Functions'
             WHEN 'w' THEN 'Window Functions'
             END AS Folder,
-       n.nspname || '.' || p.proname AS FullName,
+       n.nspname || '.' || p.proname ||
+       CASE WHEN COUNT(*) OVER (PARTITION BY p.pronamespace, p.proname) > 1
+            THEN '(' || COALESCE((SELECT STRING_AGG(FORMAT_TYPE(u.t, NULL), ', ' ORDER BY u.n) FROM UNNEST(p.proargtypes::oid[]) WITH ORDINALITY AS u(t, n)), '') || ')' ELSE '' END AS FullName,
+       n.nspname || '.' || p.proname AS BaseName,
        PG_GET_FUNCTIONDEF(p.oid) AS Code
   FROM pg_proc p
   JOIN pg_namespace n ON p.pronamespace = n.oid
@@ -2769,7 +2772,10 @@ SELECT CASE p.prokind
 WITH fn AS (SELECT f.oid, QUOTE_IDENT(fn.nspname) || '.' || QUOTE_IDENT(f.proname) AS qname
               FROM pg_proc f JOIN pg_namespace fn ON fn.oid = f.pronamespace)
 SELECT 'Aggregates' AS Folder,
-       n.nspname || '.' || p.proname AS FullName,
+       n.nspname || '.' || p.proname ||
+       CASE WHEN COUNT(*) OVER (PARTITION BY p.pronamespace, p.proname) > 1
+            THEN '(' || COALESCE((SELECT STRING_AGG(FORMAT_TYPE(u.t, NULL), ', ' ORDER BY u.n) FROM UNNEST(p.proargtypes::oid[]) WITH ORDINALITY AS u(t, n)), '') || ')' ELSE '' END AS FullName,
+       n.nspname || '.' || p.proname AS BaseName,
        'CREATE OR REPLACE AGGREGATE ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(p.proname) || '(' || PG_GET_FUNCTION_IDENTITY_ARGUMENTS(p.oid) || ') (' ||
        E'\n    SFUNC = ' || sf.qname ||
        E',\n    STYPE = ' || FORMAT_TYPE(a.aggtranstype, NULL) ||
@@ -2821,7 +2827,10 @@ SELECT 'Aggregates' AS Folder,
     {
         command.CommandText = @"
 SELECT 'Procedures' AS Folder,
-       n.nspname || '.' || p.proname AS FullName,
+       n.nspname || '.' || p.proname ||
+       CASE WHEN COUNT(*) OVER (PARTITION BY p.pronamespace, p.proname) > 1
+            THEN '(' || COALESCE((SELECT STRING_AGG(FORMAT_TYPE(u.t, NULL), ', ' ORDER BY u.n) FROM UNNEST(p.proargtypes::oid[]) WITH ORDINALITY AS u(t, n)), '') || ')' ELSE '' END AS FullName,
+       n.nspname || '.' || p.proname AS BaseName,
        PG_GET_FUNCTIONDEF(p.oid) AS Code
   FROM pg_proc p
   JOIN pg_namespace n ON p.pronamespace = n.oid
@@ -3113,6 +3122,7 @@ SELECT mv.schemaname, mv.matviewname
                     : EncodeFullName(fullName, ".sql");
                 var fileName = ResolveOutputPath(castPath, outputName);
                 var folderName = reader["Folder"].ToString();
+                RetireUnsuffixedRoutineFile(reader, castPath, fullName, fileName);
                 if (ShouldSkipKnownBadScript(fileName)) { IncrementStatForFolder(folderName); continue; }
                 var script = string.Join("\r\n", reader["Code"].ToString());
                 records.Add((castPath, fullName, fileName, script, folderName, false));
@@ -3426,6 +3436,25 @@ SELECT EVENT_NAME
             RetireDottedEventFile(castPath, fileName, file);
             _stats.Events++;
         }
+    }
+
+    // An overloaded PostgreSQL routine is written as schema.name(argtypes).sql, one file per signature; a single
+    // signature keeps schema.name.sql. When a name becomes overloaded, the file the single signature had is the
+    // same object under its old name, so the refreshed file replaces it rather than sitting beside it as an orphan.
+    private void RetireUnsuffixedRoutineFile(IDataRecord record, string castPath, string fullName, string writtenPath)
+    {
+        var baseIndex = Enumerable.Range(0, record.FieldCount).FirstOrDefault(i => string.Equals(record.GetName(i), "BaseName", StringComparison.OrdinalIgnoreCase), -1);
+        if (baseIndex < 0) return;
+        var baseName = record.GetValue(baseIndex)?.ToString();
+        if (string.IsNullOrEmpty(baseName) || string.Equals(baseName, fullName, StringComparison.Ordinal)) return;
+        var (qualifiedSchema, objectName) = Identifier.SplitQualifiedName(baseName, _platform);
+        var oldName = _isSchemaTemplate && qualifiedSchema != null ? EncodeFileName(objectName, ".sql") : EncodeFullName(baseName, ".sql");
+        var oldPath = Path.Join(castPath, oldName);
+        var file = FileWrapper.GetFromFactory();
+        if (string.Equals(oldPath, writtenPath, StringComparison.OrdinalIgnoreCase) || !file.Exists(oldPath)) return;
+        _folderIndexes.GetValueOrDefault(GetRelativeFolderName(castPath))?.MarkWritten(oldPath);
+        file.Delete(oldPath);
+        _progressLog.Info($"    Renamed {oldName} to {Path.GetFileName(writtenPath)} (the name is now overloaded)");
     }
 
     // Earlier releases wrote events as ".name.json" (an empty schema segment), which Linux and macOS hide and which

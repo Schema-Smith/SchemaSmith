@@ -45,11 +45,11 @@ BEGIN
   RAISE NOTICE 'Add New Tables';
   SELECT STRING_AGG('RAISE NOTICE ''  Create new table ' || tt."Schema" || '.' || tt."Name" || CASE WHEN COALESCE(tt."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tt."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
                     'CREATE TABLE "' || tt."Schema" || '"."' || tt."Name" || '" (' ||
-                    (SELECT STRING_AGG('"' || tc."Name" || '" ' || tc."DataType" ||
+                    (SELECT STRING_AGG('"' || tc."Name" || '" ' || CASE WHEN tc."IsSerial" THEN tc."SerialKeyword" ELSE tc."DataType" END ||
                             "SchemaSmith"."CollateClause"(tc."Collation") ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' THEN ' ' || tc."Generated" ELSE '' END ||
                             CASE WHEN tc."Nullable" THEN '' ELSE ' NOT NULL' END ||
-                            CASE WHEN COALESCE(tc."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%' AND COALESCE(tc."Default", '') != '' THEN ' DEFAULT ' || tc."Default" ELSE '' END, ', ' ORDER BY tc."_RowId")
+                            CASE WHEN COALESCE(tc."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%' AND NOT tc."IsSerial" AND COALESCE(tc."Default", '') != '' THEN ' DEFAULT ' || tc."Default" ELSE '' END, ', ' ORDER BY tc."_RowId")
                        FROM temp_columns tc
                        WHERE tc."TableSchema" = tt."Schema" AND tc."TableName" = tt."Name"
                          -- Defer computed (GENERATED ALWAYS AS expression) columns to the "Add New Computed
@@ -90,11 +90,11 @@ BEGIN
                          AND NOT EXISTS (SELECT 1 FROM information_schema.columns ic WHERE ic.table_name = tc."TableName" AND ic.table_schema = tc."TableSchema" AND ic.column_name = tc."Name")) ||
                     ')'';' || CHR(10) ||
                     'ALTER TABLE "' || tt."Schema" || '"."' || tt."Name" || '" ' ||
-                    (SELECT STRING_AGG('ADD "' || tc."Name" || '" ' || tc."DataType" ||
+                    (SELECT STRING_AGG('ADD "' || tc."Name" || '" ' || CASE WHEN tc."IsSerial" THEN tc."SerialKeyword" ELSE tc."DataType" END ||
                             "SchemaSmith"."CollateClause"(tc."Collation") ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' THEN ' ' || tc."Generated" ELSE '' END ||
                             CASE WHEN tc."Nullable" THEN '' ELSE ' NOT NULL' END ||
-                            CASE WHEN COALESCE(tc."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%' AND COALESCE(tc."Default", '') != '' THEN ' DEFAULT ' || tc."Default" ELSE '' END, ', ' ORDER BY tc."_RowId")
+                            CASE WHEN COALESCE(tc."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%' AND NOT tc."IsSerial" AND COALESCE(tc."Default", '') != '' THEN ' DEFAULT ' || tc."Default" ELSE '' END, ', ' ORDER BY tc."_RowId")
                        FROM temp_columns tc
                        WHERE tc."TableSchema" = tt."Schema" AND tc."TableName" = tt."Name"
                          AND (COALESCE(tc."Generated", 'NEVER') = 'NEVER' OR COALESCE(tc."Generated", '') LIKE 'GENERATED%IDENTITY%')

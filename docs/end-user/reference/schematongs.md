@@ -402,6 +402,16 @@ The optional `VariantName` segment comes after the schema and table, so a table'
 
 A table's identity lives in its file *content* -- `Schema`, `Name`, and `VariantName` -- not in its filename. SchemaTongs matches an existing file to an extracted table by that content identity, so a file you renamed by hand is still found and refreshed in place rather than duplicated. On PostgreSQL, `"Schema": "public"` and an absent `Schema` are the same identity: extraction omits the default schema, and a file that declares it is refreshed in place and keeps declaring it. The canonical name is a convention, not a contract: if a file's name drifts from canonical, the deploy still works and [`--Validate`](validate.md#file-naming) emits an `SS-FILE-NAME-003` warning pointing at the canonical name.
 
+## Routine File Naming (PostgreSQL)
+
+A PostgreSQL function, procedure or aggregate is written as `<schema>.<name>.sql`. When a name is **overloaded**, each
+signature gets its own file named by its argument types -- `public.f_over(integer).sql`, `public.f_over(text).sql` --
+so every overload deploys; a name with one signature keeps the plain file name, and nothing in an existing package
+changes until a second signature appears. On that re-extraction the plain file the single signature had is replaced by
+the suffixed one (the log says `Renamed public.f_over.sql to public.f_over(integer).sql`); it is not reported as an
+orphan.
+
+
 ## Variant Reconciliation on Re-Extraction
 
 When a table -- or one of its components (column, index, foreign key, constraint, statistic, full-text index) -- carries an authored [variant set](schema-packages.md#conditional-application) (two or more same-named entries each gated by `ShouldApplyExpression`), SchemaTongs can only ever see one physical shape on the source database. Rather than discard what it extracted, it **evaluates each variant's gate against the source and folds the extracted shape into the variant that is active there**, keeping that variant's gate and `VariantName` and leaving the inactive variants untouched. Real drift on the deployed variant is captured, not lost.

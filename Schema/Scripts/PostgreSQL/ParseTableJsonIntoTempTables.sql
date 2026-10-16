@@ -235,6 +235,28 @@
                                        || CASE WHEN "DataType" LIKE '%[]%' THEN '[]' ELSE '' END
                              ELSE "DataType" END;
 
+    -- A serial column is the engine's own declaration of an integer with an owned sequence. For comparison and ALTER
+    -- it is that integer, NOT NULL, with the sequence's nextval as its default; for CREATE TABLE, ADD COLUMN and the
+    -- rebuild's shadow table the keyword is kept, so the engine creates and owns the sequence. SERIAL4 is not a type
+    -- name the engine accepts in DDL at all, which is why a declared serial failed outright before this fold.
+    -- The default names the sequence the column already owns when it has one (rendered as the catalog renders it,
+    -- search_path-aware), else the one the ALTER pass creates by the engine's own naming convention.
+    ALTER TABLE temp_columns ADD COLUMN "IsSerial" BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN "SerialKeyword" TEXT;
+    UPDATE temp_columns c
+       SET "IsSerial" = TRUE,
+           "SerialKeyword" = CASE TRIM(UPPER(c."DataType")) WHEN 'SERIAL2' THEN 'SMALLSERIAL' WHEN 'SERIAL8' THEN 'BIGSERIAL' ELSE 'SERIAL' END,
+           "DataType" = CASE TRIM(UPPER(c."DataType")) WHEN 'SERIAL2' THEN 'INT2' WHEN 'SERIAL8' THEN 'INT8' ELSE 'INT4' END,
+           "Nullable" = FALSE,
+           "Default" = 'nextval(''' ||
+                       CASE WHEN TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName")) IS NOT NULL
+                             AND EXISTS (SELECT 1 FROM pg_attribute a
+                                          WHERE a.attrelid = TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"))
+                                            AND a.attname = c."Name" AND NOT a.attisdropped)
+                             AND pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name") IS NOT NULL
+                            THEN pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass::text
+                            ELSE QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName" || '_' || c."Name" || '_seq') END ||
+                       '''::regclass)'
+     WHERE TRIM(UPPER(c."DataType")) IN ('SERIAL2', 'SERIAL4', 'SERIAL8');
     -- Family defaults, applied AFTER the synonym fold so both spellings of a type reach one rule.
     -- ColumnTypeArguments renders the catalog side bare when the value equals the family default, so an
     -- explicitly-declared default has to be dropped here or it compares unequal to its own deployment --
