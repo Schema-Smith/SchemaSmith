@@ -493,6 +493,14 @@ New objects always appear in the root of their folder. Move them into subfolders
 
 ---
 
+## Prerequisite Scripts (SQL Server)
+
+Some objects a package depends on are not modelled, so SchemaTongs writes them as generated scripts in the template's `Prerequisites/` folder, which deploys before the tables. Today that is `AlwaysEncryptedKeys.sql`: every column master key and column encryption key in the source database. Each key is created only where it is missing, and the script skips itself with a message below SQL Server 2016. It is written when the tables are extracted and removed when the source has no keys any more.
+
+A prerequisite script is rewritten in full on every extraction. Change the source database rather than the file: `--Validate` warns about an edit the next extraction would overwrite (`SS-GEN-001`). Schema templates do not get one, because the keys belong to the database. See [the Prerequisites folder](schema-packages.md#sql-server-default-folders).
+
+---
+
 ## Package Initialization
 
 The first extraction is where your schema package is born. When SchemaTongs runs against a path that doesn't yet contain a schema package, it creates the full structure:

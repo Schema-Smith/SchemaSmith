@@ -36,6 +36,7 @@ public class DeployPathTableFeatureTests
     private readonly IEnvironment _environment = Substitute.For<IEnvironment>();
     private string _betweenScript;
     private string _beforeScript;
+    private string _prerequisiteScript;
     private bool _nextDeployFails;
 
     // A new database costs CREATE DATABASE, sp_cdc_enable_db, a full kindle and a cold plan compile on the first
@@ -172,6 +173,34 @@ public class DeployPathTableFeatureTests
                 """);
             cmd.CommandText = "SELECT OBJECT_SCHEMA_NAME(referenced_object_id) + '.' + OBJECT_NAME(referenced_object_id) FROM sys.foreign_keys WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("sales.Customer"));
+        }, freshDatabase: true);
+    }
+
+    // The shape SchemaTongs writes to Prerequisites/, an Objects folder: that pass runs ahead of table creation, and the
+    // script is create-only, so the second deploy finds the keys and changes nothing.
+    [Test]
+    public void AnAlwaysEncryptedTable_DeploysToAnEmptyDatabase_WithItsKeysFromAPrerequisiteScript()
+    {
+        RunScenario("DeployAeKeys", null, (deploy, db, cmd) =>
+        {
+            _prerequisiteScript = """
+                IF NOT EXISTS (SELECT 1 FROM sys.column_master_keys WHERE [name] = N'CMK_Deploy')
+                  EXEC(N'CREATE COLUMN MASTER KEY [CMK_Deploy] WITH (KEY_STORE_PROVIDER_NAME = N''MSSQL_CERTIFICATE_STORE'', KEY_PATH = N''CurrentUser/My/0123456789ABCDEF'')')
+                IF NOT EXISTS (SELECT 1 FROM sys.column_encryption_keys WHERE [name] = N'CEK_Deploy')
+                  EXEC(N'CREATE COLUMN ENCRYPTION KEY [CEK_Deploy] WITH VALUES (COLUMN_MASTER_KEY = [CMK_Deploy], ALGORITHM = ''RSA_OAEP'', ENCRYPTED_VALUE = 0x016E0000016300)')
+                """;
+            const string table = """
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                               { "Name": "[Ssn]", "DataType": "CHAR(11)", "Nullable": true, "Collation": "Latin1_General_BIN2",
+                                 "EncryptionType": "DETERMINISTIC", "EncryptionKey": "CEK_Deploy", "EncryptionAlgorithm": "AEAD_AES_256_CBC_HMAC_SHA_256" } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }
+                """;
+            deploy(table);
+            deploy(table);
+            cmd.CommandText = "SELECT k.[name] COLLATE DATABASE_DEFAULT + ':' + c.encryption_type_desc COLLATE DATABASE_DEFAULT FROM sys.columns c " +
+                              "JOIN sys.column_encryption_keys k ON k.column_encryption_key_id = c.column_encryption_key_id WHERE c.[object_id] = OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("CEK_Deploy:DETERMINISTIC"));
         }, freshDatabase: true);
     }
 
@@ -718,7 +747,7 @@ public class DeployPathTableFeatureTests
 
                 body(tableJson =>
                 {
-                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript);
+                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript, _prerequisiteScript);
                     _environment.ClearReceivedCalls();
                     var reportBase = Path.Join(tempDir, "summary");
                     if (expectIncomplete) _environment.CommandLine.Returns($"SchemaQuench.exe --report:{reportBase}");
@@ -854,7 +883,7 @@ public class DeployPathTableFeatureTests
     }
 
     private static void WritePackage(string dir, string db, string tableJson, string templateExtra = "", string betweenScript = null,
-                                     string beforeScript = null)
+                                     string beforeScript = null, string prerequisiteScript = null)
     {
         var tables = Path.Join(dir, "Templates", "Main", "Tables");
         Directory.CreateDirectory(tables);
@@ -875,6 +904,14 @@ public class DeployPathTableFeatureTests
             File.WriteAllText(Path.Join(before, "Prepare.sql"), beforeScript);
             folders += (folders.Length > 0 ? ", " : "") + "{ \"FolderPath\": \"Before\", \"QuenchSlot\": \"Before\" }";
         }
+        var prerequisites = Path.Join(dir, "Templates", "Main", "Prerequisites");
+        if (Directory.Exists(prerequisites)) Directory.Delete(prerequisites, true);
+        if (prerequisiteScript != null)
+        {
+            Directory.CreateDirectory(prerequisites);
+            File.WriteAllText(Path.Join(prerequisites, "AlwaysEncryptedKeys.sql"), prerequisiteScript);
+            folders = "{ \"FolderPath\": \"Prerequisites\", \"QuenchSlot\": \"Objects\" }" + (folders.Length > 0 ? ", " : "") + folders;
+        }
         File.WriteAllText(Path.Join(dir, "Product.json"),
             "{ \"Name\": \"DeployPathProbe\", \"ValidationScript\": \"SELECT CAST(1 AS BIT)\", \"TemplateOrder\": [\"Main\"], "
             + "\"ScriptTokens\": {}, \"ScriptFolders\": [], \"Platform\": \"SqlServer\" }");
@@ -891,6 +928,7 @@ public class DeployPathTableFeatureTests
         _environment.ClearReceivedCalls();
         _betweenScript = null;
         _beforeScript = null;
+        _prerequisiteScript = null;
         _nextDeployFails = false;
         FactoryContainer.Register(_environment);
         LogFactory.Register("ErrorLog", _errorLog);

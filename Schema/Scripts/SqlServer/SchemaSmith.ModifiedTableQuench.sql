@@ -393,12 +393,12 @@ BEGIN TRY
     ExistingMaskFn NVARCHAR(4000) COLLATE DATABASE_DEFAULT NULL,
     ExistingEncType NVARCHAR(64) COLLATE DATABASE_DEFAULT NULL,
     ExistingEncAlgo NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
-    ExistingEncKeyDb NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    ExistingEncKey NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
     PRIMARY KEY ([object_id], column_id)
   )
   IF SchemaSmith.fn_ServerMajorVersion() >= 13
     EXEC sp_executesql N'
-      INSERT INTO #ColMeta ([object_id], column_id, ExistingMaskFn, ExistingEncType, ExistingEncAlgo, ExistingEncKeyDb)
+      INSERT INTO #ColMeta ([object_id], column_id, ExistingMaskFn, ExistingEncType, ExistingEncAlgo, ExistingEncKey)
       -- NO NOLOCK ON THESE CATALOG READS. A NOLOCK scan can return the same row twice when pages move
       -- underneath it, and a deploy is exactly when the catalog is being rewritten: with several schemas
       -- of one database quenched at once, another session is creating and altering tables while this
@@ -406,10 +406,13 @@ BEGIN TRY
       -- primary key violation naming a temp table, which says nothing about the real cause. Observed
       -- intermittently on the multi-schema lifecycle test. These are small catalog reads; the dirty read
       -- bought nothing and cost correctness.
-      SELECT sc.[object_id], sc.column_id, mc.masking_function, sc.encryption_type_desc, sc.encryption_algorithm_name, sc.column_encryption_key_database_name
+      -- The key by its name: column_encryption_key_database_name is the database a key lives in (NULL for this one),
+      -- and comparing that with the declared key name made every encrypted column a change on every deploy.
+      SELECT sc.[object_id], sc.column_id, mc.masking_function, sc.encryption_type_desc, sc.encryption_algorithm_name, cek.[name]
         FROM sys.columns sc
         JOIN sys.tables st ON st.[object_id] = sc.[object_id] AND st.is_ms_shipped = 0
-        LEFT JOIN sys.masked_columns mc ON mc.[object_id] = sc.[object_id] AND mc.column_id = sc.column_id'
+        LEFT JOIN sys.masked_columns mc ON mc.[object_id] = sc.[object_id] AND mc.column_id = sc.column_id
+        LEFT JOIN sys.column_encryption_keys cek ON cek.column_encryption_key_id = sc.column_encryption_key_id'
 
   RAISERROR('Detect Column Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ColumnChanges') IS NOT NULL DROP TABLE #ColumnChanges
@@ -429,11 +432,12 @@ BEGIN TRY
                                             AND ty.collation_name IS NOT NULL) THEN ''
                         WHEN [Collation] = 'IGNORE' THEN ' COLLATE ' + ISNULL(ic.COLLATION_NAME, @v_DatabaseCollation)
                         ELSE ' COLLATE ' + @v_DatabaseCollation END +
-                   CASE WHEN [Sparse] = 1 THEN ' SPARSE' ELSE '' END +
-                   CASE WHEN Nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END +
+                   -- After COLLATE and before NULL / NOT NULL, the one place ALTER COLUMN and ADD both take it.
                    CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE'
                         THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = ''' + [EncryptionAlgorithm] + ''')'
-                        ELSE '' END
+                        ELSE '' END +
+                   CASE WHEN [Sparse] = 1 THEN ' SPARSE' ELSE '' END +
+                   CASE WHEN Nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END
               END AS [ColumnScript],
          [SpecialColumnScript] = x.[OptionsBefore] + x.[OptionsAfter],
          CAST(CASE WHEN cc.[definition] IS NOT NULL OR RTRIM(ISNULL([ComputedExpression], '')) <> ''
@@ -458,6 +462,10 @@ BEGIN TRY
          CAST(CASE WHEN (ident.column_id IS NOT NULL AND [DataType] NOT LIKE '%IDENTITY%'
                         AND RTRIM(ISNULL([ComputedExpression], '')) = '') -- identity removal (data-preserving swap)
                     OR (ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> [EncryptionType]) -- encryption change (data-preserving swap)
+                    -- Another key or algorithm is an encryption change too, which the server cannot make; the guard below refuses it.
+                    OR (ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> 'NONE' AND [EncryptionType] <> 'NONE'
+                        AND (ISNULL(cm.ExistingEncAlgo, '') COLLATE DATABASE_DEFAULT <> [EncryptionAlgorithm]
+                             OR ISNULL(cm.ExistingEncKey, '') COLLATE DATABASE_DEFAULT <> SchemaSmith.fn_StripBracketWrapping([EncryptionKey])))
                    THEN 1 ELSE 0 END AS BIT) AS MustSwapColumn,
          CAST(0 AS BIT) AS DropOnly,
          d.[DefinitionChanged], d0.[TypeChanged], x.[OptionsBefore], x.[OptionsAfter]
@@ -522,7 +530,7 @@ BEGIN TRY
                   OR (c.[PaddingApplies] = 1 AND c.[AnsiPadding] IS NOT NULL AND sc.is_ansi_padded <> c.[AnsiPadding])
                   OR ([Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') <> [Collation])
                   OR ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> [EncryptionType]
-                  OR (ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> 'NONE' AND (ISNULL(cm.ExistingEncAlgo, '') COLLATE DATABASE_DEFAULT <> [EncryptionAlgorithm] OR ISNULL(cm.ExistingEncKeyDb, '') COLLATE DATABASE_DEFAULT <> [EncryptionKey])) THEN 1 ELSE 0 END AS BIT)) d
+                  OR (ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> 'NONE' AND (ISNULL(cm.ExistingEncAlgo, '') COLLATE DATABASE_DEFAULT <> [EncryptionAlgorithm] OR ISNULL(cm.ExistingEncKey, '') COLLATE DATABASE_DEFAULT <> SchemaSmith.fn_StripBracketWrapping([EncryptionKey]))) THEN 1 ELSE 0 END AS BIT)) d
     -- Each option is its own ALTER COLUMN (two in one statement is a syntax error), split around the definition change:
     -- SQL Server will not alter a ROWGUIDCOL column, so the flag comes off before and goes back after; a definition
     -- change drops a mask by itself, so the declared mask is added back after (and not dropped before); NOT FOR
@@ -890,13 +898,20 @@ BEGIN TRY
 
   -- Always Encrypted changes on an existing column cannot be performed server-side on a standard (non-enclave)
   -- deployment: the server holds no Column Master Key and cannot re-encrypt data. Refused in WhatIf too, so the
-  -- impossibility is visible in a preview. The operator uses the Before/After full-table rebuild instead.
-  IF EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.MustSwapColumn = 1 AND cc.[ColumnScript] LIKE '%ENCRYPTED WITH%')
+  -- impossibility is visible in a preview. The operator uses the Before/After full-table rebuild instead. Either way
+  -- round: to an encrypted column, or from one, which the server cannot decrypt any more than it can encrypt.
+  IF EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.MustSwapColumn = 1 AND (cc.[ColumnScript] LIKE '%ENCRYPTED WITH%'
+                                OR EXISTS (SELECT 1 FROM #ColMeta cm WITH (NOLOCK) JOIN sys.columns sc ON sc.[object_id] = cm.[object_id] AND sc.column_id = cm.column_id
+                                            WHERE cm.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName]) AND sc.[name] = SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName])
+                                              AND ISNULL(cm.ExistingEncType, 'NONE') <> 'NONE')))
   BEGIN
     DECLARE @v_AeSchema NVARCHAR(256), @v_AeTable NVARCHAR(256), @v_AeColumn NVARCHAR(256)
     SELECT TOP 1 @v_AeSchema = cc.[Schema], @v_AeTable = cc.[TableName], @v_AeColumn = SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName])
       FROM #ColumnChanges cc WITH (NOLOCK)
-      WHERE cc.MustSwapColumn = 1 AND cc.[ColumnScript] LIKE '%ENCRYPTED WITH%'
+      WHERE cc.MustSwapColumn = 1 AND (cc.[ColumnScript] LIKE '%ENCRYPTED WITH%'
+                                OR EXISTS (SELECT 1 FROM #ColMeta cm WITH (NOLOCK) JOIN sys.columns sc ON sc.[object_id] = cm.[object_id] AND sc.column_id = cm.column_id
+                                            WHERE cm.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName]) AND sc.[name] = SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName])
+                                              AND ISNULL(cm.ExistingEncType, 'NONE') <> 'NONE'))
       ORDER BY cc.[Schema], cc.[TableName], cc.[ColumnName]
     RAISERROR('Always Encrypted: in-place encryption change on %s.%s.[%s] cannot be performed on a standard (non-enclave) server. Use Before/After migration scripts to rebuild the table with the target encryption settings and copy data client-side over a Column Encryption Setting=Enabled connection.', 16, 1, @v_AeSchema, @v_AeTable, @v_AeColumn)
   END

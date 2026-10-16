@@ -294,6 +294,7 @@ When `Template.json` does not declare its own `ScriptFolders`, SchemaSmith fills
 
 | Folder | Quench Slot | Object Type |
 |---|---|---|
+| `Prerequisites/` | Objects | — |
 | `Before Scripts/` | Before | — |
 | `Schemas/` | Objects | Schemas |
 | `DataTypes/` | Objects | DataTypes |
@@ -311,6 +312,8 @@ When `Template.json` does not declare its own `ScriptFolders`, SchemaSmith fills
 | `SchemaBound Functions/` | AfterTablesObjects | SchemaBoundFunctions |
 | `Table Data/` | TableData | — |
 | `After Scripts/` | After | — |
+
+**Prerequisites folder.** SchemaTongs writes what a package needs but does not model to `Prerequisites/`, such as the [Always Encrypted keys](#always-encrypted-sql-server) its columns use. Each script creates only what is missing and leaves what exists alone, so it is safe on every deploy. It runs in the Objects pass, which comes before table creation; the Before slot runs after it. SchemaTongs rewrites these scripts in full on every extraction. Their first line records a hash of the rest, and `--Validate` warns about a hand edit the next extraction would overwrite (`SS-GEN-001`). Delete that line to make a script your own. A template that lists its folders gets `Prerequisites` added, first, the first time SchemaTongs writes one. It is not part of a schema template, because what it creates belongs to the database.
 
 > **Legacy fallback (SQL Server only):** If your existing package has `MigrationScripts/Before/`, `MigrationScripts/After/`, or a `TableData/` folder (no space) on disk, SchemaSmith will use them in place of `Before Scripts/`, `After Scripts/`, and `Table Data/` respectively. This keeps older packages working without a folder rename.
 
@@ -896,7 +899,7 @@ These three properties appear on SQL Server column definitions only and are igno
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `EncryptionType` | string | `"NONE"` | Encryption type: `"DETERMINISTIC"` (repeatable ciphertext, supports equality comparisons) or `"RANDOMIZED"` (non-repeatable ciphertext, stronger protection). `"NONE"` or absent means no encryption. |
-| `EncryptionKey` | string | `""` | Column Encryption Key name, bracket-wrapped (e.g., `"[MyCEK]"`). Must match a CEK already installed in the target database. |
+| `EncryptionKey` | string | `""` | Column Encryption Key name, bracket-wrapped (e.g., `"[MyCEK]"`). The key must exist in the target database before the table is created. SchemaTongs extracts every column master key and column encryption key to `Prerequisites/AlwaysEncryptedKeys.sql`, which creates them on a database that lacks them. |
 | `EncryptionAlgorithm` | string | `""` | Encryption algorithm name. The only currently supported value is `"AEAD_AES_256_CBC_HMAC_SHA_256"`. |
 
 When `EncryptionType` is not `"NONE"`, SchemaQuench emits `ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = [EncryptionKey], ENCRYPTION_TYPE = [EncryptionType], ALGORITHM = '[EncryptionAlgorithm]')` in the column DDL.
@@ -926,9 +929,11 @@ When `EncryptionType` is not `"NONE"`, SchemaQuench emits `ENCRYPTED WITH (COLUM
 
 ### Works and limitations
 
-**Declaring encrypted columns and extracting them both work.** Add new encrypted columns to a table JSON; SchemaQuench creates them with the declared CEK, type, and algorithm. SchemaTongs extracts existing encrypted columns and maps `EncryptionType`, `EncryptionKey`, and `EncryptionAlgorithm` correctly, so an extract-then-deploy round-trip is faithful.
+**Declaring encrypted columns and extracting them both work.** Add new encrypted columns to a table JSON; SchemaQuench creates them with the declared CEK, type, and algorithm, and a redeploy leaves an unchanged column alone. SchemaTongs extracts existing encrypted columns and maps `EncryptionType`, `EncryptionKey`, and `EncryptionAlgorithm` correctly, and writes the keys they use to the [Prerequisites folder](#sql-server-default-folders), so an extracted package deploys to an empty database.
 
-**Changing the encryption settings on a populated column is not supported in-quench.** If you change `EncryptionType`, `EncryptionKey`, or `EncryptionAlgorithm` on a column that already has data — or add `EncryptionType` to a column that was previously plaintext — SchemaQuench raises a hard error before any DDL runs, names the column, and points you at the workaround. The column is left untouched.
+**Key secrets stay out.** The extracted column master key records only where the key lives (`KEY_PATH`, a certificate store or a key vault). The column encryption key is stored encrypted by that master key. A client that reads or writes the encrypted columns needs access to the same certificate or vault key on every environment.
+
+**Changing the encryption settings on a populated column is not supported in-quench.** If you change `EncryptionType`, `EncryptionKey`, or `EncryptionAlgorithm` on a column that already has data — or add `EncryptionType` to a column that was previously plaintext, or remove it from an encrypted one — SchemaQuench raises a hard error before any DDL runs, names the column, and points you at the workaround. The column is left untouched.
 
 This is a fundamental SQL Server constraint, not a tooling limitation. A standard (non-enclave) SQL Server holds no Column Master Key and cannot decrypt or re-encrypt data server-side; re-encryption requires client-side key access that SchemaQuench does not have. The guard fires in both live and WhatIf mode so the constraint is visible in previews before any deployment runs.
 

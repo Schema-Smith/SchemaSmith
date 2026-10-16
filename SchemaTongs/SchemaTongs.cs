@@ -1139,6 +1139,8 @@ public class SchemaTongs
                                         allowReadOnlyTarget: true);
 
             if (_includeTables) ExtractTableDefinitions(command, targetDb);
+            // Always Encrypted arrived in 2016 (major 13); below it there are no keys to read.
+            if (_includeTables && !_isSchemaTemplate && sourceMajor is 0 or >= 13) ScriptSqlServerAlwaysEncryptedKeys(command, targetDb);
             if (_includeSchemas) ScriptSqlServerSchemas(command);
             if (_includeUserDefinedTypes) ScriptSqlServerUserDefinedTypes(command);
             if (_includeUserDefinedFunctions) ScriptSqlServerFunctions(command);
@@ -1759,6 +1761,90 @@ SELECT s.name AS TableSchema, pt.name AS TableName, tr.name AS TriggerName
             ValidateAndHandleScript(command.Connection, fileName, sql, ScriptObjectType.Triggers);
             _stats.Triggers++;
         }
+    }
+
+    internal const string AlwaysEncryptedKeysScript = "AlwaysEncryptedKeys.sql";
+
+    // The column master and column encryption keys an Always Encrypted column needs before its table can be created.
+    // Neither is modelled, so they go to a generated prerequisite script that creates only what is missing and runs
+    // ahead of the tables. Rewritten in full on every extraction; removed when the database no longer has keys.
+    private void ScriptSqlServerAlwaysEncryptedKeys(IDbCommand command, string targetDb)
+    {
+        var masterKeys = new List<(string Name, string Provider, string Path, bool Enclave, byte[] Signature)>();
+        command.CommandText = @"
+IF COL_LENGTH('sys.column_master_keys', 'allow_enclave_computations') IS NOT NULL
+  EXEC sp_executesql N'SELECT [name], key_store_provider_name, key_path, allow_enclave_computations, [signature] FROM sys.column_master_keys ORDER BY [name]'
+ELSE
+  SELECT [name], key_store_provider_name, key_path, CAST(0 AS BIT), CAST(NULL AS VARBINARY(MAX)) FROM sys.column_master_keys ORDER BY [name]";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                masterKeys.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), !reader.IsDBNull(3) && Convert.ToBoolean(reader.GetValue(3)),
+                                reader.IsDBNull(4) ? null : (byte[])reader.GetValue(4)));
+
+        var encryptionKeys = new List<(string Name, string MasterKey, string Algorithm, byte[] Value)>();
+        command.CommandText = @"
+SELECT k.[name], m.[name], v.encryption_algorithm_name, v.encrypted_value
+  FROM sys.column_encryption_keys k
+  JOIN sys.column_encryption_key_values v ON v.column_encryption_key_id = k.column_encryption_key_id
+  JOIN sys.column_master_keys m ON m.column_master_key_id = v.column_master_key_id
+ ORDER BY k.[name], m.[name]";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                encryptionKeys.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), (byte[])reader.GetValue(3)));
+
+        var folder = Path.Combine(_templatePath, Template.PrerequisitesFolder);
+        var file = Path.Combine(folder, AlwaysEncryptedKeysScript);
+        var files = FileWrapper.GetFromFactory();
+        if (masterKeys.Count == 0)
+        {
+            if (files.Exists(file) && GeneratedScript.IsGenerated(files.ReadAllText(file))) files.Delete(file);
+            return;
+        }
+
+        _progressLog.Info("Casting Always Encrypted Keys");
+        string Quote(string name) => "[" + Identifier.EscapeDelimited(name, Platform.SqlServer) + "]";
+        string Hex(byte[] bytes) => "0x" + Convert.ToHexString(bytes);
+        string Exec(string sql) => $"EXEC(N'{EscapeSql(sql)}')";
+
+        var sb = new StringBuilder();
+        sb.Append($"-- The Always Encrypted keys of {targetDb}, written by SchemaTongs on every extraction: change the source database,\r\n");
+        sb.Append("-- not this file. A key is created only where it is missing; one that exists is left as it is. KEY_PATH names a\r\n");
+        sb.Append("-- certificate or vault key outside the database, which any client that reads the encrypted columns needs access to.\r\n");
+        sb.Append("IF OBJECT_ID('sys.column_master_keys') IS NULL\r\n");
+        sb.Append("  RAISERROR('  Always Encrypted keys skipped: they need SQL Server 2016', 10, 1) WITH NOWAIT\r\n");
+        sb.Append("ELSE\r\nBEGIN\r\n");
+        foreach (var key in masterKeys)
+        {
+            var enclave = key.Enclave && key.Signature != null ? $", ENCLAVE_COMPUTATIONS (SIGNATURE = {Hex(key.Signature)})" : "";
+            sb.Append($"  IF NOT EXISTS (SELECT 1 FROM sys.column_master_keys WHERE [name] = N'{EscapeSql(key.Name)}')\r\n");
+            sb.Append("    " + Exec($"CREATE COLUMN MASTER KEY {Quote(key.Name)} WITH (KEY_STORE_PROVIDER_NAME = N'{EscapeSql(key.Provider)}', KEY_PATH = N'{EscapeSql(key.Path)}'{enclave})") + "\r\n");
+        }
+        foreach (var key in encryptionKeys.GroupBy(k => k.Name))
+        {
+            var values = string.Join(", ", key.Select(v => $"(COLUMN_MASTER_KEY = {Quote(v.MasterKey)}, ALGORITHM = '{EscapeSql(v.Algorithm)}', ENCRYPTED_VALUE = {Hex(v.Value)})"));
+            sb.Append($"  IF NOT EXISTS (SELECT 1 FROM sys.column_encryption_keys WHERE [name] = N'{EscapeSql(key.Key)}')\r\n");
+            sb.Append("    " + Exec($"CREATE COLUMN ENCRYPTION KEY {Quote(key.Key)} WITH VALUES {values}") + "\r\n");
+        }
+        sb.Append("END\r\n");
+
+        DirectoryWrapper.GetFromFactory().CreateDirectory(folder);
+        EnsurePrerequisitesFolder();
+        _progressLog.Info($"  Casting {file}");
+        files.WriteAllText(file, GeneratedScript.Stamp(sb.ToString()));
+    }
+
+    // A template that lists its folders runs only those, so one extracted before the Prerequisites folder existed gets it
+    // added, first, the first time a prerequisite is written.
+    private void EnsurePrerequisitesFolder()
+    {
+        var templateFile = Path.Combine(_templatePath, "Template.json");
+        if (!FileWrapper.GetFromFactory().Exists(templateFile)) return;
+        var template = JsonHelper.Load<Template>(templateFile);
+        if (template == null || template.ScriptFolders.Count == 0
+            || template.ScriptFolders.Any(f => string.Equals(f.FolderPath, Template.PrerequisitesFolder, StringComparison.OrdinalIgnoreCase))) return;
+        template.ScriptFolders.Insert(0, new TemplateFolder { FolderPath = Template.PrerequisitesFolder, QuenchSlot = TemplateQuenchSlot.Objects });
+        _progressLog.Info($"  Adding the {Template.PrerequisitesFolder} folder to {templateFile}");
+        WritePackageObject(templateFile, template, "templates");
     }
 
     private void ScriptSqlServerFullTextCatalogs(IDbCommand command)

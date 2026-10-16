@@ -717,6 +717,8 @@ namespace Schema.Domain
         /// Single-arg overload preserved for callers (SchemaTongs, FolderMappingConfig, existing tests)
         /// that don't need the schema-template carve-out. Returns the regular-template default set.
         /// </summary>
+        public const string PrerequisitesFolder = "Prerequisites";
+
         public static List<TemplateFolder> GetDefaultTemplateFolders(Platform platform) =>
             GetDefaultTemplateFolders(platform, isSchemaTemplate: false);
 
@@ -743,6 +745,10 @@ namespace Schema.Domain
             {
                 Platform.SqlServer =>
                 [
+                    // Written by SchemaTongs in full on every extraction: what the package needs and does not model, such as
+                    // the Always Encrypted keys its columns use. An Objects folder because that pass runs ahead of table
+                    // creation (the Before slot runs after it) and on every deploy; the scripts create only what is missing.
+                    new TemplateFolder { FolderPath = PrerequisitesFolder, QuenchSlot = TemplateQuenchSlot.Objects },
                     new TemplateFolder { FolderPath = "Before Scripts", QuenchSlot = TemplateQuenchSlot.Before },
                     new TemplateFolder { FolderPath = "Schemas", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Schemas },
                     new TemplateFolder { FolderPath = "DataTypes", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.DataTypes },
@@ -820,6 +826,7 @@ namespace Schema.Domain
 
             // Database-scoped objects cannot legitimately fan out per schema (design §3.3).
             return folders.Where(f =>
+                f.FolderPath != PrerequisitesFolder &&
                 f.ObjectType != ScriptObjectType.Schemas &&
                 f.ObjectType != ScriptObjectType.DDLTriggers &&
                 f.ObjectType != ScriptObjectType.FullTextCatalogs &&
