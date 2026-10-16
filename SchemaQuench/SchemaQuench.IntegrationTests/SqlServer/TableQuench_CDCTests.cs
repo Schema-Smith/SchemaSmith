@@ -250,7 +250,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCAddCol
     }
 
     [Test]
-    public void ShouldRefreshCDCAfterDropColumn()
+    public void DroppingAColumn_DoesNotRotate_AndCaptureContinues()
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
@@ -286,18 +286,22 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCDropCo
                 """;
             RunTableQuenchProc(cmd, json);
 
-            // Assert CDC is still enabled
-            cmd.CommandText = "SELECT is_tracked_by_cdc FROM sys.tables WHERE object_id = OBJECT_ID('dbo.CDCDropColTest')";
-            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(true), "CDC should remain enabled");
-
-            // Assert the capture instance now tracks 2 columns (Extra is gone)
-            // Rotation leaves BOTH instances in place, so scope this to the one this deploy created --
-            // an unscoped count sums the old and new column sets and means nothing.
-            cmd.CommandText = @"SELECT COUNT(*) FROM cdc.captured_columns cc
-                                WHERE cc.object_id = (SELECT TOP 1 ct.object_id FROM cdc.change_tables ct
-                                                       WHERE ct.source_object_id = OBJECT_ID('dbo.CDCDropColTest')
-                                                       ORDER BY ct.create_date DESC, ct.object_id DESC)";
-            Assert.That((int)cmd.ExecuteScalar(), Is.EqualTo(2), "Refreshed capture instance should track only 2 columns");
+            // #509: a dropped column stays in the change table and captures NULL, so the one instance keeps capturing;
+            // rotating for it spent the table's second slot. (This asserted the rotated instance's column count before.)
+            cmd.CommandText = "INSERT dbo.CDCDropColTest (Id, Val) VALUES (2, 'after the drop')";
+            cmd.ExecuteNonQuery();
+            WaitForCapture(cmd, "dbo_CDCDropColTest_CT", "Id = 2");
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.CDCDropColTest')";
+            var sourceColumns = (int)cmd.ExecuteScalar();
+            cmd.CommandText = "SELECT Val + '|' + ISNULL(CONVERT(VARCHAR(10), Extra), 'NULL') FROM cdc.dbo_CDCDropColTest_CT WHERE Id = 2";
+            var captured = (string)cmd.ExecuteScalar();
+            var instances = InstanceCount(cmd, "CDCDropColTest");
+            Assert.Multiple(() =>
+            {
+                Assert.That(sourceColumns, Is.EqualTo(2), "the column is dropped");
+                Assert.That(instances, Is.EqualTo(1), "without a rotation");
+                Assert.That(captured, Is.EqualTo("after the drop|NULL"), "and the instance keeps capturing, with the dropped column NULL");
+            });
         }
         finally
         {
@@ -309,8 +313,8 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCDropCo
 
     /// <summary>
     /// Removes dbo.CDCDropColTest and EVERY capture instance on it.
-    /// <para>Every instance, not just <c>dbo_CDCDropColTest</c>: the rotation this test exercises
-    /// deliberately leaves the original instance in place alongside the new one, so naming a single
+    /// <para>Every instance, not just <c>dbo_CDCDropColTest</c>: a run that failed part-way through an
+    /// earlier shape of this test could leave a rotated instance beside the original, so naming a single
     /// instance leaves the other behind — and SQL Server permits only two per table, so the leftover
     /// eventually makes <c>sp_cdc_enable_table</c> fail for reasons that have nothing to do with the test
     /// that trips over it.</para>
@@ -608,8 +612,10 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCCeilin
             RunTableQuenchProc(cmd, "[" + CeilingPackage(withExtra: false) + "," + PlainPackage("INT") + "]");
             Assert.That(InstanceCount(cmd, "CDCCeilingTest"), Is.EqualTo(2), "the first change rotates to a second instance");
 
-            // The ceiling is hit by a column CHANGE (a new column is refused earlier, before the column pass), as in the report.
-            var ex = Assert.Catch<Exception>(() => RunTableQuenchProc(cmd, "[" + CeilingPackage(withExtra: false).Replace("NVARCHAR(100)", "NVARCHAR(200)") + "," + PlainPackage("BIGINT") + "]"));
+            // The ceiling is hit by a column CHANGE the instance cannot follow -- the identity put back, which re-creates the
+            // column -- as in the report (a new column is refused earlier, before the column pass; a type change altered in
+            // place no longer rotates). The first deploy's package declared Id without IDENTITY, so that swap was the first rotation.
+            var ex = Assert.Catch<Exception>(() => RunTableQuenchProc(cmd, "[" + CeilingPackage(withExtra: false).Replace("\"DataType\": \"INT\", \"Nullable\": false, \"Identity\": true", "\"DataType\": \"INT IDENTITY(1, 1)\", \"Nullable\": false") + "," + PlainPackage("BIGINT") + "]"));
             Assert.That(ex!.Message, Does.Contain("CDC capture-instance limit reached"));
             var idType = GetColumnDataType(cmd, "CDCCeilingPlain", "Id");
             cmd.CommandText = "SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.CDCCeilingPlain') AND [name] IN ('PK_CDCCeilingPlain', 'IX_CDCCeilingPlain_Val')";
@@ -734,6 +740,173 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCToggle
               ]
           }
           """;
+
+    [Test]
+    public void AColumnAlteredInPlace_DoesNotRotate_AndTheInstanceCapturesTheNewShape()
+    {
+        // #509: SQL Server carries an in-place ALTER COLUMN into the change table itself (probed on 2017 and 2022), so a type,
+        // nullability or collation change needs no rotation -- each used to take the table's second instance slot for nothing.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.CdcInPlace (Id INT NOT NULL CONSTRAINT PK_CdcInPlace PRIMARY KEY, Val VARCHAR(10) NULL, Qty INT NULL, Note VARCHAR(20) COLLATE Latin1_General_CI_AS NULL, Code VARCHAR(50) NULL)
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcInPlace', @role_name = NULL";
+        ExecuteWithDeadlockRetry(cmd);
+        try
+        {
+            cmd.CommandText = "INSERT dbo.CdcInPlace VALUES (1, 'short', 1, 'n', 'ab')";
+            cmd.ExecuteNonQuery();
+            WaitForCapture(cmd, "dbo_CdcInPlace_CT", "Id = 1");
+
+            RunTableQuenchProc(cmd, """
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[CdcInPlace]",
+                    "EnableCDC": true,
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                        {"Name": "[Val]", "DataType": "VARCHAR(50)", "Nullable": true},
+                        {"Name": "[Qty]", "DataType": "INT", "Nullable": false},
+                        {"Name": "[Note]", "DataType": "VARCHAR(20)", "Nullable": true, "Collation": "Latin1_General_BIN"},
+                        {"Name": "[Code]", "DataType": "VARCHAR(10)", "Nullable": true}
+                    ],
+                    "Indexes": [ {"Name": "[PK_CdcInPlace]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]"} ]
+                }
+                """);
+
+            cmd.CommandText = "INSERT dbo.CdcInPlace VALUES (2, 'this is longer than ten chars', 2, 'N', 'cd')";
+            cmd.ExecuteNonQuery();
+            WaitForCapture(cmd, "dbo_CdcInPlace_CT", "Id = 2");
+            cmd.CommandText = "SELECT Val + '|' + CONVERT(VARCHAR(10), Qty) + '|' + Note COLLATE DATABASE_DEFAULT + '|' + Code FROM cdc.dbo_CdcInPlace_CT WHERE Id = 2";
+            var captured = (string)cmd.ExecuteScalar();
+            var instances = InstanceCount(cmd, "CdcInPlace");
+            var valType = GetColumnDataType(cmd, "CdcInPlace", "Val");
+            Assert.Multiple(() =>
+            {
+                Assert.That(instances, Is.EqualTo(1), "a widening, a NOT NULL, a collation change and a narrowing the history fits must not rotate");
+                Assert.That(valType, Is.EqualTo("VARCHAR(50)"), "and the change is applied");
+                Assert.That(captured, Is.EqualTo("this is longer than ten chars|2|N|cd"), "and the one instance captures the widened value");
+            });
+        }
+        finally { DropCdcTable(cmd, "CdcInPlace"); }
+    }
+
+    [Test]
+    public void ATypeChangeTheChangeTableCannotTake_IsRefusedBeforeAnythingChanges()
+    {
+        // #518: SQL Server applies the change to every change table that captures the column, inside the capture job, and a
+        // failure there stops capture for the whole database. A rotation does not avoid it (probed), so the deploy is refused.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.CdcNarrow (Id INT NOT NULL CONSTRAINT PK_CdcNarrow PRIMARY KEY, Val VARCHAR(50) NULL, Other INT NULL)
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNarrow', @role_name = NULL";
+        ExecuteWithDeadlockRetry(cmd);
+        try
+        {
+            cmd.CommandText = "INSERT dbo.CdcNarrow VALUES (1, 'a value longer than ten characters', 1)";
+            cmd.ExecuteNonQuery();
+            WaitForCapture(cmd, "dbo_CdcNarrow_CT", "Id = 1");
+            // The source now fits the narrower type; only the change table's history does not.
+            cmd.CommandText = "DELETE dbo.CdcNarrow";
+            cmd.ExecuteNonQuery();
+            const string package = """
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[CdcNarrow]",
+                    "EnableCDC": true,
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                        {"Name": "[Val]", "DataType": "VARCHAR(10)", "Nullable": true},
+                        {"Name": "[Other]", "DataType": "BIGINT", "Nullable": true}
+                    ],
+                    "Indexes": [ {"Name": "[PK_CdcNarrow]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]"} ]
+                }
+                """;
+
+            var ex = Assert.Catch<Exception>(() => RunTableQuenchProc(cmd, package));
+            var valType = GetColumnDataType(cmd, "CdcNarrow", "Val");
+            var otherType = GetColumnDataType(cmd, "CdcNarrow", "Other");
+            var instances = InstanceCount(cmd, "CdcNarrow");
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain("CDC capture would stop on [dbo].[CdcNarrow]: the change to column [Val] (VARCHAR(10)"));
+                Assert.That(ex.Message, Does.Contain("change table [cdc].[dbo_CdcNarrow_CT] of capture instance dbo_CdcNarrow"));
+                Assert.That(ex.Message, Does.Contain("@source_name = N'CdcNarrow', @capture_instance = N'dbo_CdcNarrow'"), "the message names the instance to drop");
+                Assert.That(valType, Is.EqualTo("VARCHAR(50)"), "nothing on the table changed");
+                Assert.That(otherType, Is.EqualTo("INT"), "not even the change that would have been fine");
+                Assert.That(instances, Is.EqualTo(1));
+            });
+
+            // Doing what the message says clears the way for the same deploy.
+            cmd.CommandText = "EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'CdcNarrow', @capture_instance = N'dbo_CdcNarrow'";
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, package);
+            Assert.That(GetColumnDataType(cmd, "CdcNarrow", "Val"), Is.EqualTo("VARCHAR(10)"));
+        }
+        finally { DropCdcTable(cmd, "CdcNarrow"); }
+    }
+
+    [Test]
+    public void ChangingAComputedColumnsExpression_DoesNotRotate()
+    {
+        // A captured computed column is always NULL (SQL Server documents it, and the probe agreed), so re-creating it with
+        // another expression changes nothing the instance records.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.CdcComputedExpr (Id INT NOT NULL CONSTRAINT PK_CdcComputedExpr PRIMARY KEY, A INT NULL, Twice AS ([A] * 2))
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcComputedExpr', @role_name = NULL";
+        ExecuteWithDeadlockRetry(cmd);
+        try
+        {
+            RunTableQuenchProc(cmd, """
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[CdcComputedExpr]",
+                    "EnableCDC": true,
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                        {"Name": "[A]", "DataType": "INT", "Nullable": true},
+                        {"Name": "[Twice]", "DataType": "INT", "Nullable": true, "ComputedExpression": "[A] * 3"}
+                    ],
+                    "Indexes": [ {"Name": "[PK_CdcComputedExpr]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]"} ]
+                }
+                """);
+            cmd.CommandText = "SELECT [definition] FROM sys.computed_columns WHERE [object_id] = OBJECT_ID('dbo.CdcComputedExpr') AND [name] = 'Twice'";
+            var definition = (string)cmd.ExecuteScalar();
+            var instances = InstanceCount(cmd, "CdcComputedExpr");
+            Assert.Multiple(() =>
+            {
+                Assert.That(definition, Is.EqualTo("([A]*(3))"), "the expression is changed");
+                Assert.That(instances, Is.EqualTo(1), "without a rotation");
+                Assert.That(NewestInstanceColumns(cmd, "CdcComputedExpr"), Is.EqualTo(new[] { "A", "Id", "Twice" }));
+            });
+        }
+        finally { DropCdcTable(cmd, "CdcComputedExpr"); }
+    }
+
+    // A captured row exists once the capture job has scanned the log. The Agent runs that job where there is one (the demo
+    // server) and nowhere in CI; sys.sp_cdc_scan runs the same scan on demand in both cases (probed), so this never waits
+    // on the job's schedule, and tolerates the call failing while the job holds the scan.
+    private static void WaitForCapture(IDbCommand cmd, string changeTable, string predicate)
+    {
+        for (var attempt = 0; attempt < 60; attempt++)
+        {
+            cmd.CommandText = "BEGIN TRY EXEC sys.sp_cdc_scan @maxtrans = 500, @maxscans = 10, @continuous = 0 END TRY BEGIN CATCH END CATCH";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"SELECT COUNT(*) FROM cdc.{changeTable} WITH (NOLOCK) WHERE {predicate}";
+            if ((int)cmd.ExecuteScalar() > 0) return;
+            Thread.Sleep(500);
+        }
+        Assert.Fail($"cdc.{changeTable} never received a row where {predicate}");
+    }
 
     // ---------------------------------------------------------------------------------------------------
     // CdcFilegroup (#417). Change tables go where the package says; a table whose capture instance sits

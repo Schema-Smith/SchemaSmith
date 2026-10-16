@@ -455,7 +455,7 @@ BEGIN TRY
                     OR (ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> [EncryptionType]) -- encryption change (data-preserving swap)
                    THEN 1 ELSE 0 END AS BIT) AS MustSwapColumn,
          CAST(0 AS BIT) AS DropOnly,
-         d.[DefinitionChanged], x.[OptionsBefore], x.[OptionsAfter]
+         d.[DefinitionChanged], d0.[TypeChanged], x.[OptionsBefore], x.[OptionsAfter]
     INTO #ColumnChanges
     FROM #Tables t WITH (NOLOCK)
     JOIN #Columns c WITH (NOLOCK) ON c.[Schema] = t.[Schema] 
@@ -485,10 +485,10 @@ BEGIN TRY
     LEFT JOIN #ColMeta cm ON cm.[object_id] = sc.[object_id] AND cm.column_id = sc.column_id
     -- The definition test first, then the column options around it, so the WHERE can ask for either (#510): a row
     -- exists when the definition differs or an option does (ROWGUIDCOL, NOT FOR REPLICATION, a mask), and
-    -- [DefinitionChanged] says which. An option-only change then neither re-states the definition nor counts as a change
-    -- the CDC capture instance can see (#509): the option is compared on its own, and the type comparison ignores the
-    -- two tokens that spell one.
-    CROSS APPLY (SELECT [DefinitionChanged] = CAST(CASE WHEN ((RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+    -- [DefinitionChanged] says which, and [TypeChanged] whether the type itself differs (the CDC change-table check asks).
+    -- An option-only change then neither re-states the definition nor counts as a change the CDC capture instance can
+    -- see (#509): the option is compared on its own, and the type comparison ignores the two tokens that spell one.
+    CROSS APPLY (SELECT [TypeChanged] = CAST(CASE WHEN RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
                                                      CASE WHEN sc.xml_collection_id <> 0
                                                           THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) + '' FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                           END,
@@ -496,7 +496,8 @@ BEGIN TRY
                                                 CASE WHEN ident.column_id IS NOT NULL
                                                      THEN ' IDENTITY(' + CONVERT(NVARCHAR(20), ident.seed_value) + ', ' + CONVERT(NVARCHAR(20), ident.increment_value) + ')' +
                                                           CASE WHEN ident.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
-                                                     ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'), ' ROWGUIDCOL', ''), ' NOT FOR REPLICATION', '')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), '(CONTENT ', '('), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'), ' ROWGUIDCOL', ''), ' NOT FOR REPLICATION', ''))
+                                                     ELSE '' END), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'), ' ROWGUIDCOL', ''), ' NOT FOR REPLICATION', '')  <> REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.DataType), '(CONTENT ', '('), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'), ' ROWGUIDCOL', ''), ' NOT FOR REPLICATION', '') THEN 1 ELSE 0 END AS BIT)) d0
+    CROSS APPLY (SELECT [DefinitionChanged] = CAST(CASE WHEN (d0.[TypeChanged] = 1
                   -- A computed column's nullability belongs to the engine unless the package states one: it is derivable from
                   -- the expression, and only a PERSISTED column can be declared NOT NULL at all. Comparing an OMITTED value
                   -- here re-added every such column on every deploy, and (once the emit side agreed with it) dropped an
@@ -550,7 +551,7 @@ BEGIN TRY
       AND cc.MustDropAndRecreate = 0 AND cc.DropOnly = 0 AND RTRIM(cc.[SpecialColumnScript]) = ''
 
   RAISERROR('Detect Computed Columns Impacted by Other Column Changes', 10, 100) WITH NOWAIT
-  INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly], [DefinitionChanged], [OptionsBefore], [OptionsAfter])
+  INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly], [DefinitionChanged], [TypeChanged], [OptionsBefore], [OptionsAfter])
     -- An unchanged computed column that reads a column being altered has to come off first: SQL Server refuses the
     -- ALTER COLUMN while anything accesses the column (5074). It is dropped and added back by the computed-column
     -- passes below. Dependencies come from sys.sql_expression_dependencies, which names the exact column a computed
@@ -560,7 +561,7 @@ BEGIN TRY
            [ColumnScript] = 'AS (' + ComputedExpression + ')' + CASE WHEN c.[Persisted] = 1 THEN ' PERSISTED' ELSE '' END
                                                               + CASE WHEN c.[Persisted] = 1 AND c.[NullableDeclared] = 0 THEN ' NOT NULL' ELSE '' END,
            [SpecialColumnScript] = '',
-           MustDropAndRecreate = CAST(1 AS BIT), MustSwapColumn = CAST(0 AS BIT), [DropOnly] = CAST(0 AS BIT), [DefinitionChanged] = CAST(1 AS BIT), [OptionsBefore] = '', [OptionsAfter] = ''
+           MustDropAndRecreate = CAST(1 AS BIT), MustSwapColumn = CAST(0 AS BIT), [DropOnly] = CAST(0 AS BIT), [DefinitionChanged] = CAST(1 AS BIT), [TypeChanged] = CAST(0 AS BIT), [OptionsBefore] = '', [OptionsAfter] = ''
       FROM #ColumnChanges cc WITH (NOLOCK)
       JOIN sys.columns changed ON changed.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
                               AND QUOTENAME(changed.[name]) = cc.[ColumnName] COLLATE DATABASE_DEFAULT
@@ -598,8 +599,8 @@ BEGIN TRY
             OR c.generated_always_type IN (7, 8, 9, 10)'
 
   RAISERROR('Detect Column Drops', 10, 100) WITH NOWAIT
-  INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly], [DefinitionChanged], [OptionsBefore], [OptionsAfter])
-    SELECT t.[Schema], [TableName] = t.[Name], [ColumnName] = QUOTENAME(COLUMN_NAME), '', '', 0, 0, 1, 1, '', ''
+  INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly], [DefinitionChanged], [TypeChanged], [OptionsBefore], [OptionsAfter])
+    SELECT t.[Schema], [TableName] = t.[Name], [ColumnName] = QUOTENAME(COLUMN_NAME), '', '', 0, 0, 1, 1, 0, '', ''
       FROM #Tables t WITH (NOLOCK)
       JOIN INFORMATION_SCHEMA.COLUMNS ON t.[Schema] COLLATE DATABASE_DEFAULT = QUOTENAME(TABLE_SCHEMA)
                                                    AND t.[Name] COLLATE DATABASE_DEFAULT = QUOTENAME(TABLE_NAME) 
@@ -774,9 +775,14 @@ BEGIN TRY
            t.CdcSupportsNetChanges AS DeclaredNetChanges,
            newest.index_name AS NewestIndexName,
            SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName) AS DeclaredIndexName,
-           -- An option-only change (NOT FOR REPLICATION, ROWGUIDCOL, a mask) leaves the captured columns and their types as they
-           -- are, so it neither rotates nor is refused at the ceiling (#509).
-           ColumnChange = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.[DefinitionChanged] = 1)
+           -- Only a change the capture instance cannot follow rotates (#509): a new column, or a column replaced rather than
+           -- altered (an identity, column-set or padding change), whose new position the instance does not record. A column
+           -- altered in place is carried into the change table by SQL Server itself, a dropped column stays in it as NULL, a
+           -- computed column captures NULL whatever its expression, and an option (NOT FOR REPLICATION, ROWGUIDCOL, a mask)
+           -- is not captured at all -- so none of those rotates or is refused at the ceiling. Probed on 2017 and 2022.
+           ColumnChange = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK)
+                                                          WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.[DefinitionChanged] = 1
+                                                            AND (cc.MustDropAndRecreate = 1 OR cc.MustSwapColumn = 1) AND cc.[ColumnScript] NOT LIKE 'AS (%')
                                               OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1)
                                             THEN 1 ELSE 0 END)
       INTO #CdcCandidates
@@ -818,6 +824,55 @@ BEGIN TRY
                FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_CdcAtCeiling IS NOT NULL
       RAISERROR('CDC capture-instance limit reached on: %s. SQL Server permits two capture instances per table and both are already in use, so this column, CdcFilegroup, CdcSupportsNetChanges or CdcIndexName change cannot rotate without discarding change history. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''<schema>'', @source_name = N''<table>'', @capture_instance = N''<name>''), then re-run.', 16, 1, @v_CdcAtCeiling)
+  END
+
+  -- SQL Server applies a column's type change to every change table that captures it -- in the capture job, after the
+  -- fact, a retired instance's included -- and a change the change table's values do not fit (a narrowing over longer
+  -- history) fails there and stops capture for the whole database until that instance is dropped (#518). A rotation does
+  -- not avoid it: the old instance gets the same ALTER. So each in-place type change on a captured column is tried
+  -- against the change tables first, the way the capture job will apply it, and refused before anything changes.
+  -- Probed on 2017 and 2022. ALTER COLUMN's conversion errors are an INSERT's, not a CONVERT's (which truncates in
+  -- silence), hence the table variable.
+  RAISERROR('Verify CDC Change Tables Can Take Each Column Type Change', 10, 100) WITH NOWAIT
+  IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
+  BEGIN
+    DECLARE @v_FitSchema NVARCHAR(256), @v_FitTable NVARCHAR(256), @v_FitColumn NVARCHAR(256), @v_FitType NVARCHAR(MAX),
+            @v_FitInstance SYSNAME, @v_FitChangeTable NVARCHAR(600), @v_FitError NVARCHAR(MAX), @v_FitSQL NVARCHAR(MAX)
+    DECLARE fit_cur CURSOR LOCAL FAST_FORWARD FOR
+      SELECT cc.[Schema], cc.[TableName], cc.[ColumnName], REPLACE(REPLACE(cc.[ColumnScript], ' SPARSE', ''), ' NOT NULL', ' NULL'),
+             ct.capture_instance, QUOTENAME(OBJECT_SCHEMA_NAME(ct.[object_id])) + '.' + QUOTENAME(OBJECT_NAME(ct.[object_id]))
+        FROM #ColumnChanges cc WITH (NOLOCK)
+        JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = cc.[Schema] AND t.[Name] = cc.[TableName]
+        JOIN sys.tables st ON st.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
+        JOIN cdc.change_tables ct WITH (NOLOCK) ON ct.source_object_id = st.[object_id]
+        JOIN cdc.captured_columns cap WITH (NOLOCK) ON cap.[object_id] = ct.[object_id]
+                                                   AND cap.column_name = SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName]) COLLATE DATABASE_DEFAULT
+       WHERE cc.[TypeChanged] = 1 AND cc.MustDropAndRecreate = 0 AND cc.MustSwapColumn = 0 AND cc.[DropOnly] = 0
+         AND cc.[ColumnScript] NOT LIKE '%ENCRYPTED WITH%'
+         AND ISNULL(t.EnableCDC, 1) = 1
+       ORDER BY cc.[Schema], cc.[TableName], cc.[ColumnName], ct.capture_instance
+    OPEN fit_cur
+    FETCH NEXT FROM fit_cur INTO @v_FitSchema, @v_FitTable, @v_FitColumn, @v_FitType, @v_FitInstance, @v_FitChangeTable
+    WHILE @@FETCH_STATUS = 0 AND @v_FitError IS NULL
+    BEGIN
+      SET @v_FitSQL = N'DECLARE @fit TABLE ([v] ' + @v_FitType + N'); INSERT @fit ([v]) SELECT ' + @v_FitColumn + N' FROM ' + @v_FitChangeTable + N' WITH (NOLOCK) WHERE ' + @v_FitColumn + N' IS NOT NULL'
+      BEGIN TRY
+        EXEC sp_executesql @v_FitSQL
+      END TRY
+      BEGIN CATCH
+        SET @v_FitError = ERROR_MESSAGE()
+      END CATCH
+      IF @v_FitError IS NULL
+        FETCH NEXT FROM fit_cur INTO @v_FitSchema, @v_FitTable, @v_FitColumn, @v_FitType, @v_FitInstance, @v_FitChangeTable
+    END
+    CLOSE fit_cur
+    DEALLOCATE fit_cur
+    IF @v_FitError IS NOT NULL
+    BEGIN
+      DECLARE @v_FitSchemaBare NVARCHAR(256) = SchemaSmith.fn_StripBracketWrapping(@v_FitSchema), @v_FitTableBare NVARCHAR(256) = SchemaSmith.fn_StripBracketWrapping(@v_FitTable)
+      RAISERROR('CDC capture would stop on %s.%s: the change to column %s (%s) cannot be applied to change table %s of capture instance %s, which holds values the new type does not take (%s). SQL Server applies a column type change to every change table that captures the column, and the capture job for the whole database fails until it can. Nothing has been changed. Drain that instance and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N''%s'', @source_name = N''%s'', @capture_instance = N''%s''), then re-run.', 16, 1,
+                @v_FitSchema, @v_FitTable, @v_FitColumn, @v_FitType, @v_FitChangeTable, @v_FitInstance, @v_FitError, @v_FitSchemaBare, @v_FitTableBare, @v_FitInstance)
+    END
   END
 
   -- Always Encrypted changes on an existing column cannot be performed server-side on a standard (non-enclave)

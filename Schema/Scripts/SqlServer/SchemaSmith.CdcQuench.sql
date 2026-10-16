@@ -47,10 +47,11 @@ BEGIN TRY
     END
   END
 
-  -- A capture instance whose columns are not the table's own is rotated even when this run changed no column (#427).
-  -- The column diff only sees what THIS run changes, so a column added by a run that stopped before this step, or
-  -- while the table was at the two-instance limit, would otherwise never be captured. Rotation always captures
-  -- every column, so once it has run the sets agree and this finds nothing.
+  -- A capture instance that does not capture one of the table's columns is rotated even when this run changed no
+  -- column (#427). The column diff only sees what THIS run changes, so a column added by a run that stopped before
+  -- this step, or while the table was at the two-instance limit, would otherwise never be captured. A column the
+  -- instance captures and the table no longer has is not a reason: it stays in the change table as NULL, and rotating
+  -- for it spent the second slot (#509).
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1) AND @WhatIf = 0
   BEGIN
     IF OBJECT_ID('tempdb..#CdcCaptureDrift') IS NOT NULL DROP TABLE #CdcCaptureDrift
@@ -66,13 +67,10 @@ BEGIN TRY
                     WHERE ct.source_object_id = st.[object_id]
                     ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
       WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
-        AND (EXISTS (SELECT 1 FROM sys.columns sc
-                      WHERE sc.[object_id] = st.[object_id] AND sc.is_column_set = 0
-                        AND NOT EXISTS (SELECT 1 FROM cdc.captured_columns cc WITH (NOLOCK)
-                                         WHERE cc.[object_id] = newest.ChangeTableId AND cc.column_name = sc.[name]))
-             OR EXISTS (SELECT 1 FROM cdc.captured_columns cc WITH (NOLOCK)
-                         WHERE cc.[object_id] = newest.ChangeTableId
-                           AND NOT EXISTS (SELECT 1 FROM sys.columns sc WHERE sc.[object_id] = st.[object_id] AND sc.[name] = cc.column_name)))
+        AND EXISTS (SELECT 1 FROM sys.columns sc
+                     WHERE sc.[object_id] = st.[object_id] AND sc.is_column_set = 0
+                       AND NOT EXISTS (SELECT 1 FROM cdc.captured_columns cc WITH (NOLOCK)
+                                        WHERE cc.[object_id] = newest.ChangeTableId AND cc.column_name = sc.[name]))
 
     INSERT #CdcRotate ([Schema], [TableName], OldCaptureInstance, NewFilegroup, NewNetChanges, NewIndexName, Reason)
       SELECT d.[Schema], d.[Name], d.capture_instance, COALESCE(d.DeclaredFilegroup, d.filegroup_name),
