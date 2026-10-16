@@ -267,6 +267,12 @@ CREATE TABLE dbo.TestStatistics (
 
 CREATE STATISTICS [ST_TestStatistics_MyInt] ON dbo.TestStatistics (MyInt)
 CREATE STATISTICS [ST_TestStatistics_MyBigInt_ForNullStrings] ON dbo.TestStatistics (MyBigInt) WHERE MyString IS NULL
+-- Named like the engine's own statistics; still user-created, so still extracted. The catalog flags decide, not the name.
+CREATE STATISTICS [hind_TestStatistics_MyString] ON dbo.TestStatistics (MyString)
+CREATE STATISTICS [stat_TestStatistics_MyInt_MyString] ON dbo.TestStatistics (MyInt, MyString)
+-- A predicate on a column the optimizer has no statistic for makes it create one (auto_created = 1), which is never extracted.
+INSERT INTO dbo.TestStatistics (MyInt, MyBigInt, MyString) VALUES (1, 1, 'A'), (2, 2, 'B')
+SELECT COUNT(*) FROM dbo.TestStatistics WHERE MyBigInt = 1
 ";
         cmd.ExecuteNonQuery();
         var result = GenerateTable(cmd, "dbo", "TestStatistics");
@@ -276,11 +282,68 @@ CREATE STATISTICS [ST_TestStatistics_MyBigInt_ForNullStrings] ON dbo.TestStatist
         Assert.That(result.Columns, Is.Not.Null);
         Assert.That(result.Columns, Has.Count.EqualTo(3));
         Assert.That(result.Statistics, Is.Not.Null);
-        Assert.That(result.Statistics, Has.Count.EqualTo(2));
+        Assert.That(result.Statistics.Select(s => s.Name), Is.EquivalentTo(new[] { "[hind_TestStatistics_MyString]", "[ST_TestStatistics_MyBigInt_ForNullStrings]", "[ST_TestStatistics_MyInt]", "[stat_TestStatistics_MyInt_MyString]" }),
+            "every user-created statistic and nothing the engine created");
+        Assert.That(result.Statistics, Has.Count.EqualTo(4));
+        result.Statistics.RemoveAll(s => s.Name.StartsWith("[hind_") || s.Name.StartsWith("[stat_"));
 
         AssertStatisticProperties(result.Statistics[0], "ST_TestStatistics_MyBigInt_ForNullStrings", "[MyBigInt]", "[MyString] IS NULL");
         AssertStatisticProperties(result.Statistics[1], "ST_TestStatistics_MyInt", "[MyInt]", null);
 
+        conn.Close();
+    }
+
+    [Test]
+    public void ShouldExtractADisabledIndex_MarkedDisabled()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.TestDisabledIndexes (
+    MyInt INT NOT NULL,
+    MyString VARCHAR(100) NULL,
+    CONSTRAINT [PK_TestDisabledIndexes] PRIMARY KEY CLUSTERED (MyInt)
+)
+CREATE UNIQUE NONCLUSTERED INDEX [UX_TestDisabledIndexes_MyString] ON dbo.TestDisabledIndexes (MyString)
+ALTER INDEX [UX_TestDisabledIndexes_MyString] ON dbo.TestDisabledIndexes DISABLE
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "dbo", "TestDisabledIndexes");
+        Assert.That(result.Indexes.Select(i => i.Name), Is.EquivalentTo(new[] { "[PK_TestDisabledIndexes]", "[UX_TestDisabledIndexes_MyString]" }), "a disabled index is still the table's index");
+        Assert.Multiple(() =>
+        {
+            Assert.That(((SqlServerIndex)result.Indexes.Single(i => i.Name == "[UX_TestDisabledIndexes_MyString]")).Disabled, Is.True);
+            Assert.That(((SqlServerIndex)result.Indexes.Single(i => i.Name == "[PK_TestDisabledIndexes]")).Disabled, Is.False);
+        });
+        conn.Close();
+    }
+
+    [Test]
+    public void ShouldExtractVectorColumns_WithTheirDimensionsAndBasePrecision()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) < 17) Assert.Ignore("VECTOR is a SQL Server 2025 type.");
+        // float16 is behind the preview switch, which takes effect from the next batch, not within the one that sets it.
+        cmd.CommandText = "ALTER DATABASE SCOPED CONFIGURATION SET PREVIEW_FEATURES = ON";
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = @"
+CREATE TABLE dbo.TestVectors (
+    MyInt INT NOT NULL,
+    Emb VECTOR(3) NULL,
+    Half VECTOR(1536, float16) NULL
+)
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "dbo", "TestVectors");
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Columns.Single(c => c.Name == "[Emb]").DataType, Is.EqualTo("VECTOR(3)"));
+            Assert.That(result.Columns.Single(c => c.Name == "[Half]").DataType, Is.EqualTo("VECTOR(1536, float16)"));
+        });
         conn.Close();
     }
 

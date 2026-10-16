@@ -302,8 +302,10 @@
            -- Below PG15 NULLS NOT DISTINCT does not exist: the effective column drives compare + emit
            -- (coerced false so an old target neither churns nor emits an unsupported clause); the raw
            -- declared value drives the unsupported-feature policy (fail | warn-with-downgrade).
-           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 15 THEN COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) ELSE false END AS "NullsNotDistinct",
-           COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) AS "NullsNotDistinctDeclared",
+           -- On a primary key the clause decides nothing (the columns cannot be NULL) and the engine never records it,
+           -- so it is neither emitted nor compared there; --Validate reports it (SS-IDX-004).
+           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 15 AND NOT COALESCE((celem ->> 'PrimaryKey')::BOOLEAN, false) THEN COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) ELSE false END AS "NullsNotDistinct",
+           CASE WHEN NOT COALESCE((celem ->> 'PrimaryKey')::BOOLEAN, false) THEN COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) ELSE false END AS "NullsNotDistinctDeclared",
            -- WITHOUT OVERLAPS is PostgreSQL 18: the effective value drives compare + emit (false below 18, so an old
            -- target neither churns nor emits the clause), the declared value drives the unsupported-feature policy.
            CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 18 THEN COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) ELSE false END AS "WithoutOverlaps",
@@ -311,7 +313,12 @@
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName",
            CASE WHEN p_UpdateFillFactor THEN true ELSE COALESCE((celem ->> 'UpdateFillFactor')::BOOLEAN, false) END AS "UpdateFillFactor",
-           COALESCE(NULLIF((celem ->> 'FillFactor')::INT2, 0), 90) AS "FillFactor",
+           -- Undeclared (absent or 0) is the engine's default for the access method, which is what the live index has
+           -- when nobody set one; only a declared value is written into the CREATE (IndexWithClause).
+           COALESCE(NULLIF((celem ->> 'FillFactor')::INT2, 0),
+                    "SchemaSmith"."IndexFillFactorDefault"(CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 18 AND COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) THEN 'gist'
+                                                                ELSE COALESCE(celem ->> 'AccessMethod', 'btree') END)) AS "FillFactor",
+           NULLIF((celem ->> 'FillFactor')::INT2, 0) IS NOT NULL AS "FillFactorDeclared",
            -- Index storage parameters (the WITH clause), canonicalised as key=value pairs sorted by key so
            -- reloptions' own ordering does not matter, with fillfactor excluded (FillFactor owns it). This is
            -- what carries a vector index's m / ef_construction / lists. Same shape as IndexOnlyQuench's own

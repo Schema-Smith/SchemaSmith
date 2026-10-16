@@ -70,10 +70,12 @@ BEGIN
            idx.indisclustered AS "Clustered",
            COALESCE(PG_GET_EXPR(idx.indpred, idx.indrelid), '') AS "FilterExpression",
            (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') AS "AccessMethod",
-           CASE WHEN 'fillfactor=100' = ANY(i.reloptions) THEN 100
-                WHEN i.reloptions IS NULL THEN 90 -- Default for B-tree indexes
-                ELSE (regexp_match(array_to_string(i.reloptions, ','), 'fillfactor=(\d+)') ) [1] ::int
-                END AS "FillFactor",
+           -- The option when set, else the engine's default for the access method (NULL where it has none), which
+           -- is what the declared side resolves an undeclared FillFactor to.
+           COALESCE((regexp_match(array_to_string(i.reloptions, ','), 'fillfactor=(\d+)'))[1]::int2,
+                    "SchemaSmith"."IndexFillFactorDefault"((SELECT am.amname FROM pg_am am WHERE i.relam = am.oid))) AS "FillFactor",
+           -- A failed CREATE INDEX CONCURRENTLY leaves the index behind marked invalid: present by name, used by nothing.
+           idx.indisvalid AS "Valid",
            %s AS "NullsNotDistinct",
            %s AS "WithoutOverlaps",
            -- Storage parameters (the WITH clause), canonicalised to match the declared side: reloptions is

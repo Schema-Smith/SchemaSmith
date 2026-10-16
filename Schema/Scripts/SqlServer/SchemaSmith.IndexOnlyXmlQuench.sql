@@ -79,7 +79,7 @@ BEGIN TRY
                                FROM SchemaSmith.fn_SplitList(i.[IncludeColumns], ',')
                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''
                                ORDER BY SchemaSmith.fn_SafeBracketWrap([value]) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
-         [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0),
+         [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0), [Disabled] = ISNULL(i.[Disabled], 0),
          i.[ShouldApplyExpression], i.[VariantName], i.[Description]
     INTO #Indexes
     FROM #TableDefinitions t WITH (NOLOCK)
@@ -94,6 +94,7 @@ BEGIN TRY
       [ColumnStore] = CONVERT(BIT, CASE LOWER(idx.value('(ColumnStore/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [IgnoreDuplicateKey] = CONVERT(BIT, CASE LOWER(idx.value('(IgnoreDuplicateKey/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [PadIndex] = CONVERT(BIT, CASE LOWER(idx.value('(PadIndex/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
+      [Disabled] = CONVERT(BIT, CASE LOWER(idx.value('(Disabled/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [FillFactor] = idx.value('(FillFactor/text())[1]', 'TINYINT'),
       [FilterExpression] = idx.value('(FilterExpression/text())[1]', 'NVARCHAR(MAX)'),
       [IndexColumns] = idx.value('(IndexColumns/text())[1]', 'NVARCHAR(MAX)'),
@@ -312,7 +313,8 @@ BEGIN TRY
     JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
                                      AND si.index_id > 0
                                      AND is_hypothetical = 0
-                                     AND is_disabled = 0
+                                     -- A disabled index is still the table's index: compared like any other, dropped when its
+                                     -- definition changed, and otherwise left for IndexStateQuench to enable or keep disabled.
                                      -- A kind a package cannot declare is neither compared nor dropped. XML (3) has its own scan.
                                      AND si.[type] IN (3, {{RenderableIndexTypes}})
                                      -- The engine's own GRAPH_UNIQUE_INDEX_<guid> over a graph table's graph_id column
@@ -822,8 +824,7 @@ BEGIN TRY
                                    AND auto_created = 0
                                    AND user_created = 1
                                    -- is_temporary (2012 col) omitted: temporary stats exist only on readable secondaries; SchemaSmith targets a writable primary where it is always 0
-                                   AND si.[Name] NOT LIKE 'stat[_]%'
-                                   AND si.[Name] NOT LIKE 'hind[_]%'
+                                   -- The flags above decide what is a user statistic; a name is not evidence either way.
     WHERE t.MissingTable = 0
   
   RAISERROR('Detect Statistics Changes', 10, 100) WITH NOWAIT
@@ -1082,6 +1083,9 @@ BEGIN TRY
         WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
 
   -- Index descriptions, once every index exists.
+  -- Once every index exists: a declared Disabled state is state on an index that must already be there.
+  EXEC SchemaSmith.IndexStateQuench @WhatIf
+
   EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf = @WhatIf, @IndexesOnly = 1
 
   -- #242: record here, not in the caller -- this proc's temp tables are gone the moment it returns.

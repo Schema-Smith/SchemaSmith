@@ -33,6 +33,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string IndexColumnCode = "SS-IDX-001";
     private const string TemporalKeyShapeCode = "SS-IDX-002";
     private const string TemporalKeyPeriodCode = "SS-IDX-003";
+    private const string NullsNotDistinctOnKeyCode = "SS-IDX-004";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RebuildThresholdCode = "SS-TBL-001";
@@ -442,6 +443,12 @@ public sealed class CoherenceCheck : ISchemaCheck
         var location = $"{tableLocation} / Index '{index.Name}'";
         var localColumnNames = ColumnNames(table);
         var keyParts = SplitNames(index.IndexColumns);
+
+        // A primary key's columns cannot be NULL, so NULLS NOT DISTINCT decides nothing there and the engine never
+        // records it on one. The deploy leaves it off the key rather than re-creating the key on every run.
+        if (index is PostgreSqlIndex { NullsNotDistinct: true } && index.PrimaryKey)
+            yield return new Finding(Severity.Warning, NullsNotDistinctOnKeyCode, Category, location,
+                $"Index '{index.Name}' sets NullsNotDistinct on a primary key, whose columns cannot be NULL: the clause has no effect and is not applied.");
 
         // A temporal key (WITHOUT OVERLAPS) is a primary key or unique key; on MariaDB its last part names one of the
         // table's periods rather than a column, so that part is not a missing column.

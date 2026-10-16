@@ -945,7 +945,7 @@ Every entry in the `Indexes` array defines an index or key constraint on the tab
 On a graph table, an index can name the engine's pseudo-columns as key parts: `$node_id` on a node table, `$edge_id`, `$from_id` and `$to_id` on an edge table (`"IndexColumns": "$from_id,$to_id"`, bare, as `CREATE INDEX` takes them). SchemaTongs writes such an index under those names; the GUID-suffixed columns SQL Server stores it over never reach the package, and the engine's own `GRAPH_UNIQUE_INDEX` is neither extracted nor dropped as an unknown index.
 
 `CompressionType` (NONE/ROW/PAGE), `Clustered`, `ColumnStore`, `FillFactor`, `UpdateFillFactor`,
-`FileGroup`, `PartitionScheme`, `PartitionColumn`, `IgnoreDuplicateKey`, `PadIndex`, `BucketCount`.
+`FileGroup`, `PartitionScheme`, `PartitionColumn`, `IgnoreDuplicateKey`, `PadIndex`, `BucketCount`, `Disabled`.
 
 | Property | Type | Default | Notes |
 |---|---|---|---|
@@ -959,6 +959,7 @@ On a graph table, an index can name the engine's pseudo-columns as key parts: `$
 |---|---|---|---|
 | `IgnoreDuplicateKey` | bool | `false` | `IGNORE_DUP_KEY`. **This changes what your application sees, not how fast it runs.** With it off (the default), inserting a duplicate into a unique index fails the whole statement with error 2601 and nothing is written. With it on, the duplicate row is discarded with a warning and **the rest of the statement succeeds** — so a multi-row `INSERT` containing one duplicate lands the other rows instead of rolling back. Only valid on a unique index or unique constraint. |
 | `PadIndex` | bool | `false` | `PAD_INDEX` — applies `FillFactor` to the intermediate index pages as well as the leaf pages. Has no effect without a `FillFactor`, which is why it is declared alongside it rather than on its own. |
+| `Disabled` | bool | `false` | The index is disabled (`ALTER INDEX … DISABLE`): its definition stays in the catalog, but it holds no data and enforces nothing. This is declared state, converged once the index exists. Declared `true`, a live index is disabled after it is created. Left at the default, an index someone disabled by hand is **rebuilt**, which is what enables it — so a unique index the package says exists enforces again, and the rebuild reports the truth if the rows no longer satisfy it. A disabled index whose definition changed is replaced like any other. Two engine facts worth knowing before declaring it: disabling a **clustered** index makes the table unreadable until it is rebuilt, and disabling a primary key's or unique constraint's index disables every foreign key that references it. SchemaTongs extracts a disabled index with `Disabled: true`. |
 
 **Index kinds a package cannot declare yet:** spatial indexes, JSON indexes (SQL Server 2025) and selective XML indexes. SchemaTongs leaves them out of the table file and names each one in a warning, and SchemaQuench leaves them alone on deploy -- it neither compares them nor drops them, even with [`DropUnknownIndexes`](configuration.md#dropunknownindexes) on. Create and maintain them with a script in the template's `After` slot.
 
@@ -975,6 +976,11 @@ On a graph table, an index can name the engine's pseudo-columns as key parts: `$
 | `Deferrable` | bool | `false` | `DEFERRABLE` on a primary key or unique constraint. A plain index cannot be deferred, so it applies only to the constraint forms. |
 | `InitiallyDeferred` | bool | `false` | `INITIALLY DEFERRED` on a deferrable primary key or unique constraint: the check waits for commit unless a transaction asks otherwise. |
 | `Clustered` | bool | `false` | Marks the index as the table's cluster index (`ALTER TABLE … CLUSTER ON`), which PostgreSQL's `CLUSTER` command then uses. It does not reorder rows itself. Clearing it runs `SET WITHOUT CLUSTER`. |
+| `FillFactor` | int | unset | `fillfactor`, written into the `CREATE` only when declared and converged in place with `ALTER INDEX … SET` when it changes. Unset means the engine's own default for the index's access method — 90 for btree and GiST, 75 for hash, 80 for SP-GiST — which is what an index created without the option already has, so nothing is written and a redeploy is a no-op. Access methods with no fill factor (GIN, BRIN, extension methods such as `hnsw`) never get the option. SchemaTongs writes `FillFactor` only when the index carries the option. |
+
+**An invalid index is replaced.** A `CREATE INDEX CONCURRENTLY` that fails leaves its index behind marked invalid: present by name, used by no query. The deploy does not take it for the declared index — it names it in a warning, drops it, and creates the declared index.
+
+**`NullsNotDistinct` on a primary key does nothing.** A primary key's columns cannot be NULL, so the clause has nothing to decide and PostgreSQL never records it on one. The deploy leaves it off the key rather than re-creating the key on every run, and `--Validate` reports the declaration (`SS-IDX-004`). Declare it on a unique index or unique constraint, where it decides whether two NULL keys collide.
 
 `StorageParameters` is an open `{ "key": "value" }` map carrying the index's `WITH (...)` storage options, so
 each access method's own options are expressible without SchemaSmith maintaining a list of them — PostgreSQL

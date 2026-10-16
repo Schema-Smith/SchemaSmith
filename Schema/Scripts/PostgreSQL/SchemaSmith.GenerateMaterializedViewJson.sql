@@ -37,10 +37,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(mv))
                                (SELECT iam.amname FROM pg_am iam WHERE i.relam = iam.oid AND i.relkind = 'i') AS "AccessMethod",
                                "SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)) AS "FilterExpression",
                                '' AS "ShouldApplyExpression",
-                               CASE WHEN 'fillfactor=100' = ANY(i.reloptions) THEN 100
-                                    WHEN i.reloptions IS NULL THEN 90
-                                    ELSE (REGEXP_MATCH(ARRAY_TO_STRING(i.reloptions, ','), 'fillfactor=(\d+)') ) [1] ::int
-                                    END AS "FillFactor",
+                               -- Only a fill factor someone set is declared, as GenerateTableJson.
+                               (REGEXP_MATCH(ARRAY_TO_STRING(i.reloptions, ','), 'fillfactor=(\d+)'))[1]::int AS "FillFactor",
                                "SchemaSmith"."IndexNullsNotDistinct"(idx.indexrelid) AS "NullsNotDistinct"
                           FROM pg_index idx
                           JOIN pg_class i ON i.oid = idx.indexrelid

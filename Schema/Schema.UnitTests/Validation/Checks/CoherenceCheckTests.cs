@@ -193,6 +193,34 @@ public class CoherenceCheckTests
         Assert.That(RunOnPgTable(table), Is.Empty);
     }
 
+    // ---- NullsNotDistinct on a primary key (SS-IDX-004) ----
+    //
+    // A primary key's columns cannot be NULL, so the clause has nothing to decide and the engine never records it on
+    // one; the deploy leaves it off the key rather than re-creating the key on every run, and the package is told.
+
+    [Test]
+    public void PostgreSqlNullsNotDistinct_OnAPrimaryKey_IsAWarning()
+    {
+        var table = new Schema.Domain.PostgreSQL.PostgreSqlTable
+        {
+            Name = "t",
+            Schema = "public",
+            Columns = { new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" } },
+            Indexes = { new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "pk_t", IndexColumns = "id", PrimaryKey = true, NullsNotDistinct = true } }
+        };
+        var findings = RunOnPgTable(table);
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-004" }));
+            Assert.That(findings[0].Severity, Is.EqualTo(Severity.Warning));
+            Assert.That(findings[0].Message, Does.Contain("pk_t").And.Contain("primary key"));
+        });
+
+        table.Indexes[0].PrimaryKey = false;
+        table.Indexes[0].UniqueConstraint = true;
+        Assert.That(RunOnPgTable(table), Is.Empty, "on a unique constraint the clause is meaningful");
+    }
+
     // ---- Product MinimumVersion the engine cannot resolve (SS-VER-001) ----
     //
     // A declared MinimumVersion the deploy cannot parse aborts the run before any object is touched --

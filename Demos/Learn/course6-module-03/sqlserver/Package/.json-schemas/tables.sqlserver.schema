@@ -191,6 +191,10 @@
             "minimum": 1.0,
             "description": "BUCKET_COUNT for a HASH index on a memory-optimized table. Required for a hash index, ignored elsewhere. SQL Server rounds it up to the next power of two."
           },
+          "Disabled": {
+            "type": "boolean",
+            "description": "The index is disabled (ALTER INDEX … DISABLE): defined but holding no data and enforcing nothing. Declared true, a live index is disabled after it is created; left false, an index someone disabled by hand is rebuilt, which enables it. Disabling a clustered index makes the table unreadable, and disabling a key's index disables the foreign keys that reference it."
+          },
           "Extensions": {}
         },
         "additionalProperties": false,

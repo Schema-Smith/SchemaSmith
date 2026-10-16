@@ -488,7 +488,7 @@ BEGIN TRY
     -- [DefinitionChanged] says which, and [TypeChanged] whether the type itself differs (the CDC change-table check asks).
     -- An option-only change then neither re-states the definition nor counts as a change the CDC capture instance can
     -- see (#509): the option is compared on its own, and the type comparison ignores the two tokens that spell one.
-    CROSS APPLY (SELECT [TypeChanged] = CAST(CASE WHEN RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+    CROSS APPLY (SELECT [TypeChanged] = CAST(CASE WHEN RTRIM(ISNULL(c.[ComputedExpression], '')) = '' AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(UPPER(USER_TYPE) + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, ISNULL(NUMERIC_SCALE, sc.scale), DATETIME_PRECISION,
                                                      CASE WHEN sc.xml_collection_id <> 0
                                                           THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) + '' FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                           END,
@@ -914,7 +914,7 @@ BEGIN TRY
     INTO #IndexPlacement
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
-                       AND si.index_id > 0 AND si.is_hypothetical = 0 AND si.is_disabled = 0
+                       AND si.index_id > 0 AND si.is_hypothetical = 0
     LEFT JOIN sys.filegroups fg ON fg.data_space_id = si.data_space_id
     LEFT JOIN sys.data_spaces pds ON pds.data_space_id = si.data_space_id AND pds.[type] = 'PS'
     WHERE t.NewTable = 0
@@ -1498,7 +1498,8 @@ BEGIN TRY
     JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
                                      AND si.index_id > 0
                                      AND is_hypothetical = 0
-                                     AND is_disabled = 0
+                                     -- A disabled index is still the table's index: compared like any other, dropped when its
+                                     -- definition changed, and otherwise left for IndexStateQuench to enable or keep disabled.
                                      -- A kind a package cannot declare is neither compared nor dropped. XML (3) has its own scan.
                                      AND si.[type] IN (3, {{RenderableIndexTypes}})
                                      -- The engine's own GRAPH_UNIQUE_INDEX_<guid> over a graph table's graph_id column
@@ -2269,8 +2270,7 @@ BEGIN TRY
                                    AND auto_created = 0
                                    AND user_created = 1
                                    -- is_temporary (2012 col) omitted: temporary stats exist only on readable secondaries; SchemaSmith targets a writable primary where it is always 0
-                                   AND si.[Name] NOT LIKE 'stat[_]%'
-                                   AND si.[Name] NOT LIKE 'hind[_]%'
+                                   -- The flags above decide what is a user statistic; a name is not evidence either way.
     WHERE t.NewTable = 0
   
   RAISERROR('Detect Statistics Changes', 10, 100) WITH NOWAIT

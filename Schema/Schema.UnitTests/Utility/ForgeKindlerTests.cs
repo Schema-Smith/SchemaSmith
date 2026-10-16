@@ -339,7 +339,8 @@ public class ForgeKindlerTests
         // +1 on SQL Server = ConstraintStateQuench (a foreign key's and check constraint's Enforced / Validated state).
         // +1 on SQL Server = StageGraphKeyParts (the graph columns behind a $from_id / $to_id key part, for every renderer).
         // +1 on SQL Server = EdgeConstraintQuench (an edge table's CONNECTION constraints, 2019).
-        Assert.That(sqlServer.Length, Is.EqualTo(58));
+        // +1 on SQL Server = IndexStateQuench (a declared index's Disabled state, converged once the index exists).
+        Assert.That(sqlServer.Length, Is.EqualTo(59));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -381,7 +382,10 @@ public class ForgeKindlerTests
         //   predicate for extraction, compare and the expression map) + ConstraintStateQuench (Enforced / Validated state).
         // +1 on PostgreSQL = ConstraintWithoutOverlaps (PG18-adaptive conperiod read for temporal keys).
         // +1 on PostgreSQL = ForeignKeySetNullColumns (PG15-adaptive confdelsetcols read).
-        Assert.That(postgres.Length, Is.EqualTo(62));
+        // +2 on PostgreSQL = IndexFillFactorDefault (the engine's fill factor per access method, so an undeclared one
+        //   compares against what the engine actually uses) + IndexWithClause (one rendering of an index's WITH clause,
+        //   fillfactor only when declared, shared by every create arm).
+        Assert.That(postgres.Length, Is.EqualTo(64));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor

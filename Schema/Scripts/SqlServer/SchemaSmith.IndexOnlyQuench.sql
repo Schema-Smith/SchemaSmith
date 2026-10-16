@@ -79,7 +79,7 @@ BEGIN TRY
          [IncludeColumns] = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY SchemaSmith.fn_SafeBracketWrap([value]))
                                FROM STRING_SPLIT(i.[IncludeColumns], ',') 
                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
-         [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0),
+         [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0), [Disabled] = ISNULL(i.[Disabled], 0),
          i.[ShouldApplyExpression], i.[VariantName], [Description] = COALESCE(i.[Description], i.[LegacyDescription])
     INTO #Indexes
     FROM #TableDefinitions t WITH (NOLOCK)
@@ -94,6 +94,7 @@ BEGIN TRY
       [ColumnStore] BIT '$.ColumnStore',
       [IgnoreDuplicateKey] BIT '$.IgnoreDuplicateKey',
       [PadIndex] BIT '$.PadIndex',
+      [Disabled] BIT '$.Disabled',
       [FillFactor] TINYINT '$.FillFactor',
       [FilterExpression] NVARCHAR(MAX) '$.FilterExpression',
       [IndexColumns] NVARCHAR(MAX) '$.IndexColumns',
@@ -303,7 +304,8 @@ BEGIN TRY
     JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
                                      AND si.index_id > 0
                                      AND is_hypothetical = 0
-                                     AND is_disabled = 0
+                                     -- A disabled index is still the table's index: compared like any other, dropped when its
+                                     -- definition changed, and otherwise left for IndexStateQuench to enable or keep disabled.
                                      -- A kind a package cannot declare is neither compared nor dropped. XML (3) has its own scan.
                                      AND si.[type] IN (3, {{RenderableIndexTypes}})
                                      -- The engine's own GRAPH_UNIQUE_INDEX_<guid> over a graph table's graph_id column
@@ -799,8 +801,7 @@ BEGIN TRY
                                    AND auto_created = 0
                                    AND user_created = 1
                                    AND is_temporary = 0
-                                   AND si.[Name] NOT LIKE 'stat[_]%'
-                                   AND si.[Name] NOT LIKE 'hind[_]%'
+                                   -- The flags above decide what is a user statistic; a name is not evidence either way.
     WHERE t.MissingTable = 0
   
   RAISERROR('Detect Statistics Changes', 10, 100) WITH NOWAIT
@@ -1060,6 +1061,9 @@ BEGIN TRY
       SELECT @@SPID, 'fullTextIndex', fi.[Schema] + '.' + fi.[TableName], 'wouldCreate'
         FROM #FullTextIndexes fi WITH (NOLOCK)
         WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
+
+  -- Once every index exists: a declared Disabled state is state on an index that must already be there.
+  EXEC SchemaSmith.IndexStateQuench @WhatIf
 
   -- Index descriptions, once every index exists.
   EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf = @WhatIf, @IndexesOnly = 1

@@ -148,15 +148,8 @@ BEGIN
                               -- Left out, the deployed constraint never matched its declaration, and every deploy
                               -- dropped it CASCADE, taking its inbound foreign keys, and added it back (PG-031).
                               CASE WHEN NULLIF(ti."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(ti."IncludeColumns") || ')' ELSE '' END ||
-                              -- Positive gate on the AMs verified to accept fillfactor, not a deny-list of ones
-                              -- that don't: an extension AM (e.g. pgvector's hnsw/ivfflat) can't be enumerated in
-                              -- advance, and a deny-list defaults an unknown AM into the clause, breaking CREATE
-                              -- with PostgreSQL's own "unrecognized parameter" error. An allow-list defaults an
-                              -- unknown AM OUT of the clause instead — no fillfactor tuning, but no hard failure.
-                              CASE WHEN COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash')
-                                   THEN ' WITH (fillfactor = ' || ti."FillFactor" || CASE WHEN COALESCE(ti."StorageParameters", '') <> '' THEN ', ' || ti."StorageParameters" ELSE '' END || ')'
-                                   WHEN COALESCE(ti."StorageParameters", '') <> '' THEN ' WITH (' || ti."StorageParameters" || ')'
-                                   ELSE '' END ||
+                              -- fillfactor only when declared, and only for the access methods that take it (IndexWithClause).
+                              "SchemaSmith"."IndexWithClause"(ti."FillFactorDeclared", ti."FillFactor", ti."AccessMethod", ti."StorageParameters") ||
                               -- USING INDEX TABLESPACE precedes DEFERRABLE per the table-constraint grammar
                               -- (verified live on 16). Emitted only when declared: unset means placement is
                               -- not managed, so the backing index follows default_tablespace as before.
@@ -169,17 +162,9 @@ BEGIN
                               CASE WHEN NULLIF(ti."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(ti."IncludeColumns") || ')' ELSE '' END ||
                               -- NULLS NOT DISTINCT belongs after INCLUDE and before WITH per the CREATE INDEX grammar.
                               CASE WHEN ti."Unique" AND ti."NullsNotDistinct" THEN ' NULLS NOT DISTINCT' ELSE '' END ||
-                              -- One WITH clause: fillfactor (gated to the AMs that accept it) plus
-                              -- StorageParameters (any AM -- a vector index's m / ef_construction / lists).
-                              -- StorageParameters is already canonical key=value,key=value.
-                              CASE
-                                WHEN COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash') AND COALESCE(ti."StorageParameters", '') <> ''
-                                     THEN ' WITH (fillfactor = ' || ti."FillFactor" || ', ' || ti."StorageParameters" || ') '
-                                WHEN COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash')
-                                     THEN ' WITH (fillfactor = ' || ti."FillFactor" || ') '
-                                WHEN COALESCE(ti."StorageParameters", '') <> ''
-                                     THEN ' WITH (' || ti."StorageParameters" || ') '
-                                ELSE ' ' END ||
+                              -- One WITH clause: fillfactor only when declared (and only for the access methods that
+                              -- take it) plus StorageParameters, any access method (IndexWithClause).
+                              "SchemaSmith"."IndexWithClause"(ti."FillFactorDeclared", ti."FillFactor", ti."AccessMethod", ti."StorageParameters") || ' ' ||
                               -- TABLESPACE follows WITH and precedes WHERE per the CREATE INDEX grammar
                               -- (verified live on 16).
                               CASE WHEN COALESCE(ti."Tablespace", '') <> '' THEN ' TABLESPACE "' || ti."Tablespace" || '"' ELSE '' END ||

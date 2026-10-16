@@ -81,8 +81,10 @@ BEGIN
            -- Below PG15 NULLS NOT DISTINCT does not exist: the effective column drives compare + emit
            -- (coerced false so an old target neither churns nor emits an unsupported clause), while the
            -- raw declared value drives the unsupported-feature policy (fail | warn-with-downgrade) below.
-           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 15 THEN COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) ELSE false END AS "NullsNotDistinct",
-           COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) AS "NullsNotDistinctDeclared",
+           -- On a primary key the clause decides nothing (the columns cannot be NULL) and the engine never records it,
+           -- so it is neither emitted nor compared there; --Validate reports it (SS-IDX-004).
+           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 15 AND NOT COALESCE((celem ->> 'PrimaryKey')::BOOLEAN, false) THEN COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) ELSE false END AS "NullsNotDistinct",
+           CASE WHEN NOT COALESCE((celem ->> 'PrimaryKey')::BOOLEAN, false) THEN COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) ELSE false END AS "NullsNotDistinctDeclared",
            -- WITHOUT OVERLAPS is PostgreSQL 18: the effective value drives compare + emit (false below 18, so an old
            -- target neither churns nor emits the clause), the declared value drives the unsupported-feature policy.
            CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 18 THEN COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) ELSE false END AS "WithoutOverlaps",
@@ -90,7 +92,12 @@ BEGIN
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName",
            CASE WHEN p_UpdateFillFactor THEN true ELSE COALESCE((celem ->> 'UpdateFillFactor')::BOOLEAN, false) END AS "UpdateFillFactor",
-           COALESCE(NULLIF((celem ->> 'FillFactor')::INT2, 0), 90) AS "FillFactor",
+           -- Undeclared (absent or 0) is the engine's default for the access method, which is what the live index has
+           -- when nobody set one; only a declared value is written into the CREATE (IndexWithClause).
+           COALESCE(NULLIF((celem ->> 'FillFactor')::INT2, 0),
+                    "SchemaSmith"."IndexFillFactorDefault"(CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 18 AND COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) THEN 'gist'
+                                                                ELSE COALESCE(celem ->> 'AccessMethod', 'btree') END)) AS "FillFactor",
+           NULLIF((celem ->> 'FillFactor')::INT2, 0) IS NOT NULL AS "FillFactorDeclared",
            -- Index storage parameters (the WITH clause) canonicalised for comparison: key=value pairs
            -- sorted by key, because reloptions reorders itself and the declared map has no order. fillfactor
            -- is excluded here -- FillFactor above owns it -- so a package declaring only fillfactor produces
@@ -278,7 +285,10 @@ BEGIN
                             -- A storage-parameter change (hnsw m, ivfflat lists, brin pages_per_range, ...)
                             -- rebuilds: several cannot be ALTERed in place, so the whole index drops and is
                             -- recreated by the missing-index pass, which always works.
-                            OR COALESCE(i."StorageParameters", '') != COALESCE(ei."StorageParameters", '')))
+                            OR COALESCE(i."StorageParameters", '') != COALESCE(ei."StorageParameters", '')
+                            -- An invalid index (a failed CONCURRENTLY build) is present by name and used by nothing:
+                            -- not the declared index, so it is dropped and the declared one created.
+                            OR NOT ei."Valid"))
            OR (p_DropIndexesRemovedFromProduct -- Index Removed from Product Definition (gated)
                AND COALESCE((SELECT tt."DropIndexesRemovedFromProduct" FROM temp_tables tt WHERE tt."Schema" = ei."TableSchema" AND tt."Name" = ei."TableName"), TRUE)
                AND EXISTS (SELECT 1
@@ -354,6 +364,15 @@ BEGIN
       WHERE k."TableSchema" = ti."TableSchema" AND k."TableName" = ti."TableName" AND k."IndexName" = ti."IndexName";
     DROP TABLE IF EXISTS temp_indexes_kept_for_fks;
 
+    -- Name the invalid ones: the drop below reads like any other, and the reason is the engine's, not the package's.
+    SELECT STRING_AGG('RAISE WARNING ''  WARNING: ' || REPLACE(ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName", '''', '''''') ||
+                      ' is marked invalid by the engine (a CREATE INDEX CONCURRENTLY that did not finish); it is dropped and the declared index created'';', CHR(10))
+      INTO sql_script
+      FROM temp_indexes_to_drop ti
+      JOIN temp_existing_indexes ei ON ei."TableSchema" = ti."TableSchema" AND ei."TableName" = ti."TableName" AND ei."IndexName" = ti."IndexName"
+      WHERE NOT ei."Valid";
+    CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, FALSE);
+
     RAISE NOTICE 'Drop Unknown, Removed, and Modified Indexes';
     SELECT STRING_AGG('RAISE NOTICE ''  Dropping ' || CASE WHEN "IsConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''';' || CHR(10) ||
                       CASE WHEN "IsConstraint"
@@ -381,7 +400,7 @@ BEGIN
         AND ei."FillFactor" != ti."FillFactor"
         -- Positive gate on AMs verified to accept fillfactor (see the CREATE-path comment below) —
         -- an extension AM that rejects the option never reaches an ALTER INDEX SET here either.
-        AND COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash');
+        AND COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash', 'spgist');
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     RAISE NOTICE 'Add Missing Indexes'; -- Includes Primary Keys and Unique Constraints
@@ -395,14 +414,8 @@ BEGIN
                                 '(' || "SchemaSmith"."QuoteIndexColumnList"(ti."IndexColumns") || CASE WHEN ti."WithoutOverlaps" THEN ' WITHOUT OVERLAPS' ELSE '' END || ')' ||
                                 -- INCLUDE and the storage parameters, as MissingIndexesAndConstraintsQuench (PG-031).
                                 CASE WHEN NULLIF(ti."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(ti."IncludeColumns") || ')' ELSE '' END ||
-                                -- Positive gate, not a deny-list: an extension AM (e.g. pgvector's hnsw/ivfflat)
-                                -- can't be enumerated in advance, so allow-listing the AMs verified to accept
-                                -- fillfactor fails safe (no clause) instead of failing loud (PostgreSQL's own
-                                -- "unrecognized parameter" error) for anything not on the list.
-                                CASE WHEN COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash')
-                                     THEN ' WITH (fillfactor = ' || ti."FillFactor" || CASE WHEN COALESCE(ti."StorageParameters", '') <> '' THEN ', ' || ti."StorageParameters" ELSE '' END || ')'
-                                     WHEN COALESCE(ti."StorageParameters", '') <> '' THEN ' WITH (' || ti."StorageParameters" || ')'
-                                     ELSE '' END ||
+                                -- fillfactor only when declared, and only for the access methods that take it (IndexWithClause).
+                                "SchemaSmith"."IndexWithClause"(ti."FillFactorDeclared", ti."FillFactor", ti."AccessMethod", ti."StorageParameters") ||
                                 -- USING INDEX TABLESPACE precedes DEFERRABLE per the table-constraint grammar
                               -- (verified live on 16). Emitted only when declared: unset means placement is
                               -- not managed, so the backing index follows default_tablespace as before.
@@ -415,18 +428,9 @@ BEGIN
                                 CASE WHEN NULLIF(ti."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(ti."IncludeColumns") || ')' ELSE '' END ||
                                 -- CREATE INDEX grammar order: (cols) INCLUDE [NULLS NOT DISTINCT] [WITH] [WHERE].
                                 CASE WHEN ti."Unique" AND ti."NullsNotDistinct" THEN ' NULLS NOT DISTINCT' ELSE '' END ||
-                                -- ONE WITH clause carrying fillfactor (still gated to the AMs that accept it)
-                                -- AND StorageParameters (any AM -- this is how a vector index gets its m /
-                                -- ef_construction / lists). StorageParameters is already canonical
-                                -- key=value,key=value, which is WITH-clause syntax, so it drops straight in.
-                                CASE
-                                  WHEN COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash') AND COALESCE(ti."StorageParameters", '') <> ''
-                                       THEN ' WITH (fillfactor = ' || ti."FillFactor" || ', ' || ti."StorageParameters" || ')'
-                                  WHEN COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash')
-                                       THEN ' WITH (fillfactor = ' || ti."FillFactor" || ')'
-                                  WHEN COALESCE(ti."StorageParameters", '') <> ''
-                                       THEN ' WITH (' || ti."StorageParameters" || ')'
-                                  ELSE '' END ||
+                                -- One WITH clause: fillfactor only when declared (and only for the access methods that
+                                -- take it) plus StorageParameters, any access method (IndexWithClause).
+                                "SchemaSmith"."IndexWithClause"(ti."FillFactorDeclared", ti."FillFactor", ti."AccessMethod", ti."StorageParameters") ||
                                 -- TABLESPACE follows WITH and precedes WHERE per the CREATE INDEX grammar
                               -- (verified live on 16).
                               CASE WHEN COALESCE(ti."Tablespace", '') <> '' THEN ' TABLESPACE "' || ti."Tablespace" || '"' ELSE '' END ||

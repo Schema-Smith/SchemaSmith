@@ -249,7 +249,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, default, default)) AS [Description],
        (SELECT *
           FROM (SELECT QUOTENAME(c.COLUMN_NAME) AS [Name],
-                       CASE WHEN ut.is_user_defined = 1 THEN USER_TYPE ELSE UPPER(USER_TYPE) END + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+                       CASE WHEN ut.is_user_defined = 1 THEN USER_TYPE ELSE UPPER(USER_TYPE) END + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, ISNULL(NUMERIC_SCALE, sc.scale), DATETIME_PRECISION,
                                                CASE WHEN sc.xml_collection_id <> 0
                                                     THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                     END,
@@ -385,6 +385,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                CASE WHEN fill_factor = 100 THEN 0 ELSE fill_factor END AS [FillFactor],
                CONVERT(BIT, ignore_dup_key) AS [IgnoreDuplicateKey],
                CONVERT(BIT, is_padded) AS [PadIndex],
+               CONVERT(BIT, is_disabled) AS [Disabled],
                (SELECT STRING_AGG(CAST(CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
                   FROM sys.index_columns ic
                   LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
@@ -408,7 +409,6 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
             -- Kinds a package cannot declare yet (spatial, JSON) are left out, and SchemaTongs warns for each.
             AND si.[type] IN ({{RenderableIndexTypes}})
             AND is_hypothetical = 0
-            AND is_disabled = 0
             AND index_id > 0
             -- A graph table also gets a system-generated GRAPH_UNIQUE_INDEX_<guid> over its graph_id column.
             -- Both names carry a per-table GUID, so emitting that index is the same undeployable-package
@@ -464,8 +464,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
             AND auto_created = 0
             AND user_created = 1
             AND is_temporary = 0
-            AND [Name] NOT LIKE 'stat[_]%'
-            AND [Name] NOT LIKE 'hind[_]%'
+            -- The flags above decide what is a user statistic; a name is not evidence either way.
           ORDER BY [Name]
           FOR JSON AUTO) AS [Statistics],
        (SELECT QUOTENAME([Name]) AS [Name],

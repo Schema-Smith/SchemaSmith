@@ -442,6 +442,9 @@ public static class ForgeKindler
                 // Edge constraints (2019), after the foreign keys and once every node table exists; floor-safe (dynamic reads).
                 new("SchemaSmith.EdgeConstraintQuench.sql"),
                 new("SchemaSmith.ConstraintStateQuench.sql"),
+                // A declared index's Disabled state, converged once the index exists. Must precede TableQuench and
+                // IndexOnlyQuench, which CALL it.
+                new("SchemaSmith.IndexStateQuench.sql"),
                 new("SchemaSmith.TableQuench.sql", ReplaceParseJson: true),
                 new("SchemaSmith.IndexOnlyQuench.sql"),
                 new("SchemaSmith.fn_FormatJson.sql"),
@@ -485,6 +488,10 @@ public static class ForgeKindler
                 new("SchemaSmith.ServerVersionNum.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.IndexNullsNotDistinct.sql"),
+                // The engine's fill factor per access method, so an index declared without one compares against what
+                // the engine actually uses; and the one rendering of an index's WITH clause every create arm shares.
+                new("SchemaSmith.IndexFillFactorDefault.sql"),
+                new("SchemaSmith.IndexWithClause.sql"),
                 // PG18-adaptive conperiod read: a primary key or unique constraint declared WITHOUT OVERLAPS.
                 new("SchemaSmith.ConstraintWithoutOverlaps.sql"),
                 // PG15-adaptive confdelsetcols read: the columns an ON DELETE SET NULL (col, ...) applies to.

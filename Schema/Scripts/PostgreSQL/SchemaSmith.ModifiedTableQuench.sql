@@ -1006,7 +1006,10 @@ BEGIN
                             OR COALESCE(i."InitiallyDeferred", false) != COALESCE(ei."InitiallyDeferred", false)
                             -- A storage-parameter change rebuilds the index (hnsw m and ivfflat lists cannot
                             -- be ALTERed in place), so it drops here and the missing-index pass recreates it.
-                            OR COALESCE(i."StorageParameters", '') != COALESCE(ei."StorageParameters", '')))
+                            OR COALESCE(i."StorageParameters", '') != COALESCE(ei."StorageParameters", '')
+                            -- An invalid index (a failed CONCURRENTLY build) is present by name and used by nothing:
+                            -- not the declared index, so it is dropped and the declared one created.
+                            OR NOT ei."Valid"))
            OR (p_DropIndexesRemovedFromProduct -- Index Removed from Product Definition (gated)
                AND COALESCE((SELECT tt."DropIndexesRemovedFromProduct" FROM temp_tables tt WHERE tt."Schema" = ei."TableSchema" AND tt."Name" = ei."TableName"), TRUE)
                AND EXISTS (SELECT 1
@@ -1082,6 +1085,15 @@ BEGIN
       USING temp_indexes_kept_for_fks k
       WHERE k."TableSchema" = ti."TableSchema" AND k."TableName" = ti."TableName" AND k."IndexName" = ti."IndexName";
     DROP TABLE IF EXISTS temp_indexes_kept_for_fks;
+
+    -- Name the invalid ones: the drop below reads like any other, and the reason is the engine's, not the package's.
+    SELECT STRING_AGG('RAISE WARNING ''  WARNING: ' || REPLACE(ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName", '''', '''''') ||
+                      ' is marked invalid by the engine (a CREATE INDEX CONCURRENTLY that did not finish); it is dropped and the declared index created'';', CHR(10))
+      INTO sql_script
+      FROM temp_indexes_to_drop ti
+      JOIN temp_existing_indexes ei ON ei."TableSchema" = ti."TableSchema" AND ei."TableName" = ti."TableName" AND ei."IndexName" = ti."IndexName"
+      WHERE NOT ei."Valid";
+    CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, FALSE);
 
     RAISE NOTICE 'Drop Unknown, Removed, and Modified Indexes';
     SELECT STRING_AGG('RAISE NOTICE ''  Dropping ' || CASE WHEN "IsConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''';' || CHR(10) ||
@@ -1168,7 +1180,7 @@ BEGIN
         -- Positive gate, not a deny-list: an extension AM (e.g. pgvector's hnsw/ivfflat) can't be
         -- enumerated in advance, so allow-listing the AMs verified to accept fillfactor fails safe
         -- (skip the ALTER) instead of failing loud (PostgreSQL's "unrecognized parameter" error).
-        AND COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash');
+        AND COALESCE(ti."AccessMethod", 'btree') IN ('btree', 'gist', 'hash', 'spgist');
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     RAISE NOTICE 'Drop Generated Columns Referencing Columns That Are Changing Data Type';

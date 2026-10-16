@@ -45,6 +45,10 @@ BEGIN TRY
   EXEC SchemaSmith.ModifiedTableQuench @ProductName = @ProductName, @WhatIf = @WhatIf, @DropUnknownIndexes = @DropUnknownIndexes, @DropTablesRemovedFromProduct = @DropTablesRemovedFromProduct, @DropSchemaBoundDependents = @DropSchemaBoundDependents,
                                        @RebuildPolicyMode = @RebuildPolicyMode, @RebuildPolicyThreshold = @RebuildPolicyThreshold, @RebuildPolicyOnOrderMismatch = @RebuildPolicyOnOrderMismatch
   EXEC SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName, @WhatIf
+  -- Once every index exists: a declared Disabled state is state on an index that must already be there. Before the
+  -- foreign keys and constraint states, because disabling a key's index disables the keys that reference it, and
+  -- ConstraintStateQuench is what puts a declared Enforced back.
+  EXEC SchemaSmith.IndexStateQuench @WhatIf
   -- Also after the indexes/constraints pass, and for a closely related reason: SQL Server refuses a
   -- FILESTREAM column unless the table already has a ROWGUIDCOL column covered by a unique CONSTRAINT.
   EXEC SchemaSmith.FileStreamColumnQuench @WhatIf

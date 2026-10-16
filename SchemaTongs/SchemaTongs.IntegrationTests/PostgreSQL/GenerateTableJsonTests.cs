@@ -188,13 +188,40 @@ ALTER TABLE public.""TestIndexes"" CLUSTER ON ""CX_TestIndexes_MyBigInt""
         AssertIndexProperties(result.Indexes[0], "CX_TestIndexes_MyBigInt", true, false, false, false, "MyBigInt", null, 100, null);
         AssertIndexProperties(result.Indexes[1], "IX_TestIndexes_MyString", false, false, false, false, "MyString,MyBigInt", null, 90, "\"MyString\" IS NOT NULL");
         AssertIndexProperties(result.Indexes[2], "PK_TestIndexes", false, true, true, false, "MyInt", null, 80, null);
-        AssertIndexProperties(result.Indexes[3], "UQ_TestIndexes_MyString", false, true, false, true, "MyString", null, 90, null);
+        // Created with no WITH clause: the engine's default applies and nothing is declared, so nothing is extracted.
+        AssertIndexProperties(result.Indexes[3], "UQ_TestIndexes_MyString", false, true, false, true, "MyString", null, 0, null);
         AssertIndexProperties(result.Indexes[4], "UX_TestIndexes_MyInt", false, true, false, false, "MyInt", "MyString,MyBigInt", 100, null);
 
         conn.Close();
     }
 
-    private void AssertIndexProperties(Index index, string name, bool isCustered, bool isUnique, bool isPrimaryKey, bool isUniqueConstraint, string columns, string includeColumns, int fillFactor, string filterExpression)
+    [Test]
+    public void ShouldExtractFillFactor_OnlyWhenTheIndexDeclaresOne()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE public.""TestFillFactors"" (""MyInt"" INT NOT NULL, ""MyBigInt"" BIGINT NOT NULL, ""MyString"" VARCHAR(100) NULL, ""MyPoint"" POINT NULL);
+CREATE INDEX ""IX_FF_Btree"" ON public.""TestFillFactors"" (""MyInt"");
+CREATE INDEX ""IX_FF_Hash"" ON public.""TestFillFactors"" USING hash (""MyBigInt"");
+CREATE INDEX ""IX_FF_Declared"" ON public.""TestFillFactors"" (""MyString"") WITH (FILLFACTOR = 70);
+CREATE INDEX ""IX_FF_OtherOption"" ON public.""TestFillFactors"" USING gist (""MyPoint"") WITH (buffering = off);
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "public", "TestFillFactors");
+        int FillFactorOf(string name) => ((PostgreSqlIndex)result.Indexes.Single(i => i.Name == name)).FillFactor;
+        Assert.Multiple(() =>
+        {
+            Assert.That(FillFactorOf("IX_FF_Btree"), Is.Zero, "a btree with no WITH clause declares nothing; the engine's 90 is not an authored value");
+            Assert.That(FillFactorOf("IX_FF_Hash"), Is.Zero, "a hash index with no WITH clause does not inherit the btree default");
+            Assert.That(FillFactorOf("IX_FF_Declared"), Is.EqualTo(70), "a declared fill factor is extracted");
+            Assert.That(FillFactorOf("IX_FF_OtherOption"), Is.Zero, "a WITH clause without fillfactor declares none");
+        });
+        conn.Close();
+    }
+
+    private void AssertIndexProperties(Index index, string name, bool isCustered, bool isUnique, bool isPrimaryKey, bool isUniqueConstraint, string columns, string includeColumns, int fillFactor,string filterExpression)
     {
         var pgIndex = (PostgreSqlIndex)index;
         Assert.That(pgIndex.Name, Is.EqualTo($"{name}"), $"Name of {name}");

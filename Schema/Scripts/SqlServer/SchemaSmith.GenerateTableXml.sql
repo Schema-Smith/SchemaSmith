@@ -313,7 +313,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, default, default)) AS [Description],
        (SELECT 'true' AS [@json:Array],
                        QUOTENAME(c.COLUMN_NAME) AS [Name],
-                       CASE WHEN ut.is_user_defined = 1 THEN USER_TYPE ELSE UPPER(USER_TYPE) END + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+                       CASE WHEN ut.is_user_defined = 1 THEN USER_TYPE ELSE UPPER(USER_TYPE) END + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, ISNULL(NUMERIC_SCALE, sc.scale), DATETIME_PRECISION,
                                                CASE WHEN sc.xml_collection_id <> 0
                                                     THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                     END,
@@ -428,6 +428,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                CASE WHEN fill_factor = 100 THEN 0 ELSE fill_factor END AS [FillFactor],
                CASE WHEN ignore_dup_key = 1 THEN 'true' ELSE 'false' END AS [IgnoreDuplicateKey],
                CASE WHEN is_padded = 1 THEN 'true' ELSE 'false' END AS [PadIndex],
+               CASE WHEN is_disabled = 1 THEN 'true' ELSE 'false' END AS [Disabled],
                STUFF((SELECT ',' + CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                   FROM sys.index_columns ic
                   LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
@@ -452,7 +453,6 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
             -- Kinds a package cannot declare yet (spatial, JSON) are left out, and SchemaTongs warns for each.
             AND si.[type] IN ({{RenderableIndexTypes}})
             AND is_hypothetical = 0
-            AND is_disabled = 0
             AND index_id > 0
             -- GRAPH_UNIQUE_INDEX_<guid> over the graph_id column, which no package can declare. An index a user
             -- made over $from_id / $to_id renders its key parts as those names (#GraphKeyParts) and stays.
@@ -518,8 +518,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
             AND auto_created = 0
             AND user_created = 1
             AND NOT EXISTS (SELECT 1 FROM #TempStats ts WITH (NOLOCK) WHERE ts.[object_id] = s.[object_id] AND ts.stats_id = s.stats_id)  -- exclude 2012+ temporary stats (staged above; empty pre-2012)
-            AND [Name] NOT LIKE 'stat[_]%'
-            AND [Name] NOT LIKE 'hind[_]%'
+            -- The flags above decide what is a user statistic; a name is not evidence either way.
           ORDER BY [Name]
           FOR XML PATH('Statistics'), TYPE),
        (SELECT 'true' AS [@json:Array],

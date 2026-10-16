@@ -136,10 +136,10 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                     ELSE (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') END AS "AccessMethod",
                                "SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)) AS "FilterExpression",
                                '' AS "ShouldApplyExpression",
-                               CASE WHEN 'fillfactor=100' = ANY(i.reloptions) THEN 100
-                                    WHEN i.reloptions IS NULL THEN 90 -- Default for B-tree indexes
-                                    ELSE (REGEXP_MATCH(ARRAY_TO_STRING(i.reloptions, ','), 'fillfactor=(\d+)') ) [1] ::int
-                                    END AS "FillFactor",
+                               -- Only a fill factor someone set is declared; an index without the option is on the
+                               -- engine's default for its access method, which is not an authored value and would
+                               -- give a hash or SP-GiST index the btree 90 if written.
+                               (REGEXP_MATCH(ARRAY_TO_STRING(i.reloptions, ','), 'fillfactor=(\d+)'))[1]::int AS "FillFactor",
                                "SchemaSmith"."IndexNullsNotDistinct"(idx.indexrelid) AS "NullsNotDistinct",
                                "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid) AS "WithoutOverlaps",
                                COALESCE(con.condeferrable, FALSE) AS "Deferrable",

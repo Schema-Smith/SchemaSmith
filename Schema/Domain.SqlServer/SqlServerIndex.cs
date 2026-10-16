@@ -96,5 +96,14 @@ namespace Schema.Domain.SqlServer
             Description = "BUCKET_COUNT for a HASH index on a memory-optimized table. Required for a hash index, ignored elsewhere. SQL Server rounds it up to the next power of two.")]
         [JsonProperty(Order = 112, NullValueHandling = NullValueHandling.Ignore)]
         public int? BucketCount { get; set; }
+
+        /// <summary>
+        /// The index is disabled (<c>ALTER INDEX … DISABLE</c>): its definition stays in the catalog but it holds no
+        /// data and enforces nothing. Declared state, converged once the index exists: true disables a live index,
+        /// false (the default) rebuilds a disabled one, which is what enables it. Read from <c>sys.indexes.is_disabled</c>.
+        /// </summary>
+        [SchemaProperty(Description = "The index is disabled (ALTER INDEX … DISABLE): defined but holding no data and enforcing nothing. Declared true, a live index is disabled after it is created; left false, an index someone disabled by hand is rebuilt, which enables it. Disabling a clustered index makes the table unreadable, and disabling a key's index disables the foreign keys that reference it.")]
+        [JsonProperty(Order = 113)]
+        public bool Disabled { get; set; }
     }
 }

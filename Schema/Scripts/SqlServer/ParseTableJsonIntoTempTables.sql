@@ -222,6 +222,7 @@
     [IncludeColumns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [IgnoreDuplicateKey] BIT NULL,
     [PadIndex] BIT NULL,
+    [Disabled] BIT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
     [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
@@ -803,7 +804,7 @@
     WHERE NOT EXISTS (SELECT * FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = #TableDefinitions.[Schema] AND c.[TableName] = #TableDefinitions.[Name])
 
   RAISERROR('Parse Indexes from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #Indexes ([_RowId], [Schema], [TableName], [IndexName], [CompressionType], [XmlCompression], [PrimaryKey], [Unique], [UniqueConstraint], [Clustered], [ColumnStore], [FillFactor], [FilterExpression], [FileGroup], [PartitionScheme], [PartitionColumn], [BucketCount], [UpdateFillFactor], [IndexColumns], [IncludeColumns], [IgnoreDuplicateKey], [PadIndex], [ShouldApplyExpression], [VariantName], [Description])
+  INSERT INTO #Indexes ([_RowId], [Schema], [TableName], [IndexName], [CompressionType], [XmlCompression], [PrimaryKey], [Unique], [UniqueConstraint], [Clustered], [ColumnStore], [FillFactor], [FilterExpression], [FileGroup], [PartitionScheme], [PartitionColumn], [BucketCount], [UpdateFillFactor], [IndexColumns], [IncludeColumns], [IgnoreDuplicateKey], [PadIndex], [Disabled], [ShouldApplyExpression], [VariantName], [Description])
   -- INGEST ONLY -- raw values; NORMALIZE below owns every transform, so a second ingestion path gets
   -- the same treatment from the same code rather than a reimplementation of these rules.
   -- [UpdateFillFactor] is computed here, not in NORMALIZE: it combines the @UpdateFillFactor parameter
@@ -817,7 +818,7 @@
          [UpdateFillFactor] = CONVERT(BIT, CASE WHEN @UpdateFillFactor = 1 OR t.[UpdateFillFactor] = 1 OR i.[UpdateFillFactor] = 1 THEN 1 ELSE 0 END),
          i.[IndexColumns],
          i.[IncludeColumns],
-         i.[IgnoreDuplicateKey], i.[PadIndex],
+         i.[IgnoreDuplicateKey], i.[PadIndex], i.[Disabled],
          i.[ShouldApplyExpression], i.[VariantName], [Description] = COALESCE(i.[Description], i.[LegacyDescription])
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(Indexes) WITH (
@@ -831,6 +832,7 @@
       [ColumnStore] BIT '$.ColumnStore',
       [IgnoreDuplicateKey] BIT '$.IgnoreDuplicateKey',
       [PadIndex] BIT '$.PadIndex',
+      [Disabled] BIT '$.Disabled',
       [FillFactor] TINYINT '$.FillFactor',
       [FilterExpression] NVARCHAR(MAX) '$.FilterExpression',
       [IndexColumns] NVARCHAR(MAX) '$.IndexColumns',
@@ -873,7 +875,8 @@
                                  FROM STRING_SPLIT([IncludeColumns], ',')
                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [IgnoreDuplicateKey] = ISNULL([IgnoreDuplicateKey], 0),
-         [PadIndex]         = ISNULL([PadIndex], 0);
+         [PadIndex]         = ISNULL([PadIndex], 0),
+         [Disabled]         = ISNULL([Disabled], 0);
 
   -- Identify Indexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #Indexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))

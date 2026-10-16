@@ -3957,6 +3957,9 @@ SELECT [name], kind FROM @k ORDER BY [name];";
             case "datetimeoffset":
             case "time":
                 return scale != 7 ? $"[{Identifier.EscapeDelimited(baseType, Platform.SqlServer)}]({scale})" : $"[{Identifier.EscapeDelimited(baseType, Platform.SqlServer)}]";
+            // VECTOR(n[, float16]) (2025): max_length is 8 + n * 4 (float32) or 8 + n * 2 (float16), scale 1 marks float16.
+            case "vector":
+                return $"[{Identifier.EscapeDelimited(baseType, Platform.SqlServer)}]({(maxLength - 8) / (scale == 1 ? 2 : 4)}{(scale == 1 ? ", float16" : "")})";
             default:
                 return $"[{Identifier.EscapeDelimited(baseType, Platform.SqlServer)}]";
         }

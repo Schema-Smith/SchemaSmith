@@ -77,6 +77,46 @@ public class TableQuench_IndexIdempotencyTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // NULLS NOT DISTINCT has no meaning on a primary key (its columns cannot be NULL) and the engine never records it
+    // on one, so a package that says it must not drop and recreate the key on every deploy.
+    [Test]
+    public void TableQuench_PrimaryKeyDeclaredWithNullsNotDistinctIsIdempotent()
+    {
+        var tableName = $"PkNnd_{Guid.NewGuid().ToString("N")[..8]}";
+        var pkName = $"PK_{tableName}";
+
+        using var conn = (NpgsqlConnection)DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        var json = $$"""
+{
+    "Schema": "public",
+    "Name": "{{tableName}}",
+    "Columns": [ { "Name": "Id", "DataType": "integer", "Nullable": false } ],
+    "Indexes": [ { "Name": "{{pkName}}", "PrimaryKey": true, "IndexColumns": "Id", "NullsNotDistinct": true } ]
+}
+""";
+        try
+        {
+            RunTableQuenchProc(cmd, json);
+            var oidBefore = GetPrimaryKeyOid(cmd, "public", tableName, pkName);
+            Assert.That(oidBefore, Is.Not.Null.And.Not.EqualTo(0L), "Setup failed: the primary key was not created.");
+
+            RunTableQuenchProc(cmd, json);
+            Assert.That(GetPrimaryKeyOid(cmd, "public", tableName, pkName), Is.EqualTo(oidBefore),
+                "a primary key declared with NullsNotDistinct must not be dropped and recreated on redeploy");
+        }
+        finally
+        {
+            cmd.CommandText = $@"DROP TABLE IF EXISTS public.""{tableName}"";";
+            cmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+
     private static long? GetPrimaryKeyOid(IDbCommand cmd, string tableSchema, string tableName, string constraintName)
     {
         cmd.CommandText = $@"
