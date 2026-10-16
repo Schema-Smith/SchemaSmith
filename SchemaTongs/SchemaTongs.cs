@@ -2332,11 +2332,41 @@ SELECT s.name AS SchemaName, v.name AS ViewName
             if (_includeMaterializedViews) CastPostgreSqlMaterializedViews(command);
             if (_includeCollations) CastPostgreSqlCollations(command);
             if (_includePublications) CastPostgreSqlPublications(command);
+            LogPostgreSqlExtensionMembersSkipped(command);
         }
         finally
         {
             connection.Close();
         }
+    }
+
+    // An installed extension's members (pg_depend deptype 'e') belong to the extension, not the package: extracting
+    // them wrote pg_trgm's thirty functions under Functions/ and PostGIS's spatial_ref_sys under Tables/, which then
+    // deployed as if the package owned them. Every enumeration query below carries this predicate for its catalog.
+    private static string PostgreSqlNotExtensionMember(string classRegclass, string oidExpression) =>
+        $"NOT EXISTS (SELECT 1 FROM pg_depend xd WHERE xd.classid = '{classRegclass}'::regclass AND xd.objid = {oidExpression} AND xd.deptype = 'e')";
+
+    private void LogPostgreSqlExtensionMembersSkipped(IDbCommand command)
+    {
+        command.CommandText = @"
+SELECT e.extname, COUNT(*) AS members
+  FROM pg_depend d
+  JOIN pg_extension e ON e.oid = d.refobjid
+  WHERE d.refclassid = 'pg_extension'::regclass
+    AND d.deptype = 'e'
+    AND e.extname <> 'plpgsql'
+  GROUP BY e.extname
+  ORDER BY e.extname;
+";
+        var skipped = new List<(string Extension, long Members)>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+            {
+                var extension = reader["extname"]?.ToString();
+                if (!string.IsNullOrEmpty(extension)) skipped.Add((extension, Convert.ToInt64(reader["members"] ?? 0)));
+            }
+        foreach (var (extension, members) in skipped)
+            _progressLog.Info($"  Skipping {members} objects owned by extension {extension} (an extension's members are not extracted; the extension itself is a prerequisite of the target)");
     }
 
     private void CastPostgreSqlTableDefinitions(IDbCommand command, string targetDb)
@@ -2349,13 +2379,16 @@ SELECT s.name AS SchemaName, v.name AS ViewName
         // relkind and relispartition let the loop below tell a partitioned parent (relkind = 'p')
         // and its partitions (relispartition = true) apart from an ordinary table — both need
         // different handling than a plain table once enumerated (see the skip below).
-        command.CommandText = @"
+        // relpersistence 'u' is an UNLOGGED table, which the model carries as Persistence: Unlogged; only a temporary
+        // table ('t') is left out.
+        command.CommandText = $@"
 SELECT t.schemaname, t.tablename, c.relkind, c.relispartition
   FROM pg_tables t
   JOIN pg_class c ON c.relname = t.tablename
                  AND c.relnamespace = (SELECT n.oid FROM pg_namespace n WHERE n.nspname = t.schemaname)
-                 AND c.relpersistence = 'p'
+                 AND c.relpersistence IN ('p', 'u')
   WHERE t.schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
+    AND {PostgreSqlNotExtensionMember("pg_class", "c.oid")}
   ORDER BY t.schemaname, t.tablename;
 ";
 
@@ -2522,7 +2555,7 @@ SELECT 'Schemas' AS Folder,
     /// </summary>
     private void CastPostgreSqlDomainTypes(IDbCommand command)
     {
-        command.CommandText = @"
+        command.CommandText = $@"
 SELECT n.nspname AS SchemaName, t.typname AS TypeName
   FROM pg_type t
   JOIN pg_namespace n ON n.oid = t.typnamespace
@@ -2530,6 +2563,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
     AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND n.nspname NOT LIKE 'pg_temp_%'
     AND n.nspname NOT LIKE 'pg_toast_temp_%'
+    AND {PostgreSqlNotExtensionMember("pg_type", "t.oid")}
   ORDER BY n.nspname, t.typname;
 ";
         _progressLog.Info("Casting Domain Type Structures");
@@ -2585,7 +2619,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
     /// </summary>
     private void CastPostgreSqlEnumTypes(IDbCommand command)
     {
-        command.CommandText = @"
+        command.CommandText = $@"
 SELECT n.nspname AS SchemaName, t.typname AS TypeName
   FROM pg_type t
   JOIN pg_namespace n ON n.oid = t.typnamespace
@@ -2593,6 +2627,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
     AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND n.nspname NOT LIKE 'pg_temp_%'
     AND n.nspname NOT LIKE 'pg_toast_temp_%'
+    AND {PostgreSqlNotExtensionMember("pg_type", "t.oid")}
   ORDER BY n.nspname, t.typname;
 ";
         _progressLog.Info("Casting Enum Type Structures");
@@ -2666,6 +2701,7 @@ SELECT 'Composite Types' AS Folder,
     AND ns.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND ns.nspname NOT LIKE 'pg_temp_%'
     AND ns.nspname NOT LIKE 'pg_toast_temp_%'
+    AND " + PostgreSqlNotExtensionMember("pg_type", "t.oid") + @"
   GROUP BY ns.nspname, t.typname;
 ";
         PerformPostgreSqlCasting(command, "Composite Types");
@@ -2693,7 +2729,8 @@ SELECT 'Collations' AS Folder,
   JOIN pg_namespace n ON c.collnamespace = n.oid
                      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
                      AND n.nspname NOT LIKE 'pg_temp_%'
-                     AND n.nspname NOT LIKE 'pg_toast_temp_%';
+                     AND n.nspname NOT LIKE 'pg_toast_temp_%'
+  WHERE {PostgreSqlNotExtensionMember("pg_collation", "c.oid")};
 ";
         PerformPostgreSqlCasting(command, "Collations");
     }
@@ -2717,7 +2754,8 @@ SELECT CASE p.prokind
                      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
                      AND n.nspname NOT LIKE 'pg_temp_%'
                      AND n.nspname NOT LIKE 'pg_toast_temp_%'
-  WHERE p.prokind IN ('f', 'w');
+  WHERE p.prokind IN ('f', 'w')
+    AND " + PostgreSqlNotExtensionMember("pg_proc", "p.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Functions");
     }
@@ -2773,7 +2811,8 @@ SELECT 'Aggregates' AS Folder,
   LEFT JOIN pg_namespace opn ON opn.oid = op.oprnamespace
   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND n.nspname NOT LIKE 'pg_temp_%'
-    AND n.nspname NOT LIKE 'pg_toast_temp_%';
+    AND n.nspname NOT LIKE 'pg_toast_temp_%'
+    AND " + PostgreSqlNotExtensionMember("pg_proc", "p.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Aggregates");
     }
@@ -2789,7 +2828,8 @@ SELECT 'Procedures' AS Folder,
                      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
                      AND n.nspname NOT LIKE 'pg_temp_%'
                      AND n.nspname NOT LIKE 'pg_toast_temp_%'
-  WHERE p.prokind = 'p';
+  WHERE p.prokind = 'p'
+    AND " + PostgreSqlNotExtensionMember("pg_proc", "p.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Procedures");
     }
@@ -2819,7 +2859,7 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
     AND NOT EXISTS (SELECT 1 FROM pg_depend d
                     WHERE d.objid = s.oid
                       AND d.classid = 'pg_class'::regclass
-                      AND d.deptype IN ('i', 'a'))
+                      AND d.deptype IN ('i', 'a', 'e'))
   ORDER BY n.nspname, s.relname;
 ";
         _progressLog.Info("Casting Sequence Structures");
@@ -2922,7 +2962,8 @@ SELECT 'Rules' AS Folder,
   WHERE ns.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND ns.nspname NOT LIKE 'pg_temp_%'
     AND ns.nspname NOT LIKE 'pg_toast_temp_%'
-    AND r.rulename != '_RETURN';
+    AND r.rulename != '_RETURN'
+    AND " + PostgreSqlNotExtensionMember("pg_rewrite", "r.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Rules");
     }
@@ -2948,7 +2989,13 @@ SELECT 'Triggers' AS Folder,
   WHERE NOT t.tgisinternal
     AND ns.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND ns.nspname NOT LIKE 'pg_temp_%'
-    AND ns.nspname NOT LIKE 'pg_toast_temp_%';
+    AND ns.nspname NOT LIKE 'pg_toast_temp_%'
+    -- A partitioned table and its partitions are refused at extraction (partitioning is not modelled), so a trigger
+    -- on either -- including the copies the engine clones onto each partition -- would name a table the package
+    -- does not contain.
+    AND tbl.relkind <> 'p'
+    AND NOT tbl.relispartition
+    AND " + PostgreSqlNotExtensionMember("pg_trigger", "t.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Triggers");
     }
@@ -2969,19 +3016,23 @@ SELECT 'Views' AS Folder,
   WHERE c.relkind = 'v'
     AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND n.nspname NOT LIKE 'pg_temp_%'
-    AND n.nspname NOT LIKE 'pg_toast_temp_%';
+    AND n.nspname NOT LIKE 'pg_toast_temp_%'
+    AND " + PostgreSqlNotExtensionMember("pg_class", "c.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Views");
     }
 
     private void CastPostgreSqlMaterializedViews(IDbCommand command)
     {
-        command.CommandText = @"
+        command.CommandText = $@"
 SELECT mv.schemaname, mv.matviewname
   FROM pg_matviews mv
+  JOIN pg_class c ON c.relname = mv.matviewname
+                 AND c.relnamespace = (SELECT n.oid FROM pg_namespace n WHERE n.nspname = mv.schemaname)
   WHERE mv.schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND mv.schemaname NOT LIKE 'pg_temp_%'
     AND mv.schemaname NOT LIKE 'pg_toast_temp_%'
+    AND {PostgreSqlNotExtensionMember("pg_class", "c.oid")}
   ORDER BY mv.schemaname, mv.matviewname;
 ";
 

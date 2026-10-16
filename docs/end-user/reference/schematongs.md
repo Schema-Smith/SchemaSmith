@@ -640,10 +640,13 @@ SchemaTongs automatically excludes the platform's system schemas and internal in
 - **System objects** -- Anything flagged as system-shipped by the source engine.
 - **System schemas** -- `sys` and `INFORMATION_SCHEMA` (SQL Server); `pg_catalog`, `information_schema`, `pg_toast`, and the per-session `pg_temp_*` / `pg_toast_temp_*` schemas (PostgreSQL). On MySQL, SchemaTongs is single-schema-scoped: it extracts only the schema named in `Source:Database`, so the system schemas (`mysql`, `information_schema`, `performance_schema`, `sys`) are simply outside scope unless you point at one explicitly.
 - **User schemas are NOT excluded.** SQL Server's `dbo` and `guest`, and PostgreSQL's `public`, are user schemas. Their tables, views, procedures, functions, triggers, and types are all extracted normally. The shipped Northwind demo lives under `dbo` and round-trips end to end.
+- **Unlogged tables are NOT excluded** (PostgreSQL) -- an `UNLOGGED` table is extracted with `"PersistenceType": "Unlogged"`; only session temporary tables are left out.
 - **SchemaSmith infrastructure** -- All objects in the `SchemaSmith` schema, or named `SchemaSmith_*` on MySQL and MariaDB (the helper procedures SchemaTongs and SchemaQuench deploy). Files you keep there, such as the recycle-bin hooks, are left alone by [Orphan Detection](#orphan-detection).
 - **Schema-creation script gaps (SQL Server)** -- The pass that emits `Schemas/*.sql` scripts additionally skips system-shipped schemas (`schema_id <= 4`, which covers `dbo`, `guest`, `INFORMATION_SCHEMA`, `sys`) and database-role schemas (names matching `db[_]%`). Object extraction under those schemas is not affected -- the gap is only in the standalone `CREATE SCHEMA` scripts.
 - **Replication artifacts** (SQL Server) -- Tables prefixed with `MSPeer_` or `MSPub_`.
 - **Legacy system tables** (SQL Server) -- `dtproperties` and `sysdiagrams`.
+- **Extension members** (PostgreSQL) -- Every object an installed extension owns (`pg_trgm`'s functions, PostGIS's `spatial_ref_sys`, an extension's types, operators and views). They belong to the extension, which is a prerequisite of the target database, not to the package. The run log says how many were skipped per extension.
+- **Triggers on partitioned tables and their partitions** (PostgreSQL) -- PostgreSQL declarative partitioning is not modelled, so the partitioned table and its partitions are refused at extraction, and a trigger on either (including the copies the engine clones onto each partition) is left out with them rather than written against a table the package does not contain.
 
 ---
 
