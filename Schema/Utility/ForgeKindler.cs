@@ -660,6 +660,8 @@ public static class ForgeKindler
                 new("SchemaSmith_IndexPeriodJson.sql"),
                 new("SchemaSmith_IsSystemTimePeriodColumn.sql"),
                 new("SchemaSmith_SetSystemVersioningAlterHistory.sql"),
+                // KEEP around a new versioned table's index work only (MySQL no-op, MariaDb override); the index pass CALLs it.
+                new("SchemaSmith_KeepHistoryForNewVersionedTable.sql"),
                 new("SchemaSmith_TablePeriodsJson.sql"),
                 // The catalog-to-package read for partitioning (#partitioning, K3). ONE shared
                 // definition, unlike its Periods sibling: INFORMATION_SCHEMA.PARTITIONS exists on every

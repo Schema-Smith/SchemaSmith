@@ -821,6 +821,12 @@ for you.
 > section are table JSON, and this one is not. Since v2.6.0 the generated `.json-schemas` reject it as an
 > unexpected property, so putting it in a package fails `--Validate` with `SS-JSON-001` and exit `2`.
 
+**A unique key is refused the same way.** MariaDB will not add a `UNIQUE` index or unique constraint to a
+system-versioned table unless `KEEP` is set. A table created in the same deploy has no history to rewrite, so
+SchemaSmith sets `KEEP` around that table's index work and restores your session afterwards: a package with
+`IsSystemVersioned: true` and a unique key deploys fresh without the setting. Adding a unique key to a versioned
+table that already exists still needs it, and the deploy says so, naming the table.
+
 Leaving it unset costs nothing on a healthy deploy: the refusal only fires when a change genuinely
 requires rewriting history, never on a re-deploy where the table already matches its definition. If
 you do not want the history rewritten, the alternative is to drop system versioning, make the change,
