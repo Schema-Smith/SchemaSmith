@@ -574,7 +574,10 @@ BEGIN TRY
                                    AND c.[TableName] = cc.[TableName]
                                    AND c.[ColumnName] = QUOTENAME(sc.[name]) COLLATE DATABASE_DEFAULT
       WHERE NOT EXISTS (SELECT * FROM #ColumnChanges cc2 WITH (NOLOCK) WHERE cc2.[Schema] = c.[Schema] AND cc2.[TableName] = c.[TableName] AND cc2.[ColumnName] = c.[ColumnName])
-  
+        -- An option-only change (#509) leaves a computed column in place, except a mask: SQL Server refuses ADD MASKED
+        -- while a computed column reads the column (4922), and takes NOT FOR REPLICATION or ROWGUIDCOL on or off under it.
+        AND (cc.[DefinitionChanged] = 1 OR cc.[SpecialColumnScript] LIKE '%MASKED%')
+
   -- Engine-owned columns must never be considered for a drop. They exist because the table is a node or
   -- edge table, not because anything declared them, so the drop-by-absence pass would otherwise try to
   -- remove every one on the SECOND deploy -- and SQL Server refuses with "Internal graph columns cannot
@@ -630,6 +633,11 @@ BEGIN TRY
     JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = cc.[Schema] AND t.[Name] = cc.[TableName]
     WHERE cc.DropOnly = 1
       AND (@DropColumnsRemovedFromProduct = 0 OR ISNULL(t.[DropColumnsRemovedFromProduct], 1) = 0)
+
+  -- The same dependent-cleanup passes also skip an option-only change (#509, [DefinitionChanged] = 0): NOT FOR REPLICATION,
+  -- ROWGUIDCOL and a mask are metadata SQL Server changes under every index, statistic, foreign key, default, check and
+  -- fulltext index over the column (probed on 2022), so dropping them would only re-create them. The two dependents a
+  -- MASK cannot keep are a computed column and a schema-bound module reading the column, handled where each is collected.
 
   ----------------------------------------------------------------------------------------------------
   -- THE REBUILD DECISION POINT.
@@ -1050,9 +1058,10 @@ BEGIN TRY
           ON d.referenced_id = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
         JOIN sys.sql_modules m
           ON m.[object_id] = d.referencing_id AND m.is_schema_bound = 1
-       WHERE d.referenced_minor_id = 0
+       WHERE (d.referenced_minor_id = 0
           OR d.referenced_minor_id = COLUMNPROPERTY(d.referenced_id,
-                 SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName]), 'ColumnId')
+                 SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName]), 'ColumnId'))
+         AND (cc.[DefinitionChanged] = 1 OR cc.[SpecialColumnScript] LIKE '%MASKED%')  -- #509
       UNION ALL
       -- A module bound to a module already in the chain must come out BEFORE it. The depth cap is a
       -- cycle guard: SQL Server does not permit a schemabinding cycle, but a recursive CTE with no
@@ -1145,13 +1154,15 @@ BEGIN TRY
                                                      THEN 1 ELSE 0 END),
                  -- THE THRESHOLD COUNT: column-MODIFICATION passes only, which is what a rebuild actually
                  -- eliminates -- each #ColumnChanges row that is not a pure drop becomes its own ALTER.
-                 -- DropOnly rows are excluded (a column drop is metadata-only here, so a rebuild saves
-                 -- nothing by absorbing it); column ADDs never reach #ColumnChanges at all, having already
+                 -- DropOnly rows and option-only rows are excluded (a column drop or an option toggle is
+                 -- metadata-only here, so a rebuild saves nothing by absorbing it); column ADDs never reach
+                 -- #ColumnChanges at all, having already
                  -- been applied by MissingTableAndColumnQuench before this procedure starts; index /
                  -- constraint / statistics churn is excluded for the same reason. Counting work a rebuild
                  -- does not save would fire rebuilds that cost data movement and buy nothing.
                  [ModificationPasses] = (SELECT COUNT(*) FROM #ColumnChanges cc WITH (NOLOCK)
-                                           WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.DropOnly = 0),
+                                           WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.DropOnly = 0
+                                             AND cc.[DefinitionChanged] = 1),  -- an option toggle is metadata a rebuild does not save (#509)
                  [AnyColumnChange] = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK)
                                                                       WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name])
                                                        THEN 1 ELSE 0 END)
@@ -1279,6 +1290,7 @@ BEGIN TRY
     FROM sys.fulltext_index_columns ic
     JOIN #ColumnChanges cc WITH (NOLOCK) ON ic.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
                                         AND COL_NAME(ic.[object_id], ic.column_id) = SchemaSmith.fn_StripBracketWrapping(cc.ColumnName)
+                                        AND cc.[DefinitionChanged] = 1  -- #509
                                         AND NOT EXISTS (SELECT 1 FROM #SuppressedColumnDrops s WITH (NOLOCK)
                                                           WHERE s.[Schema] = cc.[Schema] AND s.[TableName] = cc.[TableName] AND s.[ColumnName] = cc.[ColumnName])  -- #358
 
@@ -1344,7 +1356,8 @@ BEGIN TRY
          IsClustered = CAST(CASE WHEN i.[type_desc] = 'CLUSTERED' THEN 1 ELSE 0 END AS BIT)
     INTO #IndexesToDropForColumnChanges
     FROM sys.indexes i
-    JOIN #ColumnChanges cc WITH (NOLOCK) ON i.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName]) 
+    JOIN #ColumnChanges cc WITH (NOLOCK) ON i.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
+    AND cc.[DefinitionChanged] = 1  -- #509
     AND NOT EXISTS (SELECT 1 FROM #SuppressedColumnDrops s WITH (NOLOCK)
                       WHERE s.[Schema] = cc.[Schema] AND s.[TableName] = cc.[TableName] AND s.[ColumnName] = cc.[ColumnName])  -- #358
     LEFT JOIN sys.index_columns ic ON ic.[object_id] = i.[object_id]
@@ -1868,7 +1881,8 @@ BEGIN TRY
   SELECT DISTINCT cc.[Schema], cc.[TableName], [StatName] = i.[name]
     INTO #StatisticsToDropForChanges
     FROM sys.stats i 
-    JOIN #ColumnChanges cc WITH (NOLOCK) ON i.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName]) 
+    JOIN #ColumnChanges cc WITH (NOLOCK) ON i.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
+    AND cc.[DefinitionChanged] = 1  -- #509
     AND NOT EXISTS (SELECT 1 FROM #SuppressedColumnDrops s WITH (NOLOCK)
                       WHERE s.[Schema] = cc.[Schema] AND s.[TableName] = cc.[TableName] AND s.[ColumnName] = cc.[ColumnName])  -- #358
     LEFT JOIN sys.stats_columns ic ON ic.[object_id] = i.[object_id]
@@ -1894,7 +1908,8 @@ BEGIN TRY
                                          AND SchemaSmith.fn_StripBracketWrapping(cc.ColumnName) = COL_NAME(fc.[parent_object_id], fc.parent_column_id))
                                          OR (OBJECT_ID(cc.[Schema] + '.' + cc.[TableName]) = fk.referenced_object_id
                                          AND SchemaSmith.fn_StripBracketWrapping(cc.ColumnName) = COL_NAME(fc.[referenced_object_id], fc.referenced_column_id))
-    WHERE NOT EXISTS (SELECT 1 FROM #SuppressedColumnDrops s WITH (NOLOCK)  -- #358
+    WHERE cc.[DefinitionChanged] = 1  -- #509
+      AND NOT EXISTS (SELECT 1 FROM #SuppressedColumnDrops s WITH (NOLOCK)  -- #358
                         WHERE s.[Schema] = cc.[Schema] AND s.[TableName] = cc.[TableName] AND s.[ColumnName] = cc.[ColumnName])
 
   RAISERROR('Drop Foreign Keys Referencing Modified Columns', 10, 100) WITH NOWAIT
@@ -1911,6 +1926,7 @@ BEGIN TRY
     FROM sys.default_constraints dc
     JOIN #ColumnChanges cc WITH (NOLOCK) ON dc.[parent_object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
                                         AND COL_NAME(dc.parent_object_id, dc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(cc.ColumnName)
+                                        AND cc.[DefinitionChanged] = 1  -- #509
                                         AND NOT EXISTS (SELECT 1 FROM #SuppressedColumnDrops s WITH (NOLOCK)
                                                           WHERE s.[Schema] = cc.[Schema] AND s.[TableName] = cc.[TableName] AND s.[ColumnName] = cc.[ColumnName])  -- #358
 
@@ -1929,6 +1945,7 @@ BEGIN TRY
     JOIN #ColumnChanges cc WITH (NOLOCK) ON ck.[parent_object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName]) 
                                         AND ((ck.parent_column_id <> 0 AND COL_NAME(ck.parent_object_id, ck.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(cc.ColumnName))
                                           OR (ck.parent_column_id = 0 AND ck.[definition] LIKE '%' + SchemaSmith.fn_StripBracketWrapping(cc.ColumnName) + '%'))
+                                        AND cc.[DefinitionChanged] = 1  -- #509
                                         AND NOT EXISTS (SELECT 1 FROM #SuppressedColumnDrops s WITH (NOLOCK)
                                                           WHERE s.[Schema] = cc.[Schema] AND s.[TableName] = cc.[TableName] AND s.[ColumnName] = cc.[ColumnName])  -- #358
 

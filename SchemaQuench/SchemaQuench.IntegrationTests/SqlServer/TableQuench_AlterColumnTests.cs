@@ -2,6 +2,7 @@
 
 ﻿using Schema.DataAccess;
 using Schema.Domain;
+using System.Data;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -640,6 +641,139 @@ public class TableQuench_AlterColumnTests : BaseTableQuenchTests
         Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("default()"));
 
         conn.Close();
+    }
+
+    private const string OptionOnlyPackage = """
+        [
+            {
+                "Schema": "[dbo]",
+                "Name": "[OptionOnly]",
+                "Columns": [
+                    {"Name": "[Id]", "DataType": "INT IDENTITY(1, 1)__NFR__", "Nullable": false},
+                    {"Name": "[Email]", "DataType": "VARCHAR(50)", "Nullable": false, "Default": "'x@y.z'", "CheckExpression": "[Email] <> ''"__MASK__},
+                    {"Name": "[Rg]", "DataType": "UNIQUEIDENTIFIER__RGC__", "Nullable": false, "Default": "NEWID()"}
+                ],
+                "Indexes": [
+                    {"Name": "[PK_OptionOnly]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]"},
+                    {"Name": "[UQ_OptionOnly_Email]", "Unique": true, "IndexColumns": "[Email]"},
+                    {"Name": "[IX_OptionOnly_Rg]", "IndexColumns": "[Rg]", "IncludeColumns": "[Email]"}
+                ],
+                "Statistics": [{"Name": "ST_OptionOnly_Email", "Columns": "[Email]"}],
+                "CheckConstraints": [{"Name": "CK_OptionOnly_Rows", "Expression": "[Id] > 0 AND [Email] <> 'q'"}]
+            },
+            {
+                "Schema": "[dbo]",
+                "Name": "[OptionOnlyChild]",
+                "Columns": [
+                    {"Name": "[ChildId]", "DataType": "INT", "Nullable": false},
+                    {"Name": "[ParentId]", "DataType": "INT", "Nullable": true}
+                ],
+                "Indexes": [{"Name": "[PK_OptionOnlyChild]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[ChildId]"}],
+                "ForeignKeys": [{"Name": "[FK_OptionOnlyChild_Parent]", "Columns": "[ParentId]", "RelatedTableSchema": "dbo", "RelatedTable": "[OptionOnly]", "RelatedColumns": "[Id]"}]
+            }
+        ]
+        """;
+
+    // Every constraint by object_id, every index by the rowset it sits on, every user statistic by id: a dropped and
+    // re-created object changes each of these even when it comes back under the same name.
+    private const string OptionOnlyDependents = """
+        SELECT [name] + ':' + CONVERT(VARCHAR(20), [object_id]) FROM sys.objects WHERE parent_object_id IN (OBJECT_ID('dbo.OptionOnly'), OBJECT_ID('dbo.OptionOnlyChild')) AND [type] IN ('PK', 'UQ', 'F', 'D', 'C')
+        UNION ALL
+        SELECT i.[name] + ':' + CONVERT(VARCHAR(20), p.hobt_id) FROM sys.indexes i JOIN sys.partitions p ON p.[object_id] = i.[object_id] AND p.index_id = i.index_id WHERE i.[object_id] = OBJECT_ID('dbo.OptionOnly') AND i.index_id > 0
+        UNION ALL
+        SELECT s.[name] + ':' + CONVERT(VARCHAR(20), s.stats_id) FROM sys.stats s WHERE s.[object_id] = OBJECT_ID('dbo.OptionOnly') AND s.user_created = 1
+        ORDER BY 1
+        """;
+
+    private static System.Collections.Generic.List<string> ReadStrings(IDbCommand cmd, string sql)
+    {
+        cmd.CommandText = sql;
+        var rows = new System.Collections.Generic.List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) rows.Add(reader.GetString(0));
+        return rows;
+    }
+
+    [Test]
+    public void AColumnOptionToggle_LeavesEveryDependentObjectInPlace()
+    {
+        // #509: NOT FOR REPLICATION, ROWGUIDCOL and a mask are metadata SQL Server changes under the indexes, keys, defaults,
+        // checks and statistics over the column (probed on 2022), so an option-only change drops none of them.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            RunTableQuenchProc(cmd, OptionOnlyPackage.Replace("__NFR__", "").Replace("__RGC__", "").Replace("__MASK__", ""));
+            cmd.CommandText = "INSERT dbo.OptionOnly (Email) VALUES ('a@b.c'); INSERT dbo.OptionOnlyChild (ChildId, ParentId) VALUES (1, SCOPE_IDENTITY())";
+            cmd.ExecuteNonQuery();
+            var before = ReadStrings(cmd, OptionOnlyDependents);
+            Assert.That(before, Has.Count.EqualTo(11), "the first deploy builds every dependent: " + string.Join(", ", before));
+
+            RunTableQuenchProc(cmd, OptionOnlyPackage.Replace("__NFR__", " NOT FOR REPLICATION").Replace("__RGC__", " ROWGUIDCOL").Replace("__MASK__", ", \"DataMaskFunction\": \"email()\""));
+
+            var after = ReadStrings(cmd, OptionOnlyDependents);
+            cmd.CommandText = "SELECT masking_function FROM sys.masked_columns WHERE [object_id] = OBJECT_ID('dbo.OptionOnly') AND [name] = 'Email'";
+            var mask = cmd.ExecuteScalar() as string;
+            cmd.CommandText = "SELECT COUNT(*) FROM dbo.OptionOnly p JOIN dbo.OptionOnlyChild c ON c.ParentId = p.Id";
+            var rows = (int)cmd.ExecuteScalar();
+            Assert.Multiple(() =>
+            {
+                Assert.That(GetColumnDataType(cmd, "OptionOnly", "Id"), Is.EqualTo("INT IDENTITY(1, 1) NOT FOR REPLICATION"));
+                Assert.That(GetColumnDataType(cmd, "OptionOnly", "Rg"), Is.EqualTo("UNIQUEIDENTIFIER ROWGUIDCOL"));
+                Assert.That(mask, Is.EqualTo("email()"));
+                Assert.That(after, Is.EqualTo(before), "no index, key, default, check or statistic was dropped and re-created for an option toggle");
+                Assert.That(rows, Is.EqualTo(1));
+            });
+        }
+        finally
+        {
+            cmd.CommandText = "DROP TABLE IF EXISTS dbo.OptionOnlyChild; DROP TABLE IF EXISTS dbo.OptionOnly";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    [Test]
+    public void AMaskChange_StillTakesOffTheComputedColumnThatReadsTheColumn()
+    {
+        // SQL Server refuses ADD MASKED while a computed column reads the column (4922), the one dependent a mask change
+        // cannot keep in place, so that column still comes off and goes back.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        const string package = """
+            {
+                "Schema": "[dbo]",
+                "Name": "[MaskedUnderComputed]",
+                "Columns": [
+                    {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                    {"Name": "[Email]", "DataType": "VARCHAR(50)", "Nullable": true, "DataMaskFunction": "__FN__"},
+                    {"Name": "[EmailUp]", "ComputedExpression": "UPPER([Email])"}
+                ],
+                "Indexes": [{"Name": "[PK_MaskedUnderComputed]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]"}]
+            }
+            """;
+        try
+        {
+            RunTableQuenchProc(cmd, package.Replace("__FN__", "email()"));
+            RunTableQuenchProc(cmd, package.Replace("__FN__", "default()"));
+            cmd.CommandText = "SELECT masking_function FROM sys.masked_columns WHERE [object_id] = OBJECT_ID('dbo.MaskedUnderComputed') AND [name] = 'Email'";
+            var mask = cmd.ExecuteScalar() as string;
+            cmd.CommandText = "SELECT [definition] FROM sys.computed_columns WHERE [object_id] = OBJECT_ID('dbo.MaskedUnderComputed') AND [name] = 'EmailUp'";
+            var computed = cmd.ExecuteScalar() as string;
+            Assert.Multiple(() =>
+            {
+                Assert.That(mask, Is.EqualTo("default()"));
+                Assert.That(computed, Is.EqualTo("(upper([Email]))"));
+            });
+        }
+        finally
+        {
+            cmd.CommandText = "DROP TABLE IF EXISTS dbo.MaskedUnderComputed";
+            cmd.ExecuteNonQuery();
+        }
     }
 
     [OneTimeSetUp]
