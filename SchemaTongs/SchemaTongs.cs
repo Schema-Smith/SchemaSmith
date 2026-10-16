@@ -1792,8 +1792,8 @@ SELECT k.[name], m.[name], v.encryption_algorithm_name, v.encrypted_value
             while (reader.Read())
                 encryptionKeys.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), (byte[])reader.GetValue(3)));
 
-        var folder = Path.Combine(_templatePath, Template.PrerequisitesFolder);
-        var file = Path.Combine(folder, AlwaysEncryptedKeysScript);
+        var folder = Path.Join(_templatePath, Template.PrerequisitesFolder);
+        var file = Path.Join(folder, AlwaysEncryptedKeysScript);
         var files = FileWrapper.GetFromFactory();
         if (masterKeys.Count == 0)
         {
@@ -1813,18 +1813,14 @@ SELECT k.[name], m.[name], v.encryption_algorithm_name, v.encrypted_value
         sb.Append("IF OBJECT_ID('sys.column_master_keys') IS NULL\r\n");
         sb.Append("  RAISERROR('  Always Encrypted keys skipped: they need SQL Server 2016', 10, 1) WITH NOWAIT\r\n");
         sb.Append("ELSE\r\nBEGIN\r\n");
-        foreach (var key in masterKeys)
-        {
-            var enclave = key.Enclave && key.Signature != null ? $", ENCLAVE_COMPUTATIONS (SIGNATURE = {Hex(key.Signature)})" : "";
-            sb.Append($"  IF NOT EXISTS (SELECT 1 FROM sys.column_master_keys WHERE [name] = N'{EscapeSql(key.Name)}')\r\n");
-            sb.Append("    " + Exec($"CREATE COLUMN MASTER KEY {Quote(key.Name)} WITH (KEY_STORE_PROVIDER_NAME = N'{EscapeSql(key.Provider)}', KEY_PATH = N'{EscapeSql(key.Path)}'{enclave})") + "\r\n");
-        }
-        foreach (var key in encryptionKeys.GroupBy(k => k.Name))
-        {
-            var values = string.Join(", ", key.Select(v => $"(COLUMN_MASTER_KEY = {Quote(v.MasterKey)}, ALGORITHM = '{EscapeSql(v.Algorithm)}', ENCRYPTED_VALUE = {Hex(v.Value)})"));
-            sb.Append($"  IF NOT EXISTS (SELECT 1 FROM sys.column_encryption_keys WHERE [name] = N'{EscapeSql(key.Key)}')\r\n");
-            sb.Append("    " + Exec($"CREATE COLUMN ENCRYPTION KEY {Quote(key.Key)} WITH VALUES {values}") + "\r\n");
-        }
+        sb.Append(string.Concat(masterKeys.Select(key =>
+            $"  IF NOT EXISTS (SELECT 1 FROM sys.column_master_keys WHERE [name] = N'{EscapeSql(key.Name)}')\r\n    " +
+            Exec($"CREATE COLUMN MASTER KEY {Quote(key.Name)} WITH (KEY_STORE_PROVIDER_NAME = N'{EscapeSql(key.Provider)}', KEY_PATH = N'{EscapeSql(key.Path)}'" +
+                 (key.Enclave && key.Signature != null ? $", ENCLAVE_COMPUTATIONS (SIGNATURE = {Hex(key.Signature)})" : "") + ")") + "\r\n")));
+        sb.Append(string.Concat(encryptionKeys.GroupBy(k => k.Name).Select(key =>
+            $"  IF NOT EXISTS (SELECT 1 FROM sys.column_encryption_keys WHERE [name] = N'{EscapeSql(key.Key)}')\r\n    " +
+            Exec($"CREATE COLUMN ENCRYPTION KEY {Quote(key.Key)} WITH VALUES " +
+                 string.Join(", ", key.Select(v => $"(COLUMN_MASTER_KEY = {Quote(v.MasterKey)}, ALGORITHM = '{EscapeSql(v.Algorithm)}', ENCRYPTED_VALUE = {Hex(v.Value)})"))) + "\r\n")));
         sb.Append("END\r\n");
 
         DirectoryWrapper.GetFromFactory().CreateDirectory(folder);
@@ -1837,7 +1833,7 @@ SELECT k.[name], m.[name], v.encryption_algorithm_name, v.encrypted_value
     // added, first, the first time a prerequisite is written.
     private void EnsurePrerequisitesFolder()
     {
-        var templateFile = Path.Combine(_templatePath, "Template.json");
+        var templateFile = Path.Join(_templatePath, "Template.json");
         if (!FileWrapper.GetFromFactory().Exists(templateFile)) return;
         var template = JsonHelper.Load<Template>(templateFile);
         if (template == null || template.ScriptFolders.Count == 0
