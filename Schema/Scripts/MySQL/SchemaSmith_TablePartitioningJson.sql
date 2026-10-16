@@ -57,7 +57,9 @@ BEGIN
     -- COUNT and no partition list. Emitting auto-generated p0..pN names for them would make the package
     -- look hand-authored and churn if the count ever changed.
     IF v_Method IN ('HASH', 'KEY', 'LINEAR HASH', 'LINEAR KEY') THEN
-        RETURN JSON_OBJECT('Method', v_Method, 'Expression', v_Expression, 'PartitionCount', v_Count);
+        -- CAST: MariaDB writes a local INT filled by SELECT ... INTO as a JSON string ("3"), which the package's schema
+        -- refuses as an integer. MySQL writes the number either way.
+        RETURN JSON_OBJECT('Method', v_Method, 'Expression', v_Expression, 'PartitionCount', CAST(v_Count AS UNSIGNED));
     END IF;
 
     -- ORDER IS PART OF THE DEFINITION: RANGE boundaries must ascend and the engine rejects a definition

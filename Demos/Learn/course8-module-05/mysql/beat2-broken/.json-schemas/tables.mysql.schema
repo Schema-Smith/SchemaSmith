@@ -426,8 +426,8 @@
       "properties": {
         "Method": {
           "type": "string",
-          "pattern": "^(?:RANGE|LIST|HASH|KEY|RANGE COLUMNS|LIST COLUMNS)$",
-          "description": "RANGE, LIST, HASH, KEY, RANGE COLUMNS or LIST COLUMNS."
+          "pattern": "^(?:RANGE|LIST|HASH|KEY|LINEAR HASH|LINEAR KEY|RANGE COLUMNS|LIST COLUMNS)$",
+          "description": "RANGE, LIST, HASH, KEY, LINEAR HASH, LINEAR KEY, RANGE COLUMNS or LIST COLUMNS. The LINEAR forms take a PartitionCount, as HASH and KEY do."
         },
         "Expression": {
           "type": "string",

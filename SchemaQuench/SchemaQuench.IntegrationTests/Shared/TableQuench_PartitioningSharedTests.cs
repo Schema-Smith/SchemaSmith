@@ -93,6 +93,49 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // The count methods. LINEAR HASH and LINEAR KEY fell into the RANGE/LIST branch of the create emit, which writes a
+    // partition list, so the CREATE carried an empty one and failed; and MariaDB extracted every count as a string, which
+    // the package's schema refuses as an integer.
+    [TestCase("HASH")]
+    [TestCase("KEY")]
+    [TestCase("LINEAR HASH")]
+    [TestCase("LINEAR KEY")]
+    public void TableQuench_CountPartitioning_IsCreatedWithItsCount_RedeploysAsANoOp_AndExtractsAsDeclared(string method)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartLinearProduct_{uid}";
+        var table = $"PartLinearTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithHashPartitioning(table, 3, method), productName: product);
+            Assert.Multiple(() =>
+            {
+                Assert.That(LiveMethod(cmd, table), Is.EqualTo(method));
+                Assert.That(LivePartitionCount(cmd, table), Is.EqualTo(3));
+            });
+
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithHashPartitioning(table, 3, method), productName: product),
+                "an unchanged LINEAR table redeploys cleanly");
+            Assert.That(LivePartitionCount(cmd, table), Is.EqualTo(3), "and is untouched");
+
+            cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
+            var json = cmd.ExecuteScalar()?.ToString() ?? "";
+            var partitioning = json.Contains("Partitioning") ? json[json.IndexOf("\"Partitioning\"", StringComparison.Ordinal)..] : json;
+            Assert.That(partitioning, Does.Contain($"\"Method\": \"{method}\"").And.Contain("\"PartitionCount\": 3"), partitioning);
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
     [Test]
     public void TableQuench_RedeployingAPartitionedTable_IsANoOp()
     {
@@ -647,7 +690,7 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
 ]
 """;
 
-    private static string WithHashPartitioning(string table, int count) => $$"""
+    private static string WithHashPartitioning(string table, int count, string method = "HASH") => $$"""
 [
   {
     "Name": "{{table}}",
@@ -656,7 +699,7 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
       { "Name": "`Val`", "DataType": "varchar(50)", "Nullable": true }
     ],
     "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`" } ],
-    "Partitioning": { "Method": "HASH", "Expression": "Id", "PartitionCount": {{count}} }
+    "Partitioning": { "Method": "{{method}}", "Expression": "Id", "PartitionCount": {{count}} }
   }
 ]
 """;

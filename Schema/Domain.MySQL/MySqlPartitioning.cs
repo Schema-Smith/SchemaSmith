@@ -19,12 +19,12 @@ namespace Schema.Domain.MySQL
     public class MySqlPartitioning : DynamicBase
     {
         /// <summary>
-        /// RANGE, LIST, HASH, KEY, or the COLUMNS forms of the first two. The COLUMNS variants take a
+        /// RANGE, LIST, HASH, KEY, their LINEAR forms (a powers-of-two hash, still a count), or the COLUMNS forms of the first two. The COLUMNS variants take a
         /// column LIST rather than an expression and compare values column-by-column, which is why they are
         /// distinct methods rather than a flag.
         /// </summary>
-        [SchemaProperty(Required = true, Pattern = "RANGE|LIST|HASH|KEY|RANGE COLUMNS|LIST COLUMNS",
-            Description = "RANGE, LIST, HASH, KEY, RANGE COLUMNS or LIST COLUMNS.")]
+        [SchemaProperty(Required = true, Pattern = "RANGE|LIST|HASH|KEY|LINEAR HASH|LINEAR KEY|RANGE COLUMNS|LIST COLUMNS",
+            Description = "RANGE, LIST, HASH, KEY, LINEAR HASH, LINEAR KEY, RANGE COLUMNS or LIST COLUMNS. The LINEAR forms take a PartitionCount, as HASH and KEY do.")]
         [JsonProperty(Order = 1)]
         public string Method { get; set; }
 
@@ -44,7 +44,7 @@ namespace Schema.Domain.MySQL
         public string Expression { get; set; }
 
         /// <summary>
-        /// HASH and KEY only: how many partitions to spread across. RANGE and LIST name their partitions
+        /// HASH, KEY and their LINEAR forms only: how many partitions to spread across. RANGE and LIST name their partitions
         /// individually in <see cref="Partitions"/> instead, because each one carries its own boundary.
         /// </summary>
         [SchemaProperty(Minimum = 1,

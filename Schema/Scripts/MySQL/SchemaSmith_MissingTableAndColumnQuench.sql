@@ -151,7 +151,7 @@ BEGIN
                 -- boundaries must ascend, and the engine rejects a definition where they do not), so the
                 -- list is aggregated by Ordinal. HASH and KEY carry a count instead and no list at all.
                 CASE WHEN t.PartitionMethod IS NULL THEN ''
-                     WHEN t.PartitionMethod IN ('HASH', 'KEY')
+                     WHEN t.PartitionMethod IN ('HASH', 'KEY', 'LINEAR HASH', 'LINEAR KEY')
                      THEN CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ')',
                                  CASE WHEN t.PartitionCount IS NOT NULL THEN CONCAT(' PARTITIONS ', t.PartitionCount) ELSE '' END)
                      ELSE CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ') (',
@@ -626,7 +626,7 @@ BEGIN
                       -- Partitioning (#partitioning, K3) -- must match the real-path emit above exactly,
                       -- or the WhatIf preview shows a statement the live run would not issue.
                       CASE WHEN t.PartitionMethod IS NULL THEN ''
-                           WHEN t.PartitionMethod IN ('HASH', 'KEY')
+                           WHEN t.PartitionMethod IN ('HASH', 'KEY', 'LINEAR HASH', 'LINEAR KEY')
                            THEN CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ')',
                                        CASE WHEN t.PartitionCount IS NOT NULL THEN CONCAT(' PARTITIONS ', t.PartitionCount) ELSE '' END)
                            ELSE CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ') (',

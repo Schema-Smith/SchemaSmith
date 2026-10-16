@@ -1871,9 +1871,9 @@ MySQL and MariaDB carry a table's partition definition in the table DDL itself â
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `Method` | string | | `RANGE`, `LIST`, `HASH`, `KEY`, `RANGE COLUMNS` or `LIST COLUMNS`. Required. The `COLUMNS` forms take a column **list** rather than an expression and compare values column by column. |
+| `Method` | string | | `RANGE`, `LIST`, `HASH`, `KEY`, `LINEAR HASH`, `LINEAR KEY`, `RANGE COLUMNS` or `LIST COLUMNS`. Required. The `LINEAR` forms place rows by a powers-of-two algorithm and take a `PartitionCount` like `HASH` and `KEY`. The `COLUMNS` forms take a column **list** rather than an expression and compare values column by column. |
 | `Expression` | string | | The partitioning expression (`Id`, `YEAR(created)`), or a comma-separated column list for the `COLUMNS` methods. Required. |
-| `PartitionCount` | int | `null` | `HASH` and `KEY` only: how many partitions to spread across. `RANGE` and `LIST` name each partition individually instead. |
+| `PartitionCount` | int | `null` | `HASH`, `KEY` and their `LINEAR` forms only: how many partitions to spread across. `RANGE` and `LIST` name each partition individually instead. |
 | `Partitions` | array | `[]` | `RANGE` and `LIST` only, **in declared order**. Each entry is `{ "Name": "...", "Values": "..." }` â€” `Values` is what follows `VALUES LESS THAN` for `RANGE` (a value, a tuple for `RANGE COLUMNS`, or `MAXVALUE`) or `VALUES IN` for `LIST`. |
 
 **Order is part of the definition.** `RANGE` boundaries must ascend, and the engine rejects a definition where they do not, so the list is written and read in declared order rather than sorted.
