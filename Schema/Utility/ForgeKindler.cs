@@ -623,6 +623,11 @@ public static class ForgeKindler
                 // the same way. Must follow it: it calls it.
                 new("SchemaSmith_NormalizeDeclaredDefault.sql"),
                 new("SchemaSmith_NumericDefaultsEqual.sql"),
+                // #520: a default is a literal or an expression by the catalog's own account, and an expression default
+                // compares through the engine's own rendering. In call order: the last calls the first two.
+                new("SchemaSmith_IsExpressionDefault.sql"),
+                new("SchemaSmith_ExpressionDefaultText.sql"),
+                new("SchemaSmith_ExpressionDefaultsEqual.sql"),
                 new("SchemaSmith_ColumnOnUpdateClause.sql"),
                 new("SchemaSmith_IndexIsVisible.sql"),
                 new("SchemaSmith_ColumnSrid.sql"),

@@ -144,6 +144,14 @@ BEGIN
             -- MariaDB refuses to aggregate the mix without an explicit coercion.
             'Default', CASE
                 WHEN SchemaSmith_NormalizeColumnDefault(c.COLUMN_DEFAULT) IS NULL THEN NULL
+                -- An expression default, by the catalog's own flag (#520): written wrapped, as the engine reports it
+                -- with MySQL's client-charset introducers removed and its escapes undone. The engine already wraps an
+                -- operator expression once, so that pair is kept rather than doubled. A temporal keyword is not an
+                -- expression here (SchemaSmith_IsExpressionDefault says no) and stays bare, below.
+                WHEN SchemaSmith_IsExpressionDefault(c.COLUMN_DEFAULT, c.EXTRA) = 1
+                     THEN CONVERT(CASE WHEN CONVERT(TRIM(SchemaSmith_ExpressionDefaultText(c.COLUMN_DEFAULT)) USING utf8mb4) LIKE CONVERT('(%)' USING utf8mb4)
+                                       THEN TRIM(SchemaSmith_ExpressionDefaultText(c.COLUMN_DEFAULT))
+                                       ELSE CONCAT('(', TRIM(SchemaSmith_ExpressionDefaultText(c.COLUMN_DEFAULT)), ')') END USING utf8mb4)
                 -- Numeric types: value is always a valid literal
                 WHEN c.DATA_TYPE IN ('tinyint', 'smallint', 'mediumint', 'int', 'integer', 'bigint',
                                      'float', 'double', 'decimal', 'numeric', 'bit', 'year') THEN CONVERT(c.COLUMN_DEFAULT USING utf8mb4)

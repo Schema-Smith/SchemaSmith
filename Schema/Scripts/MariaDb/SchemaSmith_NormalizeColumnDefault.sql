@@ -41,7 +41,14 @@ BEGIN
     -- The catalog qualifies a sequence default with the database (nextval(`db`.`s`)); a package declares the bare
     -- name so it deploys to any database, and extraction writes it that way, so the qualifier is dropped here.
     -- Bracket classes rather than backslash escapes, so the pattern reads the same under every sql_mode.
-    RETURN UPPER(REPLACE(REGEXP_REPLACE(p_Default, 'nextval[(]`[^`]+`[.]`', 'nextval(`'), '()', ''));
+    IF UPPER(TRIM(p_Default)) REGEXP '^(CURRENT_TIMESTAMP|NOW|LOCALTIME|LOCALTIMESTAMP|CURRENT_DATE|CURDATE|CURRENT_TIME|CURTIME|UTC_TIMESTAMP|UTC_DATE|UTC_TIME)(\\([0-9]*\\))?$' THEN
+        RETURN UPPER(REPLACE(p_Default, '()', ''));
+    END IF;
+    -- Any other unquoted value is an expression (#520): a function call or an operator expression, which the engine
+    -- stores lower-cased and renamed (LOWER as lcase). Upper-casing it here made concat('A','B') extract as the
+    -- string 'CONCAT(''A'',''B'')'; it is compared as an expression now, by SchemaSmith_ExpressionDefaultsEqual and
+    -- the expression map, and left as the engine reports it.
+    RETURN REGEXP_REPLACE(p_Default, 'nextval[(]`[^`]+`[.]`', 'nextval(`');
 END //
 
 DELIMITER ;

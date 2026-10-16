@@ -877,7 +877,11 @@ BEGIN
           OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
               AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
               AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
-                                                  c.DefaultValue, isc.DATA_TYPE) = 0)
+                                                  c.DefaultValue, isc.DATA_TYPE) = 0
+              AND SchemaSmith_ExpressionDefaultsEqual(isc.COLUMN_DEFAULT, isc.EXTRA, c.DefaultValue) = 0
+              AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                                                    'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'default',
+                                                    c.DefaultValue, IFNULL(isc.COLUMN_DEFAULT, '')) = 0)
           OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
           OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
           OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
@@ -1248,7 +1252,11 @@ BEGIN
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
-                                                      c.DefaultValue, isc.DATA_TYPE) = 0)
+                                                      c.DefaultValue, isc.DATA_TYPE) = 0
+                  AND SchemaSmith_ExpressionDefaultsEqual(isc.COLUMN_DEFAULT, isc.EXTRA, c.DefaultValue) = 0
+                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                                                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'default',
+                                                        c.DefaultValue, IFNULL(isc.COLUMN_DEFAULT, '')) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               -- Collation changes (only when JSON specifies a collation)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
@@ -1340,7 +1348,11 @@ BEGIN
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
-                                                      c.DefaultValue, isc.DATA_TYPE) = 0)
+                                                      c.DefaultValue, isc.DATA_TYPE) = 0
+                  AND SchemaSmith_ExpressionDefaultsEqual(isc.COLUMN_DEFAULT, isc.EXTRA, c.DefaultValue) = 0
+                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                                                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'default',
+                                                        c.DefaultValue, IFNULL(isc.COLUMN_DEFAULT, '')) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
               OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
@@ -1453,7 +1465,11 @@ BEGIN
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
-                                                      c.DefaultValue, isc.DATA_TYPE) = 0)
+                                                      c.DefaultValue, isc.DATA_TYPE) = 0
+                  AND SchemaSmith_ExpressionDefaultsEqual(isc.COLUMN_DEFAULT, isc.EXTRA, c.DefaultValue) = 0
+                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                                                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'default',
+                                                        c.DefaultValue, IFNULL(isc.COLUMN_DEFAULT, '')) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               -- Collation changes (only when JSON specifies a collation)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
@@ -1548,7 +1564,11 @@ BEGIN
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
-                                                      c.DefaultValue, isc.DATA_TYPE) = 0)
+                                                      c.DefaultValue, isc.DATA_TYPE) = 0
+                  AND SchemaSmith_ExpressionDefaultsEqual(isc.COLUMN_DEFAULT, isc.EXTRA, c.DefaultValue) = 0
+                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                                                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'default',
+                                                        c.DefaultValue, IFNULL(isc.COLUMN_DEFAULT, '')) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
               OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
@@ -1657,7 +1677,11 @@ BEGIN
                   -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
                   -- never matched as text and re-ALTERed the column on every deploy.
                   AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
-                                                      c.DefaultValue, isc.DATA_TYPE) = 0)
+                                                      c.DefaultValue, isc.DATA_TYPE) = 0
+                  AND SchemaSmith_ExpressionDefaultsEqual(isc.COLUMN_DEFAULT, isc.EXTRA, c.DefaultValue) = 0
+                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
+                                                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'default',
+                                                        c.DefaultValue, IFNULL(isc.COLUMN_DEFAULT, '')) = 0)
               OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
               OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
               OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL

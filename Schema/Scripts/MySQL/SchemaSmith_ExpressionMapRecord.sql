@@ -58,6 +58,8 @@ proc: BEGIN
                            AND CAST(SchemaSmith_StripBacktickWrapping(c.ColumnName) AS BINARY) = CAST(em.ObjectName AS BINARY)
                            AND ((em.ObjectKind = 'COLUMN' AND em.Slot = 'generated'
                                  AND CAST(c.GeneratedExpression AS BINARY) = CAST(em.AuthoredText AS BINARY))
+                                OR (em.ObjectKind = 'COLUMN' AND em.Slot = 'default'
+                                    AND CAST(c.DefaultValue AS BINARY) = CAST(em.AuthoredText AS BINARY))
                                 -- a MariaDB column-level check is recorded under its column's name
                                 OR (em.ObjectKind = 'CHECK' AND em.Slot = 'expression'
                                     AND CAST(c.CheckExpression AS BINARY) = CAST(em.AuthoredText AS BINARY))))
@@ -162,6 +164,35 @@ proc: BEGIN
         ON isc.TableKey = c.TableKey
        AND isc.ColumnKey = c.ColumnKey
      WHERE IFNULL(TRIM(c.GeneratedExpression), '') != ''
+        ON DUPLICATE KEY UPDATE
+           AuthoredText = VALUES(AuthoredText),
+           CanonicalText = VALUES(CanonicalText),
+           EngineVersion = VALUES(EngineVersion),
+           UpdatedUtc = VALUES(UpdatedUtc);
+
+    -- Expression defaults (#520). A declaration carries the expression as written; the engine stores its own
+    -- rendering -- a charset introducer and escaped quotes on MySQL, lower case and LOWER as lcase on MariaDB -- so
+    -- the two texts never agree by themselves once the column exists. The catalog says which live defaults are
+    -- expressions; a declared quoted literal or number is never recorded, since the plain comparison decides those.
+    INSERT INTO SchemaSmith_ExpressionMap
+        (ObjectSchema, ObjectTable, ObjectKind, ObjectName, Slot, AuthoredText, CanonicalText,
+         PlatformName, EngineVersion, CompatLevel, UpdatedUtc)
+    SELECT p_DatabaseName,
+           SchemaSmith_StripBacktickWrapping(c.TableName),
+           'COLUMN',
+           SchemaSmith_StripBacktickWrapping(c.ColumnName),
+           'default',
+           c.DefaultValue,
+           IFNULL(isc.COLUMN_DEFAULT, ''),
+           'MySQL', VERSION(), NULL, UTC_TIMESTAMP(3)
+      FROM _SchemaSmith_Columns c
+      JOIN _SchemaSmith_CatColumns isc
+        ON isc.TableKey = c.TableKey
+       AND isc.ColumnKey = c.ColumnKey
+     WHERE IFNULL(TRIM(c.DefaultValue), '') != ''
+       AND LEFT(TRIM(c.DefaultValue), 1) NOT IN ('''', '"')
+       AND NOT (TRIM(c.DefaultValue) REGEXP '^-?[0-9]')
+       AND SchemaSmith_IsExpressionDefault(isc.COLUMN_DEFAULT, isc.EXTRA) = 1
         ON DUPLICATE KEY UPDATE
            AuthoredText = VALUES(AuthoredText),
            CanonicalText = VALUES(CanonicalText),

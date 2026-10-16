@@ -514,7 +514,7 @@ public class ForgeKindlerTests
         // +1 on the MySQL family = ColumnLevelCheck (NULL on MySQL; MariaDb override reads the column-level check).
         // +2 on the MySQL family = JsonAliasCheck + IsJsonAliasColumn (MariaDB's rendering of a JSON column).
         // +2 on the MySQL family = SupportsWithoutOverlaps + IndexPeriodJson (temporal keys; MariaDb override reads the catalog).
-        Assert.That(mysql.Length, Is.EqualTo(86));
+        Assert.That(mysql.Length, Is.EqualTo(89));
     }
 
     [Test]

@@ -647,8 +647,10 @@ BEGIN
                               -- CURRENT_TIMESTAMP(3) and its synonyms are ordinary column defaults that
                               -- predate expression defaults entirely, and wrapping them turns a clause every
                               -- version accepts into a hard syntax error below 8.0.13.
+                              -- A quoted value is a literal whatever it contains (#520): wrapping 'n/a (unknown)' made it
+                              -- an expression default the compare never equalled, so the column re-altered every deploy.
                               CASE WHEN DefaultValue REGEXP '\\(' AND LEFT(DefaultValue, 1) != '('
-                                    AND NOT (LEFT(TRIM(DefaultValue), 1) IN ('''', '"') AND SchemaSmith_SupportsDefaultExpression() = 0)
+                                    AND LEFT(TRIM(DefaultValue), 1) NOT IN ('''', '"')
                                     AND UPPER(TRIM(DefaultValue)) NOT REGEXP
                                         '^(CURRENT_TIMESTAMP|NOW|LOCALTIME|LOCALTIMESTAMP)[[:space:]]*\\([0-9]*\\)$'
                                    THEN CONCAT('(', DefaultValue, ')')
