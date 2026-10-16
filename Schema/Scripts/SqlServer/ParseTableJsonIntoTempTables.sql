@@ -79,6 +79,7 @@
     [CdcIndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [Indexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [XmlIndexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [SpatialIndexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [Columns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [Statistics] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [FullTextIndex] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
@@ -255,6 +256,31 @@
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
 
+  DROP TABLE IF EXISTS #SpatialIndexes
+  -- A spatial index's key is one column and a tessellation, so it has its own working set, as #XmlIndexes does.
+  -- Every attribute but the column is NULL when the package omits it: the engine's default on create, not compared after.
+  CREATE TABLE #SpatialIndexes
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [IndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Tessellation] NVARCHAR(30) COLLATE DATABASE_DEFAULT NULL,
+    [XMin] FLOAT NULL,
+    [YMin] FLOAT NULL,
+    [XMax] FLOAT NULL,
+    [YMax] FLOAT NULL,
+    [Level1] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level2] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level3] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level4] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [CellsPerObject] INT NULL,
+    [FillFactor] TINYINT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+  )
+
   DROP TABLE IF EXISTS #ForeignKeys
   -- Merge note (2026-06-02): main added [_RowId] (kept) AND swapped RelatedTableSchema to
   -- ISNULL(f.[RelatedTableSchema], 'dbo'). Schema-templates added the explicit THROW
@@ -383,6 +409,7 @@
   TRUNCATE TABLE #Tables
   TRUNCATE TABLE #Indexes
   TRUNCATE TABLE #XmlIndexes
+  TRUNCATE TABLE #SpatialIndexes
   TRUNCATE TABLE #ForeignKeys
   TRUNCATE TABLE #CheckConstraints
   TRUNCATE TABLE #Statistics
@@ -419,7 +446,7 @@
     THROW 51000, @v_Msg, 1;
   END
 
-  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description])
+  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [SpatialIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description])
   -- INGEST ONLY -- raw values straight off the shred. Every transform that used to live in this
   -- SELECT moved to the NORMALIZE pass below, so a second ingestion path (C# bulk-loading these rows
   -- instead of shredding JSON) gets the identical treatment from one definition rather than a
@@ -437,7 +464,7 @@
          [CdcFilegroup],
          [CdcSupportsNetChanges],
          [CdcIndexName],
-         [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints],
+         [Indexes], [XmlIndexes], [SpatialIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints],
          [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName],
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch],
@@ -463,6 +490,7 @@
       [OldName] NVARCHAR(500) '$.OldName',
 	  [Indexes] NVARCHAR(MAX) '$.Indexes' AS JSON,
 	  [XmlIndexes] NVARCHAR(MAX) '$.XmlIndexes' AS JSON,
+	  [SpatialIndexes] NVARCHAR(MAX) '$.SpatialIndexes' AS JSON,
       [Columns] NVARCHAR(MAX) '$.Columns' AS JSON,
 	  [Statistics] NVARCHAR(MAX) '$.Statistics' AS JSON,
 	  [FullTextIndex] NVARCHAR(MAX) '$.FullTextIndex' AS JSON,
@@ -929,6 +957,50 @@
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
   
+  RAISERROR('Parse Spatial Indexes from Json', 10, 100) WITH NOWAIT
+  INSERT INTO #SpatialIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Tessellation], [XMin], [YMin], [XMax], [YMax],
+                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [ShouldApplyExpression], [VariantName])
+  SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
+         -- INGEST ONLY -- NORMALIZE below owns the transforms.
+         t.[Schema], t.[Name] AS [TableName], s.[IndexName], s.[Column], s.[Tessellation], s.[XMin], s.[YMin], s.[XMax], s.[YMax],
+         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[ShouldApplyExpression], s.[VariantName]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(SpatialIndexes) WITH (
+      [IndexName] NVARCHAR(500) '$.Name',
+      [Column] NVARCHAR(500) '$.Column',
+      [Tessellation] NVARCHAR(30) '$.Tessellation',
+      [XMin] FLOAT '$.BoundingBox.XMin',
+      [YMin] FLOAT '$.BoundingBox.YMin',
+      [XMax] FLOAT '$.BoundingBox.XMax',
+      [YMax] FLOAT '$.BoundingBox.YMax',
+      [Level1] NVARCHAR(10) '$.Grids.Level1',
+      [Level2] NVARCHAR(10) '$.Grids.Level2',
+      [Level3] NVARCHAR(10) '$.Grids.Level3',
+      [Level4] NVARCHAR(10) '$.Grids.Level4',
+      [CellsPerObject] INT '$.CellsPerObject',
+      [FillFactor] TINYINT '$.FillFactor',
+      [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
+      [VariantName] NVARCHAR(128) '$.VariantName'
+      ) s;
+
+  -- NORMALIZE -- names wrapped, the scheme and densities in upper case, however the rows arrived.
+  UPDATE #SpatialIndexes
+     SET [IndexName]    = SchemaSmith.fn_SafeBracketWrap([IndexName]),
+         [Column]       = SchemaSmith.fn_SafeBracketWrap([Column]),
+         [Tessellation] = UPPER(NULLIF(RTRIM([Tessellation]), '')),
+         [Level1]       = UPPER(NULLIF(RTRIM([Level1]), '')),
+         [Level2]       = UPPER(NULLIF(RTRIM([Level2]), '')),
+         [Level3]       = UPPER(NULLIF(RTRIM([Level3]), '')),
+         [Level4]       = UPPER(NULLIF(RTRIM([Level4]), '')),
+         [FillFactor]   = NULLIF([FillFactor], 0);
+
+  -- Identify SpatialIndexes to skip based on ShouldApply expression (scoped by [_RowId])
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('DELETE FROM #SpatialIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX))
+                           FROM #SpatialIndexes WITH (NOLOCK)
+                           WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  EXEC(@v_SQL)
+
   RAISERROR('Parse Foreign Keys from Json', 10, 100) WITH NOWAIT
   -- I5: missing/blank RelatedTableSchema is a programmer error after slice-1's resolver
   -- (which fills it from the platform default for regular templates or {{SchemaName}} for

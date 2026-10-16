@@ -16,7 +16,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
     [Category("SqlServer")]
     public class XmlIngestEquivalenceTests : BaseTableQuenchTests
     {
-        // A rich representative model exercising all 8 nested collections the parse shreds.
+        // A rich representative model exercising all 9 nested collections the parse shreds.
         // A second table leaves the nullable flags out: unset must stay NULL on both paths (EnableCDC unset is unmanaged).
         private const string RichModelJson = @"[{
   ""Schema"":""dbo"",""Name"":""XmlEquivTable"",""CompressionType"":""PAGE"",""IsTemporal"":true,
@@ -43,6 +43,11 @@ namespace SchemaQuench.IntegrationTests.SqlServer
   ""XmlIndexes"":[
     {""Name"":""XI_Data"",""IsPrimary"":true,""Column"":""DataXml"",""PrimaryIndex"":null,""SecondaryIndexType"":null}
   ],
+  ""SpatialIndexes"":[
+    {""Name"":""sx_shape"",""Column"":""Shape"",""Tessellation"":""geometry_grid"",""BoundingBox"":{""XMin"":-1.5,""YMin"":0,""XMax"":500.25,""YMax"":200},
+     ""Grids"":{""Level1"":""medium"",""Level2"":""LOW""},""CellsPerObject"":64,""FillFactor"":0},
+    {""Name"":""SX_Location"",""Column"":""Location"",""Tessellation"":""GEOGRAPHY_AUTO_GRID""}
+  ],
   ""ForeignKeys"":[
     {""Name"":""FK_XmlEquivTable_Other"",""Columns"":""Id"",""RelatedTableSchema"":""dbo"",""RelatedTable"":""OtherTable"",""RelatedColumns"":""OtherId"",""DeleteAction"":""CASCADE""}
   ],
@@ -61,11 +66,11 @@ namespace SchemaQuench.IntegrationTests.SqlServer
   ""Columns"":[ {""Name"":""Id"",""DataType"":""INT"",""Nullable"":false} ]
 }]";
 
-        // The 8 temp tables both parse scripts produce and every downstream proc consumes. #TableDefinitions
+        // The 9 temp tables both parse scripts produce and every downstream proc consumes. #TableDefinitions
         // is internal parse scratch (shape differs by encoding) and is deliberately not compared.
         private static readonly string[] ConsumedTables =
         {
-            "#Tables", "#Columns", "#Indexes", "#XmlIndexes",
+            "#Tables", "#Columns", "#Indexes", "#XmlIndexes", "#SpatialIndexes",
             "#ForeignKeys", "#CheckConstraints", "#Statistics", "#FullTextIndexes"
         };
 
@@ -101,10 +106,15 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                 var columnRows = string.Join("\n", jsonTables[System.Array.IndexOf(ConsumedTables, "#Columns")]);
                 Assert.That(tablesRows, Does.Contain("[SysStart]").And.Contain("DATETIME2(2)").And.Contain("[SysEnd]").And.Contain("DATETIME2(7)"), "the pair is on #Tables");
                 Assert.That(columnRows, Does.Not.Contain("SysStart").And.Not.Contain("SysEnd"), "and not on #Columns");
+                // Spatial rows arrive normalized on both tiers: names wrapped, scheme and densities upper-cased, fill factor 0 as unset.
+                var spatialRows = string.Join("\n", jsonTables[System.Array.IndexOf(ConsumedTables, "#SpatialIndexes")]);
+                Assert.That(spatialRows, Does.Contain("IndexName=[sx_shape]|Column=[Shape]|Tessellation=GEOMETRY_GRID|XMin=-1.5|")
+                                             .And.Contain("XMax=500.25|").And.Contain("Level1=MEDIUM|Level2=LOW|Level3=<null>|")
+                                             .And.Contain("FillFactor=<null>|"), "the spatial rows are normalized");
             });
         }
 
-        // Runs a parse batch (which builds the 8 temp tables), then selects each and returns, per table, a
+        // Runs a parse batch (which builds the 9 temp tables), then selects each and returns, per table, a
         // sorted list of row signatures (all columns except the non-deterministic _RowId). One self-contained
         // command per encoding, so no cross-command temp-table persistence is relied on.
         private static List<List<string>> ShredAndCapture(IDbConnection conn, string parseBatch, string payload)

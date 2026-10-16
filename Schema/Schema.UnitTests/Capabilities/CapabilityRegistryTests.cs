@@ -32,6 +32,7 @@ namespace Schema.UnitTests.Capabilities
             "data masking (SQL Server 2016)",
             "Always Encrypted (SQL Server 2016)",
             "columnstore index (SQL Server 2012/2014)",
+            "spatial AUTO_GRID tessellation (SQL Server 2012)",
             "NULLS NOT DISTINCT (PG15)",
             "NOT ENFORCED constraint (PG18)",
             "WITHOUT OVERLAPS (PG18)",

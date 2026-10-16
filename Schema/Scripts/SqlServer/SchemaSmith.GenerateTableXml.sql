@@ -490,6 +490,23 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
             AND NOT EXISTS (SELECT 1 FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id)
           ORDER BY i.[Name]
           FOR XML PATH('XmlIndexes'), TYPE),
+       -- Spatial indexes: see the JSON twin.
+       (SELECT 'true' AS [@json:Array],
+               QUOTENAME(i.[name] COLLATE DATABASE_DEFAULT) AS [Name],
+               QUOTENAME(COL_NAME(i.[object_id], ic.column_id)) AS [Column],
+               i.tessellation_scheme COLLATE DATABASE_DEFAULT AS [Tessellation],
+               tz.bounding_box_xmin AS [BoundingBox/XMin], tz.bounding_box_ymin AS [BoundingBox/YMin],
+               tz.bounding_box_xmax AS [BoundingBox/XMax], tz.bounding_box_ymax AS [BoundingBox/YMax],
+               tz.level_1_grid_desc COLLATE DATABASE_DEFAULT AS [Grids/Level1], tz.level_2_grid_desc COLLATE DATABASE_DEFAULT AS [Grids/Level2],
+               tz.level_3_grid_desc COLLATE DATABASE_DEFAULT AS [Grids/Level3], tz.level_4_grid_desc COLLATE DATABASE_DEFAULT AS [Grids/Level4],
+               tz.cells_per_object AS [CellsPerObject],
+               NULLIF(i.fill_factor, 0) AS [FillFactor]
+          FROM sys.spatial_indexes i
+          JOIN sys.spatial_index_tessellations tz ON tz.[object_id] = i.[object_id] AND tz.index_id = i.index_id
+          JOIN sys.index_columns ic ON ic.[object_id] = i.[object_id] AND ic.index_id = i.index_id
+          WHERE i.[object_id] = st.[object_id]
+          ORDER BY i.[name]
+          FOR XML PATH('SpatialIndexes'), TYPE),
 	   (SELECT 'true' AS [@json:Array],
                QUOTENAME([Name]) AS [Name],
                STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[parent_object_id], fc.parent_column_id))

@@ -87,6 +87,10 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | `SS-TMP-002` | Error | More than one column on a SQL Server table declares the same `GeneratedAlways` role. |
 | `SS-TMP-003` | Error | A SQL Server table declares period columns but not `IsTemporal`; they are created only with system versioning. |
 | `SS-TMP-004` | Error | A SQL Server period column is not `DATETIME2` or `DATETIME2(n)`. |
+| `SS-SPX-001` | Error | A SQL Server spatial index names a column the table does not declare, or one that is not `geometry` or `geography`. |
+| `SS-SPX-002` | Error | A spatial index's `Tessellation` is for the other family: a `GEOGRAPHY_` scheme on a geometry column, or a `GEOMETRY_` scheme on a geography column. |
+| `SS-SPX-003` | Error | A spatial index on a geometry column has no `BoundingBox`, one on a geography column has one, or the box has no area (`XMax` not above `XMin`, or `YMax` not above `YMin`). |
+| `SS-SPX-004` | Error | A spatial index declares `Grids` with an `AUTO_GRID` tessellation, which chooses its own. |
 | `SS-COL-001` | Warning | A column sets `BackfillExistingRows` but has no `Default`, so there is no value to apply to rows that already exist and the setting does nothing. |
 | `SS-COL-002` | Warning | A MySQL or MariaDB column declares a `CharacterSet` other than the table's and no `Collation`, so it gets that character set's default collation, which varies by engine version. A column in the table's own character set gets the table's collation; `utf8` and `utf8mb3` count as one set, and a MariaDB short collation such as `uca1400_ai_ci` belongs to the table's `CharacterSet`. |
 | `SS-COL-003` | Warning | A PostgreSQL check constraint or foreign key is named `<table>_<column>_not_null`, the name PostgreSQL 18 gives the NOT NULL constraint it makes for that column: a collision on 18, and a misleading name everywhere. |

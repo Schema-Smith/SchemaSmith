@@ -213,6 +213,7 @@ BEGIN
   -- Shared with the --IndexOnly path, which calls this proc directly (it has only #Indexes).
   EXEC SchemaSmith.DegradeUnsupportedColumnStore
   EXEC SchemaSmith.DegradeUnsupportedFullText
+  EXEC SchemaSmith.DegradeUnsupportedSpatialIndexes
 
   -- Table compression where the edition lacks it: below SQL Server 2016 SP1, Standard, Web and Express refuse
   -- DATA_COMPRESSION with 7738. The table is created uncompressed; index compression is handled with the indexes above.

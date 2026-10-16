@@ -111,11 +111,14 @@ public class IndexKindExtractionTests
         {
             Assert.That(json, Does.Contain("IX_Kinds_Code").And.Contain("PX_Kinds").And.Contain("XX_Kinds"),
                 "the kinds a package can declare are still extracted");
-            Assert.That(json, Does.Not.Contain("SX_Kinds"), "a spatial index extracted as a plain index fails the next deploy");
+            // A spatial index is declarable (#526): it goes to SpatialIndexes, never to Indexes, where it failed the next deploy.
+            var table = Newtonsoft.Json.Linq.JObject.Parse(json);
+            Assert.That(table["Indexes"]?.Select(i => (string)i["Name"]), Has.None.Contains("SX_Kinds"), "a spatial index is not a plain index");
+            Assert.That(table["SpatialIndexes"]?.Select(i => (string)i["Name"]), Is.EquivalentTo(new[] { "[SX_Kinds]" }), "it is extracted as a spatial index");
+            Assert.That(warnings.Where(w => w.Contains("SX_Kinds") && !w.Contains("SXI_Kinds")), Is.Empty, "and no longer reported as left out");
             Assert.That(json, Does.Not.Contain("SXI_Kinds"), "a selective XML index extracted as a primary one is silently not created");
-            Assert.That(warnings.Count(w => w.Contains("dbo.Kinds.SX_Kinds") && w.Contains("SPATIAL")), Is.EqualTo(1),
+            Assert.That(warnings.Count(w => w.Contains("dbo.Kinds.SXI_Kinds") && w.Contains("SELECTIVE")), Is.EqualTo(1),
                 "each index left out is named, with its kind");
-            Assert.That(warnings.Count(w => w.Contains("dbo.Kinds.SXI_Kinds") && w.Contains("SELECTIVE")), Is.EqualTo(1));
             Assert.That(tongs.ExitCode, Is.EqualTo(1), "an object the package misses makes the run exit 1");
         });
     }

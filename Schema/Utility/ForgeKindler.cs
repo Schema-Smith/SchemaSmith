@@ -402,6 +402,7 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_EnterpriseFeaturesUnavailable.sql"),
                 new("SchemaSmith.DegradeUnsupportedColumnStore.sql"),
                 new("SchemaSmith.DegradeUnsupportedFullText.sql"),
+                new("SchemaSmith.DegradeUnsupportedSpatialIndexes.sql"),
                 new("SchemaSmith.DegradeDatabaseToggles.sql"),
                 new("SchemaSmith.DegradeUnsupportedFeatures.sql"),
                 // Fills the caller's #GraphKeyParts: the graph columns behind a $from_id / $to_id key part (2017+, dynamic).

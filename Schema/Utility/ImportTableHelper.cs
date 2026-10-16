@@ -91,6 +91,7 @@ public static class ImportTableHelper
         if (original is SqlServerTable ssOriginal && tableObj is SqlServerTable ssNew)
         {
             CopyComponentDynamicProperties(ssOriginal.XmlIndexes, ssNew.XmlIndexes, isVariantActive);
+            CopyComponentDynamicProperties(ssOriginal.SpatialIndexes, ssNew.SpatialIndexes, isVariantActive);
             CopyComponentDynamicProperties(ssOriginal.Statistics, ssNew.Statistics, isVariantActive);
             // FT has no Name to match on, so the whole list is one variant group. A variant set gets
             // gate-aware attribution (the extractor DOES reconstruct the FT index); a single authored
@@ -201,6 +202,7 @@ public static class ImportTableHelper
         {
             Reorder(ssNew.Statistics, ssOrig.Statistics, fallbackOrder);
             Reorder(ssNew.XmlIndexes, ssOrig.XmlIndexes, fallbackOrder);
+            Reorder(ssNew.SpatialIndexes, ssOrig.SpatialIndexes, fallbackOrder);
         }
     }
 

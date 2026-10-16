@@ -36,7 +36,7 @@ BEGIN TRY
 
   DROP TABLE IF EXISTS #TableDefinitions
   SELECT [Schema] = SchemaSmith.fn_SafeBracketWrap([Schema]), [Name] = SchemaSmith.fn_SafeBracketWrap([Name]), [CompressionType] = ISNULL([CompressionType], 'NONE'),
-         [UpdateFillFactor] = ISNULL([UpdateFillFactor], 0), [Indexes], [XmlIndexes], [Statistics], [FullTextIndex], [DropIndexesRemovedFromProduct]
+         [UpdateFillFactor] = ISNULL([UpdateFillFactor], 0), [Indexes], [XmlIndexes], [SpatialIndexes], [Statistics], [FullTextIndex], [DropIndexesRemovedFromProduct]
     INTO #TableDefinitions
     FROM OPENJSON(@TableDefinitions) WITH (
       [Schema] NVARCHAR(500) '$.Schema',
@@ -45,6 +45,7 @@ BEGIN TRY
       [UpdateFillFactor] BIT '$.UpdateFillFactor',
 	  [Indexes] NVARCHAR(MAX) '$.Indexes' AS JSON,
 	  [XmlIndexes] NVARCHAR(MAX) '$.XmlIndexes' AS JSON,
+	  [SpatialIndexes] NVARCHAR(MAX) '$.SpatialIndexes' AS JSON,
 	  [Statistics] NVARCHAR(MAX) '$.Statistics' AS JSON,
 	  [FullTextIndex] NVARCHAR(MAX) '$.FullTextIndex' AS JSON,
 	  [DropIndexesRemovedFromProduct] BIT '$.DropIndexesRemovedFromProduct'
@@ -160,6 +161,75 @@ BEGIN TRY
     FROM #XmlIndexes WITH (NOLOCK)
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
+
+  DROP TABLE IF EXISTS #SpatialIndexes
+  -- A spatial index's key is one column and a tessellation, so it has its own working set, as #XmlIndexes does.
+  -- Every attribute but the column is NULL when the package omits it: the engine's default on create, not compared after.
+  CREATE TABLE #SpatialIndexes
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [IndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Tessellation] NVARCHAR(30) COLLATE DATABASE_DEFAULT NULL,
+    [XMin] FLOAT NULL,
+    [YMin] FLOAT NULL,
+    [XMax] FLOAT NULL,
+    [YMax] FLOAT NULL,
+    [Level1] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level2] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level3] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level4] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [CellsPerObject] INT NULL,
+    [FillFactor] TINYINT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+  )
+
+  RAISERROR('Parse Spatial Indexes from Json', 10, 100) WITH NOWAIT
+  INSERT INTO #SpatialIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Tessellation], [XMin], [YMin], [XMax], [YMax],
+                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [ShouldApplyExpression], [VariantName])
+  SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
+         t.[Schema], t.[Name] AS [TableName], s.[IndexName], s.[Column], s.[Tessellation], s.[XMin], s.[YMin], s.[XMax], s.[YMax],
+         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[ShouldApplyExpression], s.[VariantName]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(SpatialIndexes) WITH (
+      [IndexName] NVARCHAR(500) '$.Name',
+      [Column] NVARCHAR(500) '$.Column',
+      [Tessellation] NVARCHAR(30) '$.Tessellation',
+      [XMin] FLOAT '$.BoundingBox.XMin',
+      [YMin] FLOAT '$.BoundingBox.YMin',
+      [XMax] FLOAT '$.BoundingBox.XMax',
+      [YMax] FLOAT '$.BoundingBox.YMax',
+      [Level1] NVARCHAR(10) '$.Grids.Level1',
+      [Level2] NVARCHAR(10) '$.Grids.Level2',
+      [Level3] NVARCHAR(10) '$.Grids.Level3',
+      [Level4] NVARCHAR(10) '$.Grids.Level4',
+      [CellsPerObject] INT '$.CellsPerObject',
+      [FillFactor] TINYINT '$.FillFactor',
+      [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
+      [VariantName] NVARCHAR(128) '$.VariantName'
+      ) s;
+
+  -- NORMALIZE -- names wrapped, the scheme and densities in upper case, however the rows arrived.
+  UPDATE #SpatialIndexes
+     SET [IndexName]    = SchemaSmith.fn_SafeBracketWrap([IndexName]),
+         [Column]       = SchemaSmith.fn_SafeBracketWrap([Column]),
+         [Tessellation] = UPPER(NULLIF(RTRIM([Tessellation]), '')),
+         [Level1]       = UPPER(NULLIF(RTRIM([Level1]), '')),
+         [Level2]       = UPPER(NULLIF(RTRIM([Level2]), '')),
+         [Level3]       = UPPER(NULLIF(RTRIM([Level3]), '')),
+         [Level4]       = UPPER(NULLIF(RTRIM([Level4]), '')),
+         [FillFactor]   = NULLIF([FillFactor], 0);
+
+  -- Identify SpatialIndexes to skip based on ShouldApply expression (scoped by [_RowId])
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('DELETE FROM #SpatialIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX))
+                           FROM #SpatialIndexes WITH (NOLOCK)
+                           WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  EXEC(@v_SQL)
+  EXEC SchemaSmith.DegradeUnsupportedSpatialIndexes
 
   RAISERROR('Parse Statistics from Json', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #Statistics
@@ -455,6 +525,45 @@ BEGIN TRY
     FROM #XmlIndexRenames ir WITH (NOLOCK)
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
     
+  -- Spatial indexes (sys.spatial_indexes and its tessellation, both 2008). A declared attribute that differs from the
+  -- live index re-creates it; an attribute the package omits is not compared, so an index declared by its column alone
+  -- keeps whatever the engine chose. fill_factor 0 is the server default, read as 100.
+  RAISERROR('Collect Existing Spatial Index Definitions', 10, 100) WITH NOWAIT
+  IF OBJECT_ID('tempdb..#ExistingSpatialIndexes') IS NOT NULL DROP TABLE #ExistingSpatialIndexes
+  SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(i.[name] COLLATE DATABASE_DEFAULT AS NVARCHAR(500)),
+         [xColumn] = CAST(QUOTENAME(COL_NAME(i.[object_id], ic.column_id)) AS NVARCHAR(500)),
+         [xTessellation] = CAST(i.tessellation_scheme COLLATE DATABASE_DEFAULT AS NVARCHAR(60)),
+         [xXMin] = tz.bounding_box_xmin, [xYMin] = tz.bounding_box_ymin, [xXMax] = tz.bounding_box_xmax, [xYMax] = tz.bounding_box_ymax,
+         [xLevel1] = CAST(tz.level_1_grid_desc COLLATE DATABASE_DEFAULT AS NVARCHAR(60)), [xLevel2] = CAST(tz.level_2_grid_desc COLLATE DATABASE_DEFAULT AS NVARCHAR(60)),
+         [xLevel3] = CAST(tz.level_3_grid_desc COLLATE DATABASE_DEFAULT AS NVARCHAR(60)), [xLevel4] = CAST(tz.level_4_grid_desc COLLATE DATABASE_DEFAULT AS NVARCHAR(60)),
+         [xCellsPerObject] = tz.cells_per_object,
+         [xFillFactor] = CASE WHEN i.fill_factor = 0 THEN 100 ELSE i.fill_factor END
+    INTO #ExistingSpatialIndexes
+    FROM #Tables t WITH (NOLOCK)
+    JOIN sys.spatial_indexes i ON i.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+    JOIN sys.spatial_index_tessellations tz ON tz.[object_id] = i.[object_id] AND tz.index_id = i.index_id
+    JOIN sys.index_columns ic ON ic.[object_id] = i.[object_id] AND ic.index_id = i.index_id
+    WHERE t.MissingTable = 0
+
+  RAISERROR('Detect Spatial Index Changes', 10, 100) WITH NOWAIT
+  IF OBJECT_ID('tempdb..#SpatialIndexChanges') IS NOT NULL DROP TABLE #SpatialIndexChanges
+  SELECT s.[Schema], s.[TableName], s.[IndexName]
+    INTO #SpatialIndexChanges
+    FROM #ExistingSpatialIndexes ei WITH (NOLOCK)
+    JOIN #SpatialIndexes s WITH (NOLOCK) ON ei.[xSchema] = s.[Schema]
+                                        AND ei.[xTableName] = s.[TableName]
+                                        AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(s.[IndexName])
+    WHERE ei.[xColumn] <> s.[Column] COLLATE DATABASE_DEFAULT
+       OR (s.[Tessellation] IS NOT NULL AND s.[Tessellation] <> ei.[xTessellation] COLLATE DATABASE_DEFAULT)
+       OR (s.[XMin] IS NOT NULL AND (s.[XMin] <> ISNULL(ei.[xXMin], -1E308) OR s.[YMin] <> ISNULL(ei.[xYMin], -1E308)
+                                     OR s.[XMax] <> ISNULL(ei.[xXMax], -1E308) OR s.[YMax] <> ISNULL(ei.[xYMax], -1E308)))
+       OR (s.[Level1] IS NOT NULL AND s.[Level1] <> ISNULL(ei.[xLevel1], '') COLLATE DATABASE_DEFAULT)
+       OR (s.[Level2] IS NOT NULL AND s.[Level2] <> ISNULL(ei.[xLevel2], '') COLLATE DATABASE_DEFAULT)
+       OR (s.[Level3] IS NOT NULL AND s.[Level3] <> ISNULL(ei.[xLevel3], '') COLLATE DATABASE_DEFAULT)
+       OR (s.[Level4] IS NOT NULL AND s.[Level4] <> ISNULL(ei.[xLevel4], '') COLLATE DATABASE_DEFAULT)
+       OR (s.[CellsPerObject] IS NOT NULL AND s.[CellsPerObject] <> ei.[xCellsPerObject])
+       OR (s.[FillFactor] IS NOT NULL AND s.[FillFactor] <> ei.[xFillFactor])
+
   RAISERROR('Collect Existing FullText Indexes', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #ExistingFullTextIndexes
   SELECT t.[Schema], [TableName] = t.[Name],
@@ -582,6 +691,11 @@ BEGIN TRY
                         WHERE i.[Schema] = xp.[Schema]
                           AND i.TableName = xp.TableName
                           AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = xp.IndexName)
+      AND NOT EXISTS (SELECT *
+                        FROM #SpatialIndexes i WITH (NOLOCK)
+                        WHERE i.[Schema] = xp.[Schema]
+                          AND i.TableName = xp.TableName
+                          AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = xp.IndexName)
                       
   -- The guard reads the table ModifiedTableQuench fills with indexes dropped for column changes; an index-only
   -- deploy changes no column, so it is empty here.
@@ -634,6 +748,11 @@ BEGIN TRY
                         WHERE i.[Schema] = xp.[Schema]
                           AND i.TableName = xp.TableName
                           AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = xp.IndexName)
+      AND NOT EXISTS (SELECT *
+                        FROM #SpatialIndexes i WITH (NOLOCK)
+                        WHERE i.[Schema] = xp.[Schema]
+                          AND i.TableName = xp.TableName
+                          AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = xp.IndexName)
                       
   RAISERROR('Identify unknown and modified indexes to drop', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #IndexesToDrop
@@ -674,6 +793,16 @@ BEGIN TRY
   -- Xml Indexes where the index definition was modified
   SELECT [Schema], [TableName], SchemaSmith.fn_StripBracketWrapping([IndexName]), [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
     FROM #XmlIndexChanges WITH (NOLOCK)
+  UNION
+  -- Unknown spatial indexes if we're dropping unknown
+  SELECT [xSchema], [xTableName], [xIndexName], [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
+    FROM #ExistingSpatialIndexes ei WITH (NOLOCK)
+    WHERE @DropUnknownIndexes = 1
+      AND NOT EXISTS (SELECT * FROM #SpatialIndexes s WITH (NOLOCK) WHERE s.[Schema] = ei.[xSchema] AND s.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(s.[IndexName]) = ei.[xIndexName])
+  UNION
+  -- Spatial indexes where a declared attribute differs
+  SELECT [Schema], [TableName], SchemaSmith.fn_StripBracketWrapping([IndexName]), [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
+    FROM #SpatialIndexChanges WITH (NOLOCK)
 
   -- An index-only deploy never touches a foreign key, and SQL Server will not drop an index one references while it
   -- exists. Dropping the key first lost it for good -- nothing here re-creates keys -- so the index is kept as it is.
@@ -698,6 +827,12 @@ BEGIN TRY
   INSERT #IndexesToDrop ([Schema], [TableName], [IndexName], [IsConstraint], [IsUnique], [IsClustered])
     SELECT [xSchema], [xTableName], [xIndexName], [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
       FROM #ExistingXmlIndexes ei WITH (NOLOCK)
+      WHERE EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND id.[IsClustered] = 1)
+        AND NOT EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND [xIndexName] = [IndexName])
+  -- and the spatial indexes, which need the clustered primary key just as XML indexes do; the create pass puts them back.
+  INSERT #IndexesToDrop ([Schema], [TableName], [IndexName], [IsConstraint], [IsUnique], [IsClustered])
+    SELECT [xSchema], [xTableName], [xIndexName], [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
+      FROM #ExistingSpatialIndexes ei WITH (NOLOCK)
       WHERE EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND id.[IsClustered] = 1)
         AND NOT EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND [xIndexName] = [IndexName])
 
@@ -761,6 +896,11 @@ BEGIN TRY
             -- Not an index that was just RENAMED: it is still in the pre-rename snapshot under its old name,
             -- and without this the deploy logged dropping it (or listed it as a suppressed drop) after renaming it.
             AND NOT EXISTS (SELECT * FROM #XmlIndexRenames rn WITH (NOLOCK) WHERE rn.[Schema] = ei.[xSchema] AND rn.[TableName] = ei.[xTableName] AND rn.[OldName] = ei.[xIndexName])
+        UNION
+        -- Unknown spatial indexes (minus the @DropUnknownIndexes gate)
+        SELECT CAST(ei.[xSchema] AS NVARCHAR(500)), CAST(ei.[xTableName] AS NVARCHAR(500)), CAST(ei.[xIndexName] AS NVARCHAR(500)), 'index'
+          FROM #ExistingSpatialIndexes ei WITH (NOLOCK)
+          WHERE NOT EXISTS (SELECT * FROM #SpatialIndexes s WITH (NOLOCK) WHERE s.[Schema] = ei.[xSchema] AND s.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(s.[IndexName]) = ei.[xIndexName])
       ) w
     IF @v_SQL IS NOT NULL EXEC(@v_SQL)
   END
@@ -1000,6 +1140,45 @@ BEGIN TRY
     JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = i.[Schema] AND t.[Name] = i.[TableName]
     WHERE INDEXPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name]), SchemaSmith.fn_StripBracketWrapping(i.IndexName), 'IndexID') IS NOT NULL
       AND NOT EXISTS (SELECT * FROM #IndexProperties ip WITH (NOLOCK) WHERE i.[Schema] = ip.[Schema] AND i.TableName = ip.TableName AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = ip.IndexName AND ip.PropertyName = 'ProductName')
+  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+
+  RAISERROR('Add Missing Spatial Indexes', 10, 100) WITH NOWAIT
+  -- One CREATE SPATIAL INDEX per declared index the table does not have (a changed one was dropped by
+  -- the drop pass above). Every option is written only when declared, so the engine's default stands otherwise.
+  -- Doubles go through STR so a bounding box is written exactly, whatever the session's float formatting.
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Creating spatial index ' + s.[Schema] + '.' + s.[TableName] + '.' + s.[IndexName] +
+                                  CASE WHEN RTRIM(ISNULL(s.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(s.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'CREATE SPATIAL INDEX ' + s.[IndexName] + ' ON ' + s.[Schema] + '.' + s.[TableName] + ' (' + s.[Column] + ')' +
+                                  CASE WHEN s.[Tessellation] IS NOT NULL THEN ' USING ' + s.[Tessellation] ELSE '' END +
+                                  CASE WHEN o.[Options] <> '' THEN ' WITH (' + STUFF(o.[Options], 1, 2, '') + ')' ELSE '' END + ';' + CHAR(13) + CHAR(10) +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''index'', ''' + REPLACE(s.[Schema] + '.' + s.[TableName] + '.' + s.[IndexName], '''', '''''') + ''', ''created'');' AS NVARCHAR(MAX))
+    FROM #SpatialIndexes s WITH (NOLOCK)
+    CROSS APPLY (SELECT [Options] =
+                   CASE WHEN s.[XMin] IS NOT NULL
+                        THEN ', BOUNDING_BOX = (' + LTRIM(STR(s.[XMin], 38, 10)) + ', ' + LTRIM(STR(s.[YMin], 38, 10)) + ', ' + LTRIM(STR(s.[XMax], 38, 10)) + ', ' + LTRIM(STR(s.[YMax], 38, 10)) + ')' ELSE '' END +
+                   CASE WHEN COALESCE(s.[Level1], s.[Level2], s.[Level3], s.[Level4]) IS NOT NULL
+                        THEN ', GRIDS = (' + STUFF(ISNULL(', LEVEL_1 = ' + s.[Level1], '') + ISNULL(', LEVEL_2 = ' + s.[Level2], '') +
+                                                   ISNULL(', LEVEL_3 = ' + s.[Level3], '') + ISNULL(', LEVEL_4 = ' + s.[Level4], ''), 1, 2, '') + ')' ELSE '' END +
+                   CASE WHEN s.[CellsPerObject] IS NOT NULL THEN ', CELLS_PER_OBJECT = ' + CONVERT(NVARCHAR(10), s.[CellsPerObject]) ELSE '' END +
+                   CASE WHEN s.[FillFactor] IS NOT NULL THEN ', FILLFACTOR = ' + CONVERT(NVARCHAR(10), s.[FillFactor]) ELSE '' END) o
+    WHERE OBJECT_ID(s.[Schema] + '.' + s.[TableName]) IS NOT NULL
+      AND INDEXPROPERTY(OBJECT_ID(s.[Schema] + '.' + s.[TableName]), SchemaSmith.fn_StripBracketWrapping(s.[IndexName]), 'IndexID') IS NULL
+    ORDER BY s.[Schema], s.[TableName], s.[IndexName]
+    FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+
+  RAISERROR('Add missing ProductName extended property to spatial indexes', 10, 100) WITH NOWAIT
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +
+                                                              '@level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ' +
+                                                              '@level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', ' +
+                                                              '@level2type = N''Index'', @level2name = ''' + SchemaSmith.fn_StripBracketWrapping(i.IndexName) + ''';' AS NVARCHAR(MAX))
+                           FROM #SpatialIndexes i WITH (NOLOCK)
+                           JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = i.[Schema] AND t.[Name] = i.[TableName]
+                           WHERE INDEXPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name]), SchemaSmith.fn_StripBracketWrapping(i.IndexName), 'IndexID') IS NOT NULL
+                             -- Read live, not from the snapshot: a re-created index gets back the properties its drop captured, so the
+                             -- snapshot taken before it was re-created no longer says whether it has one.
+                             AND NOT EXISTS (SELECT * FROM fn_listextendedproperty(N'ProductName', 'Schema', SchemaSmith.fn_StripBracketWrapping(t.[Schema]), 'Table', SchemaSmith.fn_StripBracketWrapping(t.[Name]), 'Index', SchemaSmith.fn_StripBracketWrapping(i.IndexName)))
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Add Missing Statistics', 10, 100) WITH NOWAIT

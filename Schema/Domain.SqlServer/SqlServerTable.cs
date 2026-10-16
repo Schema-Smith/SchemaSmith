@@ -36,6 +36,11 @@ namespace Schema.Domain.SqlServer
                 var scriptTokens = tableTokens.Concat(GetCustomTokens(xmlIndex.Extensions)).ToList();
                 xmlIndex.ShouldApplyExpression = TableTokenReplace(xmlIndex.ShouldApplyExpression, scriptTokens);
             }
+            foreach (var spatialIndex in SpatialIndexes)
+            {
+                var scriptTokens = tableTokens.Concat(GetCustomTokens(spatialIndex.Extensions)).ToList();
+                spatialIndex.ShouldApplyExpression = TableTokenReplace(spatialIndex.ShouldApplyExpression, scriptTokens);
+            }
             foreach (var statistic in Statistics)
             {
                 var scriptTokens = tableTokens.Concat(GetCustomTokens(statistic.Extensions)).ToList();
@@ -99,6 +104,13 @@ namespace Schema.Domain.SqlServer
 
         [JsonProperty(Order = 103)]
         public List<XmlIndex> XmlIndexes { get; set; } = [];
+
+        // Spatial indexes have their own list for the reason XmlIndexes does: the key is a column and a tessellation, not a
+        // column list. Written only when the table has one, so existing packages stay byte for byte.
+        [JsonProperty(Order = 126)]
+        public List<SpatialIndex> SpatialIndexes { get; set; } = [];
+
+        public bool ShouldSerializeSpatialIndexes() => SpatialIndexes is { Count: > 0 };
 
         [JsonProperty(Order = 104)]
         public List<Statistic> Statistics { get; set; } = [];

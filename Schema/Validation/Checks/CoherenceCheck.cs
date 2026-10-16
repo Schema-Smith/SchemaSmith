@@ -39,6 +39,10 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string PeriodRoleRepeatedCode = "SS-TMP-002";
     private const string PeriodWithoutTemporalCode = "SS-TMP-003";
     private const string PeriodTypeCode = "SS-TMP-004";
+    private const string SpatialColumnCode = "SS-SPX-001";
+    private const string SpatialFamilyCode = "SS-SPX-002";
+    private const string SpatialBoundingBoxCode = "SS-SPX-003";
+    private const string SpatialGridsCode = "SS-SPX-004";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RebuildThresholdCode = "SS-TBL-001";
@@ -128,6 +132,7 @@ public sealed class CoherenceCheck : ISchemaCheck
 
             findings.AddRange(CheckBackfill(table, location));
             findings.AddRange(CheckPeriodColumns(table, location));
+            findings.AddRange(CheckSpatialIndexes(table, location, columnsAreOwnedElsewhere));
             findings.AddRange(CheckEdgeConstraints(table, location, tablesByKey));
             findings.AddRange(CheckCharsetWithoutCollation(table, location));
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
@@ -315,6 +320,56 @@ public sealed class CoherenceCheck : ISchemaCheck
                     yield return new Finding(Severity.Warning, EdgeConstraintNodeCode, Category, location,
                         $"Clause table '{name}' is not a node table in the package (resolved '{resolvedSchema}.{NormalizeIdentifier(parts[^1])}'). The deploy succeeds only if a node table of that name already exists on the target.");
                 }
+        }
+    }
+
+    /// <summary>
+    /// A SQL Server spatial index covers one geometry or geography column with a tessellation of the same family; a
+    /// geometry index needs a bounding box with an area and a geography index cannot have one; GRIDS belong to the GRID
+    /// schemes. The engine refuses each other shape at create time, so it is reported here. An index-only template owns
+    /// no columns, so the column checks are skipped there, as for ordinary indexes.
+    /// </summary>
+    private static IEnumerable<Finding> CheckSpatialIndexes(Table table, string tableLocation, bool columnsAreOwnedElsewhere)
+    {
+        if (table is not SqlServerTable sqlTable) yield break;
+        foreach (var index in sqlTable.SpatialIndexes)
+        {
+            var location = $"{tableLocation} / Spatial index '{index.Name}'";
+            var tessellation = index.Tessellation?.Trim().ToUpperInvariant();
+            string family = null;
+            if (!columnsAreOwnedElsewhere)
+            {
+                var column = sqlTable.Columns.FirstOrDefault(c => string.Equals(NormalizeIdentifier(c.Name), NormalizeIdentifier(index.Column), StringComparison.OrdinalIgnoreCase));
+                var type = column?.DataType?.Trim().Trim('[', ']').ToUpperInvariant();
+                if (type is not ("GEOMETRY" or "GEOGRAPHY"))
+                {
+                    yield return new Finding(Severity.Error, SpatialColumnCode, Category, location,
+                        column == null
+                            ? $"Spatial index '{index.Name}' names column '{index.Column}', which the table does not declare."
+                            : $"Spatial index '{index.Name}' is on column '{index.Column}', which is {column.DataType}: a spatial index needs a geometry or geography column.");
+                    continue;
+                }
+                family = type;
+            }
+            family ??= tessellation?.StartsWith("GEOGRAPHY") == true ? "GEOGRAPHY" : tessellation?.StartsWith("GEOMETRY") == true ? "GEOMETRY" : null;
+            if (tessellation != null && family != null && !tessellation.StartsWith(family))
+            {
+                yield return new Finding(Severity.Error, SpatialFamilyCode, Category, location,
+                    $"Spatial index '{index.Name}' uses {index.Tessellation} on a {family.ToLowerInvariant()} column: use {family}_GRID or {family}_AUTO_GRID.");
+                continue;
+            }
+            if (family == "GEOMETRY" && index.BoundingBox == null)
+                yield return new Finding(Severity.Error, SpatialBoundingBoxCode, Category, location,
+                    $"Spatial index '{index.Name}' is on a geometry column and declares no BoundingBox, which a geometry spatial index requires.");
+            else if (family == "GEOGRAPHY" && index.BoundingBox != null)
+                yield return new Finding(Severity.Error, SpatialBoundingBoxCode, Category, location,
+                    $"Spatial index '{index.Name}' is on a geography column, which takes no BoundingBox.");
+            else if (index.BoundingBox is { } box && (box.XMax <= box.XMin || box.YMax <= box.YMin))
+                yield return new Finding(Severity.Error, SpatialBoundingBoxCode, Category, location,
+                    $"Spatial index '{index.Name}' has a BoundingBox with no area: XMax must exceed XMin and YMax must exceed YMin.");
+            if (index.Grids != null && tessellation?.EndsWith("_AUTO_GRID") == true)
+                yield return new Finding(Severity.Error, SpatialGridsCode, Category, location,
+                    $"Spatial index '{index.Name}' declares Grids on {index.Tessellation}, which chooses its own: Grids apply to GEOMETRY_GRID and GEOGRAPHY_GRID.");
         }
     }
 

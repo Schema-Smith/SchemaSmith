@@ -68,6 +68,9 @@ namespace Schema.Capabilities
                 13, "SQL Server 2016", null, DegradeKind.Skip, "Always Encrypted (SQL Server 2016)"));
             // Columnstore splits by index kind: nonclustered arrived in 2012 (major 11), clustered in 2014 (12).
             // Both share the one ChangeAudit ObjectType.
+            // Below 2012 an AUTO_GRID spatial index is created with the GRID scheme of its family, so it still indexes the column.
+            rows.Add(new("spatial-auto-grid", "Spatial index AUTO_GRID tessellation", Platform.SqlServer,
+                11, "SQL Server 2012", null, DegradeKind.Reduced, "spatial AUTO_GRID tessellation (SQL Server 2012)"));
             rows.Add(new("columnstore-nonclustered", "Nonclustered columnstore index", Platform.SqlServer,
                 11, "SQL Server 2012", null, DegradeKind.Skip, "columnstore index (SQL Server 2012/2014)"));
             rows.Add(new("columnstore-clustered", "Clustered columnstore index", Platform.SqlServer,

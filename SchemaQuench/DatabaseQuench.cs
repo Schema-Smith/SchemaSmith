@@ -1742,15 +1742,16 @@ BEGIN CATCH
 END CATCH";
 
     /// <summary>
-    /// SQL Server's table-level features that run after indexes and constraints: a FILESTREAM column needs its
-    /// ROWGUIDCOL constraint, CDC must see every column (computed and FILESTREAM included), and Change Tracking
-    /// needs the primary key. Same order as the <c>SchemaSmith.TableQuench</c> wrapper (#423, #424).
+    /// SQL Server's table-level features that run after indexes and constraints: a declared Disabled state needs its
+    /// index, a FILESTREAM column needs its ROWGUIDCOL constraint, CDC must see every column (computed and FILESTREAM
+    /// included), and Change Tracking needs the primary key. Same order as the <c>SchemaSmith.TableQuench</c> wrapper.
     /// </summary>
     internal void QuenchSqlServerTableFeatures(IDbCommand tableCommand)
     {
-        SafeProgressLog("  Quenching FILESTREAM columns, CDC and Change Tracking");
+        SafeProgressLog("  Quenching index state, FILESTREAM columns, CDC and Change Tracking");
         var db = Identifier.EscapeDelimited(_databaseName, _product.Platform);
-        tableCommand.CommandText = $@"EXEC [{db}].SchemaSmith.FileStreamColumnQuench @WhatIf = {_whatIfOnly}
+        tableCommand.CommandText = $@"EXEC [{db}].SchemaSmith.IndexStateQuench @WhatIf = {_whatIfOnly}
+EXEC [{db}].SchemaSmith.FileStreamColumnQuench @WhatIf = {_whatIfOnly}
 EXEC [{db}].SchemaSmith.CdcQuench @WhatIf = {_whatIfOnly}
 EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Table Features"), tableCommand.CommandText);
@@ -1870,7 +1871,7 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
         switch (_product.Platform.GetBasePlatform())
         {
             case Platform.SqlServer:
-                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ForeignKeyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ConstraintStateQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExtendedPropertyQuench @WhatIf = {_whatIfOnly}";
+                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ForeignKeyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}\nIF [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.fn_ServerMajorVersion() >= 15 EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.EdgeConstraintQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ConstraintStateQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExtendedPropertyQuench @WhatIf = {_whatIfOnly}";
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ForeignKeyQuench""(p_WhatIf := {_whatIfOnly});

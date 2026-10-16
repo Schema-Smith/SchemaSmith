@@ -730,6 +730,100 @@
       "maxLength": 128,
       "description": "The unique index this table's CDC capture instance identifies rows by (sp_cdc_enable_table @index_name), instead of the primary key. Must name one of this table's declared unique indexes, over NOT NULL columns. Lets CdcSupportsNetChanges be true on a table with no primary key. Only meaningful with EnableCDC. A change creates a new capture instance; the old one keeps its history."
     },
+    "SpatialIndexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Column": {
+            "type": "string",
+            "description": "The geometry or geography column the index covers."
+          },
+          "Tessellation": {
+            "type": "string",
+            "pattern": "^(?:GEOMETRY_GRID|GEOGRAPHY_GRID|GEOMETRY_AUTO_GRID|GEOGRAPHY_AUTO_GRID)$",
+            "description": "USING: GEOMETRY_GRID or GEOMETRY_AUTO_GRID on a geometry column, GEOGRAPHY_GRID or GEOGRAPHY_AUTO_GRID on a geography column. The AUTO_GRID schemes are SQL Server 2012+. Omitted, the engine chooses."
+          },
+          "BoundingBox": {
+            "type": "object",
+            "properties": {
+              "XMin": {
+                "type": "number"
+              },
+              "YMin": {
+                "type": "number"
+              },
+              "XMax": {
+                "type": "number"
+              },
+              "YMax": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "XMin",
+              "YMin",
+              "XMax",
+              "YMax"
+            ],
+            "description": "BOUNDING_BOX for a geometry tessellation, which requires one. Not allowed on a geography tessellation."
+          },
+          "Grids": {
+            "type": "object",
+            "properties": {
+              "Level1": {
+                "type": "string",
+                "pattern": "^(?:LOW|MEDIUM|HIGH)$"
+              },
+              "Level2": {
+                "type": "string",
+                "pattern": "^(?:LOW|MEDIUM|HIGH)$"
+              },
+              "Level3": {
+                "type": "string",
+                "pattern": "^(?:LOW|MEDIUM|HIGH)$"
+              },
+              "Level4": {
+                "type": "string",
+                "pattern": "^(?:LOW|MEDIUM|HIGH)$"
+              }
+            },
+            "additionalProperties": false,
+            "description": "GRIDS for GEOMETRY_GRID and GEOGRAPHY_GRID: the density of each of the four levels. Not allowed on an AUTO_GRID tessellation. Omitted, every level is MEDIUM."
+          },
+          "CellsPerObject": {
+            "type": "integer",
+            "minimum": 1.0,
+            "maximum": 8192.0,
+            "description": "CELLS_PER_OBJECT. Omitted, the engine's default for the tessellation: 16 for the GRID schemes, 8 for GEOMETRY_AUTO_GRID, 12 for GEOGRAPHY_AUTO_GRID."
+          },
+          "FillFactor": {
+            "type": "integer",
+            "minimum": 1.0,
+            "maximum": 100.0,
+            "description": "FILLFACTOR. Omitted, the server's default."
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Column"
+        ]
+      }
+    },
     "Extensions": {}
   },
   "additionalProperties": false,

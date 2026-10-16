@@ -3916,15 +3916,16 @@ SELECT cc.name AS [Name],
 
     internal static string EscapeSql(string value) => value.Replace("'", "''");
 
-    // Index kinds a package cannot declare yet are left out of the table file (ForgeKindler.SqlServerRenderableIndexTypes,
-    // and selective XML indexes): each one is an object the package misses, so it is named and counted as skipped.
+    // Index kinds a package cannot declare yet (JSON and selective XML indexes) are left out of the table file, so each one is
+    // named and counted as skipped. Primary and secondary XML indexes and spatial indexes have lists of their own, and the
+    // renderable types are ordinary indexes; a selective XML index is type 3 too, so it is found through sys.xml_indexes.
     private void WarnIndexesNotExtracted(IDbCommand command, string tableSchema, string tableName)
     {
         command.CommandText = $@"
 DECLARE @o INT = OBJECT_ID(QUOTENAME(N'{EscapeSql(tableSchema)}') + N'.' + QUOTENAME(N'{EscapeSql(tableName)}'));
 DECLARE @k TABLE ([name] SYSNAME, kind NVARCHAR(60));
 INSERT @k SELECT [name], type_desc FROM sys.indexes
- WHERE [object_id] = @o AND index_id > 0 AND is_hypothetical = 0 AND [type] NOT IN (3, {ForgeKindler.SqlServerRenderableIndexTypes});
+ WHERE [object_id] = @o AND index_id > 0 AND is_hypothetical = 0 AND [type] NOT IN (3, 4, {ForgeKindler.SqlServerRenderableIndexTypes});
 IF COL_LENGTH('sys.xml_indexes', 'xml_index_type') IS NOT NULL
   INSERT @k EXEC sp_executesql N'SELECT [name], xml_index_type_description FROM sys.xml_indexes WHERE [object_id] = @o AND xml_index_type NOT IN (0, 1)',
                                N'@o INT', @o = @o;

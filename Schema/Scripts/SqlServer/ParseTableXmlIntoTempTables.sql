@@ -283,6 +283,74 @@
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   EXEC(@v_SQL)
 
+  RAISERROR('Parse Spatial Indexes from Xml', 10, 100) WITH NOWAIT
+  IF OBJECT_ID('tempdb..#SpatialIndexes') IS NOT NULL DROP TABLE #SpatialIndexes
+  -- A spatial index's key is one column and a tessellation, so it has its own working set, as #XmlIndexes does.
+  -- Every attribute but the column is NULL when the package omits it: the engine's default on create, not compared after.
+  CREATE TABLE #SpatialIndexes
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [IndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Tessellation] NVARCHAR(30) COLLATE DATABASE_DEFAULT NULL,
+    [XMin] FLOAT NULL,
+    [YMin] FLOAT NULL,
+    [XMax] FLOAT NULL,
+    [YMax] FLOAT NULL,
+    [Level1] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level2] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level3] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level4] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [CellsPerObject] INT NULL,
+    [FillFactor] TINYINT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+  )
+  INSERT INTO #SpatialIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Tessellation], [XMin], [YMin], [XMax], [YMax],
+                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [ShouldApplyExpression], [VariantName])
+  SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
+         t.[Schema], t.[Name] AS [TableName], s.[IndexName], s.[Column], s.[Tessellation], s.[XMin], s.[YMin], s.[XMax], s.[YMax],
+         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[ShouldApplyExpression], s.[VariantName]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/SpatialIndexes') AS Y(sx)
+    CROSS APPLY (SELECT
+      [IndexName] = sx.value('(Name/text())[1]', 'NVARCHAR(500)'),
+      [Column] = sx.value('(Column/text())[1]', 'NVARCHAR(500)'),
+      [Tessellation] = sx.value('(Tessellation/text())[1]', 'NVARCHAR(30)'),
+      [XMin] = sx.value('(BoundingBox/XMin/text())[1]', 'FLOAT'),
+      [YMin] = sx.value('(BoundingBox/YMin/text())[1]', 'FLOAT'),
+      [XMax] = sx.value('(BoundingBox/XMax/text())[1]', 'FLOAT'),
+      [YMax] = sx.value('(BoundingBox/YMax/text())[1]', 'FLOAT'),
+      [Level1] = sx.value('(Grids/Level1/text())[1]', 'NVARCHAR(10)'),
+      [Level2] = sx.value('(Grids/Level2/text())[1]', 'NVARCHAR(10)'),
+      [Level3] = sx.value('(Grids/Level3/text())[1]', 'NVARCHAR(10)'),
+      [Level4] = sx.value('(Grids/Level4/text())[1]', 'NVARCHAR(10)'),
+      [CellsPerObject] = sx.value('(CellsPerObject/text())[1]', 'INT'),
+      [FillFactor] = sx.value('(FillFactor/text())[1]', 'TINYINT'),
+      [ShouldApplyExpression] = sx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
+      [VariantName] = sx.value('(VariantName/text())[1]', 'NVARCHAR(128)')
+      ) s;
+
+  -- NORMALIZE -- names wrapped, the scheme and densities in upper case, however the rows arrived.
+  UPDATE #SpatialIndexes
+     SET [IndexName]    = SchemaSmith.fn_SafeBracketWrap([IndexName]),
+         [Column]       = SchemaSmith.fn_SafeBracketWrap([Column]),
+         [Tessellation] = UPPER(NULLIF(RTRIM([Tessellation]), '')),
+         [Level1]       = UPPER(NULLIF(RTRIM([Level1]), '')),
+         [Level2]       = UPPER(NULLIF(RTRIM([Level2]), '')),
+         [Level3]       = UPPER(NULLIF(RTRIM([Level3]), '')),
+         [Level4]       = UPPER(NULLIF(RTRIM([Level4]), '')),
+         [FillFactor]   = NULLIF([FillFactor], 0);
+
+  -- Identify SpatialIndexes to skip based on ShouldApply expression (scoped by [_RowId])
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('DELETE FROM #SpatialIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX))
+                           FROM #SpatialIndexes WITH (NOLOCK)
+                           WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  EXEC(@v_SQL)
+
   RAISERROR('Parse Foreign Keys from Xml', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ForeignKeys') IS NOT NULL DROP TABLE #ForeignKeys
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),

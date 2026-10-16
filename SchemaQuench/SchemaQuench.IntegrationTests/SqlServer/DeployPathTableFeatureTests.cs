@@ -176,6 +176,38 @@ public class DeployPathTableFeatureTests
     }
 
     [Test]
+    public void ADeclaredDisabledIndex_IsDisabledByARealDeploy()
+    {
+        RunScenario("DeployDisabledIndex", null, (deploy, db, cmd) =>
+        {
+            deploy("""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[Code]", "DataType": "INT", "Nullable": true } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" },
+                               { "Name": "[IX_DeployProbe_Code]", "IndexColumns": "[Code]", "Disabled": true } ] }
+                """);
+            cmd.CommandText = "SELECT is_disabled FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'IX_DeployProbe_Code'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the declared Disabled state reaches the database");
+        });
+    }
+
+    [Test]
+    public void AnEdgeConstraint_IsCreatedByARealDeploy()
+    {
+        const string setup = "CREATE TABLE dbo.ProbePerson ([Id] INT NOT NULL) AS NODE; CREATE TABLE dbo.ProbeCity ([Id] INT NOT NULL) AS NODE;";
+        RunScenario("DeployEdgeConstraint", setup, (deploy, db, cmd) =>
+        {
+            deploy("""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]", "GraphType": "Edge",
+                  "Columns": [ { "Name": "[Since]", "DataType": "DATE", "Nullable": true } ],
+                  "EdgeConstraints": [ { "Name": "[EC_DeployProbe]", "Clauses": [ { "FromTable": "[dbo].[ProbePerson]", "ToTable": "[dbo].[ProbeCity]" } ], "DeleteAction": "CASCADE" } ] }
+                """);
+            cmd.CommandText = "SELECT [name] COLLATE DATABASE_DEFAULT + ':' + delete_referential_action_desc COLLATE DATABASE_DEFAULT FROM sys.edge_constraints WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("EC_DeployProbe:CASCADE"), "the declared edge constraint reaches the database");
+        }, freshDatabase: true);
+    }
+
+    [Test]
     public void CdcDeclaredOnADatabaseWithoutCdc_IsRecordedAsDowngraded_ByARealDeploy()
     {
         RunScenario("DeployCdcOff", setupDatabase: null, (deploy, db, cmd) =>

@@ -193,6 +193,79 @@ public class CoherenceCheckTests
         Assert.That(RunOnPgTable(table), Is.Empty);
     }
 
+    // ---- Spatial indexes (SS-SPX-001 .. SS-SPX-004) ----
+    //
+    // A spatial index is on one geometry or geography column, with a tessellation of the same family; a geometry index
+    // needs a bounding box and a geography one cannot have one; grid densities belong to the GRID schemes only. The engine
+    // refuses every other shape, so the package is stopped first.
+
+    private static SqlServerTable Places(params SpatialIndex[] indexes)
+    {
+        var table = new SqlServerTable
+        {
+            Name = "Places", Schema = "dbo",
+            Columns =
+            {
+                new SqlServerColumn { Name = "Id", DataType = "int" },
+                new SqlServerColumn { Name = "Shape", DataType = "geometry" },
+                new SqlServerColumn { Name = "Location", DataType = "GEOGRAPHY" },
+                new SqlServerColumn { Name = "Label", DataType = "nvarchar(50)" }
+            }
+        };
+        table.SpatialIndexes.AddRange(indexes);
+        return table;
+    }
+
+    private static readonly SpatialBoundingBox Box = new() { XMin = 0, YMin = 0, XMax = 100, YMax = 100 };
+
+    private static string[] SpatialCodes(SqlServerTable table) => RunOn(table).Where(f => f.Code.StartsWith("SS-SPX")).Select(f => f.Code).ToArray();
+
+    [Test]
+    public void SpatialIndexes_OfEveryWellFormedShape_AreClean()
+    {
+        Assert.That(SpatialCodes(Places(
+            new SpatialIndex { Name = "SX_Shape", Column = "[Shape]", Tessellation = "GEOMETRY_GRID", BoundingBox = Box, Grids = new SpatialGrids { Level1 = "LOW" } },
+            new SpatialIndex { Name = "SX_Shape_Auto", Column = "Shape", Tessellation = "GEOMETRY_AUTO_GRID", BoundingBox = Box },
+            new SpatialIndex { Name = "SX_Location", Column = "Location" },
+            new SpatialIndex { Name = "SX_Location_Grid", Column = "Location", Tessellation = "GEOGRAPHY_GRID", CellsPerObject = 32 })), Is.Empty);
+    }
+
+    [Test]
+    public void ASpatialIndexOnAMissingOrNonSpatialColumn_IsAnError()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Gone", Column = "Gone" })), Is.EqualTo(new[] { "SS-SPX-001" }));
+            Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Label", Column = "Label" })), Is.EqualTo(new[] { "SS-SPX-001" }));
+        });
+    }
+
+    [Test]
+    public void ATessellationOfTheWrongFamily_IsAnError()
+    {
+        Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Location", Column = "Location", Tessellation = "GEOMETRY_GRID", BoundingBox = Box })),
+            Is.EqualTo(new[] { "SS-SPX-002" }));
+    }
+
+    [Test]
+    public void TheBoundingBox_IsRequiredOnGeometry_ForbiddenOnGeography_AndMustBeAnArea()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Shape", Column = "Shape" })), Is.EqualTo(new[] { "SS-SPX-003" }), "geometry without one");
+            Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Location", Column = "Location", BoundingBox = Box })), Is.EqualTo(new[] { "SS-SPX-003" }), "geography with one");
+            Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Shape", Column = "Shape", BoundingBox = new SpatialBoundingBox { XMin = 5, YMin = 0, XMax = 5, YMax = 10 } })),
+                Is.EqualTo(new[] { "SS-SPX-003" }), "an empty box");
+        });
+    }
+
+    [Test]
+    public void GridsOnAnAutoGridTessellation_AreAnError()
+    {
+        Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Location", Column = "Location", Tessellation = "GEOGRAPHY_AUTO_GRID", Grids = new SpatialGrids { Level1 = "HIGH" } })),
+            Is.EqualTo(new[] { "SS-SPX-004" }));
+    }
+
     // ---- Period columns (SS-TMP-001 .. SS-TMP-004) ----
     //
     // A temporal table's period columns are declared as a pair: one RowStart and one RowEnd, both DATETIME2, on a table

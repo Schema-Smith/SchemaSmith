@@ -529,6 +529,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | `XmlCompression` | bool | `false` | **SQL Server 2022+.** Compresses XML column data in place. Independent of `CompressionType` — a table can carry both. **Deployable from 2022 but only readable from 2025:** `sys.partitions.xml_compression` does not exist before then, so on 2022–2024 SchemaSmith applies the setting and cannot read it back. SchemaTongs carries the declared value forward from the package it is refreshing rather than dropping it, and drift is not re-evaluated there — the setting is applied at create. On 2025+ it round-trips and converges normally. Below 2022 the clause is suppressed and reported through `UnsupportedFeaturePolicy`. |
 | `IsTemporal` | bool | `false` | When `true`, SchemaQuench manages the table as system-versioned temporal: emits `ALTER TABLE ... SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = <Schema>.<Name>_Hist))` and protects the period columns from drop detection. They are `ValidFrom` / `ValidTo` unless the package declares its own (see [SQL Server column extras](#sql-server-column-extras)). When toggled back to `false`, SchemaQuench emits `SET (SYSTEM_VERSIONING = OFF)`. The history table itself (`<Name>_Hist` in the same schema) is not auto-created -- declare it as a sibling table JSON in your package or rely on a Before script that creates it before the `IsTemporal=true` table is quenched. |
 | `XmlIndexes` | array | `[]` | XML index definitions. See [XML Indexes (SQL Server)](#xml-indexes-sql-server). |
+| `SpatialIndexes` | array | `[]` | Spatial index definitions. See [Spatial Indexes (SQL Server)](#spatial-indexes-sql-server). |
 | `Statistics` | array | `[]` | Custom statistics definitions. See [Statistics (SQL Server / PostgreSQL)](#statistics-sql-server--postgresql). |
 | `FullTextIndex` | object or array | `null` | Full-text index on the table -- a single definition, or an array of conditional variants. See [Full-Text Index (SQL Server)](#full-text-index-sql-server). |
 | `UpdateFillFactor` | bool | `false` | When `true`, index fill factors on this table are updated to match JSON definitions during quench. |
@@ -981,7 +982,7 @@ On a graph table, an index can name the engine's pseudo-columns as key parts: `$
 | `PadIndex` | bool | `false` | `PAD_INDEX` — applies `FillFactor` to the intermediate index pages as well as the leaf pages. Has no effect without a `FillFactor`, which is why it is declared alongside it rather than on its own. |
 | `Disabled` | bool | `false` | The index is disabled (`ALTER INDEX … DISABLE`): its definition stays in the catalog, but it holds no data and enforces nothing. This is declared state, converged once the index exists. Declared `true`, a live index is disabled after it is created. Left at the default, an index someone disabled by hand is **rebuilt**, which is what enables it — so a unique index the package says exists enforces again, and the rebuild reports the truth if the rows no longer satisfy it. A disabled index whose definition changed is replaced like any other. Two engine facts worth knowing before declaring it: disabling a **clustered** index makes the table unreadable until it is rebuilt, and disabling a primary key's or unique constraint's index disables every foreign key that references it. SchemaTongs extracts a disabled index with `Disabled: true`. |
 
-**Index kinds a package cannot declare yet:** spatial indexes, JSON indexes (SQL Server 2025) and selective XML indexes. SchemaTongs leaves them out of the table file and names each one in a warning, and SchemaQuench leaves them alone on deploy -- it neither compares them nor drops them, even with [`DropUnknownIndexes`](configuration.md#dropunknownindexes) on. Create and maintain them with a script in the template's `After` slot.
+**Index kinds a package cannot declare yet:** JSON indexes (SQL Server 2025) and selective XML indexes. SchemaTongs leaves them out of the table file and names each one in a warning, and SchemaQuench leaves them alone on deploy -- it neither compares them nor drops them, even with [`DropUnknownIndexes`](configuration.md#dropunknownindexes) on. Create and maintain them with a script in the template's `After` slot.
 
 **On indexed views:** SQL Server rejects `IGNORE_DUP_KEY` on a view index outright ("Cannot define an index on a view with ignore_dup_key index option"), so there is nothing to declare there. `PadIndex` **is** supported on an index inside an `Indexed Views/` definition.
 
@@ -1329,6 +1330,41 @@ XML index definitions in the `XmlIndexes` array. A primary XML index must be cre
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `Extensions` | object | Custom metadata. |
+
+---
+
+## Spatial Indexes (SQL Server)
+
+Spatial index definitions in the `SpatialIndexes` array, one `CREATE SPATIAL INDEX` each. SQL Server builds a spatial index on a single `geometry` or `geography` column, and only on a table with a clustered primary key.
+
+```json
+"SpatialIndexes": [
+  { "Name": "[SX_Shape]", "Column": "[Shape]", "Tessellation": "GEOMETRY_GRID",
+    "BoundingBox": { "XMin": 0, "YMin": 0, "XMax": 500, "YMax": 200 },
+    "Grids": { "Level1": "MEDIUM", "Level2": "LOW", "Level3": "HIGH", "Level4": "MEDIUM" },
+    "CellsPerObject": 64 },
+  { "Name": "[SX_Location]", "Column": "[Location]" }
+]
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `Name` | string | Index name. Required. |
+| `Column` | string | The `geometry` or `geography` column the index covers. Required. |
+| `Tessellation` | string | `GEOMETRY_GRID` or `GEOMETRY_AUTO_GRID` on a geometry column, `GEOGRAPHY_GRID` or `GEOGRAPHY_AUTO_GRID` on a geography column. Omitted, the engine chooses. |
+| `BoundingBox` | object | `XMin`, `YMin`, `XMax`, `YMax`. Required on a geometry column, not allowed on a geography column. |
+| `Grids` | object | `Level1` to `Level4`, each `LOW`, `MEDIUM` or `HIGH`. Only on the `GRID` schemes; a level left out is `MEDIUM`. |
+| `CellsPerObject` | int | 1 to 8192. Omitted, the engine's default: 16 for the `GRID` schemes, 8 for `GEOMETRY_AUTO_GRID`, 12 for `GEOGRAPHY_AUTO_GRID`. |
+| `FillFactor` | int | 1 to 100. Omitted, the server's default. |
+| `ShouldApplyExpression` | string | Conditional inclusion. |
+| `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies. Max 128 characters. |
+| `Extensions` | object | Custom metadata. |
+
+**Only what you declare is compared.** An attribute you leave out is the engine's choice when the index is created, and a later deploy does not compare it, so a definition that names only the column keeps whatever the index has. A declared attribute that differs from the live index drops and re-creates it. A change to the clustered primary key takes the table's spatial indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A spatial index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and `--IndexOnly` deploys behave the same. `DATA_COMPRESSION` is not part of the definition: an index is created uncompressed, and a live index's compression is not compared.
+
+**Before SQL Server 2012** there are no `AUTO_GRID` schemes. A declared `GEOMETRY_AUTO_GRID` or `GEOGRAPHY_AUTO_GRID` index is created with the `GRID` scheme of the same family, with that scheme's defaults for anything not declared, and a downgrade is recorded; a redeploy leaves it as it is. Under `UnsupportedFeaturePolicy` `fail` the deploy is refused instead. See [Engine Version Compatibility](schemaquench.md#engine-version-compatibility).
+
+`--Validate` checks the column, the scheme's family, the bounding box and the grids before a deploy (`SS-SPX-001` to `SS-SPX-004`).
 
 ---
 

@@ -308,6 +308,71 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
     }
 
     [Test]
+    public void SpatialIndexes_OnTheXmlTier_Deploy_Redeploy_ExtractAndConverge_ThroughBothTheFullAndIndexOnlyPaths()
+    {
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        const string geometry = "{\"Name\": \"[SX_Shape]\", \"Column\": \"[Shape]\", \"Tessellation\": \"GEOMETRY_GRID\", \"BoundingBox\": {\"XMin\": 0, \"YMin\": 0, \"XMax\": 500, \"YMax\": 200}, "
+                              + "\"Grids\": {\"Level1\": \"MEDIUM\", \"Level2\": \"LOW\", \"Level3\": \"HIGH\", \"Level4\": \"MEDIUM\"}, \"CellsPerObject\": 64, \"FillFactor\": 80}";
+        const string geography = "{\"Name\": \"[SX_Location]\", \"Column\": \"[Location]\", \"Tessellation\": \"GEOGRAPHY_GRID\"}";
+        string Xml(string spatial) => ModelXmlSerializer.ToIngestXml("[{\"Schema\": \"[dbo]\", \"Name\": \"[XmlSpatial]\", \"Columns\": ["
+            + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false}, {\"Name\": \"[Shape]\", \"DataType\": \"GEOMETRY\", \"Nullable\": true}, {\"Name\": \"[Location]\", \"DataType\": \"GEOGRAPHY\", \"Nullable\": true}],"
+            + "\"Indexes\": [{\"Name\": \"[PK_XmlSpatial]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"}],"
+            + "\"SpatialIndexes\": [" + spatial + "]}]", "Tables", "Table");
+        string Shape()
+        {
+            cmd.CommandText = "SELECT i.name COLLATE DATABASE_DEFAULT + ':' + i.tessellation_scheme COLLATE DATABASE_DEFAULT + ':' + ISNULL(CONVERT(VARCHAR(20), tz.bounding_box_xmax), '-') + ':' + ISNULL(tz.level_2_grid_desc COLLATE DATABASE_DEFAULT, '-') + ':' + CONVERT(VARCHAR(10), tz.cells_per_object) + ',' "
+                            + "FROM sys.spatial_indexes i JOIN sys.spatial_index_tessellations tz ON tz.[object_id] = i.[object_id] AND tz.index_id = i.index_id "
+                            + "WHERE i.[object_id] = OBJECT_ID('dbo.XmlSpatial') ORDER BY i.name FOR XML PATH('')";
+            return cmd.ExecuteScalar() as string ?? "";
+        }
+        int Audits()
+        {
+            cmd.CommandText = "SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND ObjectName LIKE '%XmlSpatial%'";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+        try
+        {
+            cmd.CommandTimeout = 300;
+            cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Xml(geometry + "," + geography).Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+            Assert.That(Shape(), Is.EqualTo("SX_Location:GEOGRAPHY_GRID:-:MEDIUM:16,SX_Shape:GEOMETRY_GRID:500:LOW:64,"), "created as declared");
+
+            cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Xml(geometry + "," + geography).Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+            Assert.That(Audits(), Is.Zero, "a redeploy touches nothing");
+
+            cmd.CommandText = "EXEC SchemaSmith.GenerateTableXml @p_Schema='dbo', @p_Table='XmlSpatial'";
+            var sb = new System.Text.StringBuilder();
+            using (var reader = cmd.ExecuteReader())
+                while (reader.Read())
+                    sb.Append(reader.GetValue(0)?.ToString());
+            var table = (Schema.Domain.SqlServer.SqlServerTable)PlatformDeserializer.DeserializeTable(ModelXmlSerializer.FromIngestXml(sb.ToString()), Platform.SqlServer);
+            var shape = table.SpatialIndexes.Single(s => s.Name == "[SX_Shape]");
+            Assert.Multiple(() =>
+            {
+                Assert.That(table.SpatialIndexes.Select(s => s.Name), Is.EquivalentTo(new[] { "[SX_Shape]", "[SX_Location]" }));
+                Assert.That($"{shape.Column}|{shape.Tessellation}|{shape.BoundingBox?.XMin}|{shape.BoundingBox?.YMax}|{shape.Grids?.Level3}|{shape.CellsPerObject}|{shape.FillFactor}",
+                    Is.EqualTo("[Shape]|GEOMETRY_GRID|0|200|HIGH|64|80"), "extracted as declared");
+            });
+
+            cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Xml(geometry.Replace("\"CellsPerObject\": 64", "\"CellsPerObject\": 32")).Replace("'", "''")}'";
+            cmd.ExecuteNonQuery();
+            Assert.That(Shape(), Is.EqualTo("SX_Shape:GEOMETRY_GRID:500:LOW:32,"), "the index-only path re-creates a changed one and drops one no longer declared");
+        }
+        finally
+        {
+            DropTables(cmd, "dbo.XmlSpatial");
+        }
+
+        conn.Close();
+    }
+
+    [Test]
     public void TableQuench_XmlTier_AppliesDescriptions_AndGenerateTableXml_ReadsThemBack()
     {
         // The XML twin shreds Description, and the legacy MS_Description inside Extensions, through its own
