@@ -69,7 +69,15 @@ BEGIN
          COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) AS "NullsNotDistinctDeclared",
          COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
          CASE WHEN p_UpdateFillFactor THEN true ELSE false END AS "UpdateFillFactor",
-         COALESCE(NULLIF((celem ->> 'FillFactor')::INT2, 0), 90) AS "FillFactor"
+         -- As a table's index: an undeclared fill factor is the access method's default, written only when declared.
+         COALESCE(NULLIF((celem ->> 'FillFactor')::INT2, 0), "SchemaSmith"."IndexFillFactorDefault"(COALESCE(celem ->> 'AccessMethod', 'btree'))) AS "FillFactor",
+         NULLIF((celem ->> 'FillFactor')::INT2, 0) IS NOT NULL AS "FillFactorDeclared",
+         -- Storage parameters canonicalised as sorted key=value pairs, fillfactor excluded (FillFactor owns it), and
+         -- placement, both as a table's index declares them.
+         COALESCE((SELECT STRING_AGG(sp.k || '=' || sp.v, ',' ORDER BY sp.k)
+                     FROM JSON_EACH_TEXT(COALESCE(celem -> 'StorageParameters', '{}'::JSON)) AS sp(k, v)
+                    WHERE sp.k <> 'fillfactor'), '') AS "StorageParameters",
+         COALESCE(celem ->> 'Tablespace', '') AS "Tablespace"
     FROM my_views, JSON_ARRAY_ELEMENTS(arr) AS elem
     CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS(COALESCE((elem ->> 'Indexes')::JSON, '[]'::JSON)) AS celem(value);
 

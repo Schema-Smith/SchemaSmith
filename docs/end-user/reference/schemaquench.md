@@ -410,6 +410,7 @@ A feature a target version lacks is either taken by an equivalent longer path (s
 | **`MERGE` data delivery** (`Insert/Update`) | PostgreSQL 15 | uses a manual, NULL-safe INSERT + UPDATE upsert with identical semantics |
 | **In-place generated-column expression change** (`SET EXPRESSION`) | PostgreSQL 17 | drops and re-adds the generated column (data type, collation, nullability, storage, compression preserved) |
 | **Per-column compression** (`SET COMPRESSION`) | PostgreSQL 14 | omits the compression + records a downgrade |
+| **Statistics target** (`StatisticsTarget` on an extended-statistics object) | PostgreSQL 13 | creates the object without a target + records a downgrade |
 | **Expression statistics** (`CREATE STATISTICS` on an expression) | PostgreSQL 14 | skips the statistic + records a downgrade |
 | **Removing a column's generation** (`DROP EXPRESSION`) | PostgreSQL 13 | drops and re-adds the column as a plain column + records a downgrade (the previously-computed values are not preserved, unlike the in-place conversion available on 13+). Under `fail` the deploy is refused before anything is dropped |
 | **Table access method** (changing it on an existing table, `SET ACCESS METHOD`) | PostgreSQL 15 | leaves the table on its current access method + records a downgrade. A new table gets its declared method on every supported version (`CREATE TABLE ... USING`, PostgreSQL 12) |

@@ -273,6 +273,8 @@ BEGIN
       AND NOT ("SchemaSmith"."ServerVersionNum"() < 14 AND ts."StatisticsColumns" LIKE '%(%');
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
+  CALL "SchemaSmith"."StatisticsTargetQuench"(p_WhatIf);
+
   -- #363: WhatIf twin of the embedded 'statistic'/'created' audit above; same predicate.
   IF p_WhatIf THEN
     INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
@@ -294,6 +296,10 @@ BEGIN
                     CASE WHEN NULLIF(TRIM(tc."AccessMethod"), '') IS NOT NULL THEN ' USING ' || tc."AccessMethod" ELSE '' END ||
                     ' (' || (SELECT STRING_AGG("SchemaSmith"."QuoteIndexColumnList"((celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',')
                                FROM JSON_ARRAY_ELEMENTS(tc."ExcludeColumns"::JSON) AS celem) || ')' ||
+                    -- The backing index's extras, in the grammar's order: INCLUDE, WITH, USING INDEX TABLESPACE, WHERE.
+                    CASE WHEN NULLIF(tc."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(tc."IncludeColumns") || ')' ELSE '' END ||
+                    CASE WHEN NULLIF(tc."StorageParameters", '') IS NOT NULL THEN ' WITH (' || tc."StorageParameters" || ')' ELSE '' END ||
+                    CASE WHEN NULLIF(tc."Tablespace", '') IS NOT NULL THEN ' USING INDEX TABLESPACE "' || tc."Tablespace" || '"' ELSE '' END ||
                     CASE WHEN NULLIF(TRIM(tc."FilterExpression"), '') IS NOT NULL THEN ' WHERE (' || tc."FilterExpression" || ')' ELSE '' END ||
                     CASE WHEN tc."Deferrable" THEN ' DEFERRABLE' ELSE '' END ||
                     CASE WHEN tc."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE '' END || ';' || CHR(10) ||

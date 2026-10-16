@@ -38,6 +38,7 @@ namespace Schema.UnitTests.Capabilities
             "ON DELETE SET NULL (columns) (PG15)",
             "UNLOGGED sequence (PG15)",
             "expression statistics (PG14)",
+            "statistics target (PG13)",
             "per-column compression (PG14)",
             "table access method (PG15)",
             "un-generated column, values not kept (PG13)",

@@ -454,6 +454,12 @@
             "type": "string",
             "description": "The statistics object's schema, when it is not its table's. Left out, it is created in the table's schema."
           },
+          "StatisticsTarget": {
+            "type": "integer",
+            "minimum": 0.0,
+            "maximum": 10000.0,
+            "description": "PostgreSQL 13+. The statistics target (ALTER STATISTICS … SET STATISTICS n), the sample size ANALYZE uses for this object. Omit to leave it unmanaged; declared, it is applied when the object is created and converged in place when it changes. Below 13 a declared target follows the unsupported-feature policy."
+          },
           "Extensions": {}
         },
         "additionalProperties": false,
@@ -509,6 +515,18 @@
             "type": "string",
             "maxLength": 128,
             "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "IncludeColumns": {
+            "type": "string",
+            "description": "Comma-separated covering columns (INCLUDE) on the constraint's backing index."
+          },
+          "StorageParameters": {
+            "type": "object"
+          },
+          "Tablespace": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "PostgreSQL only. The tablespace of the constraint's backing index (USING INDEX TABLESPACE). Omit to leave placement unmanaged."
           },
           "Extensions": {}
         },

@@ -553,17 +553,22 @@ BEGIN
              t."Name" AS "TableName",
              i.relname AS "ExcludeName",
              (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') AS "AccessMethod",
-             (SELECT STRING_AGG("SchemaSmith"."QuoteIndexColumnList"(PG_GET_INDEXDEF(idx.indexrelid, idx::int4, true)) ||
-                                CASE WHEN (idx.indoption[idx-1] & 1) = 1 THEN ' DESC' || CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN '' ELSE ' NULLS LAST' END
-                                     ELSE CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN ' NULLS FIRST' ELSE '' END
-                                     END || ' WITH ' || COALESCE(nsp.nspname || '.' || o.oprname, o.oprname), ',' ORDER BY idx)
-                FROM UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
-                LEFT JOIN LATERAL (SELECT (con.conexclop::oid[])[idx] AS opr_oid) co ON TRUE
+             -- Each key in the engine's canonical form (operator class, COLLATE, parameters; IndexKeyForms), paired
+             -- with its exclusion operator by position; the declared side is normalised to the same form below.
+             (SELECT STRING_AGG(k.item || ' WITH ' || COALESCE(nsp.nspname || '.' || o.oprname, o.oprname), ',' ORDER BY k.idx)
+                FROM UNNEST("SchemaSmith"."IndexKeyItems"(idx.indexrelid)) WITH ORDINALITY AS k(item, idx)
+                LEFT JOIN LATERAL (SELECT (con.conexclop::oid[])[k.idx] AS opr_oid) co ON TRUE
                 LEFT JOIN pg_operator o ON o.oid = co.opr_oid
                 LEFT JOIN pg_namespace nsp ON nsp.oid = o.oprnamespace AND nsp.nspname != 'pg_catalog') AS "ExcludeColumns",
              COALESCE("SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)), '') AS "FilterExpression",
              COALESCE(con.condeferrable, FALSE) AS "Deferrable",
-             COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred"
+             COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred",
+             -- The backing index's extras: covering columns and every storage parameter (fillfactor included).
+             COALESCE((SELECT STRING_AGG(a.attname, ',' ORDER BY u.idx)
+                         FROM pg_attribute a
+                         CROSS JOIN LATERAL UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
+                        WHERE a.attrelid = idx.indrelid AND u.idx > idx.indnkeyatts AND a.attnum = u.element), '') AS "IncludeColumns",
+             COALESCE((SELECT STRING_AGG(opt, ',' ORDER BY opt) FROM UNNEST(i.reloptions) AS o(opt)), '') AS "StorageParameters"
         FROM temp_tables t
         JOIN pg_index idx ON idx.indrelid = to_regclass('"' || t."Schema" || '"."' || t."Name" || '"')
         JOIN pg_class i ON i.oid = idx.indexrelid
@@ -879,8 +884,10 @@ BEGIN
                                 AND ec."TableName" = c."TableName"
                                 AND ec."ExcludeName" = c."Name"
                                 AND (ec."AccessMethod" = c."AccessMethod" OR c."AccessMethod" = '')
-                                AND ec."ExcludeColumns" = (SELECT STRING_AGG("SchemaSmith"."QuoteIndexColumnList"((celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',')
+                                AND ec."ExcludeColumns" = (SELECT STRING_AGG("SchemaSmith"."IndexKeyDeclared"(c."TableSchema", c."TableName", c."AccessMethod", (celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',')
                                                              FROM JSON_ARRAY_ELEMENTS(c."ExcludeColumns"::JSON) AS celem)
+                                AND ec."IncludeColumns" = "SchemaSmith"."NormalizeIndexColumnList"(c."IncludeColumns")
+                                AND ec."StorageParameters" = c."StorageParameters"
                                 AND ec."FilterExpression" = c."FilterExpression"
                                 AND ec."Deferrable" = c."Deferrable"
                                 AND ec."InitiallyDeferred" = c."InitiallyDeferred")
@@ -904,8 +911,10 @@ BEGIN
                             AND ec."TableName" = c."TableName"
                             AND ec."ExcludeName" = c."Name"
                             AND (ec."AccessMethod" = c."AccessMethod" OR c."AccessMethod" = '')
-                            AND ec."ExcludeColumns" = (SELECT STRING_AGG("SchemaSmith"."QuoteIndexColumnList"((celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',')
+                            AND ec."ExcludeColumns" = (SELECT STRING_AGG("SchemaSmith"."IndexKeyDeclared"(c."TableSchema", c."TableName", c."AccessMethod", (celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',')
                                                          FROM JSON_ARRAY_ELEMENTS(c."ExcludeColumns"::JSON) AS celem)
+                            AND ec."IncludeColumns" = "SchemaSmith"."NormalizeIndexColumnList"(c."IncludeColumns")
+                            AND ec."StorageParameters" = c."StorageParameters"
                             AND ec."FilterExpression" = c."FilterExpression"
                             AND ec."Deferrable" = c."Deferrable"
                             AND ec."InitiallyDeferred" = c."InitiallyDeferred")
@@ -936,7 +945,7 @@ BEGIN
                          -- The declared lists are compared through NormalizeIndexColumnList: the snapshot reads
                          -- columns back unquoted with only non-default sort options, so "status" or status ASC
                          -- never matched and the index was rebuilt on every deploy.
-                         AND "SchemaSmith"."NormalizeIndexColumnList"(i."IndexColumns") = ei."IndexColumns"
+                         AND "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") = ei."IndexColumns"
                          AND "SchemaSmith"."NormalizeIndexColumnList"(i."IncludeColumns") = COALESCE(ei."IncludeColumns", '')
                          -- #285: a PRIMARY KEY is unique in the catalog whether or not the package
                          -- says so, so a naturally-authored PK (PrimaryKey: true, no Unique) failed
@@ -993,7 +1002,7 @@ BEGIN
                         WHERE i."TableSchema" = ei."TableSchema"
                           AND i."TableName" = ei."TableName"
                           AND i."Name" = ei."IndexName"
-                          AND ("SchemaSmith"."NormalizeIndexColumnList"(i."IndexColumns") != ei."IndexColumns"
+                          AND ("SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") != ei."IndexColumns"
                             OR "SchemaSmith"."NormalizeIndexColumnList"(i."IncludeColumns") != COALESCE(ei."IncludeColumns", '')
                             OR (COALESCE(i."Unique", FALSE) OR COALESCE(i."PrimaryKey", FALSE) OR COALESCE(i."UniqueConstraint", FALSE)) != ei."Unique"
                             OR COALESCE(i."UniqueConstraint", FALSE) != ei."UniqueConstraint"

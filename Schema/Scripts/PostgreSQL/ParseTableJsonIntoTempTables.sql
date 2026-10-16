@@ -414,6 +414,8 @@
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
            NULLIF(celem ->> 'Schema', '') AS "StatisticsSchema",
+           -- NULL when the package says nothing: the target is then unmanaged (13+; policy-gated below).
+           (celem ->> 'StatisticsTarget')::INT AS "StatisticsTarget",
            COALESCE(celem ->> 'Kind', '') AS "Kind",
            COALESCE(celem ->> 'StatisticsColumns', '') AS "StatisticsColumns",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
@@ -440,7 +442,13 @@
            COALESCE((celem ->> 'Deferrable')::BOOLEAN, false) AS "Deferrable",
            COALESCE((celem ->> 'InitiallyDeferred')::BOOLEAN, false) AS "InitiallyDeferred",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
-           COALESCE(celem ->> 'VariantName', '') AS "VariantName"
+           COALESCE(celem ->> 'VariantName', '') AS "VariantName",
+           -- The backing index's extras, as an index declares them; every storage parameter counts here, fillfactor
+           -- included, there being no FillFactor property on an exclusion constraint.
+           COALESCE(celem ->> 'IncludeColumns', '') AS "IncludeColumns",
+           COALESCE((SELECT STRING_AGG(sp.k || '=' || sp.v, ',' ORDER BY sp.k)
+                       FROM JSON_EACH_TEXT(COALESCE(celem -> 'StorageParameters', '{}'::JSON)) AS sp(k, v)), '') AS "StorageParameters",
+           COALESCE(celem ->> 'Tablespace', '') AS "Tablespace"
       FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
       CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'ExcludeConstraints')::JSON) AS celem(value);
 

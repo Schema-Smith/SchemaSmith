@@ -74,6 +74,7 @@ public class CapabilityDocumentationTests
         ["PostgreSQL/set-null-columns"] = "**`ON DELETE SET NULL (columns)`**",
         ["PostgreSQL/unlogged-sequence"] = "**Unlogged sequence**",
         ["PostgreSQL/expression-statistics"] = "**Expression statistics**",
+        ["PostgreSQL/statistics-target"] = "**Statistics target**",
         ["PostgreSQL/column-compression"] = "**Per-column compression**",
         ["PostgreSQL/table-access-method"] = "**Table access method**",
         ["PostgreSQL/drop-expression"] = "**Removing a column's generation**",

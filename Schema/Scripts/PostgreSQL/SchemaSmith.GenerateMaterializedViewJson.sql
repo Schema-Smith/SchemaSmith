@@ -22,12 +22,15 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(mv))
                   FROM (SELECT i.relname AS "Name",
                                idx.indisunique AS "Unique",
                                idx.indisclustered AS "Clustered",
-                               (SELECT STRING_AGG(TRIM(BOTH '"' FROM PG_GET_INDEXDEF(idx.indexrelid, idx::int4, true)) ||
-                                                  CASE WHEN (idx.indoption[idx-1] & 1) = 1 THEN ' DESC' || CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN '' ELSE ' NULLS LAST' END
-                                                       ELSE CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN ' NULLS FIRST' ELSE '' END
-                                                      END, ',' ORDER BY idx)
-                                  FROM UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
-                                  WHERE idx <= idx.indnkeyatts) AS "IndexColumns",
+                               -- The key list as the engine writes it (IndexKeyForms), as GenerateTableJson.
+                               "SchemaSmith"."IndexKeyList"(idx.indexrelid) AS "IndexColumns",
+                               -- Storage parameters and placement, as GenerateTableJson: fillfactor is FillFactor's,
+                               -- an index with no other option yields NULL here, and reltablespace 0 is the database
+                               -- default, which is not a declared placement.
+                               (SELECT JSON_OBJECT_AGG(SPLIT_PART(opt, '=', 1), SPLIT_PART(opt, '=', 2))
+                                  FROM UNNEST(i.reloptions) AS o(opt)
+                                 WHERE opt NOT LIKE 'fillfactor=%') AS "StorageParameters",
+                               (SELECT its.spcname FROM pg_tablespace its WHERE its.oid = i.reltablespace AND i.reltablespace <> 0) AS "Tablespace",
                                (SELECT STRING_AGG(a.attname, ',' ORDER BY idx)
                                   FROM pg_attribute a
                                   CROSS JOIN LATERAL UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)

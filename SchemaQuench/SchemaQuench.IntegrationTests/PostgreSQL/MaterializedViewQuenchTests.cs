@@ -734,6 +734,54 @@ END $$;";
         RunMaterializedViewQuench(cmd, "[]");
     }
 
+    // A materialized view's index carries the same extras as a table's: storage parameters, a fill factor written only
+    // when declared, and an operator class or collation in the key. Declared, they are written; a redeploy is a no-op;
+    // a changed storage parameter replaces the index.
+    [Test]
+    public void IndexExtras_AreWritten_AndRedeployAsANoOp()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+
+        static string Definition(string pagesPerRange) =>
+            @"[{""Name"":""mv_test"",""Schema"":""public"",""Definition"":""SELECT id, name, amount FROM public.test_source"",""WithData"":true,""Indexes"":[" +
+            @"{""Name"":""ix_mv_test_brin"",""AccessMethod"":""brin"",""IndexColumns"":""id"",""StorageParameters"":{""pages_per_range"":""" + pagesPerRange + @"""}}," +
+            @"{""Name"":""ix_mv_test_name"",""IndexColumns"":""name COLLATE \""C\"" text_pattern_ops"",""FillFactor"":70}]}]";
+        string State(string index)
+        {
+            cmd.CommandText = $"SELECT i.oid::text || '|' || pg_get_indexdef(i.oid) || '|' || COALESCE(array_to_string(i.reloptions, ','), '-') FROM pg_class i WHERE i.relname = '{index}' AND i.relkind = 'i'";
+            return cmd.ExecuteScalar()?.ToString() ?? "";
+        }
+
+        EnsureViewDropped(cmd);
+        RunMaterializedViewQuench(cmd, Definition("16"));
+        var brin = State("ix_mv_test_brin");
+        var name = State("ix_mv_test_name");
+        Assert.Multiple(() =>
+        {
+            Assert.That(brin, Does.EndWith("|pages_per_range=16"), brin);
+            Assert.That(name, Does.Contain("(name COLLATE \"C\" text_pattern_ops)").And.EndWith("|fillfactor=70"), name);
+        });
+
+        RunMaterializedViewQuench(cmd, Definition("16"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(State("ix_mv_test_brin"), Is.EqualTo(brin), "the redeploy neither dropped nor altered the brin index");
+            Assert.That(State("ix_mv_test_name"), Is.EqualTo(name), "the redeploy neither dropped nor altered the collated index");
+        });
+
+        RunMaterializedViewQuench(cmd, Definition("32"));
+        var changed = State("ix_mv_test_brin");
+        Assert.Multiple(() =>
+        {
+            Assert.That(changed, Does.EndWith("|pages_per_range=32"), changed);
+            Assert.That(changed.Split('|')[0], Is.Not.EqualTo(brin.Split('|')[0]), "a changed storage parameter replaces the index");
+        });
+        EnsureViewDropped(cmd);
+    }
+
     [Test]
     public void WithNoData_CreatesEmptyMaterializedView()
     {

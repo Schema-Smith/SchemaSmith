@@ -52,12 +52,9 @@ BEGIN
            -- snapshot omitted the modifier while extraction emitted it, so a DESC key with non-default
            -- null ordering was a second way to churn. TRIM(BOTH '"') because PG_GET_INDEXDEF quotes
            -- identifiers it considers to need it and the authored side does not.
-           (SELECT STRING_AGG(TRIM(BOTH '"' FROM PG_GET_INDEXDEF(idx.indexrelid, idx::int4, true)) ||
-                              CASE WHEN (idx.indoption[idx-1] & 1) = 1 THEN ' DESC' || CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN '' ELSE ' NULLS LAST' END
-                                   ELSE CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN ' NULLS FIRST' ELSE '' END
-                                  END, ',' ORDER BY idx)
-              FROM UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
-             WHERE idx <= idx.indnkeyatts) AS "IndexColumns",
+           -- Now one rendering (IndexKeyForms) carrying each key's operator class, COLLATE and parameters as the
+           -- engine writes them, which the declared side is normalised to; the shape described above is preserved.
+           "SchemaSmith"."IndexKeyList"(idx.indexrelid) AS "IndexColumns",
            (SELECT STRING_AGG(a.attname, ',' ORDER BY idx)
               FROM pg_attribute a
               CROSS JOIN LATERAL UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)

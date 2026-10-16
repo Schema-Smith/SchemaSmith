@@ -475,9 +475,15 @@ public static class ForgeKindler
                 // SQL-language functions are validated at creation, so the splitter and StripParenWrapping
                 // must be kindled before the statistics forms that call them.
                 new("SchemaSmith.SplitTopLevelList.sql"),
+                // One reading of an index key's expression, COLLATE, operator class and parameters, behind the
+                // declared-side normaliser and quoter and the live-side rendering.
+                new("SchemaSmith.IndexKeyForms.sql"),
                 new("SchemaSmith.NormalizeIndexColumnList.sql"),
                 new("SchemaSmith.StripParenWrapping.sql"),
                 new("SchemaSmith.StatisticsDefinitionForms.sql"),
+                // A declared statistics target (13+), converged after the create pass by MissingIndexesAndConstraintsQuench
+                // and IndexOnlyQuench, which CALL it; below 13 it routes the declaration through the policy.
+                new("SchemaSmith.StatisticsTargetQuench.sql"),
                 // #242: the authored-vs-canonical decision and the pass that records it.
                 new("SchemaSmith.ExpressionMapUnchanged.sql"),
                 new("SchemaSmith.ExpressionMapRecord.sql"),

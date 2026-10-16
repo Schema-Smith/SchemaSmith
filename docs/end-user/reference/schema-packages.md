@@ -969,6 +969,8 @@ On a graph table, an index can name the engine's pseudo-columns as key parts: `$
 
 `AccessMethod` (e.g., `btree`, `gin`, `gist`), `IncludeColumns` (PostgreSQL 11+ covering indexes), `Tablespace`, and `StorageParameters`.
 
+**Operator classes and collations go in the key.** PostgreSQL writes them positionally inside the key list, so `IndexColumns` carries them the same way: `"name gin_trgm_ops"`, `"name COLLATE \"C\" DESC"`, `"lower(name) COLLATE \"C\" text_pattern_ops"`, and operator-class parameters on 13+ as `"body gist_trgm_ops (siglen=32)"`. SchemaSmith compares keys in the engine's own form. An operator class that is the access method's default for the column's type, or a `COLLATE` naming the column's own collation, is the same index as one written without it, so spelling it out does not churn. A changed operator class, collation or parameter replaces the index. SchemaTongs writes only what differs from the defaults. The same key syntax works on materialized-view indexes and in an exclusion constraint's `Column`.
+
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `NullsNotDistinct` | bool | `false` | On a unique index or unique constraint, treats NULLs as equal, so only one row may hold NULL in the key (`NULLS NOT DISTINCT`). PostgreSQL 15+; below that the clause is dropped per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). |
@@ -1333,6 +1335,7 @@ Custom statistics definitions in the `Statistics` array. SQL Server uses traditi
 | `Name` | string | Statistics object name. It is created in the table's schema. |
 | `Kind` | string | Comma-separated kinds: `ndistinct`, `dependencies`, `mcv`, in any case and order. Omit it for all three, which is PostgreSQL's own default. |
 | `StatisticsColumns` | string | Comma-separated columns, or parenthesised expressions for expression statistics (PostgreSQL 14+): `"Status,DateCreated"`, `"(\"Id\" / 1)"`. Compared as a set, not in the order written. |
+| `StatisticsTarget` | int | The statistics target (`ALTER STATISTICS … SET STATISTICS n`, PostgreSQL 13+), the sample size `ANALYZE` uses for this object. Omit it and the target is unmanaged: whatever is set stays. Declared, it is applied when the object is created and converged in place when it changes, without re-creating the object. Below 13 it follows the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). SchemaTongs writes it only when someone set one. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. |
 
@@ -1566,7 +1569,10 @@ PostgreSQL exclusion constraints are declared in the `ExcludeConstraints` array.
 |---|---|---|
 | `Name` | string | Constraint name. |
 | `AccessMethod` | string | Index access method backing the constraint (e.g., `"gist"`). |
-| `ExcludeColumns` | array | One or more `{ "Column", "Operator" }` pairs. |
+| `ExcludeColumns` | array | One or more `{ "Column", "Operator" }` pairs. A `Column` may carry a `COLLATE` and an operator class exactly as an index key does (see [PostgreSQL index extras](#postgresql-index-extras)). |
+| `IncludeColumns` | string | Comma-separated covering columns (`INCLUDE`) on the constraint's backing index. |
+| `StorageParameters` | object | The backing index's `WITH (...)` options as `{ "key": "value" }`. There is no `FillFactor` property here, so `fillfactor` is an ordinary entry. A change replaces the constraint. |
+| `Tablespace` | string | The backing index's tablespace (`USING INDEX TABLESPACE`). Omit it to leave placement unmanaged. |
 | `FilterExpression` | string | Optional WHERE clause. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
@@ -1934,7 +1940,7 @@ Materialized views live in the `Materialized Views/` directory of each template.
 | `WithData` | bool | `true` | Whether the materialized view is populated immediately. Set to `false` for `WITH NO DATA`. |
 | `Tablespace` | string | `null` | Optional tablespace. |
 | `AccessMethod` | string | `null` | Storage access method. |
-| `Indexes` | array | `[]` | Indexes on the materialized view (uses the PostgreSQL index shape). |
+| `Indexes` | array | `[]` | Indexes on the materialized view, in the PostgreSQL index shape: operator classes and collations in the key, `FillFactor` written only when declared, `StorageParameters` (a change replaces the index) and `Tablespace`. |
 | `ShouldApplyExpression` | string | | Conditional inclusion. |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `Extensions` | object | | Custom metadata. |

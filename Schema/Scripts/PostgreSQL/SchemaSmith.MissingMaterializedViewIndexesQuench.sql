@@ -63,16 +63,16 @@ BEGIN
       OR %s
       -- Filter expression changed
       OR COALESCE("SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)), '') != t."FilterExpression"
-      -- FillFactor changed (when UpdateFillFactor is true)
+      -- FillFactor changed (when UpdateFillFactor is true): the live side is the option when set, else the engine's
+      -- default for the access method, which is what an undeclared FillFactor resolves to.
       OR (t."UpdateFillFactor" AND
-          COALESCE(NULLIF((REGEXP_MATCH(ARRAY_TO_STRING(i.reloptions, ','), 'fillfactor=(\d+)'))[1]::int, 0), 90) != t."FillFactor")
-      -- IndexColumns changed (declared side normalised to the unquoted, default-free form read back here)
-      OR (SELECT STRING_AGG(TRIM(BOTH '"' FROM PG_GET_INDEXDEF(idx.indexrelid, u.idx::int4, true)) ||
-                            CASE WHEN (idx.indoption[u.idx-1] & 1) = 1 THEN ' DESC' || CASE WHEN (idx.indoption[u.idx-1] & 2) = 2 THEN '' ELSE ' NULLS LAST' END
-                                 ELSE CASE WHEN (idx.indoption[u.idx-1] & 2) = 2 THEN ' NULLS FIRST' ELSE '' END
-                                END, ',' ORDER BY u.idx)
-            FROM UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
-            WHERE u.idx <= idx.indnkeyatts) != "SchemaSmith"."NormalizeIndexColumnList"(t."IndexColumns")
+          COALESCE((REGEXP_MATCH(ARRAY_TO_STRING(i.reloptions, ','), 'fillfactor=(\d+)'))[1]::int2,
+                   "SchemaSmith"."IndexFillFactorDefault"((SELECT am.amname FROM pg_am am WHERE i.relam = am.oid))) IS DISTINCT FROM t."FillFactor")
+      -- IndexColumns changed: both sides in the engine's canonical form (IndexKeyForms), operator class, COLLATE and
+      -- parameters included, with the view in hand so a declared default operator class drops away.
+      OR "SchemaSmith"."IndexKeyList"(idx.indexrelid) != "SchemaSmith"."NormalizeIndexColumnList"(t."ViewSchema", t."ViewName", t."AccessMethod", t."IndexColumns")
+      -- Storage parameters changed: several cannot be ALTERed in place, so a differing set rebuilds, as on a table.
+      OR COALESCE((SELECT STRING_AGG(opt, ',' ORDER BY opt) FROM UNNEST(i.reloptions) AS o(opt) WHERE opt NOT LIKE 'fillfactor=%%'), '') != t."StorageParameters"
       -- IncludeColumns changed
       OR COALESCE((SELECT STRING_AGG(a.attname, ',' ORDER BY u.idx)
                      FROM pg_attribute a
@@ -113,16 +113,14 @@ BEGIN
     'CREATE' || CASE WHEN t."Unique" THEN ' UNIQUE' ELSE '' END
     || ' INDEX "' || t."Name" || '" ON "' || t."ViewSchema" || '"."' || t."ViewName" || '"'
     || CASE WHEN t."AccessMethod" != 'btree' THEN ' USING ' || t."AccessMethod" ELSE '' END
-    || ' (' || t."IndexColumns" || ')'
-    || CASE WHEN NULLIF(t."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || t."IncludeColumns" || ')' ELSE '' END
+    || ' (' || "SchemaSmith"."QuoteIndexColumnList"(t."IndexColumns") || ')'
+    || CASE WHEN NULLIF(t."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(t."IncludeColumns") || ')' ELSE '' END
     || CASE WHEN t."NullsNotDistinct" THEN ' NULLS NOT DISTINCT' ELSE '' END
+    -- CREATE INDEX grammar order: WITH, then TABLESPACE, then WHERE. One WITH clause: fillfactor only when declared
+    -- (and only for the access methods that take it) plus the storage parameters (IndexWithClause).
+    || "SchemaSmith"."IndexWithClause"(t."FillFactorDeclared", t."FillFactor", t."AccessMethod", t."StorageParameters")
+    || CASE WHEN COALESCE(t."Tablespace", '') <> '' THEN ' TABLESPACE "' || t."Tablespace" || '"' ELSE '' END
     || CASE WHEN NULLIF(t."FilterExpression", '') IS NOT NULL THEN ' WHERE ' || t."FilterExpression" ELSE '' END
-    -- Positive gate, not a deny-list: an extension AM (e.g. pgvector's hnsw/ivfflat) can't be
-    -- enumerated in advance, so allow-listing the AMs verified to accept fillfactor fails safe
-    -- (no clause) instead of failing loud (PostgreSQL's "unrecognized parameter" error).
-    || CASE WHEN COALESCE(t."AccessMethod", 'btree') IN ('btree', 'gist', 'hash')
-            THEN ' WITH (fillfactor = ' || t."FillFactor" || ')'
-            ELSE '' END
     || ';' || CHR(10)
     || 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || t."ViewSchema" || '.' || t."ViewName" || '.' || t."Name" || ''', ''created'');',
     CHR(10))
@@ -148,8 +146,8 @@ BEGIN
     INTO sql_script
     FROM temp_mv_indexes t
     WHERE t."Clustered"
-      -- Positive gate on AMs verified to accept fillfactor (see the create-path comment above).
-      AND COALESCE(t."AccessMethod", 'btree') IN ('btree', 'gist', 'hash')
+      -- Positive gate on the access methods that accept fillfactor, as IndexWithClause.
+      AND COALESCE(t."AccessMethod", 'btree') IN ('btree', 'gist', 'hash', 'spgist')
       AND EXISTS (SELECT 1 FROM pg_class c
                    JOIN pg_index idx ON idx.indrelid = c.oid
                    JOIN pg_class i ON i.oid = idx.indexrelid AND i.relname = t."Name"

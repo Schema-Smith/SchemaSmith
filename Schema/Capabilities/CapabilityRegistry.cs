@@ -91,6 +91,8 @@ namespace Schema.Capabilities
                 15, "PostgreSQL 15", null, DegradeKind.Skip, "UNLOGGED sequence (PG15)"));
             rows.Add(new("expression-statistics", "Extended statistics on expressions", Platform.PostgreSQL,
                 14, "PostgreSQL 14", null, DegradeKind.Skip, "expression statistics (PG14)"));
+            rows.Add(new("statistics-target", "Extended statistics target (ALTER STATISTICS … SET STATISTICS)", Platform.PostgreSQL,
+                13, "PostgreSQL 13", null, DegradeKind.Skip, "statistics target (PG13)"));
             rows.Add(new("column-compression", "Per-column compression method", Platform.PostgreSQL,
                 14, "PostgreSQL 14", null, DegradeKind.Skip, "per-column compression (PG14)"));
             rows.Add(new("table-access-method", "Table access method", Platform.PostgreSQL,

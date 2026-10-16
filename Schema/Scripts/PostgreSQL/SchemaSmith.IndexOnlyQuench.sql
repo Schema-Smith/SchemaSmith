@@ -166,6 +166,8 @@ BEGIN
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
            NULLIF(celem ->> 'Schema', '') AS "StatisticsSchema",
+           -- NULL when the package says nothing: the target is then unmanaged (13+; policy-gated below).
+           (celem ->> 'StatisticsTarget')::INT AS "StatisticsTarget",
            COALESCE(celem ->> 'Kind', '') AS "Kind",
            COALESCE(celem ->> 'StatisticsColumns', '') AS "StatisticsColumns",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
@@ -214,7 +216,7 @@ BEGIN
                          -- The declared lists are compared through NormalizeIndexColumnList: the snapshot reads
                          -- columns back unquoted with only non-default sort options, so "status" or status ASC
                          -- never matched and the index was rebuilt on every deploy.
-                         AND "SchemaSmith"."NormalizeIndexColumnList"(i."IndexColumns") = ei."IndexColumns"
+                         AND "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") = ei."IndexColumns"
                          AND "SchemaSmith"."NormalizeIndexColumnList"(i."IncludeColumns") = COALESCE(ei."IncludeColumns", '')
                          -- #285: a PRIMARY KEY is unique in the catalog whether or not the package
                          -- says so, so a naturally-authored PK (PrimaryKey: true, no Unique) failed
@@ -271,7 +273,7 @@ BEGIN
                         WHERE i."TableSchema" = ei."TableSchema"
                           AND i."TableName" = ei."TableName"
                           AND i."Name" = ei."IndexName"
-                          AND ("SchemaSmith"."NormalizeIndexColumnList"(i."IndexColumns") != ei."IndexColumns"
+                          AND ("SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") != ei."IndexColumns"
                             OR "SchemaSmith"."NormalizeIndexColumnList"(i."IncludeColumns") != COALESCE(ei."IncludeColumns", '')
                             OR (COALESCE(i."Unique", FALSE) OR COALESCE(i."PrimaryKey", FALSE) OR COALESCE(i."UniqueConstraint", FALSE)) != ei."Unique"
                             OR COALESCE(i."UniqueConstraint", FALSE) != ei."UniqueConstraint"
@@ -559,6 +561,8 @@ BEGIN
                         WHERE ste.stxname = ts."Name")
       AND NOT ("SchemaSmith"."ServerVersionNum"() < 14 AND ts."StatisticsColumns" LIKE '%(%');
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
+  CALL "SchemaSmith"."StatisticsTargetQuench"(p_WhatIf);
 
   -- Index descriptions, once every index exists.
   CALL "SchemaSmith"."DescriptionQuench"(p_WhatIf, true);

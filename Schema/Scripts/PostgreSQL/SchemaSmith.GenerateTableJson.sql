@@ -120,12 +120,9 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                idx.indisunique AS "Unique",
                                CASE WHEN con.contype = 'u' THEN TRUE ELSE FALSE END AS "UniqueConstraint",
                                idx.indisclustered AS "Clustered",
-                               (SELECT STRING_AGG(TRIM(BOTH '"' FROM PG_GET_INDEXDEF(idx.indexrelid, idx::int4, true)) ||
-                                                  CASE WHEN (idx.indoption[idx-1] & 1) = 1 THEN ' DESC' || CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN '' ELSE ' NULLS LAST' END
-                                                       ELSE CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN ' NULLS FIRST' ELSE '' END
-                                                      END, ',' ORDER BY idx)
-                                  FROM UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
-                                  WHERE idx <= idx.indnkeyatts) AS "IndexColumns",
+                               -- The key list as the engine writes it: a non-default operator class, a differing
+                               -- COLLATE and the operator-class parameters stay in the key (IndexKeyForms).
+                               "SchemaSmith"."IndexKeyList"(idx.indexrelid) AS "IndexColumns",
                                (SELECT STRING_AGG(a.attname, ',' ORDER BY idx)
                                   FROM pg_attribute a
                                   CROSS JOIN LATERAL UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
@@ -216,6 +213,10 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                   FROM (SELECT se.stxname AS "Name",
                                -- Written only when the statistics object lives outside its table's schema.
                                NULLIF(sn.nspname, t.table_schema) AS "Schema",
+                               -- The target (13+), only when someone set one: -1 (before 17) and NULL (17+) both mean
+                               -- the default. Read through to_jsonb so the column's absence below 13 is a NULL, not a
+                               -- plan-time error.
+                               NULLIF((to_jsonb(se) ->> 'stxstattarget')::int, -1) AS "StatisticsTarget",
                                -- 'e' is left out: EXPRESSIONS is implied by an expression and CREATE STATISTICS rejects it as a
                                -- kind, so extracting it produced a package that could not be deployed.
                                COALESCE((SELECT STRING_AGG(CASE k WHEN 'd' THEN 'NDISTINCT' WHEN 'f' THEN 'DEPENDENCIES' WHEN 'm' THEN 'MCV' ELSE k::text END, ',')
@@ -233,20 +234,31 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                (SELECT JSON_AGG(ROW_TO_JSON(sub))
                   FROM (SELECT i.relname AS "Name",
                                (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') AS "AccessMethod",
+                               -- Each key as the engine writes it (operator class, COLLATE, parameters; IndexKeyForms)
+                               -- paired with its exclusion operator by position.
                                (SELECT JSON_AGG(ROW_TO_JSON(cols))
-                                  FROM (SELECT TRIM(BOTH '"' FROM PG_GET_INDEXDEF(idx.indexrelid, idx::int4, true)) ||
-                                                       CASE WHEN (idx.indoption[idx-1] & 1) = 1 THEN ' DESC' || CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN '' ELSE ' NULLS LAST' END
-                                                       ELSE CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN ' NULLS FIRST' ELSE '' END
-                                                       END AS "Column", COALESCE(nsp.nspname || '.' || o.oprname, o.oprname) AS "Operator"
-                                          FROM UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
-                                          LEFT JOIN LATERAL (SELECT (con.conexclop::oid[])[idx] AS opr_oid) co ON TRUE
+                                  FROM (SELECT k.item AS "Column", COALESCE(nsp.nspname || '.' || o.oprname, o.oprname) AS "Operator"
+                                          FROM UNNEST("SchemaSmith"."IndexKeyItems"(idx.indexrelid)) WITH ORDINALITY AS k(item, idx)
+                                          LEFT JOIN LATERAL (SELECT (con.conexclop::oid[])[k.idx] AS opr_oid) co ON TRUE
                                           LEFT JOIN pg_operator o ON o.oid = co.opr_oid
                                           LEFT JOIN pg_namespace nsp ON nsp.oid = o.oprnamespace AND nsp.nspname != 'pg_catalog'
-                                          ORDER BY idx) cols) AS "ExcludeColumns",
+                                          ORDER BY k.idx) cols) AS "ExcludeColumns",
                                "SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)) AS "FilterExpression",
                                '' AS "ShouldApplyExpression",
                                COALESCE(con.condeferrable, FALSE) AS "Deferrable",
-                               COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred"
+                               COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred",
+                               -- The backing index's extras, as an index's: covering columns, every storage parameter
+                               -- (fillfactor included, there being no FillFactor property here), and a placement only
+                               -- when it is not the database default.
+                               (SELECT STRING_AGG(a.attname, ',' ORDER BY u.idx)
+                                  FROM pg_attribute a
+                                  CROSS JOIN LATERAL UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
+                                  WHERE a.attrelid = idx.indrelid
+                                    AND u.idx > idx.indnkeyatts
+                                    AND a.attnum = u.element) AS "IncludeColumns",
+                               (SELECT JSON_OBJECT_AGG(SPLIT_PART(opt, '=', 1), SPLIT_PART(opt, '=', 2))
+                                  FROM UNNEST(i.reloptions) AS o(opt)) AS "StorageParameters",
+                               (SELECT its.spcname FROM pg_tablespace its WHERE its.oid = i.reltablespace AND i.reltablespace <> 0) AS "Tablespace"
                           FROM pg_index idx
                           JOIN pg_class i ON i.oid = idx.indexrelid
                           JOIN pg_catalog.pg_constraint con ON con.conrelid = idx.indrelid AND con.conname = i.relname AND con.contype = 'x'

@@ -385,7 +385,12 @@ public class ForgeKindlerTests
         // +2 on PostgreSQL = IndexFillFactorDefault (the engine's fill factor per access method, so an undeclared one
         //   compares against what the engine actually uses) + IndexWithClause (one rendering of an index's WITH clause,
         //   fillfactor only when declared, shared by every create arm).
-        Assert.That(postgres.Length, Is.EqualTo(64));
+        // +1 on PostgreSQL = IndexKeyForms (one tokenizer for an index key's expression, COLLATE, operator class and
+        //   parameters, behind the normaliser, the quoter and the live rendering, so an opclass or collation in a key
+        //   compares in the engine's own form).
+        // +1 on PostgreSQL = StatisticsTargetQuench (a declared extended-statistics target, 13+, converged in place after
+        //   the create pass; policy-routed below 13).
+        Assert.That(postgres.Length, Is.EqualTo(66));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
