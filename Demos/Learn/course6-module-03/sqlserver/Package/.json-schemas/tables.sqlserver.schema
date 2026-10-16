@@ -86,6 +86,15 @@
             "type": "boolean",
             "description": "SQL Server only, for char, varchar, binary and varbinary columns. false creates the column under SET ANSI_PADDING OFF, so trailing blanks (or trailing zeros) are trimmed on insert; true pads it as usual. Leaving it out leaves an existing column's padding as it is."
           },
+          "GeneratedAlways": {
+            "type": "string",
+            "pattern": "^(?:RowStart|RowEnd)$",
+            "description": "SQL Server 2016+, temporal tables. The column is a period column the engine fills: RowStart or RowEnd. Declare both, as DATETIME2(n), on a table with IsTemporal; the pair becomes PERIOD FOR SYSTEM_TIME. A rename or a change to Hidden is applied in place; a precision change is reported, because SQL Server cannot alter a period column. Omitted on a new temporal table, the columns are ValidFrom and ValidTo DATETIME2(7); omitted on an existing one, its period columns are left as they are."
+          },
+          "Hidden": {
+            "type": "boolean",
+            "description": "SQL Server 2016+, with GeneratedAlways. The period column is HIDDEN: left out of SELECT * and of an INSERT without a column list. Changed in place."
+          },
           "Extensions": {
             "type": "object",
             "required": [

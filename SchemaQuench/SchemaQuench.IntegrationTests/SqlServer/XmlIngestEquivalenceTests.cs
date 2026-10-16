@@ -32,7 +32,9 @@ namespace SchemaQuench.IntegrationTests.SqlServer
     {""Name"":""Backfilled"",""DataType"":""INT"",""Nullable"":true,""Default"":""3"",""BackfillExistingRows"":true},
     {""Name"":""Computed"",""DataType"":""INT"",""ComputedExpression"":""Id + 1"",""Persisted"":true,""Nullable"":false},
     {""Name"":""ComputedUndeclared"",""DataType"":""INT"",""ComputedExpression"":""Id + 2"",""Persisted"":true},
-    {""Name"":""PlainUndeclared"",""DataType"":""INT""}
+    {""Name"":""PlainUndeclared"",""DataType"":""INT""},
+    {""Name"":""SysStart"",""DataType"":""DATETIME2(2)"",""Nullable"":false,""GeneratedAlways"":""RowStart"",""Hidden"":true},
+    {""Name"":""SysEnd"",""DataType"":""DATETIME2"",""Nullable"":false,""GeneratedAlways"":""RowEnd""}
   ],
   ""Indexes"":[
     {""Name"":""PK_XmlEquivTable"",""PrimaryKey"":true,""Unique"":true,""Clustered"":true,""IndexColumns"":""Id""},
@@ -94,6 +96,11 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                     Assert.That(jsonRows.Count, Is.GreaterThan(0), $"{name}: JSON shred produced 0 rows — fixture does not exercise this table");
                     Assert.That(xmlRows, Is.EqualTo(jsonRows), $"{name}: XML shred rows differ from JSON shred");
                 }
+                // The declared period columns are lifted onto the table row and off the column rows, on both tiers.
+                var tablesRows = string.Join("\n", jsonTables[System.Array.IndexOf(ConsumedTables, "#Tables")]);
+                var columnRows = string.Join("\n", jsonTables[System.Array.IndexOf(ConsumedTables, "#Columns")]);
+                Assert.That(tablesRows, Does.Contain("[SysStart]").And.Contain("DATETIME2(2)").And.Contain("[SysEnd]").And.Contain("DATETIME2(7)"), "the pair is on #Tables");
+                Assert.That(columnRows, Does.Not.Contain("SysStart").And.Not.Contain("SysEnd"), "and not on #Columns");
             });
         }
 

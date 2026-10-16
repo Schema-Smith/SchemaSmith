@@ -18,6 +18,15 @@ CREATE PROCEDURE SchemaSmith.GenerateTableJSON
 AS
 SET NOCOUNT ON
 DECLARE @v_DatabaseCollation NVARCHAR(200) = CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS NVARCHAR(200))
+-- The period columns are written only when they differ from the convention a package that omits them gets
+-- (ValidFrom / ValidTo, DATETIME2(7), not hidden), so a table built from an IsTemporal-only package re-extracts
+-- byte for byte. COLUMNPROPERTY is NULL before 2016, where there are none.
+DECLARE @v_PeriodColumnsDeclared BIT = CASE WHEN EXISTS (
+  SELECT 1 FROM sys.columns pc
+   WHERE pc.[object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table))
+     AND COLUMNPROPERTY(pc.[object_id], pc.[name], 'GeneratedAlwaysType') IN (1, 2)
+     AND NOT (pc.[name] = CASE COLUMNPROPERTY(pc.[object_id], pc.[name], 'GeneratedAlwaysType') WHEN 1 THEN 'ValidFrom' ELSE 'ValidTo' END
+              AND pc.scale = 7 AND ISNULL(COLUMNPROPERTY(pc.[object_id], pc.[name], 'IsHidden'), 0) = 0)) THEN 1 ELSE 0 END
 -- SchemaSmith-internal extended properties to exclude from extraction (one-line change to add new names)
 DECLARE @InternalEPNames TABLE ([Name] NVARCHAR(128))
 INSERT @InternalEPNames VALUES (N'ProductName'), (N'PreventDrop'), (N'SchemaSmith_SuspendedHistory')  -- PreventDrop is a SchemaSmith ownership marker, not a user extended property (#270)
@@ -260,7 +269,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                                ELSE '' END AS [DataType],                   
                        CAST(CASE WHEN c.IS_NULLABLE = 'YES' THEN 1 ELSE 0 END AS BIT) AS [Nullable],
 		               -- A bound default (parent_object_id 0) is left out; the warning at the top names it.
-		               CASE WHEN NOT EXISTS (SELECT 1 FROM sys.objects bd WHERE bd.[object_id] = sc.default_object_id AND bd.parent_object_id = 0)
+		               -- A period column's default is the one the deploy writes to fill existing rows, not the author's.
+		               CASE WHEN sc.generated_always_type IN (1, 2) THEN NULL
+		                    WHEN NOT EXISTS (SELECT 1 FROM sys.objects bd WHERE bd.[object_id] = sc.default_object_id AND bd.parent_object_id = 0)
 		                    THEN NULLIF(SchemaSmith.fn_StripParenWrapping(COLUMN_DEFAULT), 'NULL') END AS [Default],
                        -- A single-column check SQL Server named itself (CK__...) is the column's CheckExpression; one with a
                        -- name of its own stays in CheckConstraints under that name, which the fold used to lose. TOP 1 by
@@ -290,6 +301,8 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                  FROM sys.column_encryption_keys cek
                                 WHERE cek.column_encryption_key_id = sc.column_encryption_key_id), '') COLLATE DATABASE_DEFAULT AS EncryptionKey,
                        ISNULL(sc.encryption_algorithm_name, '') COLLATE DATABASE_DEFAULT AS EncryptionAlgorithm,
+                       CASE sc.generated_always_type WHEN 1 THEN 'RowStart' WHEN 2 THEN 'RowEnd' END AS [GeneratedAlways],
+                       CASE WHEN sc.generated_always_type IN (1, 2) AND sc.is_hidden = 1 THEN CAST(1 AS BIT) END AS [Hidden],
                        '' AS [OldName],
                        (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Column', c.COLUMN_NAME)) AS [Description],
                        JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Column', c.COLUMN_NAME) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
@@ -309,7 +322,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     -- Exclude the temporal period columns (GENERATED ALWAYS AS ROW START/END). SchemaSmith
                     -- regenerates ValidFrom/ValidTo from IsTemporal by convention on apply, so emitting them
                     -- as user columns would double-declare them on re-deploy (#369).
-                    AND sc.generated_always_type = 0
+                    AND (sc.generated_always_type = 0 OR (sc.generated_always_type IN (1, 2) AND @v_PeriodColumnsDeclared = 1))
                     -- Exclude SQL Server graph pseudo-columns. A node or edge table carries
                     -- system-generated columns ($node_id, $edge_id, $from_id, $to_id, graph_id and
                     -- the *_obj_id pair) whose names end in a per-table GUID, so emitting them
@@ -323,7 +336,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     -- and every hidden column: what remains of one after GENERATED ALWAYS and graph is a dropped
                     -- ledger column (2022), kept hidden by the engine; extracted, it came back visible on deploy.
                     -- COLUMNPROPERTY is NULL where IsHidden is unknown (before 2016).
-                    AND ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0) x
+                    AND (ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0 OR sc.generated_always_type IN (1, 2))) x
           -- Column sequence: 'Name' (default) or 'Physical', the table's own order. The ordinal is looked up
           -- rather than projected: this is SELECT * over the derived table, so adding ORDINAL_POSITION to it
           -- would write the ordinal into the package file. The lookup only runs when Physical is asked for.

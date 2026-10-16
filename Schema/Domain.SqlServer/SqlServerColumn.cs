@@ -78,5 +78,19 @@ namespace Schema.Domain.SqlServer
                                       "true pads it as usual. Leaving it out leaves an existing column's padding as it is.")]
         public bool? AnsiPadding { get; set; }
 
+        /// <summary>
+        /// The column is one the engine fills, declared by its role: a temporal table's period columns are <c>RowStart</c>
+        /// and <c>RowEnd</c>, and the pair becomes <c>PERIOD FOR SYSTEM_TIME</c>. Declared, the name, <c>DATETIME2(n)</c> and
+        /// <c>Hidden</c> are the author's; undeclared on a new temporal table, the convention <c>ValidFrom</c>/<c>ValidTo</c>
+        /// <c>DATETIME2(7)</c> applies, and on an existing table the live pair is left alone.
+        /// </summary>
+        [JsonProperty(Order = 113, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(Pattern = "RowStart|RowEnd",
+            Description = "SQL Server 2016+, temporal tables. The column is a period column the engine fills: RowStart or RowEnd. Declare both, as DATETIME2(n), on a table with IsTemporal; the pair becomes PERIOD FOR SYSTEM_TIME. A rename or a change to Hidden is applied in place; a precision change is reported, because SQL Server cannot alter a period column. Omitted on a new temporal table, the columns are ValidFrom and ValidTo DATETIME2(7); omitted on an existing one, its period columns are left as they are.")]
+        public string GeneratedAlways { get; set; }
+
+        [JsonProperty(Order = 114)]
+        [SchemaProperty(Description = "SQL Server 2016+, with GeneratedAlways. The period column is HIDDEN: left out of SELECT * and of an INSERT without a column list. Changed in place.")]
+        public bool Hidden { get; set; }
     }
 }

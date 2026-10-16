@@ -87,7 +87,7 @@
   EXEC(@v_SQL)
 
   IF OBJECT_ID('tempdb..#Tables') IS NOT NULL DROP TABLE #Tables
-  SELECT [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName],
+  SELECT [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [PeriodStart] = CAST(NULL AS NVARCHAR(200)), [PeriodStartType] = CAST(NULL AS NVARCHAR(100)), [PeriodStartHidden] = CAST(NULL AS BIT), [PeriodEnd] = CAST(NULL AS NVARCHAR(200)), [PeriodEndType] = CAST(NULL AS NVARCHAR(100)), [PeriodEndHidden] = CAST(NULL AS BIT), [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName],
          CONVERT(BIT, CASE WHEN OBJECT_ID([Schema] + '.' + [Name], 'U') IS NULL AND OBJECT_ID([Schema] + '.' + [OldName], 'U') IS NULL THEN 1 ELSE 0 END) AS NewTable,
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified],
@@ -117,6 +117,7 @@
                                               THEN 1 ELSE 0 END),
          [Collation] = RTRIM(ISNULL(c.[Collation], '')), [DataMaskFunction] = RTRIM(ISNULL(c.[DataMaskFunction], '')),
          [EncryptionType] = ISNULL(c.[EncryptionType], 'NONE'), [EncryptionKey] = RTRIM(ISNULL(c.[EncryptionKey], '')), [EncryptionAlgorithm] = RTRIM(ISNULL(c.[EncryptionAlgorithm], '')),
+         [GeneratedAlways] = CAST(NULLIF(RTRIM(c.[GeneratedAlways]), '') AS NVARCHAR(20)), [Hidden] = c.[Hidden],
          [OldName] = SchemaSmith.fn_SafeBracketWrap(c.[OldName]),
          CONVERT(BIT, CASE WHEN (RTRIM(ISNULL([ComputedExpression], '')) <> '' OR NOT EXISTS (SELECT * FROM #Tables x WHERE x.[Name] = t.[Name] AND x.[Schema] = t.[Schema] AND x.NewTable = 1))
                             AND COLUMNPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name], 'U'), SchemaSmith.fn_StripBracketWrapping([ColumnName]), 'ColumnId') IS NULL
@@ -154,6 +155,8 @@
     CROSS APPLY (SELECT
       [ColumnName] = col.value('(Name/text())[1]', 'NVARCHAR(500)'),
       [DataType] = col.value('(DataType/text())[1]', 'NVARCHAR(100)'),
+      [GeneratedAlways] = col.value('(GeneratedAlways/text())[1]', 'NVARCHAR(20)'),
+      [Hidden] = CONVERT(BIT, CASE LOWER(col.value('(Hidden/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [Nullable] = CONVERT(BIT, CASE LOWER(col.value('(Nullable/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [Default] = col.value('(Default/text())[1]', 'NVARCHAR(MAX)'),
       [CheckExpression] = col.value('(CheckExpression/text())[1]', 'NVARCHAR(MAX)'),
@@ -181,6 +184,9 @@
                            WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   EXEC(@v_SQL)
+
+  -- The declared period columns go onto their table row and off #Columns, so no ordinary column pass sees them.
+  EXEC SchemaSmith.LiftPeriodColumns
 
   -- Don't try to apply tables without columns
   DELETE FROM #Tables

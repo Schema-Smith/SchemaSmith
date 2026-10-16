@@ -120,6 +120,40 @@ EXEC sys.sp_addextendedproperty 'MS_Description', 'A rich table', 'SCHEMA', [dbo
         conn.Close();
     }
 
+    // A temporal table whose period columns differ from the ValidFrom / ValidTo convention: both tiers write them, with
+    // GeneratedAlways, Hidden and their precision, and no default.
+    [Test]
+    public void GenerateTableXml_CustomPeriodColumns_ExtractSameModelAs_GenerateTableJson()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.Booking (Id INT NOT NULL CONSTRAINT PK_Booking PRIMARY KEY, Note NVARCHAR(50) NULL);
+ALTER TABLE dbo.Booking ADD SysStart DATETIME2(2) GENERATED ALWAYS AS ROW START HIDDEN NOT NULL DEFAULT '0001-01-01',
+                            SysEnd DATETIME2(2) GENERATED ALWAYS AS ROW END HIDDEN NOT NULL DEFAULT '9999-12-31 23:59:59.99',
+                            PERIOD FOR SYSTEM_TIME (SysStart, SysEnd);
+ALTER TABLE dbo.Booking SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.Booking_Hist));
+";
+        cmd.ExecuteNonQuery();
+
+        var jsonModel = PlatformDeserializer.DeserializeTable(GenerateTableJson(cmd, "dbo", "Booking"), Platform.SqlServer);
+        var xmlModel = PlatformDeserializer.DeserializeTable(
+            ModelXmlSerializer.FromIngestXml(GenerateTableXml(cmd, "dbo", "Booking")), Platform.SqlServer);
+
+        var periods = jsonModel.Columns.Cast<SqlServerColumn>().Where(c => c.GeneratedAlways != null)
+            .Select(c => $"{c.Name}|{c.GeneratedAlways}|{c.DataType}|{c.Hidden}|{c.Default ?? "-"}").OrderBy(s => s).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(periods, Is.EqualTo(new[] { "[SysEnd]|RowEnd|DATETIME2(2)|True|-", "[SysStart]|RowStart|DATETIME2(2)|True|-" }));
+            Assert.That(NormalizeMinusExtensions(xmlModel), Is.EqualTo(NormalizeMinusExtensions(jsonModel)), "the XML tier writes the same model");
+        });
+
+        cmd.CommandText = "ALTER TABLE dbo.Booking SET (SYSTEM_VERSIONING = OFF); DROP TABLE dbo.Booking; DROP TABLE dbo.Booking_Hist;";
+        cmd.ExecuteNonQuery();
+        conn.Close();
+    }
+
     [Test]
     public void GenerateTableXml_TypedXmlColumn_ExtractsSameTwoPartCollectionNameAs_GenerateTableJson()
     {

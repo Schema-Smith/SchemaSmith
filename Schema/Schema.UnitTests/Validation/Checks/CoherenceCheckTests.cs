@@ -193,6 +193,64 @@ public class CoherenceCheckTests
         Assert.That(RunOnPgTable(table), Is.Empty);
     }
 
+    // ---- Period columns (SS-TMP-001 .. SS-TMP-004) ----
+    //
+    // A temporal table's period columns are declared as a pair: one RowStart and one RowEnd, both DATETIME2, on a table
+    // that is system-versioned. Anything else cannot be created, so the package is stopped before a deploy is.
+
+    private static SqlServerTable Temporal(bool isTemporal, params SqlServerColumn[] periodColumns)
+    {
+        var table = new SqlServerTable { Name = "Booking", Schema = "dbo", IsTemporal = isTemporal, Columns = { new SqlServerColumn { Name = "Id", DataType = "int" } } };
+        foreach (var c in periodColumns) table.Columns.Add(c);
+        return table;
+    }
+
+    private static SqlServerColumn Period(string name, string role, string dataType = "DATETIME2(2)") =>
+        new() { Name = name, DataType = dataType, GeneratedAlways = role, Hidden = true };
+
+    [Test]
+    public void PeriodColumns_DeclaredAsAPairOnATemporalTable_AreClean()
+    {
+        Assert.That(RunOn(Temporal(true, Period("SysStart", "RowStart"), Period("SysEnd", "RowEnd"))).Where(f => f.Code.StartsWith("SS-TMP")), Is.Empty);
+    }
+
+    [Test]
+    public void APeriodColumnWithoutItsPartner_IsAnError()
+    {
+        var findings = RunOn(Temporal(true, Period("SysStart", "RowStart"))).Where(f => f.Code.StartsWith("SS-TMP")).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-TMP-001" }));
+            Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+            Assert.That(findings[0].Message, Does.Contain("RowEnd"));
+        });
+    }
+
+    [Test]
+    public void ARoleDeclaredTwice_IsAnError()
+    {
+        var findings = RunOn(Temporal(true, Period("SysStart", "RowStart"), Period("Other", "RowStart"), Period("SysEnd", "RowEnd")));
+        Assert.That(findings.Where(f => f.Code.StartsWith("SS-TMP")).Select(f => f.Code), Is.EqualTo(new[] { "SS-TMP-002" }));
+    }
+
+    [Test]
+    public void PeriodColumnsOnATableThatIsNotTemporal_AreAnError()
+    {
+        var findings = RunOn(Temporal(false, Period("SysStart", "RowStart"), Period("SysEnd", "RowEnd")));
+        Assert.That(findings.Where(f => f.Code.StartsWith("SS-TMP")).Select(f => f.Code), Is.EqualTo(new[] { "SS-TMP-003" }));
+    }
+
+    [Test]
+    public void APeriodColumnThatIsNotDatetime2_IsAnError()
+    {
+        var findings = RunOn(Temporal(true, Period("SysStart", "RowStart", "DATETIME"), Period("SysEnd", "RowEnd")));
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Where(f => f.Code.StartsWith("SS-TMP")).Select(f => f.Code), Is.EqualTo(new[] { "SS-TMP-004" }));
+            Assert.That(findings.Single(f => f.Code == "SS-TMP-004").Message, Does.Contain("SysStart"));
+        });
+    }
+
     // ---- NullsNotDistinct on a primary key (SS-IDX-004) ----
     //
     // A primary key's columns cannot be NULL, so the clause has nothing to decide and the engine never records it on

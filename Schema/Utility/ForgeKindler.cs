@@ -406,6 +406,8 @@ public static class ForgeKindler
                 new("SchemaSmith.DegradeUnsupportedFeatures.sql"),
                 // Fills the caller's #GraphKeyParts: the graph columns behind a $from_id / $to_id key part (2017+, dynamic).
                 new("SchemaSmith.StageGraphKeyParts.sql"),
+                // Moves declared period columns from #Columns onto #Tables; both parse tiers CALL it, so it precedes them.
+                new("SchemaSmith.LiftPeriodColumns.sql"),
                 new("SchemaSmith.PrintWithNoWait.sql"),
                 new("SchemaSmith.RecordWouldChanges.sql"),
                 new("SchemaSmith.CdcPreflight.sql"),
@@ -429,6 +431,8 @@ public static class ForgeKindler
                 // Must precede ModifiedTableQuench, which CALLs it, for the same compile-cost reason.
                 new("SchemaSmith.CdcIndexGuard.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
+                // A temporal table's period columns; MissingIndexesAndConstraintsQuench CALLs it before its index pass.
+                new("SchemaSmith.PeriodColumnQuench.sql"),
                 new("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"),
                 // Declared descriptions (MS_Description), converged once every table, column and index exists.
                 // Must precede TableQuench and IndexOnlyQuench, which CALL it.

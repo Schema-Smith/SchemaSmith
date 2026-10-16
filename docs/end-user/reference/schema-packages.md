@@ -527,7 +527,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | `Schema` | string | `"dbo"` | Database schema. Use bracket notation in extracted files (e.g., `"[Production]"`). |
 | `CompressionType` | string | `"NONE"` | Data compression: `"NONE"`, `"ROW"`, `"PAGE"`. |
 | `XmlCompression` | bool | `false` | **SQL Server 2022+.** Compresses XML column data in place. Independent of `CompressionType` — a table can carry both. **Deployable from 2022 but only readable from 2025:** `sys.partitions.xml_compression` does not exist before then, so on 2022–2024 SchemaSmith applies the setting and cannot read it back. SchemaTongs carries the declared value forward from the package it is refreshing rather than dropping it, and drift is not re-evaluated there — the setting is applied at create. On 2025+ it round-trips and converges normally. Below 2022 the clause is suppressed and reported through `UnsupportedFeaturePolicy`. |
-| `IsTemporal` | bool | `false` | When `true`, SchemaQuench manages the table as system-versioned temporal: emits `ALTER TABLE ... SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = <Schema>.<Name>_Hist))` and protects the period columns (`ValidFrom` / `ValidTo`) from drop detection. When toggled back to `false`, SchemaQuench emits `SET (SYSTEM_VERSIONING = OFF)`. The history table itself (`<Name>_Hist` in the same schema) is not auto-created -- declare it as a sibling table JSON in your package or rely on a Before script that creates it before the `IsTemporal=true` table is quenched. |
+| `IsTemporal` | bool | `false` | When `true`, SchemaQuench manages the table as system-versioned temporal: emits `ALTER TABLE ... SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = <Schema>.<Name>_Hist))` and protects the period columns from drop detection. They are `ValidFrom` / `ValidTo` unless the package declares its own (see [SQL Server column extras](#sql-server-column-extras)). When toggled back to `false`, SchemaQuench emits `SET (SYSTEM_VERSIONING = OFF)`. The history table itself (`<Name>_Hist` in the same schema) is not auto-created -- declare it as a sibling table JSON in your package or rely on a Before script that creates it before the `IsTemporal=true` table is quenched. |
 | `XmlIndexes` | array | `[]` | XML index definitions. See [XML Indexes (SQL Server)](#xml-indexes-sql-server). |
 | `Statistics` | array | `[]` | Custom statistics definitions. See [Statistics (SQL Server / PostgreSQL)](#statistics-sql-server--postgresql). |
 | `FullTextIndex` | object or array | `null` | Full-text index on the table -- a single definition, or an array of conditional variants. See [Full-Text Index (SQL Server)](#full-text-index-sql-server). |
@@ -694,7 +694,7 @@ Types this affects in practice: MariaDB `UUID` (10.7+), MySQL `VECTOR` (9.0+), S
 
 ### SQL Server column extras
 
-`CheckExpression`, `ComputedExpression`, `Persisted`, `Sparse`, `IsColumnSet`, `Collation`, `DataMaskFunction`, `AnsiPadding`, `FileStream` (see [FILESTREAM (SQL Server)](#filestream-sql-server)). Identity is part of the `DataType` string (`INT IDENTITY(1,1)`); `ROWGUIDCOL` likewise (`UNIQUEIDENTIFIER ROWGUIDCOL`).
+`CheckExpression`, `ComputedExpression`, `Persisted`, `Sparse`, `IsColumnSet`, `Collation`, `DataMaskFunction`, `AnsiPadding`, `GeneratedAlways`, `Hidden`, `FileStream` (see [FILESTREAM (SQL Server)](#filestream-sql-server)). Identity is part of the `DataType` string (`INT IDENTITY(1,1)`); `ROWGUIDCOL` likewise (`UNIQUEIDENTIFIER ROWGUIDCOL`).
 
 A change to a column's definition and a change to one of its options (`ROWGUIDCOL`, `NOT FOR REPLICATION`, `DataMaskFunction`) are applied in separate statements, in one deploy. A mask or `ROWGUIDCOL` the package keeps survives a definition change: SQL Server drops a mask with the old definition and will not alter a `ROWGUIDCOL` column, so the deploy takes the option off, alters the column, and puts it back. An option change on its own is metadata: the indexes, keys, defaults, checks and statistics over the column stay in place. The one exception is a mask under a computed column or a schema-bound module that reads the column, which SQL Server refuses; the computed column comes off and goes back, and the module is handled as for any other column change.
 
@@ -726,6 +726,26 @@ that sets `OnOrderMismatch` treats that pending move as column-order drift, so t
 instead and the column stays where the package declares it.
 
 > **Note:** Microsoft has deprecated `ANSI_PADDING OFF`. Use it to keep a legacy column as it is, not for new design.
+
+**Period columns on a temporal table.** A table with `IsTemporal: true` and no period columns in its package gets
+`ValidFrom` and `ValidTo DATETIME2(7)` when it is created, as it always has. To name them yourself, declare both, with
+`GeneratedAlways` set to their role:
+
+```json
+{ "Name": "[SysStart]", "DataType": "DATETIME2(2)", "Nullable": false, "GeneratedAlways": "RowStart", "Hidden": true },
+{ "Name": "[SysEnd]",   "DataType": "DATETIME2(2)", "Nullable": false, "GeneratedAlways": "RowEnd",   "Hidden": true }
+```
+
+The pair becomes `PERIOD FOR SYSTEM_TIME`, and the columns exist before the table's indexes are created, so an index
+can name them. `Hidden: true` declares `HIDDEN`, which leaves the column out of `SELECT *` and of an `INSERT` without a
+column list. On an existing table, a different name is applied with `sp_rename` (the history table follows it) and a
+different `Hidden` with `ALTER COLUMN … ADD | DROP HIDDEN`, both in place. A different precision is not applied: SQL
+Server refuses to alter a period column while the table is versioned, so the deploy leaves the column as it is and
+prints a warning naming it with its live and declared types. Re-create the table to change it. An existing table whose
+package does not declare its period columns keeps them as they are, whatever they are called. SchemaTongs writes the
+pair only when it differs from the `ValidFrom` / `ValidTo` convention, so an existing package re-extracts unchanged.
+`--Validate` stops a pair that is incomplete (`SS-TMP-001`), declares a role twice (`SS-TMP-002`), is on a table
+without `IsTemporal` (`SS-TMP-003`), or is not `DATETIME2` (`SS-TMP-004`).
 
 ### PostgreSQL column extras
 

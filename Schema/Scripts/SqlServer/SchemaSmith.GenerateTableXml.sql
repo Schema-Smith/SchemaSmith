@@ -41,6 +41,15 @@ CREATE PROCEDURE SchemaSmith.GenerateTableXml
 AS
 SET NOCOUNT ON
 DECLARE @v_DatabaseCollation NVARCHAR(200) = CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS NVARCHAR(200))
+-- The period columns are written only when they differ from the convention a package that omits them gets
+-- (ValidFrom / ValidTo, DATETIME2(7), not hidden), so a table built from an IsTemporal-only package re-extracts
+-- byte for byte. COLUMNPROPERTY is NULL before 2016, where there are none.
+DECLARE @v_PeriodColumnsDeclared BIT = CASE WHEN EXISTS (
+  SELECT 1 FROM sys.columns pc
+   WHERE pc.[object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table))
+     AND COLUMNPROPERTY(pc.[object_id], pc.[name], 'GeneratedAlwaysType') IN (1, 2)
+     AND NOT (pc.[name] = CASE COLUMNPROPERTY(pc.[object_id], pc.[name], 'GeneratedAlwaysType') WHEN 1 THEN 'ValidFrom' ELSE 'ValidTo' END
+              AND pc.scale = 7 AND ISNULL(COLUMNPROPERTY(pc.[object_id], pc.[name], 'IsHidden'), 0) = 0)) THEN 1 ELSE 0 END
 DECLARE @v_ObjectId INT = OBJECT_ID(QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table))
 DECLARE @v_IsTemporal BIT = 0
 -- History table identity/retention (#depth-gap) -- see JSON twin for the emit-only-when-nonstandard
@@ -324,7 +333,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                                ELSE '' END AS [DataType],
                        CASE WHEN c.IS_NULLABLE = 'YES' THEN 'true' ELSE 'false' END AS [Nullable],
 		               -- A bound default (parent_object_id 0) is left out; the warning at the top names it.
-		               CASE WHEN NOT EXISTS (SELECT 1 FROM sys.objects bd WHERE bd.[object_id] = sc.default_object_id AND bd.parent_object_id = 0)
+		               -- See the JSON twin: a period column's default is the deploy's, not the author's.
+		               CASE WHEN ISNULL(cm.GeneratedAlwaysType, 0) IN (1, 2) THEN NULL
+		                    WHEN NOT EXISTS (SELECT 1 FROM sys.objects bd WHERE bd.[object_id] = sc.default_object_id AND bd.parent_object_id = 0)
 		                    THEN NULLIF(SchemaSmith.fn_StripParenWrapping(COLUMN_DEFAULT), 'NULL') END AS [Default],
                        -- A single-column check SQL Server named itself (CK__...) is the column's CheckExpression; one with a
                        -- name of its own stays in CheckConstraints under that name, which the fold used to lose. TOP 1 by
@@ -351,6 +362,8 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                        ISNULL(cm.EncryptionType, 'NONE') COLLATE DATABASE_DEFAULT AS EncryptionType,
                        ISNULL(cm.EncryptionKey, '') COLLATE DATABASE_DEFAULT AS EncryptionKey,
                        ISNULL(cm.EncryptionAlgorithm, '') COLLATE DATABASE_DEFAULT AS EncryptionAlgorithm,
+                       CASE cm.GeneratedAlwaysType WHEN 1 THEN 'RowStart' WHEN 2 THEN 'RowEnd' END AS [GeneratedAlways],
+                       CASE WHEN ISNULL(cm.GeneratedAlwaysType, 0) IN (1, 2) AND COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden') = 1 THEN 'true' END AS [Hidden],
                        '' AS [OldName],
                        (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Column', c.COLUMN_NAME)) AS [Description],
                        (SELECT ep.[Name] AS [@n], CONVERT(NVARCHAR(MAX), ep.[Value]) AS [*]
@@ -372,13 +385,13 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     -- Exclude the temporal period columns (GENERATED ALWAYS AS ROW START/END); regenerated
                     -- from IsTemporal on apply (#369). generated_always_type is 2016+ -> staged into #ColMeta
                     -- (0 below 2016, where no period columns exist).
-                    AND ISNULL(cm.GeneratedAlwaysType, 0) = 0
+                    AND (ISNULL(cm.GeneratedAlwaysType, 0) = 0 OR (cm.GeneratedAlwaysType IN (1, 2) AND @v_PeriodColumnsDeclared = 1))
                     -- and the graph pseudo-columns staged above (empty below 2017).
                     AND NOT EXISTS (SELECT 1 FROM #GraphCols g WITH (NOLOCK) WHERE g.[column_id] = sc.column_id)
                     -- and every hidden column: what remains of one after GENERATED ALWAYS and graph is a dropped
                     -- ledger column (2022), kept hidden by the engine; extracted, it came back visible on deploy.
                     -- COLUMNPROPERTY is NULL where IsHidden is unknown (before 2016).
-                    AND ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0
+                    AND (ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0 OR ISNULL(cm.GeneratedAlwaysType, 0) IN (1, 2))
                   -- Column sequence: 'Name' (default) or 'Physical', as GenerateTableJSON orders it.
                   ORDER BY CASE WHEN @p_ObjectOrder = 'Physical' THEN c.ORDINAL_POSITION END,
                            CASE WHEN @p_ObjectOrder = 'Physical' THEN NULL ELSE c.COLUMN_NAME END

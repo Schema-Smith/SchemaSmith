@@ -119,6 +119,14 @@
     [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NOT NULL,
     [XmlCompression] BIT NOT NULL,
     [IsTemporal] BIT NOT NULL,
+    -- The declared period columns (GeneratedAlways RowStart / RowEnd), lifted off #Columns below so that no ordinary
+    -- column pass sees them. NULL when the package declares none: the convention on a new table, unmanaged on an old one.
+    [PeriodStart] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [PeriodStartType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
+    [PeriodStartHidden] BIT NULL,
+    [PeriodEnd] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [PeriodEndType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
+    [PeriodEndHidden] BIT NULL,
     [HistoryTableSchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [HistoryTableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [HistoryRetentionPeriod] NVARCHAR(50) COLLATE DATABASE_DEFAULT NULL,
@@ -185,6 +193,8 @@
     [EncryptionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
     [EncryptionKey] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
     [EncryptionAlgorithm] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [GeneratedAlways] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+    [Hidden] BIT NULL,
     [OldName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [NewColumn] BIT NULL,
     [ColumnScript] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
@@ -549,7 +559,7 @@
   -- 6,938 ms of a 1,783-table parse against ~125 ms for the other six child tables combined.
   TRUNCATE TABLE #Columns
   RAISERROR('Parse Columns from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [AnsiPadding], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [OldName], [ShouldApplyExpression], [VariantName], [Description])
+  INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [AnsiPadding], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [GeneratedAlways], [Hidden], [OldName], [ShouldApplyExpression], [VariantName], [Description])
   -- INGEST ONLY -- raw values straight off the shred, exactly as the other tables do it. Every default,
   -- bracket-wrap, type canonicalization and the whole ColumnScript build moved to the NORMALIZE pass
   -- below, so a second ingestion path supplying these rows gets the identical treatment from one
@@ -560,7 +570,7 @@
          c.[DataType], c.[Nullable], c.[Default], c.[CheckExpression],
          c.[ComputedExpression], c.[Persisted], c.[Sparse], c.[FileStream], c.[IsColumnSet],
          c.[BackfillExistingRows], c.[AnsiPadding], c.[Collation], c.[DataMaskFunction], c.[EncryptionType],
-         c.[EncryptionKey], c.[EncryptionAlgorithm], c.[OldName],
+         c.[EncryptionKey], c.[EncryptionAlgorithm], c.[GeneratedAlways], c.[Hidden], c.[OldName],
          c.[ShouldApplyExpression], c.[VariantName], [Description] = COALESCE(c.[Description], c.[LegacyDescription])
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(Columns) WITH (
@@ -581,6 +591,8 @@
       [EncryptionType] NVARCHAR(100) '$.EncryptionType',
       [EncryptionKey] NVARCHAR(500) '$.EncryptionKey',
       [EncryptionAlgorithm] NVARCHAR(500) '$.EncryptionAlgorithm',
+      [GeneratedAlways] NVARCHAR(20) '$.GeneratedAlways',
+      [Hidden] BIT '$.Hidden',
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName',
       [OldName] NVARCHAR(500) '$.OldName',
@@ -796,6 +808,9 @@
     FROM #Columns WITH (NOLOCK)
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
+
+  -- The declared period columns go onto their table row and off #Columns, so no ordinary column pass sees them.
+  EXEC SchemaSmith.LiftPeriodColumns
 
   -- Don't try to apply tables without columns
   DELETE FROM #Tables

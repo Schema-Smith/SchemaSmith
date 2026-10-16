@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Schema.Delivery;
 using Schema.Domain;
 using Schema.Utility;
@@ -34,6 +35,10 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string TemporalKeyShapeCode = "SS-IDX-002";
     private const string TemporalKeyPeriodCode = "SS-IDX-003";
     private const string NullsNotDistinctOnKeyCode = "SS-IDX-004";
+    private const string PeriodPairIncompleteCode = "SS-TMP-001";
+    private const string PeriodRoleRepeatedCode = "SS-TMP-002";
+    private const string PeriodWithoutTemporalCode = "SS-TMP-003";
+    private const string PeriodTypeCode = "SS-TMP-004";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RebuildThresholdCode = "SS-TBL-001";
@@ -122,6 +127,7 @@ public sealed class CoherenceCheck : ISchemaCheck
                 findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
 
             findings.AddRange(CheckBackfill(table, location));
+            findings.AddRange(CheckPeriodColumns(table, location));
             findings.AddRange(CheckEdgeConstraints(table, location, tablesByKey));
             findings.AddRange(CheckCharsetWithoutCollation(table, location));
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
@@ -313,12 +319,37 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
+    /// A SQL Server temporal table's period columns are a pair -- one RowStart, one RowEnd, both DATETIME2 -- on a
+    /// table with IsTemporal. The engine refuses every other shape, so the package is stopped here instead.
+    /// </summary>
+    private static IEnumerable<Finding> CheckPeriodColumns(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable sqlTable) yield break;
+        var periods = sqlTable.Columns.OfType<SqlServerColumn>().Where(c => !string.IsNullOrWhiteSpace(c.GeneratedAlways)).ToList();
+        if (periods.Count == 0) yield break;
+
+        var byRole = periods.GroupBy(c => c.GeneratedAlways.Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+        foreach (var (role, columns) in byRole.Where(r => r.Value.Count > 1))
+            yield return new Finding(Severity.Error, PeriodRoleRepeatedCode, Category, tableLocation,
+                $"Columns {string.Join(", ", columns.Select(c => $"'{c.Name}'"))} all declare GeneratedAlways {role}: a table has one RowStart and one RowEnd.");
+        foreach (var (have, missing) in new[] { ("RowStart", "RowEnd"), ("RowEnd", "RowStart") })
+            if (byRole.TryGetValue(have, out var present) && !byRole.ContainsKey(missing))
+                yield return new Finding(Severity.Error, PeriodPairIncompleteCode, Category, tableLocation,
+                    $"Column '{present[0].Name}' declares GeneratedAlways {have} but no column declares {missing}: PERIOD FOR SYSTEM_TIME needs both.");
+        if (!sqlTable.IsTemporal)
+            yield return new Finding(Severity.Error, PeriodWithoutTemporalCode, Category, tableLocation,
+                $"Table '{table.Name}' declares period columns but not IsTemporal: they are created only with system versioning, so set IsTemporal or remove GeneratedAlways.");
+        foreach (var column in periods.Where(c => !Regex.IsMatch(c.DataType ?? "", @"^\s*\[?DATETIME2\]?\s*(\(\s*\d\s*\))?\s*$", RegexOptions.IgnoreCase)))
+            yield return new Finding(Severity.Error, PeriodTypeCode, Category, tableLocation,
+                $"Period column '{column.Name}' is {column.DataType}: a period column must be DATETIME2 or DATETIME2(n).");
+    }
+
+    /// <summary>
     /// BackfillExistingRows renders as ALTER TABLE ... WITH VALUES, which SQL Server rejects as a SYNTAX
     /// error when the column has no DEFAULT — so the deploy path only emits it alongside one. That guard
     /// keeps the batch runnable but makes the setting a silent no-op, which is the shape worth catching
     /// here: the author asked for existing rows to be populated and nothing would populate them.
     /// </summary>
-
     private static IEnumerable<Finding> CheckBackfill(Table table, string tableLocation)
     {
         foreach (var column in table.Columns.OfType<SqlServerColumn>()
