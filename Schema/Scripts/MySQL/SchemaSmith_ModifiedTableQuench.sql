@@ -3856,6 +3856,34 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCaseRenames;
     END IF;
 
+    -- On the MariaDB patches SchemaSmith_CaseRespellKeepsOldSpelling names, an index a foreign key needs cannot be
+    -- respelled by case: the one-statement swap below keeps the old name, so retrying it would rebuild the table on every
+    -- deploy. Such an index keeps its spelling, with a warning. Keyed on its leading column, which is what a key uses;
+    -- the catalog is read here, out of the set-based statements.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkKeyedColumns;
+    CREATE TEMPORARY TABLE _SchemaSmith_FkKeyedColumns (TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+                                                       ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+                                                       PRIMARY KEY (TableKey, ColumnKey)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    IF SchemaSmith_CaseRespellKeepsOldSpelling() = 1 THEN
+        INSERT IGNORE INTO _SchemaSmith_FkKeyedColumns (TableKey, ColumnKey)
+        SELECT SchemaSmith_IdentifierKey(TABLE_NAME), SchemaSmith_NameKeyCI(COLUMN_NAME)
+          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+         WHERE TABLE_SCHEMA = v_DbCi AND REFERENCED_TABLE_NAME IS NOT NULL;
+        INSERT IGNORE INTO _SchemaSmith_FkKeyedColumns (TableKey, ColumnKey)
+        SELECT SchemaSmith_IdentifierKey(REFERENCED_TABLE_NAME), SchemaSmith_NameKeyCI(REFERENCED_COLUMN_NAME)
+          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+         WHERE REFERENCED_TABLE_SCHEMA = v_DbCi;
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  WARNING: index ', SchemaSmith_StripBacktickWrapping(i.TableName), '.', snap.IndexName,
+                      ' keeps its spelling, not ', SchemaSmith_StripBacktickWrapping(i.IndexName),
+                      ': a foreign key needs it, and this MariaDB version cannot respell such an index by case (fixed in 10.6.26, 10.11.17 and 11.4.11).')
+          FROM _SchemaSmith_Indexes i
+          JOIN _SchemaSmith_IdxDetectSnap snap ON snap.TableKey = i.TableKey AND snap.IndexKey = i.IndexKey
+          JOIN _SchemaSmith_FkKeyedColumns f ON f.TableKey = i.TableKey AND f.ColumnKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(SUBSTRING_INDEX(i.IndexColumns, ',', 1)), ' ', 1), '(', 1)))
+         WHERE i.IsPrimaryKey = 0
+           AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY);
+    END IF;
+
     -- =========================================================================
     -- STEP 2: Detect modified indexes (same name, different definition)
     -- =========================================================================
@@ -3893,7 +3921,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
       AND (
           -- Spelled differently only in case, on MariaDB, which converges it by drop and re-create. One a foreign key needs is
           -- respelled by the one-statement swap below (1553 sends it there).
-          (VERSION() LIKE '%MariaDB%' AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY))
+          (VERSION() LIKE '%MariaDB%' AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY)
+           AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_FkKeyedColumns f WHERE f.TableKey = i.TableKey AND f.ColumnKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(SUBSTRING_INDEX(i.IndexColumns, ',', 1)), ' ', 1), '(', 1)))))
           -- Or columns differ
           OR CAST(SchemaSmith_NormalizeIndexColumns(i.CompareColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
           -- Or uniqueness differs

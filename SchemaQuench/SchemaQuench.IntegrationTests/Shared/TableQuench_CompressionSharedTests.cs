@@ -74,9 +74,10 @@ public abstract class TableQuench_CompressionSharedTests : BaseTableQuenchTests
             RunTableQuenchProc(cmd, Json(t, ""));
             Assert.That(options(), Does.Not.Contain("PAGE_COMPRESSED"), "precondition");
             RunTableQuenchProc(cmd, Json(t, """, "PageCompressed": true, "PageCompressionLevel": 3"""));
-            Assert.That(options(), Does.Contain("PAGE_COMPRESSED='1'").And.Contain("PAGE_COMPRESSION_LEVEL='3'"));
+            // Some MariaDB patches (10.6.20) render the values unquoted; the deploy's reader accepts either, so does this.
+            Assert.That(options().Replace("'", ""), Does.Contain("PAGE_COMPRESSED=1").And.Contain("PAGE_COMPRESSION_LEVEL=3"));
             RunTableQuenchProc(cmd, Json(t, """, "PageCompressed": true, "PageCompressionLevel": 6"""));
-            Assert.That(options(), Does.Contain("PAGE_COMPRESSION_LEVEL='6'"));
+            Assert.That(options().Replace("'", ""), Does.Contain("PAGE_COMPRESSION_LEVEL=6"));
         });
     }
 }

@@ -547,6 +547,8 @@ MySQL and MariaDB decide whether two names are the same object from the server s
 
 Column, index, CHECK and foreign-key names are case-insensitive on every setting. When the server holds one of them under a spelling that differs from your package only in case, SchemaSmith keeps the object and its data and converges it to your package's spelling. MySQL renames the index; MariaDB drops and re-creates it instead, because a case-only index rename corrupts the index dictionary on some MariaDB versions. On MariaDB, an index that starts with a foreign key's column keeps its existing spelling, because the engine will not drop an index a foreign key depends on.
 
+**One exception, on older MariaDB patches.** From 10.3 until 10.6.26, 10.11.17 and 11.4.11 (and the series between them, which never received the fix), MariaDB cannot change the case of an index's name while a foreign key needs that index: the statement runs and the old spelling stays. On those versions SchemaSmith leaves such an index under its existing spelling and warns, naming it, rather than rebuilding the table on every deploy to no effect. The index, the key and their data are untouched; only the spelling differs from your package. Upgrade the server to converge it.
+
 A server on setting `1` or `2` has two consequences worth knowing:
 
 - **Extraction:** SchemaTongs run against a server on setting `1` writes lowercase table names, because the server holds no other spelling. Setting `2` keeps the declared spelling.
