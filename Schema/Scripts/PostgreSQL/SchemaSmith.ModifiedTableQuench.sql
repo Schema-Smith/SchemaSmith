@@ -518,7 +518,10 @@ BEGIN
              CASE con.confdeltype WHEN 'a' THEN '' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' END AS "DeleteAction",
              -- The subset a SET NULL applies to (15+; empty below, where the declared value is folded to empty too).
              "SchemaSmith"."ForeignKeySetNullColumns"(con.oid) AS "SetNullColumns",
-             CASE con.confupdtype WHEN 'a' THEN '' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' END AS "UpdateAction"
+             CASE con.confupdtype WHEN 'a' THEN '' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' END AS "UpdateAction",
+             con.condeferrable AS "Deferrable",
+             con.condeferred AS "InitiallyDeferred",
+             CASE con.confmatchtype WHEN 'f' THEN 'FULL' WHEN 'p' THEN 'PARTIAL' ELSE 'SIMPLE' END AS "MatchType"
         FROM temp_tables t
         JOIN pg_catalog.pg_constraint con ON con.conrelid = to_regclass('"' || t."Schema" || '"' ||  '.' || '"' ||  t."Name" || '"')
         JOIN pg_catalog.pg_class frel ON frel.oid = con.confrelid
@@ -626,7 +629,8 @@ BEGIN
                                 AND ek."RelatedColumns" = fk."RelatedColumns"
                                 AND ek."DeleteAction" = fk."DeleteAction"
                                 AND ek."UpdateAction" = fk."UpdateAction"
-                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", ''))
+                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", '')
+                                AND ek."MatchType" = COALESCE(NULLIF(UPPER(fk."MatchType"), ''), 'SIMPLE'))
             AND NOT EXISTS (SELECT 1
                               FROM temp_fks fk2
                               WHERE ek."TableSchema" = fk2."TableSchema"
@@ -653,7 +657,8 @@ BEGIN
                             AND ek."RelatedColumns" = fk."RelatedColumns"
                             AND ek."DeleteAction" = fk."DeleteAction"
                             AND ek."UpdateAction" = fk."UpdateAction"
-                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", ''))
+                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", '')
+                                AND ek."MatchType" = COALESCE(NULLIF(UPPER(fk."MatchType"), ''), 'SIMPLE'))
         -- Split modified vs removed: a same-named FK whose definition changed is dropped
         -- unconditionally (the create-missing pass recreates it); a FK whose name is gone
         -- from the product is a by-absence removal, gated by the cascade flag.
@@ -683,13 +688,56 @@ BEGIN
                                 AND ek."RelatedColumns" = fk."RelatedColumns"
                                 AND ek."DeleteAction" = fk."DeleteAction"
                                 AND ek."UpdateAction" = fk."UpdateAction"
-                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", ''))
+                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", '')
+                                AND ek."MatchType" = COALESCE(NULLIF(UPPER(fk."MatchType"), ''), 'SIMPLE'))
             AND (EXISTS (SELECT 1
                            FROM temp_fks fk2
                            WHERE ek."TableSchema" = fk2."TableSchema"
                              AND ek."TableName" = fk2."TableName"
                              AND ek."KeyName" = fk2."Name")
                  OR (p_DropForeignKeysRemovedFromProduct AND COALESCE(tt."DropForeignKeysRemovedFromProduct", TRUE)));
+    END IF;
+
+    -- A changed DEFERRABLE / INITIALLY DEFERRED is applied in place: ALTER CONSTRAINT changes it without re-validating
+    -- the rows, which a drop and re-create would. Only keys the pass above left standing, so every other attribute agrees.
+    RAISE NOTICE 'Alter Foreign Key Deferral';
+    SELECT STRING_AGG('ALTER TABLE "' || ek."TableSchema" || '"."' || ek."TableName" || '" ALTER CONSTRAINT "' || ek."KeyName" || '"' ||
+                      CASE WHEN fk."Deferrable" THEN ' DEFERRABLE' || CASE WHEN fk."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE ' INITIALLY IMMEDIATE' END
+                           ELSE ' NOT DEFERRABLE' END || ';' || CHR(10) ||
+                      'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || ek."TableSchema" || '.' || ek."TableName" || '.' || ek."KeyName" || ''', ''modified'');', CHR(10))
+      INTO sql_script
+      FROM temp_existing_foreignkeys ek
+      JOIN temp_fks fk ON ek."TableSchema" = fk."TableSchema"
+                      AND ek."TableName" = fk."TableName"
+                      AND ek."KeyName" = fk."Name"
+                      AND ek."Columns" = fk."Columns"
+                      AND ek."RelatedTableSchema" = fk."RelatedTableSchema"
+                      AND ek."RelatedTable" = fk."RelatedTable"
+                      AND ek."RelatedColumns" = fk."RelatedColumns"
+                      AND ek."DeleteAction" = fk."DeleteAction"
+                      AND ek."UpdateAction" = fk."UpdateAction"
+                      AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", '')
+                      AND ek."MatchType" = COALESCE(NULLIF(UPPER(fk."MatchType"), ''), 'SIMPLE')
+     WHERE ek."Deferrable" <> fk."Deferrable"
+        OR (fk."Deferrable" AND ek."InitiallyDeferred" <> fk."InitiallyDeferred");
+    CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+    IF p_WhatIf THEN
+      INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+        SELECT pg_backend_pid(), 'foreignKey', ek."TableSchema" || '.' || ek."TableName" || '.' || ek."KeyName", 'wouldModify'
+          FROM temp_existing_foreignkeys ek
+          JOIN temp_fks fk ON ek."TableSchema" = fk."TableSchema"
+                          AND ek."TableName" = fk."TableName"
+                          AND ek."KeyName" = fk."Name"
+                          AND ek."Columns" = fk."Columns"
+                          AND ek."RelatedTableSchema" = fk."RelatedTableSchema"
+                          AND ek."RelatedTable" = fk."RelatedTable"
+                          AND ek."RelatedColumns" = fk."RelatedColumns"
+                          AND ek."DeleteAction" = fk."DeleteAction"
+                          AND ek."UpdateAction" = fk."UpdateAction"
+                          AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", '')
+                          AND ek."MatchType" = COALESCE(NULLIF(UPPER(fk."MatchType"), ''), 'SIMPLE')
+         WHERE ek."Deferrable" <> fk."Deferrable"
+            OR (fk."Deferrable" AND ek."InitiallyDeferred" <> fk."InitiallyDeferred");
     END IF;
 
     -- No-drop protection tier (#270): record check constraints that WOULD be dropped by absence —
