@@ -89,15 +89,18 @@ BEGIN
         TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         ReferencedTableKey VARCHAR(260) COLLATE utf8mb4_bin,
+        ReferencedSchemaKey VARCHAR(260) COLLATE utf8mb4_bin,
         PRIMARY KEY (TableName, ConstraintName),
         KEY ix_key (TableKey, ConstraintKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     INSERT INTO _SchemaSmith_ExistingFKs (TableName, ConstraintName, ReferencedTable, DeleteRule, UpdateRule,
-                                          TableKey, ConstraintKey, ReferencedTableKey)
+                                          TableKey, ConstraintKey, ReferencedTableKey, ReferencedSchemaKey)
     SELECT tc.TABLE_NAME, tc.CONSTRAINT_NAME, rc.REFERENCED_TABLE_NAME, rc.DELETE_RULE, rc.UPDATE_RULE,
            SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME),
-           SchemaSmith_IdentifierKey(rc.REFERENCED_TABLE_NAME)
+           SchemaSmith_IdentifierKey(rc.REFERENCED_TABLE_NAME),
+           -- The referenced table's database: the unique key it references lives in it.
+           SchemaSmith_IdentifierKey(rc.UNIQUE_CONSTRAINT_SCHEMA)
       FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
       JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
         ON rc.CONSTRAINT_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(rc.CONSTRAINT_SCHEMA) = v_DbKey
@@ -128,6 +131,9 @@ BEGIN
         CAST(e.ConstraintName AS BINARY) != CAST(SchemaSmith_StripBacktickWrapping(f.KeyName) AS BINARY)
         -- Or different referenced table
         OR e.ReferencedTableKey != f.RelatedTableKey
+        -- Or the same table name in another database (MY-027). An omitted RelatedTableSchema is the table's own database.
+        OR e.ReferencedSchemaKey != IF(IFNULL(CHAR_LENGTH(TRIM(f.RelatedTableSchema)), 0) = 0, SchemaSmith_IdentifierKey(p_DatabaseName),
+                                       SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(f.RelatedTableSchema)))
         -- Or different delete or update action. InnoDB has one rule under two names: an unstated rule reads RESTRICT on
         -- MariaDB and MySQL 5.7 and NO ACTION on MySQL 8.0, so the two compare equal or the key churned every deploy.
         OR CAST(REPLACE(UPPER(TRIM(e.DeleteRule)), 'RESTRICT', 'NO ACTION') AS BINARY) != CAST(REPLACE(UPPER(TRIM(COALESCE(f.DeleteAction, 'NO ACTION'))), 'RESTRICT', 'NO ACTION') AS BINARY)

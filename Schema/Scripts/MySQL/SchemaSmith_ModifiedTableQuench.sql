@@ -2736,6 +2736,61 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     END IF;
 
     -- =======================
+    -- STEP 6.6: ALTER TABLE COMPRESSION (MY-026)
+    -- =======================
+    -- COMPRESSION, KEY_BLOCK_SIZE and MariaDB's PAGE_COMPRESSED / PAGE_COMPRESSION_LEVEL were applied on CREATE only,
+    -- so an edited package left an existing table as it was. Each is ALTERable; an omitted one stays unmanaged. An
+    -- omitted PageCompressed reads as 0, the same as a declared false, so page compression is only ever turned on here:
+    -- turning it off for a package that never mentions it would rewrite a table nobody asked to change. MySQL applies a
+    -- new COMPRESSION to pages written from now on; the table's existing pages keep theirs until it is rebuilt.
+    -- BINARY on both sides of every option comparison, for the reason STEP 6.5 gives.
+    CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CompressionStmts;
+    CREATE TEMPORARY TABLE _SchemaSmith_CompressionStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    INSERT INTO _SchemaSmith_CompressionStmts (Stmt)
+    SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, c.Options)
+    FROM (
+        SELECT t.TableName,
+               CONCAT(
+                   IF(VERSION() NOT LIKE '%MariaDB%' AND t.Compression IS NOT NULL AND t.Compression != ''
+                      AND CAST(UPPER(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'COMPRESSION'), 'NONE')) AS BINARY) != CAST(UPPER(t.Compression) AS BINARY),
+                      CONCAT(' COMPRESSION=''', t.Compression, ''''), ''),
+                   IF(t.KeyBlockSize IS NOT NULL
+                      AND CAST(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'KEY_BLOCK_SIZE'), '0') AS BINARY) != CAST(CAST(t.KeyBlockSize AS CHAR) AS BINARY),
+                      CONCAT(' KEY_BLOCK_SIZE=', t.KeyBlockSize), ''),
+                   IF(VERSION() LIKE '%MariaDB%' AND t.PageCompressed = 1
+                      AND CAST(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'PAGE_COMPRESSED'), '0') AS BINARY) != CAST('1' AS BINARY),
+                      ' PAGE_COMPRESSED=1', ''),
+                   IF(VERSION() LIKE '%MariaDB%' AND t.PageCompressed = 1 AND t.PageCompressionLevel IS NOT NULL
+                      AND CAST(COALESCE(SchemaSmith_CreateOption(ist.CREATE_OPTIONS, 'PAGE_COMPRESSION_LEVEL'), '') AS BINARY) != CAST(CAST(t.PageCompressionLevel AS CHAR) AS BINARY),
+                      CONCAT(' PAGE_COMPRESSION_LEVEL=', t.PageCompressionLevel), '')) AS Options
+        FROM _SchemaSmith_Tables t
+        INNER JOIN _SchemaSmith_CatTables ist ON ist.TableKey = t.TableKey
+        WHERE t.NewTable = 0
+    ) c
+    WHERE c.Options != '';
+
+    IF EXISTS (SELECT 1 FROM _SchemaSmith_CompressionStmts) THEN
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table compression');
+        IF p_WhatIf = 1 THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), Stmt FROM _SchemaSmith_CompressionStmts ORDER BY RowId;
+        ELSE
+            SET @v_cmp_id := (SELECT MIN(RowId) FROM _SchemaSmith_CompressionStmts);
+            WHILE @v_cmp_id IS NOT NULL DO
+                SELECT Stmt INTO @exec_sql FROM _SchemaSmith_CompressionStmts WHERE RowId = @v_cmp_id;
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Change compression: ', @exec_sql));
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+                SET @v_cmp_id := (SELECT MIN(RowId) FROM _SchemaSmith_CompressionStmts WHERE RowId > @v_cmp_id);
+            END WHILE;
+        END IF;
+    END IF;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CompressionStmts;
+
+    -- =======================
     -- STEP 7: ALTER TABLE AUTO_INCREMENT
     -- =======================
     -- Set auto-increment seed when declared value is higher than the live value (set-if-higher, idempotent).
