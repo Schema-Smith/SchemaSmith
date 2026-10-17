@@ -256,6 +256,31 @@ public class DeployPathTableFeatureTests
         }, freshDatabase: true);
     }
 
+    // A partially contained database keeps its catalog in a fixed collation and its temp tables in its own, so every
+    // comparison of the two was a collation conflict and nothing could be deployed there.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ATable_DeploysAndRedeploys_IntoAPartiallyContainedDatabase_ByARealDeploy(bool xmlIngest)
+    {
+        RunScenario("DeployContained", null, (deploy, db, cmd) =>
+        {
+            string Table(string labelType) => $$"""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                               { "Name": "[Qty]", "DataType": "INT", "Nullable": false, "Default": "0", "CheckExpression": "[Qty] >= 0" },
+                               { "Name": "[Label]", "DataType": "{{labelType}}", "Nullable": true, "Description": "What the row is" },
+                               { "Name": "[Twice]", "DataType": "INT", "Nullable": true, "ComputedExpression": "[Qty] * 2" } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" },
+                               { "Name": "[IX_DeployProbe_Positive]", "IndexColumns": "[Qty]", "IncludeColumns": "[Label]", "FilterExpression": "[Qty] > 0" } ],
+                  "Statistics": [ { "Name": "[ST_DeployProbe_Label]", "Columns": "[Label]" } ] }
+                """;
+            deploy(Table("NVARCHAR(40)"));
+            deploy(Table("NVARCHAR(80)"));
+            cmd.CommandText = "SELECT CONVERT(VARCHAR(10), max_length) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'Label'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("160"), "the redeploy changed the column");
+        }, xmlIngest: xmlIngest, contained: true);
+    }
+
     [Test]
     public void ADeclaredDisabledIndex_IsDisabledByARealDeploy()
     {
@@ -760,7 +785,7 @@ public class DeployPathTableFeatureTests
     // Tracking), so a shared one would carry that into the next scenario.
     private void RunScenario(string prefix, string setupDatabase, Action<Action<string>, string, IDbCommand> body,
                              string templateExtra = "", bool expectFailure = false, string policy = "warn", bool xmlIngest = false,
-                             bool expectIncomplete = false, bool freshDatabase = false)
+                             bool expectIncomplete = false, bool freshDatabase = false, bool contained = false)
     {
         var tempDir = Path.Join(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
         var key = (setupDatabase ?? "", policy, xmlIngest);
@@ -774,7 +799,8 @@ public class DeployPathTableFeatureTests
             cmd.CommandTimeout = 300;
             var savedPath = config["SchemaPackagePath"];
             var savedEncoding = config["Target:CompatEncoding"];
-            var shared = !freshDatabase && _sharedDatabases.ContainsKey(key);
+            var shared = !freshDatabase && !contained && _sharedDatabases.ContainsKey(key);
+            var containmentWas = 1;
             var db = shared ? _sharedDatabases[key] : prefix + "_" + Guid.NewGuid().ToString("N")[..12];
 
             try
@@ -786,9 +812,18 @@ public class DeployPathTableFeatureTests
                 }
                 else
                 {
-                    cmd.CommandText = $"CREATE DATABASE [{db}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
+                    if (contained)
+                    {
+                        // A partially contained database keeps its catalog in a fixed collation, so its own must differ from it.
+                        cmd.CommandText = "SELECT CAST(value_in_use AS INT) FROM sys.configurations WHERE [name] = 'contained database authentication'";
+                        containmentWas = Convert.ToInt32(cmd.ExecuteScalar());
+                        if (containmentWas == 0) { cmd.CommandText = "EXEC sp_configure 'contained database authentication', 1; RECONFIGURE;"; cmd.ExecuteNonQuery(); }
+                        cmd.CommandText = $"CREATE DATABASE [{db}] CONTAINMENT = PARTIAL COLLATE Japanese_CS_AS_KS;";
+                    }
+                    else
+                        cmd.CommandText = $"CREATE DATABASE [{db}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
                     cmd.ExecuteNonQuery();
-                    if (!freshDatabase) _sharedDatabases[key] = db;
+                    if (!freshDatabase && !contained) _sharedDatabases[key] = db;
                     conn.ChangeDatabase(db);
                     if (setupDatabase != null) ExecuteWithDeadlockRetry(cmd, setupDatabase);
                     ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, policy: policy);
@@ -823,7 +858,8 @@ public class DeployPathTableFeatureTests
             {
                 config["SchemaPackagePath"] = savedPath;
                 config["Target:CompatEncoding"] = savedEncoding;
-                if (freshDatabase) DropDatabase(cmd, db);
+                if (freshDatabase || contained) DropDatabase(cmd, db);
+                if (contained && containmentWas == 0) { cmd.CommandText = "EXEC sp_configure 'contained database authentication', 0; RECONFIGURE;"; cmd.ExecuteNonQuery(); }
                 conn.Close();
                 LogFactory.Clear();
                 FactoryContainer.Unregister<IEnvironment>();

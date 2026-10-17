@@ -100,7 +100,7 @@ BEGIN TRY
       -- The declared index, else the one the old instance identifies rows by. Without it sp_cdc_enable_table picks the
       -- primary key, so an instance on a unique index would move off it, and net changes with no primary key would fail.
       CASE WHEN r.NewIndexName IS NOT NULL
-                AND EXISTS (SELECT 1 FROM sys.indexes i WHERE i.[object_id] = OBJECT_ID(r.[Schema] + '.' + r.[TableName]) AND i.[name] = r.NewIndexName)
+                AND EXISTS (SELECT 1 FROM sys.indexes i WHERE i.[object_id] = OBJECT_ID(r.[Schema] + '.' + r.[TableName]) AND i.[name] COLLATE DATABASE_DEFAULT = r.NewIndexName)
            THEN ', @index_name = N''' + REPLACE(r.NewIndexName, '''', '''''') + ''''
            ELSE '' END + ';' + CHAR(13) + CHAR(10) +
       'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE(r.[Schema] + '.' + r.[TableName], '''', '''''') + ''', ''modified'');' + CHAR(13) + CHAR(10)

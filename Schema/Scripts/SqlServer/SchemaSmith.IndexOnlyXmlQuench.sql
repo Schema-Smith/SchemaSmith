@@ -341,19 +341,19 @@ BEGIN TRY
 
   RAISERROR('Collect Existing Index Definitions', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ExistingIndexes') IS NOT NULL DROP TABLE #ExistingIndexes
-  SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(si.[Name] AS NVARCHAR(500)),
+  SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(si.[Name] AS NVARCHAR(500)) COLLATE DATABASE_DEFAULT,
          IsConstraint = CAST(CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1 THEN 1 ELSE 0 END AS BIT),
          IsUnique = si.is_unique, IsClustered = CAST(CASE WHEN si.[type_desc] = 'CLUSTERED' THEN 1 ELSE 0 END AS BIT), [FillFactor] = ISNULL(NULLIF(si.fill_factor, 0), 100),
          -- Filegroup placement (#filegroups): the index's LIVE filegroup name, for the declared-vs-deployed
          -- move check below. Deliberately NOT folded into [IndexScript] -- a placement difference must
          -- ERROR, never trigger a silent rebuild via the ordinary "index definition changed" path. Mirrors
          -- ModifiedTableQuench.sql's #ExistingIndexes build.
-         [xFileGroup] = fg.[name],
+         [xFileGroup] = fg.[name] COLLATE DATABASE_DEFAULT,
          -- Partition placement (#partitioning, K1): mutually exclusive with the filegroup above, since an
          -- index lives on ONE data space. Read with its column, because the same scheme on a different
          -- column is a different physical layout.
-         [xPartitionScheme] = pds.[name],
-         [xPartitionColumn] = (SELECT pc.[name]
+         [xPartitionScheme] = pds.[name] COLLATE DATABASE_DEFAULT,
+         [xPartitionColumn] = (SELECT pc.[name] COLLATE DATABASE_DEFAULT
                                  FROM sys.index_columns pic
                                  JOIN sys.columns pc ON pc.[object_id] = pic.[object_id] AND pc.column_id = pic.column_id
                                 WHERE pic.[object_id] = si.[object_id] AND pic.index_id = si.index_id
@@ -364,9 +364,9 @@ BEGIN TRY
                        CASE WHEN si.is_unique = 1 THEN 'UNIQUE ' ELSE '' END + 
                        CASE WHEN si.[type] IN (1, 5) THEN '' ELSE 'NON' END + 'CLUSTERED ' +
                        CASE WHEN si.[type] IN (5, 6) THEN 'COLUMNSTORE ' ELSE '' END +
-                       'INDEX ' + QUOTENAME(si.[Name]) + ' ON ' + t.[Schema] + '.' + t.[Name] + 
+                       'INDEX ' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ' ON ' + t.[Schema] + '.' + t.[Name] + 
                        CASE WHEN si.[type] NOT IN (5, 6) 
-                            THEN ' (' + STUFF((SELECT ',' + CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
+                            THEN ' (' + STUFF((SELECT ',' + CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) COLLATE DATABASE_DEFAULT ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                                            FROM sys.index_columns ic
                                            LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
                                            WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0
@@ -505,7 +505,7 @@ BEGIN TRY
     WHERE EXISTS (SELECT * 
                     FROM sys.xml_indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
-                      AND si.[name] = ei.[xIndexName])
+                      AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
       AND ei.IndexScript <> 'CREATE ' + CASE WHEN i.IsPrimary = 1 THEN 'PRIMARY ' ELSE '' END + 
                             'XML INDEX ' + i.[IndexName] COLLATE DATABASE_DEFAULT + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' + 
                             CASE WHEN i.IsPrimary = 0
@@ -525,7 +525,7 @@ BEGIN TRY
       AND EXISTS (SELECT * 
                     FROM sys.xml_indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
-                      AND si.[name] = ei.[xIndexName])
+                      AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
       AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + CASE WHEN i.IsPrimary = 1 THEN 'PRIMARY ' ELSE '' END + 
                                                                   'XML INDEX ' + i.[IndexName] COLLATE DATABASE_DEFAULT + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' + 
                                                                   CASE WHEN i.IsPrimary = 0
@@ -638,7 +638,7 @@ BEGIN TRY
     WHERE EXISTS (SELECT * 
                     FROM sys.indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
-                      AND si.[name] = ei.[xIndexName])
+                      AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
       AND ei.IndexScript <> 'CREATE ' + 
                             CASE WHEN i.[Unique] = 1 THEN 'UNIQUE ' ELSE '' END + 
                             CASE WHEN i.[Clustered] = 1 THEN '' ELSE 'NON' END + 'CLUSTERED ' +
@@ -668,7 +668,7 @@ BEGIN TRY
       AND EXISTS (SELECT *
                     FROM sys.indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName])
-                      AND si.[name] = ei.[xIndexName])
+                      AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
       AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + 
                                                                   CASE WHEN i.[Unique] = 1 OR i.[PrimaryKey] = 1 THEN 'UNIQUE ' ELSE '' END + 
                                                                   CASE WHEN i.[Clustered] = 1 THEN '' ELSE 'NON' END + 'CLUSTERED ' +
@@ -678,7 +678,7 @@ BEGIN TRY
                                                                        WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                                                        ELSE '' END +
                                                                   -- #242: keyed on the OLD name -- the mapping row was written under the name the index has now.
-                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', ei.[xIndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si3.filter_definition FROM sys.indexes si3 WHERE si3.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) AND si3.[name] = ei.[xIndexName]))) ELSE '' END +
+                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', ei.[xIndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si3.filter_definition FROM sys.indexes si3 WHERE si3.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) AND si3.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName]))) ELSE '' END +
                                                                   CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) IN ('NONE', 'ROW', 'PAGE'))
                                                                          OR (i.[ColumnStore] = 1 AND RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
                                                                        THEN ' WITH (DATA_COMPRESSION=' + RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) + ')'
@@ -958,9 +958,9 @@ BEGIN TRY
   
   RAISERROR('Collect Existing Statistics Definitions', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ExistingStats') IS NOT NULL DROP TABLE #ExistingStats
-  SELECT t.[Schema], [TableName] = t.[Name], [StatsName] = si.[Name],
+  SELECT t.[Schema], [TableName] = t.[Name], [StatsName] = si.[Name] COLLATE DATABASE_DEFAULT,
          StatisticScript = 'CREATE STATISTICS ' +
-                           QUOTENAME(si.[Name]) + ' ON ' + t.[Schema] + '.' + t.[Name] + ' (' +
+                           QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ' ON ' + t.[Schema] + '.' + t.[Name] + ' (' +
                            STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id))
                               FROM sys.stats_columns ic
                               WHERE si.[object_id] = ic.[object_id] AND si.stats_id = ic.stats_id
@@ -1014,8 +1014,8 @@ BEGIN TRY
   RAISERROR('Drop Conflicting Clustered Index', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping ' + CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + mct.[Schema] + '.' + mct.[TableName] + '.' + si.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1
-                                       THEN 'IF OBJECT_ID(''' + mct.[Schema] + '.' + QUOTENAME(si.[Name]) + ''') IS NOT NULL ALTER TABLE ' + mct.[Schema] + '.' + mct.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(si.[Name]) + ';'
-                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + mct.[Schema] + '.' + mct.[TableName] + '''), ''' + si.[Name] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(si.[Name]) + ' ON ' + mct.[Schema] + '.' + mct.[TableName] + ';'
+                                       THEN 'IF OBJECT_ID(''' + mct.[Schema] + '.' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ''') IS NOT NULL ALTER TABLE ' + mct.[Schema] + '.' + mct.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ';'
+                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + mct.[Schema] + '.' + mct.[TableName] + '''), ''' + si.[Name] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ' ON ' + mct.[Schema] + '.' + mct.[TableName] + ';'
                                        END AS NVARCHAR(MAX))
                            FROM #MissingClusteredIndexTables mct WITH (NOLOCK)
                            JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(mct.[Schema] + '.' + mct.[TableName])

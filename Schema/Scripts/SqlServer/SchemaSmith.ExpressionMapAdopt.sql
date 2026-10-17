@@ -78,7 +78,7 @@ BEGIN TRY
        AND SchemaSmith.fn_NormalizeCheckExpression(ck.[definition]) <> SchemaSmith.fn_NormalizeCheckExpression(c.[CheckExpression])
        AND SchemaSmith.fn_ExpressionMapUnchanged(c.[Schema], c.[TableName], 'CHECK', ck.[name], 'expression', c.[CheckExpression], ck.[definition]) = 0
        AND NOT EXISTS (SELECT 1 FROM #ExpressionMapCandidates d
-                        WHERE d.ObjectName = ck.[name] AND d.ObjectTable = SchemaSmith.fn_StripBracketWrapping(c.[TableName]))
+                        WHERE d.ObjectName = ck.[name] COLLATE DATABASE_DEFAULT AND d.ObjectTable = SchemaSmith.fn_StripBracketWrapping(c.[TableName]))
 
   -- Computed columns. Added under another name: the copy already has the column, as a plain one.
   IF OBJECT_ID('tempdb..#Columns') IS NOT NULL

@@ -460,7 +460,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                CASE WHEN ignore_dup_key = 1 THEN 'true' ELSE 'false' END AS [IgnoreDuplicateKey],
                CASE WHEN is_padded = 1 THEN 'true' ELSE 'false' END AS [PadIndex],
                CASE WHEN is_disabled = 1 THEN 'true' ELSE 'false' END AS [Disabled],
-               STUFF((SELECT ',' + CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
+               STUFF((SELECT ',' + CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) COLLATE DATABASE_DEFAULT ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                   FROM sys.index_columns ic
                   LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0

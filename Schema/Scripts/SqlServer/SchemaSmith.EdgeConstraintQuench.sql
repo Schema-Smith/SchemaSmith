@@ -34,7 +34,7 @@ BEGIN TRY
                      ORDER BY x.[Clause]
                        FOR XML PATH(''''), TYPE).value(''.'', ''NVARCHAR(MAX)''), 1, 2, '''')
         FROM sys.edge_constraints ec
-        JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = QUOTENAME(OBJECT_SCHEMA_NAME(ec.parent_object_id)) AND t.[Name] = QUOTENAME(OBJECT_NAME(ec.parent_object_id))'
+        JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = QUOTENAME(OBJECT_SCHEMA_NAME(ec.parent_object_id)) COLLATE DATABASE_DEFAULT AND t.[Name] = QUOTENAME(OBJECT_NAME(ec.parent_object_id)) COLLATE DATABASE_DEFAULT'
 
   -- Drop: removed from the product (under the table''s flag), or changed in its clauses or action.
   RAISERROR('Drop Edge Constraints No Longer Defined In The Product, Or Changed', 10, 100) WITH NOWAIT

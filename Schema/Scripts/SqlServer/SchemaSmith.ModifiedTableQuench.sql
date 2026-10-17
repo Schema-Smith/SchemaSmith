@@ -498,7 +498,7 @@ BEGIN TRY
                                                      AND c.[ColumnName] COLLATE DATABASE_DEFAULT = QUOTENAME(ic.COLUMN_NAME)
     JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(ic.TABLE_SCHEMA + '.' + ic.TABLE_NAME) AND sc.[name] = ic.COLUMN_NAME
     JOIN (SELECT CASE WHEN SCHEMA_NAME(st.[schema_id]) IN ('sys', 'dbo')
-                      THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END + st.[name] AS USER_TYPE, st.user_type_id
+                      THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END + st.[name] COLLATE DATABASE_DEFAULT AS USER_TYPE, st.user_type_id
             FROM sys.types st) st ON st.user_type_id = sc.user_type_id
     LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
                                                       AND ident.[object_id] = OBJECT_ID(TABLE_SCHEMA + '.' + TABLE_NAME)
@@ -537,7 +537,7 @@ BEGIN TRY
                   OR sc.is_sparse <> [Sparse]
                   OR sc.is_column_set <> [IsColumnSet]
                   OR (c.[PaddingApplies] = 1 AND c.[AnsiPadding] IS NOT NULL AND sc.is_ansi_padded <> c.[AnsiPadding])
-                  OR ([Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') <> [Collation])
+                  OR ([Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') COLLATE DATABASE_DEFAULT <> [Collation])
                   OR ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> [EncryptionType]
                   OR (ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> 'NONE' AND (ISNULL(cm.ExistingEncAlgo, '') COLLATE DATABASE_DEFAULT <> [EncryptionAlgorithm] OR ISNULL(cm.ExistingEncKey, '') COLLATE DATABASE_DEFAULT <> SchemaSmith.fn_StripBracketWrapping([EncryptionKey]))) THEN 1 ELSE 0 END AS BIT)) d
     -- Each option is its own ALTER COLUMN (two in one statement is a syntax error), split around the definition change:
@@ -638,8 +638,8 @@ BEGIN TRY
         -- ValidFrom/ValidTo dropped custom-named ones, which the engine refuses. COLUMNPROPERTY is NULL before 2016.
         AND NOT (t.IsTemporal = 1 AND COLUMNPROPERTY(OBJECT_ID(QUOTENAME(TABLE_SCHEMA) + '.' + QUOTENAME(TABLE_NAME)), COLUMN_NAME, 'GeneratedAlwaysType') IN (1, 2))
         AND NOT EXISTS (SELECT 1 FROM #EngineOwnedColumns g WITH (NOLOCK)
-                         WHERE g.TableSchema = TABLE_SCHEMA AND g.TableName = TABLE_NAME
-                           AND g.ColumnName = COLUMN_NAME)
+                         WHERE g.TableSchema = TABLE_SCHEMA COLLATE DATABASE_DEFAULT AND g.TableName = TABLE_NAME COLLATE DATABASE_DEFAULT
+                           AND g.ColumnName = COLUMN_NAME COLLATE DATABASE_DEFAULT)
 
   -- #358: A DropOnly column whose drop is SUPPRESSED (env PreventDrop forces
   -- @DropColumnsRemovedFromProduct = 0, or the per-table cascade opts out) survives -- so its
@@ -928,14 +928,14 @@ BEGIN TRY
   -- The live placement of every declared index, for the two move checks below. #ExistingIndexes is collected only after
   -- the first drops, so the checks read their own table here.
   IF OBJECT_ID('tempdb..#IndexPlacement') IS NOT NULL DROP TABLE #IndexPlacement
-  SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(si.[Name] AS NVARCHAR(500)),
+  SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(si.[Name] AS NVARCHAR(500)) COLLATE DATABASE_DEFAULT,
          -- NULL when the data space is a partition scheme, which is exactly when [xPartitionScheme] is populated instead:
          -- the two are mutually exclusive because an index lives on ONE data space.
-         [xFileGroup] = fg.[name],
-         [xPartitionScheme] = pds.[name],
+         [xFileGroup] = fg.[name] COLLATE DATABASE_DEFAULT,
+         [xPartitionScheme] = pds.[name] COLLATE DATABASE_DEFAULT,
          -- The column is read alongside the scheme because the same scheme applied to a different column is a different
          -- physical layout.
-         [xPartitionColumn] = (SELECT pc.[name]
+         [xPartitionColumn] = (SELECT pc.[name] COLLATE DATABASE_DEFAULT
                                  FROM sys.index_columns pic
                                  JOIN sys.columns pc ON pc.[object_id] = pic.[object_id] AND pc.column_id = pic.column_id
                                 WHERE pic.[object_id] = si.[object_id] AND pic.index_id = si.index_id
@@ -1321,8 +1321,8 @@ BEGIN TRY
   BEGIN
     RAISERROR('Capture foreign keys suppressed by PreventDrop (would drop by absence)', 10, 100) WITH NOWAIT
     SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-      'RAISERROR(''  Foreign key ' + t.[Schema] + '.' + t.[Name] + '.' + fk.[name] + ' removed from product but PreventDrop is active -- skipping drop (protected)'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + t.[Schema] + '.' + t.[Name] + '.' + fk.[name] + ''', ''dropSuppressed'');' AS NVARCHAR(MAX))
+      'RAISERROR(''  Foreign key ' + t.[Schema] + '.' + t.[Name] + '.' + fk.[name] COLLATE DATABASE_DEFAULT + ' removed from product but PreventDrop is active -- skipping drop (protected)'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + t.[Schema] + '.' + t.[Name] + '.' + fk.[name] COLLATE DATABASE_DEFAULT + ''', ''dropSuppressed'');' AS NVARCHAR(MAX))
       FROM #Tables t WITH (NOLOCK)
       JOIN sys.foreign_keys fk ON fk.parent_object_id = OBJECT_ID(t.[Schema] + '.' + t.[Name])
       WHERE NOT EXISTS (SELECT * FROM #ForeignKeys fk2 WITH (NOLOCK) WHERE t.[Schema] = fk2.[Schema] AND t.[Name] = fk2.[TableName] AND fk.[name] = SchemaSmith.fn_StripBracketWrapping(fk2.[KeyName]))
@@ -1333,7 +1333,7 @@ BEGIN TRY
 
   RAISERROR('Collect Foreign Keys To Drop', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#FKsToDrop') IS NOT NULL DROP TABLE #FKsToDrop
-  SELECT t.[Schema], [TableName] = t.[Name], [FKName] = fk.[Name]
+  SELECT t.[Schema], [TableName] = t.[Name], [FKName] = fk.[Name] COLLATE DATABASE_DEFAULT
     INTO #FKsToDrop
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.foreign_keys fk ON fk.parent_object_id = OBJECT_ID(t.[Schema] + '.' + t.[Name])
@@ -1524,7 +1524,7 @@ BEGIN TRY
 
   RAISERROR('Collect Existing Index Definitions', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ExistingIndexes') IS NOT NULL DROP TABLE #ExistingIndexes
-  SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(si.[Name] AS NVARCHAR(500)),
+  SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(si.[Name] AS NVARCHAR(500)) COLLATE DATABASE_DEFAULT,
          IsConstraint = CAST(CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1 THEN 1 ELSE 0 END AS BIT),
          IsUnique = si.is_unique, IsClustered = CAST(CASE WHEN si.[type_desc] = 'CLUSTERED' THEN 1 ELSE 0 END AS BIT), [FillFactor] = ISNULL(NULLIF(si.fill_factor, 0), 100),
          -- Placement (filegroup, partition scheme) is deliberately NOT in [IndexScript]: that string drives #IndexChanges'
@@ -1536,9 +1536,9 @@ BEGIN TRY
                        CASE WHEN si.is_unique = 1 THEN 'UNIQUE ' ELSE '' END + 
                        CASE WHEN si.[type] IN (1, 5) THEN '' ELSE 'NON' END + 'CLUSTERED ' +
                        CASE WHEN si.[type] IN (5, 6) THEN 'COLUMNSTORE ' ELSE '' END + 
-                       'INDEX ' + QUOTENAME(si.[Name]) + ' ON ' + t.[Schema] + '.' + t.[Name] + 
+                       'INDEX ' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ' ON ' + t.[Schema] + '.' + t.[Name] + 
                        CASE WHEN si.[type] NOT IN (5, 6)
-                            THEN ' (' + STUFF((SELECT ',' + CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
+                            THEN ' (' + STUFF((SELECT ',' + CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) COLLATE DATABASE_DEFAULT ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                                            FROM sys.index_columns ic
                                            LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
                                            WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0
@@ -1607,7 +1607,7 @@ BEGIN TRY
     WHERE EXISTS (SELECT * 
                     FROM sys.indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
-                      AND si.[name] = ei.[xIndexName])
+                      AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
       AND ei.IndexScript <> 'CREATE ' + 
                             CASE WHEN i.[Unique] = 1 THEN 'UNIQUE ' ELSE '' END + 
                             CASE WHEN i.[Clustered] = 1 THEN '' ELSE 'NON' END + 'CLUSTERED ' +
@@ -1637,7 +1637,7 @@ BEGIN TRY
       AND EXISTS (SELECT *
                     FROM sys.indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName])
-                      AND si.[name] = ei.[xIndexName])
+                      AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
       AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + 
                                                                   CASE WHEN i.[Unique] = 1 OR i.[PrimaryKey] = 1 THEN 'UNIQUE ' ELSE '' END + 
                                                                   CASE WHEN i.[Clustered] = 1 THEN '' ELSE 'NON' END + 'CLUSTERED ' +
@@ -1647,7 +1647,7 @@ BEGIN TRY
                                                                        WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                                                        ELSE '' END +
                                                                   -- #242: keyed on the OLD name -- the mapping row was written under the name the index has now.
-                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', ei.[xIndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si3.filter_definition FROM sys.indexes si3 WHERE si3.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) AND si3.[name] = ei.[xIndexName]))) ELSE '' END +
+                                                                  CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', ei.[xIndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si3.filter_definition FROM sys.indexes si3 WHERE si3.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) AND si3.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName]))) ELSE '' END +
                                                                   CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) IN ('NONE', 'ROW', 'PAGE'))
                                                                          OR (i.[ColumnStore] = 1 AND RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
                                                                        THEN ' WITH (DATA_COMPRESSION=' + RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) + ')'
@@ -1710,7 +1710,7 @@ BEGIN TRY
     WHERE EXISTS (SELECT * 
                     FROM sys.xml_indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
-                      AND si.[name] = ei.[xIndexName])
+                      AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
       AND ei.IndexScript <> 'CREATE ' + CASE WHEN i.IsPrimary = 1 THEN 'PRIMARY ' ELSE '' END + 
                             'XML INDEX ' + i.[IndexName] COLLATE DATABASE_DEFAULT + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' + 
                             CASE WHEN i.IsPrimary = 0
@@ -1730,7 +1730,7 @@ BEGIN TRY
       AND EXISTS (SELECT * 
                     FROM sys.xml_indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
-                      AND si.[name] = ei.[xIndexName])
+                      AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
       AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + CASE WHEN i.IsPrimary = 1 THEN 'PRIMARY ' ELSE '' END + 
                                                                   'XML INDEX ' + i.[IndexName] COLLATE DATABASE_DEFAULT + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' + 
                                                                   CASE WHEN i.IsPrimary = 0
@@ -2010,7 +2010,7 @@ BEGIN TRY
   
   RAISERROR('Identify Statistics To Drop Based On Column Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#StatisticsToDropForChanges') IS NOT NULL DROP TABLE #StatisticsToDropForChanges
-  SELECT DISTINCT cc.[Schema], cc.[TableName], [StatName] = i.[name]
+  SELECT DISTINCT cc.[Schema], cc.[TableName], [StatName] = i.[name] COLLATE DATABASE_DEFAULT
     INTO #StatisticsToDropForChanges
     FROM sys.stats i 
     JOIN #ColumnChanges cc WITH (NOLOCK) ON i.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
@@ -2341,7 +2341,7 @@ BEGIN TRY
   RAISERROR('Collect Existing Foreign Keys', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ExistingFKs') IS NOT NULL DROP TABLE #ExistingFKs
   SELECT t.[Schema], [TableName] = t.[Name],
-         FKName = fk.[Name],
+         FKName = fk.[Name] COLLATE DATABASE_DEFAULT,
          FKScript = '(' + STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[parent_object_id], fc.parent_column_id))
                              FROM sys.foreign_key_columns fc
                              WHERE fk.[object_id] = fc.[constraint_object_id]
@@ -2387,9 +2387,9 @@ BEGIN TRY
   
   RAISERROR('Collect Existing Statistics Definitions', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ExistingStats') IS NOT NULL DROP TABLE #ExistingStats
-  SELECT t.[Schema], [TableName] = t.[Name], [StatsName] = si.[Name],
+  SELECT t.[Schema], [TableName] = t.[Name], [StatsName] = si.[Name] COLLATE DATABASE_DEFAULT,
          StatisticScript = 'CREATE STATISTICS ' +
-                           QUOTENAME(si.[Name]) + ' ON ' + t.[Schema] + '.' + t.[Name] + ' (' +
+                           QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ' ON ' + t.[Schema] + '.' + t.[Name] + ' (' +
                            STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id))
                               FROM sys.stats_columns ic
                               WHERE si.[object_id] = ic.[object_id] AND si.stats_id = ic.stats_id
@@ -2475,10 +2475,10 @@ BEGIN TRY
 
   RAISERROR('Collect Existing Check Constraints', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ExistingCheckConstraints') IS NOT NULL DROP TABLE #ExistingCheckConstraints
-  SELECT t.[Schema], [TableName] = t.[Name], [CheckName] = ck.[name], 
+  SELECT t.[Schema], [TableName] = t.[Name], [CheckName] = ck.[name] COLLATE DATABASE_DEFAULT, 
          [CheckColumn] = CASE WHEN ck.parent_column_id <> 0 THEN COL_NAME(ck.parent_object_id, ck.parent_column_id) ELSE NULL END,
          [CheckDefinition] = SchemaSmith.fn_NormalizeCheckExpression(ck.[definition]),
-         [LiveDefinition] = ck.[definition],
+         [LiveDefinition] = ck.[definition] COLLATE DATABASE_DEFAULT,
          [NotForReplication] = ck.is_not_for_replication
     INTO #ExistingCheckConstraints
     FROM #Tables t WITH (NOLOCK)
@@ -2717,8 +2717,8 @@ BEGIN TRY
   RAISERROR('Drop Conflicting Clustered Index', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping ' + CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + mct.[Schema] + '.' + mct.[TableName] + '.' + si.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1
-                                       THEN 'IF OBJECT_ID(''' + mct.[Schema] + '.' + QUOTENAME(si.[Name]) + ''') IS NOT NULL ALTER TABLE ' + mct.[Schema] + '.' + mct.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(si.[Name]) + ';'
-                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + mct.[Schema] + '.' + mct.[TableName] + '''), ''' + si.[Name] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(si.[Name]) + ' ON ' + mct.[Schema] + '.' + mct.[TableName] + ';'
+                                       THEN 'IF OBJECT_ID(''' + mct.[Schema] + '.' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ''') IS NOT NULL ALTER TABLE ' + mct.[Schema] + '.' + mct.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ';'
+                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + mct.[Schema] + '.' + mct.[TableName] + '''), ''' + si.[Name] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ' ON ' + mct.[Schema] + '.' + mct.[TableName] + ';'
                                        END AS NVARCHAR(MAX))
                            FROM #MissingClusteredIndexTables mct WITH (NOLOCK)
                            JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(mct.[Schema] + '.' + mct.[TableName])

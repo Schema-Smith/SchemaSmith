@@ -88,7 +88,7 @@ BEGIN TRY
        AND COL_NAME(ck.parent_object_id, ck.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
      WHERE RTRIM(ISNULL(c.[CheckExpression], '')) <> ''
        AND NOT EXISTS (SELECT 1 FROM #ExpressionMapDeclared d
-                        WHERE d.ObjectName = ck.[name]
+                        WHERE d.ObjectName = ck.[name] COLLATE DATABASE_DEFAULT
                           AND d.ObjectTable = SchemaSmith.fn_StripBracketWrapping(c.[TableName]))
 
   -- Computed columns.
