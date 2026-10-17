@@ -1252,6 +1252,36 @@ BEGIN
                     -- A type change is refused the same way (MA-054), and a widened key pair changes both sides.
                     OR SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1);
 
+            -- MDEV-35630 (MA-055): MariaDB refuses to widen a column that follows a STORED generated column while any
+            -- foreign key is declared on the table, naming that key (1832), even one on an unrelated column. Not seen
+            -- on 10.2/10.3; fixed in 10.11.19, 11.4.13, 11.8.9 and 12.3.3, and never in the series between them.
+            IF VERSION() LIKE '%MariaDB%'
+               AND SchemaSmith_ServerVersionPatchNum() >= 100400
+               AND NOT (SchemaSmith_ServerVersionPatchNum() >= 120303
+                        OR SchemaSmith_ServerVersionPatchNum() BETWEEN 110809 AND 119999
+                        OR SchemaSmith_ServerVersionPatchNum() BETWEEN 110413 AND 110499
+                        OR SchemaSmith_ServerVersionPatchNum() BETWEEN 101119 AND 101199) THEN
+                CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+                INSERT IGNORE INTO _SchemaSmith_ColumnCollationFKsToDrop (TableName, ConstraintName)
+                SELECT DISTINCT CONVERT(kcu.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
+                                CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                  FROM _SchemaSmith_Columns c
+                  INNER JOIN _SchemaSmith_CatColumns isc
+                      ON isc.TableKey = c.TableKey
+                      AND isc.ColumnKey = c.ColumnKey
+                  INNER JOIN INFORMATION_SCHEMA.COLUMNS gen
+                      ON gen.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(gen.TABLE_SCHEMA) = v_DbKey
+                      AND SchemaSmith_IdentifierKey(gen.TABLE_NAME) = c.TableKey
+                      AND gen.ORDINAL_POSITION < isc.ORDINAL_POSITION
+                      AND gen.EXTRA LIKE '%STORED GENERATED%'
+                  INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+                      ON kcu.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA) = v_DbKey
+                      AND SchemaSmith_IdentifierKey(kcu.TABLE_NAME) = c.TableKey
+                      AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+                 WHERE c.NewColumn = 0
+                   AND SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1;
+            END IF;
+
             OPEN cur_ColCollFks;
             column_collation_fk_loop: LOOP
                 FETCH cur_ColCollFks INTO v_ColCollFkSql;
