@@ -182,6 +182,8 @@ BEGIN
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, false);
 
     RAISE NOTICE 'Collect Existing Indexes';
+    -- #508: a filter the engine already holds in its own words is recorded, not rebuilt.
+    CALL "SchemaSmith"."ExpressionMapAdopt"(p_WhatIf);
     CALL "SchemaSmith"."BuildExistingIndexesSnapshot"();
 
     -- #242. A partial index's predicate is compared in more than one place (the drop/modify election and the

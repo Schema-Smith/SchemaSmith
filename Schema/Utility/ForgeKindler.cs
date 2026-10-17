@@ -385,6 +385,8 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_ExpressionMapUnchanged.sql"),
                 new("SchemaSmith.fn_ExpressionMapEffective.sql"),
                 new("SchemaSmith.ExpressionMapRecord.sql"),
+                // #508: an unrecorded expression is checked on a scratch copy before it is re-applied.
+                new("SchemaSmith.ExpressionMapAdopt.sql"),
                 new("SchemaSmith.fn_ColumnTypeArguments.sql"),
                 new("SchemaSmith.fn_StripLeadingSelect.sql"),
                 new("SchemaSmith.fn_StripBracketWrapping.sql"),
@@ -495,6 +497,8 @@ public static class ForgeKindler
                 // #242: the authored-vs-canonical decision and the pass that records it.
                 new("SchemaSmith.ExpressionMapUnchanged.sql"),
                 new("SchemaSmith.ExpressionMapRecord.sql"),
+                // #508: an unrecorded expression is checked on a scratch copy before it is re-applied.
+                new("SchemaSmith.ExpressionMapAdopt.sql"),
                 new("SchemaSmith.ColumnTypeArguments.sql"),
                 // Calls ColumnTypeArguments and QuoteName, and is called by extraction and the table quench.
                 new("SchemaSmith.ColumnDataType.sql"),
@@ -631,6 +635,8 @@ public static class ForgeKindler
                 // #242: the authored-vs-canonical decision and the pass that records it.
                 new("SchemaSmith_ExpressionMapUnchanged.sql"),
                 new("SchemaSmith_ExpressionMapRecord.sql"),
+                // #508: an unrecorded expression is checked on a scratch copy before it is re-applied.
+                new("SchemaSmith_ExpressionMapAdopt.sql"),
                 // Canonicalises a partition expression before comparing declared against live
                 // (#partitioning, K3) -- MySQL 5.7 echoes the text the user wrote while every other
                 // supported engine rewrites it, so a literal compare would be engine-specific.

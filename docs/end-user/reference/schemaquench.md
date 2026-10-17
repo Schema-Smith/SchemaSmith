@@ -809,10 +809,16 @@ was created under -- so a database migrated from 100 to 160 holds both forms ind
 expression-bearing object on the first deploy after a compatibility bump would be a far larger event than the
 churn this removes, so SchemaSmith re-baselines and leaves your objects alone.
 
-**No record means no opinion.** For an object SchemaSmith has not applied yet -- a pre-existing database, or the
-first deploy after upgrading -- the comparison behaves exactly as it did before, and the record is written as
-part of that deploy. Nothing needs migrating, and the table can be emptied at any time: the worst case is one
-more comparison.
+**An expression SchemaSmith has not applied is checked by the engine itself.** A database built by hand or by
+another tool, or a declaration you reworded, has no record yet. Rather than re-apply every such expression whose
+text differs, SchemaQuench applies your declared text to an empty copy of the table, reads back what the engine
+stored, and compares that with the live object byte for byte. Identical means the live object *is* your
+declaration: it is recorded and left alone, and the log says how many were verified this way. Anything else --
+a different rendering, or an expression the copy could not take -- is applied, as it would have been. The copy
+lives in the same database (so it renders at that database's compatibility level and can call its functions) and
+is rolled back on SQL Server and PostgreSQL, which is why the check runs under `WhatIf` too. On MySQL and MariaDB
+the copy is a real table for a moment, so `WhatIf` skips the check and previews such an expression as a change.
+Nothing needs migrating, and the table can be emptied at any time: the worst case is one more check.
 
 **A re-baseline is logged, not silent.** The deploy log says how many records were refreshed and for which
 version -- `Re-baselined 3 recorded expression(s) ... No object was changed.` -- so an engine upgrade is visible in
@@ -821,8 +827,10 @@ the first deploy after it.
 **Covered surfaces:** check constraints, computed columns, column defaults, and filtered-index and
 filtered-statistic predicates (SQL Server); check constraints, generated columns, partial-index predicates,
 extended-statistics expressions, row-level security `USING` / `WITH CHECK` expressions and materialized view
-bodies (PostgreSQL); check constraints and generated columns (MySQL, MariaDB). Index and statistic predicates
+bodies (PostgreSQL); check constraints, generated columns and expression defaults (MySQL, MariaDB). Index and statistic predicates
 are covered by `IndexOnlyTableQuenches` too, which compares indexes separately from the full table quench.
+The engine check on a copy covers the same surfaces except PostgreSQL's extended statistics, policies and
+materialized views, which are re-applied once and then recorded, as before.
 
 Some surfaces never had this problem and are unchanged: SQL Server indexed view bodies and literal column
 defaults, and PostgreSQL column defaults and exclude constraints, all already compared equal after the

@@ -373,6 +373,8 @@ BEGIN
     -- strings, gated by SchemaSmith_SupportsCheckConstraints() (see GenerateTableJson for the full rationale).
     -- Below the floor there are no check constraints to detect as modified, so _SchemaSmith_ModifiedChecks
     -- simply stays unpopulated by this step.
+    -- Names match through their case-insensitive key, so a spelling that differs only in case is the same check under
+    -- the wrong name, and re-creating it is the only way either engine renames one.
     SET @v_mcDbName = p_DatabaseName;
     SET @v_mcDbCi = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci;
     SET @v_mcDbKey = SchemaSmith_IdentifierKey(p_DatabaseName);
@@ -394,7 +396,8 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
     != CAST(SchemaSmith_NormalizeCheckExpression(c.Expression) AS BINARY)
   AND SchemaSmith_ExpressionMapUnchanged(@v_mcDbName, SchemaSmith_StripBacktickWrapping(c.TableName),
         ''CHECK'', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ''expression'',
-        c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0)',
+        c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0)
+   OR CAST(tc.CONSTRAINT_NAME AS BINARY) != CAST(SchemaSmith_StripBacktickWrapping(c.ConstraintName) AS BINARY)',
         -- NOT ENFORCED is part of the definition, so a changed Enforced is a modified check (MySQL only: MariaDB
         -- has no ENFORCED column, and the mention would be fatal there).
         IF(VERSION() LIKE '%MariaDB%', '', '

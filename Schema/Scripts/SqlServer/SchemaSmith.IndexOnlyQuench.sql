@@ -254,6 +254,15 @@ BEGIN TRY
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
 
+  -- #508: undo for what ExpressionMapAdopt writes under WhatIf; ExpressionMapRecord puts the map back from it.
+  IF OBJECT_ID('tempdb..#ExpressionMapAdoptUndo') IS NOT NULL DROP TABLE #ExpressionMapAdoptUndo
+  CREATE TABLE #ExpressionMapAdoptUndo (ObjectSchema NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, ObjectTable NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL,
+    ObjectKind VARCHAR(32) COLLATE DATABASE_DEFAULT NOT NULL, ObjectName NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Slot VARCHAR(32) COLLATE DATABASE_DEFAULT NOT NULL,
+    WasPresent BIT NOT NULL, AuthoredText NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, CanonicalText NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    PlatformName VARCHAR(20) COLLATE DATABASE_DEFAULT NULL, EngineVersion VARCHAR(200) COLLATE DATABASE_DEFAULT NULL, CompatLevel INT NULL, UpdatedUtc DATETIME2(3) NULL)
+  -- #508: a filter the engine already holds in its own words is recorded, not rebuilt.
+  EXEC SchemaSmith.ExpressionMapAdopt @WhatIf
+
   RAISERROR('Parse Full Text Indexes from Json', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #FullTextIndexes
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),

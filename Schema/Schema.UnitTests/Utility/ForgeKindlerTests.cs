@@ -345,7 +345,8 @@ public class ForgeKindlerTests
         // +1 on SQL Server = DegradeUnsupportedSpatialIndexes (below 2012 an AUTO_GRID spatial index is created as GRID).
         // +2 on SQL Server = LiftLedgerColumns (a ledger table's declared generated columns, for both parse tiers) +
         //   LedgerQuench (an existing ledger table's column and view names converged).
-        Assert.That(sqlServer.Length, Is.EqualTo(64));
+        // +1 on SQL Server = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
+        Assert.That(sqlServer.Length, Is.EqualTo(65));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -395,7 +396,8 @@ public class ForgeKindlerTests
         //   compares in the engine's own form).
         // +1 on PostgreSQL = StatisticsTargetQuench (a declared extended-statistics target, 13+, converged in place after
         //   the create pass; policy-routed below 13).
-        Assert.That(postgres.Length, Is.EqualTo(66));
+        // +1 = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
+        Assert.That(postgres.Length, Is.EqualTo(67));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
@@ -530,7 +532,8 @@ public class ForgeKindlerTests
         // +2 on the MySQL family = SupportsWithoutOverlaps + IndexPeriodJson (temporal keys; MariaDb override reads the catalog).
         // +1 on the MySQL family = KeepHistoryForNewVersionedTable (KEEP around a new versioned table's index work; MySQL no-op).
         // +2 = SystemTimePeriodRole (an explicit period column's role) + SupportsExplicitSystemTimeConversion (MariaDB 11.7).
-        Assert.That(mysql.Length, Is.EqualTo(92));
+        // +1 = SchemaSmith_ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
+        Assert.That(mysql.Length, Is.EqualTo(93));
     }
 
     [Test]

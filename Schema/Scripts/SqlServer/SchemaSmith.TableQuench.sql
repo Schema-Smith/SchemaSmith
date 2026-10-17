@@ -39,6 +39,14 @@ BEGIN TRY
   -- Template CDC defaults, and the capture-instance limit refused before any column is added (#427).
   EXEC SchemaSmith.CdcPreflight @CdcFilegroup = @CdcFilegroup, @CdcSupportsNetChanges = @CdcSupportsNetChanges
 
+  -- #508: undo for what ExpressionMapAdopt writes under WhatIf; ExpressionMapRecord puts the map back from it.
+  IF OBJECT_ID('tempdb..#ExpressionMapAdoptUndo') IS NOT NULL DROP TABLE #ExpressionMapAdoptUndo
+  CREATE TABLE #ExpressionMapAdoptUndo (ObjectSchema NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, ObjectTable NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL,
+    ObjectKind VARCHAR(32) COLLATE DATABASE_DEFAULT NOT NULL, ObjectName NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Slot VARCHAR(32) COLLATE DATABASE_DEFAULT NOT NULL,
+    WasPresent BIT NOT NULL, AuthoredText NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, CanonicalText NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    PlatformName VARCHAR(20) COLLATE DATABASE_DEFAULT NULL, EngineVersion VARCHAR(200) COLLATE DATABASE_DEFAULT NULL, CompatLevel INT NULL, UpdatedUtc DATETIME2(3) NULL)
+  -- #508: before any table or column is created, so only what already exists is checked on a scratch copy.
+  EXEC SchemaSmith.ExpressionMapAdopt @WhatIf
   EXEC SchemaSmith.MissingTableAndColumnQuench @WhatIf
   -- Filled by ModifiedTableQuench's CDC headroom check, consumed by CdcQuench once every column exists.
   {{CdcRotateTable}}

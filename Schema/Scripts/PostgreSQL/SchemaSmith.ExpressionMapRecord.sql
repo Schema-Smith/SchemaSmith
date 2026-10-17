@@ -24,7 +24,22 @@ DECLARE
   v_version TEXT := current_setting('server_version');
   v_rebaselined INTEGER := 0;
 BEGIN
-  IF p_WhatIf THEN RETURN; END IF;
+  IF p_WhatIf THEN
+    -- #508: a preview leaves the map as it found it, including what ExpressionMapAdopt verified for the preview.
+    IF to_regclass('pg_temp.temp_expression_map_adopt_undo') IS NOT NULL THEN
+      DELETE FROM "SchemaSmith"."ExpressionMap" m
+       USING temp_expression_map_adopt_undo u
+       WHERE u."ObjectSchema" = m."ObjectSchema" AND u."ObjectTable" = m."ObjectTable" AND u."ObjectKind" = m."ObjectKind"
+         AND u."ObjectName" = m."ObjectName" AND u."Slot" = m."Slot" AND NOT u."WasPresent";
+      UPDATE "SchemaSmith"."ExpressionMap" m
+         SET "AuthoredText" = u."AuthoredText", "CanonicalText" = u."CanonicalText", "EngineVersion" = u."EngineVersion", "UpdatedUtc" = u."UpdatedUtc"
+        FROM temp_expression_map_adopt_undo u
+       WHERE u."ObjectSchema" = m."ObjectSchema" AND u."ObjectTable" = m."ObjectTable" AND u."ObjectKind" = m."ObjectKind"
+         AND u."ObjectName" = m."ObjectName" AND u."Slot" = m."Slot" AND u."WasPresent";
+      TRUNCATE temp_expression_map_adopt_undo;
+    END IF;
+    RETURN;
+  END IF;
   -- Each source is guarded on its own: an index-only quench builds temp_indexes but no temp_columns or
   -- temp_checks, and a full quench may run with no indexes declared.
   IF to_regclass('pg_temp.temp_columns') IS NULL AND to_regclass('pg_temp.temp_indexes') IS NULL THEN RETURN; END IF;
