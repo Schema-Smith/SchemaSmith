@@ -1164,6 +1164,49 @@ BEGIN TRY
     END
   END
 
+  -- A security policy WITH SCHEMABINDING holds every column its predicates pass (5074 / 4922). Unlike a module it is
+  -- described in full by the catalog, so it is scripted out here, dropped, and created again after the column pass,
+  -- whether or not the package carries it. 2016 catalogs, so dynamic SQL.
+  IF OBJECT_ID('tempdb..#SbPolicies') IS NOT NULL DROP TABLE #SbPolicies
+  CREATE TABLE #SbPolicies ([PolicyName] NVARCHAR(300) NOT NULL PRIMARY KEY, [CreateSql] NVARCHAR(MAX) NOT NULL)
+  IF SchemaSmith.fn_ServerMajorVersion() >= 13 AND EXISTS (SELECT 1 FROM #ColumnChanges WITH (NOLOCK))
+  BEGIN
+    EXEC sp_executesql N'
+      INSERT #SbPolicies ([PolicyName], [CreateSql])
+      SELECT QUOTENAME(SCHEMA_NAME(sp.[schema_id])) + ''.'' + QUOTENAME(sp.[name]),
+             ''CREATE SECURITY POLICY '' + QUOTENAME(SCHEMA_NAME(sp.[schema_id])) + ''.'' + QUOTENAME(sp.[name]) + '' ''
+             -- predicate_definition carries outer parentheses that ADD ... PREDICATE does not accept.
+             + STUFF((SELECT '', ADD '' + p.predicate_type_desc COLLATE DATABASE_DEFAULT + '' PREDICATE ''
+                           + SUBSTRING(p.predicate_definition, 2, LEN(p.predicate_definition) - 2) COLLATE DATABASE_DEFAULT + '' ON ''
+                           + QUOTENAME(OBJECT_SCHEMA_NAME(p.target_object_id)) + ''.'' + QUOTENAME(OBJECT_NAME(p.target_object_id))
+                           + ISNULL('' '' + p.operation_desc COLLATE DATABASE_DEFAULT, '''')
+                        FROM sys.security_predicates p WHERE p.[object_id] = sp.[object_id]
+                       ORDER BY p.security_predicate_id FOR XML PATH(''''), TYPE).value(''.'', ''NVARCHAR(MAX)''), 1, 2, '''')
+             + '' WITH (STATE = '' + CASE WHEN sp.is_enabled = 1 THEN ''ON'' ELSE ''OFF'' END + '', SCHEMABINDING = ON)''
+             + CASE WHEN sp.is_not_for_replication = 1 THEN '' NOT FOR REPLICATION'' ELSE '''' END
+        FROM sys.security_policies sp
+       WHERE sp.is_schema_bound = 1
+         AND EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK)
+                       JOIN sys.sql_expression_dependencies d
+                         ON d.referencing_id = sp.[object_id]
+                        AND d.referenced_id = OBJECT_ID(cc.[Schema] + ''.'' + cc.[TableName])
+                        AND d.referenced_minor_id = COLUMNPROPERTY(d.referenced_id, SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName]), ''ColumnId'')
+                      WHERE cc.[DefinitionChanged] = 1 OR cc.[SpecialColumnScript] LIKE ''%MASKED%'')'
+    IF EXISTS (SELECT 1 FROM #SbPolicies)
+    BEGIN
+      RAISERROR('Drop Schema-Bound Security Policies Over Changing Columns', 10, 100) WITH NOWAIT
+      INSERT SchemaSmith.ChangeAudit ([SessionId], [ObjectType], [ObjectName], [ActionType])
+        SELECT @@SPID, 'securityPolicy', PARSENAME([PolicyName], 2) + '.' + PARSENAME([PolicyName], 1),
+               CASE WHEN @WhatIf = 1 THEN 'wouldDrop' ELSE 'dropped' END
+          FROM #SbPolicies
+      SELECT @v_SQL = (SELECT 'RAISERROR(''  Drop security policy ' + REPLACE([PolicyName], '''', '''''') + ' - it reads a changing column; created again after the column pass'', 10, 100) WITH NOWAIT' + CHAR(13) + CHAR(10)
+                              + 'DROP SECURITY POLICY ' + [PolicyName] + CHAR(13) + CHAR(10)
+                         FROM #SbPolicies ORDER BY [PolicyName]
+                          FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)')
+      IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+    END
+  END
+
   RAISERROR('Elect tables for rebuild', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#RebuildElection') IS NOT NULL DROP TABLE #RebuildElection
   SELECT p.[Schema], p.[TableName]
@@ -2648,6 +2691,18 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
+  IF EXISTS (SELECT 1 FROM #SbPolicies) AND @WhatIf = 0
+  BEGIN
+    RAISERROR('Create Again The Security Policies Dropped For The Column Pass', 10, 100) WITH NOWAIT
+    SELECT @v_SQL = (SELECT [CreateSql] + CHAR(13) + CHAR(10) FROM #SbPolicies ORDER BY [PolicyName]
+                        FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)')
+    EXEC(@v_SQL)
+    INSERT SchemaSmith.ChangeAudit ([SessionId], [ObjectType], [ObjectName], [ActionType])
+      SELECT @@SPID, 'securityPolicy', PARSENAME([PolicyName], 2) + '.' + PARSENAME([PolicyName], 1), 'created'
+        FROM #SbPolicies
+    DELETE #SbPolicies
+  END
+
   RAISERROR('Identify Existing Clustered Index Conflicts', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#MissingClusteredIndexTables') IS NOT NULL DROP TABLE #MissingClusteredIndexTables
   SELECT DISTINCT i.[Schema], i.[TableName]
@@ -2691,5 +2746,21 @@ BEGIN TRY
 END TRY
 BEGIN CATCH
   DECLARE @v_RethrowMsg NVARCHAR(4000) = ERROR_MESSAGE();
+  -- A policy dropped for the column pass may be one the package does not carry, so a failure before it was created
+  -- again must not lose it. Best effort: the original error is the one reported.
+  IF OBJECT_ID('tempdb..#SbPolicies') IS NOT NULL AND @WhatIf = 0
+  BEGIN
+    DECLARE @v_PolicyRestore NVARCHAR(MAX) =
+      (SELECT 'IF OBJECT_ID(N''' + REPLACE([PolicyName], '''', '''''') + ''') IS NULL ' + [CreateSql] + CHAR(13) + CHAR(10)
+         FROM #SbPolicies ORDER BY [PolicyName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)')
+    BEGIN TRY
+      IF @v_PolicyRestore IS NOT NULL EXEC(@v_PolicyRestore)
+    END TRY
+    BEGIN CATCH
+      DECLARE @v_PolicyNames NVARCHAR(2000) = LEFT(STUFF((SELECT ', ' + [PolicyName] FROM #SbPolicies ORDER BY [PolicyName]
+                                                          FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''), 2000)
+      RAISERROR('Could not create again the security policies dropped for the column pass: %s', 10, 100, @v_PolicyNames) WITH NOWAIT
+    END CATCH
+  END
   RAISERROR(@v_RethrowMsg, 16, 1);
 END CATCH

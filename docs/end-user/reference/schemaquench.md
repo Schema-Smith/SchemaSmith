@@ -1101,6 +1101,8 @@ A chain is handled deepest-first: a view bound to a view bound to the changed fu
 
 **What you see.** The log names each dependent as it is dropped and the manifest records it as `dropped`; under `WhatIf` the run lists what it would drop as `wouldDrop`, or warns that it would stop and why. An unchanged module is never altered, so none of this happens on a deploy that changes nothing.
 
+**A column under a schema-bound security policy.** A row-level security policy created `WITH (SCHEMABINDING = ON)` holds the columns its predicates pass, so changing one of them is refused the same way (SQL Server 2016 and later). The catalog describes a policy in full, so it does not need to be in the package: the deploy scripts it, drops it before the column changes, and creates it again right after with its predicates, state and `NOT FOR REPLICATION` setting. The manifest records it as `dropped` and `created`; under `WhatIf`, as `wouldDrop`.
+
 ---
 
 ## Column Type Changes on PostgreSQL

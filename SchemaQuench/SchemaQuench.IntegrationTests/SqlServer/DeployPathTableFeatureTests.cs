@@ -228,6 +228,34 @@ public class DeployPathTableFeatureTests
         }, freshDatabase: true);
     }
 
+    // A schema-bound policy holds the columns its predicates pass: changing one failed the deploy (5074 / 4922). The
+    // policy here is not in the package, the case where nothing else could put it back.
+    [Test]
+    public void ASchemaBoundSecurityPolicy_OverAChangingColumn_IsDroppedAndCreatedAgain_ByARealDeploy()
+    {
+        const string setup = "EXEC('CREATE SCHEMA sec'); EXEC('CREATE FUNCTION sec.fn_rep(@Rep AS NVARCHAR(200)) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS ok WHERE @Rep = USER_NAME()');";
+        RunScenario("DeployRlsChange", setup, (deploy, db, cmd) =>
+        {
+            string Table(string type) => $$"""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[SalesRep]", "DataType": "{{type}}", "Nullable": false } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }
+                """;
+            deploy(Table("NVARCHAR(50)"));
+            cmd.CommandText = "CREATE SECURITY POLICY [sec].[HandMade] ADD FILTER PREDICATE [sec].[fn_rep]([SalesRep]) ON [dbo].[DeployProbe], " +
+                              "ADD BLOCK PREDICATE [sec].[fn_rep]([SalesRep]) ON [dbo].[DeployProbe] AFTER INSERT WITH (STATE = OFF, SCHEMABINDING = ON)";
+            cmd.ExecuteNonQuery();
+
+            deploy(Table("NVARCHAR(100)"));
+            cmd.CommandText = "SELECT CONVERT(VARCHAR(10), max_length) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'SalesRep'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("200"), "the column changed");
+            cmd.CommandText = "SELECT CONVERT(VARCHAR(10), sp.is_enabled) + ':' + CONVERT(VARCHAR(10), sp.is_schema_bound) + ':' + " +
+                              "CONVERT(VARCHAR(10), (SELECT COUNT(*) FROM sys.security_predicates p WHERE p.[object_id] = sp.[object_id])) " +
+                              "FROM sys.security_policies sp WHERE sp.[object_id] = OBJECT_ID(N'sec.HandMade')";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("0:1:2"), "and the policy is back as it was: off, schema-bound, both predicates");
+        }, freshDatabase: true);
+    }
+
     [Test]
     public void ADeclaredDisabledIndex_IsDisabledByARealDeploy()
     {
