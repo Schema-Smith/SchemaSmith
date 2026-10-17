@@ -67,6 +67,53 @@ public abstract class SchemaTongsSharedTests
         }
     }
 
+    // MY-A2: a FULLTEXT index's WITH PARSER was deployed but never extracted, so a re-extracted package lost ngram. The
+    // engines report it only in SHOW CREATE TABLE; MariaDB ships no full-text parser plugin to declare.
+    [Test]
+    public void ShouldCastAFullTextIndexWithItsParser()
+    {
+        if (Platform != Platform.MySQL) Assert.Ignore("MariaDB has no full-text parser plugin installed.");
+        using (var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "CREATE TABLE NgramDocs (Id INT NOT NULL PRIMARY KEY, Body TEXT, FULLTEXT KEY ft_ngram (Body) WITH PARSER ngram, FULLTEXT KEY ft_plain (Body))";
+            cmd.ExecuteNonQuery();
+        }
+        try
+        {
+            var file = Substitute.For<IFile>();
+            var written = "";
+            file.WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("NgramDocs.json")), Arg.Do<string>(c => written = c));
+            lock (FactoryContainer.SharedLockObject)
+            {
+                LogFactory.Register("ErrorLog", Substitute.For<ILog>());
+                LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+                FactoryContainer.Register(Substitute.For<IEnvironment>());
+                FactoryContainer.Register(file);
+                FactoryContainer.Register(Substitute.For<IDirectory>());
+                var config = SetupConfig();
+                config["ShouldCast:Tables"] = "true";
+                config["ShouldCast:ObjectList"] = "NgramDocs";
+                new SchemaTongs(Platform).CastTemplate();
+                config["ShouldCast:Tables"] = "false";
+                config["ShouldCast:ObjectList"] = "";
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+            }
+            var table = (Schema.Domain.MySQL.MySqlTable)PlatformDeserializer.DeserializeTable(written, Platform);
+            Assert.That(table.FullTextIndexes.Select(i => $"{i.Name.Trim('`')}:{i.Parser}"), Is.EquivalentTo(new[] { "ft_ngram:ngram", "ft_plain:" }));
+        }
+        finally
+        {
+            using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DROP TABLE IF EXISTS NgramDocs";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     // Extraction used to replace the session mode with PIPES_AS_CONCAT before kindling, so procedures it created ran
     // non-strict and with || as concatenation, and SchemaQuench then found the stamp current and reused them.
     [Test]

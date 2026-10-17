@@ -3868,6 +3868,15 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                         continue;
                     }
 
+                    // A FULLTEXT parser is reported only by SHOW CREATE TABLE (MY-A2).
+                    if (tableObj is MySqlTable { FullTextIndexes.Count: > 0 } fullTextTable)
+                    {
+                        commandJson.CommandText = $"SHOW CREATE TABLE `{MySqlReservedWords.Unquote(schema).Replace("`", "``")}`.`{MySqlReservedWords.Unquote(table).Replace("`", "``")}`";
+                        using var createReader = commandJson.ExecuteReader();
+                        if (createReader.Read())
+                            MySqlFullTextParsers.Apply(fullTextTable, createReader.GetString(1));
+                    }
+
                     var resolution = resolver.Resolve("", table);
                     var filename = resolution.WritePath;
                     MarkPathWritten(tableDir, filename);
