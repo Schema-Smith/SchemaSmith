@@ -412,11 +412,16 @@ BEGIN TRY
       -- bought nothing and cost correctness.
       -- The key by its name: column_encryption_key_database_name is the database a key lives in (NULL for this one),
       -- and comparing that with the declared key name made every encrypted column a change on every deploy.
-      SELECT sc.[object_id], sc.column_id, mc.masking_function, sc.encryption_type_desc, sc.encryption_algorithm_name, cek.[name]
+      -- Only the declared tables, the only ones this procedure joins it to, and one row per column: removing NOLOCK did
+      -- not end the duplicate. Catalog views do not isolate another session''s metadata, and the whole-database read
+      -- kept seeing the tables other schemas (and their scratch copies) were creating and dropping at that moment.
+      SELECT sc.[object_id], sc.column_id, MAX(mc.masking_function), MAX(sc.encryption_type_desc), MAX(sc.encryption_algorithm_name), MAX(cek.[name])
         FROM sys.columns sc
         JOIN sys.tables st ON st.[object_id] = sc.[object_id] AND st.is_ms_shipped = 0
         LEFT JOIN sys.masked_columns mc ON mc.[object_id] = sc.[object_id] AND mc.column_id = sc.column_id
-        LEFT JOIN sys.column_encryption_keys cek ON cek.column_encryption_key_id = sc.column_encryption_key_id'
+        LEFT JOIN sys.column_encryption_keys cek ON cek.column_encryption_key_id = sc.column_encryption_key_id
+       WHERE sc.[object_id] IN (SELECT OBJECT_ID(t.[Schema] + ''.'' + t.[Name]) FROM #Tables t)
+       GROUP BY sc.[object_id], sc.column_id'
 
   RAISERROR('Detect Column Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ColumnChanges') IS NOT NULL DROP TABLE #ColumnChanges
