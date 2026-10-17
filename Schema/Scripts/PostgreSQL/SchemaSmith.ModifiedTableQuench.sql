@@ -1280,6 +1280,36 @@ BEGIN
                     AND ic.column_name = ec."ColumnName");
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
+    -- STORED <-> VIRTUAL has no ALTER, so the column is dropped here and the create pass adds it back as declared. A
+    -- generated column holds nothing of its own, so nothing is lost. Only from 18: below it there is no VIRTUAL to keep,
+    -- and the create pass skips a declared VIRTUAL there, so a drop would lose the column.
+    IF "SchemaSmith"."ServerVersionNum"() >= 18 THEN
+      RAISE NOTICE 'Drop Generated Columns Changing Between STORED and VIRTUAL';
+      SELECT STRING_AGG('RAISE NOTICE ''  Column ' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."ColumnName" || ' becomes ' || CASE WHEN c."Virtual" THEN 'VIRTUAL' ELSE 'STORED' END || ''';' || CHR(10) ||
+                        'ALTER TABLE "' || ec."TableSchema" || '"."' || ec."TableName" || '" DROP COLUMN IF EXISTS "' || ec."ColumnName" || '" CASCADE;' || CHR(10) ||
+                        'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''column'', ''' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."ColumnName" || ''', ''dropped'');', CHR(10))
+        INTO sql_script
+        FROM temp_existing_columns ec
+        JOIN temp_columns c ON c."TableSchema" = ec."TableSchema"
+                           AND c."TableName" = ec."TableName"
+                           AND c."Name" = ec."ColumnName"
+                           AND c."Generated" = 'ALWAYS' AND COALESCE(c."GenerationExpression", '') <> ''
+       WHERE ec."Generated" = 'ALWAYS'
+         AND c."Virtual" <> ec."Virtual";
+      CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+      IF p_WhatIf THEN
+        INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+          SELECT pg_backend_pid(), 'column', ec."TableSchema" || '.' || ec."TableName" || '.' || ec."ColumnName", 'wouldDrop'
+            FROM temp_existing_columns ec
+            JOIN temp_columns c ON c."TableSchema" = ec."TableSchema"
+                               AND c."TableName" = ec."TableName"
+                               AND c."Name" = ec."ColumnName"
+                               AND c."Generated" = 'ALWAYS' AND COALESCE(c."GenerationExpression", '') <> ''
+           WHERE ec."Generated" = 'ALWAYS'
+             AND c."Virtual" <> ec."Virtual";
+      END IF;
+    END IF;
+
     DELETE FROM temp_existing_columns ec
       WHERE NOT EXISTS (SELECT 1
                           FROM information_schema.columns ic
