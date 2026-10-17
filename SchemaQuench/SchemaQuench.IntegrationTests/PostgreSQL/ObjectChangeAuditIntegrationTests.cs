@@ -17,6 +17,32 @@ public class ObjectChangeAuditIntegrationTests : BaseTableQuenchTests
 {
     private const string Product = "ObjectChangeAudit Tests";
 
+    // Below PostgreSQL 17 a changed generation expression is applied by dropping and re-adding the column, and the audit
+    // left that column out with the ALTER pass's own exclusion, so the change had no row. From 17 it is SET EXPRESSION.
+    [Test]
+    public void AChangedGenerationExpression_IsAudited_OnEveryVersion()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        static string Json(string expression) => $$"""
+            [{ "Schema": "public", "Name": "AuditGenerated",
+               "Columns": [ { "Name": "a", "DataType": "integer", "Nullable": true },
+                            { "Name": "g", "DataType": "integer", "Nullable": true, "Generated": "ALWAYS", "GenerationExpression": "{{expression}}" } ] }]
+            """;
+        DropIfExists(cmd, "public", "AuditGenerated");
+        try
+        {
+            RunTableQuenchProc(cmd, Json("a + 1"), productName: Product);
+            ClearAudit(cmd);
+            RunTableQuenchProc(cmd, Json("a + 2"), productName: Product);
+            Assert.That(ReadAudit(cmd).Count(r => r is { Type: "column", Action: "modified" } && r.Name.EndsWith(".g")), Is.EqualTo(1));
+        }
+        finally { DropIfExists(cmd, "public", "AuditGenerated"); }
+    }
+
     [Test]
     public void TableQuench_EmitsObjectChangeAudit_ForCreateModifyDrop()
     {

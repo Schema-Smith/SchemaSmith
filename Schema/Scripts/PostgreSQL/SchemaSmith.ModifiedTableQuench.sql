@@ -1543,12 +1543,9 @@ BEGIN
               OR COALESCE(REGEXP_REPLACE(c."Generated", '\s*\(.*$', ''), 'NEVER') != COALESCE(REGEXP_REPLACE(ec."Generated", '\s*\(.*$', ''), 'NEVER')
               OR COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')
               OR (COALESCE(c."Storage", '') != '' AND COALESCE(c."Storage", '') != COALESCE(ec."Storage", ''))
-              OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", '')))
-            AND NOT ("SchemaSmith"."ServerVersionNum"() < 17
-                     AND COALESCE(c."Generated", 'NEVER') != 'NEVER'
-                     AND COALESCE(c."GenerationExpression", '') != ''
-                     AND COALESCE(c."Generated", 'NEVER') = COALESCE(ec."Generated", 'NEVER')
-                     AND COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", ''));
+              OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", '')));
+    -- Without the ALTER pass's PG < 17 exclusion: a generated column whose expression changed there is altered by the
+    -- drop-and-re-add pass above instead, and it is a column change all the same.
 
     -- Unsupported-feature policy: CHANGING an existing table's access method (ALTER TABLE ... SET ACCESS METHOD)
     -- requires PostgreSQL 15. The emit above is gated off under 15 (and the fixup WHERE ignores the AccessMethod
