@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using log4net;
+using MySqlConnector;
 using Microsoft.Extensions.Configuration;
 using NSubstitute;
 using NUnit.Framework;
@@ -110,7 +111,7 @@ public class NonStandardKeyWarningTests
                      "CONSTRAINT fk_child_code FOREIGN KEY (parent_code) REFERENCES parent (code))");
             return true;
         }
-        catch (Exception e) when (e.Message.Contains("Missing unique key"))
+        catch (MySqlException e) when (e.Message.Contains("Missing unique key"))
         {
             return false;
         }
