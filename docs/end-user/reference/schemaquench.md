@@ -1109,6 +1109,20 @@ PostgreSQL will not change a column's type while a view, materialized view, SQL-
 
 A dependent the package does not declare could not be put back, so the deploy stops before changing anything and the error names it. Add it to the package, or drop it in a `Before` script.
 
+**A type PostgreSQL will not cast on its own.** SchemaQuench changes a column's type with `SET DATA TYPE` and no `USING` clause, so PostgreSQL converts the existing values with its own assignment casts. Where none exists -- `text` to `integer`, `text` to `jsonb`, `integer` to `boolean` -- the deploy fails with `column "code" cannot be cast automatically to type integer`. Say how to convert in a template `Before` script, which runs before the table pass: change the column there with `USING`, and guard it so it does nothing once the column has its new type. The table pass then finds the column already declared and leaves it alone.
+
+```sql
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'orders' AND column_name = 'code' AND data_type = 'text') THEN
+    ALTER TABLE public.orders ALTER COLUMN code TYPE integer USING trim(code)::integer;
+  END IF;
+END $$;
+```
+
+Declare the new type in the table's JSON as usual.
+
 ---
 
 ## Signed Modules

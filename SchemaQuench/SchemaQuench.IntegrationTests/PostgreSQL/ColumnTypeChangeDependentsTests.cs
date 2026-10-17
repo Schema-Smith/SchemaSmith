@@ -92,6 +92,54 @@ public class ColumnTypeChangeDependentsTests : ObjectScriptDeployFixture
         }
     }
 
+    // PG-091: a change PostgreSQL will not cast on its own (text to integer) needs USING, which the table JSON cannot say.
+    // The documented recipe is a guarded Before script; the table pass then finds the column already at its type.
+    [Test]
+    public void AColumnTypeChange_PostgreSQLWillNotCast_DeploysThroughTheDocumentedBeforeScript()
+    {
+        Exec(Drops);
+        try
+        {
+            void WriteWith(string type, bool withScript)
+            {
+                WritePackage("""{ "FolderPath": "Before", "QuenchSlot": "Before" }""", "Before");
+                WriteFile("Tables", "public.t_dep.json", $$"""
+                    { "Schema": "public", "Name": "t_dep",
+                      "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false }, { "Name": "a", "DataType": "{{type}}", "Nullable": true } ],
+                      "Indexes": [ { "Name": "pk_t_dep", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" } ] }
+                    """);
+                if (withScript) WriteFile("Before", "t_dep.a to integer.sql", """
+                    DO $$
+                    BEGIN
+                      IF EXISTS (SELECT 1 FROM information_schema.columns
+                                 WHERE table_schema = 'public' AND table_name = 't_dep' AND column_name = 'a' AND data_type = 'text') THEN
+                        ALTER TABLE public.t_dep ALTER COLUMN a TYPE integer USING trim(a)::integer;
+                      END IF;
+                    END $$;
+                    """);
+            }
+            WriteWith("text", withScript: false);
+            Deploy();
+            Exec("INSERT INTO public.t_dep VALUES (1, ' 42 ')");
+
+            WriteWith("integer", withScript: false);
+            var refused = Deploy(expectSuccess: false);
+            Assert.That(refused.Log, Has.Some.Contains("cannot be cast automatically"), string.Join("\n", refused.Log));
+
+            WriteWith("integer", withScript: true);
+            Deploy();
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar("SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.t_dep'::regclass AND attname = 'a'"), Is.EqualTo("integer"));
+                Assert.That(Scalar("SELECT a FROM public.t_dep WHERE id = 1"), Is.EqualTo(42), "converted by the script's USING");
+            });
+        }
+        finally
+        {
+            Exec(Drops);
+        }
+    }
+
     // What the package does not declare cannot be put back, so the deploy stops by name before dropping anything.
     [Test]
     public void AColumnTypeChange_UnderAViewThePackageDoesNotDeclare_StopsBeforeDroppingAnything()
