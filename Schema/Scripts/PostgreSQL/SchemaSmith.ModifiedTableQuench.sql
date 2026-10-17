@@ -1525,6 +1525,14 @@ BEGIN
                            ELSE '' END ||
                       CASE WHEN COALESCE(c."Compression", '') != COALESCE(ec."Compression", '') AND COALESCE(c."Compression", '') != '' AND "SchemaSmith"."ServerVersionNum"() >= 14
                            THEN ' ALTER COLUMN "' || c."Name" || '" SET COMPRESSION ' || COALESCE(c."Compression", '') || ','
+                           ELSE '' END ||
+                      -- Identity kind, in place: a switch between ALWAYS and BY DEFAULT, or a plain column becoming identity
+                      -- with the declared sequence options. Last, after the NOT NULL and the dropped default identity needs.
+                      CASE WHEN COALESCE(c."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%'
+                                AND REGEXP_REPLACE(c."Generated", '\s*\(.*$', '') != ec."Generated"
+                           THEN ' ALTER COLUMN "' || c."Name" || '" SET GENERATED ' || CASE WHEN UPPER(c."Generated") LIKE 'GENERATED ALWAYS%' THEN 'ALWAYS' ELSE 'BY DEFAULT' END || ','
+                           WHEN COALESCE(c."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", 'NEVER') = 'NEVER'
+                           THEN ' ALTER COLUMN "' || c."Name" || '" ADD ' || c."Generated" || ','
                            ELSE '' END)), ''), ',' || CHR(10)) || ';' AS "code"
       FROM temp_columns c
       JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema"
