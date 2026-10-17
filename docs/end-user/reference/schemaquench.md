@@ -1111,6 +1111,8 @@ PostgreSQL will not change a column's type while a view, materialized view, SQL-
 
 A dependent the package does not declare could not be put back, so the deploy stops before changing anything and the error names it. Add it to the package, or drop it in a `Before` script.
 
+Two dependents need no declaring, because the catalog describes them in full: a trigger whose `WHEN` clause or `UPDATE OF` list reads the column, and a publication whose row filter or column list does (PostgreSQL 15). The deploy scripts each one, takes it down before the change and puts it back after it -- a trigger with its enabled state and comment -- and records both steps in the manifest.
+
 **A type PostgreSQL will not cast on its own.** SchemaQuench changes a column's type with `SET DATA TYPE` and no `USING` clause, so PostgreSQL converts the existing values with its own assignment casts. Where none exists -- `text` to `integer`, `text` to `jsonb`, `integer` to `boolean` -- the deploy fails with `column "code" cannot be cast automatically to type integer`. Say how to convert in a template `Before` script, which runs before the table pass: change the column there with `USING`, and guard it so it does nothing once the column has its new type. The table pass then finds the column already declared and leaves it alone.
 
 ```sql

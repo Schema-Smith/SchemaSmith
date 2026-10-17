@@ -140,6 +140,54 @@ public class ColumnTypeChangeDependentsTests : ObjectScriptDeployFixture
         }
     }
 
+    // A trigger's WHEN clause and a publication's row filter over the column block the change too. The catalog describes
+    // both in full, so neither needs declaring: these are made by hand, and both come back as they were.
+    [Test]
+    public void AColumnTypeChange_UnderATriggerWhenClauseAndAPublicationRowFilter_Deploys_AndBothAreBack()
+    {
+        var withPublication = Convert.ToInt32(Scalar("SELECT current_setting('server_version_num')::int")) >= 150000;
+        const string cleanup = "DROP PUBLICATION IF EXISTS pub_dep; DROP TABLE IF EXISTS public.t_dep; DROP FUNCTION IF EXISTS public.trg_dep_fn()";
+        Exec(cleanup);
+        try
+        {
+            void WriteTable(string type)
+            {
+                WritePackage("", []);
+                WriteFile("Tables", "public.t_dep.json", $$"""
+                    { "Schema": "public", "Name": "t_dep",
+                      "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false }, { "Name": "a", "DataType": "{{type}}", "Nullable": true } ],
+                      "Indexes": [ { "Name": "pk_t_dep", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" } ] }
+                    """);
+            }
+            WriteTable("integer");
+            Deploy();
+            Exec("""
+                CREATE FUNCTION public.trg_dep_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+                CREATE TRIGGER trg_dep BEFORE UPDATE OF a ON public.t_dep FOR EACH ROW WHEN (NEW.a > 0) EXECUTE FUNCTION public.trg_dep_fn();
+                ALTER TABLE public.t_dep DISABLE TRIGGER trg_dep;
+                COMMENT ON TRIGGER trg_dep ON public.t_dep IS 'kept';
+                """);
+            if (withPublication) Exec("CREATE PUBLICATION pub_dep FOR TABLE public.t_dep (id, a) WHERE (a > 0)");
+
+            WriteTable("bigint");
+            var changed = Deploy();
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar("SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.t_dep'::regclass AND attname = 'a'"), Is.EqualTo("bigint"));
+                Assert.That(Scalar("SELECT COALESCE((SELECT pg_get_triggerdef(oid) || ' ' || tgenabled::text || ' ' || obj_description(oid, 'pg_trigger') FROM pg_trigger WHERE tgname = 'trg_dep'), 'missing')"),
+                    Does.Contain("UPDATE OF a").And.Contain("WHEN ((new.a > 0))").And.EndWith(" D kept"), "the trigger is back, still disabled, with its comment");
+                if (withPublication)
+                    Assert.That(Scalar("SELECT COALESCE((SELECT array_to_string(attnames, ',') || ' ' || rowfilter FROM pg_publication_tables WHERE pubname = 'pub_dep'), 'missing')"),
+                        Is.EqualTo("id,a (a > 0)"), "and the publication has its column list and row filter");
+                Assert.That(changed.Audit.Select(r => $"{r.ObjectType} {r.Action}"), Is.SupersetOf(new[] { "trigger dropped", "trigger created" }), changed.DescribeAudit());
+            });
+        }
+        finally
+        {
+            Exec(cleanup);
+        }
+    }
+
     // What the package does not declare cannot be put back, so the deploy stops by name before dropping anything.
     [Test]
     public void AColumnTypeChange_UnderAViewThePackageDoesNotDeclare_StopsBeforeDroppingAnything()

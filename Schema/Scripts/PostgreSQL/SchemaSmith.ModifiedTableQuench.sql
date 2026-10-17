@@ -1373,6 +1373,61 @@ BEGIN
      WHERE dep."Kind" = 'policy';
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
+    -- A trigger whose WHEN clause or column list reads a type-changing column ("used in a trigger definition") and a
+    -- publication's row filter or column list over one (PostgreSQL 15, "used by a publication WHERE clause") block the
+    -- change too. The catalog describes both in full, so they are scripted here, taken down, and put back right after
+    -- the column pass, whether or not the package carries them.
+    DROP TABLE IF EXISTS temp_type_change_rebuilds;
+    CREATE TEMPORARY TABLE temp_type_change_rebuilds ("Kind" TEXT, "Name" TEXT, "DropSql" TEXT, "CreateSql" TEXT);
+    INSERT INTO temp_type_change_rebuilds
+      SELECT DISTINCT 'trigger', tn.nspname || '.' || tc.relname || '.' || tg.tgname,
+             'DROP TRIGGER ' || QUOTE_IDENT(tg.tgname) || ' ON ' || QUOTE_IDENT(tn.nspname) || '.' || QUOTE_IDENT(tc.relname) || ';',
+             pg_get_triggerdef(tg.oid) || ';' ||
+             CASE tg.tgenabled WHEN 'D' THEN ' ALTER TABLE ' || QUOTE_IDENT(tn.nspname) || '.' || QUOTE_IDENT(tc.relname) || ' DISABLE TRIGGER ' || QUOTE_IDENT(tg.tgname) || ';'
+                               WHEN 'R' THEN ' ALTER TABLE ' || QUOTE_IDENT(tn.nspname) || '.' || QUOTE_IDENT(tc.relname) || ' ENABLE REPLICA TRIGGER ' || QUOTE_IDENT(tg.tgname) || ';'
+                               WHEN 'A' THEN ' ALTER TABLE ' || QUOTE_IDENT(tn.nspname) || '.' || QUOTE_IDENT(tc.relname) || ' ENABLE ALWAYS TRIGGER ' || QUOTE_IDENT(tg.tgname) || ';'
+                               ELSE '' END ||
+             COALESCE(' COMMENT ON TRIGGER ' || QUOTE_IDENT(tg.tgname) || ' ON ' || QUOTE_IDENT(tn.nspname) || '.' || QUOTE_IDENT(tc.relname) || ' IS ' ||
+                      QUOTE_LITERAL(obj_description(tg.oid, 'pg_trigger')) || ';', '')
+        FROM temp_existing_columns ec
+        JOIN temp_columns c ON c."TableSchema" = ec."TableSchema" AND c."TableName" = ec."TableName" AND c."Name" = ec."ColumnName"
+        JOIN pg_class tc ON tc.oid = to_regclass(QUOTE_IDENT(ec."TableSchema") || '.' || QUOTE_IDENT(ec."TableName"))
+        JOIN pg_namespace tn ON tn.oid = tc.relnamespace
+        JOIN pg_attribute a ON a.attrelid = tc.oid AND a.attname = ec."ColumnName"
+        JOIN pg_depend d ON d.classid = 'pg_trigger'::regclass AND d.refclassid = 'pg_class'::regclass AND d.refobjid = tc.oid AND d.refobjsubid = a.attnum
+        JOIN pg_trigger tg ON tg.oid = d.objid AND NOT tg.tgisinternal
+       WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC');
+    -- prqual and prattrs are PostgreSQL 15 columns, so the query is only planned where they exist. The catalog is asked
+    -- rather than the version, which a test may pin above the server it runs on.
+    IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'pg_catalog.pg_publication_rel'::regclass AND attname = 'prqual') THEN
+      EXECUTE $q$
+        INSERT INTO temp_type_change_rebuilds
+          SELECT DISTINCT 'publication', pub.pubname || ' ' || tn.nspname || '.' || tc.relname,
+                 'ALTER PUBLICATION ' || QUOTE_IDENT(pub.pubname) || ' DROP TABLE ' || QUOTE_IDENT(tn.nspname) || '.' || QUOTE_IDENT(tc.relname) || ';',
+                 'ALTER PUBLICATION ' || QUOTE_IDENT(pub.pubname) || ' ADD TABLE ' || QUOTE_IDENT(tn.nspname) || '.' || QUOTE_IDENT(tc.relname) ||
+                 COALESCE(' (' || (SELECT STRING_AGG(QUOTE_IDENT(pa.attname), ', ' ORDER BY k.ord)
+                                     FROM UNNEST(pr.prattrs::int2[]) WITH ORDINALITY k(attnum, ord)
+                                     JOIN pg_attribute pa ON pa.attrelid = tc.oid AND pa.attnum = k.attnum) || ')', '') ||
+                 COALESCE(' WHERE (' || pg_get_expr(pr.prqual, pr.prrelid) || ')', '') || ';'
+            FROM temp_existing_columns ec
+            JOIN temp_columns c ON c."TableSchema" = ec."TableSchema" AND c."TableName" = ec."TableName" AND c."Name" = ec."ColumnName"
+            JOIN pg_class tc ON tc.oid = to_regclass(QUOTE_IDENT(ec."TableSchema") || '.' || QUOTE_IDENT(ec."TableName"))
+            JOIN pg_namespace tn ON tn.oid = tc.relnamespace
+            JOIN pg_attribute a ON a.attrelid = tc.oid AND a.attname = ec."ColumnName"
+            JOIN pg_depend d ON d.classid = 'pg_publication_rel'::regclass AND d.refclassid = 'pg_class'::regclass AND d.refobjid = tc.oid AND d.refobjsubid = a.attnum
+            JOIN pg_publication_rel pr ON pr.oid = d.objid
+            JOIN pg_publication pub ON pub.oid = pr.prpubid
+           WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')
+      $q$;
+    END IF;
+    SELECT STRING_AGG('RAISE NOTICE ''  Dropping ' || INITCAP(r."Kind") || ' ' || REPLACE(r."Name", '''', '''''') || ' - it reads a type-changing column; put back after the column pass'';' || CHR(10) ||
+                      r."DropSql" || CHR(10) ||
+                      'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || r."Kind" || ''', ''' ||
+                      REPLACE(r."Name", '''', '''''') || ''', ''dropped'');', CHR(10) ORDER BY r."Kind", r."Name")
+      INTO sql_script
+      FROM temp_type_change_rebuilds r;
+    CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
     RAISE NOTICE 'Drop Views and Rules Dependent on Modified Columns';
     SELECT STRING_AGG(CASE WHEN dep_view.relname IS NOT NULL
                            THEN 'RAISE NOTICE ''  Dropping ' || CASE WHEN dep_view.relkind = 'm' THEN 'Materialized View ' ELSE 'View ' END || view_ns.nspname || '.' || dep_view.relname || ''';' || CHR(10) ||
@@ -1729,6 +1784,14 @@ BEGIN
                  AND (COALESCE(c."Generated", 'NEVER') = 'NEVER' OR COALESCE(c."GenerationExpression", '') = '')
                  AND COALESCE(ec."GenerationExpression", '') != '')
        GROUP BY c."TableSchema", c."TableName") x;
+    CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
+    SELECT STRING_AGG('RAISE NOTICE ''  Creating ' || INITCAP(r."Kind") || ' ' || REPLACE(r."Name", '''', '''''') || ' again'';' || CHR(10) ||
+                      r."CreateSql" || CHR(10) ||
+                      'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || r."Kind" || ''', ''' ||
+                      REPLACE(r."Name", '''', '''''') || ''', ''created'');', CHR(10) ORDER BY r."Kind", r."Name")
+      INTO sql_script
+      FROM temp_type_change_rebuilds r;
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     -- Object-change audit (#243 E5): one row per column altered above. Reuses the identical
