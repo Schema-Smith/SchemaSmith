@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Globalization;
 
 namespace SchemaQuench.Reporting;
@@ -42,6 +43,7 @@ public static class DeploymentSummaryText
         RenderMigrationScripts(summary, lines);
         RenderTiming(summary, lines);
         RenderFailures(summary, lines);
+        RenderAppliedBeforeTheFailure(summary, lines);
         RenderWhatIf(summary, lines);
         RenderObjectChanges(summary, lines);
         RenderPreventDrop(summary, lines);
@@ -87,7 +89,8 @@ public static class DeploymentSummaryText
         var scripts = summary.MigrationScripts;
         lines.Add($"## Migration Scripts ({scripts.Count})");
         foreach (var script in scripts)
-            lines.Add($"- {script.Path} — {FormatScope(script.Server, script.Database, script.Schema)}");
+            lines.Add($"- {script.Path} — {FormatScope(script.Server, script.Database, script.Schema)}" +
+                      (script.Outcome == "Skipped" ? " — skipped (SHOULD NOT APPLY)" : ""));
         lines.Add("");
     }
 
@@ -115,6 +118,23 @@ public static class DeploymentSummaryText
                 lines.Add($"- {bottleneck.Scope} / {bottleneck.Slot} — {bottleneck.DurationMs}ms");
             lines.Add("");
         }
+    }
+
+    // Nothing is rolled back when a run fails, so a failed run says what it had already applied: the scripts that
+    // ran and the data delivered. Resume continues from there.
+    private static void RenderAppliedBeforeTheFailure(DeploymentSummary summary, List<string> lines)
+    {
+        if (summary.Run.Outcome is not (RunOutcome.PartialFailure or RunOutcome.Aborted)) return;
+        var migrations = summary.MigrationScripts.Where(m => m.Outcome == "Ran").Select(m => $"migration script {m.Path}");
+        var details = summary.ObjectChanges?.Details ?? [];
+        var objects = details.Where(d => d.Action == "ran").Select(d => $"{d.ObjectType} {d.ObjectName}");
+        var deliveries = details.Where(d => d.ObjectType == "dataDelivery" && d.Action == "delivered").Select(d => $"data {d.ObjectName}");
+        var applied = migrations.Concat(objects).Concat(deliveries).ToList();
+        lines.Add($"## Applied Before The Failure ({applied.Count})");
+        lines.Add("Nothing here was rolled back. `--ResumeQuench` continues from where the run stopped.");
+        foreach (var item in applied)
+            lines.Add($"- {item}");
+        lines.Add("");
     }
 
     private static void RenderFailures(DeploymentSummary summary, List<string> lines)

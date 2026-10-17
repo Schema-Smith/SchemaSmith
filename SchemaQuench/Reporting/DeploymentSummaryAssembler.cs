@@ -67,7 +67,7 @@ public static class DeploymentSummaryAssembler
                 Schema: NullIfEmpty(m.Schema),
                 Server: m.Server,
                 Database: NullIfEmpty(m.Database),
-                Outcome: "Ran"))
+                Outcome: m.Outcome))
             .ToList();
 
         var timingSummary = new TimingSummary(

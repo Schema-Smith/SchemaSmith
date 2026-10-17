@@ -3024,7 +3024,8 @@ SET NOCOUNT ON
                 if (script.HasBeenQuenched)
                 {
                     _checkpointing.MarkScriptCompleted(DbScope, checkpointSlot.ToString(), script.LogPath);
-                    MigrationScripts?.Record(_server, _databaseName, _schemaName ?? "", _template.Name, checkpointSlot.ToString(), GetRelativeScriptPath(script.LogPath));
+                    MigrationScripts?.Record(_server, _databaseName, _schemaName ?? "", _template.Name, checkpointSlot.ToString(), GetRelativeScriptPath(script.LogPath),
+                        script.Outcome == ScriptOutcome.Skipped ? "Skipped" : "Ran");
                     if (_trackRunOnceMigrations && !ShouldAlwaysRun(script.Name))
                         MarkScriptCompleted(destCmd, script.LogPath, slot);
                 }

@@ -1722,11 +1722,32 @@ public class ProductQuenchTests
                     s.Contains("Database 'tenant_skipped'") &&
                     s.Contains("CreateIfMissing is false") &&
                     s.Contains("skipping all iterations for this server-database pair")));
+                // And the deployment summary has a row for it, as it does for a skipped schema.
+                Assert.That(quench.TargetResults.Select(t => $"{t.Database}:{t.Template}:{t.Outcome}"),
+                    Is.EquivalentTo(new[] { "tenant_skipped:PerTenantDB:Skipped" }));
             });
         }, extraConfig: new Dictionary<string, string>
         {
             ["Target:TemplateTargets:PerTenantDB:Databases:0"] = "tenant_a",
             ["Target:TemplateTargets:PerTenantDB:Databases:1"] = "tenant_skipped"
+        });
+    }
+
+    [Test]
+    public void ATemplateWithABlankIdentificationScript_IsSkipped_WithAWarningThatSaysWhy()
+    {
+        WithMinimalSqlServerProductQuench(quench =>
+        {
+            var blank = new Template { Name = "NoTargets", Product = quench.LoadedProduct, DatabaseIdentificationScript = "  " };
+            var named = new Template { Name = "HasTargets", Product = quench.LoadedProduct, DatabaseIdentificationScript = "SELECT 1" };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(quench.HasDatabasesToIdentify(blank), Is.False);
+                Assert.That(quench.HasDatabasesToIdentify(named), Is.True);
+                Assert.That(quench.ProgressLogLines, Has.One.Matches<string>(s => s.Contains("NoTargets") && s.Contains("no DatabaseIdentificationScript") && s.Contains("skipped")));
+                Assert.That(quench.ProgressLogLines, Has.None.Contains("HasTargets"));
+            });
         });
     }
 

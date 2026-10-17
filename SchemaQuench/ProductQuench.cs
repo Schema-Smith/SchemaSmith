@@ -1316,9 +1316,16 @@ public class ProductQuench
             file.Delete();
     }
 
+    internal bool HasDatabasesToIdentify(Template template)
+    {
+        if (!string.IsNullOrWhiteSpace(template.DatabaseIdentificationScript)) return true;
+        _progressLog.Warn($"Template {template.Name} has no DatabaseIdentificationScript, so it names no database to deploy to — skipped.");
+        return false;
+    }
+
     private void QuenchTemplate(Template template, bool suppressKindling)
     {
-        if (string.IsNullOrWhiteSpace(template.DatabaseIdentificationScript)) return;
+        if (!HasDatabasesToIdentify(template)) return;
 
         _progressLog.Info($"Quenching Template: {template.Name}");
         LogSchemaTemplateFieldsIfSet(template);
@@ -1802,6 +1809,10 @@ public class ProductQuench
         _progressLog.Info(
             $"[{server}] Database '{databaseName}' does not exist and " +
             $"TemplateTargets CreateIfMissing is false — skipping all iterations for this server-database pair.");
+        // No work unit is created for it, so the summary's target row is written here, or the skip leaves no trace there.
+        if (!previewOnly)
+            _targetResults.Add(new TargetResult($"[{server}].[{databaseName}]", server, databaseName, "", template.Name,
+                TargetOutcome.Skipped, 0, $"TemplateTargets:{template.Name}:Databases"));
         return new DbAxisGate(false, false);
     }
 

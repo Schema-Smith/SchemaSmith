@@ -79,7 +79,9 @@ TRUNCATE TABLE SchemaSmith.TestLog";
             _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching After Product Scripts to")));
             _progressLog.Received(1).Info(Arg.Is<string>(s => s.EndsWith($"Jobs{Path.DirectorySeparatorChar}Job 1.sql")));
             _progressLog.Received(1).Info(Arg.Is<string>(s => s.EndsWith($"Jobs{Path.DirectorySeparatorChar}SubFolder{Path.DirectorySeparatorChar}Job 2.sql")));
-            _progressLog.Received(3).Warn(Arg.Any<string>());
+            // The three unresolved-token warnings, and the Bogus template, which has no DatabaseIdentificationScript.
+            _progressLog.Received(4).Warn(Arg.Any<string>());
+            _progressLog.Received(1).Warn(Arg.Is<string>(s => s.Contains("Template Bogus has no DatabaseIdentificationScript")));
             _progressLog.Received(1).Warn(Arg.Is<string>(s => s.EndsWith("Unresolved token: {{Unresolved}}")));
             _progressLog.Received(2).Warn(Arg.Is<string>(s => s.EndsWith("Unresolved token: {{Other}}")));
 

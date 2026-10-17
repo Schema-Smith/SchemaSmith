@@ -91,7 +91,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
       "schema": "sales",
       "server": "primary",
       "database": "TenantA",
-      "outcome": "Ran"             // always "Ran" — a listed script is one that ran
+      "outcome": "Ran"             // "Ran", or "Skipped" when it raised SHOULD NOT APPLY
     }
   ],
   "timing": {
@@ -164,7 +164,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | --- | --- |
 | `server` / `database` / `schema` | The target's coordinates; `schema` is `null` when the target has no schema. |
 | `template` | The template that produced this target. |
-| `outcome` | `Success`, `Failed`, or `Skipped`. |
+| `outcome` | `Success`, `Failed`, or `Skipped`. A target skipped because a `TemplateTargets` database or schema does not exist and `CreateIfMissing` is `false` is listed as `Skipped`. |
 | `durationMs` | Milliseconds spent on this target. |
 | `slots[]` | Per-slot timing for this target: `slot`, `durationMs`, `scriptsRun`. |
 | `databaseSource` / `schemaSource` | Where each axis of this target came from — the discovery script, or a `TemplateTargets` override naming the template and key. This is the run's source-disclosure audit trail: it answers "was this tenant selected by the script, or overridden in config?" per target. A regular template has no schema axis, so its targets carry `schemaSource: "(regular template)"` -- which is every target on MySQL and MariaDB, where schema templates do not apply. Empty on a run with no source information recorded. |
@@ -176,7 +176,12 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `path` | Package-relative path of the migration script. |
 | `slot` | The slot it ran in. |
 | `template` / `schema` / `server` / `database` | Where it ran; `schema` and `database` are `null` when not applicable. |
-| `outcome` | Always `"Ran"` — a script only appears here because it ran. |
+| `outcome` | `"Ran"`, or `"Skipped"` when the script raised the `SHOULD NOT APPLY` sentinel. Either way it is recorded as done and not run again; the Markdown marks a skipped one. A script appears here only when it was run this time. |
+
+**Applied before the failure.** Nothing a failed run applied is rolled back, so the Markdown of a failed or aborted run
+adds an "Applied Before The Failure" section: every migration script that ran, every object script that ran, and every
+table whose data was delivered before the run stopped. `--ResumeQuench` continues from there. The JSON carries the same
+facts in `migrationScripts[]` and `objectChanges.details[]`.
 
 ### `timing`
 
