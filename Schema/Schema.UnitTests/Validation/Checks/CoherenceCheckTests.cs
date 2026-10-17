@@ -781,6 +781,18 @@ public class CoherenceCheckTests
         });
     }
 
+    [Test]
+    public void ARemovedHashFunctionInAPartitionExpression_IsAWarning_OnMySql()
+    {
+        var table = new MySqlTable
+        {
+            Name = "T1",
+            Partitioning = new MySqlPartitioning { Method = "KEY", Expression = "crc32(md5(`c`))" },
+            Columns = { new MySqlColumn { Name = "c", DataType = "varchar(10)" } }
+        };
+        Assert.That(RunOnMy(table).Where(f => f.Code == "SS-COL-004").Select(f => f.Location), Has.One.EndsWith("/ Partitioning"));
+    }
+
     // MY-076: NVARCHAR creates a utf8mb3 column.
     [TestCase(Platform.MySQL, "NVARCHAR(10)", true)]
     [TestCase(Platform.MariaDb, "national varchar(10)", true)]

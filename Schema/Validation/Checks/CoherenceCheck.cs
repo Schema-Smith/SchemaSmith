@@ -330,7 +330,8 @@ public sealed class CoherenceCheck : ISchemaCheck
         var expressions = table.Columns.OfType<MySqlColumn>()
             .SelectMany(c => new[] { ($"Column '{c.Name}'", c.GenerationExpression), ($"Column '{c.Name}'", c.Default) })
             .Concat(table.CheckConstraints.Select(cc => ($"Check constraint '{cc.Name}'", cc.Expression)))
-            .Concat(table.Indexes.Select(i => ($"Index '{i.Name}'", i.IndexColumns)));
+            .Concat(table.Indexes.Select(i => ($"Index '{i.Name}'", i.IndexColumns)))
+            .Append(("Partitioning", (table as MySqlTable)?.Partitioning?.Expression));
         if (platform == Platform.MySQL)
             foreach (var (where, expression) in expressions.Where(e => !string.IsNullOrWhiteSpace(e.Item2) && RemovedHashFunction.IsMatch(e.Item2)))
                 yield return new Finding(Severity.Warning, RemovedFunctionCode, Category, $"{tableLocation} / {where}",
