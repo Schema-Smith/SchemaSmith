@@ -1650,6 +1650,8 @@ MySQL allows **multiple** full-text indexes per table, so the property is `FullT
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `Extensions` | object | Custom metadata. |
 
+A full-text index is created by every deploy, with or without `IndexOnlyTableQuenches`, and it is never dropped as unknown or removed while the package declares it. One whose `Columns` or `Description` changes is dropped and created again, since a full-text index cannot be altered in place. The `Parser` is used when the index is created but is not compared afterwards: MySQL and MariaDB report it only in `SHOW CREATE TABLE`. To change the parser of an existing index, rename the index or drop it.
+
 ---
 
 ## Exclude Constraints (PostgreSQL)

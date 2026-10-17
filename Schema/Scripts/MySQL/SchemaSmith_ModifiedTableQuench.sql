@@ -3882,6 +3882,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropModIdxStmts;
     END IF;
+    -- A FULLTEXT index whose columns or comment changed goes with the other modified indexes (#530);
+    -- MissingIndexesAndConstraintsQuench re-creates it.
+    CALL SchemaSmith_DropModifiedFullTextIndexes(p_DatabaseName, p_WhatIf);
 
     -- =========================================================================
     -- No-drop protection tier (#270): capture indexes that WOULD have been dropped by absence but
@@ -3992,6 +3995,12 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
               WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
                 AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
           );
+
+        -- A declared FULLTEXT index is part of the definition too: it is parsed into _SchemaSmith_FullTextIndexes, not
+        -- _SchemaSmith_Indexes, and both axes above read only the latter, so it was dropped as removed or unknown (#530).
+        DELETE d FROM _SchemaSmith_WouldDropStep8Indexes d
+          JOIN _SchemaSmith_FullTextIndexes ft
+            ON ft.TableKey = SchemaSmith_IdentifierKey(d.TableName) AND ft.IndexKey = SchemaSmith_NameKeyCI(d.IndexName);
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT CONNECTION_ID(), 'index', CONCAT(TableName, '.', IndexName), 'dropSuppressed'
@@ -4111,6 +4120,12 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                     AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
               );
         END IF;
+
+        -- A declared FULLTEXT index is part of the definition too: it is parsed into _SchemaSmith_FullTextIndexes, not
+        -- _SchemaSmith_Indexes, and both axes above read only the latter, so it was dropped as removed or unknown (#530).
+        DELETE d FROM _SchemaSmith_IndexesToDrop d
+          JOIN _SchemaSmith_FullTextIndexes ft
+            ON ft.TableKey = SchemaSmith_IdentifierKey(d.TableName) AND ft.IndexKey = SchemaSmith_NameKeyCI(d.IndexName);
 
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown indexes');

@@ -254,6 +254,107 @@ public abstract class TableQuench_FullTextIndexSharedTests
         }
     }
 
+    private string FullTableJson(string fullText) => $$"""
+        [{ "Name": "`{{_testTableName}}`",
+           "Columns": [ { "Name": "`id`", "DataType": "INT", "Nullable": false, "AutoIncrement": true },
+                        { "Name": "`title`", "DataType": "VARCHAR(200)", "Nullable": false },
+                        { "Name": "`content`", "DataType": "TEXT" }, { "Name": "`summary`", "DataType": "TEXT" } ],
+           "Indexes": [ { "Name": "`PRIMARY`", "IndexColumns": "`id`", "PrimaryKey": true } ],
+           "FullTextIndexes": [ {{fullText}} ] }]
+        """;
+
+    // The normal table quench, with both by-absence drops on: DropUnknownIndexes here, removed-from-product inside.
+    private void FullQuench(IDbCommand command, string json, int dropUnknownIndexes = 1)
+    {
+        command.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+        command.ExecuteNonQuery();
+        command.CommandText = $"CALL SchemaSmith_TableQuench('FullTextProduct', '{_testDb}', '{json.Replace("'", "''")}', 0, {dropUnknownIndexes}, 0)";
+        command.ExecuteNonQuery();
+    }
+
+    private string FullText(IDbCommand command)
+    {
+        command.CommandText = $"""
+            SELECT IFNULL(GROUP_CONCAT(CONCAT(INDEX_NAME, '(', cols, ')', IF(cmt <> '', CONCAT(' ', cmt), '')) ORDER BY INDEX_NAME SEPARATOR ' '), '')
+              FROM (SELECT INDEX_NAME, GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) cols, MAX(INDEX_COMMENT) cmt
+                      FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{_testTableName}' AND INDEX_TYPE = 'FULLTEXT'
+                     GROUP BY INDEX_NAME) f
+            """;
+        return command.ExecuteScalar()?.ToString() ?? "";
+    }
+
+    private string IndexAudits(IDbCommand command)
+    {
+        command.CommandText = $"SELECT IFNULL(GROUP_CONCAT(ActionType ORDER BY ActionType), '') FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ObjectType IN ('fullTextIndex', 'index') AND ObjectName LIKE '%{_testTableName}%'";
+        return command.ExecuteScalar()?.ToString() ?? "";
+    }
+
+    // #530: a normal deploy never created a table's FullTextIndexes (only an index-only quench did), dropped one it had
+    // created earlier as removed from the package, and never compared a changed one (MY-025).
+    [Test]
+    public void TheFullTableQuench_CreatesAFullTextIndex_KeepsIt_AndReCreatesItWhenItsColumnsOrCommentChange()
+    {
+        using var command = _connection.CreateCommand();
+        FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content" }"""));
+        Assert.Multiple(() =>
+        {
+            Assert.That(FullText(command), Is.EqualTo("ft_content(content)"), "created by the normal deploy");
+            Assert.That(IndexAudits(command), Is.EqualTo("created"));
+        });
+
+        FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content" }"""));
+        Assert.Multiple(() =>
+        {
+            Assert.That(FullText(command), Is.EqualTo("ft_content(content)"), "kept: it is in the package, so it is neither removed nor unknown");
+            Assert.That(IndexAudits(command), Is.Empty, "and a redeploy touches nothing");
+        });
+
+        FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary" }"""));
+        Assert.That(FullText(command), Is.EqualTo("ft_content(content,summary)"), "its columns changed");
+
+        FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary", "Comment": "search" }"""));
+        Assert.That(FullText(command), Is.EqualTo("ft_content(content,summary) search"), "its comment changed");
+
+        FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary", "Comment": "search" }"""));
+        Assert.That(IndexAudits(command), Is.Empty, "then a redeploy is a no-op");
+    }
+
+    [Test]
+    public void TheFullTableQuench_KeepsADeclaredFullTextIndexBuiltByHand_UnderDropUnknownIndexes()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"ALTER TABLE `{_testDb}`.`{_testTableName}` ADD FULLTEXT INDEX ft_summary (summary)";
+        command.ExecuteNonQuery();
+
+        FullQuench(command, FullTableJson("""{ "Name": "ft_summary", "Columns": "summary" }"""));
+        Assert.Multiple(() =>
+        {
+            Assert.That(FullText(command), Is.EqualTo("ft_summary(summary)"));
+            Assert.That(IndexAudits(command), Is.Empty, "the package declares it, so it is not unknown");
+        });
+    }
+
+    [Test]
+    public void TheIndexOnlyQuench_ReCreatesAFullTextIndexWhoseColumnsChanged()
+    {
+        using var command = _connection.CreateCommand();
+        void IndexOnly(string columns)
+        {
+            var json = $$"""[{ "Name": "`{{_testTableName}}`", "FullTextIndexes": [ { "Name": "ft_io", "Columns": "{{columns}}" } ] }]""";
+            command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{json.Replace("'", "''")}')";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
+            command.ExecuteNonQuery();
+        }
+        IndexOnly("content");
+        command.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+        command.ExecuteNonQuery();
+        IndexOnly("content");
+        Assert.That(IndexAudits(command), Is.Empty, "an unchanged redeploy no longer drops and re-creates it");
+        IndexOnly("content,title");
+        Assert.That(FullText(command), Is.EqualTo("ft_io(content,title)"));
+    }
+
     [Test]
     public void ShouldTrackFullTextIndexInProductOwnership()
     {

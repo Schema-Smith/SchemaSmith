@@ -534,7 +534,8 @@ public class ForgeKindlerTests
         // +2 = SystemTimePeriodRole (an explicit period column's role) + SupportsExplicitSystemTimeConversion (MariaDB 11.7).
         // +1 = SchemaSmith_ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
         // +1 = SchemaSmith_GeneratedKindChanged (MY-022: a VIRTUAL <-> STORED switch joins the generated-status drop and re-add).
-        Assert.That(mysql.Length, Is.EqualTo(94));
+        // +2 = SchemaSmith_DropModifiedFullTextIndexes + SchemaSmith_CreateMissingFullTextIndexes (#530: both index paths).
+        Assert.That(mysql.Length, Is.EqualTo(96));
     }
 
     [Test]

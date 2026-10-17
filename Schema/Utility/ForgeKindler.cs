@@ -715,6 +715,9 @@ public static class ForgeKindler
                 new("SchemaSmith_ParseTableJson.sql"),
                 new("SchemaSmith_RefuseUnsupportedIndexes.sql"),
                 new("SchemaSmith_MissingTableAndColumnQuench.sql"),
+                // #530: a table's FullTextIndexes, created and re-created by both index paths, not only the index-only one.
+                new("SchemaSmith_DropModifiedFullTextIndexes.sql"),
+                new("SchemaSmith_CreateMissingFullTextIndexes.sql"),
                 new("SchemaSmith_ModifiedTableQuench.sql"),
                 new("SchemaSmith_MissingIndexesAndConstraintsQuench.sql"),
                 new("SchemaSmith_ForeignKeyQuench.sql"),

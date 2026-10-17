@@ -813,6 +813,9 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
 
     END IF;
 
+    -- A table's FullTextIndexes (#530): this pass created every other index but never these.
+    CALL SchemaSmith_CreateMissingFullTextIndexes(p_ProductName, p_DatabaseName, p_WhatIf);
+
     -- Cleanup temporary tables
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexRenames;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifiedIndexes;
