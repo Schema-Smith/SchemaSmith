@@ -465,7 +465,7 @@ Extraction carries on past an object it cannot write, and the exit code tells a 
 | Code | Meaning |
 |---|---|
 | `0` | Every object was extracted. |
-| `1` | Finished, but the package is missing something: a script failed validation (saved as `.sqlerror` or removed), an existing `.sqlerror` was skipped with validation off, a module is encrypted (SQL Server), an index is of a kind a package cannot declare yet (SQL Server JSON and selective XML indexes), or an object's definition came back empty. The summary counts them under `Skipped` and `Invalid`. |
+| `1` | Finished, but the package is missing something: a script failed validation (saved as `.sqlerror` or removed), an existing `.sqlerror` was skipped with validation off, a module is encrypted (SQL Server), an index is of a kind a package cannot declare yet (SQL Server JSON and selective XML indexes), a table is a FileTable or an external table, a procedure is numbered, or an object's definition came back empty. The summary counts them under `Skipped` and `Invalid`. |
 | `2` | At least one table failed to extract. |
 
 The full table of codes is in [Configuration -- Exit Codes](configuration.md#exit-codes).
@@ -673,6 +673,8 @@ SchemaTongs automatically excludes the platform's system schemas and internal in
 - **Schema-creation script gaps (SQL Server)** -- The pass that emits `Schemas/*.sql` scripts additionally skips system-shipped schemas (`schema_id <= 4`, which covers `dbo`, `guest`, `INFORMATION_SCHEMA`, `sys`) and database-role schemas (names matching `db[_]%`). Object extraction under those schemas is not affected -- the gap is only in the standalone `CREATE SCHEMA` scripts.
 - **Replication artifacts** (SQL Server) -- Tables prefixed with `MSPeer_` or `MSPub_`.
 - **Legacy system tables** (SQL Server) -- `dtproperties` and `sysdiagrams`.
+- **FileTables and external tables** (SQL Server) -- a FileTable's shape comes from its FILESTREAM share and an external table's from its external data source, so a table file of their columns would deploy as an ordinary table. Each is named in a warning and counted as skipped. Create them with a script in the template's `After` slot.
+- **Numbered procedures** (SQL Server) -- `dbo.p;2` and later numbers of a procedure, deprecated since SQL Server 2008. SchemaTongs extracts `dbo.p` itself, which is `;1`, and names each later number in a warning, counted as skipped.
 - **Extension members** (PostgreSQL) -- Every object an installed extension owns (`pg_trgm`'s functions, PostGIS's `spatial_ref_sys`, an extension's types, operators and views). They belong to the extension, which is a prerequisite of the target database, not to the package. The run log says how many were skipped per extension.
 - **Triggers on partitioned tables and their partitions** (PostgreSQL) -- PostgreSQL declarative partitioning is not modelled, so the partitioned table and its partitions are refused at extraction, and a trigger on either (including the copies the engine clones onto each partition) is left out with them rather than written against a table the package does not contain.
 

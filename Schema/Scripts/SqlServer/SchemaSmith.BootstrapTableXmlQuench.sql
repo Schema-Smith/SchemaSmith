@@ -185,7 +185,7 @@ BEGIN TRY
               WHERE NOT EXISTS (
                   SELECT 1 FROM sys.columns sc
                    WHERE sc.object_id = OBJECT_ID(@v_QualifiedName)
-                     AND sc.name = c.ColumnNameBare
+                     AND sc.name COLLATE DATABASE_DEFAULT = c.ColumnNameBare
               )
               ORDER BY OrdinalPos
               FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '');
@@ -273,13 +273,13 @@ BEGIN TRY
            FROM @v_Indexes i
            JOIN sys.indexes si
              ON si.object_id = OBJECT_ID(@v_QualifiedName)
-            AND si.name = i.IndexNameBare
+            AND si.name COLLATE DATABASE_DEFAULT = i.IndexNameBare
           WHERE i.PrimaryKey = 0
             AND (si.is_unique <> i.[Unique]
                  OR CASE WHEN si.type_desc = 'CLUSTERED' THEN 1 ELSE 0 END <> i.[Clustered]
                  OR REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(REPLACE(REPLACE(REPLACE(i.IndexColumns, '[', ''), ']', ''), ' ', '')),
                                        'ASC', ''), 'DESC', '~'), '~', ' DESC'), ',', ','), '  ', ' ') <>
-                    ISNULL(STUFF((SELECT ',' + c.[name] + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
+                    ISNULL(STUFF((SELECT ',' + c.[name] COLLATE DATABASE_DEFAULT + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                               FROM sys.index_columns ic
                               JOIN sys.columns c
                                 ON c.object_id = ic.object_id AND c.column_id = ic.column_id
@@ -316,7 +316,7 @@ BEGIN TRY
             AND NOT EXISTS (
                 SELECT 1 FROM sys.indexes si
                  WHERE si.object_id = OBJECT_ID(@v_QualifiedName)
-                   AND si.name = i.IndexNameBare
+                   AND si.name COLLATE DATABASE_DEFAULT = i.IndexNameBare
             )
           ORDER BY OrdinalPos
           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 3, '');

@@ -223,7 +223,7 @@ BEGIN TRY
               WHERE NOT EXISTS (
                   SELECT 1 FROM sys.columns sc
                    WHERE sc.object_id = OBJECT_ID(@v_QualifiedName)
-                     AND sc.name = c.ColumnNameBare
+                     AND sc.name COLLATE DATABASE_DEFAULT = c.ColumnNameBare
               ));
 
         IF @v_AddColumns IS NOT NULL
@@ -318,7 +318,7 @@ BEGIN TRY
            FROM @v_Indexes i
            JOIN sys.indexes si
              ON si.object_id = OBJECT_ID(@v_QualifiedName)
-            AND si.name = i.IndexNameBare
+            AND si.name COLLATE DATABASE_DEFAULT = i.IndexNameBare
           WHERE i.PrimaryKey = 0
             AND (si.is_unique <> i.[Unique]
                  OR CASE WHEN si.type_desc = 'CLUSTERED' THEN 1 ELSE 0 END <> i.[Clustered]
@@ -338,7 +338,7 @@ BEGIN TRY
                  -- 'ASC,' needs an A.
                  OR REPLACE(REPLACE(',' + REPLACE(REPLACE(REPLACE(UPPER(i.IndexColumns), '[', ''), ']', ''), ' ', '') + ',',
                                     'ASC,', ','), 'DESC,', ' DESC,') <>
-                    ISNULL((SELECT ',' + UPPER(STRING_AGG(CAST(c.[name] + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',')
+                    ISNULL((SELECT ',' + UPPER(STRING_AGG(CAST(c.[name] COLLATE DATABASE_DEFAULT + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',')
                                      WITHIN GROUP (ORDER BY ic.key_ordinal)) + ','
                               FROM sys.index_columns ic
                               JOIN sys.columns c
@@ -376,7 +376,7 @@ BEGIN TRY
             AND NOT EXISTS (
                 SELECT 1 FROM sys.indexes si
                  WHERE si.object_id = OBJECT_ID(@v_QualifiedName)
-                   AND si.name = i.IndexNameBare
+                   AND si.name COLLATE DATABASE_DEFAULT = i.IndexNameBare
             ));
 
     IF @v_SQL IS NOT NULL

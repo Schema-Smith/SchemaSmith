@@ -99,8 +99,8 @@ BEGIN
         + N'Indexed view ' + s.name + N'.' + v.name + N' owned by different product. ['
         + CAST(ep.value AS NVARCHAR(200)) + N'] <> [' + @ProductName + N']'
     FROM @Views rv
-    INNER JOIN sys.schemas s ON s.name = rv.ViewSchema
-    INNER JOIN sys.views v ON v.name = rv.ViewName AND v.schema_id = s.schema_id
+    INNER JOIN sys.schemas s ON s.name COLLATE DATABASE_DEFAULT = rv.ViewSchema
+    INNER JOIN sys.views v ON v.name COLLATE DATABASE_DEFAULT = rv.ViewName AND v.schema_id = s.schema_id
     INNER JOIN sys.extended_properties ep ON ep.major_id = v.object_id AND ep.minor_id = 0
         AND ep.name = 'SchemaSmith_Product'
     WHERE CAST(ep.value AS NVARCHAR(200)) <> @ProductName
@@ -473,7 +473,7 @@ BEGIN
             WHERE NOT EXISTS (
                 SELECT 1 FROM sys.indexes si
                 WHERE si.object_id = OBJECT_ID(QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName))
-                AND si.name = v.IdxName
+                AND si.name COLLATE DATABASE_DEFAULT = v.IdxName
             )
             ORDER BY CASE WHEN v.IsClustered = 1 THEN 0 ELSE 1 END FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 4, '');
 

@@ -1810,6 +1810,48 @@ SELECT s.name AS SchemaName, o.name AS ObjectName
             ValidateAndHandleScript(command.Connection, fileName, sql, ScriptObjectType.Procedures);
             _stats.Procedures++;
         }
+
+        WarnNumberedProcedures(command, procedures);
+    }
+
+    // A numbered procedure (dbo.p;2 and on, deprecated since 2008) shares its name with dbo.p, whose definition is the
+    // only one SchemaTongs reads, so each later number would be lost without a word.
+    private void WarnNumberedProcedures(IDbCommand command, List<(string Schema, string Name)> procedures)
+    {
+        command.CommandText = @"
+SELECT OBJECT_SCHEMA_NAME(np.[object_id]), OBJECT_NAME(np.[object_id]), np.procedure_number
+  FROM sys.numbered_procedures np
+ WHERE np.procedure_number > 1
+ ORDER BY 1, 2, 3";
+        var numbered = new List<string>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                if (procedures.Contains((reader.GetString(0), reader.GetString(1))))
+                    numbered.Add($"{reader.GetString(0)}.{reader.GetString(1)};{reader.GetInt16(2)}");
+        foreach (var procedure in numbered)
+        {
+            _progressLog.Warn($"  WARNING: {procedure} is a numbered procedure, which a package cannot declare; only its ;1 is extracted");
+            _stats.SkippedObjects++;
+        }
+    }
+
+    // FileTables (2012) and external tables (2016) are tables SQL Server builds from something outside the table
+    // definition, a FILESTREAM share or an external data source, so a table file of their columns would deploy as an
+    // ordinary table. Each is named, counted as skipped, and left out.
+    private void WarnSqlServerTablesNotExtracted(IDbCommand command)
+    {
+        if (_sourceMajor is > 0 and < 11) return;
+        command.CommandText = "SELECT SCHEMA_NAME([schema_id]), [name], 'a FileTable' FROM sys.tables WHERE is_filetable = 1" +
+                              (_sourceMajor is 0 or >= 13 ? " UNION ALL SELECT SCHEMA_NAME([schema_id]), [name], 'an external table' FROM sys.tables WHERE is_external = 1" : "") +
+                              " ORDER BY 1, 2";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var (schema, name, kind) = (reader.GetString(0), reader.GetString(1), reader.GetString(2));
+            if (!ShouldExtractFromSchema(schema)) continue;
+            _progressLog.Warn($"  WARNING: {schema}.{name} is {kind}, which a package cannot declare; not extracted");
+            _stats.SkippedObjects++;
+        }
     }
 
     private void ScriptSqlServerTableTriggers(IDbCommand command)
@@ -3920,6 +3962,10 @@ SELECT TABLE_SCHEMA, TABLE_NAME
     -- Both report is_ms_shipped = 0, and the History one has is_dropped_ledger_table = 0, so the
     -- obvious flag misses it -- the engine-reserved name prefix is the reliable discriminator.
     AND TABLE_NAME NOT LIKE 'MSSQL[_]DroppedLedger%'
+    -- A FileTable or external table is named in a warning once the tables are done (WarnSqlServerTablesNotExtracted).
+    AND ISNULL(OBJECTPROPERTY(so.[object_id], 'TableIsFileTable'), 0) = 0" +
+    (_sourceMajor is 0 or >= 13 ? @"
+    AND NOT EXISTS (SELECT 1 FROM sys.tables xt WHERE xt.[object_id] = so.[object_id] AND xt.is_external = 1)" : "") + @"
   ORDER BY 1, 2
 ";
 
@@ -4020,6 +4066,8 @@ SELECT cc.name AS [Name],
                     _stats.TableErrors++;
                 }
             }
+            reader.Close();
+            WarnSqlServerTablesNotExtracted(commandJson);
         }
         finally
         {
