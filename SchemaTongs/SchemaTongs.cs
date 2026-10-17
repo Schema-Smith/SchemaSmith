@@ -3831,6 +3831,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
             commandJson.CommandText = $"SET @SchemaSmith_ObjectOrder = '{_objectOrder}'";
             commandJson.ExecuteNonQuery();
 
+            var extracted = new List<Table>();
             foreach (var (schema, table) in tables)
             {
                 if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(table.ToLower()) && !_objectsToCast.Contains($"{schema}.{table}".ToLower())) continue;
@@ -3897,6 +3898,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
 
                     if (_platform == Platform.MariaDb) StripSequenceDatabase(tableObj, targetSchema);
                     WritePackageObject(filename, tableObj, "tables");
+                    extracted.Add(tableObj);
                     _stats.Tables++;
                 }
                 catch (MySqlException ex)
@@ -3919,6 +3921,13 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                     _stats.TableErrors++;
                 }
             }
+
+            static string Bare(string name) => (name ?? "").Trim('`');
+            // MySQL 8.0 deploys a foreign key to a non-unique or partial key; 8.4 refuses it by default.
+            if (_platform == Platform.MySQL)
+                foreach (var (owner, fk) in Schema.Validation.Checks.CoherenceCheck.NonStandardKeyReferences(extracted))
+                    _progressLog.Warn($"    Foreign key {Bare(owner.Name)}.{Bare(fk.Name)} references {Bare(fk.RelatedTable)} ({fk.RelatedColumns.Replace("`", "")}), which is not a whole primary or unique key. " +
+                                      "MySQL 8.4 refuses such a key while restrict_fk_on_non_standard_key is on, its default (SS-FK-008).");
         }
         finally
         {

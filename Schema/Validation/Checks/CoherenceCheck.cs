@@ -270,6 +270,28 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
+    /// The foreign keys among <paramref name="tables"/> whose related columns are not a whole primary or unique key of a
+    /// related table in the same set (MySQL 8.4 refuses them by default). Shared with SchemaTongs, which warns on extraction.
+    /// </summary>
+    public static IEnumerable<(Table Table, ForeignKey ForeignKey)> NonStandardKeyReferences(IReadOnlyCollection<Table> tables)
+    {
+        var tablesByKey = tables.GroupBy(TableKey).ToDictionary(g => g.Key, g => g.ToList());
+        return tables.SelectMany(t => t.ForeignKeys.Select(fk => (Table: t, ForeignKey: fk)))
+            .Where(x => tablesByKey.TryGetValue(ResolveRelatedTarget(x.Table, x.ForeignKey), out var related) && !ReferencesWholeKey(x.ForeignKey, related));
+    }
+
+    private static bool ReferencesWholeKey(ForeignKey fk, List<Table> relatedTables)
+    {
+        var related = SplitNames(fk.RelatedColumns).Select(NormalizeIdentifier).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (related.Count == 0) return true;
+        return relatedTables.SelectMany(t => t.Indexes)
+            .Where(i => i.PrimaryKey || i.Unique || i.UniqueConstraint)
+            // A prefix or expression key part (Code(10)) never equals a column name, so a partial key does not match.
+            .Select(i => SplitNames(i.IndexColumns).Select(part => StripOrderingSuffix(part).Trim()).ToList())
+            .Any(parts => parts.Select(NormalizeIdentifier).ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(related));
+    }
+
+    /// <summary>
     /// Two foreign-key shapes the MySQL family accepts at create time but does not honour as written:
     /// <list type="bullet">
     /// <item><c>SET DEFAULT</c> is stored and then acts as <c>RESTRICT</c> (probed on MySQL 8.0 and MariaDB 11.4:
@@ -293,15 +315,7 @@ public sealed class CoherenceCheck : ISchemaCheck
                         $"{clause} SET DEFAULT is accepted by {platform} but acts as RESTRICT: the change to the parent row is refused instead. Declare the action the server will carry out.");
 
             if (platform != Platform.MySQL) continue;
-            if (!tablesByKey.TryGetValue(ResolveRelatedTarget(table, fk), out var relatedTables)) continue;
-            var related = SplitNames(fk.RelatedColumns).Select(NormalizeIdentifier).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            if (related.Count == 0) continue;
-            var isWholeKey = relatedTables.SelectMany(t => t.Indexes)
-                .Where(i => i.PrimaryKey || i.Unique || i.UniqueConstraint)
-                // A prefix or expression key part (Code(10)) never equals a column name, so a partial key does not match.
-                .Select(i => SplitNames(i.IndexColumns).Select(part => StripOrderingSuffix(part).Trim()).ToList())
-                .Any(parts => parts.Select(NormalizeIdentifier).ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(related));
-            if (!isWholeKey)
+            if (tablesByKey.TryGetValue(ResolveRelatedTarget(table, fk), out var relatedTables) && !ReferencesWholeKey(fk, relatedTables))
                 yield return new Finding(Severity.Warning, NonStandardKeyReferenceCode, Category, location,
                     $"RelatedColumns ({fk.RelatedColumns}) are not the whole primary key or a whole unique key of '{fk.RelatedTable}'. MySQL 8.4 refuses such a foreign key while restrict_fk_on_non_standard_key is on, its default. Reference a whole unique key, or declare one on those columns.");
         }
