@@ -866,6 +866,10 @@ BEGIN
           OR
           ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
            AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
+          OR
+          -- Generated both ways, but switching between VIRTUAL and STORED
+          (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
+           AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           -- STEP 3's set: any declared attribute differs from the live one.
           OR CASE WHEN UPPER(c.CompareDataType) LIKE 'ENUM%' OR UPPER(c.CompareDataType) LIKE 'SET%'
                     OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
@@ -1298,6 +1302,10 @@ BEGIN
               -- Currently regular, wants to be generated
               ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
                AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
+              OR
+              -- Generated both ways, but switching between VIRTUAL and STORED
+              (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
+               AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           )
           -- A desired expression-form default this target cannot legally MODIFY into (below MySQL
           -- 8.0.13 / see the degrade guard above) drops the whole column out of this pass; its
@@ -1402,6 +1410,10 @@ BEGIN
               OR
               ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
                AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
+              OR
+              -- Generated both ways, but switching between VIRTUAL and STORED
+              (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
+               AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           )
           -- A desired expression-form default this target cannot legally MODIFY into (below MySQL
           -- 8.0.13 / see the degrade guard above) drops the whole column out of this pass; its
@@ -1511,6 +1523,10 @@ BEGIN
               -- Currently regular, wants to be generated
               ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
                AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
+              OR
+              -- Generated both ways, but switching between VIRTUAL and STORED
+              (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
+               AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           )
           -- A desired expression-form default this target cannot legally MODIFY into (below MySQL
           -- 8.0.13 / see the degrade guard above) drops the whole column out of this pass; its
@@ -1618,6 +1634,10 @@ BEGIN
               OR
               ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
                AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
+              OR
+              -- Generated both ways, but switching between VIRTUAL and STORED
+              (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
+               AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           )
           -- A desired expression-form default this target cannot legally MODIFY into (below MySQL
           -- 8.0.13 / see the degrade guard above) drops the whole column out of this pass; its
@@ -1731,6 +1751,10 @@ BEGIN
               OR
               ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
                AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
+              OR
+              -- Generated both ways, but switching between VIRTUAL and STORED
+              (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
+               AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           )
           -- A desired expression-form default this target cannot legally MODIFY into (below MySQL
           -- 8.0.13 / see the degrade guard above) drops the whole column out of this pass; its
@@ -1844,6 +1868,10 @@ BEGIN
               OR
               ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
                AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
+              OR
+              -- Generated both ways, but switching between VIRTUAL and STORED
+              (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
+               AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           );
         -- Show ADD COLUMN statements
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
@@ -1863,6 +1891,10 @@ BEGIN
               OR
               ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
                AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
+              OR
+              -- Generated both ways, but switching between VIRTUAL and STORED
+              (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
+               AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           );
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Recreate columns (generated status changes)');
@@ -1884,6 +1916,10 @@ BEGIN
               OR
               ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
                AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
+              OR
+              -- Generated both ways, but switching between VIRTUAL and STORED
+              (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
+               AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           );
 
         -- Materialize DROP-phase then ADD-phase, folded per table. Two separate INSERTs (a
@@ -1912,6 +1948,10 @@ BEGIN
               OR
               ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
                AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
+              OR
+              -- Generated both ways, but switching between VIRTUAL and STORED
+              (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
+               AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           )
         GROUP BY c.TableName;
 
@@ -1932,6 +1972,10 @@ BEGIN
               OR
               ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
                AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
+              OR
+              -- Generated both ways, but switching between VIRTUAL and STORED
+              (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
+               AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           )
         GROUP BY c.TableName;
 

@@ -671,6 +671,8 @@ public static class ForgeKindler
                 new("SchemaSmith_IsSystemTimePeriodColumn.sql"),
                 // A declared system-time period column's role, and the gate for adding explicit ones to an implicit table (11.7).
                 new("SchemaSmith_SystemTimePeriodRole.sql"),
+                // Read by ModifiedTableQuench's generated-status passes: a VIRTUAL <-> STORED switch is a drop and re-add.
+                new("SchemaSmith_GeneratedKindChanged.sql"),
                 new("SchemaSmith_SupportsExplicitSystemTimeConversion.sql"),
                 new("SchemaSmith_SetSystemVersioningAlterHistory.sql"),
                 // KEEP around a new versioned table's index work only (MySQL no-op, MariaDb override); the index pass CALLs it.
