@@ -36,6 +36,7 @@ DECLARE
   protect_notice TEXT;
   partitioned_tables TEXT;
   rebuild_target RECORD;
+  undeclared_dependents TEXT;
 BEGIN
     -- OldName rename parity: a table renamed via OldName still has its PRE-rename name in
     -- temp_product_ownership (owned on the prior deploy). It is NOT removed from the product — the
@@ -1321,11 +1322,62 @@ BEGIN
                             AND ic.column_name = ec."ColumnName");
 
 
+    -- The objects a column type change must take down and put back: views and materialized views (pg_rewrite), SQL-standard
+    -- routines (pg_proc, PostgreSQL 14) and row-level security policies (pg_policy) that read a column whose type changes.
+    -- Only what the package declares can be put back -- a view or routine by its script, a materialized view or a policy
+    -- by its declaration -- so when the deploy says what it declares (temp_declared_modules, staged by SchemaQuench), a
+    -- dependent it does not declare stops the deploy by name before anything is dropped, as SQL Server's schema-bound
+    -- dependents do. Dropping it would lose it.
+    DROP TABLE IF EXISTS temp_type_change_dependents;
+    CREATE TEMPORARY TABLE temp_type_change_dependents AS
+      SELECT DISTINCT dep.*
+        FROM temp_existing_columns ec
+        JOIN temp_columns c ON c."TableSchema" = ec."TableSchema" AND c."TableName" = ec."TableName" AND c."Name" = ec."ColumnName"
+        JOIN pg_class ref_obj ON ref_obj.oid = to_regclass(QUOTE_IDENT(ec."TableSchema") || '.' || QUOTE_IDENT(ec."TableName"))
+        JOIN pg_attribute ref_attr ON ref_attr.attrelid = ref_obj.oid AND ref_attr.attname = ec."ColumnName"
+        JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass AND d.refobjid = ref_obj.oid AND d.refobjsubid = ref_attr.attnum
+        CROSS JOIN LATERAL (
+          SELECT CASE vc.relkind WHEN 'm' THEN 'materialized view' ELSE 'view' END AS "Kind", vn.nspname AS "Schema", vc.relname AS "Name", NULL::TEXT AS "OnTable"
+            FROM pg_rewrite r JOIN pg_class vc ON vc.oid = r.ev_class JOIN pg_namespace vn ON vn.oid = vc.relnamespace
+           WHERE d.classid = 'pg_rewrite'::regclass AND r.oid = d.objid AND r.rulename = '_RETURN' AND vc.oid <> ref_obj.oid
+          UNION ALL
+          SELECT CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END, pn.nspname, p.proname, NULL
+            FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace
+           WHERE d.classid = 'pg_proc'::regclass AND p.oid = d.objid
+          UNION ALL
+          SELECT 'policy', ec."TableSchema", pol.polname, ec."TableName"
+            FROM pg_policy pol
+           WHERE d.classid = 'pg_policy'::regclass AND pol.oid = d.objid) dep
+       WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC');
+
+    IF to_regclass('pg_temp.temp_declared_modules') IS NOT NULL THEN
+      SELECT STRING_AGG(dep."Kind" || ' ' || dep."Schema" || '.' || dep."Name", ', ' ORDER BY dep."Kind", dep."Schema", dep."Name")
+        INTO undeclared_dependents
+        FROM temp_type_change_dependents dep
+       WHERE (dep."Kind" <> 'policy'
+              AND NOT EXISTS (SELECT 1 FROM temp_declared_modules m WHERE m."Schema" = dep."Schema" AND m."Name" = dep."Name"))
+          OR (dep."Kind" = 'policy'
+              AND NOT EXISTS (SELECT 1 FROM temp_policies tp WHERE tp."TableSchema" = dep."Schema" AND tp."TableName" = dep."OnTable" AND tp."Name" = dep."Name"));
+      IF undeclared_dependents IS NOT NULL THEN
+        RAISE EXCEPTION 'A column type change in this package has to drop and re-create what reads that column, and the package does not declare: %. Declare it in the package so it can be put back, or drop it in a Before script. Nothing was changed.', undeclared_dependents;
+      END IF;
+    END IF;
+
+    -- Declared policies over a type-changing column: dropped here, created again by MissingIndexesAndConstraintsQuench.
+    SELECT STRING_AGG('RAISE NOTICE ''  Dropping Policy ' || REPLACE(dep."Name", '''', '''''') || ' on ' || REPLACE(dep."Schema" || '.' || dep."OnTable", '''', '''''') || ''';' || CHR(10) ||
+                      'DROP POLICY IF EXISTS ' || QUOTE_IDENT(dep."Name") || ' ON ' || QUOTE_IDENT(dep."Schema") || '.' || QUOTE_IDENT(dep."OnTable") || ';' || CHR(10) ||
+                      'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''policy'', ''' ||
+                      REPLACE(dep."Schema" || '.' || dep."OnTable" || '.' || dep."Name", '''', '''''') || ''', ''dropped'');', CHR(10))
+      INTO sql_script
+      FROM temp_type_change_dependents dep
+     WHERE dep."Kind" = 'policy';
+    CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
     RAISE NOTICE 'Drop Views and Rules Dependent on Modified Columns';
     SELECT STRING_AGG(CASE WHEN dep_view.relname IS NOT NULL
-                           THEN 'RAISE NOTICE ''  Dropping View ' || view_ns.nspname || '.' || dep_view.relname || ''';' || CHR(10) ||
-                                'DROP VIEW IF EXISTS ' || QUOTE_IDENT(view_ns.nspname) || '.' || QUOTE_IDENT(dep_view.relname) || ';' || CHR(10) ||
-                                'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''view'', ''' ||
+                           THEN 'RAISE NOTICE ''  Dropping ' || CASE WHEN dep_view.relkind = 'm' THEN 'Materialized View ' ELSE 'View ' END || view_ns.nspname || '.' || dep_view.relname || ''';' || CHR(10) ||
+                                'DROP ' || CASE WHEN dep_view.relkind = 'm' THEN 'MATERIALIZED VIEW' ELSE 'VIEW' END || ' IF EXISTS ' || QUOTE_IDENT(view_ns.nspname) || '.' || QUOTE_IDENT(dep_view.relname) || ';' || CHR(10) ||
+                                'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN dep_view.relkind = 'm' THEN 'materializedView' ELSE 'view' END || ''', ''' ||
                                 REPLACE(view_ns.nspname || '.' || dep_view.relname, '''', '''''') || ''', ''dropped'');'
                            ELSE CASE WHEN dep_rule.rulename != '_RETURN'
                                      THEN 'RAISE NOTICE ''  Dropping Rule ' || rule_class.relnamespace::regnamespace || '.' || dep_rule.rulename || ''';' || CHR(10) ||
@@ -1530,6 +1582,24 @@ BEGIN
         JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema" AND ec."TableName" = c."TableName" AND ec."ColumnName" = c."Name"
        WHERE (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
                       AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> '');
+
+    -- PG-095. A column cannot become nullable while it is in the index the table uses as its replica identity, and the
+    -- declared identity is applied later (ReplicaIdentityQuench), so a package that moves the identity off that index and
+    -- relaxes the column failed: "column ... is in index used as replica identity". The identity steps aside to DEFAULT
+    -- first; ReplicaIdentityQuench then sets the declared one. A package that keeps the index gets the engine's refusal.
+    RAISE NOTICE 'Release Replica Identity Index Ahead of a Nullability Change';
+    SELECT STRING_AGG(DISTINCT 'ALTER TABLE ' || QUOTE_IDENT(t."Schema") || '.' || QUOTE_IDENT(t."Name") || ' REPLICA IDENTITY DEFAULT;', CHR(10))
+      INTO sql_script
+      FROM temp_tables t
+      JOIN pg_class c ON c.oid = to_regclass(QUOTE_IDENT(t."Schema") || '.' || QUOTE_IDENT(t."Name")) AND c.relreplident = 'i'
+      JOIN pg_index ri ON ri.indrelid = c.oid AND ri.indisreplident
+      JOIN pg_class ric ON ric.oid = ri.indexrelid
+      JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY (ri.indkey)
+      JOIN temp_columns col ON col."TableSchema" = t."Schema" AND col."TableName" = t."Name" AND col."Name" = a.attname AND col."Nullable"
+      JOIN temp_existing_columns ec ON ec."TableSchema" = t."Schema" AND ec."TableName" = t."Name" AND ec."ColumnName" = a.attname AND NOT ec."Nullable"
+     WHERE COALESCE(t."ReplicaIdentity", '') != ''
+       AND NOT (t."ReplicaIdentity" = 'INDEX' AND t."ReplicaIdentityIndex" = ric.relname);
+    CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     RAISE NOTICE 'Alter Modified Columns';
     SELECT STRING_AGG("code", CHR(10))

@@ -762,6 +762,7 @@ public class DatabaseQuench
                 if (!_template.IndexOnlyTableQuenches && _updateTables)
                 {
                     var modifiedTablesSw = Stopwatch.StartNew();
+                    StageDeclaredModules(effectiveTableCmd);
                     _checkpointing.Track(DbScope, "ModifiedTables", () => QuenchModifiedTables(effectiveTableCmd));
                     modifiedTablesSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "ModifiedTables", modifiedTablesSw.ElapsedMilliseconds, 0);
@@ -2670,6 +2671,26 @@ SET NOCOUNT ON
             dependent.Outcome = ScriptOutcome.Applied;
             if (ProbeScriptStamp(destCmd, dependent, DatabaseScriptSlot.AfterTablesObject) is { } stamp) RecordScriptStamp(destCmd, stamp);
         }
+    }
+
+    // What ModifiedTableQuench may drop and expect this run to put back (PostgreSQL): the views and routines the package
+    // scripts and the materialized views it declares. A dependent of a type-changing column that is not here stops the
+    // deploy by name before anything is dropped.
+    private void StageDeclaredModules(IDbCommand tableCommand)
+    {
+        if (_product.Platform != Platform.PostgreSQL) return;
+        static string Literal(string s) => "'" + (s ?? "").Replace("'", "''") + "'";
+        var declared = new HashSet<(string Schema, string Name)>();
+        foreach (var script in _iteration.ObjectScripts.Concat(_iteration.AfterTablesObjectScripts))
+            if (ModuleScriptIdentity.Parse(script.Batches, _product.Platform) is { Name: not null } id)
+                declared.Add((id.Schema ?? "public", id.Name));
+        foreach (var view in JsonObjects(IterationMaterializedViewSchema))
+            declared.Add((view["Schema"]?.ToString() ?? "public", view["Name"]?.ToString() ?? ""));
+        var values = string.Join(", ", declared.Select(d => $"({Literal(d.Schema)}, {Literal(d.Name)})"));
+        ClearParameters(tableCommand);
+        tableCommand.CommandText = "DROP TABLE IF EXISTS temp_declared_modules; CREATE TEMPORARY TABLE temp_declared_modules (\"Schema\" TEXT, \"Name\" TEXT);"
+                                   + (values.Length > 0 ? $" INSERT INTO temp_declared_modules VALUES {values};" : "");
+        tableCommand.ExecuteNonQuery();
     }
 
     // A column type change drops the views and SQL-standard routines that depend on the column (PostgreSQL), and the

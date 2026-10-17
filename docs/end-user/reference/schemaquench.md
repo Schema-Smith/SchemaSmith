@@ -1103,6 +1103,14 @@ A chain is handled deepest-first: a view bound to a view bound to the changed fu
 
 ---
 
+## Column Type Changes on PostgreSQL
+
+PostgreSQL will not change a column's type while a view, materialized view, SQL-standard routine (`BEGIN ATOMIC` or `RETURN`, PostgreSQL 14) or row-level security policy reads the column. SchemaQuench drops each of them before the change and puts it back in the same run: views and routines by their scripts, materialized views by the materialized-view pass, and policies by the table pass. Each is recorded as `dropped` in the manifest.
+
+A dependent the package does not declare could not be put back, so the deploy stops before changing anything and the error names it. Add it to the package, or drop it in a `Before` script.
+
+---
+
 ## Signed Modules
 
 `ALTER` strips a SQL Server module's signatures, and the private key that made them cannot be read, so a signature cannot be scripted into a package. On SQL Server the deploy looks at a module's signatures (`sys.crypt_properties`) before its script runs, and after the change applies it signs the module again with every certificate or asymmetric key whose private key is encrypted by the database master key, which the server can use without a password. The manifest records that as `resigned` (`wouldResign` under `WhatIf`).

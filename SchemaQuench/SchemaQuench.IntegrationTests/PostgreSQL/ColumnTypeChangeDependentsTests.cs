@@ -53,6 +53,76 @@ public class ColumnTypeChangeDependentsTests : ObjectScriptDeployFixture
         WriteFile("Views", "public.v_dep.sql", "CREATE OR REPLACE VIEW public.v_dep AS SELECT id, a FROM public.t_dep;");
     }
 
+    // PG-090: a materialized view was dropped as "DROP VIEW" (refused: it is not a view), and a policy over the column blocked
+    // the change outright. Both are declared, so both are dropped and created again in the same run.
+    [Test]
+    public void AColumnTypeChange_UnderADeclaredMaterializedViewAndPolicy_Deploys_AndBothAreBack()
+    {
+        Exec("DROP MATERIALIZED VIEW IF EXISTS public.mv_dep; " + Drops);
+        try
+        {
+            void WriteWith(string type)
+            {
+                WritePackage("", "Materialized Views");
+                WriteFile("Tables", "public.t_dep.json", $$"""
+                    { "Schema": "public", "Name": "t_dep",
+                      "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false }, { "Name": "a", "DataType": "{{type}}", "Nullable": true } ],
+                      "Indexes": [ { "Name": "pk_t_dep", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" } ],
+                      "Policies": [ { "Name": "pol_dep", "Command": "SELECT", "UsingExpression": "a > 0" } ] }
+                    """);
+                WriteFile("Materialized Views", "public.mv_dep.json", """
+                    { "Schema": "public", "Name": "mv_dep", "Definition": "SELECT sum(a) AS total FROM public.t_dep" }
+                    """);
+            }
+            WriteWith("integer");
+            Deploy();
+            WriteWith("bigint");
+            var changed = Deploy();
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar("SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.t_dep'::regclass AND attname = 'a'"), Is.EqualTo("bigint"));
+                Assert.That(Count("SELECT count(*) FROM pg_matviews WHERE matviewname = 'mv_dep'"), Is.EqualTo(1), "the materialized view is back");
+                Assert.That(Count("SELECT count(*) FROM pg_policies WHERE policyname = 'pol_dep'"), Is.EqualTo(1), "and the policy");
+                Assert.That(changed.Audit.Select(r => $"{r.ObjectType} {r.Action}"), Is.SupersetOf(new[] { "materializedView dropped", "policy dropped" }), changed.DescribeAudit());
+            });
+        }
+        finally
+        {
+            Exec("DROP MATERIALIZED VIEW IF EXISTS public.mv_dep; " + Drops);
+        }
+    }
+
+    // What the package does not declare cannot be put back, so the deploy stops by name before dropping anything.
+    [Test]
+    public void AColumnTypeChange_UnderAViewThePackageDoesNotDeclare_StopsBeforeDroppingAnything()
+    {
+        Exec("DROP VIEW IF EXISTS public.v_mine; " + Drops);
+        try
+        {
+            WritePackage("", []);
+            void WriteTable(string type) => WriteFile("Tables", "public.t_dep.json", $$"""
+                { "Schema": "public", "Name": "t_dep",
+                  "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false }, { "Name": "a", "DataType": "{{type}}", "Nullable": true } ],
+                  "Indexes": [ { "Name": "pk_t_dep", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" } ] }
+                """);
+            WriteTable("integer");
+            Deploy();
+            Exec("CREATE VIEW public.v_mine AS SELECT a FROM public.t_dep");
+            WriteTable("bigint");
+            var refused = Deploy(expectSuccess: false);
+            Assert.Multiple(() =>
+            {
+                Assert.That(refused.Log, Has.Some.Contains("view public.v_mine"), string.Join("\n", refused.Log));
+                Assert.That(Scalar("SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.t_dep'::regclass AND attname = 'a'"), Is.EqualTo("integer"));
+                Assert.That(Count("SELECT count(*) FROM pg_views WHERE viewname = 'v_mine'"), Is.EqualTo(1), "and the view is still there");
+            });
+        }
+        finally
+        {
+            Exec("DROP VIEW IF EXISTS public.v_mine; " + Drops);
+        }
+    }
+
     [Test]
     public void AColumnTypeChange_UnderADependentViewAndBeginAtomicFunction_Deploys_AndBothAreBackInTheSameRun()
     {
