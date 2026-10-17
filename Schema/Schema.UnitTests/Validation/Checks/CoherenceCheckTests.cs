@@ -389,6 +389,39 @@ public class CoherenceCheckTests
         });
     }
 
+    // ---- MariaDB explicit system-time columns (SS-TMP-001 .. SS-TMP-004) ----
+
+    private static Schema.Domain.MariaDb.MariaDbTable Versioned(bool versioned, params Schema.Domain.MariaDb.MariaDbColumn[] columns)
+    {
+        var table = new Schema.Domain.MariaDb.MariaDbTable { Name = "Booking", IsSystemVersioned = versioned, Columns = { new Schema.Domain.MariaDb.MariaDbColumn { Name = "Id", DataType = "int" } } };
+        foreach (var c in columns) table.Columns.Add(c);
+        return table;
+    }
+
+    private static Schema.Domain.MariaDb.MariaDbColumn RowTime(string name, string role, string dataType = "TIMESTAMP(6)") => new() { Name = name, DataType = dataType, GeneratedAlways = role };
+
+    private static string[] MariaTmpCodes(Schema.Domain.MariaDb.MariaDbTable table) => RunOnMaria(table).Where(f => f.Code.StartsWith("SS-TMP")).Select(f => f.Code).ToArray();
+
+    [TestCase("TIMESTAMP(6)")]
+    [TestCase("bigint unsigned")]
+    [TestCase("BIGINT(20) UNSIGNED")]
+    public void AnExplicitSystemTimePair_OnAVersionedMariaDbTable_IsClean(string dataType)
+    {
+        Assert.That(MariaTmpCodes(Versioned(true, RowTime("rs", "RowStart", dataType), RowTime("re", "rowend", dataType))), Is.Empty);
+    }
+
+    [Test]
+    public void AnIncompleteRepeatedOrUnversionedOrMistypedMariaDbPair_IsAnError()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(MariaTmpCodes(Versioned(true, RowTime("rs", "RowStart"))), Is.EqualTo(new[] { "SS-TMP-001" }));
+            Assert.That(MariaTmpCodes(Versioned(true, RowTime("a", "RowStart"), RowTime("b", "RowStart"), RowTime("re", "RowEnd"))), Is.EqualTo(new[] { "SS-TMP-002" }));
+            Assert.That(MariaTmpCodes(Versioned(false, RowTime("rs", "RowStart"), RowTime("re", "RowEnd"))), Is.EqualTo(new[] { "SS-TMP-003" }));
+            Assert.That(MariaTmpCodes(Versioned(true, RowTime("rs", "RowStart", "DATETIME(6)"), RowTime("re", "RowEnd"))), Is.EqualTo(new[] { "SS-TMP-004" }));
+        });
+    }
+
     // ---- NullsNotDistinct on a primary key (SS-IDX-004) ----
     //
     // A primary key's columns cannot be NULL, so the clause has nothing to decide and the engine never records it on

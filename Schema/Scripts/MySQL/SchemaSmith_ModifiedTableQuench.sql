@@ -1108,6 +1108,78 @@ BEGIN
     CALL SchemaSmith_SetSystemVersioningAlterHistory(@ss_system_versioning_alter_history);
 
     -- =======================
+    -- STEP 2.97: EXPLICIT SYSTEM-TIME COLUMNS ON A TABLE THAT HAS THE IMPLICIT PAIR (MariaDB)
+    -- =======================
+    -- A package that declares ROW START / ROW END columns on a versioned table that still has the hidden
+    -- row_start/row_end gets them added with the period, the way MariaDB 11.7 allows: ALTER TABLE ... ADD COLUMN
+    -- ... ROW START, ADD COLUMN ... ROW END, ADD PERIOD FOR SYSTEM_TIME. That rewrites the history, so it waits for
+    -- the SystemVersioningAlterHistory=KEEP opt-in and says so without it; below 11.7 the table keeps its implicit
+    -- pair and a downgrade is recorded. Its unique keys then end in the new ROW END column, as the parse expects of a
+    -- table that already had one.
+    IF SchemaSmith_SupportsSystemVersioning() = 1 AND EXISTS (
+           SELECT 1 FROM _SchemaSmith_SystemPeriods sp
+             JOIN _SchemaSmith_Tables t ON t.TableName = sp.TableName
+            WHERE t.NewTable = 0 AND sp.LiveEndColumn IS NULL) THEN
+        BEGIN
+            DECLARE v_SpDone INT DEFAULT FALSE;
+            DECLARE v_SpTable VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+            DECLARE v_SpStart, v_SpEnd VARCHAR(130) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DECLARE v_SpStartScript, v_SpEndScript TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DECLARE cur_Sp CURSOR FOR
+                SELECT sp.TableName, sp.StartColumn, sp.EndColumn, sp.StartScript, sp.EndScript
+                  FROM _SchemaSmith_SystemPeriods sp
+                  JOIN _SchemaSmith_Tables t ON t.TableName = sp.TableName
+                 WHERE t.NewTable = 0 AND sp.LiveEndColumn IS NULL
+                   AND EXISTS (SELECT 1 FROM _SchemaSmith_CatTables ct WHERE ct.TableKey = t.TableKey AND ct.TABLE_TYPE = 'SYSTEM VERSIONED');
+            DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_SpDone = TRUE;
+            OPEN cur_Sp;
+            sp_loop: LOOP
+                FETCH cur_Sp INTO v_SpTable, v_SpStart, v_SpEnd, v_SpStartScript, v_SpEndScript;
+                IF v_SpDone THEN LEAVE sp_loop; END IF;
+                IF SchemaSmith_SupportsExplicitSystemTimeConversion() = 0 THEN
+                    IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail' THEN
+                        SET @ss_msg = CONCAT('Explicit ROW START / ROW END columns on an existing system-versioned table require MariaDB 11.7 (UnsupportedFeaturePolicy=fail): ',
+                                             SchemaSmith_StripBacktickWrapping(v_SpTable));
+                        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+                    END IF;
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  Explicit system-time columns not added (requires MariaDB 11.7 - downgraded): ', SchemaSmith_StripBacktickWrapping(v_SpTable)));
+                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+                    VALUES (CONNECTION_ID(), 'explicit system-time columns (MariaDB 11.7)', SchemaSmith_StripBacktickWrapping(v_SpTable), 'downgraded');
+                ELSEIF UPPER(COALESCE(@ss_system_versioning_alter_history, '')) <> 'KEEP' THEN
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  WARNING: ', SchemaSmith_StripBacktickWrapping(v_SpTable),
+                            ' declares ROW START / ROW END columns; adding them rewrites its history, so set SystemVersioningAlterHistory=KEEP to apply it'));
+                ELSEIF p_WhatIf = 0 THEN
+                    SET @ss_sp_sql = CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', v_SpTable,
+                                            ' ADD COLUMN ', v_SpStartScript, ', ADD COLUMN ', v_SpEndScript,
+                                            ', ADD PERIOD FOR SYSTEM_TIME(', v_SpStart, ', ', v_SpEnd, ')');
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  Adding explicit system-time columns to ', SchemaSmith_StripBacktickWrapping(v_SpTable)));
+                    PREPARE ss_sp_stmt FROM @ss_sp_sql;
+                    EXECUTE ss_sp_stmt;
+                    DEALLOCATE PREPARE ss_sp_stmt;
+                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+                    VALUES (CONNECTION_ID(), 'table', SchemaSmith_StripBacktickWrapping(v_SpTable), 'modified');
+                    -- MariaDB drops INVISIBLE from a column it adds this way, and refuses to change it after (4134), so a
+                    -- declared invisible period column stays visible: said, not hidden.
+                    IF v_SpStartScript LIKE '% INVISIBLE%' OR v_SpEndScript LIKE '% INVISIBLE%' THEN
+                        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                        VALUES (CONNECTION_ID(), CONCAT('  WARNING: ', SchemaSmith_StripBacktickWrapping(v_SpTable),
+                                ': MariaDB adds ROW START / ROW END columns to an existing table visible, whatever is declared, and cannot change that afterwards'));
+                    END IF;
+                    UPDATE _SchemaSmith_Indexes i
+                       SET i.CompareColumns = CONCAT(i.CompareColumns, ',', v_SpEnd)
+                     WHERE i.TableName = v_SpTable AND (i.IsPrimaryKey = 1 OR i.IsUnique = 1) AND i.WithoutOverlaps = 0
+                       AND SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(TRIM(SUBSTRING_INDEX(i.CompareColumns, ',', -1))))
+                           <> SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(v_SpEnd));
+                END IF;
+            END LOOP;
+            CLOSE cur_Sp;
+        END;
+    END IF;
+
+    -- =======================
     -- STEP 2.9: DROP FOREIGN KEYS THAT BLOCK A COLUMN-LEVEL COLLATION CHANGE
     -- =======================
     -- THE ONLY collation-driven FK teardown left, and it is the one that is genuinely needed. It has to
@@ -1939,6 +2011,8 @@ BEGIN
         )
     WHERE t.NewTable = 0
       AND dc.ColumnName IS NULL
+      -- A system-versioned table's ROW START / ROW END columns are the engine's: never dropped by absence.
+      AND SchemaSmith_IsSystemTimePeriodColumn(p_DatabaseName, SchemaSmith_StripBacktickWrapping(t.TableName), isc.COLUMN_NAME) = 0
       AND p_DropColumnsRemovedFromProduct = 1
       AND COALESCE(t.DropColumnsRemovedFromProduct, 1) = 1;
 
@@ -1968,6 +2042,7 @@ BEGIN
                 OR (dc.OldName IS NOT NULL AND dc.OldNameKey = isc.ColumnKey)
             )
         WHERE t.NewTable = 0
+          AND SchemaSmith_IsSystemTimePeriodColumn(p_DatabaseName, SchemaSmith_StripBacktickWrapping(t.TableName), isc.COLUMN_NAME) = 0
           AND dc.ColumnName IS NULL
           AND COALESCE(t.DropColumnsRemovedFromProduct, 1) = 1;
 

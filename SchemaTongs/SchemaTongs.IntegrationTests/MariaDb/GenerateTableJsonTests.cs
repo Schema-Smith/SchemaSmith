@@ -43,7 +43,7 @@ public class GenerateTableJsonTests : GenerateTableJsonSharedTests
     /// rather than in the shared fixture.</para>
     /// </summary>
     [Test]
-    public void ShouldExtractSystemVersionedTables_AndExcludeTheirEngineOwnedPeriodColumns()
+    public void ShouldExtractSystemVersionedTables_WithExplicitPeriodColumnsByTheirRole()
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_testConnectionString);
         conn.Open();
@@ -98,16 +98,17 @@ CREATE TABLE `{_integrationDb}`.`NotVersioned` (`Id` INT NOT NULL PRIMARY KEY) E
             Assert.That(plainJson, Does.Not.Contain("IsSystemVersioned"),
                 "An ordinary table's package must omit the key entirely rather than carry it as false.");
 
-            // The trap: these are generated and maintained by the engine. Extracted as ordinary columns,
-            // the apply path would try to manage them and re-deploy would attempt DDL the engine owns.
-            var explicitColumns = explicitTable.Columns.Select(c => c.Name.Replace("`", "")).ToList();
-            Assert.That(explicitColumns, Does.Not.Contain("RowStart"),
-                "The row-start period column is engine-owned and must not be extracted as a user column.");
-            Assert.That(explicitColumns, Does.Not.Contain("RowEnd"),
-                "The row-end period column is engine-owned and must not be extracted as a user column.");
-            Assert.That(explicitColumns, Does.Contain("Id"),
-                "Excluding the period columns must not take the real columns with them.");
-            Assert.That(explicitColumns, Does.Contain("Val"));
+            // The engine owns these columns, so they are written with their role rather than as ordinary or generated
+            // columns: an ordinary one would have the deploy try to manage it, and a generated one would carry the
+            // pseudo-expression ROW START. The implicit form's hidden pair is not written at all.
+            var explicitColumns = explicitTable.Columns.OfType<MariaDbColumn>().ToDictionary(c => c.Name.Replace("`", ""));
+            Assert.That(explicitColumns.Keys, Is.EquivalentTo(new[] { "Id", "Val", "RowStart", "RowEnd" }));
+            Assert.That($"{explicitColumns["RowStart"].GeneratedAlways}|{explicitColumns["RowEnd"].GeneratedAlways}", Is.EqualTo("RowStart|RowEnd"),
+                "each period column with its role");
+            Assert.That(explicitColumns["RowStart"].GenerationExpression ?? explicitColumns["RowEnd"].GenerationExpression, Is.Null,
+                "and not as a generated column");
+            Assert.That(implicitTable.Columns.Select(c => c.Name.Replace("`", "")), Is.EquivalentTo(new[] { "Id", "Val" }),
+                "the implicit pair is the engine's and is not written");
         });
 
         conn.Close();

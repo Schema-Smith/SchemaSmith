@@ -177,6 +177,10 @@ namespace Schema.Capabilities
                 1004, "MariaDB 10.4.3", null, DegradeKind.Reduced, "table without its PERIOD FOR clause"));
             // A unique or primary key WITHOUT OVERLAPS over a period (10.5.3). Below it the key is created over the
             // period's end and start columns -- what the engine itself lists for a temporal key -- without the clause.
+            // Explicit ROW START / ROW END columns added to an existing table that has the implicit pair (11.7). Below it
+            // the table keeps its hidden row_start/row_end; a new table takes declared ones on every supported version.
+            rows.Add(new("explicit-system-time-columns", "Explicit system-time columns on an existing table", Platform.MariaDb,
+                1107, "MariaDB 11.7", null, DegradeKind.Skip, "explicit system-time columns (MariaDB 11.7)"));
             rows.Add(new("temporal-key", "Temporal key (WITHOUT OVERLAPS)", Platform.MariaDb,
                 1005, "MariaDB 10.5.3", null, DegradeKind.Reduced, "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)"));
 

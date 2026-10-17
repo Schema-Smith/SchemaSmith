@@ -529,7 +529,8 @@ public class ForgeKindlerTests
         // +2 on the MySQL family = JsonAliasCheck + IsJsonAliasColumn (MariaDB's rendering of a JSON column).
         // +2 on the MySQL family = SupportsWithoutOverlaps + IndexPeriodJson (temporal keys; MariaDb override reads the catalog).
         // +1 on the MySQL family = KeepHistoryForNewVersionedTable (KEEP around a new versioned table's index work; MySQL no-op).
-        Assert.That(mysql.Length, Is.EqualTo(90));
+        // +2 = SystemTimePeriodRole (an explicit period column's role) + SupportsExplicitSystemTimeConversion (MariaDB 11.7).
+        Assert.That(mysql.Length, Is.EqualTo(92));
     }
 
     [Test]

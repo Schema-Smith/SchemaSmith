@@ -622,6 +622,11 @@ MariaDB columns carry every MySQL column property, plus:
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `WithoutSystemVersioning` | bool | `false` | Excludes this column from the row history of a system-versioned table: an `UPDATE` touching only this column writes no history row. Typically used for a large or high-churn column whose history is not worth keeping. **Meaningless unless the table is system-versioned** — MariaDB accepts the clause on an ordinary table and silently discards it, so `--Validate` reports `SS-SV-001` rather than letting it look applied. Changing it on a deployed column is an `ALTER`, so it needs `SystemVersioningAlterHistory: "KEEP"`. Requires MariaDB 10.3.4+; below that the clause is suppressed and the column deploys ordinarily. |
+| `GeneratedAlways` | string | | `RowStart` or `RowEnd`, on a table with `IsSystemVersioned`: the column is the engine's `ROW START` or `ROW END`. Declare both, as `TIMESTAMP(6)` (or `BIGINT UNSIGNED` for transaction-precise history), and the pair becomes `PERIOD FOR SYSTEM_TIME`; `Invisible` hides one. Left out, the table has MariaDB's hidden `row_start` / `row_end`. See [explicit system-time columns](#explicit-system-time-columns-mariadb). |
+
+### Explicit system-time columns (MariaDB)
+
+MariaDB adds a versioned table's `ROW END` column to every unique key itself, so `PRIMARY KEY (Id)` is stored as `(Id, re)`. A key declared without it compares equal to that, and SchemaTongs writes it without. A table created by the package takes the declared columns on every version with system versioning. A table that already has the hidden pair takes them from MariaDB 11.7, when `SystemVersioningAlterHistory` is `KEEP`, because adding them rewrites the stored history; without `KEEP` the deploy prints a warning and leaves the table as it is. MariaDB adds them visible whatever is declared and cannot change that afterwards, so the deploy says so. Below 11.7 the table keeps its hidden pair and a downgrade is recorded. The columns are the engine's: they are never altered, reordered or dropped by absence.
 
 ### Minimal example (PostgreSQL)
 

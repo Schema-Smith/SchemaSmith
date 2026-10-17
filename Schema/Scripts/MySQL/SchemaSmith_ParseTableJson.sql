@@ -269,6 +269,8 @@ BEGIN
         Collation VARCHAR(100) DEFAULT NULL,
         IsInvisible TINYINT DEFAULT 0,
         IsWithoutSystemVersioning TINYINT DEFAULT 0,
+        -- MariaDB: a declared system-time period column, 'ROWSTART' or 'ROWEND' (GeneratedAlways). NULL otherwise.
+        SystemTimeRole VARCHAR(10) DEFAULT NULL,
         Srid INT DEFAULT NULL,
         -- MySQL's column comment ceiling is 1024 characters. No pre-validation -- see the Tables
         -- temp table Comment column above for the same convention.
@@ -295,7 +297,7 @@ BEGIN
                 INSERT INTO _SchemaSmith_Columns (
                     TableName, ColumnName, OrdinalPosition, DataType, IsNullable, NullableDeclared, DefaultValue, OnUpdateCurrentTimestamp,
                     IsAutoIncrement, GeneratedExpression, GeneratedType, CheckExpression,
-                    CharacterSet, Collation, IsInvisible, IsWithoutSystemVersioning, Srid, Comment, OldName, NewColumn, ShouldApply, ShouldApplyExpression, VariantName
+                    CharacterSet, Collation, IsInvisible, IsWithoutSystemVersioning, SystemTimeRole, Srid, Comment, OldName, NewColumn, ShouldApply, ShouldApplyExpression, VariantName
                 )
                 SELECT
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Name')))) AS TableName,
@@ -321,6 +323,8 @@ BEGIN
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Collation'))) AS Collation,
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Invisible'))), 0) AS IsInvisible,
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].WithoutSystemVersioning'))), 0) AS IsWithoutSystemVersioning,
+                    CASE UPPER(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].GeneratedAlways')))))
+                         WHEN 'ROWSTART' THEN 'ROWSTART' WHEN 'ROWEND' THEN 'ROWEND' END AS SystemTimeRole,
                     SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Srid'))) AS Srid,
                     COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Description')))), ''),
                          NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Comment')))), '')) AS Comment,
@@ -618,6 +622,9 @@ BEGIN
     SET ColumnScript = CONCAT(
         ColumnName, ' ',
         CASE
+            -- A system-time period column (MariaDB): the type and the role, nothing else; the engine owns the value.
+            WHEN SystemTimeRole IS NOT NULL AND SchemaSmith_SupportsSystemVersioning() = 1 THEN
+                CONCAT(SchemaSmith_UpperDataType(DataType), ' GENERATED ALWAYS AS ROW ', CASE SystemTimeRole WHEN 'ROWSTART' THEN 'START' ELSE 'END' END)
             WHEN GeneratedExpression IS NOT NULL AND TRIM(GeneratedExpression) != '' THEN
                 CONCAT(
                     SchemaSmith_UpperDataType(DataType),
@@ -684,6 +691,37 @@ BEGIN
         CASE WHEN CheckExpression IS NOT NULL AND TRIM(CheckExpression) != '' AND VERSION() LIKE '%MariaDB%'
              THEN CONCAT(' CHECK (', CheckExpression, ')') ELSE '' END
     );
+
+    -- Declared system-time period columns (MariaDB). A new table takes them in its CREATE, with PERIOD FOR SYSTEM_TIME;
+    -- on a table that exists they come off _SchemaSmith_Columns, so no column pass adds, alters or reorders them, and
+    -- ModifiedTableQuench adds them to a table that still has the implicit pair. LiveEndColumn is the table's own
+    -- explicit ROW END column when it has one: MariaDB adds it to every unique key, so the keys compare with it.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_SystemPeriods;
+    CREATE TEMPORARY TABLE _SchemaSmith_SystemPeriods (
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
+        StartColumn VARCHAR(130) DEFAULT NULL,
+        StartScript TEXT DEFAULT NULL,
+        EndColumn VARCHAR(130) DEFAULT NULL,
+        EndScript TEXT DEFAULT NULL,
+        LiveEndColumn VARCHAR(130) DEFAULT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    IF SchemaSmith_SupportsSystemVersioning() = 1 THEN
+        INSERT INTO _SchemaSmith_SystemPeriods (TableName, StartColumn, StartScript)
+        SELECT c.TableName, c.ColumnName, c.ColumnScript FROM _SchemaSmith_Columns c WHERE c.SystemTimeRole = 'ROWSTART';
+        UPDATE _SchemaSmith_SystemPeriods sp
+          JOIN _SchemaSmith_Columns c ON c.TableName = sp.TableName AND c.SystemTimeRole = 'ROWEND'
+           SET sp.EndColumn = c.ColumnName, sp.EndScript = c.ColumnScript;
+        DELETE FROM _SchemaSmith_SystemPeriods WHERE EndColumn IS NULL;
+        UPDATE _SchemaSmith_SystemPeriods sp
+           SET sp.LiveEndColumn = (SELECT CONCAT('`', c.COLUMN_NAME, '`')
+                                     FROM INFORMATION_SCHEMA.COLUMNS c
+                                    WHERE SchemaSmith_IdentifierKey(c.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
+                                      AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(sp.TableName))
+                                      AND c.GENERATION_EXPRESSION = 'ROW END' LIMIT 1);
+        DELETE c FROM _SchemaSmith_Columns c
+          JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+         WHERE t.NewTable = 0 AND c.SystemTimeRole IS NOT NULL;
+    END IF;
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Calculate generated column dependencies');
 
@@ -1097,6 +1135,14 @@ BEGIN
            EmitColumns = CASE WHEN WithoutOverlaps = 1 AND SchemaSmith_SupportsWithoutOverlaps() = 1 THEN CONCAT(IndexColumns, ' WITHOUT OVERLAPS')
                               WHEN WithoutOverlaps = 1 THEN COALESCE(CompareColumns, IndexColumns)
                               ELSE IndexColumns END;
+    -- A unique key of a table with explicit system-time columns ends in its ROW END column, put there by MariaDB, so a
+    -- key declared without it compares with it. One that already names it is left as it is.
+    UPDATE _SchemaSmith_Indexes i
+      JOIN _SchemaSmith_SystemPeriods sp ON sp.TableName = i.TableName AND sp.LiveEndColumn IS NOT NULL
+       SET i.CompareColumns = CONCAT(i.CompareColumns, ',', sp.LiveEndColumn)
+     WHERE (i.IsPrimaryKey = 1 OR i.IsUnique = 1) AND i.WithoutOverlaps = 0
+       AND SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(TRIM(SUBSTRING_INDEX(i.CompareColumns, ',', -1))))
+           <> SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(sp.LiveEndColumn));
 
 
     -- Partitioning (#partitioning, K3): the ORDERED per-partition list. Order is load-bearing -- RANGE

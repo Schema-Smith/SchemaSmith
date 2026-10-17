@@ -33,6 +33,7 @@ namespace Schema.UnitTests.Capabilities
             "Always Encrypted (SQL Server 2016)",
             "columnstore index (SQL Server 2012/2014)",
             "spatial AUTO_GRID tessellation (SQL Server 2012)",
+            "explicit system-time columns (MariaDB 11.7)",
             "NULLS NOT DISTINCT (PG15)",
             "NOT ENFORCED constraint (PG18)",
             "WITHOUT OVERLAPS (PG18)",

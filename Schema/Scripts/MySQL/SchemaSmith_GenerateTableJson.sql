@@ -199,12 +199,14 @@ BEGIN
             -- MariaDB only (NULL on MySQL, and stripped below so a MySQL package never carries a key its model rejects).
             'CheckExpression', CASE WHEN SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 1 THEN NULL
                                     ELSE SchemaSmith_ColumnLevelCheck(p_Schema, p_Table, c.COLUMN_NAME) END,
+            'GeneratedAlways', CASE SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, c.COLUMN_NAME) WHEN 1 THEN 'RowStart' WHEN 2 THEN 'RowEnd' END,
             'Generated', CASE
+                WHEN SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, c.COLUMN_NAME) > 0 THEN NULL
                 WHEN c.EXTRA LIKE '%VIRTUAL GENERATED%' THEN 'VIRTUAL'
                 WHEN c.EXTRA LIKE '%STORED GENERATED%' THEN 'STORED'
                 ELSE NULL
             END,
-            'GenerationExpression', CASE WHEN c.GENERATION_EXPRESSION = '' THEN NULL ELSE c.GENERATION_EXPRESSION END,
+            'GenerationExpression', CASE WHEN c.GENERATION_EXPRESSION = '' OR c.GENERATION_EXPRESSION IN ('ROW START', 'ROW END') THEN NULL ELSE c.GENERATION_EXPRESSION END,
             'CharacterSet', CASE WHEN SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 1 THEN NULL
                                  ELSE c.CHARACTER_SET_NAME END,
             'Collation', CASE
@@ -219,7 +221,9 @@ BEGIN
                 THEN '$.___dummy___' ELSE '$.WithoutSystemVersioning' END,
            CASE WHEN SchemaSmith_ColumnLevelCheck(p_Schema, p_Table, c.COLUMN_NAME) IS NOT NULL
                  AND SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 0
-                THEN '$.___dummy2___' ELSE '$.CheckExpression' END)
+                THEN '$.___dummy2___' ELSE '$.CheckExpression' END,
+           CASE WHEN SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, c.COLUMN_NAME) > 0
+                THEN '$.___dummy3___' ELSE '$.GeneratedAlways' END)
         -- Alphabetical, matching SQL Server and PostgreSQL. Ordinal order made the same table extract
         -- differently depending on which engine it came from, so a package re-extracted elsewhere showed
         -- a whole-file diff that was pure noise. Name order is also stable against a source table whose
@@ -240,12 +244,9 @@ BEGIN
     ), ']') INTO v_columns
     FROM INFORMATION_SCHEMA.COLUMNS c
     WHERE c.TABLE_SCHEMA = p_Schema
-      AND c.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
-      -- A system-versioned table's row-start/row-end columns are generated and maintained by the engine.
-      -- Extracting them as ordinary columns would have the apply path try to manage them on re-deploy.
-      -- Only the explicit authoring form exposes them at all; the implicit form hides them. Isolated in a
-      -- function because the catalog columns behind it do not exist on MySQL -- see that function.
-      AND SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, c.COLUMN_NAME) = 0;
+      AND c.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table);
+      -- A system-versioned table's explicit ROW START / ROW END columns are written with their role (GeneratedAlways);
+      -- the implicit pair is not in INFORMATION_SCHEMA.COLUMNS at all, so a table that has it extracts without them.
 
     -- Get indexes (excluding FULLTEXT which are handled separately). A functional/expression key part
     -- (MySQL 8.0.13+) has NULL COLUMN_NAME and reports its text via EXPRESSION instead; that column does
@@ -335,9 +336,9 @@ BEGIN
             WHERE s.TABLE_SCHEMA = p_Schema
               AND s.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
               AND s.INDEX_TYPE != 'FULLTEXT'
-              -- A period column is left out of Columns, so an index must not name it either: the package would not
-              -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
-              AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
+              -- MariaDB adds a versioned table's ROW END column to its unique keys itself, so a unique key is written
+              -- without it; the deploy compares the two as one. Any other index naming a period column keeps it.
+              AND (s.COLUMN_NAME IS NULL OR s.NON_UNIQUE = 1 OR SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, s.COLUMN_NAME) <> 2)
             GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT, pj.PeriodJson
         ) idx_subquery;
     ELSE
@@ -375,9 +376,9 @@ BEGIN
             WHERE s.TABLE_SCHEMA = p_Schema
               AND s.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
               AND s.INDEX_TYPE != 'FULLTEXT'
-              -- A period column is left out of Columns, so an index must not name it either: the package would not
-              -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
-              AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
+              -- MariaDB adds a versioned table's ROW END column to its unique keys itself, so a unique key is written
+              -- without it; the deploy compares the two as one. Any other index naming a period column keeps it.
+              AND (s.COLUMN_NAME IS NULL OR s.NON_UNIQUE = 1 OR SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, s.COLUMN_NAME) <> 2)
             GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT, pj.PeriodJson
         ) idx_subquery;
     END IF;

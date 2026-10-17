@@ -65,6 +65,13 @@ BEGIN
                        AND SchemaSmith_SupportsApplicationTimePeriods() = 1),
                     ''
                 ),
+                -- Declared system-time period columns (MariaDB): their period, in the CREATE with the columns.
+                COALESCE(
+                    (SELECT CONCAT(', PERIOD FOR SYSTEM_TIME(', sp.StartColumn, ', ', sp.EndColumn, ')')
+                     FROM _SchemaSmith_SystemPeriods sp
+                     WHERE sp.TableName = t.TableName AND t.IsSystemVersioned = 1),
+                    ''
+                ),
                 ') ENGINE=', COALESCE(t.Engine, 'InnoDB'),
                 -- DEFAULT CHARACTER SET / COLLATE -- the table's declared collation, which this option list omitted
                 -- entirely while carrying ENGINE, ROW_FORMAT, the CREATE_OPTIONS four, encryption, AUTO_INCREMENT,

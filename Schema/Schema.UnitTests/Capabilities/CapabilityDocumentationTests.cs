@@ -101,6 +101,7 @@ public class CapabilityDocumentationTests
         ["MariaDb/invisible-column"] = "**Invisible column**",
         ["MariaDb/application-time-period"] = "**Application-time period**",
         ["MariaDb/temporal-key"] = "**Temporal key**",
+        ["MariaDb/explicit-system-time-columns"] = "**Explicit system-time columns**",
         ["MariaDb/column-history-exclusion"] = "**Per-column history exclusion**",
         ["MariaDb/table-system-versioning"] = "**Table-level system versioning**",
         ["MariaDb/long-unique-key"] = "**Long unique key**",

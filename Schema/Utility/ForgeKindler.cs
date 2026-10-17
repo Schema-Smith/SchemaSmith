@@ -663,6 +663,9 @@ public static class ForgeKindler
                 new("SchemaSmith_SupportsWithoutOverlaps.sql"),
                 new("SchemaSmith_IndexPeriodJson.sql"),
                 new("SchemaSmith_IsSystemTimePeriodColumn.sql"),
+                // A declared system-time period column's role, and the gate for adding explicit ones to an implicit table (11.7).
+                new("SchemaSmith_SystemTimePeriodRole.sql"),
+                new("SchemaSmith_SupportsExplicitSystemTimeConversion.sql"),
                 new("SchemaSmith_SetSystemVersioningAlterHistory.sql"),
                 // KEEP around a new versioned table's index work only (MySQL no-op, MariaDb override); the index pass CALLs it.
                 new("SchemaSmith_KeepHistoryForNewVersionedTable.sql"),

@@ -138,6 +138,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckBackfill(table, location));
             findings.AddRange(CheckPeriodColumns(table, location));
             findings.AddRange(CheckLedgerColumns(table, location));
+            findings.AddRange(CheckMariaDbPeriodColumns(table, location));
             findings.AddRange(CheckSpatialIndexes(table, location, columnsAreOwnedElsewhere));
             findings.AddRange(CheckEdgeConstraints(table, location, tablesByKey));
             findings.AddRange(CheckCharsetWithoutCollation(table, location));
@@ -380,9 +381,31 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
-    /// A SQL Server temporal table's period columns are a pair -- one RowStart, one RowEnd, both DATETIME2 -- on a
-    /// table with IsTemporal. The engine refuses every other shape, so the package is stopped here instead.
+    /// MariaDB's explicit system-time columns follow the same pair rule as SQL Server's period columns (one RowStart, one
+    /// RowEnd, on a table with IsSystemVersioned), with MariaDB's types: TIMESTAMP(6), or BIGINT UNSIGNED for
+    /// transaction-precise history. MariaDB refuses anything else at CREATE TABLE.
     /// </summary>
+    private static IEnumerable<Finding> CheckMariaDbPeriodColumns(Table table, string tableLocation)
+    {
+        if (table is not Schema.Domain.MariaDb.MariaDbTable mariaTable) yield break;
+        var periods = mariaTable.Columns.OfType<Schema.Domain.MariaDb.MariaDbColumn>().Where(c => PeriodRoles.Contains(c.GeneratedAlways?.Trim() ?? "")).ToList();
+        if (periods.Count == 0) yield break;
+        var byRole = periods.GroupBy(c => c.GeneratedAlways.Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+        foreach (var (role, columns) in byRole.Where(r => r.Value.Count > 1))
+            yield return new Finding(Severity.Error, PeriodRoleRepeatedCode, Category, tableLocation,
+                $"Columns {string.Join(", ", columns.Select(c => $"'{c.Name}'"))} all declare GeneratedAlways {role}: a table has one RowStart and one RowEnd.");
+        foreach (var (have, missing) in new[] { ("RowStart", "RowEnd"), ("RowEnd", "RowStart") })
+            if (byRole.TryGetValue(have, out var present) && !byRole.ContainsKey(missing))
+                yield return new Finding(Severity.Error, PeriodPairIncompleteCode, Category, tableLocation,
+                    $"Column '{present[0].Name}' declares GeneratedAlways {have} but no column declares {missing}: PERIOD FOR SYSTEM_TIME needs both.");
+        if (!mariaTable.IsSystemVersioned)
+            yield return new Finding(Severity.Error, PeriodWithoutTemporalCode, Category, tableLocation,
+                $"Table '{table.Name}' declares ROW START / ROW END columns but not IsSystemVersioned: they exist only on a system-versioned table, so set IsSystemVersioned or remove GeneratedAlways.");
+        foreach (var column in periods.Where(c => !Regex.IsMatch(c.DataType ?? "", @"^\s*(TIMESTAMP\s*\(\s*6\s*\)|BIGINT(\s*\(\s*\d+\s*\))?\s+UNSIGNED)\s*$", RegexOptions.IgnoreCase)))
+            yield return new Finding(Severity.Error, PeriodTypeCode, Category, tableLocation,
+                $"System-time column '{column.Name}' is {column.DataType}: MariaDB takes TIMESTAMP(6), or BIGINT UNSIGNED for transaction-precise history.");
+    }
+
     private static readonly HashSet<string> PeriodRoles = new(StringComparer.OrdinalIgnoreCase) { "RowStart", "RowEnd" };
     private static readonly HashSet<string> LedgerRoles = new(StringComparer.OrdinalIgnoreCase)
         { "TransactionIdStart", "TransactionIdEnd", "SequenceNumberStart", "SequenceNumberEnd" };
@@ -419,6 +442,10 @@ public sealed class CoherenceCheck : ISchemaCheck
                 $"Ledger column '{column.Name}' is {column.DataType}: SQL Server makes a ledger table's generated columns BIGINT.");
     }
 
+    /// <summary>
+    /// A SQL Server temporal table's period columns are a pair -- one RowStart, one RowEnd, both DATETIME2 -- on a
+    /// table with IsTemporal. The engine refuses every other shape, so the package is stopped here instead.
+    /// </summary>
     private static IEnumerable<Finding> CheckPeriodColumns(Table table, string tableLocation)
     {
         if (table is not SqlServerTable sqlTable) yield break;
