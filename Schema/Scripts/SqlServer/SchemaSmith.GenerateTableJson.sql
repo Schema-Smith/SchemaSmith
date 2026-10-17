@@ -45,6 +45,19 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
      WHERE [object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table));',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Ledger NVARCHAR(12) OUTPUT',
     @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Ledger = @v_Ledger OUTPUT
+-- The ledger view (2022), written only for the members that differ from the engine's defaults.
+DECLARE @v_LvSchema NVARCHAR(300), @v_LvName NVARCHAR(300), @v_LvTx NVARCHAR(300), @v_LvSeq NVARCHAR(300), @v_LvOp NVARCHAR(300), @v_LvOpDesc NVARCHAR(300)
+IF SchemaSmith.fn_ServerMajorVersion() >= 16
+  EXEC sp_executesql N'
+    SELECT @p_LvSchema = CASE WHEN OBJECT_SCHEMA_NAME(st.ledger_view_id) <> @p_Schema THEN QUOTENAME(OBJECT_SCHEMA_NAME(st.ledger_view_id)) END,
+           @p_LvName = CASE WHEN OBJECT_NAME(st.ledger_view_id) <> @p_Table + ''_Ledger'' THEN QUOTENAME(OBJECT_NAME(st.ledger_view_id)) END,
+           @p_LvTx = (SELECT QUOTENAME(vc.[name]) FROM sys.columns vc WHERE vc.[object_id] = st.ledger_view_id AND vc.ledger_view_column_type = 1 AND vc.[name] <> ''ledger_transaction_id''),
+           @p_LvSeq = (SELECT QUOTENAME(vc.[name]) FROM sys.columns vc WHERE vc.[object_id] = st.ledger_view_id AND vc.ledger_view_column_type = 2 AND vc.[name] <> ''ledger_sequence_number''),
+           @p_LvOp = (SELECT QUOTENAME(vc.[name]) FROM sys.columns vc WHERE vc.[object_id] = st.ledger_view_id AND vc.ledger_view_column_type = 3 AND vc.[name] <> ''ledger_operation_type''),
+           @p_LvOpDesc = (SELECT QUOTENAME(vc.[name]) FROM sys.columns vc WHERE vc.[object_id] = st.ledger_view_id AND vc.ledger_view_column_type = 4 AND vc.[name] <> ''ledger_operation_type_desc'')
+      FROM sys.tables st WHERE st.[object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table)) AND st.ledger_view_id IS NOT NULL;',
+    N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_LvSchema NVARCHAR(300) OUTPUT, @p_LvName NVARCHAR(300) OUTPUT, @p_LvTx NVARCHAR(300) OUTPUT, @p_LvSeq NVARCHAR(300) OUTPUT, @p_LvOp NVARCHAR(300) OUTPUT, @p_LvOpDesc NVARCHAR(300) OUTPUT',
+    @p_Schema = @p_Schema, @p_Table = @p_Table, @p_LvSchema = @v_LvSchema OUTPUT, @p_LvName = @v_LvName OUTPUT, @p_LvTx = @v_LvTx OUTPUT, @p_LvSeq = @v_LvSeq OUTPUT, @p_LvOp = @v_LvOp OUTPUT, @p_LvOpDesc = @v_LvOpDesc OUTPUT
 -- CDC change-table filegroup (#417). The cdc schema exists only in a CDC-enabled database, so the read is
 -- dynamic and guarded. It takes the NEWEST capture instance first and only then asks whether its filegroup is
 -- a non-default one -- filtering to non-default first would report an older instance's placement. NULL (the
@@ -208,6 +221,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        -- Ledger (#ledger, 2022+). Emitted only when the table IS one. ledger_type_desc is 2022, so
        -- it is read through a version-gated helper rather than referenced here -- see @v_Ledger.
        @v_Ledger AS [Ledger],
+       JSON_QUERY(CASE WHEN COALESCE(@v_LvSchema, @v_LvName, @v_LvTx, @v_LvSeq, @v_LvOp, @v_LvOpDesc) IS NOT NULL
+                       THEN (SELECT @v_LvSchema AS [Schema], @v_LvName AS [Name], @v_LvTx AS [TransactionIdColumn], @v_LvSeq AS [SequenceNumberColumn],
+                                    @v_LvOp AS [OperationTypeColumn], @v_LvOpDesc AS [OperationTypeDescColumn] FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) END) AS [LedgerView],
        -- Table-level Change Tracking round-trip. Emitted only when ON, like IsTemporal above: every
        -- extracted package would otherwise gain "EnableChangeTracking": false on every table.
        -- sys.change_tracking_tables shipped with Change Tracking in 2008, so it is safe to read
@@ -301,8 +317,8 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                  FROM sys.column_encryption_keys cek
                                 WHERE cek.column_encryption_key_id = sc.column_encryption_key_id), '') COLLATE DATABASE_DEFAULT AS EncryptionKey,
                        ISNULL(sc.encryption_algorithm_name, '') COLLATE DATABASE_DEFAULT AS EncryptionAlgorithm,
-                       CASE sc.generated_always_type WHEN 1 THEN 'RowStart' WHEN 2 THEN 'RowEnd' END AS [GeneratedAlways],
-                       CASE WHEN sc.generated_always_type IN (1, 2) AND sc.is_hidden = 1 THEN CAST(1 AS BIT) END AS [Hidden],
+                       CASE sc.generated_always_type WHEN 1 THEN 'RowStart' WHEN 2 THEN 'RowEnd' WHEN 7 THEN 'TransactionIdStart' WHEN 8 THEN 'TransactionIdEnd' WHEN 9 THEN 'SequenceNumberStart' WHEN 10 THEN 'SequenceNumberEnd' END AS [GeneratedAlways],
+                       CASE WHEN sc.generated_always_type IN (1, 2, 7, 8, 9, 10) AND sc.is_hidden = 1 THEN CAST(1 AS BIT) END AS [Hidden],
                        '' AS [OldName],
                        (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Column', c.COLUMN_NAME)) AS [Description],
                        JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Column', c.COLUMN_NAME) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
@@ -322,7 +338,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     -- Exclude the temporal period columns (GENERATED ALWAYS AS ROW START/END). SchemaSmith
                     -- regenerates ValidFrom/ValidTo from IsTemporal by convention on apply, so emitting them
                     -- as user columns would double-declare them on re-deploy (#369).
-                    AND (sc.generated_always_type = 0 OR (sc.generated_always_type IN (1, 2) AND @v_PeriodColumnsDeclared = 1))
+                    AND (sc.generated_always_type = 0 OR (sc.generated_always_type IN (1, 2) AND @v_PeriodColumnsDeclared = 1)
+                         -- A ledger table's generated column is written only when it is not the engine's own (its name, hidden).
+                         OR (sc.generated_always_type IN (7, 8, 9, 10) AND (sc.[name] <> CASE sc.generated_always_type WHEN 7 THEN 'ledger_start_transaction_id' WHEN 8 THEN 'ledger_end_transaction_id' WHEN 9 THEN 'ledger_start_sequence_number' ELSE 'ledger_end_sequence_number' END OR sc.is_hidden = 0)))
                     -- Exclude SQL Server graph pseudo-columns. A node or edge table carries
                     -- system-generated columns ($node_id, $edge_id, $from_id, $to_id, graph_id and
                     -- the *_obj_id pair) whose names end in a per-table GUID, so emitting them
@@ -336,7 +354,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     -- and every hidden column: what remains of one after GENERATED ALWAYS and graph is a dropped
                     -- ledger column (2022), kept hidden by the engine; extracted, it came back visible on deploy.
                     -- COLUMNPROPERTY is NULL where IsHidden is unknown (before 2016).
-                    AND (ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0 OR sc.generated_always_type IN (1, 2))) x
+                    AND (ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0 OR sc.generated_always_type IN (1, 2, 7, 8, 9, 10))) x
           -- Column sequence: 'Name' (default) or 'Physical', the table's own order. The ordinal is looked up
           -- rather than projected: this is SELECT * over the derived table, so adding ORDINAL_POSITION to it
           -- would write the ordinal into the package file. The lookup only runs when Physical is asked for.

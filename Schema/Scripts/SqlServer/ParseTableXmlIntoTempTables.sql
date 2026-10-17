@@ -75,7 +75,13 @@
          [PreventDrop] = ISNULL(CONVERT(BIT, CASE LOWER(t.value('(PreventDrop/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END), 0),
          -- Omitted stays NULL (leave the database's description alone), '' stays '' (remove it); an MS_Description
          -- left inside Extensions.ExtendedProperties, where extraction used to put it, still counts.
-         [Description] = COALESCE(t.value('(Description/text())[1]', 'NVARCHAR(MAX)'), t.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'))
+         [Description] = COALESCE(t.value('(Description/text())[1]', 'NVARCHAR(MAX)'), t.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)')),
+         [LedgerViewSchema] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/Schema/text())[1]', 'NVARCHAR(500)')), '')),
+         [LedgerViewName] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/Name/text())[1]', 'NVARCHAR(500)')), '')),
+         [LedgerTransactionIdColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/TransactionIdColumn/text())[1]', 'NVARCHAR(500)')), '')),
+         [LedgerSequenceNumberColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/SequenceNumberColumn/text())[1]', 'NVARCHAR(500)')), '')),
+         [LedgerOperationTypeColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/OperationTypeColumn/text())[1]', 'NVARCHAR(500)')), '')),
+         [LedgerOperationTypeDescColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/OperationTypeDescColumn/text())[1]', 'NVARCHAR(500)')), ''))
     INTO #TableDefinitions
     FROM @v_TableXml.nodes('/Tables/Table') AS X(t);
 
@@ -91,7 +97,7 @@
          CONVERT(BIT, CASE WHEN OBJECT_ID([Schema] + '.' + [Name], 'U') IS NULL AND OBJECT_ID([Schema] + '.' + [OldName], 'U') IS NULL THEN 1 ELSE 0 END) AS NewTable,
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified],
-         ISNULL([PreventDrop], 0) AS [PreventDrop], [Description]
+         ISNULL([PreventDrop], 0) AS [PreventDrop], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn]
     INTO #Tables
     FROM #TableDefinitions WITH (NOLOCK);
 
@@ -145,6 +151,12 @@
                    CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE' AND SchemaSmith.fn_ServerMajorVersion() >= 13
                         THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = ''' + [EncryptionAlgorithm] + ''')'
                         ELSE '' END +
+                   -- A ledger table's generated column (2022): the role, and HIDDEN when declared. Only ever in a CREATE TABLE.
+                   ISNULL(CASE UPPER(c.[GeneratedAlways]) WHEN 'TRANSACTIONIDSTART' THEN ' GENERATED ALWAYS AS TRANSACTION_ID START'
+                                                  WHEN 'TRANSACTIONIDEND' THEN ' GENERATED ALWAYS AS TRANSACTION_ID END'
+                                                  WHEN 'SEQUENCENUMBERSTART' THEN ' GENERATED ALWAYS AS SEQUENCE_NUMBER START'
+                                                  WHEN 'SEQUENCENUMBEREND' THEN ' GENERATED ALWAYS AS SEQUENCE_NUMBER END' END +
+                          CASE WHEN ISNULL(c.[Hidden], 0) = 1 THEN ' HIDDEN' ELSE '' END, '') +
                    CASE WHEN ISNULL(Nullable, 0) = 1 THEN ' NULL' ELSE ' NOT NULL' END +
                    CASE WHEN RTRIM(ISNULL([Default], '')) <> '' THEN ' DEFAULT ' + [Default] ELSE '' END
               END AS [ColumnScript],
@@ -187,6 +199,12 @@
 
   -- The declared period columns go onto their table row and off #Columns, so no ordinary column pass sees them.
   EXEC SchemaSmith.LiftPeriodColumns
+  -- A ledger table's declared generated columns, by role (sys.columns.generated_always_type 7-10). Filled by
+  -- LiftLedgerColumns; on an existing table they are off #Columns and converge in LedgerQuench.
+  IF OBJECT_ID('tempdb..#LedgerColumns') IS NOT NULL DROP TABLE #LedgerColumns
+  CREATE TABLE #LedgerColumns ([Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+                               [RoleType] TINYINT NOT NULL, [ColumnName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Hidden] BIT NOT NULL)
+  EXEC SchemaSmith.LiftLedgerColumns
 
   -- Don't try to apply tables without columns
   DELETE FROM #Tables

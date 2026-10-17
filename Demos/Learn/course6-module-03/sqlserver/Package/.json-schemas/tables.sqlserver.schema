@@ -88,12 +88,12 @@
           },
           "GeneratedAlways": {
             "type": "string",
-            "pattern": "^(?:RowStart|RowEnd)$",
-            "description": "SQL Server 2016+, temporal tables. The column is a period column the engine fills: RowStart or RowEnd. Declare both, as DATETIME2(n), on a table with IsTemporal; the pair becomes PERIOD FOR SYSTEM_TIME. A rename or a change to Hidden is applied in place; a precision change is reported, because SQL Server cannot alter a period column. Omitted on a new temporal table, the columns are ValidFrom and ValidTo DATETIME2(7); omitted on an existing one, its period columns are left as they are."
+            "pattern": "^(?:RowStart|RowEnd|TransactionIdStart|TransactionIdEnd|SequenceNumberStart|SequenceNumberEnd)$",
+            "description": "A column the engine fills. RowStart or RowEnd (SQL Server 2016+): a temporal table's period column; declare both, as DATETIME2(n), on a table with IsTemporal, and the pair becomes PERIOD FOR SYSTEM_TIME. A rename or a change to Hidden is applied in place; a precision change is reported, because SQL Server cannot alter a period column. Omitted on a new temporal table, the columns are ValidFrom and ValidTo DATETIME2(7). TransactionIdStart, TransactionIdEnd, SequenceNumberStart or SequenceNumberEnd (SQL Server 2022): a ledger table's generated column, BIGINT; an append-only table has only the two Start columns. One left out takes the engine's name (ledger_start_transaction_id and so on), hidden. A rename or a change to Hidden is applied in place."
           },
           "Hidden": {
             "type": "boolean",
-            "description": "SQL Server 2016+, with GeneratedAlways. The period column is HIDDEN: left out of SELECT * and of an INSERT without a column list. Changed in place."
+            "description": "SQL Server 2016+, with GeneratedAlways. The column is HIDDEN: left out of SELECT * and of an INSERT without a column list. Changed in place."
           },
           "Extensions": {
             "type": "object",
@@ -840,6 +840,37 @@
           "Column"
         ]
       }
+    },
+    "LedgerView": {
+      "type": "object",
+      "properties": {
+        "Schema": {
+          "type": "string",
+          "description": "The view's schema. Omitted, the table's."
+        },
+        "Name": {
+          "type": "string",
+          "description": "The view's name. Omitted, <table>_Ledger."
+        },
+        "TransactionIdColumn": {
+          "type": "string",
+          "description": "Omitted, ledger_transaction_id."
+        },
+        "SequenceNumberColumn": {
+          "type": "string",
+          "description": "Omitted, ledger_sequence_number."
+        },
+        "OperationTypeColumn": {
+          "type": "string",
+          "description": "Omitted, ledger_operation_type."
+        },
+        "OperationTypeDescColumn": {
+          "type": "string",
+          "description": "Omitted, ledger_operation_type_desc."
+        }
+      },
+      "additionalProperties": false,
+      "description": "SQL Server 2022, with Ledger. The ledger view and its four column names; a member left out takes the engine's default (<table>_Ledger in the table's schema, ledger_transaction_id and so on). A new name for the view, in its schema, is applied with sp_rename; another schema or other column names are reported, since SQL Server cannot change them."
     },
     "Extensions": {
       "type": "object",

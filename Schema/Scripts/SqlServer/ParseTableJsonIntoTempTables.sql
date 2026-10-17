@@ -107,7 +107,13 @@
     [RebuildPolicyOnOrderMismatch] BIT NULL,
     [RebuildPolicySpecified] BIT NULL,
     [PreventDrop] BIT NULL,
-    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerViewSchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerViewName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerTransactionIdColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerSequenceNumberColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerOperationTypeColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerOperationTypeDescColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #Tables
@@ -161,7 +167,13 @@
     [RebuildPolicyOnOrderMismatch] BIT NULL,
     [RebuildPolicySpecified] BIT NULL,
     [PreventDrop] BIT NOT NULL,
-    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerViewSchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerViewName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerTransactionIdColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerSequenceNumberColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerOperationTypeColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerOperationTypeDescColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #Columns
@@ -446,7 +458,7 @@
     THROW 51000, @v_Msg, 1;
   END
 
-  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [SpatialIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description])
+  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [SpatialIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn])
   -- INGEST ONLY -- raw values straight off the shred. Every transform that used to live in this
   -- SELECT moved to the NORMALIZE pass below, so a second ingestion path (C# bulk-loading these rows
   -- instead of shredding JSON) gets the identical treatment from one definition rather than a
@@ -471,7 +483,8 @@
          [RebuildPolicySpecified] = CONVERT(BIT, CASE WHEN [RebuildPolicyJson] IS NOT NULL THEN 1 ELSE 0 END),
          -- NULL stays NULL (omitted: leave the database's description alone); '' stays '' (remove it). An
          -- MS_Description left inside Extensions.ExtendedProperties, where extraction used to put it, still counts.
-         [PreventDrop], [Description] = COALESCE([Description], [LegacyDescription])
+         [PreventDrop], [Description] = COALESCE([Description], [LegacyDescription]),
+         [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn]
     FROM OPENJSON(@TableDefinitions) WITH (
       [Schema] NVARCHAR(500) '$.Schema',
       [Name] NVARCHAR(500) '$.Name',
@@ -522,7 +535,13 @@
       [RebuildPolicyJson] NVARCHAR(MAX) '$.RebuildPolicy' AS JSON,
       [PreventDrop] BIT '$.PreventDrop',
       [Description] NVARCHAR(MAX) '$.Description',
-      [LegacyDescription] NVARCHAR(MAX) '$.Extensions.ExtendedProperties.MS_Description'
+      [LegacyDescription] NVARCHAR(MAX) '$.Extensions.ExtendedProperties.MS_Description',
+      [LedgerViewSchema] NVARCHAR(500) '$.LedgerView.Schema',
+      [LedgerViewName] NVARCHAR(500) '$.LedgerView.Name',
+      [LedgerTransactionIdColumn] NVARCHAR(500) '$.LedgerView.TransactionIdColumn',
+      [LedgerSequenceNumberColumn] NVARCHAR(500) '$.LedgerView.SequenceNumberColumn',
+      [LedgerOperationTypeColumn] NVARCHAR(500) '$.LedgerView.OperationTypeColumn',
+      [LedgerOperationTypeDescColumn] NVARCHAR(500) '$.LedgerView.OperationTypeDescColumn'
       ) t;
   
 
@@ -564,7 +583,13 @@
         [Durability] = UPPER(RTRIM(ISNULL(NULLIF([Durability], ''), 'SCHEMA_AND_DATA'))),
         [TrackColumnsUpdated] = ISNULL([TrackColumnsUpdated], 0),
         [OldName] = SchemaSmith.fn_SafeBracketWrap([OldName]),
-        [PreventDrop] = ISNULL([PreventDrop], 0)
+        [PreventDrop] = ISNULL([PreventDrop], 0),
+        [LedgerViewSchema] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerViewSchema]), '')),
+        [LedgerViewName] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerViewName]), '')),
+        [LedgerTransactionIdColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerTransactionIdColumn]), '')),
+        [LedgerSequenceNumberColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerSequenceNumberColumn]), '')),
+        [LedgerOperationTypeColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerOperationTypeColumn]), '')),
+        [LedgerOperationTypeDescColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerOperationTypeDescColumn]), ''))
 
   -- Identify Tables to skip based on ShouldApply expression
   -- Scoped by [_RowId] so each generated DELETE targets exactly the source row whose
@@ -574,12 +599,12 @@
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
 
-  INSERT INTO #Tables ([Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName], [NewTable], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description])
+  INSERT INTO #Tables ([Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName], [NewTable], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn])
   SELECT [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName],
          CONVERT(BIT, CASE WHEN OBJECT_ID([Schema] + '.' + [Name], 'U') IS NULL AND OBJECT_ID([Schema] + '.' + [OldName], 'U') IS NULL THEN 1 ELSE 0 END) AS NewTable,
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified],
-         ISNULL([PreventDrop], 0) AS [PreventDrop], [Description]
+         ISNULL([PreventDrop], 0) AS [PreventDrop], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn]
     FROM #TableDefinitions WITH (NOLOCK);
   
   -- Removed outright by an ingest path that supplies these rows itself, for the same reason as
@@ -695,6 +720,12 @@
                    CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE' AND SchemaSmith.fn_ServerMajorVersion() >= 13
                         THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = ''' + [EncryptionAlgorithm] + ''')'
                         ELSE '' END +
+                   -- A ledger table's generated column (2022): the role, and HIDDEN when declared. Only ever in a CREATE TABLE.
+                   ISNULL(CASE UPPER([GeneratedAlways]) WHEN 'TRANSACTIONIDSTART' THEN ' GENERATED ALWAYS AS TRANSACTION_ID START'
+                                                  WHEN 'TRANSACTIONIDEND' THEN ' GENERATED ALWAYS AS TRANSACTION_ID END'
+                                                  WHEN 'SEQUENCENUMBERSTART' THEN ' GENERATED ALWAYS AS SEQUENCE_NUMBER START'
+                                                  WHEN 'SEQUENCENUMBEREND' THEN ' GENERATED ALWAYS AS SEQUENCE_NUMBER END' END +
+                          CASE WHEN ISNULL([Hidden], 0) = 1 THEN ' HIDDEN' ELSE '' END, '') +
                    CASE WHEN ISNULL(Nullable, 0) = 1 THEN ' NULL' ELSE ' NOT NULL' END +
                    CASE WHEN RTRIM(ISNULL([Default], '')) <> '' THEN ' DEFAULT ' + [Default] ELSE '' END
               END
@@ -839,6 +870,12 @@
 
   -- The declared period columns go onto their table row and off #Columns, so no ordinary column pass sees them.
   EXEC SchemaSmith.LiftPeriodColumns
+  -- A ledger table's declared generated columns, by role (sys.columns.generated_always_type 7-10). Filled by
+  -- LiftLedgerColumns; on an existing table they are off #Columns and converge in LedgerQuench.
+  IF OBJECT_ID('tempdb..#LedgerColumns') IS NOT NULL DROP TABLE #LedgerColumns
+  CREATE TABLE #LedgerColumns ([Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+                               [RoleType] TINYINT NOT NULL, [ColumnName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Hidden] BIT NOT NULL)
+  EXEC SchemaSmith.LiftLedgerColumns
 
   -- Don't try to apply tables without columns
   DELETE FROM #Tables

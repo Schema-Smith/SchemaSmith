@@ -343,7 +343,9 @@ public class ForgeKindlerTests
         // +2 on SQL Server = LiftPeriodColumns (declared period columns off #Columns, for both parse tiers) +
         //   PeriodColumnQuench (a temporal table's period columns: added before the index pass, renamed and re-hidden in place).
         // +1 on SQL Server = DegradeUnsupportedSpatialIndexes (below 2012 an AUTO_GRID spatial index is created as GRID).
-        Assert.That(sqlServer.Length, Is.EqualTo(62));
+        // +2 on SQL Server = LiftLedgerColumns (a ledger table's declared generated columns, for both parse tiers) +
+        //   LedgerQuench (an existing ledger table's column and view names converged).
+        Assert.That(sqlServer.Length, Is.EqualTo(64));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns

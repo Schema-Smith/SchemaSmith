@@ -62,16 +62,19 @@ namespace SchemaQuench.IntegrationTests.SqlServer
   ]
 },
 {
-  ""Schema"":""dbo"",""Name"":""XmlEquivUnset"",
-  ""Columns"":[ {""Name"":""Id"",""DataType"":""INT"",""Nullable"":false} ]
+  ""Schema"":""dbo"",""Name"":""XmlEquivUnset"",""Ledger"":""Updatable"",
+  ""LedgerView"":{""Name"":""equiv_view"",""TransactionIdColumn"":""TxId"",""OperationTypeDescColumn"":""[Op Desc]""},
+  ""Columns"":[ {""Name"":""Id"",""DataType"":""INT"",""Nullable"":false},
+                {""Name"":""TxStart"",""DataType"":""BIGINT"",""Nullable"":false,""GeneratedAlways"":""TransactionIdStart"",""Hidden"":true},
+                {""Name"":""SeqEnd"",""DataType"":""BIGINT"",""Nullable"":true,""GeneratedAlways"":""sequencenumberend""} ]
 }]";
 
-        // The 9 temp tables both parse scripts produce and every downstream proc consumes. #TableDefinitions
+        // The 10 temp tables both parse scripts produce and every downstream proc consumes. #TableDefinitions
         // is internal parse scratch (shape differs by encoding) and is deliberately not compared.
         private static readonly string[] ConsumedTables =
         {
             "#Tables", "#Columns", "#Indexes", "#XmlIndexes", "#SpatialIndexes",
-            "#ForeignKeys", "#CheckConstraints", "#Statistics", "#FullTextIndexes"
+            "#ForeignKeys", "#CheckConstraints", "#Statistics", "#FullTextIndexes", "#LedgerColumns"
         };
 
         [Test]

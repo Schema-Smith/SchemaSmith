@@ -372,8 +372,9 @@ BEGIN TRY
                                                     FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), '')
                                           ELSE '' END,
                                         WithOptions =
-                                            CASE t.[Ledger] WHEN 'AppendOnly' THEN ', LEDGER = ON (APPEND_ONLY = ON)'
-                                                            WHEN 'Updatable'  THEN ', SYSTEM_VERSIONING = ON, LEDGER = ON'
+                                            -- LEDGER_VIEW only when the package names a member of it; the rest take the engine's defaults.
+                                            CASE t.[Ledger] WHEN 'AppendOnly' THEN ', LEDGER = ON (APPEND_ONLY = ON' + ISNULL(', ' + lv.[Clause], '') + ')'
+                                                            WHEN 'Updatable'  THEN ', SYSTEM_VERSIONING = ON, LEDGER = ON' + ISNULL(' (' + lv.[Clause] + ')', '')
                                                             ELSE '' END +
                                             -- Memory-optimized (#J1): the WITH that switches on the Hekaton
                                             -- storage engine. DURABILITY defaults to SCHEMA_AND_DATA in the parse.
@@ -402,6 +403,15 @@ BEGIN TRY
                                                                                     AND C2.[SparseOrColumnSet] = 1) THEN 1 ELSE 0 END,
                                         ScriptColumns = STUFF((SELECT ', ' + [ColumnScript] FROM #AddTableColumns c WITH (NOLOCK) WHERE c.[KeySchema] = CONVERT(NVARCHAR(200), t.[Schema]) AND c.[KeyTableName] = CONVERT(NVARCHAR(200), t.[Name]) AND c.[InCreate] = 1 ORDER BY c.[_RowId] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
                                    FROM #Tables t WITH (NOLOCK)
+                           CROSS APPLY (SELECT [Clause] = CASE WHEN COALESCE(t.[LedgerViewSchema], t.[LedgerViewName], t.[LedgerTransactionIdColumn], t.[LedgerSequenceNumberColumn],
+                                                                           t.[LedgerOperationTypeColumn], t.[LedgerOperationTypeDescColumn]) IS NOT NULL
+                                                              THEN 'LEDGER_VIEW = ' + ISNULL(t.[LedgerViewSchema], t.[Schema]) + '.' +
+                                                                   ISNULL(t.[LedgerViewName], SchemaSmith.fn_SafeBracketWrap(SchemaSmith.fn_StripBracketWrapping(t.[Name]) + '_Ledger')) +
+                                                                   ISNULL(' (' + STUFF(ISNULL(', TRANSACTION_ID_COLUMN_NAME = ' + t.[LedgerTransactionIdColumn], '') +
+                                                                                       ISNULL(', SEQUENCE_NUMBER_COLUMN_NAME = ' + t.[LedgerSequenceNumberColumn], '') +
+                                                                                       ISNULL(', OPERATION_TYPE_COLUMN_NAME = ' + t.[LedgerOperationTypeColumn], '') +
+                                                                                       ISNULL(', OPERATION_TYPE_DESC_COLUMN_NAME = ' + t.[LedgerOperationTypeDescColumn], ''), 1, 2, '') + ')', '')
+                                                         END) lv
                                    WHERE NewTable = 1) t
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)

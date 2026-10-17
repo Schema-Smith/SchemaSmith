@@ -235,6 +235,10 @@ namespace Schema.Domain.SqlServer
         [JsonProperty(Order = 116, NullValueHandling = NullValueHandling.Ignore)]
         public string Ledger { get; set; }
 
+        [SchemaProperty(Description = "SQL Server 2022, with Ledger. The ledger view and its four column names; a member left out takes the engine's default (<table>_Ledger in the table's schema, ledger_transaction_id and so on). A new name for the view, in its schema, is applied with sp_rename; another schema or other column names are reported, since SQL Server cannot change them.")]
+        [JsonProperty(Order = 127, NullValueHandling = NullValueHandling.Ignore)]
+        public SqlServerLedgerView LedgerView { get; set; }
+
         // Partition placement (#partitioning): the NAME of an existing partition scheme, plus the column
         // the table is partitioned on. Both or neither -- a scheme with no column is not a placement.
         //

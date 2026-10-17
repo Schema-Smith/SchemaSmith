@@ -324,6 +324,71 @@ public class CoherenceCheckTests
         });
     }
 
+    // ---- Ledger generated columns and view (SS-LDG-001 .. SS-LDG-005) ----
+    //
+    // A ledger table's generated columns and view exist only on a ledger table; an append-only one has no End columns;
+    // each role is one BIGINT column. Every other shape fails CREATE TABLE.
+
+    private static SqlServerTable LedgerTable(string ledger, params SqlServerColumn[] columns)
+    {
+        var table = new SqlServerTable { Name = "Audit", Schema = "dbo", Ledger = ledger, Columns = { new SqlServerColumn { Name = "Id", DataType = "int" } } };
+        foreach (var c in columns) table.Columns.Add(c);
+        return table;
+    }
+
+    private static SqlServerColumn LedgerColumn(string name, string role, string dataType = "BIGINT") => new() { Name = name, DataType = dataType, GeneratedAlways = role };
+
+    private static string[] LedgerCodes(SqlServerTable table) => RunOn(table).Where(f => f.Code.StartsWith("SS-LDG") || f.Code.StartsWith("SS-TMP")).Select(f => f.Code).ToArray();
+
+    [Test]
+    public void DeclaredLedgerColumnsAndView_OnALedgerTable_AreClean_AndAreNotReadAsPeriodColumns()
+    {
+        var table = LedgerTable("Updatable", LedgerColumn("TxStart", "TransactionIdStart"), LedgerColumn("TxEnd", "TransactionIdEnd"),
+                                LedgerColumn("SeqStart", "SequenceNumberStart"), LedgerColumn("SeqEnd", "sequencenumberend"));
+        table.LedgerView = new SqlServerLedgerView { Name = "AuditView" };
+        Assert.That(LedgerCodes(table), Is.Empty, "no SS-TMP finding either: the period pair rule is for RowStart and RowEnd");
+    }
+
+    [TestCase(null)]
+    [TestCase("Off")]
+    public void ALedgerColumnOnATableThatIsNotALedger_IsAnError(string ledger)
+    {
+        Assert.That(LedgerCodes(LedgerTable(ledger, LedgerColumn("TxStart", "TransactionIdStart"))), Is.EqualTo(new[] { "SS-LDG-001" }));
+    }
+
+    [Test]
+    public void AnEndColumnOnAnAppendOnlyTable_IsAnError()
+    {
+        Assert.That(LedgerCodes(LedgerTable("AppendOnly", LedgerColumn("TxStart", "TransactionIdStart"), LedgerColumn("TxEnd", "TransactionIdEnd"))),
+            Is.EqualTo(new[] { "SS-LDG-002" }));
+    }
+
+    [Test]
+    public void ALedgerRoleDeclaredTwice_IsAnError()
+    {
+        Assert.That(LedgerCodes(LedgerTable("Updatable", LedgerColumn("A", "TransactionIdStart"), LedgerColumn("B", "transactionidstart"))),
+            Is.EqualTo(new[] { "SS-LDG-003" }));
+    }
+
+    [Test]
+    public void ALedgerViewOnATableThatIsNotALedger_IsAnError()
+    {
+        var table = LedgerTable(null);
+        table.LedgerView = new SqlServerLedgerView { Name = "AuditView" };
+        Assert.That(LedgerCodes(table), Is.EqualTo(new[] { "SS-LDG-004" }));
+    }
+
+    [Test]
+    public void ALedgerColumnThatIsNotBigint_IsAnError()
+    {
+        var findings = RunOn(LedgerTable("Updatable", LedgerColumn("TxStart", "TransactionIdStart", "INT")));
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Where(f => f.Code.StartsWith("SS-LDG")).Select(f => f.Code), Is.EqualTo(new[] { "SS-LDG-005" }));
+            Assert.That(findings.Single(f => f.Code == "SS-LDG-005").Message, Does.Contain("TxStart").And.Contain("BIGINT"));
+        });
+    }
+
     // ---- NullsNotDistinct on a primary key (SS-IDX-004) ----
     //
     // A primary key's columns cannot be NULL, so the clause has nothing to decide and the engine never records it on

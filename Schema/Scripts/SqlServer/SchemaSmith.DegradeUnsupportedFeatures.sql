@@ -159,7 +159,14 @@ BEGIN
         SELECT @@SPID, 'ledger table (SQL Server 2022)', t.[Schema] + '.' + t.[Name], 'downgraded'
           FROM #Tables t WITH (NOLOCK) WHERE ISNULL(t.[Ledger], 'Off') <> 'Off'
       RAISERROR('  Ledger skipped: requires SQL Server 2022 - the table deploys as an ordinary table (downgraded)', 10, 100) WITH NOWAIT
-      UPDATE #Tables SET [Ledger] = 'Off' WHERE ISNULL([Ledger], 'Off') <> 'Off'
+      -- The generated columns and view exist only on a ledger table, so they go with it.
+      DELETE c FROM #Columns c JOIN #Tables t ON t.[Schema] = c.[Schema] AND t.[Name] = c.[TableName]
+       WHERE ISNULL(t.[Ledger], 'Off') <> 'Off'
+         AND UPPER(c.[GeneratedAlways]) IN ('TRANSACTIONIDSTART', 'TRANSACTIONIDEND', 'SEQUENCENUMBERSTART', 'SEQUENCENUMBEREND')
+      DELETE FROM #LedgerColumns
+      UPDATE #Tables SET [Ledger] = 'Off', [LedgerViewSchema] = NULL, [LedgerViewName] = NULL, [LedgerTransactionIdColumn] = NULL,
+                         [LedgerSequenceNumberColumn] = NULL, [LedgerOperationTypeColumn] = NULL, [LedgerOperationTypeDescColumn] = NULL
+       WHERE ISNULL([Ledger], 'Off') <> 'Off'
     END
   END
 

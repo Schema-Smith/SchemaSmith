@@ -409,6 +409,8 @@ public static class ForgeKindler
                 new("SchemaSmith.StageGraphKeyParts.sql"),
                 // Moves declared period columns from #Columns onto #Tables; both parse tiers CALL it, so it precedes them.
                 new("SchemaSmith.LiftPeriodColumns.sql"),
+                // Records a ledger table's declared generated columns; both parse tiers CALL it, so it precedes them.
+                new("SchemaSmith.LiftLedgerColumns.sql"),
                 new("SchemaSmith.PrintWithNoWait.sql"),
                 new("SchemaSmith.RecordWouldChanges.sql"),
                 new("SchemaSmith.CdcPreflight.sql"),
@@ -434,6 +436,7 @@ public static class ForgeKindler
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 // A temporal table's period columns; MissingIndexesAndConstraintsQuench CALLs it before its index pass.
                 new("SchemaSmith.PeriodColumnQuench.sql"),
+                new("SchemaSmith.LedgerQuench.sql"),
                 new("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"),
                 // Declared descriptions (MS_Description), converged once every table, column and index exists.
                 // Must precede TableQuench and IndexOnlyQuench, which CALL it.

@@ -39,6 +39,11 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string PeriodRoleRepeatedCode = "SS-TMP-002";
     private const string PeriodWithoutTemporalCode = "SS-TMP-003";
     private const string PeriodTypeCode = "SS-TMP-004";
+    private const string LedgerColumnWithoutLedgerCode = "SS-LDG-001";
+    private const string LedgerEndOnAppendOnlyCode = "SS-LDG-002";
+    private const string LedgerRoleRepeatedCode = "SS-LDG-003";
+    private const string LedgerViewWithoutLedgerCode = "SS-LDG-004";
+    private const string LedgerColumnTypeCode = "SS-LDG-005";
     private const string SpatialColumnCode = "SS-SPX-001";
     private const string SpatialFamilyCode = "SS-SPX-002";
     private const string SpatialBoundingBoxCode = "SS-SPX-003";
@@ -132,6 +137,7 @@ public sealed class CoherenceCheck : ISchemaCheck
 
             findings.AddRange(CheckBackfill(table, location));
             findings.AddRange(CheckPeriodColumns(table, location));
+            findings.AddRange(CheckLedgerColumns(table, location));
             findings.AddRange(CheckSpatialIndexes(table, location, columnsAreOwnedElsewhere));
             findings.AddRange(CheckEdgeConstraints(table, location, tablesByKey));
             findings.AddRange(CheckCharsetWithoutCollation(table, location));
@@ -377,10 +383,46 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// A SQL Server temporal table's period columns are a pair -- one RowStart, one RowEnd, both DATETIME2 -- on a
     /// table with IsTemporal. The engine refuses every other shape, so the package is stopped here instead.
     /// </summary>
+    private static readonly HashSet<string> PeriodRoles = new(StringComparer.OrdinalIgnoreCase) { "RowStart", "RowEnd" };
+    private static readonly HashSet<string> LedgerRoles = new(StringComparer.OrdinalIgnoreCase)
+        { "TransactionIdStart", "TransactionIdEnd", "SequenceNumberStart", "SequenceNumberEnd" };
+
+    /// <summary>
+    /// A ledger table's generated columns and view exist only on a ledger table: an append-only one has the two Start
+    /// columns and no End ones, each role is one column, and SQL Server makes them BIGINT. Every other shape fails the
+    /// CREATE TABLE, so it is stopped here.
+    /// </summary>
+    private static IEnumerable<Finding> CheckLedgerColumns(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable sqlTable) yield break;
+        var ledger = sqlTable.Ledger?.Trim();
+        var isLedger = !string.IsNullOrEmpty(ledger) && !string.Equals(ledger, "Off", StringComparison.OrdinalIgnoreCase);
+        var columns = sqlTable.Columns.OfType<SqlServerColumn>().Where(c => LedgerRoles.Contains(c.GeneratedAlways?.Trim() ?? "")).ToList();
+        if (sqlTable.LedgerView != null && !isLedger)
+            yield return new Finding(Severity.Error, LedgerViewWithoutLedgerCode, Category, tableLocation,
+                $"Table '{table.Name}' declares a LedgerView but no Ledger: a ledger view exists only beside a ledger table.");
+        if (columns.Count == 0) yield break;
+        if (!isLedger)
+        {
+            yield return new Finding(Severity.Error, LedgerColumnWithoutLedgerCode, Category, tableLocation,
+                $"Column '{columns[0].Name}' declares GeneratedAlways {columns[0].GeneratedAlways}, a ledger column, but table '{table.Name}' declares no Ledger.");
+            yield break;
+        }
+        foreach (var column in columns.Where(c => string.Equals(ledger, "AppendOnly", StringComparison.OrdinalIgnoreCase) && c.GeneratedAlways.Trim().EndsWith("End", StringComparison.OrdinalIgnoreCase)))
+            yield return new Finding(Severity.Error, LedgerEndOnAppendOnlyCode, Category, tableLocation,
+                $"Column '{column.Name}' declares GeneratedAlways {column.GeneratedAlways} on an append-only ledger table, which has no End columns: rows are never updated or deleted.");
+        foreach (var group in columns.GroupBy(c => c.GeneratedAlways.Trim(), StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+            yield return new Finding(Severity.Error, LedgerRoleRepeatedCode, Category, tableLocation,
+                $"Columns {string.Join(", ", group.Select(c => $"'{c.Name}'"))} all declare GeneratedAlways {group.Key}: a ledger table has one column of each role.");
+        foreach (var column in columns.Where(c => !Regex.IsMatch(c.DataType ?? "", @"^\s*\[?BIGINT\]?\s*$", RegexOptions.IgnoreCase)))
+            yield return new Finding(Severity.Error, LedgerColumnTypeCode, Category, tableLocation,
+                $"Ledger column '{column.Name}' is {column.DataType}: SQL Server makes a ledger table's generated columns BIGINT.");
+    }
+
     private static IEnumerable<Finding> CheckPeriodColumns(Table table, string tableLocation)
     {
         if (table is not SqlServerTable sqlTable) yield break;
-        var periods = sqlTable.Columns.OfType<SqlServerColumn>().Where(c => !string.IsNullOrWhiteSpace(c.GeneratedAlways)).ToList();
+        var periods = sqlTable.Columns.OfType<SqlServerColumn>().Where(c => PeriodRoles.Contains(c.GeneratedAlways?.Trim() ?? "")).ToList();
         if (periods.Count == 0) yield break;
 
         var byRole = periods.GroupBy(c => c.GeneratedAlways.Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);

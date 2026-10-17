@@ -551,6 +551,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | `GraphType` | string | `null` | `"Node"` or `"Edge"` creates the table `AS NODE` / `AS EDGE`. `null` or `"None"` is an ordinary table. **Create-time only** -- SQL Server has no `ALTER` that converts a table to or from a graph table, so changing this on a deployed table is refused rather than attempted. Requires SQL Server 2017; below that the table deploys as an ordinary one and the change is reported through `UnsupportedFeaturePolicy`. The graph pseudo-columns SQL Server adds are never extracted and never dropped. |
 | `EdgeConstraints` | array | `[]` | **SQL Server 2019+, edge tables only.** Each `{ "Name", "Clauses": [ { "FromTable", "ToTable" } ], "DeleteAction" }` deploys `CONNECTION (from TO to, ...) ON DELETE action`: which node tables the edges may connect, and whether deleting a connected node deletes its edges (`"CASCADE"`) or is refused (`"NO ACTION"`, the default). A clause table is schema-qualified (`[dbo].[Person]`) or bare, meaning the edge table's own schema. The clauses are a set, so their order never counts as a change; a changed clause or action drops and re-creates the constraint, and one that leaves the package is dropped under `DropForeignKeysRemovedFromProduct`. Below 2019 the edge table deploys without it per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). `--Validate` stops one on a table that is not an edge table (`SS-TBL-003`) and warns when a clause names a table the package does not declare as a node (`SS-TBL-004`). |
 | `Ledger` | string | `null` | `"AppendOnly"` or `"Updatable"` creates a tamper-evident ledger table. `null` or `"Off"` is an ordinary table. Cannot be combined with `IsTemporal` -- a ledger table manages its own history, and SQL Server reports it as non-temporal. Requires SQL Server 2022; below that the table deploys as an ordinary one and the change is reported through `UnsupportedFeaturePolicy`. **Close to permanent:** there is no `ALTER` to or from a ledger table, and `DROP` does not remove one -- SQL Server retains it under a generated name -- so changing this on a deployed table is refused. |
+| `LedgerView` | object | `null` | With `Ledger`, the ledger view's `Schema` and `Name` and the names of its four columns: `TransactionIdColumn`, `SequenceNumberColumn`, `OperationTypeColumn`, `OperationTypeDescColumn`. A member left out is the engine's default (`<table>_Ledger` in the table's schema, `ledger_transaction_id` and so on). See [ledger columns](#sql-server-column-extras). |
 | `HistoryTableSchema` | string | `null` | Schema of the temporal history table when `IsTemporal` is `true`. `null` means the same schema as the versioned table. |
 | `HistoryTableName` | string | `null` | Name of the temporal history table when `IsTemporal` is `true`. `null` means `<Name>_Hist`. Pointing an existing temporal table at a *different* history table is not something SchemaQuench performs. |
 | `HistoryRetentionPeriod` | string | `null` | Retention for the temporal history table, as the SQL Server token (e.g. `"5 YEARS"`, `"90 DAYS"`, `"INFINITE"`). `null` leaves retention unmanaged. |
@@ -751,6 +752,29 @@ package does not declare its period columns keeps them as they are, whatever the
 pair only when it differs from the `ValidFrom` / `ValidTo` convention, so an existing package re-extracts unchanged.
 `--Validate` stops a pair that is incomplete (`SS-TMP-001`), declares a role twice (`SS-TMP-002`), is on a table
 without `IsTemporal` (`SS-TMP-003`), or is not `DATETIME2` (`SS-TMP-004`).
+
+**Ledger columns and view.** A ledger table's four generated columns are declared the same way, by role:
+`TransactionIdStart`, `TransactionIdEnd`, `SequenceNumberStart`, `SequenceNumberEnd`, each `BIGINT`. An append-only
+table has only the two Start columns. A role you leave out takes the engine's name, such as
+`ledger_start_transaction_id`, hidden. `LedgerView` names the view and its columns the same way.
+
+```json
+"Ledger": "Updatable",
+"LedgerView": { "Name": "[AccountHistory]", "TransactionIdColumn": "[TxId]" },
+"Columns": [
+  { "Name": "[TxStart]", "DataType": "BIGINT", "Nullable": false, "GeneratedAlways": "TransactionIdStart", "Hidden": true }
+]
+```
+
+On an existing ledger table, a declared column with another name is renamed with `sp_rename` and a different `Hidden`
+is applied with `ALTER COLUMN … ADD | DROP HIDDEN`. A declared view name is applied with `sp_rename` too. SQL Server
+cannot move the view to another schema or rename its columns, so the deploy leaves those as they are and prints a
+warning naming each one. A table whose package declares no `LedgerView`, or leaves out a ledger column, keeps what it
+has. SchemaTongs writes the columns and view members only where they differ from the engine's defaults, so an existing
+package re-extracts unchanged. Below SQL Server 2022 the table deploys as an ordinary one without them. `--Validate`
+stops a ledger column on a table that is not a ledger (`SS-LDG-001`), an End column on an append-only table
+(`SS-LDG-002`), a role declared twice (`SS-LDG-003`), a `LedgerView` without `Ledger` (`SS-LDG-004`), and a ledger
+column that is not `BIGINT` (`SS-LDG-005`).
 
 ### PostgreSQL column extras
 

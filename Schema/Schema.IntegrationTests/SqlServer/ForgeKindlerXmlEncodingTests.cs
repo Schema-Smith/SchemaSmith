@@ -373,6 +373,46 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
     }
 
     [Test]
+    public void LedgerNames_OnTheXmlTier_AreCreatedAsDeclared_AndExtractedWhereTheyDiffer()
+    {
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            var json = "[{\"Schema\": \"[dbo]\", \"Name\": \"[XmlLedger]\", \"Ledger\": \"Updatable\", \"LedgerView\": {\"Name\": \"[XmlLedgerView]\", \"OperationTypeColumn\": \"[Op]\"},"
+                     + "\"Columns\": [{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false},"
+                     + "{\"Name\": \"[TxStart]\", \"DataType\": \"BIGINT\", \"Nullable\": false, \"GeneratedAlways\": \"TransactionIdStart\", \"Hidden\": true}],"
+                     + "\"Indexes\": [{\"Name\": \"[PK_XmlLedger]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"}]}]";
+            var xml = ModelXmlSerializer.ToIngestXml(json, "Tables", "Table");
+            cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlLedger', @TableDefinitions = N'{xml.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = "EXEC SchemaSmith.GenerateTableXml @p_Schema='dbo', @p_Table='XmlLedger'";
+            var sb = new System.Text.StringBuilder();
+            using (var reader = cmd.ExecuteReader())
+                while (reader.Read())
+                    sb.Append(reader.GetValue(0)?.ToString());
+            var table = (Schema.Domain.SqlServer.SqlServerTable)PlatformDeserializer.DeserializeTable(ModelXmlSerializer.FromIngestXml(sb.ToString()), Platform.SqlServer);
+            Assert.Multiple(() =>
+            {
+                Assert.That(table.Columns.OfType<Schema.Domain.SqlServer.SqlServerColumn>().Where(c => c.GeneratedAlways != null).Select(c => $"{c.Name}:{c.GeneratedAlways}:{c.Hidden}"),
+                    Is.EqualTo(new[] { "[TxStart]:TransactionIdStart:True" }), "the declared column, not the engine's three");
+                Assert.That($"{table.LedgerView?.Schema}|{table.LedgerView?.Name}|{table.LedgerView?.OperationTypeColumn}|{table.LedgerView?.TransactionIdColumn}",
+                    Is.EqualTo("|[XmlLedgerView]|[Op]|"));
+            });
+        }
+        finally
+        {
+            DropTables(cmd, "dbo.XmlLedger");
+        }
+
+        conn.Close();
+    }
+
+    [Test]
     public void TableQuench_XmlTier_AppliesDescriptions_AndGenerateTableXml_ReadsThemBack()
     {
         // The XML twin shreds Description, and the legacy MS_Description inside Extensions, through its own

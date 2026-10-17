@@ -172,6 +172,10 @@ BEGIN TRY
   IF @v_NeedsAttributeValidation = 1
     EXEC SchemaSmith.ValidateDeclaredTableAttributes
 
+  -- After the validation, which refuses a Ledger the table does not have: an existing ledger table's names converge.
+  IF SchemaSmith.fn_ServerMajorVersion() >= 16 AND EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE NewTable = 0 AND ISNULL([Ledger], 'Off') <> 'Off')
+    EXEC SchemaSmith.LedgerQuench @WhatIf = @WhatIf
+
 
 
   -- No-drop protection tier (#270): when protected mode is active the caller forces
