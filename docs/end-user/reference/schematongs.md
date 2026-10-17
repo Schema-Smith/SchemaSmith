@@ -160,6 +160,7 @@ For the full explanation of configuration loading, environment variable mapping,
     "XMLSchemaCollections": true,
     "IndexedViews": true,
     "Synonyms": true,
+    "SecurityPolicies": true,
     "ModuleSyntax": "CreateOrAlter",
 
     "DomainTypes": true,
@@ -251,6 +252,7 @@ Control exactly what gets cast from the database. Each object type can be indivi
 | `XMLSchemaCollections` | `true` | XML schema collections |
 | `IndexedViews` | `true` | Indexed (materialized) view definitions as JSON files |
 | `Synonyms` | `true` | Synonyms |
+| `SecurityPolicies` | `true` | Row-level security policies (SQL Server 2016+), to `SecurityPolicies/`. See [Security policies](#security-policies-sql-server). |
 | `ModuleSyntax` | `CreateOrAlter` | The statement form module scripts are written in: `CreateOrAlter` (SQL Server 2016 SP1 and later) or `Legacy` (every supported version). See [ModuleSyntax](#modulesyntax). |
 
 **What the SQL Server scripts carry.** A table type is written with its identity, computed columns, defaults, a `COLLATE` that differs from the database's, its named indexes (`HASH`, `INCLUDE` and filter forms included), `IGNORE_DUP_KEY` and `MEMORY_OPTIMIZED` (2014+). A sequence keeps its type's precision, an alias type's name and an explicit `CACHE` or `NO CACHE`. A full-text catalog keeps `ACCENT_SENSITIVITY` and `AS DEFAULT`. A module renamed with `sp_rename` still carries its old name in its stored text; SchemaTongs writes it under the current name and logs a warning naming the old one, so review the body for references to it. A table trigger script ends with a `DISABLE TRIGGER` batch when the trigger is disabled and an `sp_settriggerorder` batch for each statement it is set first or last for; a database DDL trigger script ends with `DISABLE TRIGGER ... ON DATABASE` when it is disabled. Neither is part of the trigger's definition, so without the tail a redeploy would enable and unorder it.
@@ -498,6 +500,14 @@ New objects always appear in the root of their folder. Move them into subfolders
 Some objects a package depends on are not modelled, so SchemaTongs writes them as generated scripts in the template's `Prerequisites/` folder, which deploys before the tables. Today that is `AlwaysEncryptedKeys.sql`: every column master key and column encryption key in the source database. Each key is created only where it is missing, and the script skips itself with a message below SQL Server 2016. It is written when the tables are extracted and removed when the source has no keys any more.
 
 A prerequisite script is rewritten in full on every extraction. Change the source database rather than the file: `--Validate` warns about an edit the next extraction would overwrite (`SS-GEN-001`). Schema templates do not get one, because the keys belong to the database. See [the Prerequisites folder](schema-packages.md#sql-server-default-folders).
+
+---
+
+## Security Policies (SQL Server)
+
+Each row-level security policy is written to `SecurityPolicies/<schema>.<policy>.sql` with its filter and block predicates, `STATE`, `SCHEMABINDING` and `NOT FOR REPLICATION`. The predicate functions are ordinary functions and extract with them; a schema-bound one goes to `SchemaBound Functions/`, which deploys first.
+
+A policy script compares the live policy with the extracted one when it runs. It creates the policy when it is missing, leaves it alone when it matches, and re-creates it when it differs, inside a transaction, so the table is never unprotected in between. A policy the package does not have is left alone, as with every scripted folder. Below SQL Server 2016 the script skips itself with a message.
 
 ---
 

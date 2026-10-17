@@ -81,6 +81,7 @@
       "ShouldCast:SaveInvalidScripts",
       "ShouldCast:Schemas",
       "ShouldCast:ScriptDynamicDependencyRemovalForFunctions",
+      "ShouldCast:SecurityPolicies",
       "ShouldCast:Sequences",
       "ShouldCast:StopLists",
       "ShouldCast:Synonyms",

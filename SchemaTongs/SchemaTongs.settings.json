@@ -62,6 +62,7 @@
         "XMLSchemaCollections": true,
         "IndexedViews": true, // SQL Server only — indexed views
         "Synonyms": true,
+        "SecurityPolicies": true, // row-level security policies (2016+)
         "ModuleSyntax": "CreateOrAlter", // CreateOrAlter needs SQL Server 2016 SP1; Legacy writes a guarded CREATE stub plus ALTER, which every version accepts
 
         // PostgreSQL only

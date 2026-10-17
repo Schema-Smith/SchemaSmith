@@ -552,4 +552,18 @@ public class HelperMethodTests
     }
 
     #endregion
+
+    #region StripOuterParentheses (security policy predicates)
+
+    [TestCase("([sec].[fn]([Col]))", "[sec].[fn]([Col])")]
+    [TestCase("[sec].[fn]([Col])", "[sec].[fn]([Col])")]
+    [TestCase("((x))", "(x)")]
+    [TestCase("(a) AND (b)", "(a) AND (b)")]
+    [TestCase(" (x) ", "x")]
+    public void StripOuterParentheses_RemovesOnlyAPairThatWrapsTheWhole(string definition, string expected)
+    {
+        Assert.That(SchemaTongs.StripOuterParentheses(definition), Is.EqualTo(expected));
+    }
+
+    #endregion
 }

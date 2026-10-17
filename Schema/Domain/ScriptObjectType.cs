@@ -40,6 +40,8 @@ namespace Schema.Domain
         Collations,
         Publications,
         // MySQL
-        Events
+        Events,
+        // SQL Server, after the rest so no existing value moves.
+        SecurityPolicies
     }
 }

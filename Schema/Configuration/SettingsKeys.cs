@@ -144,6 +144,8 @@ public static class SettingsKeys
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string Synonyms = "ShouldCast:Synonyms";
         [ReadBy(SettingsTool.SchemaTongs)]
+        public const string SecurityPolicies = "ShouldCast:SecurityPolicies";
+        [ReadBy(SettingsTool.SchemaTongs)]
         public const string TableTriggers = "ShouldCast:TableTriggers";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string Tables = "ShouldCast:Tables";

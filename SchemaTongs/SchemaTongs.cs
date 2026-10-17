@@ -83,6 +83,7 @@ public class SchemaTongs
     private bool _scriptDynamicDependencyRemovalForFunctions;
     private bool _includeIndexedViews;
     private bool _includeSynonyms;
+    private bool _includeSecurityPolicies;
 
     // PostgreSQL specific
     private bool _includeDomainTypes;
@@ -587,6 +588,7 @@ public class SchemaTongs
                 _includeIndexedViews = config[SettingsKeys.ShouldCast.IndexedViews]?.ToLower() != "false";
                 _includeSequences = config[SettingsKeys.ShouldCast.Sequences]?.ToLower() != "false";
                 _includeSynonyms = config[SettingsKeys.ShouldCast.Synonyms]?.ToLower() != "false";
+                _includeSecurityPolicies = config[SettingsKeys.ShouldCast.SecurityPolicies]?.ToLower() != "false";
                 _moduleSyntax = ReadModuleSyntax(config[SettingsKeys.ShouldCast.ModuleSyntax]);
                 break;
 
@@ -1032,6 +1034,7 @@ public class SchemaTongs
                 if (_includeIndexedViews) folders.Add("Indexed Views");
                 if (_includeSequences) folders.Add(ResolveFolderName("Sequences", ScriptObjectType.Sequences));
                 if (_includeSynonyms) folders.Add(ResolveFolderName("Synonyms", ScriptObjectType.Synonyms));
+                if (_includeSecurityPolicies) folders.Add(ResolveFolderName("SecurityPolicies", ScriptObjectType.SecurityPolicies));
                 break;
 
             case Platform.PostgreSQL:
@@ -1155,6 +1158,8 @@ public class SchemaTongs
             // Sequences arrived in SQL Server 2012 (major 11); 2008 R2 has no sys.sequences, so there is nothing to cast.
             if (_includeSequences && sourceMajor is 0 or >= 11) ScriptSqlServerSequences(command);
             if (_includeSynonyms) ScriptSqlServerSynonyms(command);
+            // Row-level security arrived in SQL Server 2016 (major 13).
+            if (_includeSecurityPolicies && sourceMajor is 0 or >= 13) ScriptSqlServerSecurityPolicies(command);
         }
         finally
         {
@@ -1523,6 +1528,104 @@ SELECT s.name AS SchemaName, sq.name AS SequenceName,
             FileWrapper.GetFromFactory().WriteAllText(fileName, script);
             _stats.Sequences++;
         }
+    }
+
+    // The catalog's own description of a policy, used twice so the two can only agree: on the source it becomes the
+    // expected value written into the script, and on the target the script recomputes it to decide whether to re-create.
+    internal const string SecurityPolicySignatureSql =
+        "SELECT CONVERT(NVARCHAR(1), p.is_enabled) + CONVERT(NVARCHAR(1), p.is_schema_bound) + CONVERT(NVARCHAR(1), p.is_not_for_replication) + " +
+        "ISNULL((SELECT N'|' + sp.predicate_type_desc + N':' + ISNULL(sp.operation_desc, N'') + N':' + QUOTENAME(OBJECT_SCHEMA_NAME(sp.target_object_id)) + N'.' + " +
+        "QUOTENAME(OBJECT_NAME(sp.target_object_id)) + N':' + sp.predicate_definition FROM sys.security_predicates sp WHERE sp.[object_id] = p.[object_id] " +
+        "ORDER BY OBJECT_SCHEMA_NAME(sp.target_object_id), OBJECT_NAME(sp.target_object_id), sp.predicate_type_desc, sp.operation_desc, sp.predicate_definition " +
+        "FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), N'') FROM sys.security_policies p WHERE p.[object_id] = OBJECT_ID(@policy)";
+
+    // Row-level security policies, one script each. Creating one where it is missing is not enough, since a changed
+    // predicate would never apply, and re-creating it on every deploy would switch the security off for a moment.
+    // So the script compares the live policy with the extracted one and re-creates it only when they differ, inside a
+    // transaction, so a reader never sees the table unprotected.
+    private void ScriptSqlServerSecurityPolicies(IDbCommand command)
+    {
+        _progressLog.Info("Casting Security Policies");
+        var castPath = GetCastPath(ScriptObjectType.SecurityPolicies, "SecurityPolicies");
+        DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
+
+        command.CommandText = @"
+SELECT SCHEMA_NAME(p.[schema_id]), p.[name], p.is_enabled, p.is_schema_bound, p.is_not_for_replication,
+       sp.predicate_type_desc, sp.operation_desc, OBJECT_SCHEMA_NAME(sp.target_object_id), OBJECT_NAME(sp.target_object_id), sp.predicate_definition
+  FROM sys.security_policies p
+  LEFT JOIN sys.security_predicates sp ON sp.[object_id] = p.[object_id]
+ ORDER BY SCHEMA_NAME(p.[schema_id]), p.[name], sp.security_predicate_id";
+        var rows = new List<(string Schema, string Name, bool Enabled, bool SchemaBound, bool NotForReplication, string Type, string Operation, string TargetSchema, string Target, string Definition)>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                rows.Add((reader.GetString(0), reader.GetString(1), reader.GetBoolean(2), reader.GetBoolean(3), reader.GetBoolean(4),
+                          reader.IsDBNull(5) ? null : reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetString(6),
+                          reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8), reader.IsDBNull(9) ? null : reader.GetString(9)));
+
+        foreach (var policy in rows.GroupBy(r => (r.Schema, r.Name))
+                     .Where(g => ShouldExtractFromSchema(g.Key.Schema))
+                     .Where(g => _objectsToCast.Length == 0 || _objectsToCast.Contains(g.Key.Name.ToLower()) || _objectsToCast.Contains($"{g.Key.Schema}.{g.Key.Name}".ToLower())))
+        {
+            var qualified = $"[{Identifier.EscapeDelimited(policy.Key.Schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(policy.Key.Name, Platform.SqlServer)}]";
+            command.CommandText = "DECLARE @policy NVARCHAR(600) = @p; " + SecurityPolicySignatureSql;
+            command.Parameters.Clear();
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = "@p";
+            parameter.Value = qualified;
+            command.Parameters.Add(parameter);
+            var signature = command.ExecuteScalar()?.ToString() ?? "";
+            command.Parameters.Clear();
+
+            var first = policy.First();
+            var predicates = string.Join(",\r\n  ", policy.Where(p => p.Type != null).Select(p =>
+                $"ADD {p.Type} PREDICATE {StripOuterParentheses(p.Definition)} ON [{Identifier.EscapeDelimited(p.TargetSchema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(p.Target, Platform.SqlServer)}]" +
+                (string.IsNullOrEmpty(p.Operation) ? "" : " " + p.Operation)));
+            var create = $"CREATE SECURITY POLICY {qualified}\r\n  {predicates}\r\n  WITH (STATE = {(first.Enabled ? "ON" : "OFF")}, SCHEMABINDING = {(first.SchemaBound ? "ON" : "OFF")})" +
+                         (first.NotForReplication ? " NOT FOR REPLICATION" : "");
+
+            var script =
+                "IF OBJECT_ID('sys.security_policies') IS NULL\r\n" +
+                $"  RAISERROR('  Security policy {EscapeSql(qualified)} skipped: row-level security needs SQL Server 2016', 10, 1) WITH NOWAIT\r\n" +
+                "ELSE\r\nBEGIN\r\n" +
+                $"  DECLARE @policy NVARCHAR(600) = N'{EscapeSql(qualified)}', @v_Live NVARCHAR(MAX)\r\n" +
+                $"  SET @v_Live = ({SecurityPolicySignatureSql})\r\n" +
+                $"  IF @v_Live IS NULL OR @v_Live <> N'{EscapeSql(signature)}'\r\n" +
+                "  BEGIN\r\n" +
+                "  BEGIN TRY\r\n" +
+                "    BEGIN TRANSACTION\r\n" +
+                $"    IF @v_Live IS NOT NULL EXEC(N'DROP SECURITY POLICY {EscapeSql(qualified)}')\r\n" +
+                $"    EXEC(N'{EscapeSql(create)}')\r\n" +
+                "    COMMIT\r\n" +
+                "  END TRY\r\n" +
+                "  BEGIN CATCH\r\n" +
+                "    IF @@TRANCOUNT > 0 ROLLBACK\r\n" +
+                "    DECLARE @v_Error NVARCHAR(2048) = ERROR_MESSAGE()\r\n" +
+                "    RAISERROR(@v_Error, 16, 1)\r\n" +
+                "  END CATCH\r\n" +
+                "  END\r\n" +
+                "END\r\n";
+
+            var fileName = ResolveOutputPath(castPath, EncodeObjectFileName(policy.Key.Schema, policy.Key.Name, ".sql"));
+            script = RewriteSqlBodyForSchemaTemplate(script, fileName);
+            _progressLog.Info($"  Casting {fileName}");
+            FileWrapper.GetFromFactory().WriteAllText(fileName, script);
+            _stats.SecurityPolicies++;
+        }
+    }
+
+    // The catalog wraps each predicate in one pair of parentheses that CREATE SECURITY POLICY does not take.
+    internal static string StripOuterParentheses(string definition)
+    {
+        var text = definition.Trim();
+        if (text.Length < 2 || text[0] != '(' || text[^1] != ')') return text;
+        var depth = 0;
+        for (var i = 0; i < text.Length - 1; i++)
+        {
+            if (text[i] == '(') depth++;
+            else if (text[i] == ')') depth--;
+            if (depth == 0) return text;
+        }
+        return text[1..^1].Trim();
     }
 
     private void ScriptSqlServerSynonyms(IDbCommand command)
@@ -4117,6 +4220,7 @@ SELECT [name], kind FROM @k ORDER BY [name];";
                 LogIfPositive("  IdxViews:   ", _stats.IndexedViews);
                 LogIfPositive("  Sequences:  ", _stats.Sequences);
                 LogIfPositive("  Synonyms:   ", _stats.Synonyms);
+                LogIfPositive("  Security policies: ", _stats.SecurityPolicies);
                 break;
 
             case Platform.PostgreSQL:
@@ -4191,6 +4295,7 @@ SELECT [name], kind FROM @k ORDER BY [name];";
         public int FullTextStopLists { get; set; }
         public int XmlSchemaCollections { get; set; }
         public int Synonyms { get; set; }
+        public int SecurityPolicies { get; set; }
         public int Collations { get; set; }
         public int Publications { get; set; }
     }

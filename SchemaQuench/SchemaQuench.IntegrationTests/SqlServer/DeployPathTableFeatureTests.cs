@@ -37,6 +37,7 @@ public class DeployPathTableFeatureTests
     private string _betweenScript;
     private string _beforeScript;
     private string _prerequisiteScript;
+    private string _securityPolicyScript;
     private bool _nextDeployFails;
 
     // A new database costs CREATE DATABASE, sp_cdc_enable_db, a full kindle and a cold plan compile on the first
@@ -201,6 +202,29 @@ public class DeployPathTableFeatureTests
             cmd.CommandText = "SELECT k.[name] COLLATE DATABASE_DEFAULT + ':' + c.encryption_type_desc COLLATE DATABASE_DEFAULT FROM sys.columns c " +
                               "JOIN sys.column_encryption_keys k ON k.column_encryption_key_id = c.column_encryption_key_id WHERE c.[object_id] = OBJECT_ID('dbo.DeployProbe')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("CEK_Deploy:DETERMINISTIC"));
+        }, freshDatabase: true);
+    }
+
+    // SecurityPolicies is an after-tables folder: a policy names its table, which the same deploy has just created.
+    [Test]
+    public void ASecurityPolicy_IsCreatedAfterTheTableItProtects_ByARealDeploy()
+    {
+        const string setup = "EXEC('CREATE SCHEMA sec'); EXEC('CREATE FUNCTION sec.fn_rep(@Rep AS SYSNAME) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS ok WHERE @Rep = USER_NAME()');";
+        RunScenario("DeployRls", setup, (deploy, db, cmd) =>
+        {
+            _securityPolicyScript = """
+                IF OBJECT_ID(N'[sec].[ProbePolicy]') IS NULL
+                  EXEC(N'CREATE SECURITY POLICY [sec].[ProbePolicy] ADD FILTER PREDICATE [sec].[fn_rep]([SalesRep]) ON [dbo].[DeployProbe] WITH (STATE = ON, SCHEMABINDING = ON)')
+                """;
+            const string table = """
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[SalesRep]", "DataType": "SYSNAME", "Nullable": false } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }
+                """;
+            deploy(table);
+            deploy(table);
+            cmd.CommandText = "SELECT OBJECT_NAME(target_object_id) FROM sys.security_predicates WHERE [object_id] = OBJECT_ID(N'sec.ProbePolicy')";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("DeployProbe"));
         }, freshDatabase: true);
     }
 
@@ -747,7 +771,7 @@ public class DeployPathTableFeatureTests
 
                 body(tableJson =>
                 {
-                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript, _prerequisiteScript);
+                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript, _prerequisiteScript, _securityPolicyScript);
                     _environment.ClearReceivedCalls();
                     var reportBase = Path.Join(tempDir, "summary");
                     if (expectIncomplete) _environment.CommandLine.Returns($"SchemaQuench.exe --report:{reportBase}");
@@ -883,7 +907,7 @@ public class DeployPathTableFeatureTests
     }
 
     private static void WritePackage(string dir, string db, string tableJson, string templateExtra = "", string betweenScript = null,
-                                     string beforeScript = null, string prerequisiteScript = null)
+                                     string beforeScript = null, string prerequisiteScript = null, string securityPolicyScript = null)
     {
         var tables = Path.Join(dir, "Templates", "Main", "Tables");
         Directory.CreateDirectory(tables);
@@ -912,6 +936,14 @@ public class DeployPathTableFeatureTests
             File.WriteAllText(Path.Join(prerequisites, "AlwaysEncryptedKeys.sql"), prerequisiteScript);
             folders = "{ \"FolderPath\": \"Prerequisites\", \"QuenchSlot\": \"Objects\" }" + (folders.Length > 0 ? ", " : "") + folders;
         }
+        var policies = Path.Join(dir, "Templates", "Main", "SecurityPolicies");
+        if (Directory.Exists(policies)) Directory.Delete(policies, true);
+        if (securityPolicyScript != null)
+        {
+            Directory.CreateDirectory(policies);
+            File.WriteAllText(Path.Join(policies, "sec.ProbePolicy.sql"), securityPolicyScript);
+            folders += (folders.Length > 0 ? ", " : "") + "{ \"FolderPath\": \"SecurityPolicies\", \"QuenchSlot\": \"AfterTablesObjects\", \"ObjectType\": \"SecurityPolicies\" }";
+        }
         File.WriteAllText(Path.Join(dir, "Product.json"),
             "{ \"Name\": \"DeployPathProbe\", \"ValidationScript\": \"SELECT CAST(1 AS BIT)\", \"TemplateOrder\": [\"Main\"], "
             + "\"ScriptTokens\": {}, \"ScriptFolders\": [], \"Platform\": \"SqlServer\" }");
@@ -929,6 +961,7 @@ public class DeployPathTableFeatureTests
         _betweenScript = null;
         _beforeScript = null;
         _prerequisiteScript = null;
+        _securityPolicyScript = null;
         _nextDeployFails = false;
         FactoryContainer.Register(_environment);
         LogFactory.Register("ErrorLog", _errorLog);

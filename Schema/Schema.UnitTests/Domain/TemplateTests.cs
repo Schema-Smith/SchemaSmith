@@ -339,6 +339,10 @@ namespace Schema.UnitTests.Domain
                 Assert.That(Template.GetDefaultTemplateFolders(Platform.SqlServer, isSchemaTemplate: true).Select(f => f.FolderPath),
                     Has.No.Member("Prerequisites"), "database-scoped, so never fanned out per schema");
                 Assert.That(Template.GetDefaultTemplateFolders(Platform.PostgreSQL).Select(f => f.FolderPath), Has.No.Member("Prerequisites"));
+                var policies = folders.Single(f => f.ObjectType == ScriptObjectType.SecurityPolicies);
+                Assert.That(policies.QuenchSlot, Is.EqualTo(TemplateQuenchSlot.AfterTablesObjects), "after the tables and predicate functions");
+                Assert.That(folders.IndexOf(policies), Is.GreaterThan(folders.FindIndex(f => f.ObjectType == ScriptObjectType.SchemaBoundFunctions)));
+                Assert.That(Schema.Utility.ScriptFolderTypeInference.InferFromFolderName("SecurityPolicies"), Is.EqualTo(ScriptObjectType.SecurityPolicies));
             });
         }
 

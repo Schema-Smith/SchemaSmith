@@ -771,6 +771,8 @@ namespace Schema.Domain
                     // this pass recreate them -- which only works after the table work has run.
                     new TemplateFolder { FolderPath = "SchemaBound Views", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.SchemaBoundViews },
                     new TemplateFolder { FolderPath = "SchemaBound Functions", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.SchemaBoundFunctions },
+                    // Row-level security (2016): after the tables and the predicate functions a policy names.
+                    new TemplateFolder { FolderPath = "SecurityPolicies", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.SecurityPolicies },
                     new TemplateFolder { FolderPath = "Table Data", QuenchSlot = TemplateQuenchSlot.TableData },
                     new TemplateFolder { FolderPath = "After Scripts", QuenchSlot = TemplateQuenchSlot.After },
                 ],

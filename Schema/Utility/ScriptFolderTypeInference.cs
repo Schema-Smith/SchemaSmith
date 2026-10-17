@@ -22,6 +22,7 @@ public static class ScriptFolderTypeInference
         ["XMLSchemaCollections"] = ScriptObjectType.XMLSchemaCollections,
         ["DDLTriggers"] = ScriptObjectType.DDLTriggers,
         ["Synonyms"] = ScriptObjectType.Synonyms,
+        ["SecurityPolicies"] = ScriptObjectType.SecurityPolicies,
         ["Domain Types"] = ScriptObjectType.DomainTypes,
         ["Enum Types"] = ScriptObjectType.EnumTypes,
         ["Composite Types"] = ScriptObjectType.CompositeTypes,

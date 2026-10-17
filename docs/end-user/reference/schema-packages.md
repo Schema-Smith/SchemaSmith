@@ -310,6 +310,7 @@ When `Template.json` does not declare its own `ScriptFolders`, SchemaSmith fills
 | `DDLTriggers/` | AfterTablesObjects | DDLTriggers |
 | `SchemaBound Views/` | AfterTablesObjects | SchemaBoundViews |
 | `SchemaBound Functions/` | AfterTablesObjects | SchemaBoundFunctions |
+| `SecurityPolicies/` | AfterTablesObjects | SecurityPolicies |
 | `Table Data/` | TableData | — |
 | `After Scripts/` | After | — |
 
