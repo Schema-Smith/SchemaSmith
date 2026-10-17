@@ -600,7 +600,10 @@ BEGIN
     -- (longtext, plus the json_valid check it adds from 10.4.3 -- NULL below, where it adds none); a column that
     -- declares a check of its own keeps that as the comparison.
     UPDATE _SchemaSmith_Columns
-       SET CompareDataType = CASE WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON' THEN 'LONGTEXT' ELSE DataType END,
+       -- A bare VECTOR is stored as vector(2048) on MySQL (probed on 9.7); MariaDB refuses one without its dimension.
+       SET CompareDataType = CASE WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON' THEN 'LONGTEXT'
+                                  WHEN VERSION() NOT LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'VECTOR' THEN 'VECTOR(2048)'
+                                  ELSE DataType END,
            CompareCheckExpression = CASE WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON'
                                           AND (CheckExpression IS NULL OR TRIM(CheckExpression) = '')
                                          THEN SchemaSmith_JsonAliasCheck(SchemaSmith_StripBacktickWrapping(ColumnName))

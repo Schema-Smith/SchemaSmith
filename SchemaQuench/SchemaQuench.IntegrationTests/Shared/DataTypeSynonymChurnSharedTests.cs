@@ -108,6 +108,30 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // MY-V3: MySQL stores a bare VECTOR as vector(2048), so it was altered on every deploy. MariaDB refuses a VECTOR
+    // without its dimension, so there only the dimensioned form exists.
+    [TestCase("VECTOR(3)")]
+    [TestCase("VECTOR")]
+    public void AVectorColumn_IsNotRewrittenOnRedeploy(string declared)
+    {
+        using (var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT VERSION()";
+            var version = cmd.ExecuteScalar()?.ToString() ?? "";
+            var isMariaDb = version.Contains("MariaDB", StringComparison.OrdinalIgnoreCase);
+            var numbers = version.Split('-')[0].Split('.');
+            var major = int.Parse(numbers[0]);
+            var minor = int.Parse(numbers[1]);
+            if (isMariaDb ? major < 11 || (major == 11 && minor < 7) : major < 9)
+                Assert.Ignore("VECTOR is MySQL 9.0 / MariaDB 11.7.");
+            if (isMariaDb && declared == "VECTOR")
+                Assert.Ignore("MariaDB refuses a VECTOR without its dimension.");
+        }
+        ColumnDeclaredWithASynonym_IsNotRewrittenOnRedeploy(declared);
+    }
+
     // Members are trimmed with their quoting intact. A backslash-escaped quote is part of the member: reading it as the
     // member's end lost everything after it, and the column's DDL then failed to parse.
     [TestCase(@"ENUM('it\'s ','b')", @"ENUM('it\'s','b')")]
