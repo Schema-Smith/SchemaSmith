@@ -744,7 +744,8 @@ BEGIN
         -- rides a table rename also fires — its parse-time NewColumn flag is unreliable because the
         -- new table name did not exist when the flag was computed.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColRenameStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_ColRenameStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_ColRenameStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT,
+                                                            TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         -- `ALTER TABLE ... RENAME COLUMN old TO new` needs MySQL 8.0 / MariaDB 10.5.2+. Below that
         -- (MySQL 5.7 / MariaDB 10.2-10.5) reproduce the rename with `CHANGE COLUMN old new <def>`,
@@ -759,7 +760,75 @@ BEGIN
         -- omitted here too, for the same reason: it is unconditionally dropped by this CHANGE COLUMN and
         -- restored by ModifiedTableQuench's ON UPDATE compare against the new column name in the same deploy.
         CALL SchemaSmith_MarkColumnRenames(p_DatabaseName);
+
+        -- MySQL refuses to rename a column that a functional key part (3837) or a generated column (3108) reads;
+        -- MariaDB rewrites both itself. A declared functional index is dropped ahead of the rename and rebuilt by the
+        -- index pass; a declared generated column is re-stated over the new name in the rename's own ALTER. One the
+        -- package does not declare could not be put back, so the deploy stops by name before anything is renamed.
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RenameDependents;
+        CREATE TEMPORARY TABLE _SchemaSmith_RenameDependents (
+            Kind VARCHAR(16) COLLATE utf8mb4_bin NOT NULL,
+            TableName VARCHAR(130) COLLATE utf8mb4_bin NOT NULL,
+            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            DependentName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            Declared TINYINT NOT NULL DEFAULT 0,
+            PRIMARY KEY (Kind, TableKey, DependentName)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        IF VERSION() NOT LIKE '%MariaDB%' THEN
+            INSERT IGNORE INTO _SchemaSmith_RenameDependents (Kind, TableName, TableKey, DependentName)
+            SELECT 'column', c.TableName, c.TableKey, g.COLUMN_NAME
+              FROM _SchemaSmith_Columns c
+              JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId
+              JOIN _SchemaSmith_CatColumns g ON g.TableKey = c.TableKey
+             WHERE CONVERT(g.EXTRA USING utf8mb4) LIKE '%GENERATED%'
+               AND LOCATE(CAST(CONCAT('`', r.LiveName, '`') AS BINARY), CAST(g.GENERATION_EXPRESSION AS BINARY)) > 0;
+            -- STATISTICS.EXPRESSION is 8.0.13, and a catalog column is resolved when the procedure is created, so it is
+            -- only ever named in a prepared statement.
+            IF SchemaSmith_ServerVersionPatchNum() >= 80013 THEN
+                SET @ss_rename_db = p_DatabaseName;
+                SET @ss_rename_sql = CONCAT(
+                    'INSERT IGNORE INTO _SchemaSmith_RenameDependents (Kind, TableName, TableKey, DependentName) ',
+                    'SELECT ''index'', c.TableName, c.TableKey, s.INDEX_NAME FROM _SchemaSmith_Columns c ',
+                    'JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId ',
+                    'JOIN INFORMATION_SCHEMA.STATISTICS s ON s.TABLE_SCHEMA = ? AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = c.TableKey ',
+                    'WHERE s.EXPRESSION IS NOT NULL ',
+                    'AND LOCATE(CAST(CONCAT(''`'', r.LiveName, ''`'') AS BINARY), CAST(s.EXPRESSION AS BINARY)) > 0');
+                PREPARE stmt FROM @ss_rename_sql;
+                EXECUTE stmt USING @ss_rename_db;
+                DEALLOCATE PREPARE stmt;
+            END IF;
+        END IF;
+        UPDATE _SchemaSmith_RenameDependents d SET d.Declared = 1
+         WHERE d.Kind = 'index'
+           AND EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
+                        WHERE i.TableKey = d.TableKey AND i.IndexKey = SchemaSmith_NameKeyCI(d.DependentName));
+        UPDATE _SchemaSmith_RenameDependents d SET d.Declared = 1
+         WHERE d.Kind = 'column'
+           AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
+                        WHERE c.TableKey = d.TableKey AND c.ColumnKey = SchemaSmith_NameKeyCI(d.DependentName)
+                          AND c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) <> '');
+        IF EXISTS (SELECT 1 FROM _SchemaSmith_RenameDependents WHERE Declared = 0) THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), CONCAT('  A column rename would break ', Kind, ' ', SchemaSmith_StripBacktickWrapping(TableName), '.', DependentName,
+                                           ', which the package does not declare. Declare it in the table''s JSON, or drop it in a Before script.')
+              FROM _SchemaSmith_RenameDependents WHERE Declared = 0;
+            SET @ss_msg = (SELECT LEFT(CONCAT('A column rename would break undeclared ', Kind, ' ', DependentName, ' on ',
+                                              SchemaSmith_StripBacktickWrapping(TableName), '; see the deploy log.'), 128)
+                             FROM _SchemaSmith_RenameDependents WHERE Declared = 0 ORDER BY TableName, DependentName LIMIT 1);
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+        END IF;
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  Drop functional index `', DependentName, '` on ', TableName, ' ahead of a column rename')
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'index';
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'index', CONCAT(SchemaSmith_StripBacktickWrapping(TableName), '.', DependentName), 'dropped'
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'index';
         INSERT INTO _SchemaSmith_ColRenameStmts (Stmt)
+        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', TableName,
+                      ' DROP INDEX `', REPLACE(DependentName, '`', '``'), '`')
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'index';
+
+        INSERT INTO _SchemaSmith_ColRenameStmts (Stmt, TableKey)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
                       GROUP_CONCAT(
                           IF(SchemaSmith_SupportsRenameColumn() = 1,
@@ -780,13 +849,23 @@ BEGIN
                                     IF(CONVERT(isc.EXTRA USING utf8mb4) LIKE '%auto_increment%', ' AUTO_INCREMENT', ''),
                                     IF(COALESCE(CONVERT(isc.COLUMN_COMMENT USING utf8mb4), '') <> '',
                                        CONCAT(' COMMENT ', QUOTE(CONVERT(isc.COLUMN_COMMENT USING utf8mb4) COLLATE utf8mb4_unicode_ci)), '')))
-                          ORDER BY c.ColumnName SEPARATOR ', '))
+                          ORDER BY c.ColumnName SEPARATOR ', ')),
+               MIN(c.TableKey)
         FROM _SchemaSmith_Columns c
         JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId
         JOIN _SchemaSmith_CatColumns isc
             ON isc.TableKey = c.TableKey
            AND CAST(isc.COLUMN_NAME AS BINARY) = CAST(r.LiveName AS BINARY)
         GROUP BY c.TableName;
+
+        UPDATE _SchemaSmith_ColRenameStmts s
+          JOIN (SELECT d.TableKey, GROUP_CONCAT(CONCAT('MODIFY COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', ') AS Clauses
+                  FROM _SchemaSmith_RenameDependents d
+                  JOIN _SchemaSmith_Columns c ON c.TableKey = d.TableKey AND c.ColumnKey = SchemaSmith_NameKeyCI(d.DependentName)
+                 WHERE d.Kind = 'column'
+                 GROUP BY d.TableKey) m ON m.TableKey = s.TableKey
+           SET s.Stmt = CONCAT(s.Stmt, ', ', m.Clauses);
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RenameDependents;
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Rename column `', r.LiveName,
