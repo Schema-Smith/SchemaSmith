@@ -31,6 +31,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string CardinalityCode = "SS-FK-005";
     private const string ForeignKeyNameReusedCode = "SS-FK-006";
     private const string SetNullColumnsCode = "SS-FK-007";
+    private const string NonStandardKeyReferenceCode = "SS-FK-008";
+    private const string SetDefaultActionCode = "SS-FK-009";
     private const string IndexColumnCode = "SS-IDX-001";
     private const string TemporalKeyShapeCode = "SS-IDX-002";
     private const string TemporalKeyPeriodCode = "SS-IDX-003";
@@ -50,6 +52,9 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string SpatialGridsCode = "SS-SPX-004";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string CharsetWithoutCollationCode = "SS-COL-002";
+    private const string RemovedFunctionCode = "SS-COL-004";
+    private const string NationalCharacterTypeCode = "SS-COL-005";
+    private const string DeprecatedNumericFormCode = "SS-COL-006";
     private const string RebuildThresholdCode = "SS-TBL-001";
     private const string IgnoredThresholdCode = "SS-TBL-002";
     private const string EdgeConstraintTableKindCode = "SS-TBL-003";
@@ -131,6 +136,8 @@ public sealed class CoherenceCheck : ISchemaCheck
 
             foreach (var fk in table.ForeignKeys)
                 findings.AddRange(CheckForeignKey(table, fk, location, tablesByKey, columnsAreOwnedElsewhere));
+            findings.AddRange(CheckMySqlFamilyForeignKeys(table, location, tablesByKey, ctx.Product.Platform));
+            findings.AddRange(CheckMySqlFamilyColumnTypes(table, location, ctx.Product.Platform));
 
             foreach (var index in table.Indexes)
                 findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
@@ -260,6 +267,85 @@ public sealed class CoherenceCheck : ISchemaCheck
         foreach (var column in fkRelatedColumns.Where(column => !relatedColumnNames.Contains(NormalizeIdentifier(column))))
             yield return new Finding(Severity.Error, RelatedColumnCode, Category, location,
                 $"Related column '{column}' referenced in RelatedColumns does not exist on related table '{fk.RelatedTable}'.");
+    }
+
+    /// <summary>
+    /// Two foreign-key shapes the MySQL family accepts at create time but does not honour as written:
+    /// <list type="bullet">
+    /// <item><c>SET DEFAULT</c> is stored and then acts as <c>RESTRICT</c> (probed on MySQL 8.0 and MariaDB 11.4:
+    /// the parent delete fails with 1451), so the declared action never happens;</item>
+    /// <item>MySQL 8.4 refuses a key to columns that are not a whole primary or unique key of the related table
+    /// (6125, while <c>restrict_fk_on_non_standard_key</c> is on, its default). A package extracted from 8.0 can
+    /// carry one. MariaDB has no such restriction.</item>
+    /// </list>
+    /// Both are warnings: the first deploys, and the second deploys where the server variable is off.
+    /// </summary>
+    private static IEnumerable<Finding> CheckMySqlFamilyForeignKeys(Table table, string tableLocation,
+        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey, Platform platform)
+    {
+        if (platform.GetBasePlatform() != Platform.MySQL) yield break;
+        foreach (var fk in table.ForeignKeys)
+        {
+            var location = $"{tableLocation} / FK '{fk.Name}'";
+            foreach (var (clause, action) in new[] { ("ON DELETE", fk.DeleteAction), ("ON UPDATE", fk.UpdateAction) })
+                if (NormalizeAction(action) == "SET DEFAULT")
+                    yield return new Finding(Severity.Warning, SetDefaultActionCode, Category, location,
+                        $"{clause} SET DEFAULT is accepted by {platform} but acts as RESTRICT: the change to the parent row is refused instead. Declare the action the server will carry out.");
+
+            if (platform != Platform.MySQL) continue;
+            if (!tablesByKey.TryGetValue(ResolveRelatedTarget(table, fk), out var relatedTables)) continue;
+            var related = SplitNames(fk.RelatedColumns).Select(NormalizeIdentifier).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (related.Count == 0) continue;
+            var isWholeKey = relatedTables.SelectMany(t => t.Indexes)
+                .Where(i => i.PrimaryKey || i.Unique || i.UniqueConstraint)
+                // A prefix or expression key part (Code(10)) never equals a column name, so a partial key does not match.
+                .Select(i => SplitNames(i.IndexColumns).Select(part => StripOrderingSuffix(part).Trim()).ToList())
+                .Any(parts => parts.Select(NormalizeIdentifier).ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(related));
+            if (!isWholeKey)
+                yield return new Finding(Severity.Warning, NonStandardKeyReferenceCode, Category, location,
+                    $"RelatedColumns ({fk.RelatedColumns}) are not the whole primary key or a whole unique key of '{fk.RelatedTable}'. MySQL 8.4 refuses such a foreign key while restrict_fk_on_non_standard_key is on, its default. Reference a whole unique key, or declare one on those columns.");
+        }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex RemovedHashFunction =
+        new(@"\b(MD5|SHA1|SHA)\s*\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex NationalCharacterType =
+        new(@"^\s*(NVARCHAR|NCHAR|NATIONAL\s+(VARCHAR|CHAR|CHARACTER))\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex DeprecatedNumericForm =
+        new(@"^\s*(FLOAT|DOUBLE|REAL)\s*\(\s*\d+\s*,\s*\d+\s*\)|^\s*(FLOAT|DOUBLE|REAL|DECIMAL|NUMERIC)\b.*\bUNSIGNED\b|\bZEROFILL\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Column declarations the MySQL family accepts today but that will stop deploying, or that do something other than
+    /// the name suggests. All warnings, since each still deploys on the servers that accept it:
+    /// <list type="bullet">
+    /// <item>MySQL 9.6 removed <c>MD5()</c>, <c>SHA1()</c> and <c>SHA()</c>, so an expression that calls one fails there;</item>
+    /// <item><c>NVARCHAR</c> / <c>NCHAR</c> create a <c>utf8mb3</c> column, a character set MySQL has deprecated;</item>
+    /// <item>MySQL 8.0.17 deprecated <c>FLOAT(M,D)</c>, <c>UNSIGNED</c> on approximate and decimal types, and <c>ZEROFILL</c>.</item>
+    /// </list>
+    /// </summary>
+    private static IEnumerable<Finding> CheckMySqlFamilyColumnTypes(Table table, string tableLocation, Platform platform)
+    {
+        if (platform.GetBasePlatform() != Platform.MySQL) yield break;
+        var expressions = table.Columns.OfType<MySqlColumn>()
+            .SelectMany(c => new[] { ($"Column '{c.Name}'", c.GenerationExpression), ($"Column '{c.Name}'", c.Default) })
+            .Concat(table.CheckConstraints.Select(cc => ($"Check constraint '{cc.Name}'", cc.Expression)))
+            .Concat(table.Indexes.Select(i => ($"Index '{i.Name}'", i.IndexColumns)));
+        if (platform == Platform.MySQL)
+            foreach (var (where, expression) in expressions.Where(e => !string.IsNullOrWhiteSpace(e.Item2) && RemovedHashFunction.IsMatch(e.Item2)))
+                yield return new Finding(Severity.Warning, RemovedFunctionCode, Category, $"{tableLocation} / {where}",
+                    $"The expression calls {RemovedHashFunction.Match(expression).Groups[1].Value.ToUpperInvariant()}(), which MySQL 9.6 removed, so it fails to deploy there. SHA2() is the supported replacement.");
+
+        foreach (var column in table.Columns)
+        {
+            var location = $"{tableLocation} / Column '{column.Name}'";
+            if (NationalCharacterType.IsMatch(column.DataType ?? ""))
+                yield return new Finding(Severity.Warning, NationalCharacterTypeCode, Category, location,
+                    $"'{column.DataType}' creates a utf8mb3 column, a character set {platform} has deprecated. Declare VARCHAR or CHAR with CharacterSet utf8mb4 instead.");
+            if (platform == Platform.MySQL && DeprecatedNumericForm.IsMatch(column.DataType ?? ""))
+                yield return new Finding(Severity.Warning, DeprecatedNumericFormCode, Category, location,
+                    $"'{column.DataType}' uses a form MySQL 8.0.17 deprecated (FLOAT(M,D), UNSIGNED on FLOAT, DOUBLE or DECIMAL, or ZEROFILL), which a later release will remove.");
+        }
     }
 
     /// <summary>

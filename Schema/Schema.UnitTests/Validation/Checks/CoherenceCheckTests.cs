@@ -698,6 +698,112 @@ public class CoherenceCheckTests
         Assert.That(RunOn(table).Any(f => f.Code == "SS-XTP-001"), Is.False);
     }
 
+    private static Finding[] RunMyFamily(Platform platform, string relatedColumns, string parentIndexColumns, bool parentIndexUnique,
+        string deleteAction = null, bool declareParent = true)
+    {
+        MySqlTable Make() => platform == Platform.MariaDb ? new MariaDbTable() : new MySqlTable();
+        var parent = Make();
+        parent.Name = "Parent";
+        parent.Columns.Add(new MySqlColumn { Name = "Id", DataType = "int" });
+        parent.Columns.Add(new MySqlColumn { Name = "Code", DataType = "varchar(20)" });
+        parent.Indexes.Add(new MySqlIndex { Name = "PRIMARY", PrimaryKey = true, Unique = true, IndexColumns = "Id" });
+        parent.Indexes.Add(new MySqlIndex { Name = "ix_code", Unique = parentIndexUnique, IndexColumns = parentIndexColumns });
+        var child = Make();
+        child.Name = "Child";
+        child.Columns.Add(new MySqlColumn { Name = "Id", DataType = "int" });
+        child.Columns.Add(new MySqlColumn { Name = "ParentCode", DataType = "varchar(20)" });
+        child.ForeignKeys.Add(new MySqlForeignKey { Name = "fk_child", Columns = "ParentCode", RelatedTable = "Parent", RelatedColumns = relatedColumns, DeleteAction = deleteAction });
+        var template = new Template { Name = "T" };
+        if (declareParent) template.Tables.Add(parent);
+        template.Tables.Add(child);
+        var product = new Product { Name = "Acme", Platform = platform, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    // MY-F1: MySQL 8.4 refuses a foreign key to columns that are not a whole primary or unique key.
+    [TestCase("Code", "Code", true, false, TestName = "AWholeUniqueKey_IsClean")]
+    [TestCase("`Code`", "Code DESC", true, false, TestName = "AWholeUniqueKey_QuotedAndOrdered_IsClean")]
+    [TestCase("Id", "Code", false, false, TestName = "ThePrimaryKey_IsClean")]
+    [TestCase("Code", "Code", false, true, TestName = "ANonUniqueIndex_IsAWarning")]
+    [TestCase("Code", "Code(10)", true, true, TestName = "APrefixUniqueKey_IsAWarning")]
+    public void MySqlForeignKeyTarget_MustBeAWholeKey(string relatedColumns, string indexColumns, bool unique, bool expectWarning)
+    {
+        var findings = RunMyFamily(Platform.MySQL, relatedColumns, indexColumns, unique).Where(f => f.Code == "SS-FK-008").ToArray();
+        Assert.That(findings.Select(f => f.Severity), expectWarning ? Is.EqualTo(new[] { Severity.Warning }) : Is.Empty);
+    }
+
+    [Test]
+    public void ANonStandardKeyTarget_IsNotFlagged_OnMariaDb_OrWhenTheParentIsNotInThePackage()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunMyFamily(Platform.MariaDb, "Code", "Code", false).Where(f => f.Code == "SS-FK-008"), Is.Empty);
+            Assert.That(RunMyFamily(Platform.MySQL, "Code", "Code", false, declareParent: false).Where(f => f.Code == "SS-FK-008"), Is.Empty);
+        });
+    }
+
+    // MY-080 / MA-062: SET DEFAULT is stored by the MySQL family and then acts as RESTRICT.
+    [TestCase(Platform.MySQL)]
+    [TestCase(Platform.MariaDb)]
+    public void SetDefaultAction_IsAWarning_OnTheMySqlFamily(Platform platform)
+    {
+        var findings = RunMyFamily(platform, "Id", "Code", true, deleteAction: "set  default").Where(f => f.Code == "SS-FK-009").ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Select(f => f.Severity), Is.EqualTo(new[] { Severity.Warning }));
+            Assert.That(findings.Single().Message, Does.Contain("ON DELETE SET DEFAULT").And.Contain("RESTRICT"));
+            Assert.That(RunMyFamily(platform, "Id", "Code", true, deleteAction: "CASCADE").Where(f => f.Code == "SS-FK-009"), Is.Empty);
+        });
+    }
+
+    private static Finding[] RunMyColumn(Platform platform, string dataType, string generation = null, string check = null)
+    {
+        MySqlTable table = platform == Platform.MariaDb ? new MariaDbTable() : new MySqlTable();
+        table.Name = "T1";
+        table.Columns.Add(new MySqlColumn { Name = "c", DataType = dataType, GenerationExpression = generation });
+        if (check != null) table.CheckConstraints.Add(new CheckConstraint { Name = "ck", Expression = check });
+        var template = new Template { Name = "T" };
+        template.Tables.Add(table);
+        var product = new Product { Name = "Acme", Platform = platform, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    // MY-#2: MySQL 9.6 removed MD5(), SHA1() and SHA().
+    [TestCase("varchar(32)", "md5(`c`)", null, true)]
+    [TestCase("varchar(40)", null, "SHA1 (c) <> ''", true)]
+    [TestCase("varchar(64)", "sha2(`c`, 256)", null, false)]
+    public void ARemovedHashFunctionInAnExpression_IsAWarning_OnMySql(string type, string generation, string check, bool expected)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunMyColumn(Platform.MySQL, type, generation, check).Count(f => f.Code == "SS-COL-004"), Is.EqualTo(expected ? 1 : 0));
+            Assert.That(RunMyColumn(Platform.MariaDb, type, generation, check).Count(f => f.Code == "SS-COL-004"), Is.Zero, "MariaDB keeps them");
+        });
+    }
+
+    // MY-076: NVARCHAR creates a utf8mb3 column.
+    [TestCase(Platform.MySQL, "NVARCHAR(10)", true)]
+    [TestCase(Platform.MariaDb, "national varchar(10)", true)]
+    [TestCase(Platform.MySQL, "varchar(10)", false)]
+    public void ANationalCharacterType_IsAWarning(Platform platform, string type, bool expected) =>
+        Assert.That(RunMyColumn(platform, type).Count(f => f.Code == "SS-COL-005"), Is.EqualTo(expected ? 1 : 0));
+
+    // MY-063: forms MySQL 8.0.17 deprecated.
+    [TestCase("float(7,2)", true)]
+    [TestCase("decimal(10,2) unsigned", true)]
+    [TestCase("int(5) zerofill", true)]
+    [TestCase("int unsigned", false)]
+    [TestCase("decimal(10,2)", false)]
+    [TestCase("float", false)]
+    public void ADeprecatedNumericForm_IsAWarning_OnMySql(string type, bool expected)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunMyColumn(Platform.MySQL, type).Count(f => f.Code == "SS-COL-006"), Is.EqualTo(expected ? 1 : 0));
+            Assert.That(RunMyColumn(Platform.MariaDb, type).Count(f => f.Code == "SS-COL-006"), Is.Zero);
+        });
+    }
+
     [Test]
     public void RangePartitioningWithNoPartitions_IsError()
     {

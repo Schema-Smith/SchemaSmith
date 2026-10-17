@@ -33,7 +33,8 @@ namespace Schema.Domain.MySQL
         [DefaultValue("InnoDB")]
         public string Engine { get; set; } = "InnoDB";
 
-        [SchemaProperty(Pattern = "Dynamic|Compact|Compressed|Redundant|Fixed")]
+        // The deploy compares UPPER() to UPPER(), so any casing deploys. Page is MariaDB's Aria format, which extraction writes.
+        [SchemaProperty(Pattern = "Dynamic|Compact|Compressed|Redundant|Fixed|Page", PatternIgnoreCase = true)]
         [JsonProperty(Order = 101)]
         public string RowFormat { get; set; }
 

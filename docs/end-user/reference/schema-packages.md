@@ -581,7 +581,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `Engine` | string | `"InnoDB"` | Storage engine. |
-| `RowFormat` | string | `null` | Row format: `"DYNAMIC"`, `"COMPACT"`, `"COMPRESSED"`, or `"REDUNDANT"`. |
+| `RowFormat` | string | `null` | Row format: `"Dynamic"`, `"Compact"`, `"Compressed"`, `"Redundant"` or `"Fixed"`, in any casing. |
 | `CharacterSet` | string | `null` | Default character set for the table. |
 | `Collation` | string | `null` | Default collation for the table. |
 | `Comment` | string | `null` | **Deprecated** alias of the shared `Description`. Still deploys; `--Validate` reports it (`SS-DESC-002`), and SchemaTongs writes `Description`. |
@@ -601,7 +601,7 @@ MariaDB tables carry every MySQL property above, plus the ones below for feature
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `Engine` | string | `"InnoDB"` | Storage engine. |
-| `RowFormat` | string | `null` | Row format: `"DYNAMIC"`, `"COMPACT"`, `"COMPRESSED"`, or `"REDUNDANT"`. |
+| `RowFormat` | string | `null` | Row format: `"Dynamic"`, `"Compact"`, `"Compressed"`, `"Redundant"`, `"Fixed"`, or `"Page"` for an Aria table, in any casing. |
 | `CharacterSet` | string | `null` | Default character set for the table. |
 | `Collation` | string | `null` | Default collation for the table. |
 | `Comment` | string | `null` | **Deprecated** alias of the shared `Description`. Still deploys; `--Validate` reports it (`SS-DESC-002`), and SchemaTongs writes `Description`. |

@@ -368,7 +368,7 @@
     },
     "RowFormat": {
       "type": "string",
-      "pattern": "^(?:Dynamic|Compact|Compressed|Redundant|Fixed)$"
+      "pattern": "^(?:[Dd][Yy][Nn][Aa][Mm][Ii][Cc]|[Cc][Oo][Mm][Pp][Aa][Cc][Tt]|[Cc][Oo][Mm][Pp][Rr][Ee][Ss][Ss][Ee][Dd]|[Rr][Ee][Dd][Uu][Nn][Dd][Aa][Nn][Tt]|[Ff][Ii][Xx][Ee][Dd]|[Pp][Aa][Gg][Ee])$"
     },
     "CharacterSet": {
       "type": "string"
