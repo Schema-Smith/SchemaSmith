@@ -1184,7 +1184,7 @@ BEGIN
     END IF;
 
     -- =======================
-    -- STEP 2.9: DROP FOREIGN KEYS THAT BLOCK A COLUMN-LEVEL COLLATION CHANGE
+    -- STEP 2.9: DROP FOREIGN KEYS THAT BLOCK A COLUMN-LEVEL COLLATION OR TYPE CHANGE
     -- =======================
     -- THE ONLY collation-driven FK teardown left, and it is the one that is genuinely needed. It has to
     -- happen BEFORE Step 3 emits its per-column MODIFY COLUMN: the engine refuses to change a column a
@@ -1229,7 +1229,10 @@ BEGIN
                   AND SchemaSmith_IdentifierKey(kcu.TABLE_NAME) = c.TableKey
                   AND SchemaSmith_NameKeyCI(kcu.COLUMN_NAME) = c.ColumnKey
                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
-             WHERE c.NewColumn = 0 AND c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation;
+             WHERE c.NewColumn = 0
+               AND ((c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation)
+                    -- A type change is refused the same way (MA-054), and a widened key pair changes both sides.
+                    OR SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1);
 
             -- And FKs POINTING AT one. Separate INSERT for the same optimizer reason as the table-level twin.
             CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
@@ -1244,7 +1247,10 @@ BEGIN
                   ON kcu.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA) = v_DbKey
                   AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = c.TableKey
                   AND SchemaSmith_NameKeyCI(kcu.REFERENCED_COLUMN_NAME) = c.ColumnKey
-             WHERE c.NewColumn = 0 AND c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation;
+             WHERE c.NewColumn = 0
+               AND ((c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation)
+                    -- A type change is refused the same way (MA-054), and a widened key pair changes both sides.
+                    OR SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1);
 
             OPEN cur_ColCollFks;
             column_collation_fk_loop: LOOP

@@ -536,7 +536,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
         // +1 = SchemaSmith_GeneratedKindChanged (MY-022: a VIRTUAL <-> STORED switch joins the generated-status drop and re-add).
         // +2 = SchemaSmith_DropModifiedFullTextIndexes + SchemaSmith_CreateMissingFullTextIndexes (#530: both index paths).
-        Assert.That(mysql.Length, Is.EqualTo(96));
+        // +1 = SchemaSmith_ColumnTypeDiffers (MA-054: a type change takes down the foreign keys on its column first).
+        Assert.That(mysql.Length, Is.EqualTo(97));
     }
 
     [Test]

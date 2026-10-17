@@ -13,6 +13,48 @@ namespace SchemaQuench.IntegrationTests.Shared;
 /// </summary>
 public abstract class TableQuench_ForeignKeySchemaSharedTests : BaseTableQuenchTests
 {
+    // MA-054: widening a key pair (INT -> BIGINT on both sides) was refused, "Cannot change column ...: used in a foreign
+    // key constraint", on every MariaDB version probed and on MySQL: the type change ran with the key still in place.
+    [Test]
+    public void AKeyPairWidenedOnBothSides_Deploys_AndTheForeignKeyIsBack()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        string Json(string type) => $$"""
+            [{ "Name": "wpar_{{uid}}", "Columns": [ { "Name": "Id", "DataType": "{{type}}", "Nullable": false } ],
+               "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" } ] },
+             { "Name": "wchd_{{uid}}", "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "ParentId", "DataType": "{{type}}", "Nullable": true } ],
+               "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" } ],
+               "ForeignKeys": [ { "Name": "fkw_{{uid}}", "Columns": "ParentId", "RelatedTable": "wpar_{{uid}}", "RelatedColumns": "Id" } ] }]
+            """;
+        string Scalar(string sql)
+        {
+            cmd.CommandText = sql;
+            return cmd.ExecuteScalar()?.ToString() ?? "";
+        }
+        try
+        {
+            RunTableQuenchProc(cmd, Json("INT"));
+            RunTableQuenchProc(cmd, Json("BIGINT"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar($"SELECT GROUP_CONCAT(DATA_TYPE ORDER BY TABLE_NAME) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND ((TABLE_NAME = 'wpar_{uid}' AND COLUMN_NAME = 'Id') OR (TABLE_NAME = 'wchd_{uid}' AND COLUMN_NAME = 'ParentId'))"),
+                    Is.EqualTo("bigint,bigint"), "both sides widened");
+                Assert.That(Scalar($"SELECT COUNT(*) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fkw_{uid}'"),
+                    Is.EqualTo("1"), "and the foreign key is back");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `wchd_{uid}`; DROP TABLE IF EXISTS `wpar_{uid}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{uid}%'";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void AForeignKeyMovedToAnotherDatabasesTable_ReferencesTheDeclaredOne()
     {
