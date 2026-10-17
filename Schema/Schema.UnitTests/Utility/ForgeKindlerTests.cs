@@ -397,7 +397,8 @@ public class ForgeKindlerTests
         // +1 on PostgreSQL = StatisticsTargetQuench (a declared extended-statistics target, 13+, converged in place after
         //   the create pass; policy-routed below 13).
         // +1 = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
-        Assert.That(postgres.Length, Is.EqualTo(67));
+        // +1 = IdentityOptionChanges (an identity column's declared sequence options, compared and applied).
+        Assert.That(postgres.Length, Is.EqualTo(68));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor

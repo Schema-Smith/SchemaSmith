@@ -415,7 +415,10 @@ BEGIN
                             OR COALESCE(REGEXP_REPLACE(c."Generated", '\s*\(.*$', ''), 'NEVER') != COALESCE(REGEXP_REPLACE(ec."Generated", '\s*\(.*$', ''), 'NEVER')
                             OR COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')
                             OR (COALESCE(c."Storage", '') != '' AND COALESCE(c."Storage", '') != COALESCE(ec."Storage", ''))
-                            OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", '')))) AS "ModificationPasses",
+                            OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", ''))
+                  -- Declared identity sequence options that differ from the live sequence (only the ones declared).
+                  OR (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> ''))) AS "ModificationPasses",
                      -- ALWAYS fires on ANY detected column change, which includes a column present live
                      -- but absent from the package -- a rebuild delivers that removal as part of building
                      -- the replacement from the declared definition.
@@ -1488,6 +1491,16 @@ BEGIN
       END IF;
     END IF;
 
+    -- Which identity columns' declared sequence options differ, decided before the ALTER below changes the sequence: the
+    -- audit after it reads this, because by then the live sequence already matches.
+    DROP TABLE IF EXISTS temp_identity_option_changes;
+    CREATE TEMPORARY TABLE temp_identity_option_changes AS
+      SELECT c."TableSchema", c."TableName", c."Name"
+        FROM temp_columns c
+        JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema" AND ec."TableName" = c."TableName" AND ec."ColumnName" = c."Name"
+       WHERE (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> '');
+
     RAISE NOTICE 'Alter Modified Columns';
     SELECT STRING_AGG("code", CHR(10))
       INTO sql_script
@@ -1512,7 +1525,10 @@ BEGIN
                   OR COALESCE(REGEXP_REPLACE(ic."Generated", '\s*\(.*$', ''), 'NEVER') != COALESCE(REGEXP_REPLACE(iec."Generated", '\s*\(.*$', ''), 'NEVER')
                   OR COALESCE(ic."GenerationExpression", '') != COALESCE(iec."GenerationExpression", '')
                   OR (COALESCE(ic."Storage", '') != '' AND COALESCE(ic."Storage", '') != COALESCE(iec."Storage", ''))
-                  OR (COALESCE(ic."Compression", '') != '' AND COALESCE(ic."Compression", '') != COALESCE(iec."Compression", '')))) || ')'';' || CHR(10) ||
+                  OR (COALESCE(ic."Compression", '') != '' AND COALESCE(ic."Compression", '') != COALESCE(iec."Compression", ''))
+                  -- Declared identity sequence options that differ from the live sequence (only the ones declared).
+                  OR (COALESCE(ic."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(iec."Generated", '') LIKE 'GENERATED%IDENTITY%'
+                      AND "SchemaSmith"."IdentityOptionChanges"(ic."Generated", pg_get_serial_sequence(QUOTE_IDENT(ic."TableSchema") || '.' || QUOTE_IDENT(ic."TableName"), ic."Name")::regclass) <> ''))) || ')'';' || CHR(10) ||
            -- A column converging to serial needs its sequence first: created and owned by the column here, made the
            -- default by the ALTER below. IF NOT EXISTS keeps an earlier half-applied run harmless.
            COALESCE((SELECT STRING_AGG('CREATE SEQUENCE IF NOT EXISTS ' || QUOTE_IDENT(sc."TableSchema") || '.' || QUOTE_IDENT(sc."TableName" || '_' || sc."Name" || '_seq') ||
@@ -1563,6 +1579,11 @@ BEGIN
                            THEN ' ALTER COLUMN "' || c."Name" || '" SET GENERATED ' || CASE WHEN UPPER(c."Generated") LIKE 'GENERATED ALWAYS%' THEN 'ALWAYS' ELSE 'BY DEFAULT' END || ','
                            WHEN COALESCE(c."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", 'NEVER') = 'NEVER'
                            THEN ' ALTER COLUMN "' || c."Name" || '" ADD ' || c."Generated" || ','
+                           ELSE '' END ||
+                      -- The declared sequence options, in place (only those declared, and only where they differ).
+                      CASE WHEN (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> '')
+                           THEN ' ALTER COLUMN "' || c."Name" || '"' || "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) || ','
                            ELSE '' END)), ''), ',' || CHR(10)) || ';' AS "code"
       FROM temp_columns c
       JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema"
@@ -1586,7 +1607,10 @@ BEGIN
           OR COALESCE(REGEXP_REPLACE(c."Generated", '\s*\(.*$', ''), 'NEVER') != COALESCE(REGEXP_REPLACE(ec."Generated", '\s*\(.*$', ''), 'NEVER')
           OR COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')
           OR (COALESCE(c."Storage", '') != '' AND COALESCE(c."Storage", '') != COALESCE(ec."Storage", ''))
-          OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", '')))
+          OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", ''))
+                  -- Declared identity sequence options that differ from the live sequence (only the ones declared).
+                  OR (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> ''))
         AND NOT (-- PG < 17 generated-expression change on a generated column (status unchanged): handled SOLELY by the
                  -- drop-and-re-add pass above, which re-adds the FULL target definition. Exclude such columns from the
                  -- ALTER pass entirely — regardless of whether type/collation/nullability ALSO changed (the re-add carries
@@ -1629,7 +1653,10 @@ BEGIN
               OR COALESCE(REGEXP_REPLACE(c."Generated", '\s*\(.*$', ''), 'NEVER') != COALESCE(REGEXP_REPLACE(ec."Generated", '\s*\(.*$', ''), 'NEVER')
               OR COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')
               OR (COALESCE(c."Storage", '') != '' AND COALESCE(c."Storage", '') != COALESCE(ec."Storage", ''))
-              OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", '')));
+              OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", ''))
+                  -- Declared identity sequence options that differ from the live sequence (only the ones declared).
+                  OR EXISTS (SELECT 1 FROM temp_identity_option_changes io
+                         WHERE io."TableSchema" = c."TableSchema" AND io."TableName" = c."TableName" AND io."Name" = c."Name"));
     -- Without the ALTER pass's PG < 17 exclusion: a generated column whose expression changed there is altered by the
     -- drop-and-re-add pass above instead, and it is a column change all the same.
 

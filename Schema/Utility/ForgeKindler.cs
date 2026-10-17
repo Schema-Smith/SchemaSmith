@@ -499,6 +499,8 @@ public static class ForgeKindler
                 new("SchemaSmith.ExpressionMapRecord.sql"),
                 // #508: an unrecorded expression is checked on a scratch copy before it is re-applied.
                 new("SchemaSmith.ExpressionMapAdopt.sql"),
+                // Read by ModifiedTableQuench: a declared identity sequence option that differs from the live sequence.
+                new("SchemaSmith.IdentityOptionChanges.sql"),
                 new("SchemaSmith.ColumnTypeArguments.sql"),
                 // Calls ColumnTypeArguments and QuoteName, and is called by extraction and the table quench.
                 new("SchemaSmith.ColumnDataType.sql"),
