@@ -765,6 +765,7 @@ public class DatabaseQuench
                     _checkpointing.Track(DbScope, "ModifiedTables", () => QuenchModifiedTables(effectiveTableCmd));
                     modifiedTablesSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "ModifiedTables", modifiedTablesSw.ElapsedMilliseconds, 0);
+                    if (!IsWhatIf) RequeueModulesTheTableQuenchDropped(effectiveTableCmd);
                 }
 
                 if (!IsWhatIf)
@@ -799,9 +800,8 @@ public class DatabaseQuench
 
                 // #242: record what each expression-bearing object was applied with, AFTER the create passes
                 // above, so an object created on this run is recorded on this run rather than churning once more.
-                // SQL Server only for now; the other engines join as their surfaces are wired.
-                if (!IsWhatIf)
-                    RecordExpressionMap(effectiveTableCmd);
+                // Under WhatIf it records nothing and puts back what the #508 scratch-copy check verified for the preview.
+                RecordExpressionMap(effectiveTableCmd);
 
                 if (!IsWhatIf)
                 {
@@ -1605,8 +1605,9 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
         @UpdateFillFactor BIT = {updateFillFactor}
 {ForgeKindler.GetParseTableXmlScript(Platform.SqlServer)}
 {SqlServerCdcRotateTable}
+{SqlServerExpressionMapAdoptUndoTable}
 {SqlServerPreflight}
-EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {_whatIfOnly}";
+{SqlServerExpressionMapAdopt}EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {_whatIfOnly}";
                     break;
                 }
 
@@ -1623,14 +1624,16 @@ EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmit
                     $@"CALL ""SchemaSmith"".""ParseTableJson""(@tableJson, {_template.UpdateFillFactor.ToString().ToLower()});",
                     IterationTableSchema, "Parse Table Json");
 
-                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {_whatIfOnly})";
+                // #508: before any table or column is created, so only what already exists is checked on a scratch copy.
+                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {_whatIfOnly}); CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {_whatIfOnly})";
                 break;
             }
             case Platform.MySQL:
             {
                 ParseMySqlTableJson(tableCommand);
                 var whatIf = _whatIfOnly == "1" ? 1 : 0;
-                tableCommand.CommandText = $"CALL SchemaSmith_MissingTableAndColumnQuench('{EscapeSqlLiteral(_databaseName)}', {whatIf})";
+                // #508: before any table or column is created (skipped under WhatIf inside the procedure: its copy is a real table).
+                tableCommand.CommandText = $"CALL SchemaSmith_ExpressionMapAdopt('{EscapeSqlLiteral(_databaseName)}', {whatIf}); CALL SchemaSmith_MissingTableAndColumnQuench('{EscapeSqlLiteral(_databaseName)}', {whatIf})";
                 break;
             }
         }
@@ -1707,6 +1710,18 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
     // them later, once every column exists (#420). A temp table created inside a procedure dies when it returns.
     private const string SqlServerCdcRotateTable = "IF OBJECT_ID('tempdb..#CdcRotate') IS NOT NULL DROP TABLE #CdcRotate\n"
                                                    + ForgeKindler.SqlServerCdcRotateTable;
+
+    // #508: what ExpressionMapAdopt writes under WhatIf, so ExpressionMapRecord can put the map back at the end of the run.
+    // Session-scoped like #CdcRotate, for the same reason: a temp table created inside a procedure dies when it returns.
+    private const string SqlServerExpressionMapAdoptUndoTable =
+        "IF OBJECT_ID('tempdb..#ExpressionMapAdoptUndo') IS NOT NULL DROP TABLE #ExpressionMapAdoptUndo\n" +
+        "CREATE TABLE #ExpressionMapAdoptUndo (ObjectSchema NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, ObjectTable NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, " +
+        "ObjectKind VARCHAR(32) COLLATE DATABASE_DEFAULT NOT NULL, ObjectName NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Slot VARCHAR(32) COLLATE DATABASE_DEFAULT NOT NULL, " +
+        "WasPresent BIT NOT NULL, AuthoredText NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, CanonicalText NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, " +
+        "PlatformName VARCHAR(20) COLLATE DATABASE_DEFAULT NULL, EngineVersion VARCHAR(200) COLLATE DATABASE_DEFAULT NULL, CompatLevel INT NULL, UpdatedUtc DATETIME2(3) NULL)\n";
+
+    // #508: before any table or column is created, so only what already exists is checked on a scratch copy.
+    private string SqlServerExpressionMapAdopt => $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExpressionMapAdopt @WhatIf = {_whatIfOnly}\n";
 
     // Runs before anything is created, on every run including a resumed one: neutralizes (or, under 'fail', refuses) what
     // the detected version cannot support (#425), then resolves the template's CDC defaults and refuses a change the
@@ -2111,7 +2126,7 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly});";
     {
         var (createTables, fillTables) = ForgeKindler.GetParseTableJsonPhases(Platform.SqlServer);
         var tableJson = IterationTableSchema;
-        var quench = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {_whatIfOnly}";
+        var quench = SqlServerExpressionMapAdopt + $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {_whatIfOnly}";
 
         // The debug artifact stays replayable, which means it stays whole: the undivided script with the
         // payload inlined, exactly the text this path used to execute. Splitting the execution should not
@@ -2122,11 +2137,12 @@ DECLARE @TableDefinitions VARCHAR(MAX)= '{EscapeSqlLiteral(tableJson)}',
         @UpdateFillFactor BIT = {updateFillFactor}
 {ForgeKindler.GetParseTableJsonScript(Platform.SqlServer)}
 {SqlServerCdcRotateTable}
+{SqlServerExpressionMapAdoptUndoTable}
 {SqlServerPreflight}
 {quench}");
 
         ClearParameters(command);
-        command.CommandText = createTables + Environment.NewLine + SqlServerCdcRotateTable;
+        command.CommandText = createTables + Environment.NewLine + SqlServerCdcRotateTable + SqlServerExpressionMapAdoptUndoTable;
         // Retried like every other step: these reads and creates now contend with concurrent DDL for
         // real locks, where the dirty read they replaced waited for nothing.
         ExecuteNonQueryHandlingMessages(command, retryOnDeadlock: true);
@@ -2525,9 +2541,8 @@ SET NOCOUNT ON
                 foreach (var batch in script.Batches)
                 {
                     needDBReset = needDBReset || batch.ContainsIgnoringCase("USE ");
-                    destCmd.CommandText = batch;
                     _infoMessageException = null;
-                    destCmd.ExecuteNonQuery();
+                    ScriptStatement.Execute(destCmd, batch);
                     if (_infoMessageException != null) throw _infoMessageException;
                 }
 
@@ -2654,6 +2669,26 @@ SET NOCOUNT ON
             dependent.HasBeenQuenched = wasQuenched;
             dependent.Outcome = ScriptOutcome.Applied;
             if (ProbeScriptStamp(destCmd, dependent, DatabaseScriptSlot.AfterTablesObject) is { } stamp) RecordScriptStamp(destCmd, stamp);
+        }
+    }
+
+    // A column type change drops the views and SQL-standard routines that depend on the column (PostgreSQL), and the
+    // first object pass has already applied their scripts, so nothing in this run would create them again: they were
+    // missing until the next deploy. The procedure records each drop; the scripts that create those objects go back to
+    // the after-tables pass.
+    private void RequeueModulesTheTableQuenchDropped(IDbCommand tableCommand)
+    {
+        var rows = ChangeAuditReader.Peek(_product.Platform, tableCommand);
+        if (rows == null) return;
+        foreach (var row in rows.Where(r => r.Action == "dropped" && r.ObjectType is "view" or "function" or "procedure"))
+        {
+            var dot = row.ObjectName.IndexOf('.');
+            if (dot <= 0) continue;
+            foreach (var script in ScriptsCreating(row.ObjectName[..dot], row.ObjectName[(dot + 1)..]))
+            {
+                script.HasBeenQuenched = false;
+                script.Outcome = ScriptOutcome.Applied;
+            }
         }
     }
 

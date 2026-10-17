@@ -21,6 +21,10 @@ public static class ChangeAuditReader
     public static IReadOnlyList<ChangeAuditRow> ReadAndDrain(Platform platform, IDbCommand command) =>
         SessionSql(platform) is { } sql ? ReadRows(command, sql.Select, sql.Delete) : null;
 
+    /// <summary>This session's rows so far, left in place for the drain at the end of the work unit.</summary>
+    public static IReadOnlyList<ChangeAuditRow> Peek(Platform platform, IDbCommand command) =>
+        SessionSql(platform) is { } sql ? ReadRows(command, sql.Select, null) : null;
+
     /// <summary>
     /// Discards rows already carrying this connection's session id before the work unit writes any. They belong to an
     /// earlier session that ended without draining -- a deploy that died part-way -- and the engine has since given its
@@ -74,8 +78,11 @@ public static class ChangeAuditReader
                     rows.Add(new ChangeAuditRow(reader.GetString(0), reader.GetString(1), reader.GetString(2)));
             }
 
-            command.CommandText = deleteSql;
-            command.ExecuteNonQuery();
+            if (deleteSql != null)
+            {
+                command.CommandText = deleteSql;
+                command.ExecuteNonQuery();
+            }
             return rows;
         }
         catch (DbException)

@@ -1323,8 +1323,10 @@ BEGIN
 
     RAISE NOTICE 'Drop Views and Rules Dependent on Modified Columns';
     SELECT STRING_AGG(CASE WHEN dep_view.relname IS NOT NULL
-                           THEN 'RAISE NOTICE ''  Dropping View ' || ref_obj.relnamespace::regnamespace || '.' || dep_view.relname || ''';' || CHR(10) ||
-                                'DROP VIEW IF EXISTS "' || ref_obj.relnamespace::regnamespace || '"."' || dep_view.relname || '";'
+                           THEN 'RAISE NOTICE ''  Dropping View ' || view_ns.nspname || '.' || dep_view.relname || ''';' || CHR(10) ||
+                                'DROP VIEW IF EXISTS ' || QUOTE_IDENT(view_ns.nspname) || '.' || QUOTE_IDENT(dep_view.relname) || ';' || CHR(10) ||
+                                'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''view'', ''' ||
+                                REPLACE(view_ns.nspname || '.' || dep_view.relname, '''', '''''') || ''', ''dropped'');'
                            ELSE CASE WHEN dep_rule.rulename != '_RETURN'
                                      THEN 'RAISE NOTICE ''  Dropping Rule ' || rule_class.relnamespace::regnamespace || '.' || dep_rule.rulename || ''';' || CHR(10) ||
                                           'DROP RULE IF EXISTS "' || rule_class.relnamespace::regnamespace || '"."' || dep_rule.rulename || '";'
@@ -1340,7 +1342,35 @@ BEGIN
       JOIN pg_rewrite AS dep_rule ON dep_rule.oid = d.objid
       JOIN pg_class rule_class ON rule_class.oid = dep_rule.ev_class
       LEFT JOIN pg_class AS dep_view ON dep_view.oid = dep_rule.ev_class
+      LEFT JOIN pg_namespace AS view_ns ON view_ns.oid = dep_view.relnamespace
       WHERE EXISTS (SELECT 1 -- need to determine if any changes other than type have the need to drop dependent views/rules
+                      FROM temp_columns c
+                      WHERE c."TableSchema" = ec."TableSchema"
+                        AND c."TableName" = ec."TableName"
+                        AND c."Name" = ec."ColumnName"
+                        AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'));
+    CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+
+    -- PG-128. A SQL-standard routine body (BEGIN ATOMIC / RETURN, PostgreSQL 14) records a dependency on the columns it
+    -- reads, and PostgreSQL refuses to change their type ("cannot alter type of a column used by a function or
+    -- procedure"). Dropped here like a dependent view, and put back by the after-tables object pass, which DatabaseQuench
+    -- tells from the 'dropped' audit row (a script already applied this run is not run again otherwise). A routine with a dollar-quoted body
+    -- records no such dependency, so below 14 this finds nothing.
+    RAISE NOTICE 'Drop SQL-Standard Routines Dependent on Modified Columns';
+    SELECT STRING_AGG(DISTINCT 'RAISE NOTICE ''  Dropping ' || CASE WHEN p.prokind = 'p' THEN 'Procedure ' ELSE 'Function ' END || REPLACE(p.oid::regprocedure::text, '''', '''''') || ''';' || CHR(10) ||
+                      'DROP ' || CASE WHEN p.prokind = 'p' THEN 'PROCEDURE ' ELSE 'FUNCTION ' END || p.oid::regprocedure::text || ';' || CHR(10) ||
+                      'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' ||
+                      CASE WHEN p.prokind = 'p' THEN 'procedure' ELSE 'function' END || ''', ''' || REPLACE(pn.nspname || '.' || p.proname, '''', '''''') || ''', ''dropped'');', CHR(10))
+      INTO sql_script
+      FROM temp_existing_columns ec
+      JOIN pg_class AS ref_obj ON ref_obj.relnamespace::regnamespace = ('"' || ec."TableSchema" || '"')::regnamespace
+                              AND ref_obj.relname = ec."TableName"
+      JOIN pg_attribute AS ref_attr ON ref_attr.attrelid = ref_obj.oid AND ref_attr.attname = ec."ColumnName"
+      JOIN pg_depend AS d ON d.refclassid = 'pg_class'::regclass AND d.refobjid = ref_obj.oid AND d.refobjsubid = ref_attr.attnum
+                         AND d.classid = 'pg_proc'::regclass
+      JOIN pg_proc AS p ON p.oid = d.objid
+      JOIN pg_namespace AS pn ON pn.oid = p.pronamespace
+      WHERE EXISTS (SELECT 1
                       FROM temp_columns c
                       WHERE c."TableSchema" = ec."TableSchema"
                         AND c."TableName" = ec."TableName"

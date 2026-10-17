@@ -2153,8 +2153,7 @@ public class ProductQuench
                         currentBatchIndex = batchIndex;
                         var batch = script.Batches[batchIndex];
                         needDBReset = needDBReset || batch.ContainsIgnoringCase("USE ");
-                        destCmd.CommandText = batch;
-                        destCmd.ExecuteNonQuery();
+                        ScriptStatement.Execute(destCmd, batch);
                     }
                 }
 
