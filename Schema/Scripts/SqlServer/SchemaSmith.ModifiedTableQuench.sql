@@ -1168,7 +1168,7 @@ BEGIN TRY
   -- described in full by the catalog, so it is scripted out here, dropped, and created again after the column pass,
   -- whether or not the package carries it. 2016 catalogs, so dynamic SQL.
   IF OBJECT_ID('tempdb..#SbPolicies') IS NOT NULL DROP TABLE #SbPolicies
-  CREATE TABLE #SbPolicies ([PolicyName] NVARCHAR(300) NOT NULL PRIMARY KEY, [CreateSql] NVARCHAR(MAX) NOT NULL)
+  CREATE TABLE #SbPolicies ([PolicyName] NVARCHAR(300) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, [CreateSql] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NOT NULL)
   IF SchemaSmith.fn_ServerMajorVersion() >= 13 AND EXISTS (SELECT 1 FROM #ColumnChanges WITH (NOLOCK))
   BEGIN
     EXEC sp_executesql N'
