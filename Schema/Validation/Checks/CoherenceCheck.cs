@@ -237,7 +237,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             if (!string.Equals(NormalizeAction(fk.DeleteAction), "SET NULL", StringComparison.OrdinalIgnoreCase))
                 yield return new Finding(Severity.Error, SetNullColumnsCode, Category, location,
                     $"SetNullColumns is set but DeleteAction is '{fk.DeleteAction ?? "NO ACTION"}': the subset applies to ON DELETE SET NULL alone, so set DeleteAction to SET NULL or remove SetNullColumns.");
-            var keyColumns = fkColumns.Select(NormalizeIdentifier).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var keyColumns = fkColumns.Select(NormalizeIdentifier).ToHashSet(StringComparer.Ordinal);
             foreach (var column in SplitNames(pgFk.SetNullColumns).Where(column => !keyColumns.Contains(NormalizeIdentifier(column))))
                 yield return new Finding(Severity.Error, SetNullColumnsCode, Category, location,
                     $"SetNullColumns names '{column}', which is not one of the key's Columns: only a key column can be set to NULL on delete.");
@@ -258,7 +258,7 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         var relatedColumnNames = new HashSet<string>(
             relatedTables.SelectMany(ColumnNames),
-            StringComparer.OrdinalIgnoreCase);
+            NameComparer(table));
 
         foreach (var column in fkRelatedColumns.Where(column => !relatedColumnNames.Contains(NormalizeIdentifier(column))))
             yield return new Finding(Severity.Error, RelatedColumnCode, Category, location,
@@ -278,13 +278,14 @@ public sealed class CoherenceCheck : ISchemaCheck
 
     private static bool ReferencesWholeKey(ForeignKey fk, List<Table> relatedTables)
     {
-        var related = SplitNames(fk.RelatedColumns).Select(NormalizeIdentifier).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var comparer = relatedTables.Count > 0 ? NameComparer(relatedTables[0]) : StringComparer.OrdinalIgnoreCase;
+        var related = SplitNames(fk.RelatedColumns).Select(NormalizeIdentifier).ToHashSet(comparer);
         if (related.Count == 0) return true;
         return relatedTables.SelectMany(t => t.Indexes)
             .Where(i => i.PrimaryKey || i.Unique || i.UniqueConstraint)
             // A prefix or expression key part (Code(10)) never equals a column name, so a partial key does not match.
             .Select(i => SplitNames(i.IndexColumns).Select(part => StripOrderingSuffix(part).Trim()).ToList())
-            .Any(parts => parts.Select(NormalizeIdentifier).ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(related));
+            .Any(parts => parts.Select(NormalizeIdentifier).ToHashSet(comparer).SetEquals(related));
     }
 
     /// <summary>
@@ -770,12 +771,13 @@ public sealed class CoherenceCheck : ISchemaCheck
             _ => Platform.SqlServer
         };
         var (prefixSchema, unqualified) = Identifier.SplitQualifiedName(fk.RelatedTable ?? "", platform);
-        var name = IdentityKey(unqualified);
+        var exact = ComparesExactly(owningTable);
+        var name = IdentityKey(unqualified, exact);
 
         var schema = hasExplicitSchemaProperty ? relatedTableSchema
             : prefixSchema ?? NormalizedSchema(owningTable);
 
-        return (IdentityKey(schema), name);
+        return (IdentityKey(schema, exact), name);
     }
 
     // IDeliverableTable.Schema is resolved uniformly across platforms (SchemaDefaultResolver
@@ -787,17 +789,24 @@ public sealed class CoherenceCheck : ISchemaCheck
     // strings therefore made every such FK unresolvable, which is the ordinary hand-authored shape: two
     // shipped demos reported SS-FK-002 against a table sitting in the same template. Packages that spell
     // RelatedTableSchema out explicitly matched by luck, because then both sides carry the brackets.
-    private static string IdentityKey(string identifier) =>
-        NormalizeIdentifier(identifier).ToLowerInvariant();
+    // PostgreSQL compares exactly: SchemaSmith deploys every PostgreSQL name quoted, so `Customer` and `customer` are
+    // two tables there, and a key to the wrong spelling fails the deploy with 42P01.
+    private static string IdentityKey(string identifier, bool exact = false) =>
+        exact ? NormalizeIdentifier(identifier) : NormalizeIdentifier(identifier).ToLowerInvariant();
+
+    private static bool ComparesExactly(Table table) => table is PostgreSqlTable;
+
+    private static StringComparer NameComparer(Table table) =>
+        ComparesExactly(table) ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
 
     private static (string Schema, string Name) TableKey(Table table) =>
-        (NormalizedSchema(table), IdentityKey(table.Name));
+        (NormalizedSchema(table), IdentityKey(table.Name, ComparesExactly(table)));
 
     private static string NormalizedSchema(Table table) =>
-        IdentityKey((table as IDeliverableTable)?.Schema ?? "");
+        IdentityKey((table as IDeliverableTable)?.Schema ?? "", ComparesExactly(table));
 
     private static HashSet<string> ColumnNames(Table table) =>
-        new(table.Columns.Select(c => NormalizeIdentifier(c.Name ?? "")), StringComparer.OrdinalIgnoreCase);
+        new(table.Columns.Select(c => NormalizeIdentifier(c.Name ?? "")), NameComparer(table));
 
     // Mirrors SchemaSmith_StripBacktickWrapping.sql (source of truth for the backtick case — keep in
     // sync), generalized to the other two engines' wrapping so a hand-authored/hand-edited package
@@ -805,10 +814,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     // [bracket] (SQL Server), "double-quote" (PostgreSQL). Strips only a matched pair around the
     // WHOLE identifier — a lone/unbalanced quote character is left untouched, and interior content is
     // never touched (in particular, no expression key part reaches here — those are filtered out
-    // before comparison). Comparison is OrdinalIgnoreCase everywhere in this class, so an unwrapped
-    // PostgreSQL identifier (folds to lower case) and a "quoted" one (case-sensitive) are compared
-    // case-insensitively too — a deliberate slight loosening: the failure mode this check should have
-    // is a missed nit, never a false error on a valid package.
+    // before comparison). Names compare case-insensitively except on PostgreSQL (see IdentityKey).
     private static string NormalizeAction(string action) =>
         System.Text.RegularExpressions.Regex.Replace((action ?? "").Trim(), @"\s+", " ").ToUpperInvariant();
 
@@ -823,7 +829,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         if (trimmed[0] == '[' && trimmed[^1] == ']')
             return trimmed[1..^1];
         if (trimmed[0] == '"' && trimmed[^1] == '"')
-            return trimmed[1..^1];
+            return trimmed[1..^1].Replace("\"\"", "\"");
 
         return trimmed;
     }
@@ -1005,7 +1011,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         }
 
         var named = table.Indexes.FirstOrDefault(i =>
-            string.Equals(i.Name, indexName, StringComparison.OrdinalIgnoreCase));
+            string.Equals(NormalizeIdentifier(i.Name), NormalizeIdentifier(indexName), StringComparison.Ordinal));
 
         if (named == null)
         {

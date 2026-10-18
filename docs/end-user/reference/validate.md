@@ -69,7 +69,7 @@ The check runs at every level a name collision could hide: columns, indexes, for
 
 ### Cross-object coherence
 
-The JSON schema can enforce shape, but it can't confirm that a foreign key actually points at something real. `CoherenceCheck` walks every foreign key and index in the package and confirms the columns it references exist:
+The JSON schema can enforce shape, but it can't confirm that a foreign key actually points at something real. `CoherenceCheck` walks every foreign key and index in the package and confirms the columns it references exist. Names match without regard to case, except on PostgreSQL: SchemaSmith deploys every PostgreSQL name quoted, so `Customer` and `customer` are two different tables there, and a reference to the wrong spelling is reported.
 
 | Code | Severity | Meaning |
 |------|----------|---------|

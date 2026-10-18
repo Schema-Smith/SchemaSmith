@@ -75,6 +75,84 @@ public class CoherenceCheckTests
         return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
     }
 
+    // ---- PostgreSQL names compare exactly ----
+    //
+    // SchemaSmith deploys every PostgreSQL name quoted, so a key to `Customer` where the table is `customer` fails the
+    // deploy with 42P01. The other engines compare names without case.
+
+    private static Finding[] RunPgOrderAndCustomer(string relatedTable, string relatedColumns, string localColumns = "customer_id",
+        string keyColumns = "id")
+    {
+        var order = new Schema.Domain.PostgreSQL.PostgreSqlTable
+        {
+            Name = "order",
+            Schema = "public",
+            Columns = { new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "customer_id", DataType = "integer" } },
+            Indexes = { new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "ix_order_customer", IndexColumns = localColumns } },
+            ForeignKeys =
+            {
+                new Schema.Domain.PostgreSQL.PostgreSqlForeignKey
+                {
+                    Name = "fk_order_customer", Columns = localColumns, RelatedTableSchema = "public", RelatedTable = relatedTable,
+                    RelatedColumns = relatedColumns
+                }
+            }
+        };
+        var customer = new Schema.Domain.PostgreSQL.PostgreSqlTable
+        {
+            Name = "customer",
+            Schema = "public",
+            Columns = { new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" } },
+            Indexes = { new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "pk_customer", IndexColumns = keyColumns, PrimaryKey = true } }
+        };
+        var template = new Template { Name = "T" };
+        template.Tables.Add(order);
+        template.Tables.Add(customer);
+        var product = new Product { Name = "Acme", Platform = Platform.PostgreSQL, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    [Test]
+    public void PostgreSqlKey_ToTheSameSpelling_IsClean()
+    {
+        Assert.That(RunPgOrderAndCustomer("customer", "id"), Is.Empty);
+        Assert.That(RunPgOrderAndCustomer("\"customer\"", "\"id\""), Is.Empty, "a quoted name is the same name");
+    }
+
+    [Test]
+    public void PostgreSqlKey_ToADifferentCase_DoesNotResolve()
+    {
+        var findings = RunPgOrderAndCustomer("Customer", "id");
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-FK-002" }),
+            string.Join("; ", findings.Select(f => f.Code + " " + f.Message)));
+    }
+
+    [Test]
+    public void PostgreSqlKey_ToARelatedColumnOfADifferentCase_IsError()
+    {
+        Assert.That(RunPgOrderAndCustomer("customer", "Id").Select(f => f.Code), Is.EqualTo(new[] { "SS-FK-004" }));
+    }
+
+    [Test]
+    public void PostgreSqlKey_AndIndex_OnALocalColumnOfADifferentCase_AreErrors()
+    {
+        Assert.That(RunPgOrderAndCustomer("customer", "id", localColumns: "Customer_Id").Select(f => f.Code).OrderBy(c => c).ToArray(),
+            Is.EqualTo(new[] { "SS-FK-001", "SS-IDX-001" }));
+    }
+
+    [Test]
+    public void SqlServerKey_ToADifferentCase_Resolves()
+    {
+        var order = new SqlServerTable
+        {
+            Name = "Order",
+            Schema = "dbo",
+            Columns = { new SqlServerColumn { Name = "CustomerId", DataType = "int" } },
+            ForeignKeys = { new SqlServerForeignKey { Name = "FK_Order_Customer", Columns = "customerid", RelatedTable = "CUSTOMER", RelatedTableSchema = "DBO", RelatedColumns = "ID" } }
+        };
+        Assert.That(new CoherenceCheck().Run(Context(TemplateWithTables("Main", order, Customer()))), Is.Empty);
+    }
+
     // ---- Temporal keys (SS-IDX-002 / SS-IDX-003) ----
 
     private static Schema.Domain.MariaDb.MariaDbTable MariaRates(string keyColumns, bool withoutOverlaps, bool unique = true, bool withPeriod = true)
