@@ -300,6 +300,46 @@ namespace Schema.UnitTests.Domain
             Assert.That(template.Tables, Has.Count.EqualTo(1));
         }
 
+        // A variant table's canonical name in a schema template is <name>~<variant>.json: the dot that separates a variant
+        // everywhere else is the one this rule refuses.
+        [TestCase("v1")]
+        [TestCase("eu.west")] // a dot after the separator is the variant label's, not a schema prefix
+        public void SchemaTemplate_VariantTableFilename_WithTildeSeparator_Allowed(string variant)
+        {
+            var (templateFile, tablesPath) = Paths();
+            _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(@"{ ""Name"": ""TenantBody"", ""SchemaIdentificationScript"": ""SELECT 'tenant_a'"" }");
+            _mockDirectory.Exists(tablesPath).Returns(true);
+
+            var tableFile = Path.Join(tablesPath, $"Customers~{variant}.json");
+            _mockDirectory.GetFiles(tablesPath, "*.json", SearchOption.AllDirectories).Returns(new[] { tableFile });
+            _mockFile.Exists(tableFile).Returns(true);
+            _mockFile.ReadAllText(tableFile).Returns($@"{{ ""Name"": ""Customers"", ""VariantName"": ""{variant}"", ""ShouldApplyExpression"": ""1=1"", ""Columns"": [] }}");
+
+            var template = Template.Load("Main", MakeProduct(Platform.SqlServer));
+            Assert.That(template.Tables.Select(t => t.VariantName), Is.EqualTo(new[] { variant }));
+        }
+
+        // The suggestion comes from the file's content: a guess from the name alone took `v1` for the table.
+        [TestCase("dbo.Customers~v1.json")]
+        [TestCase("Customers.v1.json")]
+        public void SchemaTemplate_DottedVariantTableFilename_Rejected_SuggestingTheTildeName(string fileName)
+        {
+            var (templateFile, tablesPath) = Paths();
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(@"{ ""Name"": ""TenantBody"", ""SchemaIdentificationScript"": ""SELECT 'tenant_a'"" }");
+            _mockDirectory.Exists(tablesPath).Returns(true);
+
+            var tableFile = Path.Join(tablesPath, fileName);
+            _mockDirectory.GetFiles(tablesPath, "*.json", SearchOption.AllDirectories).Returns(new[] { tableFile });
+            _mockFile.Exists(tableFile).Returns(true);
+            _mockFile.ReadAllText(tableFile).Returns(@"{ ""Name"": ""Customers"", ""VariantName"": ""v1"", ""Columns"": [] }");
+
+            var ex = Assert.Throws<PackageException>(() => Template.Load("Main", MakeProduct(Platform.SqlServer)));
+            Assert.That(ex!.Message, Does.Contain("rename to 'Customers~v1.json'"));
+        }
+
         [Test]
         public void RegularTemplate_TableFilenameWithSchemaPrefix_Allowed()
         {

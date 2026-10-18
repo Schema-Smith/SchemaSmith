@@ -1209,15 +1209,34 @@ namespace Schema.Domain
                 {
                     var fileName = Path.GetFileName(file);
                     var bareName = Path.GetFileNameWithoutExtension(fileName);
-                    if (!bareName.Contains('.')) continue;
+                    var objectName = bareName.Split(TableFileName.SchemaTemplateVariantSeparator)[0];
+                    if (!objectName.Contains('.')) continue;
 
                     throw new PackageException(
                         $"Template '{Name}' (file: {FilePath}) is a schema template; the {ownerKind} " +
                         $"file '{fileName}' has a schema-qualified name. Schema templates require " +
-                        $"unqualified filenames — rename to '{bareName.Substring(bareName.LastIndexOf('.') + 1)}.json' " +
-                        $"(the schema is supplied per iteration via {{{{SchemaName}}}}).");
+                        $"unqualified filenames — rename to '{SuggestedName(file, bareName, objectName)}' " +
+                        $"(the schema is supplied per iteration via {{{{SchemaName}}}}; a variant label follows " +
+                        $"a '{TableFileName.SchemaTemplateVariantSeparator}', as in 'Customers{TableFileName.SchemaTemplateVariantSeparator}v1.json').");
                 }
             }
+        }
+
+        // The name the file's own content gives it; without readable content, the last dotted segment is the best guess.
+        private static string SuggestedName(string file, string bareName, string objectName)
+        {
+            try
+            {
+                var content = JsonText.ParseObject(ProductFileWrapper.GetFromFactory().ReadAllText(file));
+                var name = content.Value<string>("Name");
+                if (!string.IsNullOrWhiteSpace(name))
+                    return TableFileName.Canonical("", name, content.Value<string>("VariantName") ?? "", schemaLess: true, inSchemaTemplate: true);
+            }
+            catch (JsonReaderException)
+            {
+                // Fall through to the guess.
+            }
+            return $"{objectName[(objectName.LastIndexOf('.') + 1)..]}{bareName[objectName.Length..]}.json";
         }
 
         /// <summary>

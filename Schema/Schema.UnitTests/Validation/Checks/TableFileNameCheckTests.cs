@@ -58,6 +58,43 @@ public class TableFileNameCheckTests
         return "{" + string.Join(",", parts) + "}";
     }
 
+    // Read from Template.json, so a schema template that failed to load still gets its file names right.
+    private void StubSchemaTemplate()
+    {
+        var templateFile = Path.Join(PackagePath, "Templates", "Main", "Template.json");
+        _file.Exists(templateFile).Returns(true);
+        _file.ReadAllText(templateFile).Returns(@"{ ""Name"": ""Main"", ""SchemaIdentificationScript"": ""SELECT 'tenant_a'"" }");
+    }
+
+    [Test]
+    public void SchemaTemplateVariant_InTildeFile_NoFinding()
+    {
+        StubSchemaTemplate();
+        StubTableFiles((Path.Join(TablesDir, "Customers~v1.json"), TableJson("", "Customers", "v1", "1=1")));
+
+        Assert.That(new TableFileNameCheck().Run(Context()), Is.Empty);
+    }
+
+    [Test]
+    public void SchemaTemplateVariant_InBareFile_SuggestsTheTildeName()
+    {
+        StubSchemaTemplate();
+        StubTableFiles((Path.Join(TablesDir, "Customers.json"), TableJson("", "Customers", "v1", "1=1")));
+
+        var findings = new TableFileNameCheck().Run(Context()).ToList();
+
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-FILE-NAME-003" }));
+        Assert.That(findings[0].Message, Does.Contain("'Customers~v1.json'"));
+    }
+
+    [Test]
+    public void SchemaLessVariant_OutsideASchemaTemplate_KeepsTheDot()
+    {
+        StubTableFiles((Path.Join(TablesDir, "Orders.EU.json"), TableJson("", "Orders", "EU", "1=1")));
+
+        Assert.That(new TableFileNameCheck().Run(Context(Platform.MySQL)), Is.Empty);
+    }
+
     [Test]
     public void CanonicalName_NoFinding()
     {

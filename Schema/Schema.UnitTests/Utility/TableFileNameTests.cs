@@ -20,9 +20,16 @@ public class TableFileNameTests
     }
 
     [Test]
-    public void Canonical_SchemaTemplate_OmitsSchemaSegment()
+    public void Canonical_SchemaLess_OmitsSchemaSegment()
     {
         Assert.That(TableFileName.Canonical("dbo", "Orders", "EU", true), Is.EqualTo("Orders.EU.json"));
+    }
+
+    [Test]
+    public void Canonical_InASchemaTemplate_TheVariantFollowsATilde()
+    {
+        Assert.That(TableFileName.Canonical("", "Orders", "EU", schemaLess: true, inSchemaTemplate: true), Is.EqualTo("Orders~EU.json"));
+        Assert.That(TableFileName.Canonical("", "Orders", "", schemaLess: true, inSchemaTemplate: true), Is.EqualTo("Orders.json"));
     }
 
     [Test]
