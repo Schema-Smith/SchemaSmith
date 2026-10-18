@@ -28,7 +28,7 @@ MYSQL_PORT=13480
 
 cleanup() {
   [ "$KEEP" = "1" ] && { echo "KEEP_CONTAINERS=1 -- leaving the datadir containers up"; return; }
-  docker rm -f "$MARIADB_NAME" "$MYSQL_NAME" >/dev/null 2>&1
+  docker rm -fv "$MARIADB_NAME" "$MYSQL_NAME" >/dev/null 2>&1
 }
 trap cleanup EXIT
 
@@ -50,15 +50,15 @@ run_leg() {
   local engine="$1" name="$2" port="$3" image="$4" tag="$5" category="$6"
   echo ""
   echo "--- $engine ($image:$tag, port $port) ---"
-  docker rm -f "$name" >/dev/null 2>&1
+  docker rm -fv "$name" >/dev/null 2>&1
 
   if [ "$engine" = "mariadb" ]; then
-    docker run -d --name "$name" \
+    docker run -d --name "$name" --memory 2g --memory-swap 2g \
       -e MARIADB_ROOT_PASSWORD="$TEST_PASSWORD" -e MARIADB_USER="$TEST_USER" \
       -e MARIADB_PASSWORD="$TEST_PASSWORD" -e MARIADB_DATABASE=TestMain \
       -p "$port:3306" "$image:$tag" >/dev/null
   else
-    docker run -d --name "$name" \
+    docker run -d --name "$name" --memory 2g --memory-swap 2g \
       -e MYSQL_ROOT_PASSWORD="$TEST_PASSWORD" -e MYSQL_USER="$TEST_USER" \
       -e MYSQL_PASSWORD="$TEST_PASSWORD" -e MYSQL_DATABASE=TestMain \
       -p "$port:3306" "$image:$tag" >/dev/null

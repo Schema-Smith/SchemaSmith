@@ -22,7 +22,7 @@ FAILED=0
 
 cleanup() {
   [ "$KEEP" = "1" ] && { echo "KEEP_CONTAINERS=1 -- leaving the encryption container up"; return; }
-  docker rm -f "$NAME" >/dev/null 2>&1
+  docker rm -fv "$NAME" >/dev/null 2>&1
 }
 trap cleanup EXIT
 
@@ -37,8 +37,8 @@ if ! dotnet build SchemaSmith.sln -c Release -v q --nologo >/dev/null 2>&1; then
   echo "FAIL: Release build failed."; exit 1
 fi
 
-docker rm -f "$NAME" >/dev/null 2>&1
-docker run -d --name "$NAME" \
+docker rm -fv "$NAME" >/dev/null 2>&1
+docker run -d --name "$NAME" --memory 2g --memory-swap 2g \
   -e MARIADB_ROOT_PASSWORD="$TEST_PASSWORD" -e MARIADB_USER="$TEST_USER" \
   -e MARIADB_PASSWORD="$TEST_PASSWORD" -e MARIADB_DATABASE=TestMain \
   -p "$PORT:3306" schemasmith-enc-mariadb:11.4 >/dev/null
