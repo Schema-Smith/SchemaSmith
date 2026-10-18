@@ -3774,6 +3774,26 @@ SELECT TABLE_NAME
 
     // The catalog qualifies a sequence default with the database (nextval(`db`.`s`)); the package carries the bare
     // name so it deploys to any database, and the deploy compares defaults without the qualifier.
+    // The engine names a subpartition <partition>sp<n> unless the table names it; a named one is not modelled.
+    private static bool HasExplicitSubpartitionNames(IDbCommand command, string schema, string table, MySqlTable mySqlTable)
+    {
+        if (mySqlTable.Partitioning?.Subpartitioning == null) return false;
+        command.CommandText = @"SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS
+WHERE TABLE_SCHEMA = @schema AND TABLE_NAME = @table AND SUBPARTITION_NAME IS NOT NULL
+  AND CAST(SUBPARTITION_NAME AS BINARY) <> CAST(CONCAT(PARTITION_NAME, 'sp', SUBPARTITION_ORDINAL_POSITION - 1) AS BINARY)";
+        command.Parameters.Clear();
+        foreach (var (name, value) in new[] { ("@schema", MySqlReservedWords.Unquote(schema)), ("@table", MySqlReservedWords.Unquote(table)) })
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = name;
+            parameter.Value = value;
+            command.Parameters.Add(parameter);
+        }
+        var named = Convert.ToInt32(command.ExecuteScalar());
+        command.Parameters.Clear();
+        return named > 0;
+    }
+
     internal static void StripSequenceDatabase(Table table, string database)
     {
         var qualified = new Regex(@"nextval\(`" + Regex.Escape(database) + "`\\.`", RegexOptions.IgnoreCase);
@@ -3869,13 +3889,29 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                         continue;
                     }
 
-                    // A FULLTEXT parser is reported only by SHOW CREATE TABLE (MY-A2).
-                    if (tableObj is MySqlTable { FullTextIndexes.Count: > 0 } fullTextTable)
+                    if (tableObj is MySqlTable mySqlTable)
                     {
-                        commandJson.CommandText = $"SHOW CREATE TABLE `{MySqlReservedWords.Unquote(schema).Replace("`", "``")}`.`{MySqlReservedWords.Unquote(table).Replace("`", "``")}`";
-                        using var createReader = commandJson.ExecuteReader();
-                        if (createReader.Read())
-                            MySqlFullTextParsers.Apply(fullTextTable, createReader.GetString(1));
+                        if (HasExplicitSubpartitionNames(commandJson, schema, table, mySqlTable))
+                        {
+                            _progressLog.Error($"    ERROR: {table} names its subpartitions; SchemaSmith models subpartitions as a count, which the engine names <partition>sp<n>. Skipped rather than emitted with names a deploy would not create.");
+                            _stats.TableErrors++;
+                            continue;
+                        }
+
+                        // A FULLTEXT parser (MY-A2) and KEY partitioning's ALGORITHM are reported only by SHOW CREATE TABLE.
+                        var keyPartitioned = mySqlTable.Partitioning?.Method?.Trim().EndsWith("KEY", StringComparison.OrdinalIgnoreCase) == true;
+                        if (mySqlTable.FullTextIndexes.Count > 0 || keyPartitioned)
+                        {
+                            commandJson.CommandText = $"SHOW CREATE TABLE `{MySqlReservedWords.Unquote(schema).Replace("`", "``")}`.`{MySqlReservedWords.Unquote(table).Replace("`", "``")}`";
+                            using var createReader = commandJson.ExecuteReader();
+                            if (createReader.Read())
+                            {
+                                var createTable = createReader.GetString(1);
+                                MySqlFullTextParsers.Apply(mySqlTable, createTable);
+                                if (keyPartitioned)
+                                    mySqlTable.Partitioning.KeyAlgorithm = MySqlKeyAlgorithm.Read(createTable);
+                            }
+                        }
                     }
 
                     var resolution = resolver.Resolve("", table);

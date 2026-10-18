@@ -271,4 +271,47 @@ public class SystemVersioningDeployTests : BaseTableQuenchTests
         cmd.ExecuteNonQuery();
         conn.Close();
     }
+
+    // MariaDB's grammar puts WITH SYSTEM VERSIONING before PARTITION BY. The CREATE wrote it after, so a table that was
+    // both versioned and partitioned failed with a syntax error and could not be deployed at all.
+    [Test]
+    public void AVersionedPartitionedTable_IsCreatedVersionedAndPartitioned()
+    {
+        const string table = "SysVerPartitioned";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.MariaDb).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+
+        cmd.CommandText = "SELECT SchemaSmith_SupportsSystemVersioning()";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            Assert.Ignore("This server cannot declare system versioning (MariaDB 10.3+).");
+
+        cmd.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+        cmd.ExecuteNonQuery();
+        try
+        {
+            var package = TableJsonFor(table, isSystemVersioned: true).Replace(
+                "\"IsSystemVersioned\": true,",
+                "\"IsSystemVersioned\": true, \"Partitioning\": { \"Method\": \"HASH\", \"Expression\": \"Id\", \"PartitionCount\": 2 },");
+            Assert.That(package, Does.Contain("Partitioning"));
+            RunTableQuenchProc(cmd, package);
+
+            var tableType = GetTableType(cmd, table);
+            cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND PARTITION_NAME IS NOT NULL";
+            var partitions = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Multiple(() =>
+            {
+                Assert.That(tableType, Is.EqualTo("SYSTEM VERSIONED"));
+                Assert.That(partitions, Is.EqualTo(2));
+            });
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, package), "and it redeploys");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+            cmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
 }

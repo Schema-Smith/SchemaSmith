@@ -147,6 +147,12 @@ BEGIN
                 CASE WHEN t.DataDirectory IS NOT NULL AND t.DataDirectory != ''
                      THEN CONCAT(' DATA DIRECTORY=''', REPLACE(t.DataDirectory, '''', ''''''), '''')
                      ELSE '' END,
+                -- System versioning (MariaDB WITH SYSTEM VERSIONING, F1S1). A table option, so it comes before
+                -- PARTITION BY: MariaDB refuses it after (1064), so a versioned partitioned table could not be created.
+                -- Gated on SchemaSmith_SupportsSystemVersioning() (MariaDB 10.3+; MySQL never): below the floor the
+                -- clause is suppressed so the table deploys as an ordinary one, and the degrade guard below reports it.
+                CASE WHEN t.IsSystemVersioned = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
+                     THEN ' WITH SYSTEM VERSIONING' ELSE '' END,
                 -- Partitioning (#partitioning, K3). LAST in the statement, which is where MySQL's own
                 -- CREATE TABLE grammar puts it -- after every table option.
                 --
@@ -158,26 +164,32 @@ BEGIN
                 -- boundaries must ascend, and the engine rejects a definition where they do not), so the
                 -- list is aggregated by Ordinal. HASH and KEY carry a count instead and no list at all.
                 CASE WHEN t.PartitionMethod IS NULL THEN ''
-                     WHEN t.PartitionMethod IN ('HASH', 'KEY', 'LINEAR HASH', 'LINEAR KEY')
-                     THEN CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ')',
-                                 CASE WHEN t.PartitionCount IS NOT NULL THEN CONCAT(' PARTITIONS ', t.PartitionCount) ELSE '' END)
-                     ELSE CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ') (',
-                                 COALESCE((SELECT GROUP_CONCAT(CONCAT('PARTITION ', pt.PartitionName,
-                                                                      CASE WHEN t.PartitionMethod LIKE 'LIST%'
-                                                                           THEN CONCAT(' VALUES IN (', pt.PartitionValues, ')')
-                                                                           ELSE CONCAT(' VALUES LESS THAN (', pt.PartitionValues, ')') END)
-                                                               ORDER BY pt.Ordinal SEPARATOR ', ')
+                     ELSE CONCAT(' PARTITION BY ', t.PartitionMethod,
+                                 CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
+                                      THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
+                                 ' (', t.PartitionExpression, ')',
+                                 -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
+                                 CASE WHEN t.SubpartitionMethod IS NOT NULL
+                                      THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
+                                                  CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
+                                      ELSE '' END,
+                                 -- The named list, in declared order: RANGE and LIST with their boundaries, HASH and KEY by name
+                                 -- alone. A HASH or KEY table that names none takes a count instead.
+                                 COALESCE((SELECT CONCAT(' (', GROUP_CONCAT(CONCAT('PARTITION ', pt.PartitionName,
+                                                                  CASE WHEN t.PartitionMethod LIKE 'LIST%'
+                                                                       THEN CONCAT(' VALUES IN (', pt.PartitionValues, ')')
+                                                                       WHEN t.PartitionMethod LIKE 'RANGE%'
+                                                                       THEN CONCAT(' VALUES LESS THAN (', pt.PartitionValues, ')')
+                                                                       ELSE '' END,
+                                                                  CASE WHEN pt.PartitionComment IS NOT NULL
+                                                                       THEN CONCAT(' COMMENT = ', QUOTE(pt.PartitionComment)) ELSE '' END)
+                                                           ORDER BY pt.Ordinal SEPARATOR ', '), ')')
                                              FROM _SchemaSmith_Partitions pt
-                                            WHERE pt.TableName = t.TableName), ''),
-                                 ')')
-                     END,
-                -- System versioning (MariaDB WITH SYSTEM VERSIONING, F1S1). A trailing table SUFFIX
-                -- keyword, not a KEY=VALUE option, so it goes last -- after PARTITION BY, which is where
-                -- MariaDB's own grammar places it. Gated on the EXISTING SchemaSmith_SupportsSystemVersioning()
-                -- (MariaDB 10.3+; MySQL never): below the floor the clause is suppressed here so the table
-                -- still deploys as an ordinary table -- see the degrade guard below, which reports the loss.
-                CASE WHEN t.IsSystemVersioned = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
-                     THEN ' WITH SYSTEM VERSIONING' ELSE '' END
+                                            WHERE pt.TableName = t.TableName),
+                                          CASE WHEN t.PartitionMethod LIKE 'RANGE%' OR t.PartitionMethod LIKE 'LIST%' THEN ' ()'
+                                               WHEN t.PartitionCount IS NOT NULL THEN CONCAT(' PARTITIONS ', t.PartitionCount)
+                                               ELSE '' END))
+                END
             ) AS CreateTableStatement,
             CASE WHEN t.Compression IS NOT NULL AND t.Compression != '' AND VERSION() NOT LIKE '%MariaDB%'
                  THEN CONCAT(' COMPRESSION=''', t.Compression, '''')
@@ -190,7 +202,8 @@ BEGIN
         GROUP BY t.TableName, t.VariantName, t.Engine, t.RowFormat, t.Compression, t.KeyBlockSize,
                  t.PageCompressed, t.PageCompressionLevel, t.Encryption, t.Encrypted, t.EncryptionKeyId,
                  t.AutoIncrementValue, t.Comment, t.Tablespace, t.DataDirectory,
-                 t.PartitionMethod, t.PartitionExpression, t.PartitionCount;
+                 t.PartitionMethod, t.PartitionExpression, t.PartitionCount,
+                 t.PartitionKeyAlgorithm, t.SubpartitionMethod, t.SubpartitionExpression, t.SubpartitionCount;
 
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_Done = TRUE;
 
@@ -630,26 +643,41 @@ BEGIN
                       CASE WHEN t.DataDirectory IS NOT NULL AND t.DataDirectory != ''
                            THEN CONCAT(' DATA DIRECTORY=''', REPLACE(t.DataDirectory, '''', ''''''), '''')
                            ELSE '' END,
+                      -- System versioning (MariaDB WITH SYSTEM VERSIONING, F1S1). A table option, so it comes before
+                      -- PARTITION BY: MariaDB refuses it after (1064), so a versioned partitioned table could not be created.
+                      -- Gated on SchemaSmith_SupportsSystemVersioning() (MariaDB 10.3+; MySQL never): below the floor the
+                      -- clause is suppressed so the table deploys as an ordinary one, and the degrade guard below reports it.
+                      CASE WHEN t.IsSystemVersioned = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
+                           THEN ' WITH SYSTEM VERSIONING' ELSE '' END,
                       -- Partitioning (#partitioning, K3) -- must match the real-path emit above exactly,
                       -- or the WhatIf preview shows a statement the live run would not issue.
                       CASE WHEN t.PartitionMethod IS NULL THEN ''
-                           WHEN t.PartitionMethod IN ('HASH', 'KEY', 'LINEAR HASH', 'LINEAR KEY')
-                           THEN CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ')',
-                                       CASE WHEN t.PartitionCount IS NOT NULL THEN CONCAT(' PARTITIONS ', t.PartitionCount) ELSE '' END)
-                           ELSE CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ') (',
-                                       COALESCE((SELECT GROUP_CONCAT(CONCAT('PARTITION ', pt.PartitionName,
-                                                                            CASE WHEN t.PartitionMethod LIKE 'LIST%'
-                                                                                 THEN CONCAT(' VALUES IN (', pt.PartitionValues, ')')
-                                                                                 ELSE CONCAT(' VALUES LESS THAN (', pt.PartitionValues, ')') END)
-                                                                     ORDER BY pt.Ordinal SEPARATOR ', ')
+                           ELSE CONCAT(' PARTITION BY ', t.PartitionMethod,
+                                       CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
+                                            THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
+                                       ' (', t.PartitionExpression, ')',
+                                       -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
+                                       CASE WHEN t.SubpartitionMethod IS NOT NULL
+                                            THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
+                                                        CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
+                                            ELSE '' END,
+                                       -- The named list, in declared order: RANGE and LIST with their boundaries, HASH and KEY by name
+                                       -- alone. A HASH or KEY table that names none takes a count instead.
+                                       COALESCE((SELECT CONCAT(' (', GROUP_CONCAT(CONCAT('PARTITION ', pt.PartitionName,
+                                                                        CASE WHEN t.PartitionMethod LIKE 'LIST%'
+                                                                             THEN CONCAT(' VALUES IN (', pt.PartitionValues, ')')
+                                                                             WHEN t.PartitionMethod LIKE 'RANGE%'
+                                                                             THEN CONCAT(' VALUES LESS THAN (', pt.PartitionValues, ')')
+                                                                             ELSE '' END,
+                                                                        CASE WHEN pt.PartitionComment IS NOT NULL
+                                                                             THEN CONCAT(' COMMENT = ', QUOTE(pt.PartitionComment)) ELSE '' END)
+                                                                 ORDER BY pt.Ordinal SEPARATOR ', '), ')')
                                                    FROM _SchemaSmith_Partitions pt
-                                                  WHERE pt.TableName = t.TableName), ''),
-                                       ')')
-                           END,
-                      -- Must match the real-path emit above exactly, or the WhatIf preview shows a
-                      -- statement the live run would not issue.
-                      CASE WHEN t.IsSystemVersioned = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
-                           THEN ' WITH SYSTEM VERSIONING' ELSE '' END)
+                                                  WHERE pt.TableName = t.TableName),
+                                                CASE WHEN t.PartitionMethod LIKE 'RANGE%' OR t.PartitionMethod LIKE 'LIST%' THEN ' ()'
+                                                     WHEN t.PartitionCount IS NOT NULL THEN CONCAT(' PARTITIONS ', t.PartitionCount)
+                                                     ELSE '' END))
+                      END)
         FROM _SchemaSmith_Tables t
         INNER JOIN _SchemaSmith_Columns c ON c.TableName = t.TableName
         WHERE t.NewTable = 1
@@ -658,7 +686,8 @@ BEGIN
         GROUP BY t.TableName, t.VariantName, t.Engine, t.RowFormat, t.Compression, t.KeyBlockSize,
                  t.PageCompressed, t.PageCompressionLevel, t.Encryption, t.Encrypted, t.EncryptionKeyId,
                  t.AutoIncrementValue, t.Comment, t.Tablespace, t.DataDirectory,
-                 t.PartitionMethod, t.PartitionExpression, t.PartitionCount;
+                 t.PartitionMethod, t.PartitionExpression, t.PartitionCount,
+                 t.PartitionKeyAlgorithm, t.SubpartitionMethod, t.SubpartitionExpression, t.SubpartitionCount;
 
         -- Step 2: Show ALTER TABLE ADD COLUMN for new columns on existing tables (set-based;
         -- one row per column, matching the per-column statement the ELSE branch would issue

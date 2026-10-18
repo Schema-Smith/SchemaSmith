@@ -1947,8 +1947,10 @@ MySQL and MariaDB carry a table's partition definition in the table DDL itself â
 |---|---|---|---|
 | `Method` | string | | `RANGE`, `LIST`, `HASH`, `KEY`, `LINEAR HASH`, `LINEAR KEY`, `RANGE COLUMNS` or `LIST COLUMNS`. Required. The `LINEAR` forms place rows by a powers-of-two algorithm and take a `PartitionCount` like `HASH` and `KEY`. The `COLUMNS` forms take a column **list** rather than an expression and compare values column by column. |
 | `Expression` | string | | The partitioning expression (`Id`, `YEAR(created)`), or a comma-separated column list for the `COLUMNS` methods. Required. |
-| `PartitionCount` | int | `null` | `HASH`, `KEY` and their `LINEAR` forms only: how many partitions to spread across. `RANGE` and `LIST` name each partition individually instead. |
-| `Partitions` | array | `[]` | `RANGE` and `LIST` only, **in declared order**. Each entry is `{ "Name": "...", "Values": "..." }` â€” `Values` is what follows `VALUES LESS THAN` for `RANGE` (a value, a tuple for `RANGE COLUMNS`, or `MAXVALUE`) or `VALUES IN` for `LIST`. |
+| `PartitionCount` | int | `null` | `HASH`, `KEY` and their `LINEAR` forms only: how many partitions to spread across, named `p0`, `p1`, ... by the engine. `RANGE` and `LIST` name each partition individually instead, and so may a `HASH` or `KEY` table, in `Partitions`. |
+| `KeyAlgorithm` | int | `null` | `KEY` and `LINEAR KEY` only: `ALGORITHM = 1` or `2`, the default. It decides which partition a row lands in, so a table created with `1` (MySQL 5.1's hashing) carries it, and extraction writes it. Not compared on a deployed table: the engines report it only in `SHOW CREATE TABLE`. |
+| `Subpartitioning` | object | `null` | `RANGE` and `LIST` only: `{ "Method": "HASH", "Expression": "Id", "Count": 2 }` splits every partition again, by `HASH`, `KEY` or a `LINEAR` form, into `Count` subpartitions that the engine names `<partition>sp0`, `<partition>sp1`, ... |
+| `Partitions` | array | `[]` | **In declared order.** Each entry is `{ "Name": "...", "Values": "...", "Comment": "..." }`. `Values` is what follows `VALUES LESS THAN` for `RANGE` (a value, a tuple for `RANGE COLUMNS`, or `MAXVALUE`) or `VALUES IN` for `LIST`; a `HASH` or `KEY` partition has none. `Comment` is optional. |
 
 **Order is part of the definition.** `RANGE` boundaries must ascend, and the engine rejects a definition where they do not, so the list is written and read in declared order rather than sorted.
 
@@ -1956,7 +1958,13 @@ MySQL and MariaDB carry a table's partition definition in the table DDL itself â
 
 **The comparison ignores backticks, whitespace and case**, because the engines do not agree on how they report a partition expression back: MySQL 5.7 returns the text you wrote, while MySQL 8, MariaDB 10.2 and MariaDB 11.4 all return a rewritten form (`year(`dt`)`). Without normalising, the same package would deploy on one engine and be refused on another.
 
-**MySQL requires every `UNIQUE` and `PRIMARY KEY` to contain every partitioning column.** That is the engine's rule, not SchemaSmith's, and a definition breaking it fails with the engine's own error.
+**Named `HASH` and `KEY` partitions are compared by name, and their number never changes.** Every row's partition depends on how many there are, so adding or removing one rehashes the table: a declaration with a different count is refused, as a changed `PartitionCount` is.
+
+**Subpartitioning is part of the scheme.** A changed method, expression or `Count` is refused like a changed `Method`. Subpartitions the table names itself (`SUBPARTITION s0`) are not modelled: SchemaTongs reports such a table and skips it rather than writing names a deploy would not create.
+
+**A changed partition `Comment` is reported, not applied.** The engine changes a partition's comment only by reorganizing the partition, which rewrites its rows, so the deploy logs a warning naming the partition and both comments and leaves the table as it is. A partition added above the deployed maximum is created with its comment. Per-partition options other than the comment (`DATA DIRECTORY`, `ENGINE`, `MAX_ROWS`, `MIN_ROWS`) are not modelled: a partition is created with the table's.
+
+**MySQL requires every `UNIQUE` and `PRIMARY KEY` to contain every partitioning column, whole.** That is the engine's rule, not SchemaSmith's: a key that leaves a partitioning column out, or holds only a prefix of it (`` `code`(10) ``), fails with error `1503`. [`--Validate`](validate.md) reports it first (`SS-PART-005`) where the method names its columns, as `KEY` and the `COLUMNS` forms do.
 
 ```json
 {

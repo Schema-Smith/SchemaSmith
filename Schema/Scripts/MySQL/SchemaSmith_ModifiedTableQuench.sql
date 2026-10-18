@@ -231,24 +231,37 @@ BEGIN
                CONCAT('  Declared partitioning does not match the deployed table (refused -- repartitioning rewrites every row): ',
                       SchemaSmith_StripBacktickWrapping(t.TableName),
                       ' declares ', t.PartitionMethod, '(', t.PartitionExpression, ')',
-                      ', deployed ', COALESCE(CONCAT(lp.PARTITION_METHOD, '(', lp.PARTITION_EXPRESSION, ')'), 'unpartitioned'))
+                      COALESCE(CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, '(', t.SubpartitionExpression, ')'), ''),
+                      ', deployed ', COALESCE(CONCAT(lp.PARTITION_METHOD, '(', lp.PARTITION_EXPRESSION, ')',
+                                                     COALESCE(CONCAT(' SUBPARTITION BY ', lp.SUBPARTITION_METHOD, '(', lp.SUBPARTITION_EXPRESSION, ')'), '')),
+                                              'unpartitioned'))
           FROM _SchemaSmith_Tables t
-          LEFT JOIN (SELECT p.TABLE_NAME, p.PARTITION_METHOD, p.PARTITION_EXPRESSION
+          LEFT JOIN (SELECT p.TABLE_NAME, p.PARTITION_METHOD, p.PARTITION_EXPRESSION, p.SUBPARTITION_METHOD, p.SUBPARTITION_EXPRESSION
                        FROM INFORMATION_SCHEMA.PARTITIONS p
                       WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
                         AND p.PARTITION_NAME IS NOT NULL
-                        AND p.PARTITION_ORDINAL_POSITION = 1) lp
+                        AND p.PARTITION_ORDINAL_POSITION = 1
+                        AND COALESCE(p.SUBPARTITION_ORDINAL_POSITION, 1) = 1) lp
             ON SchemaSmith_IdentifierKey(lp.TABLE_NAME) = t.TableKey
          WHERE t.NewTable = 0
            AND t.PartitionMethod IS NOT NULL
            AND (lp.PARTITION_METHOD IS NULL
                 OR UPPER(lp.PARTITION_METHOD) <> t.PartitionMethod
                 OR SchemaSmith_NormalizePartitionExpression(lp.PARTITION_EXPRESSION) <> SchemaSmith_NormalizePartitionExpression(t.PartitionExpression)
+                -- Subpartitioning is part of the scheme: changing it rewrites every row, like the method.
+                OR COALESCE(UPPER(lp.SUBPARTITION_METHOD), '') <> COALESCE(t.SubpartitionMethod, '')
+                OR (t.SubpartitionMethod IS NOT NULL
+                    AND SchemaSmith_NormalizePartitionExpression(lp.SUBPARTITION_EXPRESSION) <> SchemaSmith_NormalizePartitionExpression(t.SubpartitionExpression))
+                OR (t.SubpartitionCount IS NOT NULL
+                    AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS sc
+                          WHERE sc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(sc.TABLE_SCHEMA) = v_DbKey
+                            AND SchemaSmith_IdentifierKey(sc.TABLE_NAME) = t.TableKey
+                            AND sc.PARTITION_ORDINAL_POSITION = 1 AND sc.SUBPARTITION_NAME IS NOT NULL) <> t.SubpartitionCount)
                 -- Partition COUNT change (HASH/KEY declare a count, not named partitions): re-partitioning
                 -- from N to M buckets rewrites every row, so it is refused like a method/expression change.
                 -- Gated on a declared count so RANGE/LIST (named partitions, no declared count) is untouched.
                 OR (t.PartitionCount IS NOT NULL AND t.PartitionCount > 0
-                    AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS pc
+                    AND (SELECT COUNT(DISTINCT pc.PARTITION_NAME) FROM INFORMATION_SCHEMA.PARTITIONS pc
                           WHERE pc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(pc.TABLE_SCHEMA) = v_DbKey
                             AND SchemaSmith_IdentifierKey(pc.TABLE_NAME) = t.TableKey
                             AND pc.PARTITION_NAME IS NOT NULL) <> t.PartitionCount));
@@ -299,14 +312,17 @@ BEGIN
             DeployedCount INT NOT NULL,
             PrefixMismatch VARCHAR(128) DEFAULT NULL,
             RemovedName VARCHAR(128) DEFAULT NULL,
-            DeployedEndsMaxValue TINYINT NOT NULL DEFAULT 0
+            DeployedEndsMaxValue TINYINT NOT NULL DEFAULT 0,
+            -- A HASH or KEY table that names its partitions: every row's partition depends on how many there are.
+            Hashes TINYINT NOT NULL DEFAULT 0,
+            IsList TINYINT NOT NULL DEFAULT 0
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-        INSERT INTO _SchemaSmith_PartitionVerdict (TableName, TableKey, DeclaredCount, DeployedCount, DeployedEndsMaxValue)
+        INSERT INTO _SchemaSmith_PartitionVerdict (TableName, TableKey, DeclaredCount, DeployedCount, DeployedEndsMaxValue, Hashes, IsList)
         SELECT t.TableName, t.TableKey,
                (SELECT COUNT(*) FROM _SchemaSmith_Partitions dp
                  WHERE SchemaSmith_IdentifierKey(dp.TableName) = SchemaSmith_IdentifierKey(t.TableName)),
-               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS pc
+               (SELECT COUNT(DISTINCT pc.PARTITION_NAME) FROM INFORMATION_SCHEMA.PARTITIONS pc
                  WHERE pc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(pc.TABLE_SCHEMA) = v_DbKey
                    AND SchemaSmith_IdentifierKey(pc.TABLE_NAME) = t.TableKey
                    AND pc.PARTITION_NAME IS NOT NULL),
@@ -314,7 +330,9 @@ BEGIN
                            FROM INFORMATION_SCHEMA.PARTITIONS pm
                           WHERE pm.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(pm.TABLE_SCHEMA) = v_DbKey
                             AND SchemaSmith_IdentifierKey(pm.TABLE_NAME) = t.TableKey
-                            AND pm.PARTITION_NAME IS NOT NULL), 0)
+                            AND pm.PARTITION_NAME IS NOT NULL), 0),
+               t.PartitionMethod IN ('HASH', 'KEY', 'LINEAR HASH', 'LINEAR KEY'),
+               t.PartitionMethod LIKE 'LIST%'
           FROM _SchemaSmith_Tables t
          WHERE t.NewTable = 0
            AND t.PartitionMethod IS NOT NULL
@@ -373,6 +391,9 @@ BEGIN
                              THEN CONCAT('partition ', v.PrefixMismatch,
                                          ' differs from the partition deployed in that position; moving or '
                                          'renaming a boundary redistributes rows')
+                           WHEN v.Hashes = 1
+                             THEN 'a HASH or KEY table places every row by the number of partitions; adding or '
+                                  'removing one rehashes them all'
                            ELSE 'nothing can be added above a MAXVALUE partition; this is a REORGANIZE, '
                                 'not an append' END,
                       '): ', SchemaSmith_StripBacktickWrapping(v.TableName),
@@ -381,7 +402,8 @@ BEGIN
          WHERE v.DeclaredCount > 0
            AND (v.RemovedName IS NOT NULL
                 OR v.PrefixMismatch IS NOT NULL
-                OR (v.DeclaredCount > v.DeployedCount AND v.DeployedEndsMaxValue = 1));
+                OR (v.DeclaredCount > v.DeployedCount AND v.DeployedEndsMaxValue = 1)
+                OR (v.Hashes = 1 AND v.DeclaredCount <> v.DeployedCount));
 
         SET @ss_part_refusals = @ss_part_refusals + ROW_COUNT();
 
@@ -389,6 +411,21 @@ BEGIN
             SET @ss_msg = 'Declared partitioning does not match the deployed table -- see the run log. Repartitioning rewrites every row and is refused.';
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         END IF;
+
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(),
+               CONCAT('  WARNING: partition ', SchemaSmith_StripBacktickWrapping(dp.TableName), '.', dp.PartitionName,
+                      ' declares comment ', QUOTE(COALESCE(dp.PartitionComment, '')), ' but has ',
+                      QUOTE(COALESCE(lp.PARTITION_COMMENT, '')),
+                      ' (reported, not applied -- the engine changes a partition comment only by reorganizing the partition)')
+          FROM _SchemaSmith_Partitions dp
+          JOIN _SchemaSmith_Tables t ON t.TableName = dp.TableName AND t.NewTable = 0
+          JOIN INFORMATION_SCHEMA.PARTITIONS lp
+            ON lp.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(lp.TABLE_SCHEMA) = v_DbKey
+           AND SchemaSmith_IdentifierKey(lp.TABLE_NAME) = t.TableKey
+           AND SchemaSmith_NameKeyCI(lp.PARTITION_NAME) = SchemaSmith_NameKeyCI(dp.PartitionName)
+           AND COALESCE(lp.SUBPARTITION_ORDINAL_POSITION, 1) = 1
+         WHERE CAST(COALESCE(dp.PartitionComment, '') AS BINARY) <> CAST(COALESCE(lp.PARTITION_COMMENT, '') AS BINARY);
 
         -- ---- apply the appends ----------------------------------------------------------------------
         -- Only reached when every declared table's prefix agrees, so the sole remaining difference is one
@@ -399,11 +436,13 @@ BEGIN
             RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
             TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             PartitionName VARCHAR(128) NOT NULL,
-            PartitionValues TEXT DEFAULT NULL
+            PartitionValues TEXT DEFAULT NULL,
+            PartitionComment TEXT DEFAULT NULL,
+            IsList TINYINT NOT NULL DEFAULT 0
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-        INSERT INTO _SchemaSmith_PartitionAdds (TableName, PartitionName, PartitionValues)
-        SELECT dp.TableName, dp.PartitionName, dp.PartitionValues
+        INSERT INTO _SchemaSmith_PartitionAdds (TableName, PartitionName, PartitionValues, PartitionComment, IsList)
+        SELECT dp.TableName, dp.PartitionName, dp.PartitionValues, dp.PartitionComment, v.IsList
           FROM _SchemaSmith_Partitions dp
           JOIN _SchemaSmith_PartitionVerdict v
             ON SchemaSmith_IdentifierKey(v.TableName) = SchemaSmith_IdentifierKey(dp.TableName)
@@ -414,8 +453,8 @@ BEGIN
         IF (SELECT COUNT(*) FROM _SchemaSmith_PartitionAdds) > 0 THEN
             SET @ss_add_done = 0;
             WHILE @ss_add_done = 0 DO
-                SELECT RowId, TableName, PartitionName, PartitionValues
-                  INTO @ss_add_id, @ss_add_table, @ss_add_name, @ss_add_values
+                SELECT RowId, TableName, PartitionName, PartitionValues, PartitionComment, IsList
+                  INTO @ss_add_id, @ss_add_table, @ss_add_name, @ss_add_values, @ss_add_comment, @ss_add_list
                   FROM _SchemaSmith_PartitionAdds ORDER BY RowId LIMIT 1;
 
                 IF @ss_add_id IS NULL THEN
@@ -428,11 +467,13 @@ BEGIN
                     IF p_WhatIf = 0 THEN
                         SET @ss_sql = CONCAT('ALTER TABLE `', p_DatabaseName, '`.`',
                                              SchemaSmith_StripBacktickWrapping(@ss_add_table),
-                                             '` ADD PARTITION (PARTITION `', @ss_add_name,
-                                             '` VALUES LESS THAN ',
-                                             CASE WHEN UPPER(TRIM(COALESCE(@ss_add_values, ''))) = 'MAXVALUE'
-                                                  THEN 'MAXVALUE'
-                                                  ELSE CONCAT('(', @ss_add_values, ')') END, ')');
+                                             '` ADD PARTITION (PARTITION `', @ss_add_name, '`',
+                                             CASE WHEN @ss_add_list = 1 THEN CONCAT(' VALUES IN (', @ss_add_values, ')')
+                                                  WHEN UPPER(TRIM(COALESCE(@ss_add_values, ''))) = 'MAXVALUE'
+                                                  THEN ' VALUES LESS THAN MAXVALUE'
+                                                  ELSE CONCAT(' VALUES LESS THAN (', @ss_add_values, ')') END,
+                                             CASE WHEN @ss_add_comment IS NOT NULL
+                                                  THEN CONCAT(' COMMENT = ', QUOTE(@ss_add_comment)) ELSE '' END, ')');
                         PREPARE ss_add_stmt FROM @ss_sql;
                         EXECUTE ss_add_stmt;
                         DEALLOCATE PREPARE ss_add_stmt;

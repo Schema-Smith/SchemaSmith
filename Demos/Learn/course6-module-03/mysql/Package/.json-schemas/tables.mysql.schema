@@ -453,7 +453,39 @@
         "PartitionCount": {
           "type": "integer",
           "minimum": 1.0,
-          "description": "Number of partitions for HASH and KEY. Not used by RANGE or LIST, which name each partition and its boundary explicitly."
+          "description": "Number of partitions for HASH and KEY. Not used by RANGE or LIST, which name each partition and its boundary explicitly. A HASH or KEY table may name its partitions in Partitions instead, and then the count is how many it names."
+        },
+        "KeyAlgorithm": {
+          "type": "integer",
+          "minimum": 1.0,
+          "maximum": 2.0,
+          "description": "KEY partitioning only: ALGORITHM 1 or 2 (the default). Set from extraction when the table uses 1. Not compared on an existing table."
+        },
+        "Subpartitioning": {
+          "type": "object",
+          "properties": {
+            "Method": {
+              "type": "string",
+              "pattern": "^(?:HASH|KEY|LINEAR HASH|LINEAR KEY)$",
+              "description": "HASH, KEY, LINEAR HASH or LINEAR KEY."
+            },
+            "Expression": {
+              "type": "string",
+              "description": "The subpartitioning expression for HASH, or the column list for KEY. Compared normalized, like the partitioning expression."
+            },
+            "Count": {
+              "type": "integer",
+              "minimum": 1.0,
+              "description": "Subpartitions in each partition."
+            },
+            "Extensions": {}
+          },
+          "additionalProperties": false,
+          "required": [
+            "Method",
+            "Expression",
+            "Count"
+          ]
         },
         "Partitions": {
           "type": "array",
@@ -467,6 +499,11 @@
               "Values": {
                 "type": "string",
                 "description": "The VALUES LESS THAN boundary for RANGE, or the VALUES IN list for LIST. Omitted for HASH and KEY, which have no boundary."
+              },
+              "Comment": {
+                "type": "string",
+                "maxLength": 1024,
+                "description": "The partition's comment. A change on a deployed table is reported, not applied, because the engine reorganizes the partition to change it."
               },
               "Extensions": {}
             },
