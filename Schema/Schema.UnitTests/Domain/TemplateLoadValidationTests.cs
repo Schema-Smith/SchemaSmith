@@ -183,6 +183,29 @@ namespace Schema.UnitTests.Domain
                 Template.Load("Main", MakeProduct(Platform.SqlServer)));
         }
 
+        // A publication is database-scoped, so a schema template's default folders leave it out; an explicit folder is
+        // refused the same way rather than fanned out per schema.
+        [Test]
+        public void SchemaTemplate_PublicationsScriptFolder_Rejected()
+        {
+            var (templateFile, tablesPath) = Paths();
+            var json = @"{
+                ""Name"": ""TenantBody"",
+                ""SchemaIdentificationScript"": ""SELECT 'tenant_a'"",
+                ""ScriptFolders"": [
+                    { ""FolderPath"": ""Publications"", ""QuenchSlot"": ""AfterTablesObjects"", ""ObjectType"": ""Publications"" }
+                ]
+            }";
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(json);
+            _mockDirectory.Exists(tablesPath).Returns(false);
+            _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
+
+            var ex = Assert.Throws<PackageException>(() =>
+                Template.Load("Main", MakeProduct(Platform.PostgreSQL)));
+            Assert.That(ex!.Message, Does.Contain("Publications").And.Contain("database-scoped"));
+        }
+
         [Test]
         public void SchemaTemplate_FullTextStopListsScriptFolder_Rejected()
         {

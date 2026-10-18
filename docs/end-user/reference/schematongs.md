@@ -773,7 +773,7 @@ If `Template.json` already exists at the output path, SchemaTongs does not overw
 
 ### ShouldCast flags
 
-Four `ShouldCast` flags are forced off in schema-template extraction mode because the object types they control are database-scoped, not schema-scoped. They cannot fan out per-schema iteration and must live in a regular template earlier in `TemplateOrder`.
+These `ShouldCast` flags are forced off in schema-template extraction mode because the object types they control are database-scoped, not schema-scoped. They cannot fan out per-schema iteration and must live in a regular template earlier in `TemplateOrder`. SchemaQuench refuses a schema template that declares a folder for one of them.
 
 **SQL Server:**
 
@@ -789,6 +789,7 @@ Four `ShouldCast` flags are forced off in schema-template extraction mode becaus
 | Flag | Forced | Warning message |
 |---|---|---|
 | `ShouldCast:Schemas` | `false` | "schema objects ARE the iteration unit" |
+| `ShouldCast:Publications` | `false` | "publications are database-scoped" |
 
 The warning fires when the flag was `true` (or at its default-true value). A quiet skip would be too surprising -- if you have `ShouldCast:Schemas: true` in your config and nothing appears under `Schemas/`, you deserve an explanation.
 

@@ -340,7 +340,8 @@ namespace Schema.Domain
             ScriptObjectType.Schemas,
             ScriptObjectType.DDLTriggers,
             ScriptObjectType.FullTextCatalogs,
-            ScriptObjectType.FullTextStopLists
+            ScriptObjectType.FullTextStopLists,
+            ScriptObjectType.Publications
         };
 
         /// <summary>
