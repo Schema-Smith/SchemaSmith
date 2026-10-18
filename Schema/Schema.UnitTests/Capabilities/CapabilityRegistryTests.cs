@@ -64,6 +64,8 @@ namespace Schema.UnitTests.Capabilities
             "INDEX (functional/expression, MySQL 8.0.13)",
             "table without its COMPRESSION option",
             "table without its SYSTEM_TIME partitioning",
+            "columnstore over a (max) or computed column (SQL Server 2017)",
+            "columnstore index without its ORDER",
             "SYSTEM_TIME partitioning without AUTO"
         };
 
@@ -88,6 +90,16 @@ namespace Schema.UnitTests.Capabilities
                     Assert.That(c.RequiredCompatLevel, Is.Null.Or.GreaterThan(0), $"RequiredCompatLevel for {c.Key}");
                 }
             });
+        }
+
+        // The label is written to ChangeAudit.ObjectType, NVARCHAR(64) on every engine's kindled table: a longer one fails
+        // the degrade it records with a truncation error.
+        [Test]
+        public void ManifestObjectTypes_FitTheAuditColumn()
+        {
+            var tooLong = CapabilityRegistry.All.Where(c => c.ManifestObjectType is { Length: > 64 })
+                .Select(c => $"{c.Key}/{c.Platform}: {c.ManifestObjectType.Length}").ToList();
+            Assert.That(tooLong, Is.Empty, "ManifestObjectType longer than ChangeAudit.ObjectType (64): " + string.Join("; ", tooLong));
         }
 
         [Test]

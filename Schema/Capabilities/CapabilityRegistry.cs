@@ -82,6 +82,14 @@ namespace Schema.Capabilities
                 13, "SQL Server 2016", null, DegradeKind.Skip, "nonclustered columnstore index (writable from SQL Server 2016)"));
             rows.Add(new("columnstore-clustered-with-rowstore", "Clustered columnstore beside rowstore indexes", Platform.SqlServer,
                 13, "SQL Server 2016", null, DegradeKind.Skip, "clustered columnstore beside rowstore indexes (SQL Server 2016)"));
+            // A clustered columnstore over a (max) or non-persisted computed column: 2017 (35343 and 35307 on 2016).
+            rows.Add(new("columnstore-clustered-max-computed", "Clustered columnstore over a (max) or computed column", Platform.SqlServer,
+                14, "SQL Server 2017", null, DegradeKind.Skip, "columnstore over a (max) or computed column (SQL Server 2017)"));
+            // Ordered columnstore (ORDER): clustered 2022, nonclustered 2025. The index is kept and created unordered.
+            rows.Add(new("columnstore-clustered-ordered", "Ordered clustered columnstore index", Platform.SqlServer,
+                16, "SQL Server 2022", null, DegradeKind.Reduced, "columnstore index without its ORDER"));
+            rows.Add(new("columnstore-nonclustered-ordered", "Ordered nonclustered columnstore index", Platform.SqlServer,
+                17, "SQL Server 2025", null, DegradeKind.Reduced, "columnstore index without its ORDER"));
 
             // ---- PostgreSQL (major gated via ServerVersionNum; all skipped) ---------------------------------
             // Reduced: the column becomes plain as declared, but below 13 it is dropped and re-added, so its values

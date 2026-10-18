@@ -56,6 +56,9 @@ public class CapabilityDocumentationTests
         ["SqlServer/columnstore-clustered"] = "**Clustered columnstore index**",
         ["SqlServer/columnstore-nonclustered-writable"] = "**Writable nonclustered columnstore**",
         ["SqlServer/columnstore-clustered-with-rowstore"] = "**Clustered columnstore beside rowstore indexes**",
+        ["SqlServer/columnstore-clustered-max-computed"] = "**Clustered columnstore over a `(max)` or computed column**",
+        ["SqlServer/columnstore-clustered-ordered"] = "**Ordered clustered columnstore**",
+        ["SqlServer/columnstore-nonclustered-ordered"] = "**Ordered nonclustered columnstore**",
         // Gated on the server's edition, so documented in prose below the table, like FILESTREAM.
         ["SqlServer/data-compression-edition"] = "**Data compression**",
         ["SqlServer/columnstore-edition"] = "**columnstore indexes**",

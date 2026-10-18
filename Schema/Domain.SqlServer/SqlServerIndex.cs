@@ -105,5 +105,14 @@ namespace Schema.Domain.SqlServer
         [SchemaProperty(Description = "The index is disabled (ALTER INDEX … DISABLE): defined but holding no data and enforcing nothing. Declared true, a live index is disabled after it is created; left false, an index someone disabled by hand is rebuilt, which enables it. Disabling a clustered index makes the table unreadable, and disabling a key's index disables the foreign keys that reference it.")]
         [JsonProperty(Order = 113)]
         public bool Disabled { get; set; }
+
+        /// <summary>
+        /// An ordered columnstore index's sort columns (<c>ORDER (…)</c>), comma-separated in sort order: a clustered
+        /// columnstore from SQL Server 2022, a nonclustered one from 2025. Below that the index is created unordered and a
+        /// downgrade is recorded. Read from <c>sys.index_columns.column_store_order_ordinal</c>.
+        /// </summary>
+        [SchemaProperty(Description = "ColumnStore only: the ORDER columns, comma-separated in sort order. A clustered columnstore index from SQL Server 2022, a nonclustered one from 2025; below that it is created unordered and a downgrade recorded. A change re-creates the index.")]
+        [JsonProperty(Order = 114, NullValueHandling = NullValueHandling.Ignore)]
+        public string Order { get; set; }
     }
 }

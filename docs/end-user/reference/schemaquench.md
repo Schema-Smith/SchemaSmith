@@ -465,6 +465,9 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 | **Clustered columnstore index** | SQL Server 2014 | skips the index + records a downgrade |
 | **Writable nonclustered columnstore** | SQL Server 2016 | skips the index + records a downgrade. On 2012 and 2014 a nonclustered columnstore index makes its table read-only, so creating it would change what the application can do. An index already on the table is left in place |
 | **Clustered columnstore beside rowstore indexes** | SQL Server 2016 | skips the columnstore index and keeps the rowstore indexes, which carry keys and uniqueness + records a downgrade. SQL Server 2014 refuses the combination. An index already on the table is left in place |
+| **Clustered columnstore over a `(max)` or computed column** (a new clustered columnstore index on a table with a `(max)` or non-persisted computed column) | SQL Server 2017 | skips the index + records a downgrade; the engine refuses it below 2017 |
+| **Ordered clustered columnstore** (`Order` on a clustered columnstore index) | SQL Server 2022 | creates the index unordered + records a downgrade |
+| **Ordered nonclustered columnstore** (`Order` on a nonclustered columnstore index) | SQL Server 2025 | creates the index unordered + records a downgrade |
 | **Spatial index AUTO_GRID tessellation** (`GEOMETRY_AUTO_GRID`, `GEOGRAPHY_AUTO_GRID`) | SQL Server 2012 | creates the index with the `GRID` scheme of the same family, and that scheme's defaults for anything not declared + records a downgrade. A redeploy leaves it as it is |
 | **Graph tables** (`NODE` / `EDGE`) | SQL Server 2017 | creates the table with all its declared columns, *without* graph semantics + records a downgrade |
 | **Edge constraints** (`EdgeConstraints` on an edge table) | SQL Server 2019 | creates the edge table without the constraint + records a downgrade |

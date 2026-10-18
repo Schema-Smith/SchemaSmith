@@ -579,6 +579,26 @@ public class ForgeKindlerTests
         });
     }
 
+    // The ordered-columnstore read and the degrade that clears a declared ORDER resolve from one value: a version-less
+    // kindle (0) must neither name column_store_order_ordinal, which an older server cannot bind, nor keep an ORDER the
+    // read would then never see, which would re-create the index on every deploy.
+    [TestCase(0, false)]
+    [TestCase(15, false)]
+    [TestCase(16, true)]
+    public void ResolveKindleScript_ColumnStoreOrderTokens_ResolveTogether(int major, bool readable)
+    {
+        string Resolve(string file) => ForgeKindler.ResolveKindleScript(file, Platform.SqlServer, replaceParseJson: false, replaceTableDef: false,
+            IngestEncoding.Json, serverMajorVersion: major);
+        var scan = Resolve("SchemaSmith.ModifiedTableQuench.sql");
+        var degrade = Resolve("SchemaSmith.DegradeUnsupportedColumnStore.sql");
+        Assert.Multiple(() =>
+        {
+            Assert.That(scan.Contains("column_store_order_ordinal"), Is.EqualTo(readable), "the live read");
+            Assert.That(scan, Does.Not.Contain("{{ColumnStoreOrderList}}"));
+            Assert.That(degrade, Does.Contain(readable ? "OR 1 = 0)" : "OR 0 = 0)"), "the degrade clears ORDER wherever the read cannot see it");
+        });
+    }
+
     // #CdcRotate is created in three places, and a column added to one copy and not the others failed every deploy.
     [TestCase("SchemaSmith.TableQuench.sql", true)]
     [TestCase("SchemaSmith.ModifiedTableQuench.sql", false)]

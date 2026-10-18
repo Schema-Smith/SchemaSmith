@@ -204,6 +204,10 @@
             "type": "boolean",
             "description": "The index is disabled (ALTER INDEX … DISABLE): defined but holding no data and enforcing nothing. Declared true, a live index is disabled after it is created; left false, an index someone disabled by hand is rebuilt, which enables it. Disabling a clustered index makes the table unreadable, and disabling a key's index disables the foreign keys that reference it."
           },
+          "Order": {
+            "type": "string",
+            "description": "ColumnStore only: the ORDER columns, comma-separated in sort order. A clustered columnstore index from SQL Server 2022, a nonclustered one from 2025; below that it is created unordered and a downgrade recorded. A change re-creates the index."
+          },
           "Extensions": {}
         },
         "additionalProperties": false,

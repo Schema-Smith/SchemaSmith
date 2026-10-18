@@ -197,6 +197,14 @@ public static class ForgeKindler
                             xmlCompressionReadable ? "p.xml_compression" : "CONVERT(BIT, NULL)")
                        .Replace("{{XmlCompressionCanRead}}", xmlCompressionReadable ? "1" : "0");
 
+        // The ordered-columnstore key arrived with 2022 (sys.index_columns.column_store_order_ordinal), and naming the column
+        // on an older server fails the CREATE as xml_compression does, so the read is composed out at kindle time.
+        // Two tokens from one value, as for XML compression: the degrade clears a declared ORDER wherever the read cannot see
+        // one, so an index is never created ordered where the next deploy would read it as unordered and re-create it.
+        var columnStoreOrderReadable = serverMajorVersion >= 16;
+        script = script.Replace("{{ColumnStoreOrderList}}", columnStoreOrderReadable ? SqlServerColumnStoreOrderList : "CONVERT(NVARCHAR(MAX), NULL)")
+                       .Replace("{{ColumnStoreOrderCanRead}}", columnStoreOrderReadable ? "1" : "0");
+
         return script;
     }
 
@@ -346,6 +354,12 @@ public static class ForgeKindler
     // Anything else (spatial, JSON, vector) is left out of extraction and of the live scans, which would otherwise
     // render it as a plain index: an undeployable package, or an index the deploy drops as unknown.
     public const string SqlServerRenderableIndexTypes = "1, 2, 5, 6, 7";
+
+    // A columnstore index's ORDER columns, in sort order, or NULL when it has none. Reads the caller's sys.indexes as si.
+    internal const string SqlServerColumnStoreOrderList =
+        "(SELECT STUFF((SELECT ',' + QUOTENAME(COL_NAME(oc.[object_id], oc.column_id)) COLLATE DATABASE_DEFAULT " +
+        "FROM sys.index_columns oc WHERE oc.[object_id] = si.[object_id] AND oc.index_id = si.index_id AND oc.column_store_order_ordinal > 0 " +
+        "ORDER BY oc.column_store_order_ordinal FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''))";
 
     // Selective XML indexes cannot be declared yet, and without xml_index_type they read as primary XML indexes. The
     // column arrived with them (2012 SP1), so a server without it has none to leave out, and the read is dynamic so

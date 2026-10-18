@@ -21,7 +21,8 @@ BEGIN
   --     application can do, so it waits for 2016;
   --   * clustered beside rowstore indexes on 2014, which refuses the combination (35304); the rowstore indexes carry
   --     keys and uniqueness, so the columnstore is the one skipped.
-  -- The last two only stop SchemaSmith CREATING the index. One that already exists on the table was made on purpose
+  --   * clustered over a (max) or a non-persisted computed column below 2017 (35343, 35307 on 2016), new indexes only.
+  -- The last three only stop SchemaSmith CREATING the index. One that already exists on the table was made on purpose
   -- on this server, and leaving it out of the working set would let a later pass drop it.
   DECLARE @v_Major INT = SchemaSmith.fn_ServerMajorVersion()
   DECLARE @v_NoEnterprise BIT = SchemaSmith.fn_EnterpriseFeaturesUnavailable()
@@ -29,6 +30,24 @@ BEGIN
   CREATE TABLE #IndexDegrades ([Schema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
                                [IndexName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [ObjectType] NVARCHAR(200) COLLATE DATABASE_DEFAULT,
                                [Reason] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [DropIndex] BIT)
+
+  -- Tables whose columns a clustered columnstore cannot hold below 2017: the declared columns where the TableQuench
+  -- path parsed them, otherwise (--IndexOnly, where the table exists) the live ones.
+  CREATE TABLE #CciBlockers ([Schema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT)
+  IF @v_Major < 14
+  BEGIN
+    IF OBJECT_ID('tempdb..#Columns') IS NOT NULL
+      INSERT INTO #CciBlockers ([Schema], [TableName])
+        SELECT DISTINCT c.[Schema], c.[TableName]
+          FROM #Columns c WITH (NOLOCK)
+          WHERE c.[DataType] LIKE '%(MAX)%' OR (RTRIM(ISNULL(c.[ComputedExpression], '')) <> '' AND ISNULL(c.[Persisted], 0) = 0)
+    INSERT INTO #CciBlockers ([Schema], [TableName])
+      SELECT DISTINCT i.[Schema], i.[TableName]
+        FROM #Indexes i WITH (NOLOCK)
+        JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
+        LEFT JOIN sys.computed_columns cc ON cc.[object_id] = sc.[object_id] AND cc.column_id = sc.column_id
+        WHERE sc.max_length = -1 OR (cc.column_id IS NOT NULL AND cc.is_persisted = 0)
+  END
 
   INSERT INTO #IndexDegrades ([Schema], [TableName], [IndexName], [ObjectType], [Reason], [DropIndex])
     SELECT i.[Schema], i.[TableName], i.[IndexName], d.[ObjectType], d.[Reason], 1
@@ -45,6 +64,10 @@ BEGIN
                           AND EXISTS (SELECT 1 FROM #Indexes o WITH (NOLOCK)
                                        WHERE o.[Schema] = i.[Schema] AND o.[TableName] = i.[TableName] AND o.[ColumnStore] = 0)
                        THEN 'clustered columnstore beside rowstore indexes (SQL Server 2016)'
+                     WHEN @v_Major < 14 AND i.[Clustered] = 1
+                          AND INDEXPROPERTY(OBJECT_ID(i.[Schema] + '.' + i.[TableName]), SchemaSmith.fn_StripBracketWrapping(i.[IndexName]), 'IndexID') IS NULL
+                          AND EXISTS (SELECT 1 FROM #CciBlockers b WHERE b.[Schema] = i.[Schema] AND b.[TableName] = i.[TableName])
+                       THEN 'columnstore over a (max) or computed column (SQL Server 2017)'
                    END AS [ObjectType]) t
       CROSS APPLY (SELECT t.[ObjectType], CASE t.[ObjectType]
                      WHEN 'columnstore index (SQL Server 2012/2014)'
@@ -53,7 +76,9 @@ BEGIN
                        THEN 'Columnstore indexes require Enterprise or Developer edition below SQL Server 2016 SP1'
                      WHEN 'nonclustered columnstore index (writable from SQL Server 2016)'
                        THEN 'A nonclustered columnstore index makes its table read-only below SQL Server 2016'
-                     ELSE 'A clustered columnstore index cannot sit beside rowstore indexes below SQL Server 2016'
+                     WHEN 'clustered columnstore beside rowstore indexes (SQL Server 2016)'
+                       THEN 'A clustered columnstore index cannot sit beside rowstore indexes below SQL Server 2016'
+                     ELSE 'A clustered columnstore index cannot include a (max) or non-persisted computed column below SQL Server 2017'
                    END AS [Reason]) d
       WHERE i.[ColumnStore] = 1 AND t.[ObjectType] IS NOT NULL
 
@@ -63,6 +88,15 @@ BEGIN
            'Data compression requires Enterprise or Developer edition below SQL Server 2016 SP1', 0
       FROM #Indexes i WITH (NOLOCK)
       WHERE @v_NoEnterprise = 1 AND i.[ColumnStore] = 0 AND RTRIM(ISNULL(i.[CompressionType], 'NONE')) IN ('ROW', 'PAGE')
+
+  -- An ordered columnstore index (ORDER): clustered from 2022, nonclustered from 2025. Kept, and created unordered.
+  INSERT INTO #IndexDegrades ([Schema], [TableName], [IndexName], [ObjectType], [Reason], [DropIndex])
+    SELECT i.[Schema], i.[TableName], i.[IndexName], 'columnstore index without its ORDER',
+           'An ordered columnstore index requires SQL Server 2022 (clustered) / 2025 (nonclustered)', 0
+      FROM #Indexes i WITH (NOLOCK)
+      WHERE i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[Order], '')) <> ''
+        AND (@v_Major < CASE WHEN i.[Clustered] = 1 THEN 16 ELSE 17 END OR {{ColumnStoreOrderCanRead}} = 0)
+        AND NOT EXISTS (SELECT 1 FROM #IndexDegrades x WHERE x.[Schema] = i.[Schema] AND x.[TableName] = i.[TableName] AND x.[IndexName] = i.[IndexName])
 
   IF NOT EXISTS (SELECT 1 FROM #IndexDegrades) RETURN
 
@@ -82,8 +116,10 @@ BEGIN
 
   IF EXISTS (SELECT 1 FROM #IndexDegrades WHERE [DropIndex] = 1)
     RAISERROR('  Columnstore index skipped (not supported on this server version or edition - downgraded)', 10, 100) WITH NOWAIT
-  IF EXISTS (SELECT 1 FROM #IndexDegrades WHERE [DropIndex] = 0)
+  IF EXISTS (SELECT 1 FROM #IndexDegrades WHERE [DropIndex] = 0 AND [ObjectType] LIKE 'data compression%')
     RAISERROR('  Index compression skipped (Enterprise edition below SQL Server 2016 SP1 - downgraded)', 10, 100) WITH NOWAIT
+  IF EXISTS (SELECT 1 FROM #IndexDegrades WHERE [ObjectType] = 'columnstore index without its ORDER')
+    RAISERROR('  Columnstore index created without its ORDER (SQL Server 2022 clustered / 2025 nonclustered - downgraded)', 10, 100) WITH NOWAIT
 
   DELETE i
     FROM #Indexes i
@@ -93,5 +129,10 @@ BEGIN
   UPDATE i SET [CompressionType] = 'NONE'
     FROM #Indexes i
     JOIN #IndexDegrades d ON d.[Schema] = i.[Schema] AND d.[TableName] = i.[TableName] AND d.[IndexName] = i.[IndexName]
-    WHERE d.[DropIndex] = 0
+    WHERE d.[DropIndex] = 0 AND d.[ObjectType] LIKE 'data compression%'
+
+  UPDATE i SET [Order] = NULL
+    FROM #Indexes i
+    JOIN #IndexDegrades d ON d.[Schema] = i.[Schema] AND d.[TableName] = i.[TableName] AND d.[IndexName] = i.[IndexName]
+    WHERE d.[ObjectType] = 'columnstore index without its ORDER'
 END

@@ -246,6 +246,7 @@
     [IgnoreDuplicateKey] BIT NULL,
     [PadIndex] BIT NULL,
     [Disabled] BIT NULL,
+    [Order] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
     [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
@@ -884,7 +885,7 @@
     WHERE NOT EXISTS (SELECT * FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = #TableDefinitions.[Schema] AND c.[TableName] = #TableDefinitions.[Name])
 
   RAISERROR('Parse Indexes from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #Indexes ([_RowId], [Schema], [TableName], [IndexName], [CompressionType], [XmlCompression], [PrimaryKey], [Unique], [UniqueConstraint], [Clustered], [ColumnStore], [FillFactor], [FilterExpression], [FileGroup], [PartitionScheme], [PartitionColumn], [BucketCount], [UpdateFillFactor], [IndexColumns], [IncludeColumns], [IgnoreDuplicateKey], [PadIndex], [Disabled], [ShouldApplyExpression], [VariantName], [Description])
+  INSERT INTO #Indexes ([_RowId], [Schema], [TableName], [IndexName], [CompressionType], [XmlCompression], [PrimaryKey], [Unique], [UniqueConstraint], [Clustered], [ColumnStore], [FillFactor], [FilterExpression], [FileGroup], [PartitionScheme], [PartitionColumn], [BucketCount], [UpdateFillFactor], [IndexColumns], [IncludeColumns], [IgnoreDuplicateKey], [PadIndex], [Disabled], [Order], [ShouldApplyExpression], [VariantName], [Description])
   -- INGEST ONLY -- raw values; NORMALIZE below owns every transform, so a second ingestion path gets
   -- the same treatment from the same code rather than a reimplementation of these rules.
   -- [UpdateFillFactor] is computed here, not in NORMALIZE: it combines the @UpdateFillFactor parameter
@@ -898,7 +899,7 @@
          [UpdateFillFactor] = CONVERT(BIT, CASE WHEN @UpdateFillFactor = 1 OR t.[UpdateFillFactor] = 1 OR i.[UpdateFillFactor] = 1 THEN 1 ELSE 0 END),
          i.[IndexColumns],
          i.[IncludeColumns],
-         i.[IgnoreDuplicateKey], i.[PadIndex], i.[Disabled],
+         i.[IgnoreDuplicateKey], i.[PadIndex], i.[Disabled], i.[Order],
          i.[ShouldApplyExpression], i.[VariantName], [Description] = COALESCE(i.[Description], i.[LegacyDescription])
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(Indexes) WITH (
@@ -913,6 +914,7 @@
       [IgnoreDuplicateKey] BIT '$.IgnoreDuplicateKey',
       [PadIndex] BIT '$.PadIndex',
       [Disabled] BIT '$.Disabled',
+      [Order] NVARCHAR(MAX) '$.Order',
       [FillFactor] TINYINT '$.FillFactor',
       [FilterExpression] NVARCHAR(MAX) '$.FilterExpression',
       [IndexColumns] NVARCHAR(MAX) '$.IndexColumns',
@@ -934,7 +936,7 @@
   -- statement -- which is what keeps this a faithful move rather than a re-ordering.
   UPDATE #Indexes
      SET [IndexName]        = SchemaSmith.fn_SafeBracketWrap([IndexName]),
-         [CompressionType]  = ISNULL(NULLIF(RTRIM([CompressionType]), ''), 'NONE'),
+         [CompressionType]  = CASE WHEN ISNULL([ColumnStore], 0) = 1 AND ISNULL(NULLIF(RTRIM([CompressionType]), ''), 'NONE') = 'NONE' THEN 'COLUMNSTORE' ELSE ISNULL(NULLIF(RTRIM([CompressionType]), ''), 'NONE') END,
          [XmlCompression]   = ISNULL([XmlCompression], 0),
          [PrimaryKey]       = ISNULL([PrimaryKey], 0),
          [Unique]           = COALESCE(NULLIF([Unique], 0), NULLIF([PrimaryKey], 0), [UniqueConstraint], 0),
@@ -956,7 +958,11 @@
                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [IgnoreDuplicateKey] = ISNULL([IgnoreDuplicateKey], 0),
          [PadIndex]         = ISNULL([PadIndex], 0),
-         [Disabled]         = ISNULL([Disabled], 0);
+         [Disabled]         = ISNULL([Disabled], 0),
+         -- The ordered-columnstore column list, in declared order (it is the sort order).
+         [Order]            = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
+                                 FROM STRING_SPLIT([Order], ',')
+                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '');
 
   -- Identify Indexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #Indexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))

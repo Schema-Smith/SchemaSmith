@@ -221,7 +221,7 @@
 
   IF OBJECT_ID('tempdb..#Indexes') IS NOT NULL DROP TABLE #Indexes
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), [CompressionType] = ISNULL(NULLIF(RTRIM(i.[CompressionType]), ''), 'NONE'), [XmlCompression] = ISNULL(i.[XmlCompression], 0), [PrimaryKey] = ISNULL(i.[PrimaryKey], 0),
+         t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), [CompressionType] = CASE WHEN ISNULL(i.[ColumnStore], 0) = 1 AND ISNULL(NULLIF(RTRIM(i.[CompressionType]), ''), 'NONE') = 'NONE' THEN 'COLUMNSTORE' ELSE ISNULL(NULLIF(RTRIM(i.[CompressionType]), ''), 'NONE') END, [XmlCompression] = ISNULL(i.[XmlCompression], 0), [PrimaryKey] = ISNULL(i.[PrimaryKey], 0),
          [Unique] = COALESCE(NULLIF(i.[Unique], 0), NULLIF(i.[PrimaryKey], 0), i.[UniqueConstraint], 0),
          [UniqueConstraint] = ISNULL(i.[UniqueConstraint], 0), [Clustered] = ISNULL(i.[Clustered], 0), [ColumnStore] = ISNULL(i.[ColumnStore], 0), [FillFactor] = ISNULL(NULLIF(i.[FillFactor], 0), 100),
          i.[FilterExpression], [FileGroup] = SchemaSmith.fn_SafeBracketWrap(i.[FileGroup]),
@@ -238,6 +238,10 @@
                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''
                                ORDER BY SchemaSmith.fn_SafeBracketWrap([value]) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0), [Disabled] = ISNULL(i.[Disabled], 0),
+         [Order] = STUFF((SELECT ',' + SchemaSmith.fn_SafeBracketWrap([value])
+                            FROM SchemaSmith.fn_SplitList(i.[Order], ',')
+                            WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''
+                            ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          i.[ShouldApplyExpression], i.[VariantName], i.[Description]
     INTO #Indexes
     FROM #TableDefinitions t WITH (NOLOCK)
@@ -254,6 +258,7 @@
       [IgnoreDuplicateKey] = CONVERT(BIT, CASE LOWER(idx.value('(IgnoreDuplicateKey/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [PadIndex] = CONVERT(BIT, CASE LOWER(idx.value('(PadIndex/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [Disabled] = CONVERT(BIT, CASE LOWER(idx.value('(Disabled/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
+      [Order] = idx.value('(Order/text())[1]', 'NVARCHAR(MAX)'),
       [FillFactor] = idx.value('(FillFactor/text())[1]', 'TINYINT'),
       [FilterExpression] = idx.value('(FilterExpression/text())[1]', 'NVARCHAR(MAX)'),
       [IndexColumns] = idx.value('(IndexColumns/text())[1]', 'NVARCHAR(MAX)'),

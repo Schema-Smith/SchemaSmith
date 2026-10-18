@@ -63,7 +63,7 @@ BEGIN TRY
 
   IF OBJECT_ID('tempdb..#Indexes') IS NOT NULL DROP TABLE #Indexes
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), [CompressionType] = ISNULL(i.[CompressionType], 'NONE'), [PrimaryKey] = ISNULL(i.[PrimaryKey], 0),
+         t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), [CompressionType] = CASE WHEN ISNULL(i.[ColumnStore], 0) = 1 AND ISNULL(NULLIF(RTRIM(i.[CompressionType]), ''), 'NONE') = 'NONE' THEN 'COLUMNSTORE' ELSE ISNULL(i.[CompressionType], 'NONE') END, [PrimaryKey] = ISNULL(i.[PrimaryKey], 0),
          [Unique] = COALESCE(NULLIF(i.[Unique], 0), NULLIF(i.[PrimaryKey], 0), i.[UniqueConstraint], 0),
          [UniqueConstraint] = ISNULL(i.[UniqueConstraint], 0), [Clustered] = ISNULL(i.[Clustered], 0), [ColumnStore] = ISNULL(i.[ColumnStore], 0), [FillFactor] = ISNULL(NULLIF(i.[FillFactor], 0), 100),
          i.[FilterExpression], [FileGroup] = SchemaSmith.fn_SafeBracketWrap(i.[FileGroup]),
@@ -80,6 +80,10 @@ BEGIN TRY
                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''
                                ORDER BY SchemaSmith.fn_SafeBracketWrap([value]) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          [IgnoreDuplicateKey] = ISNULL(i.[IgnoreDuplicateKey], 0), [PadIndex] = ISNULL(i.[PadIndex], 0), [Disabled] = ISNULL(i.[Disabled], 0),
+         [Order] = STUFF((SELECT ',' + SchemaSmith.fn_SafeBracketWrap([value])
+                            FROM SchemaSmith.fn_SplitList(i.[Order], ',')
+                            WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''
+                            ORDER BY [Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
          i.[ShouldApplyExpression], i.[VariantName], i.[Description]
     INTO #Indexes
     FROM #TableDefinitions t WITH (NOLOCK)
@@ -95,6 +99,7 @@ BEGIN TRY
       [IgnoreDuplicateKey] = CONVERT(BIT, CASE LOWER(idx.value('(IgnoreDuplicateKey/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [PadIndex] = CONVERT(BIT, CASE LOWER(idx.value('(PadIndex/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [Disabled] = CONVERT(BIT, CASE LOWER(idx.value('(Disabled/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
+      [Order] = idx.value('(Order/text())[1]', 'NVARCHAR(MAX)'),
       [FillFactor] = idx.value('(FillFactor/text())[1]', 'TINYINT'),
       [FilterExpression] = idx.value('(FilterExpression/text())[1]', 'NVARCHAR(MAX)'),
       [IndexColumns] = idx.value('(IndexColumns/text())[1]', 'NVARCHAR(MAX)'),
@@ -384,6 +389,7 @@ BEGIN TRY
                                            WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1
                                            ORDER BY COL_NAME(ic.[object_id], ic.column_id) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') + ')'
                             ELSE '' END +
+                       ISNULL(' ORDER (' + {{ColumnStoreOrderList}} + ')', '') +
                        CASE WHEN si.has_filter = 1 THEN ' WHERE ' + SchemaSmith.fn_StripParenWrapping(si.filter_definition) ELSE '' END +
                        CASE WHEN o.[WithOptions] <> '' THEN ' WITH (' + STUFF(o.[WithOptions], 1, 2, '') + ')' ELSE '' END
     INTO #ExistingIndexes
@@ -647,6 +653,7 @@ BEGIN TRY
                             CASE WHEN i.[ColumnStore] = 0 THEN ' (' + i.[IndexColumns] + ')' + CASE WHEN RTRIM(ISNULL(i.[IncludeColumns], '')) <> '' THEN ' INCLUDE (' + i.[IncludeColumns] + ')' ELSE '' END
                                  WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                  ELSE '' END +
+                                 CASE WHEN i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[Order], '')) <> '' THEN ' ORDER (' + i.[Order] + ')' ELSE '' END +
                             -- #242: the engine's own rendering of the filter when the mapping vouches for it (fn_ExpressionMapEffective).
                             CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', i.[IndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si2.filter_definition FROM sys.indexes si2 WHERE si2.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si2.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))) ELSE '' END +
                             CASE WHEN o.[WithOptions] <> '' THEN ' WITH (' + STUFF(o.[WithOptions], 1, 2, '') + ')' ELSE '' END
@@ -677,6 +684,7 @@ BEGIN TRY
                                                                   CASE WHEN i.[ColumnStore] = 0 THEN ' (' + i.[IndexColumns] + ')' + CASE WHEN RTRIM(ISNULL(i.[IncludeColumns], '')) <> '' THEN ' INCLUDE (' + i.[IncludeColumns] + ')' ELSE '' END
                                                                        WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                                                        ELSE '' END +
+                                                                       CASE WHEN i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[Order], '')) <> '' THEN ' ORDER (' + i.[Order] + ')' ELSE '' END +
                                                                   -- #242: keyed on the OLD name -- the mapping row was written under the name the index has now.
                                                                   CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', ei.[xIndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si3.filter_definition FROM sys.indexes si3 WHERE si3.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) AND si3.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName]))) ELSE '' END +
                                                                   CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) IN ('NONE', 'ROW', 'PAGE'))
@@ -1097,6 +1105,7 @@ BEGIN TRY
                                             CASE WHEN i.[ColumnStore] = 0 THEN ' (' + i.[IndexColumns] + ')' + CASE WHEN RTRIM(ISNULL(i.[IncludeColumns], '')) <> '' THEN ' INCLUDE (' + i.[IncludeColumns] + ')' ELSE '' END
                                                  WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                                  ELSE '' END +
+                                                 CASE WHEN i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[Order], '')) <> '' THEN ' ORDER (' + i.[Order] + ')' ELSE '' END +
                                             CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + i.[FilterExpression] ELSE '' END +
 					                        CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('NONE', 'ROW', 'PAGE'))
                                                    OR (i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
