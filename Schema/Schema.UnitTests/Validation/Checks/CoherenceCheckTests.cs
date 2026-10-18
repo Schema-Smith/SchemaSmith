@@ -153,6 +153,43 @@ public class CoherenceCheckTests
         Assert.That(new CoherenceCheck().Run(Context(TemplateWithTables("Main", order, Customer()))), Is.Empty);
     }
 
+    // ---- A foreign key resolves within its own template (SS-FK-010) ----
+    //
+    // Each template deploys to the databases its DatabaseIdentificationScript names, so a table declared only in
+    // another template is on this one's target only when both scripts name the same databases.
+
+    private static Finding[] RunOrderAndCustomerInTwoTemplates(string orderDatabases, string customerDatabases)
+    {
+        var order = new SqlServerTable
+        {
+            Name = "Order",
+            Schema = "dbo",
+            Columns = { new SqlServerColumn { Name = "CustomerId", DataType = "int" } },
+            ForeignKeys = { new SqlServerForeignKey { Name = "FK_Order_Customer", Columns = "CustomerId", RelatedTable = "Customer", RelatedTableSchema = "dbo", RelatedColumns = "Id" } }
+        };
+        var sales = TemplateWithTables("Sales", order);
+        sales.DatabaseIdentificationScript = orderDatabases;
+        var crm = TemplateWithTables("Crm", Customer());
+        crm.DatabaseIdentificationScript = customerDatabases;
+        return new CoherenceCheck().Run(Context(crm, sales)).ToArray();
+    }
+
+    [Test]
+    public void ForeignKey_ToATableInATemplateOnOtherDatabases_WarnsNamingThatTemplate()
+    {
+        var findings = RunOrderAndCustomerInTwoTemplates("SELECT 'Sales'", "SELECT 'Crm'");
+        Assert.That(findings.Select(f => (f.Code, f.Severity)), Is.EqualTo(new[] { ("SS-FK-010", Severity.Warning) }),
+            string.Join("; ", findings.Select(f => f.Code + " " + f.Message)));
+        Assert.That(findings[0].Message, Does.Contain("template 'Crm'").And.Contain("'Sales'"));
+        Assert.That(findings[0].Location, Is.EqualTo("Template 'Sales' / Table 'Order' / FK 'FK_Order_Customer'"));
+    }
+
+    [Test]
+    public void ForeignKey_ToATableInATemplateOnTheSameDatabases_Resolves()
+    {
+        Assert.That(RunOrderAndCustomerInTwoTemplates("SELECT 'Shop'", " SELECT 'Shop' "), Is.Empty);
+    }
+
     // ---- Temporal keys (SS-IDX-002 / SS-IDX-003) ----
 
     private static Schema.Domain.MariaDb.MariaDbTable MariaRates(string keyColumns, bool withoutOverlaps, bool unique = true, bool withPeriod = true)

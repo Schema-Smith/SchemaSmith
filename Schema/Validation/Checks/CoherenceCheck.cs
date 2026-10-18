@@ -33,6 +33,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string SetNullColumnsCode = "SS-FK-007";
     private const string NonStandardKeyReferenceCode = "SS-FK-008";
     private const string SetDefaultActionCode = "SS-FK-009";
+    private const string RelatedTableInOtherTemplateCode = "SS-FK-010";
     private const string IndexColumnCode = "SS-IDX-001";
     private const string TemporalKeyShapeCode = "SS-IDX-002";
     private const string TemporalKeyPeriodCode = "SS-IDX-003";
@@ -95,6 +96,12 @@ public sealed class CoherenceCheck : ISchemaCheck
             .GroupBy(t => TableKey(t))
             .ToDictionary(g => g.Key, g => g.ToList());
 
+        // A foreign key resolves within its own template: each template deploys to the databases its
+        // DatabaseIdentificationScript names, so a table in another template is on this one's target only when
+        // both identify the same databases.
+        var tablesByTemplate = ctx.Templates.ToDictionary(t => t,
+            t => t.Tables.GroupBy(TableKey).ToDictionary(g => g.Key, g => g.ToList()));
+
         var findings = new List<Finding>();
         findings.AddRange(CheckMinimumVersion(ctx.Product));
         // A policy is resolved as a WHOLE object from the nearest level that declares one, so an unusable
@@ -131,7 +138,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             var columnsAreOwnedElsewhere = template.IndexOnlyTableQuenches;
 
             foreach (var fk in table.ForeignKeys)
-                findings.AddRange(CheckForeignKey(table, fk, location, tablesByKey, columnsAreOwnedElsewhere));
+                findings.AddRange(CheckForeignKey(table, fk, location, template, tablesByTemplate, columnsAreOwnedElsewhere));
             findings.AddRange(CheckMySqlFamilyForeignKeys(table, location, tablesByKey, ctx.Product.Platform));
             findings.AddRange(CheckMySqlFamilyColumnTypes(table, location, ctx.Product.Platform));
 
@@ -208,7 +215,8 @@ public sealed class CoherenceCheck : ISchemaCheck
         Table table,
         ForeignKey fk,
         string tableLocation,
-        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey,
+        Template owningTemplate,
+        IReadOnlyDictionary<Template, Dictionary<(string Schema, string Name), List<Table>>> tablesByTemplate,
         bool columnsAreOwnedElsewhere)
     {
         var location = $"{tableLocation} / FK '{fk.Name}'";
@@ -244,9 +252,23 @@ public sealed class CoherenceCheck : ISchemaCheck
         }
 
         var (schema, name) = ResolveRelatedTarget(table, fk);
+        var relatedTables = tablesByTemplate
+            .Where(x => x.Key == owningTemplate || SameDatabases(x.Key, owningTemplate))
+            .SelectMany(x => x.Value.TryGetValue((schema, name), out var found) ? found : [])
+            .ToList();
 
-        if (!tablesByKey.TryGetValue((schema, name), out var relatedTables))
+        if (relatedTables.Count == 0)
         {
+            var elsewhere = tablesByTemplate.Where(x => x.Value.ContainsKey((schema, name))).Select(x => $"'{x.Key.Name}'").ToList();
+            if (elsewhere.Count > 0)
+            {
+                yield return new Finding(Severity.Warning, RelatedTableInOtherTemplateCode, Category, location,
+                    $"RelatedTable '{fk.RelatedTable}' is declared in template {string.Join(", ", elsewhere)}, not in " +
+                    $"'{owningTemplate.Name}', and the two identify their databases differently. The deploy succeeds only " +
+                    $"if that table already exists on the database '{owningTemplate.Name}' deploys to.");
+                yield break;
+            }
+
             // A warning, not an error: the deploy creates a foreign key to any table that exists on the target,
             // declared or not, so an unresolved reference is only a likely mistake. Never silenced -- not even for
             // a partial deployment such as a SchemaShears patch, where it is expected: DropTablesRemovedFromProduct
@@ -275,6 +297,9 @@ public sealed class CoherenceCheck : ISchemaCheck
         return tables.SelectMany(t => t.ForeignKeys.Select(fk => (Table: t, ForeignKey: fk)))
             .Where(x => tablesByKey.TryGetValue(ResolveRelatedTarget(x.Table, x.ForeignKey), out var related) && !ReferencesWholeKey(x.ForeignKey, related));
     }
+
+    private static bool SameDatabases(Template a, Template b) =>
+        string.Equals((a.DatabaseIdentificationScript ?? "").Trim(), (b.DatabaseIdentificationScript ?? "").Trim(), StringComparison.Ordinal);
 
     private static bool ReferencesWholeKey(ForeignKey fk, List<Table> relatedTables)
     {
