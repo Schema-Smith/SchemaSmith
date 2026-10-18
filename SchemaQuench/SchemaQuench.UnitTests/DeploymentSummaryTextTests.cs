@@ -332,7 +332,10 @@ public class DeploymentSummaryTextTests
         {
             new("procedure", "dbo.usp_one", "ran"),
             new("dataDelivery", "dbo.Lookup", "delivered"),
-            new("column", "dbo.T.c", "created")
+            new("table", "dbo.T", "created"),
+            new("procedure", "dbo.usp_same", "unchanged"),
+            new("index", "dbo.T.ix", "wouldCreate"),
+            new("check constraint", "dbo.T.ck", "downgraded")
         };
         var failed = BuildFullyPopulatedSummary() with { MigrationScripts = scripts };
         failed = failed with { ObjectChanges = failed.ObjectChanges with { Details = details } };
@@ -343,11 +346,12 @@ public class DeploymentSummaryTextTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(section, Does.StartWith("## Applied Before The Failure (3)"));
+            Assert.That(section, Does.StartWith("## Applied Before The Failure (4)"));
             Assert.That(section, Does.Contain("- migration script Before/ran.sql"));
             Assert.That(section, Does.Contain("- procedure dbo.usp_one"));
             Assert.That(section, Does.Contain("- data dbo.Lookup"));
-            Assert.That(section, Does.Not.Contain("skip.sql").And.Not.Contain("dbo.T.c"));
+            Assert.That(section, Does.Contain("- table dbo.T created"), "a schema change the run made is not rolled back either (#545)");
+            Assert.That(section, Does.Not.Contain("skip.sql").And.Not.Contain("usp_same").And.Not.Contain("dbo.T.ix").And.Not.Contain("dbo.T.ck"));
             Assert.That(DeploymentSummaryText.Render(failed with { Run = failed.Run with { Outcome = RunOutcome.Success } }),
                 Does.Not.Contain("Applied Before The Failure"));
         });

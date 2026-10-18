@@ -562,7 +562,9 @@ public class DatabaseQuench
                 var effectiveTableCmd = tableCommand ?? command;
                 var effectiveObjectsCmd = objectsCommand ?? command;
                 var effectiveSilentCmd = silentCommand ?? command;
-                if (ChangeAudit != null) ChangeAuditReader.DiscardStale(_product.Platform, effectiveTableCmd);
+                // The table work is what writes the audit; a run that updates no tables (the datafix profile) need not have
+                // rights on SchemaSmith's own tables, so it neither reads them nor records the expression map.
+                if (ChangeAudit != null && _updateTables) ChangeAuditReader.DiscardStale(_product.Platform, effectiveTableCmd);
 
                 // Detect the target version ONCE, up front (the connection is open) and BEFORE folder gates,
                 // since a folder ShouldApplyExpression may reference the version tokens (A1). One unified
@@ -802,7 +804,7 @@ public class DatabaseQuench
                 // #242: record what each expression-bearing object was applied with, AFTER the create passes
                 // above, so an object created on this run is recorded on this run rather than churning once more.
                 // Under WhatIf it records nothing and puts back what the #508 scratch-copy check verified for the preview.
-                RecordExpressionMap(effectiveTableCmd);
+                if (_updateTables) RecordExpressionMap(effectiveTableCmd);
 
                 if (!IsWhatIf)
                 {
@@ -918,6 +920,8 @@ public class DatabaseQuench
                         RunTiming?.Record(LogPrefix, _databaseName, "IndexedViewQuench", indexedViewQuenchSw.ElapsedMilliseconds, 0);
                     }
 
+                    ReapplyPreservedModulePermissions(effectiveTableCmd);
+
                     SafeProgressLog("  Quenching after database scripts");
                     QuenchTemplateScriptsWithCheckpoint(command, "After", _iteration.AfterScripts, DatabaseScriptSlot.After);
 
@@ -1008,7 +1012,7 @@ public class DatabaseQuench
             {
                 _statusMonitor?.Dispose();
                 _statusMonitor = null;
-                DrainChangeAudit(tableCommand ?? command);
+                if (_updateTables) DrainChangeAudit(tableCommand ?? command);
                 // MySQL parses the table JSON into session-scoped temp tables that every table step
                 // consumes, so the drop belongs AFTER the last consumer -- foreign keys -- not between
                 // two of them. It used to run right after the index quench, which meant ForeignKeys
@@ -2437,7 +2441,7 @@ SET NOCOUNT ON
             {
                 if (_checkpointing.HasCompletedScript(DbScope, slot.ToString(), script.LogPath))
                 {
-                    if (showErrors) SafeProgressLog($"    Skipping (previously quenched per checkpoint) {script.LogPath}");
+                    SafeProgressLog($"    Skipping (previously quenched per checkpoint) {script.LogPath}");
                     script.HasBeenQuenched = true;
                     continue;
                 }
@@ -2448,7 +2452,7 @@ SET NOCOUNT ON
                     script.HasBeenQuenched = true;
                     script.Error = null;
                     script.Outcome = ScriptOutcome.Unchanged;
-                    if (showErrors) SafeProgressLog($"    Unchanged, not re-run: {script.LogPath}");
+                    SafeProgressLog($"    Unchanged, not re-run: {script.LogPath}");
                     _checkpointing.MarkScriptCompleted(DbScope, slot.ToString(), script.LogPath);
                     ChangeAudit?.Record(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged");
                     continue;
@@ -2595,6 +2599,7 @@ SET NOCOUNT ON
     // owns it. One the package does not declare stops the deploy by name, before anything is dropped.
     // SQL Server only: SCHEMABINDING has no counterpart on PostgreSQL or MySQL.
     private readonly List<(string ObjectName, string Script)> _indexedViewPermissions = new();
+    private readonly List<PreservedModulePermissions> _droppedDependentPermissions = new();
 
     private static bool IsBlockedBySchemaBinding(Exception error) => error switch
     {
@@ -2638,6 +2643,7 @@ SET NOCOUNT ON
             {
                 SafeProgressLog($"    Dropping {drop.Dependent.Display}: it is bound to {identity.Schema}.{identity.Name}, which {script.LogPath} changes; the run puts it back");
                 if (drop.Dependent.Kind == SchemaBoundDependentKind.IndexedView) StashIndexedViewPermissions(destCmd, drop.Dependent);
+                if (drop.Dependent.Kind == SchemaBoundDependentKind.Module) StashDependentModulePermissions(destCmd, drop.Dependent);
                 foreach (var statement in drop.Statements)
                 {
                     destCmd.CommandText = statement;
@@ -2670,26 +2676,95 @@ SET NOCOUNT ON
             dependent.Outcome = ScriptOutcome.Applied;
             if (ProbeScriptStamp(destCmd, dependent, DatabaseScriptSlot.AfterTablesObject) is { } stamp) RecordScriptStamp(destCmd, stamp);
         }
+        ReapplyCapturedPermissions(destCmd, _droppedDependentPermissions);
+        _droppedDependentPermissions.Clear();
     }
 
-    // What ModifiedTableQuench may drop and expect this run to put back (PostgreSQL): the views and routines the package
-    // scripts and the materialized views it declares. A dependent of a type-changing column that is not here stops the
-    // deploy by name before anything is dropped.
+    // What ModifiedTableQuench may drop and expect this run to put back: the views and routines the package scripts, and
+    // on PostgreSQL the materialized views it declares. A dependent of a changing column that is not here stops the
+    // deploy by name before anything is dropped (PostgreSQL #533, SQL Server #542). The grants a drop takes off the ones
+    // that are here are captured beside them, for ReapplyPreservedModulePermissions.
+    private bool _modulePermissionsStaged;
+
     private void StageDeclaredModules(IDbCommand tableCommand)
     {
-        if (_product.Platform != Platform.PostgreSQL) return;
+        var basePlatform = _product.Platform.GetBasePlatform();
+        if (basePlatform is not (Platform.SqlServer or Platform.PostgreSQL)) return;
         static string Literal(string s) => "'" + (s ?? "").Replace("'", "''") + "'";
         var declared = new HashSet<(string Schema, string Name)>();
         foreach (var script in _iteration.ObjectScripts.Concat(_iteration.AfterTablesObjectScripts))
             if (ModuleScriptIdentity.Parse(script.Batches, _product.Platform) is { Name: not null } id)
-                declared.Add((id.Schema ?? "public", id.Name));
-        foreach (var view in JsonObjects(IterationMaterializedViewSchema))
-            declared.Add((view["Schema"]?.ToString() ?? "public", view["Name"]?.ToString() ?? ""));
-        var values = string.Join(", ", declared.Select(d => $"({Literal(d.Schema)}, {Literal(d.Name)})"));
+                declared.Add(basePlatform == Platform.SqlServer
+                    ? (DeclaredObjects.Bare(id.Schema ?? "dbo"), DeclaredObjects.Bare(id.Name))
+                    : (id.Schema ?? "public", id.Name));
+        if (basePlatform == Platform.PostgreSQL)
+            foreach (var view in JsonObjects(IterationMaterializedViewSchema))
+                declared.Add((view["Schema"]?.ToString() ?? "public", view["Name"]?.ToString() ?? ""));
         ClearParameters(tableCommand);
-        tableCommand.CommandText = "DROP TABLE IF EXISTS temp_declared_modules; CREATE TEMPORARY TABLE temp_declared_modules (\"Schema\" TEXT, \"Name\" TEXT);"
-                                   + (values.Length > 0 ? $" INSERT INTO temp_declared_modules VALUES {values};" : "");
+        var sql = new System.Text.StringBuilder();
+        if (basePlatform == Platform.SqlServer)
+        {
+            sql.Append("IF OBJECT_ID('tempdb..#DeclaredModules') IS NOT NULL DROP TABLE #DeclaredModules; ")
+               .Append("CREATE TABLE #DeclaredModules ([Schema] NVARCHAR(128) COLLATE DATABASE_DEFAULT, [Name] NVARCHAR(128) COLLATE DATABASE_DEFAULT); ")
+               .Append("IF OBJECT_ID('tempdb..#PreservedModulePermissions') IS NULL ")
+               .Append("CREATE TABLE #PreservedModulePermissions ([ObjectType] NVARCHAR(64) COLLATE DATABASE_DEFAULT, [Schema] NVARCHAR(128) COLLATE DATABASE_DEFAULT, [Name] NVARCHAR(128) COLLATE DATABASE_DEFAULT, [Script] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT);");
+            // A table value constructor takes at most 1000 rows.
+            foreach (var chunk in declared.Chunk(900))
+                sql.Append(" INSERT INTO #DeclaredModules VALUES ").Append(string.Join(", ", chunk.Select(d => $"(N{Literal(d.Schema)}, N{Literal(d.Name)})"))).Append(';');
+        }
+        else
+        {
+            sql.Append("DROP TABLE IF EXISTS temp_declared_modules; CREATE TEMPORARY TABLE temp_declared_modules (\"Schema\" TEXT, \"Name\" TEXT); ")
+               .Append("CREATE TEMPORARY TABLE IF NOT EXISTS temp_preserved_module_permissions (\"ObjectType\" TEXT, \"Schema\" TEXT, \"Name\" TEXT, \"Script\" TEXT);");
+            if (declared.Count > 0)
+                sql.Append(" INSERT INTO temp_declared_modules VALUES ").Append(string.Join(", ", declared.Select(d => $"({Literal(d.Schema)}, {Literal(d.Name)})"))).Append(';');
+        }
+        tableCommand.CommandText = sql.ToString();
         tableCommand.ExecuteNonQuery();
+        _modulePermissionsStaged = true;
+    }
+
+    private sealed record PreservedModulePermissions(string ObjectType, string Schema, string Name, string Script);
+
+    // The grants ModifiedTableQuench captured off the modules it dropped for a column change, put back once the run has
+    // re-created them: the after-tables object pass, and on PostgreSQL the materialized-view pass.
+    private void ReapplyPreservedModulePermissions(IDbCommand tableCommand)
+    {
+        if (!_modulePermissionsStaged) return;
+        var basePlatform = _product.Platform.GetBasePlatform();
+        var preserved = new List<PreservedModulePermissions>();
+        ClearParameters(tableCommand);
+        tableCommand.CommandText = basePlatform == Platform.SqlServer
+            ? "SELECT [ObjectType], [Schema], [Name], [Script] FROM #PreservedModulePermissions"
+            : "SELECT \"ObjectType\", \"Schema\", \"Name\", \"Script\" FROM temp_preserved_module_permissions";
+        using (var reader = tableCommand.ExecuteReader())
+            while (reader.Read())
+                preserved.Add(new PreservedModulePermissions(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)));
+        if (preserved.Count == 0) return;
+        ReapplyCapturedPermissions(tableCommand, preserved);
+        tableCommand.CommandText = basePlatform == Platform.SqlServer ? "DELETE FROM #PreservedModulePermissions" : "DELETE FROM temp_preserved_module_permissions";
+        tableCommand.ExecuteNonQuery();
+    }
+
+    private void ReapplyCapturedPermissions(IDbCommand command, IEnumerable<PreservedModulePermissions> preserved)
+    {
+        var sqlServer = _product.Platform.GetBasePlatform() == Platform.SqlServer;
+        foreach (var item in preserved)
+        {
+            var objectName = sqlServer ? $"[{item.Schema.Replace("]", "]]")}].[{item.Name.Replace("]", "]]")}]" : QuoteIdent(item.Schema) + "." + QuoteIdent(item.Name);
+            command.CommandText = sqlServer
+                ? $"SELECT CASE WHEN OBJECT_ID(N'{EscapeSqlLiteral(objectName)}') IS NULL THEN 0 ELSE 1 END"
+                : $"SELECT CASE WHEN to_regclass('{EscapeSqlLiteral(objectName)}') IS NOT NULL OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = '{EscapeSqlLiteral(item.Schema)}' AND p.proname = '{EscapeSqlLiteral(item.Name)}') THEN 1 ELSE 0 END";
+            if (Convert.ToInt32(command.ExecuteScalar()) == 0)
+            {
+                _progressLog.Warn($"{objectName} was dropped for a column change and this run did not re-create it, so its grants were not put back.");
+                continue;
+            }
+            command.CommandText = sqlServer
+                ? $"EXEC SchemaSmith.ReapplyPermissions @Script = N'{EscapeSqlLiteral(item.Script)}', @ObjectType = N'{item.ObjectType}', @ObjectName = N'{EscapeSqlLiteral(objectName)}', @WhatIf = 0"
+                : $"CALL \"SchemaSmith\".\"ReapplyPermissions\"('{EscapeSqlLiteral(item.Script)}', '{item.ObjectType}', '{EscapeSqlLiteral(objectName)}', FALSE)";
+            ExecuteNonQueryHandlingMessages(command);
+        }
     }
 
     // A column type change drops the views and SQL-standard routines that depend on the column (PostgreSQL), and the
@@ -2745,6 +2820,13 @@ SET NOCOUNT ON
         if (string.IsNullOrWhiteSpace(json)) return [];
         var token = JToken.Parse(json);
         return token is JArray array ? array.OfType<JObject>() : token is JObject single ? [single] : [];
+    }
+
+    private void StashDependentModulePermissions(IDbCommand destCmd, SchemaBoundDependent module)
+    {
+        destCmd.CommandText = $"DECLARE @s NVARCHAR(MAX); EXEC SchemaSmith.CapturePermissions @Schema = N'{EscapeSqlLiteral(module.Schema)}', @Name = N'{EscapeSqlLiteral(module.Name)}', @Script = @s OUTPUT; SELECT @s;";
+        if (destCmd.ExecuteScalar() is string script && script.Length > 0)
+            _droppedDependentPermissions.Add(new PreservedModulePermissions(module.TypeDescription == "view" ? "view" : "function", module.Schema, module.Name, script));
     }
 
     private void StashIndexedViewPermissions(IDbCommand destCmd, SchemaBoundDependent view)
@@ -3026,7 +3108,7 @@ SET NOCOUNT ON
                     MigrationScripts?.Record(_server, _databaseName, _schemaName ?? "", _template.Name, checkpointSlot.ToString(), GetRelativeScriptPath(script.LogPath),
                         script.Outcome == ScriptOutcome.Skipped ? "Skipped" : "Ran");
                     if (_trackRunOnceMigrations && !ShouldAlwaysRun(script.Name))
-                        MarkScriptCompleted(destCmd, script.LogPath, slot);
+                        MarkScriptCompleted(destCmd, script, slot);
                 }
             }
             else
@@ -3055,9 +3137,22 @@ SET NOCOUNT ON
 
     internal static bool ShouldAlwaysRun(string scriptName) => Path.GetFileNameWithoutExtension(scriptName).EndsWith("[ALWAYS]");
 
+    // Only an absent tracking table reads as "nothing has run yet". Any other failure -- the deploy login cannot read the
+    // table -- would make every run-once script run again, so the run stops before running one.
     private List<string> GetCompletedEntriesBySlot(IDbCommand destCmd, string slot)
     {
         var entries = new List<string>();
+        // SQL Server reports a denied SELECT as a message on this connection rather than an exception, and hides a table
+        // the login has no rights on, so it is asked directly.
+        if (_product.Platform.GetBasePlatform() == Platform.SqlServer)
+        {
+            destCmd.CommandText = "SELECT ISNULL(HAS_PERMS_BY_NAME(N'SchemaSmith.CompletedMigrationScripts', N'OBJECT', N'SELECT'), 0) "
+                                  + "& ISNULL(HAS_PERMS_BY_NAME(N'SchemaSmith.CompletedMigrationScripts', N'OBJECT', N'INSERT'), 0)";
+            if (Convert.ToInt32(destCmd.ExecuteScalar()) == 0)
+                throw new RunFailedException($"Cannot read or record which {slot} scripts have already run: the deploy login has no SELECT and INSERT on "
+                                             + $"{TrackingTableName()}. Nothing in the slot was run, because a run-once script would run again. "
+                                             + $"Grant the deploy login SELECT, INSERT and DELETE on {TrackingTableName()}.");
+        }
         try
         {
             destCmd.CommandText = GetSelectCompletedScriptsSql(
@@ -3066,29 +3161,62 @@ SET NOCOUNT ON
             while (reader.Read())
                 entries.Add(reader.GetString(0));
         }
-        catch
+        catch (DbException ex) when (IsMissingTable(ex))
         {
-            // Table may not exist yet (MySQL) or on first run
             return entries;
+        }
+        catch (DbException ex)
+        {
+            throw new RunFailedException($"Cannot read which {slot} scripts have already run ({ex.Message}). Nothing in the slot was run, because a run-once script "
+                                         + $"would run again. Grant the deploy login SELECT, INSERT and DELETE on {TrackingTableName()}.");
         }
 
         return entries;
     }
 
-    private void MarkScriptCompleted(IDbCommand destCmd, string scriptPath, string slot)
+    private void MarkScriptCompleted(IDbCommand destCmd, SqlScript script, string slot)
     {
         try
         {
             destCmd.CommandText = GetInsertCompletedScriptSql(
-                GetRelativeScriptPath(scriptPath), _product.Name, slot,
+                GetRelativeScriptPath(script.LogPath), _product.Name, slot,
                 _template.Name, DbScope.SchemaName ?? "");
             destCmd.ExecuteNonQuery();
         }
-        catch
+        catch (DbException ex) when (IsMissingTable(ex) || IsDuplicateKey(ex))
         {
-            // Ignore errors if table doesn't exist or duplicate entry
+            // Never kindled, or already recorded.
+        }
+        catch (DbException ex)
+        {
+            script.HasBeenQuenched = false;
+            script.Error = new Exception($"The script applied, but could not be recorded as run, so the next deploy would run it again: {ex.Message}. "
+                                         + $"Grant the deploy login SELECT, INSERT and DELETE on {TrackingTableName()}.", ex);
         }
     }
+
+    private string TrackingTableName() => _product.Platform.GetBasePlatform() switch
+    {
+        Platform.SqlServer => "SchemaSmith.CompletedMigrationScripts",
+        Platform.PostgreSQL => "\"SchemaSmith\".\"CompletedMigrationScripts\" (and USAGE on the schema)",
+        _ => "SchemaSmith_CompletedMigrationScripts"
+    };
+
+    private static bool IsMissingTable(DbException ex) => ex switch
+    {
+        SqlException { Number: 208 } => true,
+        Npgsql.PostgresException { SqlState: "42P01" or "3F000" } => true,
+        MySqlConnector.MySqlException { Number: 1146 } => true,
+        _ => false
+    };
+
+    private static bool IsDuplicateKey(DbException ex) => ex switch
+    {
+        SqlException { Number: 2627 or 2601 } => true,
+        Npgsql.PostgresException { SqlState: "23505" } => true,
+        MySqlConnector.MySqlException { Number: 1062 } => true,
+        _ => false
+    };
 
     internal string GetRelativeScriptPath(string filePath)
     {

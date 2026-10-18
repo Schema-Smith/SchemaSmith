@@ -1363,6 +1363,18 @@ BEGIN
       END IF;
     END IF;
 
+    -- A DROP takes the object's privileges, owner and comments with it, and the script or declaration that re-creates it
+    -- does not carry them. They are captured here and put back by SchemaQuench once the run has re-created the object.
+    IF NOT p_WhatIf AND to_regclass('pg_temp.temp_preserved_module_permissions') IS NOT NULL THEN
+      INSERT INTO temp_preserved_module_permissions ("ObjectType", "Schema", "Name", "Script")
+        SELECT cap."ObjectType", cap."Schema", cap."Name", cap."Script"
+          FROM (SELECT CASE dep."Kind" WHEN 'materialized view' THEN 'matview' ELSE dep."Kind" END AS "ObjectType",
+                       dep."Schema", dep."Name",
+                       "SchemaSmith"."CapturePermissions"(dep."Schema", dep."Name", UPPER(dep."Kind")) AS "Script"
+                  FROM (SELECT DISTINCT "Kind", "Schema", "Name" FROM temp_type_change_dependents WHERE "Kind" <> 'policy') dep) cap
+         WHERE cap."Script" IS NOT NULL;
+    END IF;
+
     -- Declared policies over a type-changing column: dropped here, created again by MissingIndexesAndConstraintsQuench.
     SELECT STRING_AGG('RAISE NOTICE ''  Dropping Policy ' || REPLACE(dep."Name", '''', '''''') || ' on ' || REPLACE(dep."Schema" || '.' || dep."OnTable", '''', '''''') || ''';' || CHR(10) ||
                       'DROP POLICY IF EXISTS ' || QUOTE_IDENT(dep."Name") || ' ON ' || QUOTE_IDENT(dep."Schema") || '.' || QUOTE_IDENT(dep."OnTable") || ';' || CHR(10) ||
@@ -1864,33 +1876,36 @@ BEGIN
     --     ALTER INDEX ... SET TABLESPACE rebuilds the index, so this errors naming both rather than
     --     silently moving data. Clearing a declared value back to unset is a no-op, which is the right
     --     side to err on: SchemaSmith never moves objects between tablespaces either way.
+    --   * An object on the database default records tablespace 0 whatever it was created with, so the default's
+    --     own name (pg_default, or the database's TABLESPACE) is where it lives, not a move (#545).
     DECLARE
       v_move RECORD;
+      v_default_tablespace TEXT := (SELECT ts.spcname FROM pg_database d JOIN pg_tablespace ts ON ts.oid = d.dattablespace
+                                     WHERE d.datname = current_database());
     BEGIN
       FOR v_move IN
         SELECT t."Schema" AS sch, t."Name" AS obj, 'table' AS kind,
-               t."Tablespace" AS declared, COALESCE(ts.spcname, '') AS live
+               t."Tablespace" AS declared, COALESCE(ts.spcname, v_default_tablespace) AS live
           FROM temp_tables t
           JOIN pg_class c ON c.relname = t."Name"
                          AND c.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = t."Schema")
                          AND c.relkind = 'r'
           LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace
          WHERE COALESCE(t."Tablespace", '') <> ''
-           AND t."Tablespace" IS DISTINCT FROM COALESCE(ts.spcname, '')
+           AND t."Tablespace" IS DISTINCT FROM COALESCE(ts.spcname, v_default_tablespace)
         UNION ALL
         SELECT ti."TableSchema", ti."Name", 'index',
-               ti."Tablespace", COALESCE(ts.spcname, '')
+               ti."Tablespace", COALESCE(ts.spcname, v_default_tablespace)
           FROM temp_indexes ti
           JOIN pg_class c ON c.relname = ti."Name"
                          AND c.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                          AND c.relkind = 'i'
           LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace
          WHERE COALESCE(ti."Tablespace", '') <> ''
-           AND ti."Tablespace" IS DISTINCT FROM COALESCE(ts.spcname, '')
+           AND ti."Tablespace" IS DISTINCT FROM COALESCE(ts.spcname, v_default_tablespace)
       LOOP
         RAISE EXCEPTION '% %.% declares tablespace %, but is currently deployed on %. SchemaSmith does not move an existing object to a different tablespace (that is a rewrite) -- migrate it manually, or correct the declared tablespace to match.',
-          v_move.kind, v_move.sch, v_move.obj, v_move.declared,
-          CASE WHEN v_move.live = '' THEN 'the database default' ELSE v_move.live END;
+          v_move.kind, v_move.sch, v_move.obj, v_move.declared, v_move.live;
       END LOOP;
     END;
 

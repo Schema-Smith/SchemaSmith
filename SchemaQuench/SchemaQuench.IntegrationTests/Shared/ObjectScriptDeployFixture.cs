@@ -101,7 +101,8 @@ public abstract class ObjectScriptDeployFixture
     protected void WriteFile(string folder, string fileName, string text) => File.WriteAllText(Path.Join(TemplateDir, folder, fileName), text);
 
     /// <param name="expectSuccess">False for a deploy that is meant to stop: the result is returned instead of asserted on.</param>
-    protected DeployResult Deploy(bool skipUnchanged = true, bool whatIf = false, bool runTwice = false, bool expectSuccess = true)
+    protected DeployResult Deploy(bool skipUnchanged = true, bool whatIf = false, bool runTwice = false, bool expectSuccess = true, bool dropSchemaBoundDependents = false,
+        bool updateTables = true, (string User, string Password)? login = null)
     {
         var checkpointDir = Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
         lock (FactoryContainer.SharedLockObject)
@@ -113,8 +114,8 @@ public abstract class ObjectScriptDeployFixture
                 var settings = new Dictionary<string, string>
                 {
                     ["SchemaPackagePath"] = PackageDir,
-                    ["Target:User"] = config[$"{ConfigPrefix}:User"] ?? config["Target:User"] ?? "TestUser",
-                    ["Target:Password"] = config[$"{ConfigPrefix}:Password"] ?? config["Target:Password"],
+                    ["Target:User"] = login?.User ?? config[$"{ConfigPrefix}:User"] ?? config["Target:User"] ?? "TestUser",
+                    ["Target:Password"] = login?.Password ?? config[$"{ConfigPrefix}:Password"] ?? config["Target:Password"],
                     ["Target:Port"] = config[$"{ConfigPrefix}:Port"] ?? config["Target:Port"],
                     ["Target:Server"] = config[$"{ConfigPrefix}:Server"] ?? config["Target:Server"] ?? "127.0.0.1",
                     ["Target:SkipUnchangedObjects"] = skipUnchanged ? "true" : "false"
@@ -141,9 +142,9 @@ public abstract class ObjectScriptDeployFixture
                 var yes = Platform == Platform.PostgreSQL ? "true" : "1";
                 var audit = new ChangeAuditCapture();
                 var quench = new DatabaseQuench("127.0.0.1", product, template, MainDb,
-                    suppressKindling: false, whatIfOnly: whatIf ? yes : no, runScriptsTwice: runTwice,
-                    dropRemovedTables: no, dropRemovedColumns: yes, dropRemovedForeignKeys: yes, dropRemovedCheckConstraints: yes, dropRemovedExcludeConstraints: yes, dropRemovedStatistics: yes, dropRemovedIndexes: yes, dropUnknownIndexes: false, updateTables: true,
-                    deliverData: false, checkpointing: new FileCheckpointManager(checkpointDir)) { ChangeAudit = audit };
+                    suppressKindling: login != null, whatIfOnly: whatIf ? yes : no, runScriptsTwice: runTwice,
+                    dropRemovedTables: no, dropRemovedColumns: yes, dropRemovedForeignKeys: yes, dropRemovedCheckConstraints: yes, dropRemovedExcludeConstraints: yes, dropRemovedStatistics: yes, dropRemovedIndexes: yes, dropUnknownIndexes: false, updateTables: updateTables,
+                    deliverData: false, checkpointing: new FileCheckpointManager(checkpointDir)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents };
                 quench.Execute();
                 var scripts = quench.IterationObjectScripts.Concat(quench.IterationAfterTablesObjectScripts).ToList();
                 var errors = scripts.Where(s => s.Error != null).Select(s => $"{Path.GetFileName(s.LogPath)}: {s.Error.Message}");

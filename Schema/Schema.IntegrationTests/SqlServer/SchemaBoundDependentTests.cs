@@ -72,11 +72,13 @@ public class SchemaBoundDependentTests
                IF OBJECT_ID('dbo.SbDropView', 'V') IS NOT NULL DROP VIEW dbo.SbDropView;
                IF OBJECT_ID('dbo.SbKeepView', 'V') IS NOT NULL DROP VIEW dbo.SbKeepView;
                IF OBJECT_ID('dbo.SbEncView', 'V') IS NOT NULL DROP VIEW dbo.SbEncView;
+               IF OBJECT_ID('dbo.SbUndeclView', 'V') IS NOT NULL DROP VIEW dbo.SbUndeclView;
                IF OBJECT_ID('dbo.SbTable', 'U') IS NOT NULL DROP TABLE dbo.SbTable;
                IF OBJECT_ID('dbo.SbEnum', 'U') IS NOT NULL DROP TABLE dbo.SbEnum;
                IF OBJECT_ID('dbo.SbDrop', 'U') IS NOT NULL DROP TABLE dbo.SbDrop;
                IF OBJECT_ID('dbo.SbKeep', 'U') IS NOT NULL DROP TABLE dbo.SbKeep;
                IF OBJECT_ID('dbo.SbEnc', 'U') IS NOT NULL DROP TABLE dbo.SbEnc;
+               IF OBJECT_ID('dbo.SbUndecl', 'U') IS NOT NULL DROP TABLE dbo.SbUndecl;
                IF OBJECT_ID('dbo.SbNest', 'U') IS NOT NULL DROP TABLE dbo.SbNest;
                DELETE FROM SchemaSmith.ProductOwnership WHERE ProductName = 'SchemaBoundTest';");
     }
@@ -231,6 +233,33 @@ public class SchemaBoundDependentTests
         });
     }
 
+
+    // #542: the option dropped a module whatever its origin, so one the package does not declare was gone at exit 0. When
+    // the caller says what it declares, the rest are refused by name before anything is dropped; names match on case.
+    [Test]
+    public void WithTheOptionOn_AModuleTheCallerDoesNotDeclare_IsRefusedByName_AndKept()
+    {
+        Deploy(Package("SbUndecl", "50"));
+        Exec("CREATE VIEW dbo.SbUndeclView WITH SCHEMABINDING AS SELECT Id, Label FROM dbo.SbUndecl");
+        Exec("CREATE TABLE #DeclaredModules ([Schema] NVARCHAR(128), [Name] NVARCHAR(128)); INSERT #DeclaredModules VALUES (N'dbo', N'SomethingElse')");
+        try
+        {
+            var ex = Assert.Catch(() => DeployWithDrop(Package("SbUndecl", "100")));
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex?.Message, Does.Contain("dbo.SbUndeclView").And.Contain("does not declare"), ex?.Message);
+                Assert.That(Scalar("SELECT COUNT(*) FROM sys.objects WHERE name = 'SbUndeclView'"), Is.EqualTo(1), "the view is kept");
+            });
+
+            Exec("INSERT #DeclaredModules VALUES (N'DBO', N'sbundeclview')");
+            DeployWithDrop(Package("SbUndecl", "100"));
+            Assert.That(Scalar("SELECT COUNT(*) FROM sys.objects WHERE name = 'SbUndeclView'"), Is.Zero, "declared, it is dropped for the change");
+        }
+        finally
+        {
+            Exec("DROP TABLE #DeclaredModules");
+        }
+    }
 
     [Test]
     public void ANestedSchemaBoundChain_IsDroppedDeepestFirst()

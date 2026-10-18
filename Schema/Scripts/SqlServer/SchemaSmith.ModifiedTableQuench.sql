@@ -1137,8 +1137,46 @@ BEGIN TRY
     IF @v_SbBlocked IS NOT NULL AND @DropSchemaBoundDependents = 0
       RAISERROR('Column change blocked by SCHEMABINDING: %s. SQL Server will not alter a column while a schema-bound module references it, and SchemaSmith will not drop a scripted object it cannot put back. Move the listed module(s) into a schema-bound object folder (QuenchSlot AfterTablesObjects) and set DropSchemaBoundDependents so the deploy can drop them around the table work and the after-tables object pass recreates them, or remove SCHEMABINDING from them.', 16, 1, @v_SbBlocked)
 
+    -- Only a module the package declares is put back by this run, so when the deploy says what it declares
+    -- (#DeclaredModules, staged by SchemaQuench) one it does not stops the deploy by name before anything is dropped
+    -- (#542). Dropping it would lose it, at exit 0.
+    IF @v_SbBlocked IS NOT NULL AND @DropSchemaBoundDependents = 1 AND OBJECT_ID('tempdb..#DeclaredModules') IS NOT NULL
+    BEGIN
+      DECLARE @v_SbUndeclared NVARCHAR(MAX) =
+        STUFF((SELECT ', ' + OBJECT_SCHEMA_NAME(c.ModuleId) + '.' + OBJECT_NAME(c.ModuleId)
+                 FROM #SbChain c
+                WHERE NOT EXISTS (SELECT 1 FROM #DeclaredModules m
+                                   WHERE LOWER(m.[Schema]) = LOWER(OBJECT_SCHEMA_NAME(c.ModuleId)) COLLATE DATABASE_DEFAULT
+                                     AND LOWER(m.[Name]) = LOWER(OBJECT_NAME(c.ModuleId)) COLLATE DATABASE_DEFAULT)
+                ORDER BY OBJECT_NAME(c.ModuleId)
+                  FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      IF @v_SbUndeclared IS NOT NULL
+        RAISERROR('Column change blocked by SCHEMABINDING: %s, which the package does not declare, so nothing in this run could put it back and SchemaSmith will not drop it. Add its script to a schema-bound object folder (QuenchSlot AfterTablesObjects), or remove SCHEMABINDING from it. Nothing was changed.', 16, 1, @v_SbUndeclared)
+    END
+
     IF @v_SbBlocked IS NOT NULL AND @DropSchemaBoundDependents = 1
     BEGIN
+      -- A DROP takes the module's grants and extended properties with it, and its script does not carry them. They are
+      -- captured here and put back by SchemaQuench once the run has re-created the module.
+      IF @WhatIf = 0 AND OBJECT_ID('tempdb..#PreservedModulePermissions') IS NOT NULL
+      BEGIN
+        DECLARE @v_SbId INT, @v_SbSchema NVARCHAR(128), @v_SbName NVARCHAR(128), @v_SbPermissions NVARCHAR(MAX)
+        DECLARE sb_permissions CURSOR LOCAL FAST_FORWARD FOR SELECT ModuleId FROM #SbChain
+        OPEN sb_permissions
+        FETCH NEXT FROM sb_permissions INTO @v_SbId
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+          SELECT @v_SbSchema = OBJECT_SCHEMA_NAME(@v_SbId), @v_SbName = OBJECT_NAME(@v_SbId)
+          EXEC SchemaSmith.CapturePermissions @Schema = @v_SbSchema, @Name = @v_SbName, @Script = @v_SbPermissions OUTPUT
+          IF @v_SbPermissions IS NOT NULL
+            INSERT #PreservedModulePermissions ([ObjectType], [Schema], [Name], [Script])
+              VALUES (CASE WHEN OBJECTPROPERTY(@v_SbId, 'IsView') = 1 THEN 'view' ELSE 'function' END, @v_SbSchema, @v_SbName, @v_SbPermissions)
+          FETCH NEXT FROM sb_permissions INTO @v_SbId
+        END
+        CLOSE sb_permissions
+        DEALLOCATE sb_permissions
+      END
+
       -- The audit is written set-based here rather than generated into the script below, so this proc
       -- has two levels of quoting instead of three.
       INSERT SchemaSmith.ChangeAudit ([SessionId], [ObjectType], [ObjectName], [ActionType])

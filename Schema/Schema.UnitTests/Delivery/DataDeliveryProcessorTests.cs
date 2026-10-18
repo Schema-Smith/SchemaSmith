@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Data;
 using System.IO;
 using NSubstitute;
@@ -202,6 +203,8 @@ public class DataDeliveryProcessorTests
             Assert.That(built, Is.EqualTo(new[] { (expectedData, expectedEncoding) }), "the merge is built from the delivered content and encoding");
             Assert.That(_executedScripts, Has.Count.EqualTo(1));
             Assert.That(downgrades, Is.Empty, "nothing is left undelivered, so nothing is downgraded");
+            Assert.That(_logs.Any(l => l.Contains("Delivering dbo.Config") && l.Contains($"(converted to Xml for compatibility level {compatLevel})")), Is.EqualTo(expectedEncoding == "Xml"),
+                "the delivery line says when the payload was converted; log: " + string.Join(" | ", _logs));
         });
     }
 

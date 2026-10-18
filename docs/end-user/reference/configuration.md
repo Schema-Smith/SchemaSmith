@@ -579,14 +579,17 @@ views and functions into those folders automatically on extraction** — whether
 — so an extracted package is already shaped correctly the day you turn it on. A module left in the
 ordinary `Views/` or `Functions/` folder is recreated before the table work rather than after it.
 
-### Dropping discards permissions
+### Permissions come back with the module
 
-**A dropped view or function loses every `GRANT` on it, and SchemaSmith does not put them back.**
-SchemaSmith does not manage permissions on any object, so it has nothing to restore them from. Re-grant
-in the recreating script itself, or from whatever process you already use to manage permissions — if you
-grant on these objects at all, you almost certainly have one.
+A `DROP` takes the grants, an owner set on the module and its extended properties with it, and your script
+does not carry them. SchemaQuench captures them before the drop and puts them back once the after-tables
+pass has recreated the module (see [Preserved Permissions](schemaquench.md#preserved-permissions)).
 
 ### What it will not do
+
+A module **your package does not declare** is refused, by name and before anything is dropped. Nothing in
+the run could recreate it, so dropping it would lose it. Add its script to a schema-bound folder, or remove
+its `SCHEMABINDING`.
 
 An **encrypted** module (`WITH ENCRYPTION`) is refused even with the setting on, and refused *before*
 anything is dropped. `OBJECT_DEFINITION` returns `NULL` for one, so it cannot be scripted from the server

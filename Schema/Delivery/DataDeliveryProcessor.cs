@@ -198,7 +198,7 @@ public class DataDeliveryProcessor : IDataDelivery
                         continue;
                     }
                     tableDataMap[(table, index)] = jsonAsXml && !IsXml(delivery)
-                        ? new DeliveryContent(MergeScriptHelper.JsonPayloadToXml(content), "Xml")
+                        ? new DeliveryContent(MergeScriptHelper.JsonPayloadToXml(content), "Xml", $" (converted to Xml for compatibility level {context.SqlServerCompatibilityLevel})")
                         : new DeliveryContent(content, delivery.ContentEncoding ?? "Json");
                 }
                 catch (Exception ex)
@@ -395,7 +395,7 @@ public class DataDeliveryProcessor : IDataDelivery
 
             if (deferredColumns.Count > 0 && !isCircularFallback)
             {
-                log($"    Delivering {tableKey}{VariantSuffix(delivery)} (pass 1 - deferred columns as NULL)");
+                log($"    Delivering {tableKey}{VariantSuffix(delivery)}{content.Note} (pass 1 - deferred columns as NULL)");
 
                 var mergeScript = BuildDeferredMergeScript(context, schemaOrDb, table, delivery, content, keyColumns, deferredColumns);
 
@@ -415,7 +415,7 @@ public class DataDeliveryProcessor : IDataDelivery
             }
             else
             {
-                log($"    Delivering {tableKey}{VariantSuffix(delivery)}");
+                log($"    Delivering {tableKey}{VariantSuffix(delivery)}{content.Note}");
                 var update = (delivery.MergeType ?? "").IndexOf("Update", StringComparison.OrdinalIgnoreCase) >= 0;
                 var delete = (delivery.MergeType ?? "").IndexOf("Delete", StringComparison.OrdinalIgnoreCase) >= 0;
                 var mergeFilter = ResolveMergeFilter(delivery.MergeFilter, context.SchemaName);
@@ -460,7 +460,7 @@ public class DataDeliveryProcessor : IDataDelivery
 
     // A delivery's content as read, and the encoding it is delivered in, which differs from the declared one when a JSON
     // delivery was converted to XML for a target below compatibility level 130.
-    internal readonly record struct DeliveryContent(string Data, string Encoding);
+    internal readonly record struct DeliveryContent(string Data, string Encoding, string Note = "");
 
     private static bool IsXml(DataDelivery delivery) =>
         string.Equals(delivery.ContentEncoding, "Xml", StringComparison.OrdinalIgnoreCase);

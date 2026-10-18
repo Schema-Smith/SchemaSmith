@@ -6,6 +6,11 @@ The grant sets below are the recommended starting point for a `datafix_user` acc
 
 > **Provisional:** Treat these as the minimal baseline a datafix deploy role needs across all four engines (the Course 6 lab exercises SQL Server, PostgreSQL, and MySQL; MariaDB uses the same grant set as MySQL). Certify them against your own fix and environment — any grant a specific datafix doesn't actually exercise should be removed.
 
+**SchemaSmith's run-once record.** A migration script runs once per database because SchemaQuench records it in a
+SchemaSmith table when it has run. The deploy account needs `SELECT`, `INSERT` and `DELETE` on that table and nothing
+else of SchemaSmith's. Without them SchemaQuench stops before running the slot, naming the table, rather than run your fix
+again on the next deploy.
+
 ---
 
 ## SQL Server
@@ -34,6 +39,8 @@ GRANT CREATE TABLE TO datafix_user;
 
 -- Ancillary stored procedures and functions the fix may call
 GRANT EXECUTE ON SCHEMA::dbo TO datafix_user;
+-- SchemaSmith's run-once record, so a fix is marked as run and not run again
+GRANT SELECT, INSERT, DELETE ON SchemaSmith.CompletedMigrationScripts TO datafix_user;
 GO
 ```
 
@@ -73,6 +80,9 @@ CREATE SCHEMA datafix AUTHORIZATION datafix_user;
 -- Ancillary functions and procedures the fix may call
 GRANT EXECUTE ON ALL FUNCTIONS  IN SCHEMA public TO datafix_user;
 GRANT EXECUTE ON ALL PROCEDURES IN SCHEMA public TO datafix_user;
+-- SchemaSmith's run-once record, so a fix is marked as run and not run again
+GRANT USAGE ON SCHEMA "SchemaSmith" TO datafix_user;
+GRANT SELECT, INSERT, DELETE ON "SchemaSmith"."CompletedMigrationScripts" TO datafix_user;
 ```
 
 ---
@@ -95,6 +105,8 @@ GRANT CREATE TEMPORARY TABLES ON `shop_tenant_a`.* TO 'datafix_user'@'%';
 
 GRANT EXECUTE ON `shop_tenant_a`.* TO 'datafix_user'@'%';
 -- Ancillary stored procedures and functions the fix may call
+GRANT DELETE ON `shop_tenant_a`.`SchemaSmith_CompletedMigrationScripts` TO 'datafix_user'@'%';
+-- SchemaSmith's run-once record: SELECT and INSERT come with the grant above
 
 FLUSH PRIVILEGES;
 ```
@@ -109,3 +121,4 @@ FLUSH PRIVILEGES;
 | Backup table creation | `GRANT CREATE TABLE` + `CREATE SCHEMA datafix AUTHORIZATION datafix_user` (owns the schema) | `CREATE SCHEMA datafix AUTHORIZATION datafix_user` (owns it; no `CREATE` on `public`) | `GRANT CREATE ON db.*` | `GRANT CREATE ON db.*` |
 | Temp space | Implicit for authenticated logins | `GRANT TEMPORARY ON DATABASE` | `GRANT CREATE TEMPORARY TABLES ON db.*` | `GRANT CREATE TEMPORARY TABLES ON db.*` |
 | Execute ancillary routines | `GRANT EXECUTE ON SCHEMA::dbo` | `GRANT EXECUTE ON ALL FUNCTIONS/PROCEDURES IN SCHEMA public` | `GRANT EXECUTE ON db.*` | `GRANT EXECUTE ON db.*` |
+| Run-once record | `GRANT SELECT, INSERT, DELETE ON SchemaSmith.CompletedMigrationScripts` | `GRANT USAGE ON SCHEMA "SchemaSmith"` + `GRANT SELECT, INSERT, DELETE ON "SchemaSmith"."CompletedMigrationScripts"` | `GRANT DELETE ON db.SchemaSmith_CompletedMigrationScripts` (with the reader/writer grant) | as MySQL |

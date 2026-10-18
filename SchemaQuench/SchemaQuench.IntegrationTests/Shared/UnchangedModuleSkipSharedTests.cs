@@ -47,8 +47,16 @@ public abstract class UnchangedModuleSkipSharedTests : ObjectScriptDeployFixture
         var first = Deploy().Outcomes;
         Assert.That(first.Values, Is.All.EqualTo(ScriptOutcome.Applied), "first deploy: " + Describe(first));
 
-        var second = Deploy().Outcomes;
-        Assert.That(second.Values, Is.All.EqualTo(ScriptOutcome.Unchanged), "an unchanged package must not re-run any module: " + Describe(second));
+        var secondRun = Deploy();
+        var second = secondRun.Outcomes;
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Values, Is.All.EqualTo(ScriptOutcome.Unchanged), "an unchanged package must not re-run any module: " + Describe(second));
+            // The documented line, on an ordinary deploy: it was written only on the retry pass, which a skipped script never reaches.
+            foreach (var folder in second.Keys)
+                Assert.That(secondRun.Log.Any(l => l != null && l.Contains("Unchanged, not re-run:") && l.Contains(folder)), Is.True,
+                    $"the {folder} script says it was not re-run; log: " + string.Join(" | ", secondRun.Log));
+        });
 
         Exec(AlterViewByHand);
         var third = Deploy().Outcomes;

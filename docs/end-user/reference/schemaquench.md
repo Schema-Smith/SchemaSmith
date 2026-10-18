@@ -1115,7 +1115,7 @@ Some changes can only be made by replacing an object: a table whose declared sha
 
 MySQL and MariaDB key a table's grants by name, so a rebuilt table keeps them without help; only a routine's grants are lost by a `DROP`, and only those are captured.
 
-**Where it applies.** Around a table rebuild, around the drop and re-create of an indexed view (SQL Server) and a materialized view (PostgreSQL), and around any object script that drops its own procedure, function or view before creating it -- the `DROP PROCEDURE IF EXISTS ... CREATE PROCEDURE` form that MySQL and MariaDB require, or the same shape on another engine. A script that alters in place (`CREATE OR ALTER`, `CREATE OR REPLACE`) loses nothing and needs nothing.
+**Where it applies.** Around a table rebuild, around the drop and re-create of an indexed view (SQL Server) and a materialized view (PostgreSQL), around a module dropped so a change can apply and then re-created from the package -- a schema-bound view or function blocking a column change ([`DropSchemaBoundDependents`](configuration.md#dropschemabounddependents)) or a changed function (SQL Server), and a view, materialized view or SQL-standard routine over a column whose type changes (PostgreSQL) -- and around any object script that drops its own procedure, function or view before creating it -- the `DROP PROCEDURE IF EXISTS ... CREATE PROCEDURE` form that MySQL and MariaDB require, or the same shape on another engine. A script that alters in place (`CREATE OR ALTER`, `CREATE OR REPLACE`) loses nothing and needs nothing.
 
 **What you see.** The log names the object as its permissions are put back, and the run manifest records a `reapplied` row for it. Under `WhatIf` the statements are printed and the manifest records `wouldReapply` instead.
 
@@ -1592,7 +1592,7 @@ SchemaQuench writes checkpoints as it goes. Every completed quench step and ever
 SchemaQuench --ResumeQuench
 ```
 
-With `--ResumeQuench`, SchemaQuench reads the existing checkpoint files (if any) and skips anything already recorded as complete. Without the switch, the resume logic is off -- every step executes regardless of prior state.
+With `--ResumeQuench`, SchemaQuench reads the existing checkpoint files (if any) and skips anything already recorded as complete. Without the switch, the resume logic is off -- every step executes regardless of prior state, and each database the run reaches starts a fresh checkpoint.
 
 ### Where checkpoints live
 
@@ -1608,13 +1608,9 @@ Checkpoint files are named by product, template, server and database, not by run
 
 ### Checkpoint scopes
 
-SchemaQuench tracks two kinds of progress:
-
-**Product-scoped** -- Cross-database work shared by all templates:
-- `Before` and `After` product-level scripts (per server, for SQL Server Availability Group deployments).
-- Completed templates (a template with every database finished is itself recorded as complete).
-
-**Database-scoped** -- One checkpoint file per `{product, template, server, database}` combination:
+Progress is recorded per database: one checkpoint file per `{product, template, server, database}` combination. A
+resumed run enters every template again and each database continues from its own file. Product-level `Before` and
+`After` scripts are not checkpointed, so a resumed run runs them again, as every deployment does.
 
 | Step name | What it covers |
 |---|---|
@@ -1638,7 +1634,7 @@ In addition, each template slot (`Before`, `Objects`, `BetweenTablesAndKeys`, `A
 
 ### Automatic cleanup after success
 
-Checkpoints exist to protect against failures. When the quench completes without error, SchemaQuench deletes every checkpoint file associated with the product. A clean run leaves no residue to mislead the next deployment. A failed run leaves the checkpoint files in place, ready for the next `--ResumeQuench` invocation.
+Checkpoints exist to protect against failures. When the quench completes without error, SchemaQuench deletes the checkpoint files of the databases it deployed. Another database's checkpoint -- a failed deploy of the same product to a different target, with a different settings file -- is left in place, so that deploy can still be resumed. A failed run leaves its checkpoint files in place, ready for the next `--ResumeQuench` invocation.
 
 ### Practical resume workflow
 

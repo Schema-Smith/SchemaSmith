@@ -121,15 +121,23 @@ public static class DeploymentSummaryText
     }
 
     // Nothing is rolled back when a run fails, so a failed run says what it had already applied: the scripts that
-    // ran and the data delivered. Resume continues from there.
+    // ran, the schema changes made and the data delivered. Resume continues from there.
+    private static readonly HashSet<string> NotAChange = new(StringComparer.Ordinal) { "unchanged", "skipped", "downgraded", "dropSuppressed" };
+
     private static void RenderAppliedBeforeTheFailure(DeploymentSummary summary, List<string> lines)
     {
         if (summary.Run.Outcome is not (RunOutcome.PartialFailure or RunOutcome.Aborted)) return;
         var migrations = summary.MigrationScripts.Where(m => m.Outcome == "Ran").Select(m => $"migration script {m.Path}");
         var details = summary.ObjectChanges?.Details ?? [];
-        var objects = details.Where(d => d.Action == "ran").Select(d => $"{d.ObjectType} {d.ObjectName}");
-        var deliveries = details.Where(d => d.ObjectType == "dataDelivery" && d.Action == "delivered").Select(d => $"data {d.ObjectName}");
-        var applied = migrations.Concat(objects).Concat(deliveries).ToList();
+        var changes = details
+            .Where(d => !d.Action.StartsWith("would", StringComparison.Ordinal) && !NotAChange.Contains(d.Action))
+            .Select(d => d.Action switch
+            {
+                "ran" => $"{d.ObjectType} {d.ObjectName}",
+                "delivered" when d.ObjectType == "dataDelivery" => $"data {d.ObjectName}",
+                _ => $"{d.ObjectType} {d.ObjectName} {d.Action}"
+            });
+        var applied = migrations.Concat(changes).ToList();
         lines.Add($"## Applied Before The Failure ({applied.Count})");
         lines.Add("Nothing here was rolled back. `--ResumeQuench` continues from where the run stopped.");
         foreach (var item in applied)

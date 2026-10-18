@@ -101,6 +101,24 @@ public class SchemaBoundModuleChangeTests : ObjectScriptDeployFixture
         });
     }
 
+    [Test]
+    public void AChangedFunction_UnderADeclaredSchemaBoundView_PutsTheViewBackWithItsGrant()
+    {
+        WritePackage(factor: 2, withTable: true);
+        Deploy();
+        Exec("IF USER_ID('sb_perm_user') IS NULL CREATE USER sb_perm_user WITHOUT LOGIN; GRANT SELECT ON [dbo].[vw_sb_orders] TO sb_perm_user");
+
+        WritePackage(factor: 3, withTable: true);
+        Deploy();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FunctionDefinition(), Does.Contain("* 3"), "the changed body must have been applied");
+            Assert.That(Count("SELECT COUNT(*) FROM sys.database_permissions WHERE class = 1 AND major_id = OBJECT_ID('dbo.vw_sb_orders') AND grantee_principal_id = USER_ID('sb_perm_user') AND permission_name = 'SELECT'"), Is.EqualTo(1),
+                "the grant the DROP took off the schema-bound view has to come back with it");
+        });
+    }
+
     private string FunctionDefinition() => Scalar("SELECT OBJECT_DEFINITION(OBJECT_ID('dbo.fn_sb_price'))")?.ToString() ?? "";
 
     [Test]

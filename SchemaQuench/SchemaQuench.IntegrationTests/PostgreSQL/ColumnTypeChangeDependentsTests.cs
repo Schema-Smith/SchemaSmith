@@ -92,6 +92,46 @@ public class ColumnTypeChangeDependentsTests : ObjectScriptDeployFixture
         }
     }
 
+    // A dropped view or materialized view lost its privileges: the script or declaration that re-creates it does not carry them.
+    [Test]
+    public void AColumnTypeChange_PutsBackTheGrantsOnTheDependentsItDrops()
+    {
+        Exec("DROP MATERIALIZED VIEW IF EXISTS public.mv_dep; " + Drops);
+        Exec("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'tcd_reader') THEN CREATE ROLE tcd_reader NOLOGIN; END IF; END $$");
+        try
+        {
+            void WriteWith(string type)
+            {
+                WritePackage("""{ "FolderPath": "Views", "QuenchSlot": "Objects", "ObjectType": "Views" }""", "Views", "Materialized Views");
+                WriteFile("Tables", "public.t_dep.json", $$"""
+                    { "Schema": "public", "Name": "t_dep",
+                      "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false }, { "Name": "a", "DataType": "{{type}}", "Nullable": true } ],
+                      "Indexes": [ { "Name": "pk_t_dep", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" } ] }
+                    """);
+                WriteFile("Views", "public.v_dep.sql", "CREATE OR REPLACE VIEW public.v_dep AS SELECT id, a FROM public.t_dep;");
+                WriteFile("Materialized Views", "public.mv_dep.json", """
+                    { "Schema": "public", "Name": "mv_dep", "Definition": "SELECT sum(a) AS total FROM public.t_dep" }
+                    """);
+            }
+            WriteWith("integer");
+            Deploy();
+            Exec("GRANT SELECT ON public.v_dep TO tcd_reader; GRANT SELECT ON public.mv_dep TO tcd_reader");
+
+            WriteWith("bigint");
+            Deploy();
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar("SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.t_dep'::regclass AND attname = 'a'"), Is.EqualTo("bigint"));
+                Assert.That(Scalar("SELECT has_table_privilege('tcd_reader', 'public.v_dep', 'SELECT')"), Is.True, "the view's grant is back");
+                Assert.That(Scalar("SELECT has_table_privilege('tcd_reader', 'public.mv_dep', 'SELECT')"), Is.True, "and the materialized view's");
+            });
+        }
+        finally
+        {
+            Exec("DROP MATERIALIZED VIEW IF EXISTS public.mv_dep; " + Drops + "; DROP ROLE IF EXISTS tcd_reader");
+        }
+    }
+
     // PG-091: a change PostgreSQL will not cast on its own (text to integer) needs USING, which the table JSON cannot say.
     // The documented recipe is a guarded Before script; the table pass then finds the column already at its type.
     [Test]
