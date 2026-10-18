@@ -107,6 +107,16 @@ A stale-helpers warning is not fatal on purpose. Refusing would make a replica u
 
 Deployment is unaffected: SchemaQuench still requires a writable target, because applying a schema genuinely cannot work without one. Use [`SkipIfReadOnly`](schema-packages.md) on a template if you want a deploy to pass over a read-only target rather than fail against it.
 
+## Deploying an Extraction to an Older Server
+
+A package carries what the source server reports, so a package extracted from a newer server can name things an
+older one does not have. On MariaDB the common case is the collation: from 11.4 (and in Debian and Ubuntu packages
+from 11.3.2) a table or column that takes the default is reported with `utf8mb4_uca1400_ai_ci`, which MariaDB before
+10.10 does not know, and the deploy there fails with `1273 Unknown collation`. Replace it in the package with a
+collation the older server has, such as `utf8mb4_unicode_ci`, before deploying it there. A declared sequence with a
+`DataType` other than `bigint` deploys below 11.5 as a `bigint`, with a downgrade recorded; a `CREATE SEQUENCE ... AS`
+in one of your own scripts fails there.
+
 ## Configuration Reference
 
 SchemaTongs reads configuration from multiple sources, merged in precedence order (highest priority last):

@@ -119,6 +119,38 @@ public abstract class ParseAlteringSqlModeSharedTests
         });
     }
 
+    // MySQL 9.5's INTERPRET_UTF8_AS_UTF8MB4 makes a declared utf8 mean utf8mb4, so a column declared utf8 was created
+    // as utf8mb4 and read back as different from the package on every deploy.
+    [Test]
+    public void Deploy_UnderInterpretUtf8AsUtf8mb4_CreatesTheDeclaredCharacterSet_AndRedeploysWithoutChange()
+    {
+        try
+        {
+            Exec("SET SESSION sql_mode = CONCAT(@@GLOBAL.sql_mode, ',INTERPRET_UTF8_AS_UTF8MB4')");
+        }
+        catch (MySqlConnector.MySqlException ex) when (ex.Number == 1231)
+        {
+            Assert.Ignore("INTERPRET_UTF8_AS_UTF8MB4 is a MySQL 9.5+ sql_mode flag.");
+        }
+        ForgeKindler.KindleTheForge(Command(), Platform, forceReKindle: true);
+        const string deploy = """
+             CALL SchemaSmith_TableQuench('Utf8ModeProduct', DATABASE(),
+               '[{ "Name": "`utf8_t`", "Columns": [ { "Name": "`id`", "DataType": "INT", "Nullable": false },
+                   { "Name": "`s`", "DataType": "VARCHAR(20)", "Nullable": true, "CharacterSet": "utf8", "Collation": "utf8_general_ci" } ],
+                   "Indexes": [ { "Name": "`PRIMARY`", "PrimaryKey": true, "Unique": true, "IndexColumns": "`id`" } ] }]', 0, 0, 0)
+             """;
+        Exec(deploy);
+        var afterFirst = Count("SELECT COUNT(*) FROM SchemaSmith_ChangeAudit");
+        Exec(deploy);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Scalar($"SELECT CHARACTER_SET_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = 'utf8_t' AND COLUMN_NAME = 's'"),
+                Is.EqualTo("utf8mb3"), "the declared character set");
+            Assert.That(Count("SELECT COUNT(*) FROM SchemaSmith_ChangeAudit"), Is.EqualTo(afterFirst), "an unchanged redeploy changes nothing");
+        });
+    }
+
     // DataTongs reads table data under this pin. PAD_CHAR_TO_FULL_LENGTH returns CHAR values padded, so 'ab' in a
     // CHAR(5) was extracted as "ab   "; on a NO PAD collation (MySQL 8's utf8mb4_0900_*) that never matches the stored
     // value again, and every delivery rewrites the row.

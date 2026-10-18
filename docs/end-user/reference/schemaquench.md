@@ -578,6 +578,40 @@ scripts (Before, After, Objects, migration scripts and `ValidationScript`) alway
 | `information_schema_stats_expiry` (MySQL 8.0+) | Read past for `AUTO_INCREMENT`, on deploy and on extraction, so a stale statistics cache cannot hide the table's current value. |
 | `lower_case_table_names` | See [Name case on MySQL](#name-case-on-mysql). |
 
+### Upgrading MySQL or MariaDB under a package
+
+A package that deploys cleanly today can stop deploying after the server is upgraded, because a newer engine refuses
+something the older one accepted. SchemaSmith's own DDL is kept to forms every supported version accepts; these are
+the changes that reach your declarations and your own scripts. Each was checked on the version named unless it says
+"release notes".
+
+**MySQL**
+
+| From | What changes | What to do |
+|---|---|---|
+| 8.4 | `AUTO_INCREMENT` on a `FLOAT` or `DOUBLE` column is refused (`1063 Incorrect column specifier`). | Make the column an integer type. |
+| 8.4 | `SET_USER_ID` is gone; setting another account as a routine's or view's `DEFINER` needs `SET_ANY_DEFINER`, and naming an account that does not exist needs `ALLOW_NONEXISTENT_DEFINER` (8.2 per release notes). | Grant the deploying account the new privilege if your scripts carry `DEFINER` clauses. |
+| 8.4 | A foreign key whose related columns are not a whole primary or unique key is refused while `restrict_fk_on_non_standard_key` is on, its default (`6125`). | `--Validate` warns (`SS-FK-008`); point the key at a whole key. |
+| 8.4.11 | With `sql_require_primary_key` on, a table whose only key is `UNIQUE` over `NOT NULL` columns is accepted (8.0 refuses it). | Nothing; on 8.0 such a table still needs a primary key. |
+| 9.6 | `MD5()`, `SHA1()` and `SHA()` are removed (checked on 9.7: `1305 FUNCTION ... does not exist`). | `--Validate` warns where a column, check, index or partitioning expression calls one (`SS-COL-004`); use `SHA2()`. Your own scripts need the same change. |
+| 9.7 | `enable_cascade_triggers` exists, off by default: triggers do not fire for rows changed by a foreign key's cascade. | Nothing changes unless it is turned on, and then a cascade fires triggers it did not before. |
+| 9.5 | `INTERPRET_UTF8_AS_UTF8MB4` is an `sql_mode` flag; with it set, a declared `utf8` means `utf8mb4`. | SchemaSmith writes a declared `utf8` as `utf8mb3`, so the columns it creates keep the character set the package declares. In your own scripts `utf8` means `utf8mb4` while the flag is set. |
+| 9.7 | A stricter row-size check refuses some very wide tables (release notes). | Split the table or move wide columns to `TEXT`/`BLOB`. |
+| current patches | Widening an indexed column past 767 bytes on a `COMPACT` or `REDUNDANT` row format is refused (`1071`; 8.0.46, 8.4.11, 9.7.2); older patches allowed it. | Use `DYNAMIC` (the default) or keep the column narrow enough. |
+| 8.0.29 | Before it, from 8.0.23, the catalog leaves an invisible column out of a foreign key's column list, so extraction writes the key short. | Extract from 8.0.29 or later. |
+
+`VALUES()` inside `ON DUPLICATE KEY UPDATE` is deprecated (warning `1287`) but still runs through 26.7; SchemaSmith's own
+scripts use it.
+
+**MariaDB**
+
+| From | What changes | What to do |
+|---|---|---|
+| 11.4 | The default `utf8mb4` collation is `utf8mb4_uca1400_ai_ci` (Debian and Ubuntu packages from 11.3.2). | See the collation note under [MariaDB (MySQL family)](#mariadb-mysql-family--where-the-native-ddl-diverges); an extraction carries it, see [SchemaTongs](schematongs.md#deploying-an-extraction-to-an-older-server). |
+| 11.8 | `innodb_snapshot_isolation` is on by default: a transaction that reads a row another transaction changed after its snapshot gets error `1020` instead of reading past it. | Retry such transactions in your own scripts, or turn the setting off. |
+| 11.8 | A column with `CHARACTER SET x COMPRESSED` is refused; `COMPRESSED CHARACTER SET x` still works. | Reorder it in your scripts. SchemaSmith writes the type, with any `COMPRESSED`, before the character set. |
+| 12.3 | `CONVERSION` and `TO_DATE` are reserved words: a table or column of that name must be quoted. | The DDL SchemaSmith writes quotes table and column names; quote them in your scripts. |
+
 ---
 
 ## Quench Slots
