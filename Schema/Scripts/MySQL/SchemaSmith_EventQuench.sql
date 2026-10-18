@@ -18,10 +18,11 @@ BEGIN
     -- Converges declared scheduled events, and RETURNS THE STATEMENTS TO RUN rather than running them.
     --
     -- WHY THIS PROCEDURE IS SHAPED UNLIKE EVERY OTHER QUENCH. The others build DDL as a string and run it
-    -- with PREPARE/EXECUTE. That is impossible for events: MySQL cannot prepare event DDL at all -- both
-    -- CREATE EVENT and DROP EVENT fail with 1295, "This command is not supported in the prepared statement
-    -- protocol yet". MariaDB CAN prepare them, so the limit is MySQL-only, and writing to the lower common
-    -- denominator is what keeps ONE implementation for both engines instead of two.
+    -- with PREPARE/EXECUTE. That is impossible for events below MySQL 9: MySQL 8 cannot prepare event DDL at
+    -- all -- both CREATE EVENT and DROP EVENT fail with 1295, "This command is not supported in the prepared
+    -- statement protocol yet" (probed on 8.4; 9.7 prepares them). MariaDB CAN prepare them, so the limit is
+    -- MySQL 8 and older, and writing to the lower common denominator is what keeps ONE implementation for
+    -- every supported version of both engines instead of two.
     --
     -- The decision-making therefore stays here in SQL and the caller is a dumb executor: this returns an
     -- ORDERED list of statements and SchemaQuench runs them in sequence. The ownership and audit writes
