@@ -538,7 +538,8 @@ public class ForgeKindlerTests
         // +2 = SchemaSmith_DropModifiedFullTextIndexes + SchemaSmith_CreateMissingFullTextIndexes (#530: both index paths).
         // +1 = SchemaSmith_ColumnTypeDiffers (MA-054: a type change takes down the foreign keys on its column first).
         // +1 = SchemaSmith_CaseRespellKeepsOldSpelling (a case-only respelling a foreign key blocks, on old MariaDB patches).
-        Assert.That(mysql.Length, Is.EqualTo(98));
+        // +3 = SupportsSystemTimePartitionCount + SupportsSystemTimeAutoPartitions + SystemTimePartitionable (D8 SYSTEM_TIME).
+        Assert.That(mysql.Length, Is.EqualTo(101));
     }
 
     [Test]

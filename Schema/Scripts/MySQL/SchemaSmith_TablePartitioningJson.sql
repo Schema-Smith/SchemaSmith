@@ -77,6 +77,32 @@ BEGIN
                            ',"Count":', v_SubCount, '}');
     END IF;
 
+    -- SYSTEM_TIME (MariaDB): the engine's expression is its own (over the row-end column) and is not declared, and
+    -- INTERVAL, STARTS, LIMIT and AUTO appear only in SHOW CREATE TABLE, which SchemaTongs reads. Partitions the
+    -- engine named (history p0, p1, ... and the current pn) are written as a count; any others as a list.
+    IF v_Method = 'SYSTEM_TIME' THEN
+        SELECT SUM(CASE WHEN p.PARTITION_DESCRIPTION = 'CURRENT' THEN p.PARTITION_NAME <> 'pn'
+                        ELSE p.PARTITION_NAME <> CONCAT('p', p.PARTITION_ORDINAL_POSITION - 1) END)
+          INTO v_Named
+          FROM INFORMATION_SCHEMA.PARTITIONS p
+         WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
+           AND SchemaSmith_IdentifierKey(p.TABLE_NAME) = v_TableKey
+           AND p.PARTITION_NAME IS NOT NULL;
+        IF COALESCE(v_Named, 0) = 0 THEN
+            RETURN JSON_OBJECT('Method', v_Method, 'PartitionCount', CAST(v_Count AS UNSIGNED));
+        END IF;
+        SELECT GROUP_CONCAT(
+                   CONCAT('{"Name":', JSON_QUOTE(p.PARTITION_NAME),
+                          ',"Values":', JSON_QUOTE(IF(p.PARTITION_DESCRIPTION = 'CURRENT', 'CURRENT', 'HISTORY')), '}')
+                   ORDER BY p.PARTITION_ORDINAL_POSITION SEPARATOR ',')
+          INTO v_Partitions
+          FROM INFORMATION_SCHEMA.PARTITIONS p
+         WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
+           AND SchemaSmith_IdentifierKey(p.TABLE_NAME) = v_TableKey
+           AND p.PARTITION_NAME IS NOT NULL;
+        RETURN CONCAT('{"Method":', JSON_QUOTE(v_Method), ',"Partitions":[', COALESCE(v_Partitions, ''), ']}');
+    END IF;
+
     -- HASH and KEY have no per-partition boundary -- the engine assigns rows by hashing -- so they carry a
     -- COUNT and no partition list, unless a partition has a name of its own or a comment.
     IF v_Method IN ('HASH', 'KEY', 'LINEAR HASH', 'LINEAR KEY') AND COALESCE(v_Named, 0) = 0 THEN

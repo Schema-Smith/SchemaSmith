@@ -688,6 +688,10 @@ public static class ForgeKindler
                 // definition, unlike its Periods sibling: INFORMATION_SCHEMA.PARTITIONS exists on every
                 // supported version of both engines, so no MariaDb override is needed.
                 new("SchemaSmith_TablePartitioningJson.sql"),
+                // SYSTEM_TIME partitioning (MariaDB): the count/STARTS and AUTO gates, and whether a declaration can be created.
+                new("SchemaSmith_SupportsSystemTimePartitionCount.sql"),
+                new("SchemaSmith_SupportsSystemTimeAutoPartitions.sql"),
+                new("SchemaSmith_SystemTimePartitionable.sql"),
                 new("SchemaSmith_SnapshotIndexVisibility.sql"),
                 new("SchemaSmith_SnapshotIndexExistence.sql"),
                 new("SchemaSmith_DropCheckClause.sql"),

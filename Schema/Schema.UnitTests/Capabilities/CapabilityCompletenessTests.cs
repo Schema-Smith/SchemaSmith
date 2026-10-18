@@ -40,6 +40,8 @@ namespace Schema.UnitTests.Capabilities
             ["SchemaSmith_SupportsColumnSrid.sql"] = "column-srid",
             ["SchemaSmith_SupportsFunctionalIndex.sql"] = "functional-index",
             ["SchemaSmith_SupportsSystemVersioning.sql"] = "column-history-exclusion",
+            ["SchemaSmith_SupportsSystemTimePartitionCount.sql"] = "system-time-partition-count",
+            ["SchemaSmith_SupportsSystemTimeAutoPartitions.sql"] = "system-time-auto-partitions",
         };
 
         // Gates whose predicate is real but deliberately carries NO registry row. CapabilityRegistry's own

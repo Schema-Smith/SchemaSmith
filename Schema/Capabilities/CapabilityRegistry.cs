@@ -229,6 +229,14 @@ namespace Schema.Capabilities
             rows.Add(new("table-system-versioning", "Table-level system versioning", Platform.MariaDb,
                 1003, "MariaDB 10.3", null, DegradeKind.Skip, "table without its WITH SYSTEM VERSIONING clause"));
 
+            // SYSTEM_TIME partitioning of a versioned table's history. Below 10.5 only a list naming every partition, with no
+            // STARTS, is accepted, so a count or STARTS leaves the clause off; AUTO (10.9.1) is left off on its own and the
+            // table keeps its history partitioning. A table that cannot be versioned at all is the row above.
+            rows.Add(new("system-time-partition-count", "SYSTEM_TIME partitioning by count or with STARTS", Platform.MariaDb,
+                1005, "MariaDB 10.5", null, DegradeKind.Skip, "table without its SYSTEM_TIME partitioning"));
+            rows.Add(new("system-time-auto-partitions", "SYSTEM_TIME partitioning with AUTO", Platform.MariaDb,
+                1009, "MariaDB 10.9.1", null, DegradeKind.Reduced, "SYSTEM_TIME partitioning without AUTO", IntroducedInPatchComparable: 100901));
+
             // Change Data Capture, gated by a DATABASE setting rather than an engine version -- the first
             // row of that kind, which is why Capability gained RequiredDatabaseSetting. IntroducedInComparable
             // is 0 and means "not version-gated": CDC is old enough that no supported server lacks it, and

@@ -245,9 +245,14 @@ BEGIN
             ON SchemaSmith_IdentifierKey(lp.TABLE_NAME) = t.TableKey
          WHERE t.NewTable = 0
            AND t.PartitionMethod IS NOT NULL
+           -- SYSTEM_TIME the server could not create was left off the table and reported then; not refused now.
+           AND NOT (t.PartitionMethod = 'SYSTEM_TIME'
+                    AND SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0)
            AND (lp.PARTITION_METHOD IS NULL
                 OR UPPER(lp.PARTITION_METHOD) <> t.PartitionMethod
-                OR SchemaSmith_NormalizePartitionExpression(lp.PARTITION_EXPRESSION) <> SchemaSmith_NormalizePartitionExpression(t.PartitionExpression)
+                -- SYSTEM_TIME has no declared expression (the engine reports its own, over the row-end column).
+                OR (t.PartitionMethod <> 'SYSTEM_TIME'
+                    AND SchemaSmith_NormalizePartitionExpression(lp.PARTITION_EXPRESSION) <> SchemaSmith_NormalizePartitionExpression(t.PartitionExpression))
                 -- Subpartitioning is part of the scheme: changing it rewrites every row, like the method.
                 OR COALESCE(UPPER(lp.SUBPARTITION_METHOD), '') <> COALESCE(t.SubpartitionMethod, '')
                 OR (t.SubpartitionMethod IS NOT NULL
@@ -260,7 +265,8 @@ BEGIN
                 -- Partition COUNT change (HASH/KEY declare a count, not named partitions): re-partitioning
                 -- from N to M buckets rewrites every row, so it is refused like a method/expression change.
                 -- Gated on a declared count so RANGE/LIST (named partitions, no declared count) is untouched.
-                OR (t.PartitionCount IS NOT NULL AND t.PartitionCount > 0
+                -- Not SYSTEM_TIME: history partitions are added as the history grows, by the engine or by hand.
+                OR (t.PartitionCount IS NOT NULL AND t.PartitionCount > 0 AND t.PartitionMethod <> 'SYSTEM_TIME'
                     AND (SELECT COUNT(DISTINCT pc.PARTITION_NAME) FROM INFORMATION_SCHEMA.PARTITIONS pc
                           WHERE pc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(pc.TABLE_SCHEMA) = v_DbKey
                             AND SchemaSmith_IdentifierKey(pc.TABLE_NAME) = t.TableKey
@@ -336,7 +342,8 @@ BEGIN
           FROM _SchemaSmith_Tables t
          WHERE t.NewTable = 0
            AND t.PartitionMethod IS NOT NULL
-           AND t.PartitionCount IS NULL;
+           AND t.PartitionCount IS NULL
+           AND t.PartitionMethod <> 'SYSTEM_TIME';
 
         -- The first declared partition that disagrees with the deployed partition in the same position.
         -- MIN over the ordinal picks the EARLIEST disagreement, so the message names the partition a

@@ -103,6 +103,13 @@ BEGIN
         SubpartitionMethod VARCHAR(20) DEFAULT NULL,
         SubpartitionExpression TEXT DEFAULT NULL,
         SubpartitionCount INT DEFAULT NULL,
+        SystemTimeInterval VARCHAR(64) DEFAULT NULL,
+        SystemTimeStarts VARCHAR(32) DEFAULT NULL,
+        SystemTimeLimit BIGINT DEFAULT NULL,
+        SystemTimeAuto TINYINT NOT NULL DEFAULT 0,
+        -- Set once the partition list is parsed: the CREATE needs to know whether one exists, and a statement cannot
+        -- read _SchemaSmith_Partitions twice (1137).
+        HasPartitionList TINYINT NOT NULL DEFAULT 0,
         AutoIncrementValue BIGINT UNSIGNED DEFAULT NULL,
         -- MySQL's table comment ceiling is 2048 characters (COLUMN_COMMENT/COLUMN varies -- see the
         -- Columns/Indexes temp tables below). No pre-validation against that limit: an over-long
@@ -146,7 +153,7 @@ BEGIN
     SET v_TblIdx = 0;
     WHILE v_TblIdx < v_TblCnt DO
         IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name'))) IS NOT NULL THEN
-            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, CharacterSet, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, PartitionKeyAlgorithm, SubpartitionMethod, SubpartitionExpression, SubpartitionCount, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned)
+            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, CharacterSet, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, PartitionKeyAlgorithm, SubpartitionMethod, SubpartitionExpression, SubpartitionCount, SystemTimeInterval, SystemTimeStarts, SystemTimeLimit, SystemTimeAuto, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned)
             SELECT
                 SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name')))) AS TableName,
                 COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Engine')))), ''), 'InnoDB') AS Engine,
@@ -176,6 +183,10 @@ BEGIN
                 UPPER(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.Subpartitioning.Method')))), '')) AS SubpartitionMethod,
                 NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.Subpartitioning.Expression')))), '') AS SubpartitionExpression,
                 SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.Subpartitioning.Count'))) AS SubpartitionCount,
+                UPPER(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.SystemTime.Interval')))), '')) AS SystemTimeInterval,
+                NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.SystemTime.StartsAt')))), '') AS SystemTimeStarts,
+                SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.SystemTime.Limit'))) AS SystemTimeLimit,
+                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.SystemTime.Auto'))), 0) AS SystemTimeAuto,
                 SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].AutoIncrementValue'))) AS AutoIncrementValue,
                 COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Description')))), ''),
                          NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Comment')))), '')) AS Comment,
@@ -1193,6 +1204,10 @@ BEGIN
         END WHILE;
         SET v_PdOuterIdx = v_PdOuterIdx + 1;
     END WHILE;
+
+    UPDATE _SchemaSmith_Tables t
+       SET t.HasPartitionList = 1
+     WHERE EXISTS (SELECT 1 FROM _SchemaSmith_Partitions pt WHERE pt.TableName = t.TableName);
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Evaluate ShouldApplyExpression');
 

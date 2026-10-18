@@ -989,6 +989,51 @@ public class CoherenceCheckTests
         Assert.That(findings, expected ? Has.Count.GreaterThan(0) : Is.Empty, string.Join("; ", findings.Select(f => f.Message)));
     }
 
+    // SS-PART-006 / SS-PART-007: SYSTEM_TIME partitions a versioned MariaDB table's history and takes no Expression;
+    // every other method needs one.
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    public void SystemTimePartitioning_NeedsAVersionedTable(bool versioned, bool expected)
+    {
+        var table = new Schema.Domain.MariaDb.MariaDbTable
+        {
+            Name = "History", IsSystemVersioned = versioned,
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = "SYSTEM_TIME", SystemTime = new Schema.Domain.MySQL.MariaDbSystemTimePartitioning { Interval = "1 MONTH" } },
+            Columns = { new Schema.Domain.MariaDb.MariaDbColumn { Name = "Id", DataType = "int" } }
+        };
+        var codes = RunOnMaria(table).Select(f => f.Code).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(codes.Contains("SS-PART-006"), Is.EqualTo(expected), string.Join(",", codes));
+            Assert.That(codes, Has.No.Member("SS-PART-007"), "SYSTEM_TIME takes no Expression");
+        });
+    }
+
+    [Test]
+    public void SystemTimePartitioning_OnMySql_IsError()
+    {
+        var table = new Schema.Domain.MySQL.MySqlTable
+        {
+            Name = "History",
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = "SYSTEM_TIME" },
+            Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "Id", DataType = "int" } }
+        };
+        Assert.That(RunOnMy(table).Select(f => f.Code), Has.Member("SS-PART-006"));
+    }
+
+    [TestCase("", true)]
+    [TestCase("Id", false)]
+    public void APartitioningWithoutAnExpression_IsError(string expression, bool expected)
+    {
+        var table = new Schema.Domain.MySQL.MySqlTable
+        {
+            Name = "Spread",
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = "HASH", Expression = expression, PartitionCount = 2 },
+            Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "Id", DataType = "int" } }
+        };
+        Assert.That(RunOnMy(table).Any(f => f.Code == "SS-PART-007"), Is.EqualTo(expected));
+    }
+
     [Test]
     public void BackfillWithoutDefault_IsWarning()
     {

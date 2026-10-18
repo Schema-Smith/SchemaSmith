@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Linq;
 using MySqlConnector;
 using NUnit.Framework;
 using Schema.DataAccess;
@@ -309,6 +310,168 @@ public class SystemVersioningDeployTests : BaseTableQuenchTests
         }
         finally
         {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+            cmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+
+    // ---- SYSTEM_TIME partitioning (D8 slice 3) -------------------------------------------------------------
+
+    private static string SystemTimePackage(string table, string partitioning) => $$"""
+        [{
+            "Name": "{{table}}",
+            "IsSystemVersioned": true,
+            "Partitioning": {{partitioning}},
+            "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false } ],
+            "Indexes": [ { "Name": "PRIMARY", "IndexColumns": "Id", "PrimaryKey": true, "Unique": true } ]
+        }]
+        """;
+
+    private static int Scalar(System.Data.IDbCommand cmd, string sql)
+    {
+        cmd.CommandText = sql;
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private string LiveSystemTimeMethod(System.Data.IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $"SELECT MAX(PARTITION_METHOD) FROM INFORMATION_SCHEMA.PARTITIONS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}'";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    // The interval form, as the engine writes it on extraction. Where AUTO or the count form is newer than the server,
+    // the table is still created versioned, without what it cannot have, and the loss is recorded.
+    [Test]
+    public void ASystemTimeIntervalTable_IsCreated_RedeploysAsANoOp_AndDegradesWhereTheServerIsOlder()
+    {
+        const string table = "SysTimeInterval";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.MariaDb).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        if (Scalar(cmd, "SELECT SchemaSmith_SupportsSystemVersioning()") == 0)
+            Assert.Ignore("This server cannot declare system versioning (MariaDB 10.3+).");
+        var counts = Scalar(cmd, "SELECT SchemaSmith_SupportsSystemTimePartitionCount()") == 1;
+        var auto = Scalar(cmd, "SELECT SchemaSmith_SupportsSystemTimeAutoPartitions()") == 1;
+        cmd.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+        cmd.ExecuteNonQuery();
+        var package = SystemTimePackage(table, """{ "Method": "SYSTEM_TIME", "SystemTime": { "Interval": "1 MONTH", "StartsAt": "2026-01-01 00:00:00", "Auto": true } }""");
+        try
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, package);
+
+            cmd.CommandText = "SELECT GROUP_CONCAT(ObjectType) FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ActionType = 'downgraded' AND ObjectName = '" + table + "'";
+            var downgrades = cmd.ExecuteScalar() as string ?? "";
+            cmd.CommandText = $"SHOW CREATE TABLE `{_mainDb}`.`{table}`";
+            string created;
+            using (var reader = cmd.ExecuteReader()) { reader.Read(); created = reader.GetString(1); }
+            Assert.Multiple(() =>
+            {
+                Assert.That(GetTableType(cmd, table), Is.EqualTo("SYSTEM VERSIONED"));
+                if (!counts)
+                {
+                    Assert.That(LiveSystemTimeMethod(cmd, table), Is.Null, created);
+                    Assert.That(downgrades, Is.EqualTo("table without its SYSTEM_TIME partitioning"));
+                    return;
+                }
+                Assert.That(LiveSystemTimeMethod(cmd, table), Is.EqualTo("SYSTEM_TIME"), created);
+                Assert.That(created, Does.Contain("INTERVAL 1 MONTH STARTS TIMESTAMP'2026-01-01 00:00:00'"), created);
+                if (auto)
+                {
+                    Assert.That(created, Does.Contain(" AUTO"), created);
+                    Assert.That(downgrades, Is.Empty);
+                }
+                else
+                {
+                    Assert.That(created, Does.Not.Contain(" AUTO"), created);
+                    Assert.That(downgrades, Is.EqualTo("SYSTEM_TIME partitioning without AUTO"));
+                }
+            });
+
+            // A history partition added since -- by the engine under AUTO, or by hand -- is not a change to the package.
+            if (counts)
+            {
+                cmd.CommandText = $"ALTER TABLE `{_mainDb}`.`{table}` ADD PARTITION (PARTITION p_extra HISTORY)";
+                cmd.ExecuteNonQuery();
+            }
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, package), "and it redeploys");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+            cmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+
+    // The list form, the one MariaDB 10.3 and 10.4 accept: every partition named, HISTORY or CURRENT.
+    [Test]
+    public void ASystemTimeLimitTableWithAList_IsCreated_RedeploysAsANoOp_AndExtractsTheList()
+    {
+        const string table = "SysTimeList";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.MariaDb).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        if (Scalar(cmd, "SELECT SchemaSmith_SupportsSystemVersioning()") == 0)
+            Assert.Ignore("This server cannot declare system versioning (MariaDB 10.3+).");
+        cmd.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+        cmd.ExecuteNonQuery();
+        var package = SystemTimePackage(table, """{ "Method": "SYSTEM_TIME", "SystemTime": { "Limit": 1000 }, "Partitions": [ { "Name": "h1", "Values": "HISTORY" }, { "Name": "h2", "Values": "HISTORY" }, { "Name": "cur", "Values": "CURRENT" } ] }""");
+        try
+        {
+            RunTableQuenchProc(cmd, package);
+            cmd.CommandText = $"SELECT GROUP_CONCAT(CONCAT(PARTITION_NAME, ':', COALESCE(PARTITION_DESCRIPTION, 'HISTORY')) ORDER BY PARTITION_ORDINAL_POSITION) FROM INFORMATION_SCHEMA.PARTITIONS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}'";
+            Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("h1:HISTORY,h2:HISTORY,cur:CURRENT"));
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, package), "and it redeploys");
+
+            cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
+            var partitioning = Newtonsoft.Json.Linq.JObject.Parse(cmd.ExecuteScalar()?.ToString() ?? "{}")["Partitioning"];
+            Assert.Multiple(() =>
+            {
+                Assert.That((string)partitioning?["Method"], Is.EqualTo("SYSTEM_TIME"), partitioning?.ToString());
+                Assert.That(partitioning?["Expression"], Is.Null, "SYSTEM_TIME has no declared expression");
+                Assert.That(partitioning?["Partitions"]?.Select(x => $"{x["Name"]}:{x["Values"]}"),
+                    Is.EqualTo(new[] { "h1:HISTORY", "h2:HISTORY", "cur:CURRENT" }));
+            });
+
+            // History partitions are added as the history grows; one added by hand is not a change to the package.
+            cmd.CommandText = $"ALTER TABLE `{_mainDb}`.`{table}` ADD PARTITION (PARTITION h3 HISTORY)";
+            cmd.ExecuteNonQuery();
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, package), "a history partition added since is not refused");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+            cmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+
+    // Partitioning the history differently is repartitioning, and is refused like any other.
+    [Test]
+    public void ChangingASystemTimeTableToAnotherMethod_IsRefused()
+    {
+        const string table = "SysTimeRefuse";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.MariaDb).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        if (Scalar(cmd, "SELECT SchemaSmith_SupportsSystemVersioning()") == 0)
+            Assert.Ignore("This server cannot declare system versioning (MariaDB 10.3+).");
+        cmd.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+        cmd.ExecuteNonQuery();
+        try
+        {
+            RunTableQuenchProc(cmd, SystemTimePackage(table, """{ "Method": "SYSTEM_TIME", "SystemTime": { "Limit": 1000 }, "Partitions": [ { "Name": "h1", "Values": "HISTORY" }, { "Name": "cur", "Values": "CURRENT" } ] }"""));
+            var refused = Assert.Throws<MySqlException>(() => RunTableQuenchProc(cmd, SystemTimePackage(table, """{ "Method": "HASH", "Expression": "Id", "PartitionCount": 2 }""")));
+            Assert.That(refused!.Message, Does.Contain("Repartitioning rewrites every row and is refused"));
+            Assert.That(LiveSystemTimeMethod(cmd, table), Is.EqualTo("SYSTEM_TIME"), "and nothing changed");
+        }
+        finally
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
             cmd.CommandText = $"DROP TABLE IF EXISTS `{table}`";
             cmd.ExecuteNonQuery();
         }

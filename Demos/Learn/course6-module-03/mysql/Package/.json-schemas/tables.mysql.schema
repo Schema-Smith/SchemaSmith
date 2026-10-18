@@ -443,12 +443,12 @@
       "properties": {
         "Method": {
           "type": "string",
-          "pattern": "^(?:RANGE|LIST|HASH|KEY|LINEAR HASH|LINEAR KEY|RANGE COLUMNS|LIST COLUMNS)$",
-          "description": "RANGE, LIST, HASH, KEY, LINEAR HASH, LINEAR KEY, RANGE COLUMNS or LIST COLUMNS. The LINEAR forms take a PartitionCount, as HASH and KEY do."
+          "pattern": "^(?:RANGE|LIST|HASH|KEY|LINEAR HASH|LINEAR KEY|RANGE COLUMNS|LIST COLUMNS|SYSTEM_TIME)$",
+          "description": "RANGE, LIST, HASH, KEY, LINEAR HASH, LINEAR KEY, RANGE COLUMNS, LIST COLUMNS or SYSTEM_TIME. The LINEAR forms take a PartitionCount, as HASH and KEY do. SYSTEM_TIME (MariaDB) partitions a system-versioned table's history and takes SystemTime instead of an Expression."
         },
         "Expression": {
           "type": "string",
-          "description": "The partitioning expression, or a comma-separated column list for the COLUMNS methods. Compared with backticks, whitespace and case normalized away, because the engines disagree on how they report it."
+          "description": "The partitioning expression, or a comma-separated column list for the COLUMNS methods. Required for every method but SYSTEM_TIME. Compared with backticks, whitespace and case normalized away, because the engines disagree on how they report it."
         },
         "PartitionCount": {
           "type": "integer",
@@ -487,6 +487,30 @@
             "Count"
           ]
         },
+        "SystemTime": {
+          "type": "object",
+          "properties": {
+            "Interval": {
+              "type": "string",
+              "description": "A new history partition per interval, as MariaDB writes it after INTERVAL: \"1 MONTH\", \"7 DAY\"."
+            },
+            "StartsAt": {
+              "type": "string",
+              "description": "With Interval: the timestamp the first interval starts at (\"2026-01-01 00:00:00\"). MariaDB 10.5 and later."
+            },
+            "Limit": {
+              "type": "integer",
+              "minimum": 1.0,
+              "description": "A new history partition after this many history rows."
+            },
+            "Auto": {
+              "type": "boolean",
+              "description": "The engine adds history partitions as they fill (MariaDB 10.9 and later). The partition list is then the engine's and is not extracted or compared."
+            },
+            "Extensions": {}
+          },
+          "additionalProperties": false
+        },
         "Partitions": {
           "type": "array",
           "items": {
@@ -498,7 +522,7 @@
               },
               "Values": {
                 "type": "string",
-                "description": "The VALUES LESS THAN boundary for RANGE, or the VALUES IN list for LIST. Omitted for HASH and KEY, which have no boundary."
+                "description": "The VALUES LESS THAN boundary for RANGE, or the VALUES IN list for LIST. Omitted for HASH and KEY, which have no boundary. HISTORY or CURRENT for SYSTEM_TIME."
               },
               "Comment": {
                 "type": "string",
@@ -517,8 +541,7 @@
       },
       "additionalProperties": false,
       "required": [
-        "Method",
-        "Expression"
+        "Method"
       ]
     },
     "Encryption": {

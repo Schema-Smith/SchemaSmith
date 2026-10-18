@@ -84,6 +84,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string MyPartitionRangeListNoPartitionsCode = "SS-PART-003";
     private const string MyPartitionHashBoundaryCode = "SS-PART-004";
     private const string MyPartitionKeyMissesColumnCode = "SS-PART-005";
+    private const string SystemTimePartitioningCode = "SS-PART-006";
+    private const string PartitionExpressionMissingCode = "SS-PART-007";
     private const string MemoryOptimizedPlacementCode = "SS-XTP-001";
     private const string Category = "Coherence";
 
@@ -156,6 +158,8 @@ public sealed class CoherenceCheck : ISchemaCheck
         [MyPartitionRangeListNoPartitionsCode] = ErrorLevel,
         [MyPartitionHashBoundaryCode] = ErrorLevel,
         [MyPartitionKeyMissesColumnCode] = ErrorLevel,
+        [SystemTimePartitioningCode] = ErrorLevel,
+        [PartitionExpressionMissingCode] = ErrorLevel,
         [MemoryOptimizedPlacementCode] = ErrorLevel,
     };
 
@@ -1389,6 +1393,19 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         foreach (var finding in CheckMyPartitionKeys(mySqlTable, method, p.Expression, tableLocation))
             yield return finding;
+
+        if (method == "SYSTEM_TIME")
+        {
+            // The engine refuses it on a table that is not system-versioned (4124), and MySQL has no system versioning.
+            if (mySqlTable is not Schema.Domain.MariaDb.MariaDbTable { IsSystemVersioned: true })
+                yield return new Finding(Severity.Error, SystemTimePartitioningCode, Category, tableLocation,
+                    $"Table '{table.Name}' partitions by SYSTEM_TIME, which partitions a system-versioned table's history: " +
+                    "it needs a MariaDB table with IsSystemVersioned true.");
+        }
+        else if (string.IsNullOrWhiteSpace(p.Expression))
+            yield return new Finding(Severity.Error, PartitionExpressionMissingCode, Category, tableLocation,
+                $"Table '{table.Name}' partitions by {method} but declares no Expression: every method but SYSTEM_TIME " +
+                "partitions on an expression or a column list.");
     }
 
     // Every primary and unique key must hold each partitioning column whole (1503 on every MySQL and MariaDB version);

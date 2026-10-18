@@ -140,6 +140,8 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | `SS-PART-003` | Error | MySQL, MariaDB — a table partitions by `RANGE` or `LIST` (or their `COLUMNS` forms) and declares no `Partitions`. Each partition is named with its boundary; use `HASH` or `KEY` with a `PartitionCount` to spread rows without boundaries. |
 | `SS-PART-004` | Error | MySQL, MariaDB — a `HASH` or `KEY` partition declares a `Values` boundary. Those methods assign rows by hashing and have none. |
 | `SS-PART-005` | Error | MySQL, MariaDB — a primary or unique key does not hold a partitioning column whole: the column is missing from the key, or the key holds only a prefix of it (`` `code`(10) ``). The engine refuses the table (`1503`). Checked for `KEY` (an empty list means the primary key's columns) and the `COLUMNS` forms; an expression method's columns are not read. |
+| `SS-PART-006` | Error | A table partitions by `SYSTEM_TIME` but is not a MariaDB table with `IsSystemVersioned: true`. `SYSTEM_TIME` partitions a system-versioned table's history; the engine refuses it on any other table (`4124`), and MySQL has no system versioning. |
+| `SS-PART-007` | Error | A table partitions by a method other than `SYSTEM_TIME` but declares no `Expression`. |
 
 Related-table resolution honors the same schema defaulting a real deployment uses -- an explicit `RelatedTableSchema`, a `schema.table` prefix on `RelatedTable`, or (falling back) the owning table's own schema. Because every foreign key target resolves to a concrete schema one way or another, there's no such thing as an "ambiguous target" here -- a `RelatedTable` either resolves to a real table or it doesn't.
 

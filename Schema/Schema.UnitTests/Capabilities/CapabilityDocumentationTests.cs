@@ -104,6 +104,8 @@ public class CapabilityDocumentationTests
         ["MariaDb/explicit-system-time-columns"] = "**Explicit system-time columns**",
         ["MariaDb/column-history-exclusion"] = "**Per-column history exclusion**",
         ["MariaDb/table-system-versioning"] = "**Table-level system versioning**",
+        ["MariaDb/system-time-partition-count"] = "**`SYSTEM_TIME` partitioning by count or with `STARTS`**",
+        ["MariaDb/system-time-auto-partitions"] = "**`SYSTEM_TIME` partitioning with `AUTO`**",
         ["MariaDb/long-unique-key"] = "**Long unique key**",
         ["MariaDb/sequence"] = "**Declared sequence**",
         ["MariaDb/sequence-type"] = "**Sequence data type**",

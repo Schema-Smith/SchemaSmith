@@ -3774,6 +3774,15 @@ SELECT TABLE_NAME
 
     // The catalog qualifies a sequence default with the database (nextval(`db`.`s`)); the package carries the bare
     // name so it deploys to any database, and the deploy compares defaults without the qualifier.
+    // Under AUTO the engine adds history partitions as they fill, so the list it reports today is not the declaration.
+    internal static void ApplySystemTimeOptions(MySqlPartitioning partitioning, string createTable)
+    {
+        partitioning.SystemTime = MariaDbSystemTimeOptions.Read(createTable);
+        if (partitioning.SystemTime?.Auto != true) return;
+        partitioning.Partitions.Clear();
+        partitioning.PartitionCount = null;
+    }
+
     // The engine names a subpartition <partition>sp<n> unless the table names it; a named one is not modelled.
     private static bool HasExplicitSubpartitionNames(IDbCommand command, string schema, string table, MySqlTable mySqlTable)
     {
@@ -3898,9 +3907,11 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                             continue;
                         }
 
-                        // A FULLTEXT parser (MY-A2) and KEY partitioning's ALGORITHM are reported only by SHOW CREATE TABLE.
+                        // A FULLTEXT parser (MY-A2), KEY partitioning's ALGORITHM and SYSTEM_TIME's options are reported only by
+                        // SHOW CREATE TABLE.
                         var keyPartitioned = mySqlTable.Partitioning?.Method?.Trim().EndsWith("KEY", StringComparison.OrdinalIgnoreCase) == true;
-                        if (mySqlTable.FullTextIndexes.Count > 0 || keyPartitioned)
+                        var systemTime = string.Equals(mySqlTable.Partitioning?.Method?.Trim(), "SYSTEM_TIME", StringComparison.OrdinalIgnoreCase);
+                        if (mySqlTable.FullTextIndexes.Count > 0 || keyPartitioned || systemTime)
                         {
                             commandJson.CommandText = $"SHOW CREATE TABLE `{MySqlReservedWords.Unquote(schema).Replace("`", "``")}`.`{MySqlReservedWords.Unquote(table).Replace("`", "``")}`";
                             using var createReader = commandJson.ExecuteReader();
@@ -3910,6 +3921,8 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                                 MySqlFullTextParsers.Apply(mySqlTable, createTable);
                                 if (keyPartitioned)
                                     mySqlTable.Partitioning.KeyAlgorithm = MySqlKeyAlgorithm.Read(createTable);
+                                if (systemTime)
+                                    ApplySystemTimeOptions(mySqlTable.Partitioning, createTable);
                             }
                         }
                     }

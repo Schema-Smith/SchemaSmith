@@ -1945,12 +1945,13 @@ MySQL and MariaDB carry a table's partition definition in the table DDL itself â
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `Method` | string | | `RANGE`, `LIST`, `HASH`, `KEY`, `LINEAR HASH`, `LINEAR KEY`, `RANGE COLUMNS` or `LIST COLUMNS`. Required. The `LINEAR` forms place rows by a powers-of-two algorithm and take a `PartitionCount` like `HASH` and `KEY`. The `COLUMNS` forms take a column **list** rather than an expression and compare values column by column. |
-| `Expression` | string | | The partitioning expression (`Id`, `YEAR(created)`), or a comma-separated column list for the `COLUMNS` methods. Required. |
+| `Method` | string | | `RANGE`, `LIST`, `HASH`, `KEY`, `LINEAR HASH`, `LINEAR KEY`, `RANGE COLUMNS`, `LIST COLUMNS` or, on MariaDB, `SYSTEM_TIME`. Required. The `LINEAR` forms place rows by a powers-of-two algorithm and take a `PartitionCount` like `HASH` and `KEY`. The `COLUMNS` forms take a column **list** rather than an expression and compare values column by column. |
+| `Expression` | string | | The partitioning expression (`Id`, `YEAR(created)`), or a comma-separated column list for the `COLUMNS` methods. Required for every method but `SYSTEM_TIME`, which has none ([`--Validate`](validate.md) reports a missing one as `SS-PART-007`). |
 | `PartitionCount` | int | `null` | `HASH`, `KEY` and their `LINEAR` forms only: how many partitions to spread across, named `p0`, `p1`, ... by the engine. `RANGE` and `LIST` name each partition individually instead, and so may a `HASH` or `KEY` table, in `Partitions`. |
 | `KeyAlgorithm` | int | `null` | `KEY` and `LINEAR KEY` only: `ALGORITHM = 1` or `2`, the default. It decides which partition a row lands in, so a table created with `1` (MySQL 5.1's hashing) carries it, and extraction writes it. Not compared on a deployed table: the engines report it only in `SHOW CREATE TABLE`. |
 | `Subpartitioning` | object | `null` | `RANGE` and `LIST` only: `{ "Method": "HASH", "Expression": "Id", "Count": 2 }` splits every partition again, by `HASH`, `KEY` or a `LINEAR` form, into `Count` subpartitions that the engine names `<partition>sp0`, `<partition>sp1`, ... |
-| `Partitions` | array | `[]` | **In declared order.** Each entry is `{ "Name": "...", "Values": "...", "Comment": "..." }`. `Values` is what follows `VALUES LESS THAN` for `RANGE` (a value, a tuple for `RANGE COLUMNS`, or `MAXVALUE`) or `VALUES IN` for `LIST`; a `HASH` or `KEY` partition has none. `Comment` is optional. |
+| `SystemTime` | object | `null` | `SYSTEM_TIME` only: how the history is split. `Interval` (`"1 MONTH"`) with an optional `StartsAt` (`"2026-01-01 00:00:00"`), or `Limit` (a row count); `Auto: true` lets the engine add history partitions as they fill. See [History partitioning](#history-partitioning-mariadb). |
+| `Partitions` | array | `[]` | **In declared order.** Each entry is `{ "Name": "...", "Values": "...", "Comment": "..." }`. `Values` is what follows `VALUES LESS THAN` for `RANGE` (a value, a tuple for `RANGE COLUMNS`, or `MAXVALUE`) or `VALUES IN` for `LIST`, and `HISTORY` or `CURRENT` for `SYSTEM_TIME`; a `HASH` or `KEY` partition has none. `Comment` is optional. |
 
 **Order is part of the definition.** `RANGE` boundaries must ascend, and the engine rejects a definition where they do not, so the list is written and read in declared order rather than sorted.
 
@@ -1986,6 +1987,25 @@ MySQL and MariaDB carry a table's partition definition in the table DDL itself â
   }
 }
 ```
+
+### History partitioning (MariaDB)
+
+`SYSTEM_TIME` partitions a system-versioned ([`IsSystemVersioned`](#mariadb-mariadbtable)) table's history: current rows live in the `CURRENT` partition, and each old version moves to a `HISTORY` partition as it is replaced. The table must declare `IsSystemVersioned: true`; [`--Validate`](validate.md) stops one that does not, or one on MySQL, which has no system versioning (`SS-PART-006`).
+
+```json
+"Partitioning": {
+  "Method": "SYSTEM_TIME",
+  "SystemTime": { "Interval": "1 MONTH", "StartsAt": "2026-01-01 00:00:00", "Auto": true }
+}
+```
+
+- **`Interval` or `Limit` says when a history partition closes**: every interval, or after so many rows. Without `StartsAt` the engine starts the first interval when the table is created, and extraction writes the date it chose.
+- **`Partitions` names them, or the engine does.** A list holds the `HISTORY` partitions and the one `CURRENT`. Without one, `PartitionCount` sets how many there are (`p0`, `p1`, ... and `pn`; more than two needs an `Interval` or `Limit` to rotate them), and without either the engine creates two.
+- **`Auto` hands the history partitions to the engine**, which adds one whenever the last fills. The list is then the engine's, so extraction does not write it and a deploy does not compare it.
+
+**Only the method is compared on a deployed table.** A history partition added since, by the engine or by hand, is not a difference, and the engine reports `Interval`, `StartsAt`, `Limit` and `Auto` only in `SHOW CREATE TABLE`, so they are applied when the table is created and not compared after. Changing a table to or from `SYSTEM_TIME` is repartitioning and is refused.
+
+**What each version accepts.** MariaDB 10.3 and 10.4 accept only a list that names every partition, with no `StartsAt`; a count or `StartsAt` needs 10.5, and `Auto` needs 10.9.1. On an older server the table is created without what it cannot have, and the loss is recorded as a downgrade: without its `SYSTEM_TIME` partitioning below 10.5, and without `Auto` below 10.9.1. See the [compatibility matrix](schemaquench.md#mysql--mariadb).
 
 ---
 

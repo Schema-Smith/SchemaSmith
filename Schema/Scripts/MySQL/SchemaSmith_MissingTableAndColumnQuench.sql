@@ -164,22 +164,34 @@ BEGIN
                 -- boundaries must ascend, and the engine rejects a definition where they do not), so the
                 -- list is aggregated by Ordinal. HASH and KEY carry a count instead and no list at all.
                 CASE WHEN t.PartitionMethod IS NULL THEN ''
+                     -- SYSTEM_TIME (MariaDB) the server cannot create is left out; the degrade guard below reports it.
+                     WHEN t.PartitionMethod = 'SYSTEM_TIME'
+                          AND SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0 THEN ''
                      ELSE CONCAT(' PARTITION BY ', t.PartitionMethod,
-                                 CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
-                                      THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
-                                 ' (', t.PartitionExpression, ')',
-                                 -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
-                                 CASE WHEN t.SubpartitionMethod IS NOT NULL
-                                      THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
-                                                  CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
-                                      ELSE '' END,
-                                 -- The named list, in declared order: RANGE and LIST with their boundaries, HASH and KEY by name
-                                 -- alone. A HASH or KEY table that names none takes a count instead.
+                                 -- SYSTEM_TIME has no expression: it partitions the history by INTERVAL or LIMIT, AUTO from 10.9.1.
+                                 IF(t.PartitionMethod = 'SYSTEM_TIME',
+                                    CONCAT(COALESCE(CONCAT(' INTERVAL ', t.SystemTimeInterval,
+                                                           COALESCE(CONCAT(' STARTS ', QUOTE(t.SystemTimeStarts)), '')), ''),
+                                           COALESCE(CONCAT(' LIMIT ', t.SystemTimeLimit), ''),
+                                           IF(t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 1, ' AUTO', '')),
+                                    CONCAT(CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
+                                                THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
+                                           ' (', t.PartitionExpression, ')',
+                                           -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
+                                           CASE WHEN t.SubpartitionMethod IS NOT NULL
+                                                THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
+                                                            CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
+                                                ELSE '' END)),
+                                 -- The named list, in declared order: RANGE and LIST with their boundaries, SYSTEM_TIME as HISTORY or
+                                 -- CURRENT, HASH and KEY by name alone. ONE read of _SchemaSmith_Partitions in this statement: MySQL
+                                 -- cannot reopen a temporary table (1137). A table that names none takes a count instead.
                                  COALESCE((SELECT CONCAT(' (', GROUP_CONCAT(CONCAT('PARTITION ', pt.PartitionName,
                                                                   CASE WHEN t.PartitionMethod LIKE 'LIST%'
                                                                        THEN CONCAT(' VALUES IN (', pt.PartitionValues, ')')
                                                                        WHEN t.PartitionMethod LIKE 'RANGE%'
                                                                        THEN CONCAT(' VALUES LESS THAN (', pt.PartitionValues, ')')
+                                                                       WHEN t.PartitionMethod = 'SYSTEM_TIME'
+                                                                       THEN IF(UPPER(TRIM(COALESCE(pt.PartitionValues, ''))) = 'CURRENT', ' CURRENT', ' HISTORY')
                                                                        ELSE '' END,
                                                                   CASE WHEN pt.PartitionComment IS NOT NULL
                                                                        THEN CONCAT(' COMMENT = ', QUOTE(pt.PartitionComment)) ELSE '' END)
@@ -203,7 +215,8 @@ BEGIN
                  t.PageCompressed, t.PageCompressionLevel, t.Encryption, t.Encrypted, t.EncryptionKeyId,
                  t.AutoIncrementValue, t.Comment, t.Tablespace, t.DataDirectory,
                  t.PartitionMethod, t.PartitionExpression, t.PartitionCount,
-                 t.PartitionKeyAlgorithm, t.SubpartitionMethod, t.SubpartitionExpression, t.SubpartitionCount;
+                 t.PartitionKeyAlgorithm, t.SubpartitionMethod, t.SubpartitionExpression, t.SubpartitionCount,
+                 t.SystemTimeInterval, t.SystemTimeStarts, t.SystemTimeLimit, t.SystemTimeAuto, t.HasPartitionList;
 
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_Done = TRUE;
 
@@ -542,6 +555,46 @@ BEGIN
     END IF;
 
 
+    -- SYSTEM_TIME partitioning a server cannot create (no system versioning, or a count or STARTS below MariaDB 10.5)
+    -- is left off the CREATE above, and AUTO below 10.9.1. A versioned table without its history partitioning is still a
+    -- correct table, so each is a downgrade rather than a failure, unless the policy says fail.
+    IF EXISTS (SELECT 1 FROM _SchemaSmith_Tables t
+               WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+                 AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
+                      OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0))) THEN
+        IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail' THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), CONCAT('  SYSTEM_TIME partitioning this server cannot create (UnsupportedFeaturePolicy=fail): ',
+                   SchemaSmith_StripBacktickWrapping(t.TableName))
+            FROM _SchemaSmith_Tables t
+            WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+              AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
+                   OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0));
+            SET @ss_msg = 'SYSTEM_TIME partitioning needs a newer MariaDB (UnsupportedFeaturePolicy=fail). See the run log.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+        ELSE
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(),
+                   CONCAT(IF(SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0,
+                             '  Table deployed without its SYSTEM_TIME partitioning (needs system versioning, and MariaDB 10.5 for a count or STARTS - downgraded): ',
+                             '  SYSTEM_TIME partitioning deployed without AUTO (requires MariaDB 10.9.1 - downgraded): '),
+                          SchemaSmith_StripBacktickWrapping(t.TableName))
+            FROM _SchemaSmith_Tables t
+            WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+              AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
+                   OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0));
+            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+            SELECT CONNECTION_ID(),
+                   IF(SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0,
+                      'table without its SYSTEM_TIME partitioning', 'SYSTEM_TIME partitioning without AUTO'),
+                   SchemaSmith_StripBacktickWrapping(t.TableName), 'downgraded'
+            FROM _SchemaSmith_Tables t
+            WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+              AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
+                   OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0));
+        END IF;
+    END IF;
+
     IF p_WhatIf = 1 THEN
         -- WhatIf mode: output the actual SQL that would be executed
         CALL SchemaSmith_MarkTableRenames(p_DatabaseName);
@@ -652,22 +705,34 @@ BEGIN
                       -- Partitioning (#partitioning, K3) -- must match the real-path emit above exactly,
                       -- or the WhatIf preview shows a statement the live run would not issue.
                       CASE WHEN t.PartitionMethod IS NULL THEN ''
+                           -- SYSTEM_TIME (MariaDB) the server cannot create is left out; the degrade guard below reports it.
+                           WHEN t.PartitionMethod = 'SYSTEM_TIME'
+                                AND SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0 THEN ''
                            ELSE CONCAT(' PARTITION BY ', t.PartitionMethod,
-                                       CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
-                                            THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
-                                       ' (', t.PartitionExpression, ')',
-                                       -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
-                                       CASE WHEN t.SubpartitionMethod IS NOT NULL
-                                            THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
-                                                        CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
-                                            ELSE '' END,
-                                       -- The named list, in declared order: RANGE and LIST with their boundaries, HASH and KEY by name
-                                       -- alone. A HASH or KEY table that names none takes a count instead.
+                                       -- SYSTEM_TIME has no expression: it partitions the history by INTERVAL or LIMIT, AUTO from 10.9.1.
+                                       IF(t.PartitionMethod = 'SYSTEM_TIME',
+                                          CONCAT(COALESCE(CONCAT(' INTERVAL ', t.SystemTimeInterval,
+                                                                 COALESCE(CONCAT(' STARTS ', QUOTE(t.SystemTimeStarts)), '')), ''),
+                                                 COALESCE(CONCAT(' LIMIT ', t.SystemTimeLimit), ''),
+                                                 IF(t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 1, ' AUTO', '')),
+                                          CONCAT(CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
+                                                      THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
+                                                 ' (', t.PartitionExpression, ')',
+                                                 -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
+                                                 CASE WHEN t.SubpartitionMethod IS NOT NULL
+                                                      THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
+                                                                  CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
+                                                      ELSE '' END)),
+                                       -- The named list, in declared order: RANGE and LIST with their boundaries, SYSTEM_TIME as HISTORY or
+                                       -- CURRENT, HASH and KEY by name alone. ONE read of _SchemaSmith_Partitions in this statement: MySQL
+                                       -- cannot reopen a temporary table (1137). A table that names none takes a count instead.
                                        COALESCE((SELECT CONCAT(' (', GROUP_CONCAT(CONCAT('PARTITION ', pt.PartitionName,
                                                                         CASE WHEN t.PartitionMethod LIKE 'LIST%'
                                                                              THEN CONCAT(' VALUES IN (', pt.PartitionValues, ')')
                                                                              WHEN t.PartitionMethod LIKE 'RANGE%'
                                                                              THEN CONCAT(' VALUES LESS THAN (', pt.PartitionValues, ')')
+                                                                             WHEN t.PartitionMethod = 'SYSTEM_TIME'
+                                                                             THEN IF(UPPER(TRIM(COALESCE(pt.PartitionValues, ''))) = 'CURRENT', ' CURRENT', ' HISTORY')
                                                                              ELSE '' END,
                                                                         CASE WHEN pt.PartitionComment IS NOT NULL
                                                                              THEN CONCAT(' COMMENT = ', QUOTE(pt.PartitionComment)) ELSE '' END)
@@ -687,7 +752,8 @@ BEGIN
                  t.PageCompressed, t.PageCompressionLevel, t.Encryption, t.Encrypted, t.EncryptionKeyId,
                  t.AutoIncrementValue, t.Comment, t.Tablespace, t.DataDirectory,
                  t.PartitionMethod, t.PartitionExpression, t.PartitionCount,
-                 t.PartitionKeyAlgorithm, t.SubpartitionMethod, t.SubpartitionExpression, t.SubpartitionCount;
+                 t.PartitionKeyAlgorithm, t.SubpartitionMethod, t.SubpartitionExpression, t.SubpartitionCount,
+                 t.SystemTimeInterval, t.SystemTimeStarts, t.SystemTimeLimit, t.SystemTimeAuto, t.HasPartitionList;
 
         -- Step 2: Show ALTER TABLE ADD COLUMN for new columns on existing tables (set-based;
         -- one row per column, matching the per-column statement the ELSE branch would issue
