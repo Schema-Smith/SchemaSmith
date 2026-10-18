@@ -86,6 +86,77 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string MemoryOptimizedPlacementCode = "SS-XTP-001";
     private const string Category = "Coherence";
 
+    private static readonly IReadOnlyList<Severity> ErrorLevel = [Severity.Error];
+    private static readonly IReadOnlyList<Severity> WarningLevel = [Severity.Warning];
+    private static readonly IReadOnlyList<Severity> ErrorOrWarningLevel = [Severity.Error, Severity.Warning];
+
+    /// <summary>
+    /// Every code this check reports, with the levels it can carry. A code with two levels picks one from the product
+    /// (<c>SS-FK-006</c> is a warning on MariaDB below 12.1). A caller that refuses an Error and warns on a Warning reads
+    /// the levels from here rather than keeping its own copy.
+    /// </summary>
+    public static IReadOnlyDictionary<string, IReadOnlyList<Severity>> Codes { get; } = new Dictionary<string, IReadOnlyList<Severity>>
+    {
+        [LocalColumnCode] = ErrorLevel,
+        [RelatedTableCode] = WarningLevel,
+        [RelatedColumnCode] = ErrorLevel,
+        [CardinalityCode] = ErrorLevel,
+        [ForeignKeyNameReusedCode] = ErrorOrWarningLevel,
+        [SetNullColumnsCode] = ErrorLevel,
+        [NonStandardKeyReferenceCode] = WarningLevel,
+        [SetDefaultActionCode] = WarningLevel,
+        [RelatedTableInOtherTemplateCode] = WarningLevel,
+        [IndexColumnCode] = ErrorLevel,
+        [TemporalKeyShapeCode] = ErrorLevel,
+        [TemporalKeyPeriodCode] = ErrorLevel,
+        [NullsNotDistinctOnKeyCode] = WarningLevel,
+        [PeriodPairIncompleteCode] = ErrorLevel,
+        [PeriodRoleRepeatedCode] = ErrorLevel,
+        [PeriodWithoutTemporalCode] = ErrorLevel,
+        [PeriodTypeCode] = ErrorLevel,
+        [LedgerColumnWithoutLedgerCode] = ErrorLevel,
+        [LedgerEndOnAppendOnlyCode] = ErrorLevel,
+        [LedgerRoleRepeatedCode] = ErrorLevel,
+        [LedgerViewWithoutLedgerCode] = ErrorLevel,
+        [LedgerColumnTypeCode] = ErrorLevel,
+        [SpatialColumnCode] = ErrorLevel,
+        [SpatialFamilyCode] = ErrorLevel,
+        [SpatialBoundingBoxCode] = ErrorLevel,
+        [SpatialGridsCode] = ErrorLevel,
+        [BackfillWithoutDefaultCode] = WarningLevel,
+        [CharsetWithoutCollationCode] = WarningLevel,
+        [RemovedFunctionCode] = WarningLevel,
+        [NationalCharacterTypeCode] = WarningLevel,
+        [DeprecatedNumericFormCode] = WarningLevel,
+        [RebuildThresholdCode] = ErrorLevel,
+        [IgnoredThresholdCode] = WarningLevel,
+        [EdgeConstraintTableKindCode] = ErrorLevel,
+        [EdgeConstraintNodeCode] = WarningLevel,
+        [RlsWithoutPoliciesCode] = WarningLevel,
+        [PoliciesWithoutRlsCode] = WarningLevel,
+        [ReplicaIdentityIndexMissingCode] = ErrorLevel,
+        [IdentifierTooLongCode] = ErrorLevel,
+        [ReplicaIdentityIndexUnknownCode] = ErrorLevel,
+        [ReplicaIdentityIndexNotUniqueCode] = ErrorLevel,
+        [ReplicaIdentityIndexIgnoredCode] = WarningLevel,
+        [VersioningExclusionInertCode] = WarningLevel,
+        [MinimumVersionUnresolvableCode] = ErrorLevel,
+        [CdcFilegroupInertCode] = WarningLevel,
+        [CdcIndexNameInvalidCode] = ErrorLevel,
+        [FullTextKeyIndexInvalidCode] = ErrorLevel,
+        [CompressionConflictCode] = ErrorLevel,
+        [CompressionLevelInertCode] = WarningLevel,
+        [DuplicateEventCode] = ErrorLevel,
+        [DuplicateEnumTypeCode] = ErrorLevel,
+        [DuplicateSequenceCode] = ErrorLevel,
+        [DuplicateDomainTypeCode] = ErrorLevel,
+        [PartitionHalfDeclaredCode] = ErrorLevel,
+        [PartitionAndFileGroupCode] = ErrorLevel,
+        [MyPartitionRangeListNoPartitionsCode] = ErrorLevel,
+        [MyPartitionHashBoundaryCode] = ErrorLevel,
+        [MemoryOptimizedPlacementCode] = ErrorLevel,
+    };
+
     public IEnumerable<Finding> Run(ValidationContext ctx)
     {
         // (schema, name) identity groups multiple GATED variants of the same logical table
