@@ -6,47 +6,82 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '*.md'
-      - '**/*.md'
-      - 'LICENSE'
-      - '.gitignore'
-      # Demo/lab scripts are doc/demo content (exempt from pull requests): a lab .ps1/.sh/.sql is not product
-      # code and should not spin the three-engine container matrix. Package JSON and .json-schemas
-      # under Demos are deliberately NOT excluded — validate-demo-schemas.yml reads them and the regeneration rule
-      # (the --Validate SS-STALE-001 staleness check) keeps them current, so those still trigger CI.
-      - 'Demos/**/*.ps1'
-      - 'Demos/**/*.sh'
-      - 'Demos/**/*.sql'
-      # install.sh is not built, not covered by any test, and nothing in CI exercises it, so a change
-      # to it cannot alter a test outcome -- yet it spun the whole three-engine matrix. NOTE: this is
-      # coupled to release.yml's is_non_product list. Once CI skips these commits they have no
-      # check-runs at all, and a release cut straight after one fails the gate with 'check not found'
-      # unless the gate can walk back to a product-identical ancestor. The two lists move together.
-      - 'packaging/install/**'
+    # What CI builds, runs or reads: a copy of .github/ci-tested-paths.txt, which is the list (a trigger cannot
+    # read a file). CiTestedPathsTests fails when this copy, the pull_request copy below and the file disagree.
+    paths:
+      - 'Schema/**'
+      - 'SchemaQuench/**'
+      - 'SchemaTongs/**'
+      - 'DataTongs/**'
+      - 'SchemaShears/**'
+      - 'TestProducts/**'
+      - 'Demos/**'
+      - '!Demos/**/*.md'
+      - '!Demos/**/*.ps1'
+      - '!Demos/**/*.sh'
+      - '!Demos/**/*.sql'
+      - 'Demos/**/Templates/**/*.sql'
+      - 'Demos/**/* Product/**/*.sql'
+      - '!**/*.md'
+      - 'docs/end-user/reference/schemaquench.md'
+      - 'docs/development/genuine-sweep-results.md'
+      - 'scripts/check-coverage-thresholds.py'
+      - 'scripts/check-sweep-record.sh'
+      - 'scripts/provision-semantic-db.sh'
+      - 'scripts/run-sqlserver-shards.sh'
+      - 'scripts/suite-overhead.py'
+      - 'scripts/ci_path_filter.py'
+      - '.github/ci-tested-paths.txt'
+      - '.github/workflows/continuous-integration.yml'
+      - '.github/workflows/ci-docs-only-companion.yml'
+      - '.github/engine-ceilings.json'
+      - 'SchemaSmith.sln'
+      - 'Directory.Build.props'
+      - 'Directory.Build.targets'
+      - 'Directory.Packages.props'
+      - 'nuget.config'
+      - 'coverage.runsettings'
+      - '.editorconfig'
+      - '.gitattributes'
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '*.md'
-      - '**/*.md'
-      - 'LICENSE'
-      - '.gitignore'
-      # Demo/lab scripts are doc/demo content (exempt from pull requests): a lab .ps1/.sh/.sql is not product
-      # code and should not spin the three-engine container matrix. Package JSON and .json-schemas
-      # under Demos are deliberately NOT excluded — validate-demo-schemas.yml reads them and the regeneration rule
-      # (the --Validate SS-STALE-001 staleness check) keeps them current, so those still trigger CI.
-      - 'Demos/**/*.ps1'
-      - 'Demos/**/*.sh'
-      - 'Demos/**/*.sql'
-      # install.sh is not built, not covered by any test, and nothing in CI exercises it, so a change
-      # to it cannot alter a test outcome -- yet it spun the whole three-engine matrix. NOTE: this is
-      # coupled to release.yml's is_non_product list. Once CI skips these commits they have no
-      # check-runs at all, and a release cut straight after one fails the gate with 'check not found'
-      # unless the gate can walk back to a product-identical ancestor. The two lists move together.
-      - 'packaging/install/**'
-
+    # What CI builds, runs or reads: a copy of .github/ci-tested-paths.txt, which is the list (a trigger cannot
+    # read a file). CiTestedPathsTests fails when this copy, the push copy above and the file disagree.
+    paths:
+      - 'Schema/**'
+      - 'SchemaQuench/**'
+      - 'SchemaTongs/**'
+      - 'DataTongs/**'
+      - 'SchemaShears/**'
+      - 'TestProducts/**'
+      - 'Demos/**'
+      - '!Demos/**/*.md'
+      - '!Demos/**/*.ps1'
+      - '!Demos/**/*.sh'
+      - '!Demos/**/*.sql'
+      - 'Demos/**/Templates/**/*.sql'
+      - 'Demos/**/* Product/**/*.sql'
+      - '!**/*.md'
+      - 'docs/end-user/reference/schemaquench.md'
+      - 'docs/development/genuine-sweep-results.md'
+      - 'scripts/check-coverage-thresholds.py'
+      - 'scripts/check-sweep-record.sh'
+      - 'scripts/provision-semantic-db.sh'
+      - 'scripts/run-sqlserver-shards.sh'
+      - 'scripts/suite-overhead.py'
+      - 'scripts/ci_path_filter.py'
+      - '.github/ci-tested-paths.txt'
+      - '.github/workflows/continuous-integration.yml'
+      - '.github/workflows/ci-docs-only-companion.yml'
+      - '.github/engine-ceilings.json'
+      - 'SchemaSmith.sln'
+      - 'Directory.Build.props'
+      - 'Directory.Build.targets'
+      - 'Directory.Packages.props'
+      - 'nuget.config'
+      - 'coverage.runsettings'
+      - '.editorconfig'
+      - '.gitattributes'
 # Two pushes in quick succession used to run both matrices to completion, and closing a PR did not
 # stop its run -- a closed PR burned the full matrix until it was cancelled by hand. Cancellation is
 # gated on pull_request so a push to main is never silently superseded.
@@ -880,8 +915,8 @@ jobs:
   # everything expensive. coverage-gate needs the matrices, so it is gated transitively.
   #
   # Safe to gate on because 'Genuine Sweep Record' is NOT one of the twelve required status checks on
-  # main -- verified against the ruleset. That matters: this workflow carries a paths-ignore for
-  # docs/demos, so if it ever becomes required, ci-docs-only-companion.yml must report it too or a
+  # main -- verified against the ruleset. That matters: this workflow runs only for a change to a
+  # path it tests, so if it ever becomes required, ci-docs-only-companion.yml must report it too or a
   # docs-only PR waits forever on a context nothing emits -- the exact deadlock that companion exists
   # to fix.
   sweep-record:

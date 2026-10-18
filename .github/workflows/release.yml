@@ -83,24 +83,11 @@ jobs:
             "check-headers"
           )
 
-          # KEEP IN SYNC WITH continuous-integration.yml's paths-ignore. Every path CI skips must be
-          # non-product here: a commit CI skipped has NO check-runs at all, so if the walk-back below
-          # treats it as product it stops there and the gate fails with "check not found" on a tree
-          # that is genuinely verified. The two lists had already drifted -- LICENSE, .gitignore and
-          # the Demos script excludes were only ever in the CI list.
-          #
-          # A path that cannot change any test outcome. Everything else — all product code, engine
-          # scripts, test projects, TestProducts, Demos (their .json-schemas are asserted by the
-          # --Validate staleness check), and continuous-integration.yml itself, since changing CI
-          # changes what "passed" means — is product for this purpose. The list is deliberately
-          # conservative: a wrong "non-product" weakens the release gate, while a wrong "product"
-          # only costs a CI re-run.
+          # A path CI does not test, read from the list CI's trigger is copied from (.github/ci-tested-paths.txt), so
+          # the two cannot drift: a commit CI skipped has NO check-runs at all, and if the walk-back below treated it
+          # as product it would stop there and fail the gate with "check not found" on a tree that is verified.
           is_non_product() {
-            case "$1" in
-              docs/*|*.md|LICENSE|.gitignore|.github/workflows/release.yml|.github/workflows/distribution-publish.yml|.github/ISSUE_TEMPLATE/*) return 0 ;;
-              packaging/install/*|Demos/*/*.ps1|Demos/*/*.sh|Demos/*/*.sql) return 0 ;;
-              *) return 1 ;;
-            esac
+            ! printf '%s\n' "$1" | python3 scripts/ci_path_filter.py .github/ci-tested-paths.txt > /dev/null
           }
 
           # Build the set of commits whose green checks still hold for this tree: the release commit,
