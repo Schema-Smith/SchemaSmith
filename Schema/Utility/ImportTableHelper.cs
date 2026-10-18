@@ -76,6 +76,12 @@ public static class ImportTableHelper
                     .FirstOrDefault(i => string.Equals(i.Name, newIndex.Name, StringComparison.OrdinalIgnoreCase));
                 if (origIndex != null) newIndex.XmlCompression = origIndex.XmlCompression;
             }
+            foreach (var newXmlIndex in xcNew.XmlIndexes)
+            {
+                var origXmlIndex = xcOriginal.XmlIndexes
+                    .FirstOrDefault(i => string.Equals(i.Name, newXmlIndex.Name, StringComparison.OrdinalIgnoreCase));
+                if (origXmlIndex != null) newXmlIndex.XmlCompression = origXmlIndex.XmlCompression;
+            }
         }
 
         // Copy dynamic (custom) properties at table level

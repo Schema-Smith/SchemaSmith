@@ -15,8 +15,8 @@ namespace Schema.Domain.SqlServer
         public string CompressionType { get; set; } = "NONE";
 
         // Valid on an index as well as a table (probed on 2022), and alterable via ALTER INDEX ... REBUILD.
-        // Same 2022-deploy / 2025-extract asymmetry as SqlServerTable.XmlCompression -- see the comment there.
-        [SchemaProperty(Description = "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022, but only EXTRACTABLE from 2025** — sys.partitions.xml_compression does not exist before then, so on 2022-2024 SchemaTongs carries the value forward from the package it is refreshing rather than dropping it.")]
+        // Same deploy / extract asymmetry as SqlServerTable.XmlCompression -- see the comment there.
+        [SchemaProperty(Description = "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022; extracted where the server reports sys.partitions.xml_compression** (2025, and 2022 from CU26; 2022 CU25 does not). On a server without it, SchemaTongs carries the value forward from the package it is refreshing rather than dropping it.")]
         [JsonProperty(Order = 110)]
         public bool XmlCompression { get; set; }
 

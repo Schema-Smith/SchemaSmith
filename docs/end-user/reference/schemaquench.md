@@ -472,7 +472,7 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 | **Graph tables** (`NODE` / `EDGE`) | SQL Server 2017 | creates the table with all its declared columns, *without* graph semantics + records a downgrade |
 | **Edge constraints** (`EdgeConstraints` on an edge table) | SQL Server 2019 | creates the edge table without the constraint + records a downgrade |
 | **Ledger tables** | SQL Server 2022 | creates an ordinary table + records a downgrade. The direction is deliberate: a ledger table cannot be converted or dropped afterwards, so not creating one is far easier to recover from than creating one by accident |
-| **XML compression** | SQL Server 2022 | creates the table or index without the compression clause + records a downgrade. Nothing an application can observe changes — only the storage saving is lost |
+| **XML compression** | SQL Server 2022 | creates the table, index or XML index without the compression clause + records a downgrade. Nothing an application can observe changes — only the storage saving is lost |
 
 > **Check the manifest before deploying to a pre-2016 target.** Under the default `warn`, a masked column is created unmasked and an Always Encrypted column is created unencrypted — the deploy succeeds and the downgrade is recorded, but the protection is not there. If a silently-unprotected column is worse for you than a failed deployment, set `Target:UnsupportedFeaturePolicy=fail`.
 

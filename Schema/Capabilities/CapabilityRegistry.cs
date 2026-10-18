@@ -56,8 +56,8 @@ namespace Schema.Capabilities
             //
             // WORTH KNOWING for anything driving UI or AI off this row, because the two thresholds are
             // NOT the same one: the version that can DEPLOY this (2022) is not the version that can READ
-            // it back. sys.partitions.xml_compression arrives in 2025, so 2022-2024 honour the setting
-            // and cannot report it -- exactly the asymmetry application-time-period documents for
+            // it back. sys.partitions.xml_compression is missing on 2022 CU25 and present from CU26 and on
+            // 2025, so a 2022 build without it honours the setting and cannot report it -- exactly the asymmetry application-time-period documents for
             // MariaDB. The row encodes the DEPLOY threshold, because that is what the gate compares
             // against; SchemaTongs covers the read gap by preserving the value from the package.
             rows.Add(new("xml-compression", "XML compression", Platform.SqlServer,

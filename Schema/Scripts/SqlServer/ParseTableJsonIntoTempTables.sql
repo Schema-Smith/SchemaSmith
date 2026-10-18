@@ -265,6 +265,7 @@
     [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [PrimaryIndex] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [SecondaryIndexType] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [XmlCompression] BIT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
@@ -971,12 +972,12 @@
   EXEC(@v_SQL)
   
   RAISERROR('Parse XML Indexes from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [XmlCompression], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          -- INGEST ONLY -- NORMALIZE below owns the transforms.
          t.[Schema], t.[Name] AS [TableName], i.[IndexName], i.[IsPrimary],
          i.[Column], i.[PrimaryIndex],
-         i.[SecondaryIndexType], i.[ShouldApplyExpression], i.[VariantName]
+         i.[SecondaryIndexType], i.[XmlCompression], i.[ShouldApplyExpression], i.[VariantName]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(XmlIndexes) WITH (
       [IndexName] NVARCHAR(500) '$.Name',
@@ -984,6 +985,7 @@
       [Column] NVARCHAR(500) '$.Column',
       [PrimaryIndex] NVARCHAR(500) '$.PrimaryIndex',
 	  [SecondaryIndexType] NVARCHAR(500) '$.SecondaryIndexType',
+      [XmlCompression] BIT '$.XmlCompression',
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName'
       ) i;
@@ -992,7 +994,8 @@
   UPDATE #XmlIndexes
      SET [IndexName]    = SchemaSmith.fn_SafeBracketWrap([IndexName]),
          [Column]       = SchemaSmith.fn_SafeBracketWrap([Column]),
-         [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap([PrimaryIndex]);
+         [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap([PrimaryIndex]),
+         [XmlCompression] = ISNULL([XmlCompression], 0);
 
   -- Identify XmlIndexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #XmlIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))

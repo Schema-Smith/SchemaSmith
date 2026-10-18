@@ -24,6 +24,11 @@ namespace Schema.Domain.SqlServer
         [JsonProperty(Order = 5)]
         public string SecondaryIndexType { get; set; }
 
+        // Each XML index, primary or secondary, has its own setting; a secondary does not inherit its primary's.
+        [SchemaProperty(Description = "SQL Server 2022+. Compresses this XML index (XML_COMPRESSION). A secondary XML index has its own setting and does not inherit its primary's. Extracted where the server reports sys.partitions.xml_compression (2025, and 2022 from CU26); elsewhere SchemaTongs carries the value forward from the package it is refreshing.")]
+        [JsonProperty(Order = 8)]
+        public bool XmlCompression { get; set; }
+
         [JsonProperty(Order = 6)]
         public string ShouldApplyExpression { get; set; }
 

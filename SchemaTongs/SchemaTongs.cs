@@ -140,7 +140,7 @@ public class SchemaTongs
         _folderMappingConfig = new FolderMappingConfig(config, _platform);
         _folderMappingConfig.Validate();
 
-        var templateFile = Path.Combine(_templatePath, "Template.json");
+        var templateFile = Path.Join(_templatePath, "Template.json");
         if (!FileWrapper.GetFromFactory().Exists(templateFile)) return;
 
         var template = JsonHelper.Load<Template>(templateFile);
@@ -295,6 +295,7 @@ public class SchemaTongs
     // Detected SOURCE server major, kept so extraction queries can gate a filter on a catalog column
     // that does not exist on older servers. 0 until version detection has run.
     private int _sourceMajor;
+    private bool _sourceReportsXmlCompression;
 
     /// <summary>
     /// Whether the SOURCE server can report XML_COMPRESSION. It DEPLOYS from SQL Server 2022 but only
@@ -304,7 +305,7 @@ public class SchemaTongs
     /// extraction that structurally cannot see it strip a property the server is honouring.
     /// </summary>
     private bool SourceCanReportXmlCompression =>
-        _platform == Platform.SqlServer && _sourceMajor >= 17 && _ingestEncoding != IngestEncoding.Xml;
+        _platform == Platform.SqlServer && _sourceReportsXmlCompression && _ingestEncoding != IngestEncoding.Xml;
 
     /// <summary>
     /// Excludes a LIVE ledger view (<c>&lt;table&gt;_Ledger</c>), which a ledger table generates and
@@ -757,7 +758,7 @@ public class SchemaTongs
 
     private void BuildFileIndexes()
     {
-        var templateFile = Path.Combine(_templatePath, "Template.json");
+        var templateFile = Path.Join(_templatePath, "Template.json");
         if (!FileWrapper.GetFromFactory().Exists(templateFile)) return;
 
         var template = JsonHelper.Load<Template>(templateFile);
@@ -1132,6 +1133,7 @@ public class SchemaTongs
                         info.CompatibilityLevel, info.ServerComparable);
                 sourceMajor = info?.ServerComparable ?? 0;
                 _sourceMajor = sourceMajor;
+                _sourceReportsXmlCompression = _platform == Platform.SqlServer && ForgeKindler.ReportsXmlCompression(versionCmd);
             }
 
             _progressLog.Info("Kindling The Forge");
@@ -1618,7 +1620,7 @@ SELECT SCHEMA_NAME(p.[schema_id]), p.[name], p.is_enabled, p.is_schema_bound, p.
     private void DeclareFolderWrittenOnUse(ScriptObjectType type, string castPath)
     {
         DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
-        var templateFile = Path.Combine(_templatePath, "Template.json");
+        var templateFile = Path.Join(_templatePath, "Template.json");
         if (!FileWrapper.GetFromFactory().Exists(templateFile)) return;
         var template = JsonHelper.Load<Template>(templateFile);
         if (template.ScriptFolders.Any(f => f.ObjectType == type)) return;

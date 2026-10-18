@@ -601,4 +601,43 @@ public class ImportTableHelperTests
             Assert.That(newTable.Description, Is.EqualTo("fresh"));
         });
     }
+
+    private static SqlServerTable XmlCompressionTable(bool compressed) => new()
+    {
+        Name = "Docs",
+        XmlCompression = compressed,
+        Indexes = [new SqlServerIndex { Name = "ix_docs", XmlCompression = compressed }],
+        XmlIndexes = [new XmlIndex { Name = "pxml_docs", IsPrimary = true, Column = "body", XmlCompression = compressed }]
+    };
+
+    [Test]
+    public void XmlCompression_IsCarriedForward_WhenTheSourceCannotReportIt()
+    {
+        var extracted = XmlCompressionTable(compressed: false);
+
+        ImportTableHelper.PreserveDataDeliveryAndCustomProperties(extracted, XmlCompressionTable(compressed: true), _ => true,
+            sourceCanReportXmlCompression: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(extracted.XmlCompression, Is.True, "the table");
+            Assert.That(((SqlServerIndex)extracted.Indexes[0]).XmlCompression, Is.True, "the index");
+            Assert.That(extracted.XmlIndexes[0].XmlCompression, Is.True, "the XML index");
+        });
+    }
+
+    [Test]
+    public void XmlCompression_FollowsTheServer_WhenTheSourceReportsIt()
+    {
+        var extracted = XmlCompressionTable(compressed: false);
+
+        ImportTableHelper.PreserveDataDeliveryAndCustomProperties(extracted, XmlCompressionTable(compressed: true), _ => true,
+            sourceCanReportXmlCompression: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(extracted.XmlCompression, Is.False, "turned off out of band shows as a change");
+            Assert.That(extracted.XmlIndexes[0].XmlCompression, Is.False);
+        });
+    }
 }

@@ -68,15 +68,15 @@ namespace Schema.Domain.SqlServer
         // PAGE compressed and XML compressed at once.
         //
         // THE VERSION STORY IS ASYMMETRIC, and verified live rather than read. The clause deploys from
-        // SQL Server 2022, but sys.partitions.xml_compression does NOT exist there: on 2022 CU25 the
-        // column is only on sys.internal_partitions, which reports NULL for an ordinary table. It appears
-        // on sys.partitions in 2025. So 2022-2024 can deploy this and can never read it back, the same
-        // shape as MariaDB application-time periods (declarable 10.4.3, readable 11.4). Extraction on
-        // those versions therefore PRESERVES whatever the package already declared instead of emitting
-        // nothing, which would silently drop it -- see ImportTableHelper.
+        // SQL Server 2022, but sys.partitions.xml_compression is missing on 2022 CU25 (the column is only on
+        // sys.internal_partitions, which reports NULL for an ordinary table) and present on 2022 CU26 and
+        // 2025. So a server without it can deploy this and never read it back, the same shape as MariaDB
+        // application-time periods (declarable 10.4.3, readable 11.4). The kindle and SchemaTongs ask the
+        // server whether the column is there; where it is not, extraction PRESERVES whatever the package
+        // already declared instead of emitting nothing, which would silently drop it -- see ImportTableHelper.
         //
         // Unlike TextImageFileGroup this is not create-time only: ALTER TABLE ... REBUILD WITH changes it.
-        [SchemaProperty(Description = "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022, but only EXTRACTABLE from 2025** — sys.partitions.xml_compression does not exist before then, so on 2022-2024 SchemaTongs carries the value forward from the package it is refreshing rather than dropping it.")]
+        [SchemaProperty(Description = "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022; extracted where the server reports sys.partitions.xml_compression** (2025, and 2022 from CU26; 2022 CU25 does not). On a server without it, SchemaTongs carries the value forward from the package it is refreshing rather than dropping it.")]
         [JsonProperty(Order = 118)]
         public bool XmlCompression { get; set; }
 

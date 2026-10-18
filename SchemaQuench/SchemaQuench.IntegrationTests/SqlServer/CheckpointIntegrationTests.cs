@@ -281,7 +281,7 @@ MissingTablesAndColumns
             FactoryContainer.Resolve<IConfigurationRoot>()["CheckpointDirectory"] = _checkpointDir;
 
             var product = Product.Load();
-            string CheckpointPath(string database) => Path.Combine(_checkpointDir,
+            string CheckpointPath(string database) => Path.Join(_checkpointDir,
                 $"{FileNameEncoder.Encode(product.Name)}.{FileNameEncoder.Encode("Main")}.{FileNameEncoder.Encode(_server)}.{FileNameEncoder.Encode(database)}.{FileNameEncoder.Encode("")}.checkpoint");
             var otherTarget = CheckpointPath("OtherTenantOfThisProduct");
             const string otherContent = "# SchemaQuench Database Checkpoint seeded for another target";

@@ -109,10 +109,11 @@ BEGIN
   -- deploys the table or index uncompressed: the schema is identical and only the storage saving is
   -- lost, which is the mildest Reduced degrade in this file -- nothing an application can observe.
   --
-  -- Both #Tables and #Indexes carry the property, so both are reported; an index inherits nothing from
-  -- its table here.
+  -- #Tables, #Indexes and #XmlIndexes carry the property, so each is reported; an index inherits nothing
+  -- from its table here.
   IF @v_major < 16 AND (EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE ISNULL([XmlCompression], 0) = 1)
-                     OR EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE ISNULL([XmlCompression], 0) = 1))
+                     OR EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE ISNULL([XmlCompression], 0) = 1)
+                     OR EXISTS (SELECT 1 FROM #XmlIndexes WITH (NOLOCK) WHERE ISNULL([XmlCompression], 0) = 1))
   BEGIN
     IF @v_policy = 'fail'
     BEGIN
@@ -130,9 +131,13 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'XML compression (SQL Server 2022)', I.[Schema] + '.' + I.[TableName] + '.' + I.[IndexName], 'downgraded'
           FROM #Indexes I WITH (NOLOCK) WHERE ISNULL(I.[XmlCompression], 0) = 1
+      INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT @@SPID, 'XML compression (SQL Server 2022)', X.[Schema] + '.' + X.[TableName] + '.' + X.[IndexName], 'downgraded'
+          FROM #XmlIndexes X WITH (NOLOCK) WHERE ISNULL(X.[XmlCompression], 0) = 1
       RAISERROR('  XML compression skipped: requires SQL Server 2022 - the object deploys uncompressed (downgraded)', 10, 100) WITH NOWAIT
       UPDATE #Tables SET [XmlCompression] = 0 WHERE ISNULL([XmlCompression], 0) = 1
       UPDATE #Indexes SET [XmlCompression] = 0 WHERE ISNULL([XmlCompression], 0) = 1
+      UPDATE #XmlIndexes SET [XmlCompression] = 0 WHERE ISNULL([XmlCompression], 0) = 1
     END
   END
 

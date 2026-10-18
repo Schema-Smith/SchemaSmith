@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -73,7 +74,8 @@ public static class ForgeKindler
             if (platform == Platform.SqlServer && serverMajorVersion == 0)
                 serverMajorVersion = TargetVersionDetector.TryDetect(command, Platform.SqlServer)?.ServerComparable ?? 0;
 
-            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode);
+            bool? xmlCompressionReadable = platform == Platform.SqlServer ? ReportsXmlCompression(command) : null;
+            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode, xmlCompressionReadable);
             var current = ReadStamp(command, platform);
             if (!forceReKindle && string.Equals(current, expected, StringComparison.Ordinal))
             {
@@ -98,7 +100,7 @@ public static class ForgeKindler
             if (platform == Platform.PostgreSQL)
                 DropSupersededPostgreSqlOverloads(command);
 
-            KindleScripts(command, platform, encoding, serverMajorVersion, policy);
+            KindleScripts(command, platform, encoding, serverMajorVersion, policy, xmlCompressionReadable);
             if (platform.GetBasePlatform() == Platform.MySQL)
                 CleanupMySqlStatusMessages(command);
 
@@ -111,11 +113,26 @@ public static class ForgeKindler
     }
 
     private static void KindleScripts(IDbCommand command, Platform platform, IngestEncoding encoding,
-        int serverMajorVersion, string policy)
+        int serverMajorVersion, string policy, bool? xmlCompressionReadable)
     {
         foreach (var s in GetKindlingScripts(platform, encoding))
             KindleOneFile(command, s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
-                serverMajorVersion, policy);
+                serverMajorVersion, policy, xmlCompressionReadable);
+    }
+
+    // Whether sys.partitions carries xml_compression on this server. COL_LENGTH reads metadata only, so the question is
+    // safe on every supported version; a server that cannot answer is treated as not reporting it.
+    public static bool ReportsXmlCompression(IDbCommand command)
+    {
+        try
+        {
+            command.CommandText = "SELECT CASE WHEN COL_LENGTH('sys.partitions', 'xml_compression') IS NULL THEN 0 ELSE 1 END";
+            return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture) == "1";
+        }
+        catch (DbException)
+        {
+            return false;
+        }
     }
 
     // MySQL only: clear orphaned status rows from crashed sessions. Operational, not schema
@@ -145,7 +162,7 @@ public static class ForgeKindler
     /// </summary>
     internal static string ResolveKindleScript(string fileName, Platform platform,
         bool replaceParseJson, bool replaceTableDef, IngestEncoding encoding = IngestEncoding.Json,
-        int serverMajorVersion = 0, string policy = "warn")
+        int serverMajorVersion = 0, string policy = "warn", bool? xmlCompressionReadable = null)
     {
         var script = ResourceLoader.Load(fileName, platform)
             ?? throw new Exception($"Script '{fileName}' not found for platform '{platform}'.");
@@ -170,8 +187,9 @@ public static class ForgeKindler
                        .Replace("{{UnsupportedPolicy}}", policy);
 
         // {{XmlCompressionRead}} is a COLUMN REFERENCE, not a value, and that is why it is resolved here
-        // rather than guarded at runtime. sys.partitions.xml_compression does not exist before SQL Server
-        // 2025 -- verified on 2022 CU25, where the column lives only on sys.internal_partitions -- and a
+        // rather than guarded at runtime. sys.partitions.xml_compression is missing on 2022 CU25 (the column
+        // lives only on sys.internal_partitions) and present on 2022 CU26 and 2025, so the kindle asks the
+        // server (ReportsXmlCompression) rather than inferring it from the major version -- and a
         // procedure naming a column the server does not have fails to CREATE, taking the whole kindle
         // down. A runtime IF cannot save it because binding happens first. Composing the reference out at
         // kindle time is the same move LedgerViewFilter() makes in C# for sys.tables.ledger_view_id, and
@@ -192,10 +210,10 @@ public static class ForgeKindler
                        .Replace("{{RenderableIndexTypes}}", SqlServerRenderableIndexTypes)
                        .Replace("{{CollectSelectiveXmlIndexes}}", SqlServerCollectSelectiveXmlIndexes);
 
-        var xmlCompressionReadable = serverMajorVersion >= 17;
+        var xmlReadable = xmlCompressionReadable ?? serverMajorVersion >= 17;
         script = script.Replace("{{XmlCompressionRead}}",
-                            xmlCompressionReadable ? "p.xml_compression" : "CONVERT(BIT, NULL)")
-                       .Replace("{{XmlCompressionCanRead}}", xmlCompressionReadable ? "1" : "0");
+                            xmlReadable ? "p.xml_compression" : "CONVERT(BIT, NULL)")
+                       .Replace("{{XmlCompressionCanRead}}", xmlReadable ? "1" : "0");
 
         // The ordered-columnstore key arrived with 2022 (sys.index_columns.column_store_order_ordinal), and naming the column
         // on an older server fails the CREATE as xml_compression does, so the read is composed out at kindle time.
@@ -215,12 +233,13 @@ public static class ForgeKindler
     /// </summary>
     public static void KindleOneFile(IDbCommand command, string fileName, Platform platform,
         bool replaceParseJsonToken = false, bool replaceTableDefToken = false,
-        IngestEncoding encoding = IngestEncoding.Json, int serverMajorVersion = 0, string policy = "warn")
+        IngestEncoding encoding = IngestEncoding.Json, int serverMajorVersion = 0, string policy = "warn",
+        bool? xmlCompressionReadable = null)
     {
         try
         {
             var script = ResolveKindleScript(fileName, platform, replaceParseJsonToken, replaceTableDefToken,
-                encoding, serverMajorVersion, policy);
+                encoding, serverMajorVersion, policy, xmlCompressionReadable);
 
             if (platform.GetBasePlatform() == Platform.MySQL)
             {
@@ -965,7 +984,7 @@ public static class ForgeKindler
     /// -> the next kindle re-runs automatically (alternating version/policy across runs re-kindles; cheap).
     /// </summary>
     public static string ComputeKindleStamp(Platform platform, IngestEncoding encoding = IngestEncoding.Json,
-        int serverMajorVersion = 0, string policy = "warn", string sqlMode = null)
+        int serverMajorVersion = 0, string policy = "warn", string sqlMode = null, bool? xmlCompressionReadable = null)
     {
         var sb = new StringBuilder();
         if (!string.IsNullOrEmpty(sqlMode))
@@ -974,7 +993,7 @@ public static class ForgeKindler
         // resolved text — and therefore the stamp — already differs from Json; no extra discriminator needed.
         foreach (var s in GetKindlingScripts(platform, encoding))
             sb.Append(ResolveKindleScript(s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
-                serverMajorVersion, policy));
+                serverMajorVersion, policy, xmlCompressionReadable));
 
         using var sha = SHA256.Create();
         var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(sb.ToString()));

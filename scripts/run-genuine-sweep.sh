@@ -21,7 +21,7 @@ cd "$(dirname "$0")/.." || exit 1
 #       * OldBinarySpatialIndexTests runs its deploy-and-converge test on EVERY instance; its refusal test
 #         runs only below 2012 (14330), where the AUTO_GRID tessellations do not exist.
 #       * OldBinaryLedgerDegradeTests runs on EVERY instance: all four are below 2022.
-#     Expected shape: 9 passed / 5 skipped on every instance.
+#     Expected shape: 10 passed / 6 skipped on 14330-14332, 11 passed / 5 skipped on 14333.
 #  2. SchemaQuench's GenuineSql2008EmitGuardCert HARDCODES 127.0.0.1,14330 for its own work, but it
 #     lives in the SqlServer namespace whose [SetUpFixture] provisions Always Encrypted keys. Point
 #     the env vars at an old instance and that setup dies with "SQL Server instance in use does not
@@ -64,7 +64,7 @@ for port in 14330 14331 14332 14333; do
   summary="$(grep -E "^(Passed!|Failed!)" "/tmp/ss-sweep-$port.log" | head -1 | sed "s/ - Duration.*//")"
   # A fixture's one-time teardown error fails the run under a "Passed!" summary; the record must show it.
   [ "$rc" -ne 0 ] && summary="FAILED (exit $rc): ${summary:-NO RESULT}"
-  expected="7 passed / 4 skipped"; [ "$port" = "14330" ] && expected="6 passed / 5 skipped"
+  expected="10 passed / 6 skipped"; [ "$port" = "14333" ] && expected="11 passed / 5 skipped"
   SWEEP_ROWS="${SWEEP_ROWS}| SQL Server $(version_for "$port") @ $port | ${summary:-NO RESULT} | $expected |
 "
 done

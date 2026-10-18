@@ -108,7 +108,7 @@ public class ForgeKindlerIntegrationTests
             // reflects the detected version, not 0.
             var detected = TargetVersionDetector.Detect(command, Platform.SqlServer).ServerComparable;
             Assert.That(ForgeKindler.ReadStamp(command, Platform.SqlServer),
-                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, serverMajorVersion: detected)),
+                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, serverMajorVersion: detected, xmlCompressionReadable: ForgeKindler.ReportsXmlCompression(command))),
                 "A fresh kindle must write the current content stamp for the detected server version.");
         }
         finally
@@ -134,7 +134,7 @@ public class ForgeKindlerIntegrationTests
         ForgeKindler.KindleTheForge(command, Platform.SqlServer, forceReKindle: true, serverMajorVersion: 0);
 
         Assert.That(ForgeKindler.ReadStamp(command, Platform.SqlServer),
-            Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, serverMajorVersion: detected)),
+            Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, serverMajorVersion: detected, xmlCompressionReadable: ForgeKindler.ReportsXmlCompression(command))),
             "a version-less kindle must stamp with the DETECTED version");
         Assert.That(ForgeKindler.ReadStamp(command, Platform.SqlServer),
             Is.Not.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, serverMajorVersion: 0)),

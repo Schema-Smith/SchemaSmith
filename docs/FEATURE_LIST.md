@@ -86,7 +86,7 @@ Per-table options, column attributes, and table-scoped behavior beyond the basic
 | Row format | n/a | n/a | ✓ | ✓ | `RowFormat`: DYNAMIC / COMPACT / COMPRESSED / REDUNDANT |
 | Initial auto-increment value | n/a | n/a | ✓ | ✓ | `AutoIncrementValue` |
 | Data compression | ✓ | n/a | n/a | n/a | `CompressionType`: NONE / ROW / PAGE |
-| XML compression | ✓ | n/a | n/a | n/a | `XmlCompression` on table and index; deploy 2022+, extract 2025+ |
+| XML compression | ✓ | n/a | n/a | n/a | `XmlCompression` on table, index and XML index; deploy 2022+, extract 2025+ and 2022 CU26+ |
 | Memory-optimized (Hekaton) tables | ✓ | n/a | n/a | n/a | `MemoryOptimized` + `Durability` (SCHEMA_AND_DATA / SCHEMA_ONLY); indexes declared inline; the memory-optimized nature, durability, and inline index shape are refused on change; ownership tracked in `SchemaSmith.ProductOwnership` (extended properties are rejected on such tables); requires In-Memory OLTP support + a `MEMORY_OPTIMIZED_DATA` filegroup |
 | Table-level access method | n/a | ✓ | n/a | n/a | `AccessMethod` |
 | Persistence type (UNLOGGED / TEMPORARY) | n/a | ✓ | n/a | n/a | `PersistenceType` |
