@@ -112,6 +112,25 @@ public class FileCheckpointManager : ICheckpointing
         }
     }
 
+    public bool ResumedAny { get; private set; }
+
+    // A plain run discards only its own targets' checkpoints, as it reaches each one; a failed deploy of the same
+    // product to another database keeps its resume point.
+    public void DeleteCheckpointsOfThisRun(string productName)
+    {
+        foreach (var checkpoint in _dbCheckpoints.Where(kv => kv.Key.StartsWith(productName + "|", StringComparison.OrdinalIgnoreCase)).Select(kv => kv.Value).ToList())
+        {
+            var filePath = GetDatabaseCheckpointPath(checkpoint.ProductName, checkpoint.TemplateName, checkpoint.Server, checkpoint.DatabaseName, checkpoint.SchemaName);
+            try { FileWrapper.GetFromFactory().Delete(filePath); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        foreach (var key in _dbCheckpoints.Keys.Where(k => k.StartsWith(productName + "|", StringComparison.OrdinalIgnoreCase)).ToList())
+            _dbCheckpoints.TryRemove(key, out _);
+        DeleteProductCheckpoint(productName);
+        _productCheckpoints.TryRemove(productName, out _);
+    }
+
     /// <summary>Clean up checkpoint files after a successful deployment.</summary>
     public void DeleteCheckpoints(string productName)
     {
@@ -227,7 +246,16 @@ public class FileCheckpointManager : ICheckpointing
     private DatabaseCheckpoint LoadDatabaseCheckpoint(TrackingScope scope)
     {
         var filePath = GetDatabaseCheckpointPath(scope.ProductName, scope.TemplateName, scope.Server, scope.DatabaseName, scope.SchemaName);
-        if (!_adoptExisting || !FileWrapper.GetFromFactory().Exists(filePath))
+        var exists = FileWrapper.GetFromFactory().Exists(filePath);
+        // A run that is not resuming starts this target fresh, so a resume after it fails cannot take up an older run's steps.
+        if (exists && !_adoptExisting)
+        {
+            try { FileWrapper.GetFromFactory().Delete(filePath); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        if (exists && _adoptExisting) ResumedAny = true;
+        if (!_adoptExisting || !exists)
             return new DatabaseCheckpoint
             {
                 ProductName = scope.ProductName,

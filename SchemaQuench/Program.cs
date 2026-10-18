@@ -85,12 +85,8 @@ public static class Program
             return;
         }
 
-        // --ResumeQuench is opt-in (#332): without it, discard any leftover checkpoint so a
-        // re-run starts fresh and is never influenced by a stale checkpoint. Checkpointing
-        // stays active for this run — a fresh failure still writes a checkpoint for a later
-        // --ResumeQuench. Uses the same FileCheckpointManager (and directory) the run will use.
-        if (!CommandLineParser.ContainsSwitch("ResumeQuench"))
-            CleanupCheckpoints();
+        // --ResumeQuench is opt-in (#332): without it a run takes up no checkpoint, and discards each of its own targets'
+        // as it reaches them. Another target's resume point, left by a failed run of the same product, is kept.
 
         try
         {
@@ -157,7 +153,7 @@ public static class Program
     {
         try
         {
-            FileCheckpointManager.GetFromFactory().DeleteCheckpoints(Product.Load().Name);
+            FileCheckpointManager.GetFromFactory().DeleteCheckpointsOfThisRun(Product.Load().Name);
         }
         catch
         {

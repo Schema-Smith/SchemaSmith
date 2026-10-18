@@ -87,7 +87,6 @@ public class ProductQuench
     // Captured pre-run (before this run marks any of its own steps complete) so the report
     // reflects whether the run RESUMED — reading the checkpoint at emit time would see this
     // run's own in-progress completions and report true for nearly every run.
-    private bool _resumedFromCheckpoint;
 
     // Thread-safe collection of every work unit's outcome + duration (#243 Deployment Summary
     // Report, slice E4a). Passive capture only — a later slice (E4d) assembles this into the
@@ -481,14 +480,6 @@ public class ProductQuench
         ? _whatIfOnly == "true"
         : _whatIfOnly == "1";
 
-    private TrackingScope ProductScope => new TrackingScope { ProductName = _product.Name };
-
-    private TrackingScope ProductScopeForServer(string server) => new TrackingScope
-    {
-        ProductName = _product.Name,
-        Server = server
-    };
-
     internal virtual IDbCommand GetCommand(string server)
     {
         var initDb = GetInitDatabase(_product.Platform);
@@ -839,10 +830,8 @@ public class ProductQuench
 
         RemoveOldTableQuenchScripts();
 
-        var summary = _checkpointing.GetProductCheckpointSummary(_product.Name);
-        _resumedFromCheckpoint = summary.HasAnyCompleted;
-        if (summary.HasAnyCompleted)
-            _progressLog.Info($"Resuming from checkpoint (Before Scripts: {summary.TotalBeforeScripts} across {summary.ServersWithBeforeScripts} server(s), Templates: {summary.CompletedTemplates}, After Scripts: {summary.TotalAfterScripts} across {summary.ServersWithAfterScripts} server(s))");
+        if (CommandLineParser.ContainsSwitch("ResumeQuench"))
+            _progressLog.Info("Resuming: each database continues from its own checkpoint, and product scripts run again");
 
         using var command = GetCommand(_primaryServer);
 
@@ -910,23 +899,9 @@ public class ProductQuench
 
             foreach (var template in templatesInScope)
             {
-                var stepName = $"Template:{template.Name}";
-                if (_checkpointing.HasCompleted(ProductScope, stepName))
-                {
-                    _progressLog.Info($"Skipping template '{template.Name}' (previously completed per checkpoint)");
-                    continue;
-                }
-                // Explicit check-then-mark rather than Track(): QuenchTemplate handles its own
-                // failure via LogBackup.BackupLogsAndExit(2), which terminates the process in
-                // production but is a mocked no-op under tests. Using Track() would interpret the
-                // non-throwing return as success and record the template as complete even when
-                // _updateFailed is set, leading to the template being skipped on the next run.
+                // A template is not checkpointed: each of its databases resumes from its own checkpoint.
                 QuenchTemplate(template, suppressKindling);
-                if (!_updateFailed)
-                {
-                    _checkpointing.MarkStepCompleted(ProductScope, stepName);
-                }
-                else if (ShouldAbortOnFailure(template))
+                if (_updateFailed && ShouldAbortOnFailure(template))
                 {
                     // Abort mode: BackupLogsAndExit(2) was called. In production, the process
                     // terminates. In tests (mocked exit), we break here to preserve the
@@ -999,7 +974,7 @@ public class ProductQuench
         try
         {
             var mode = IsWhatIfOnly ? RunMode.WhatIf : RunMode.Quench;
-            var resumed = _resumedFromCheckpoint;
+            var resumed = _checkpointing.ResumedAny;
             var summary = DeploymentSummaryAssembler.Assemble(
                 _product.Name, _product.Platform.ToString(), ToolVersion(),
                 _startedUtc, DateTime.UtcNow, mode, outcome, exitCode, resumed,
@@ -2135,14 +2110,6 @@ public class ProductQuench
 
         foreach (var script in scriptList)
         {
-            if (_checkpointing.HasCompletedScript(ProductScopeForServer(server), slot, script.LogPath))
-            {
-                _progressLog.Info($"{serverMsg}[{initDb}]    {(IsWhatIfOnly ? "Would SKIP" : "Skipping")} (previously quenched per checkpoint) {script.LogPath}");
-                if (IsWhatIfOnly) _whatIf.Record(WhatIfCategory.Skip, $"{serverMsg}[{initDb}]", script.LogPath);
-                script.HasBeenQuenched = true;
-                continue;
-            }
-
             if (IsWhatIfOnly)
             {
                 _progressLog.Info($"{serverMsg}[{initDb}]    Would Quench {script.LogPath}");
@@ -2170,7 +2137,6 @@ public class ProductQuench
 
                 script.HasBeenQuenched = true;
                 script.Error = null;
-                _checkpointing.MarkScriptCompleted(ProductScopeForServer(server), slot, script.LogPath);
                 _migrationScripts.Record(server, "", "", "", slot, MakeScriptPathRelative(script.LogPath, Path.GetDirectoryName(_product.FilePath) ?? ""));
             }
             catch (Exception ex)

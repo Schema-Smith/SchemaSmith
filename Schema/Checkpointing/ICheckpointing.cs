@@ -66,6 +66,12 @@ public interface ICheckpointing
     /// Clean up checkpoint files after a successful deployment.
     /// </summary>
     void DeleteCheckpoints(string productName);
+
+    /// <summary>Deletes the database checkpoints this run wrote or took up, and leaves every other target's resume point.</summary>
+    void DeleteCheckpointsOfThisRun(string productName) => DeleteCheckpoints(productName);
+
+    /// <summary>Whether any database in this run continued from a checkpoint a failed run left.</summary>
+    bool ResumedAny => false;
 }
 
 /// <summary>

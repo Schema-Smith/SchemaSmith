@@ -184,6 +184,48 @@ public class FileCheckpointManagerTests
         Assert.That(count, Is.EqualTo(2));
     }
 
+    // A plain run deleted every checkpoint of the product, so a failed deploy to one database lost its resume point to a
+    // plain deploy of the same product to another.
+    [Test]
+    public void DeleteCheckpointsOfThisRun_KeepsAnotherTargetsResumePoint()
+    {
+        new FileCheckpointManager(_tempDir, adoptExisting: false).Track(DbScope(database: "TenantA"), "ModifiedTables", () => { });
+        var plain = new FileCheckpointManager(_tempDir, adoptExisting: false);
+        plain.Track(DbScope(database: "TenantB"), "ModifiedTables", () => { });
+        plain.DeleteCheckpointsOfThisRun("TestProduct");
+
+        var resume = new FileCheckpointManager(_tempDir, adoptExisting: true);
+        var ranA = false;
+        var ranB = false;
+        resume.Track(DbScope(database: "TenantA"), "ModifiedTables", () => ranA = true);
+        resume.Track(DbScope(database: "TenantB"), "ModifiedTables", () => ranB = true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ranA, Is.False, "the failed target resumes");
+            Assert.That(ranB, Is.True, "the plain run's own target starts fresh");
+            Assert.That(resume.ResumedAny, Is.True);
+        });
+    }
+
+    [Test]
+    public void APlainRun_DiscardsAStaleCheckpointOfItsOwnTarget_WhenItReachesIt()
+    {
+        new FileCheckpointManager(_tempDir, adoptExisting: false).Track(DbScope(), "ModifiedTables", () => { });
+        var plain = new FileCheckpointManager(_tempDir, adoptExisting: false);
+        Assert.That(plain.HasCompleted(DbScope(), "ModifiedTables"), Is.False);
+
+        var resume = new FileCheckpointManager(_tempDir, adoptExisting: true);
+        var ran = false;
+        resume.Track(DbScope(), "ModifiedTables", () => ran = true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ran, Is.True, "a resume after the plain run does not take up the older run's steps");
+            Assert.That(resume.ResumedAny, Is.False);
+        });
+    }
+
     [Test]
     public void DatabaseCheckpoint_ParseFormat_RoundTrip()
     {

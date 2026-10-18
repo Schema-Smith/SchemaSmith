@@ -83,7 +83,9 @@ public class CheckpointIntegrationTests
     }
 
     [Test]
-    public void ShouldResumeFromProductCheckpoint()
+    // A template is no longer checkpointed (each database resumes from its own file), so a product checkpoint an older
+    // release left is not taken up.
+    public void ShouldRunEveryTemplate_WhenAProductCheckpointIsLeftOver()
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -105,7 +107,8 @@ Template:Main
 
             RunSchemaQuench();
 
-            _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Skipping template 'Main' (previously completed per checkpoint)")));
+            _progressLog.DidNotReceive().Info(Arg.Is<string>(s => s.Contains("previously completed per checkpoint")));
+            _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching Template: Main")));
             _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching Template: Secondary")));
 
             LogFactory.Clear();
@@ -259,6 +262,40 @@ MissingTablesAndColumns
             Assert.That(File.ReadAllText(seededCheckpoint), Is.EqualTo(seededContent), "Pre-existing checkpoint content must not be altered after a failed run");
 
             _environment.Received(1).Exit(2);
+
+            LogFactory.Clear();
+            FactoryContainer.Unregister<IEnvironment>();
+            FactoryContainer.Unregister<Schema.Checkpointing.ICheckpointing>();
+        }
+    }
+
+    [Test]
+    // A failed deploy of the same product to another database keeps its resume point through a successful run here.
+    public void ShouldKeepAnotherTargetsCheckpoint_WhenTheRunSucceeds()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetupSharedMocks();
+
+            FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "ValidProduct");
+            FactoryContainer.Resolve<IConfigurationRoot>()["CheckpointDirectory"] = _checkpointDir;
+
+            var product = Product.Load();
+            string CheckpointPath(string database) => Path.Combine(_checkpointDir,
+                $"{FileNameEncoder.Encode(product.Name)}.{FileNameEncoder.Encode("Main")}.{FileNameEncoder.Encode(_server)}.{FileNameEncoder.Encode(database)}.{FileNameEncoder.Encode("")}.checkpoint");
+            var otherTarget = CheckpointPath("OtherTenantOfThisProduct");
+            const string otherContent = "# SchemaQuench Database Checkpoint seeded for another target";
+            File.WriteAllText(otherTarget, otherContent);
+
+            RunSchemaQuench();
+
+            Assert.Multiple(() =>
+            {
+                _environment.DidNotReceive().Exit(Arg.Is<int>(code => code >= 2));
+                Assert.That(File.Exists(otherTarget), Is.True, "another target's resume point survives");
+                Assert.That(File.ReadAllText(otherTarget), Is.EqualTo(otherContent));
+                Assert.That(File.Exists(CheckpointPath(_mainDb)), Is.False, "the run's own checkpoint is cleaned up");
+            });
 
             LogFactory.Clear();
             FactoryContainer.Unregister<IEnvironment>();
