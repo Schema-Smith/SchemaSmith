@@ -83,6 +83,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string PartitionAndFileGroupCode = "SS-PART-002";
     private const string MyPartitionRangeListNoPartitionsCode = "SS-PART-003";
     private const string MyPartitionHashBoundaryCode = "SS-PART-004";
+    private const string MyPartitionKeyMissesColumnCode = "SS-PART-005";
     private const string MemoryOptimizedPlacementCode = "SS-XTP-001";
     private const string Category = "Coherence";
 
@@ -154,6 +155,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         [PartitionAndFileGroupCode] = ErrorLevel,
         [MyPartitionRangeListNoPartitionsCode] = ErrorLevel,
         [MyPartitionHashBoundaryCode] = ErrorLevel,
+        [MyPartitionKeyMissesColumnCode] = ErrorLevel,
         [MemoryOptimizedPlacementCode] = ErrorLevel,
     };
 
@@ -1384,6 +1386,40 @@ public sealed class CoherenceCheck : ISchemaCheck
                     $"Table '{table.Name}' partitions by {method} but partition '{part.Name}' declares a " +
                     "Values boundary. HASH/KEY assign rows by hashing and have no boundary — drop the Values, " +
                     "or use RANGE/LIST if you meant to define boundaries.");
+
+        foreach (var finding in CheckMyPartitionKeys(mySqlTable, method, p.Expression, tableLocation))
+            yield return finding;
+    }
+
+    // Every primary and unique key must hold each partitioning column whole (1503 on every MySQL and MariaDB version);
+    // a prefix key part does not count. Checked where the method names columns: KEY (an empty list means the primary
+    // key's) and the COLUMNS forms. An expression method's columns are not parsed.
+    private static IEnumerable<Finding> CheckMyPartitionKeys(MySqlTable table, string method, string expression, string tableLocation)
+    {
+        var keys = table.Indexes.Where(i => i.PrimaryKey || i.Unique || i.UniqueConstraint).ToList();
+        List<string> columns;
+        if (method is "KEY" or "LINEAR KEY")
+        {
+            columns = SplitNames(expression).Select(NormalizeIdentifier).ToList();
+            if (columns.Count == 0)
+                columns = keys.Where(i => i.PrimaryKey).SelectMany(i => SplitNames(i.IndexColumns))
+                    .Select(part => NormalizeIdentifier(StripOrderingSuffix(part).Trim().Split('(')[0])).ToList();
+        }
+        else if (method is "RANGE COLUMNS" or "LIST COLUMNS")
+            columns = SplitNames(expression).Select(NormalizeIdentifier).ToList();
+        else
+            yield break;
+
+        foreach (var key in keys)
+        {
+            var whole = SplitNames(key.IndexColumns).Select(part => NormalizeIdentifier(StripOrderingSuffix(part).Trim()))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var column in columns.Where(c => c.Length > 0 && !whole.Contains(c)))
+                yield return new Finding(Severity.Error, MyPartitionKeyMissesColumnCode, Category, tableLocation,
+                    $"Table '{table.Name}' partitions by {method} on '{column}', which key '{key.Name}' does not hold whole " +
+                    "(a prefix part does not count). Every primary and unique key must include every partitioning column, " +
+                    "or the engine refuses the table — add the column to the key, or partition on columns the keys hold.");
+        }
     }
 
     /// <summary>

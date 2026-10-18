@@ -961,6 +961,34 @@ public class CoherenceCheckTests
         Assert.That(RunOnMy(table).Single(f => f.Code == "SS-PART-004").Severity, Is.EqualTo(Severity.Error));
     }
 
+    // SS-PART-005: every primary and unique key holds each partitioning column whole, or the engine refuses the table
+    // with 1503 (MySQL 8.0.46 and 8.4.11, MariaDB 11.8.9: the same four shapes).
+    [TestCase("KEY", "", "`a`(10)", true, TestName = "KeyOverAPrefixedPrimaryKey")]
+    [TestCase("KEY", "`b`", "`a`(10),`b`", false, TestName = "KeyOnAWholeKeyColumn")]
+    [TestCase("KEY", "`a`", "`a`(10),`b`", true, TestName = "KeyOnAColumnTheKeyHoldsAsAPrefix")]
+    [TestCase("RANGE COLUMNS", "`b`", "`a`", true, TestName = "RangeColumnsOnAColumnOutsideTheKey")]
+    [TestCase("LINEAR KEY", "a, b", "a,b", false, TestName = "LinearKeyOnTheWholeKey")]
+    public void PartitioningAColumnAKeyDoesNotHoldWhole_IsError(string method, string expression, string keyColumns, bool expected)
+    {
+        var table = new Schema.Domain.MySQL.MySqlTable
+        {
+            Name = "Parts",
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning
+            {
+                Method = method, Expression = expression, PartitionCount = method.EndsWith("KEY") ? 2 : null,
+                Partitions = method.EndsWith("KEY") ? [] : [new Schema.Domain.MySQL.MySqlPartition { Name = "p0", Values = "MAXVALUE" }]
+            },
+            Columns =
+            {
+                new Schema.Domain.MySQL.MySqlColumn { Name = "a", DataType = "varchar(100)" },
+                new Schema.Domain.MySQL.MySqlColumn { Name = "b", DataType = "int" }
+            },
+            Indexes = { new Schema.Domain.MySQL.MySqlIndex { Name = "PRIMARY", PrimaryKey = true, Unique = true, IndexColumns = keyColumns } }
+        };
+        var findings = RunOnMy(table).Where(f => f.Code == "SS-PART-005").ToList();
+        Assert.That(findings, expected ? Has.Count.GreaterThan(0) : Is.Empty, string.Join("; ", findings.Select(f => f.Message)));
+    }
+
     [Test]
     public void BackfillWithoutDefault_IsWarning()
     {
