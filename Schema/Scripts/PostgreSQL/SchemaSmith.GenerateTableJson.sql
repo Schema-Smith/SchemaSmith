@@ -28,7 +28,7 @@ BEGIN
 FOR invalid_not_null IN SELECT con.conname, a.attname
                           FROM pg_catalog.pg_constraint con
                           JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
-                         WHERE con.conrelid = ('"' || p_Schema || '"."' || p_Table || '"')::regclass
+                         WHERE con.conrelid = ("SchemaSmith"."QuoteName"(p_Schema) || '.' || "SchemaSmith"."QuoteName"(p_Table))::regclass
                            AND con.contype = 'n'
                            AND NOT con.convalidated
                          ORDER BY con.conname LOOP
@@ -40,7 +40,7 @@ END LOOP;
 -- The warning reaches the SchemaTongs log through the connection's notice channel.
 FOR skipped_fk IN SELECT con.conname
                     FROM pg_catalog.pg_constraint con
-                   WHERE con.conrelid = ('"' || p_Schema || '"."' || p_Table || '"')::regclass
+                   WHERE con.conrelid = ("SchemaSmith"."QuoteName"(p_Schema) || '.' || "SchemaSmith"."QuoteName"(p_Table))::regclass
                      AND con.contype = 'f'
                      AND "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid)
                    ORDER BY con.conname LOOP
@@ -93,7 +93,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                '' AS "ShouldApplyExpression",
                                '' AS "OldName"
                           FROM information_schema.columns c
-                          JOIN pg_attribute a ON a.attrelid = ('"' || c.table_schema || '"."' || c.table_name || '"')::regclass
+                          JOIN pg_attribute a ON a.attrelid = ("SchemaSmith"."QuoteName"(c.table_schema) || '.' || "SchemaSmith"."QuoteName"(c.table_name))::regclass
                                              AND a.attname = c.column_name
                                              AND NOT a.attisdropped
                           LEFT JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass
@@ -139,7 +139,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                -- The key list as the engine writes it: a non-default operator class, a differing
                                -- COLLATE and the operator-class parameters stay in the key (IndexKeyForms).
                                "SchemaSmith"."IndexKeyList"(idx.indexrelid) AS "IndexColumns",
-                               (SELECT STRING_AGG(a.attname, ',' ORDER BY idx)
+                               (SELECT STRING_AGG("SchemaSmith"."ListName"(a.attname), ',' ORDER BY idx)
                                   FROM pg_attribute a
                                   CROSS JOIN LATERAL UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
                                   WHERE a.attrelid = idx.indrelid
@@ -174,19 +174,19 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                           FROM pg_index idx
                           JOIN pg_class i ON i.oid = idx.indexrelid
                           LEFT JOIN pg_catalog.pg_constraint con ON con.conrelid = idx.indrelid AND con.conname = i.relname AND con.contype IN ('p', 'u', 'x')
-                          WHERE idx.indrelid = ('"' || t.table_schema || '"."' || t.table_name || '"')::regclass
+                          WHERE idx.indrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
                             AND (con.contype IS NULL OR con.contype IN ('p', 'u'))
                           ORDER BY i.relname) sub) AS "Indexes",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))
                   FROM (SELECT con.conname AS "Name",
-                               (SELECT STRING_AGG(a.attname, ',' ORDER BY idx)
+                               (SELECT STRING_AGG("SchemaSmith"."ListName"(a.attname), ',' ORDER BY idx)
                                   FROM pg_attribute a
                                   CROSS JOIN LATERAL UNNEST(con.conkey) WITH ORDINALITY AS u(element, idx)
                                   WHERE a.attrelid = con.conrelid
                                     AND a.attnum = element) AS "Columns",
                                fnsp.nspname AS "RelatedTableSchema",
                                frel.relname AS "RelatedTable",
-                               (SELECT STRING_AGG(a.attname, ',' ORDER BY idx)
+                               (SELECT STRING_AGG("SchemaSmith"."ListName"(a.attname), ',' ORDER BY idx)
                                   FROM pg_attribute a
                                   CROSS JOIN LATERAL UNNEST(con.confkey) WITH ORDINALITY AS u(element, idx)
                                   WHERE a.attrelid = frel.oid
@@ -208,7 +208,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                           FROM pg_catalog.pg_constraint con
                           JOIN pg_catalog.pg_class frel ON frel.oid = con.confrelid
                           JOIN pg_catalog.pg_namespace fnsp ON fnsp.oid = frel.relnamespace
-                          WHERE con.conrelid = ('"' || t.table_schema || '"."' || t.table_name || '"')::regclass
+                          WHERE con.conrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
                             AND con.contype = 'f'
                             AND NOT "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid)
                           ORDER BY con.conname) sub) AS "ForeignKeys",
@@ -222,7 +222,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                COALESCE(con.connoinherit, FALSE) AS "NoInherit",
                                "SchemaSmith"."ConstraintEnforced"(con.oid) AS "Enforced"
                         FROM pg_catalog.pg_constraint con
-                          WHERE con.conrelid = ('"' || t.table_schema || '"."' || t.table_name || '"')::regclass
+                          WHERE con.conrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
                             AND con.contype = 'c'
                           ORDER BY con.conname) sub) AS "CheckConstraints",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))
@@ -237,7 +237,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                -- kind, so extracting it produced a package that could not be deployed.
                                COALESCE((SELECT STRING_AGG(CASE k WHEN 'd' THEN 'NDISTINCT' WHEN 'f' THEN 'DEPENDENCIES' WHEN 'm' THEN 'MCV' ELSE k::text END, ',')
                                            FROM UNNEST(se.stxkind) AS k WHERE k <> 'e'), '') AS "Kind",
-                               COALESCE(ARRAY_TO_STRING(ARRAY_CAT(COALESCE((SELECT ARRAY_AGG(a.attname::text)
+                               COALESCE(ARRAY_TO_STRING(ARRAY_CAT(COALESCE((SELECT ARRAY_AGG("SchemaSmith"."ListName"(a.attname::text))
                                                                               FROM UNNEST(se.stxkeys) WITH ORDINALITY AS t(attnum, ord)
                                                                               JOIN pg_attribute a ON a.attrelid = se.stxrelid AND a.attnum = t.attnum
                                                                               WHERE a.attnum > 0),
@@ -245,7 +245,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                                                   "SchemaSmith"."StatisticsExpressionColumns"(sn.nspname, se.stxname)), ','), '') AS "StatisticsColumns"
                           FROM pg_statistic_ext se
                           JOIN pg_namespace sn ON sn.oid = se.stxnamespace
-                          WHERE se.stxrelid = ('"' || t.table_schema || '"."' || t.table_name || '"')::regclass
+                          WHERE se.stxrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
                           ORDER BY se.stxname) sub) AS "Statistics",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))
                   FROM (SELECT i.relname AS "Name",
@@ -266,7 +266,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                -- The backing index's extras, as an index's: covering columns, every storage parameter
                                -- (fillfactor included, there being no FillFactor property here), and a placement only
                                -- when it is not the database default.
-                               (SELECT STRING_AGG(a.attname, ',' ORDER BY u.idx)
+                               (SELECT STRING_AGG("SchemaSmith"."ListName"(a.attname), ',' ORDER BY u.idx)
                                   FROM pg_attribute a
                                   CROSS JOIN LATERAL UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
                                   WHERE a.attrelid = idx.indrelid
@@ -278,7 +278,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                           FROM pg_index idx
                           JOIN pg_class i ON i.oid = idx.indexrelid
                           JOIN pg_catalog.pg_constraint con ON con.conrelid = idx.indrelid AND con.conname = i.relname AND con.contype = 'x'
-                          WHERE idx.indrelid = ('"' || t.table_schema || '"."' || t.table_name || '"')::regclass
+                          WHERE idx.indrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
                           ORDER BY i.relname) sub) AS "ExcludeConstraints",
                -- Row-level security policies (#rls). Emitted only when the table has any, so no existing
                -- package gains an empty "Policies": [] on every table. pg_policies exposes the normalised

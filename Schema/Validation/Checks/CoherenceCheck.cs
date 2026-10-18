@@ -62,7 +62,6 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string RlsWithoutPoliciesCode = "SS-RLS-001";
     private const string PoliciesWithoutRlsCode = "SS-RLS-002";
     private const string ReplicaIdentityIndexMissingCode = "SS-RI-001";
-    private const string QuotedIdentifierCode = "SS-IDENT-001";
     private const string IdentifierTooLongCode = "SS-IDENT-002";
     private const int PostgreSqlMaxIdentifierBytes = 63;
     private const string ReplicaIdentityIndexUnknownCode = "SS-RI-002";
@@ -115,9 +114,6 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckModeledFolderObjectCoexistence(template));
 
         foreach (var template in ctx.Templates)
-            findings.AddRange(CheckPostgreSqlQuotedIdentifierOnModeledObjects(template));
-
-        foreach (var template in ctx.Templates)
             findings.AddRange(IdentifierLengthFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'"));
 
         foreach (var template in ctx.Templates)
@@ -152,7 +148,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
             findings.AddRange(CheckRowLevelSecurity(table, location));
             findings.AddRange(CheckReplicaIdentity(table, location));
-            findings.AddRange(CheckPostgreSqlQuotedIdentifier(table, location));
+            findings.AddRange(CheckPostgreSqlIdentifierLength(table, location));
             findings.AddRange(CheckSystemVersioningExclusions(table, location));
             findings.AddRange(CheckCdcFilegroup(table, location));
             findings.AddRange(CheckCdcSupportsNetChanges(table, location));
@@ -878,28 +874,8 @@ public sealed class CoherenceCheck : ISchemaCheck
         return result;
     }
 
-    /// <summary>
-    /// A <c>"</c> in a PostgreSQL object name is refused, because no stored form of such a name deploys.
-    /// <para>
-    /// The quench re-wraps a stored name as <c>'"' || Name || '"'</c> without escaping, so a bare
-    /// <c>a"b</c> emits <c>"a"b"</c> — invalid DDL — while the escaped form <c>a""b</c> would emit
-    /// correctly but is never what extraction writes, since extraction writes the RAW catalog name. The
-    /// two directions disagree, so no consumer can be correct by construction, and the failure lands at
-    /// deploy time as a syntax error that names nothing useful.
-    /// </para>
-    /// <para>
-    /// Refusing here is deliberately the 2.7.0 answer rather than escaping the ~101 emission sites: it
-    /// states the limit, fails at lint time with something actionable, and cannot break a working package
-    /// because such a package has never deployed. Supporting the name properly is 2.8.0 work — see the
-    /// roadmap entry — and when it lands this check is what gets deleted.
-    /// </para>
-    /// </summary>
-    private static IEnumerable<Finding> CheckPostgreSqlQuotedIdentifier(Table table, string tableLocation)
-    {
-        if (table is not PostgreSqlTable pgTable) return [];
-        return QuotedIdentifierFindings(NamedParts(pgTable), tableLocation)
-            .Concat(IdentifierLengthFindings(NamedParts(pgTable), tableLocation));
-    }
+    private static IEnumerable<Finding> CheckPostgreSqlIdentifierLength(Table table, string tableLocation) =>
+        table is PostgreSqlTable pgTable ? IdentifierLengthFindings(NamedParts(pgTable), tableLocation) : [];
 
     /// <summary>
     /// PostgreSQL truncates an identifier longer than 63 bytes, with only a NOTICE. The object is created under the
@@ -922,40 +898,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
-    /// The modeled-object populations — materialized views, enum types, sequences, domain types — which
-    /// reach the identical unescaped re-wrap as a table's own names and were outside the check's original
-    /// table-only population.
-    /// <para>Not platform-gated, because these four collections are typed to PostgreSQL-only classes: a
-    /// non-PostgreSQL package cannot populate them at all, so there is no cross-engine false error to
-    /// guard against the way there is for a table.</para>
-    /// </summary>
-    private static IEnumerable<Finding> CheckPostgreSqlQuotedIdentifierOnModeledObjects(Template template) =>
-        QuotedIdentifierFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'");
-
-    private static IEnumerable<Finding> QuotedIdentifierFindings(
-        IEnumerable<(string Kind, string Name)> parts,
-        string location)
-    {
-        foreach (var (kind, name) in parts)
-        {
-            if (string.IsNullOrEmpty(name) || !name.Contains('"')) continue;
-            // "{kind} '{name}'" rather than "{kind} name '{name}'": several kinds already end in the noun
-            // (Table OldName, ReplicaIdentityIndex), and appending "name" to those read as "Table OldName
-            // name 'old'".
-            yield return new Finding(Severity.Error, QuotedIdentifierCode, Category, location,
-                $"{kind} '{name}' contains a double-quote character, which PostgreSQL allows but " +
-                "SchemaSmith cannot deploy: the name is re-wrapped in double quotes without escaping, so " +
-                "every stored form of it produces invalid DDL. Rename the object to remove the quote.");
-        }
-    }
-
-    /// <summary>
-    /// Every name on a table that reaches PostgreSQL DDL as a wrapped identifier.
-    /// <para>Each kind here was read at its emission site in the shipped quench scripts and carries the
-    /// stored value between bare double quotes with no doubling. A name wrapped by <c>QUOTE_IDENT</c>
-    /// escapes correctly and so is deliberately ABSENT — a policy name is the case that looks like an
-    /// omission and is not one. Column <em>lists</em> are also out: they route through
-    /// <c>QuoteColumnList</c>/<c>QuoteIndexColumnList</c>, and <c>SchemaRef</c> is read by no script.</para>
+    /// Every name on a table that reaches PostgreSQL DDL as an identifier, for the 63-byte limit (SS-IDENT-002). Column
+    /// <em>lists</em> are out (their items are checked as the columns they name), and <c>SchemaRef</c> is read by no script.
     /// </summary>
     private static IEnumerable<(string Kind, string Name)> NamedParts(PostgreSqlTable table)
     {

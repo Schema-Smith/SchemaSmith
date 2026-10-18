@@ -2449,7 +2449,11 @@ public class CoherenceCheckTests
         Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-002"), Is.Empty);
     }
 
-    // ---- SS-IDENT-001: a " in a PostgreSQL name is refused, because no stored form of it deploys ----
+    // ---- SS-IDENT-002's POPULATION: one case per PostgreSQL name kind that reaches DDL ----
+    //
+    // A case per kind, deliberately, because the population is a hand-written helper and a kind dropped
+    // from it fails silently -- the check still passes, on a smaller set. Each name here is 64 bytes, one
+    // over PostgreSQL's limit, which truncates it.
 
     private static PostgreSqlTable QTable(string tableName = "invoice", string columnName = "id",
                                           string tableOldName = null, string columnOldName = null) =>
@@ -2461,61 +2465,9 @@ public class CoherenceCheckTests
             Columns = { new PostgreSqlColumn { Name = columnName, DataType = "integer", OldName = columnOldName } }
         };
 
-    [TestCase("in\"voice", "id", null, null, TestName = "quote in the table name")]
-    [TestCase("invoice", "a\"b", null, null, TestName = "quote in a column name")]
-    [TestCase("invoice", "id", "ol\"d", null, TestName = "quote in the table OldName")]
-    [TestCase("invoice", "id", null, "ol\"d", TestName = "quote in a column OldName")]
-    public void AQuoteInAPostgreSqlName_IsRefused(string t, string c, string tOld, string cOld)
-    {
-        // Every one of these reaches PostgreSQL DDL as a wrapped identifier, and the wrap does not escape,
-        // so the deploy emits invalid SQL. The OldName cases matter most: there the failure is SILENT --
-        // the rename matches nothing, the new object is created, and the old one is orphaned for a later
-        // drop-by-absence to remove with its rows.
-        var finding = RunPg(QTable(t, c, tOld, cOld)).Single(f => f.Code == "SS-IDENT-001");
+    private const string Overlong = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(finding.Severity, Is.EqualTo(Severity.Error), "invalid DDL is not a warning");
-            Assert.That(finding.Message, Does.Contain("double-quote"), finding.Message);
-            Assert.That(finding.Message, Does.Contain("Rename"), "the message has to say what to do");
-        });
-    }
-
-    [Test]
-    public void OrdinaryPostgreSqlNames_AreNotRefused()
-    {
-        // The control that matters: 114 shipped Demos/PostgreSQL files carry ordinary quoted-lowercase
-        // names, and a check that fired on those would fail --Validate across the whole demo catalogue.
-        Assert.That(RunPg(QTable()).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
-    }
-
-    [Test]
-    public void AQuoteInANonPostgreSqlName_IsNotRefusedHere()
-    {
-        // SQL Server and the MySQL family escape at their own wrap sites, so this limit is PostgreSQL's
-        // alone -- scoping it by platform is what keeps it from becoming a cross-engine false error.
-        var sql = new SqlServerTable
-        {
-            Name = "in\"voice", Schema = "dbo",
-            Columns = { new SqlServerColumn { Name = "id", DataType = "int" } }
-        };
-        Assert.That(RunFor(sql, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
-    }
-
-    // ---- SS-IDENT-001's POPULATION: one case per name kind that reaches the unescaped re-wrap ----
-    //
-    // A case per kind, deliberately, because the population is a hand-written helper and a kind dropped
-    // from it fails silently -- the check still passes, on a smaller set. Three of the original kinds
-    // (Schema, Index, Foreign key) shipped with no test at all and were only ever exercised by an
-    // out-of-band probe, which is exactly how that happens.
-    //
-    // Every kind below was read at its emission site in the shipped PostgreSQL quench scripts and
-    // confirmed to concatenate the stored value between bare double quotes with no doubling. Names that
-    // go through QUOTE_IDENT are NOT here and must not be added: a policy name (MissingIndexesAnd
-    // ConstraintsQuench:321/375/410) escapes correctly, so refusing a quote in one would be a restriction
-    // the engine does not impose.
-
-    private static System.Collections.Generic.IEnumerable<TestCaseData> QuotedTableNameKinds()
+    private static System.Collections.Generic.IEnumerable<TestCaseData> OverlongTableNameKinds()
     {
         PostgreSqlTable Base() => new()
         {
@@ -2531,68 +2483,67 @@ public class CoherenceCheckTests
             return t;
         }
 
-        yield return new TestCaseData(With(t => t.Name = "in\"voice"), "Table").SetName("table name");
-        yield return new TestCaseData(With(t => t.Schema = "pub\"lic"), "Schema").SetName("schema name");
-        yield return new TestCaseData(With(t => t.OldName = "ol\"d"), "Table OldName").SetName("table OldName");
-        yield return new TestCaseData(With(t => t.Columns[0].Name = "a\"b"), "Column").SetName("column name");
-        yield return new TestCaseData(With(t => t.Columns[0].OldName = "ol\"d"), "Column OldName").SetName("column OldName");
+        yield return new TestCaseData(With(t => t.Name = Overlong), "Table").SetName("table name");
+        yield return new TestCaseData(With(t => t.Schema = Overlong), "Schema").SetName("schema name");
+        yield return new TestCaseData(With(t => t.OldName = Overlong), "Table OldName").SetName("table OldName");
+        yield return new TestCaseData(With(t => t.Columns[0].Name = Overlong), "Column").SetName("column name");
+        yield return new TestCaseData(With(t => t.Columns[0].OldName = Overlong), "Column OldName").SetName("column OldName");
         yield return new TestCaseData(
-            With(t => t.Indexes.Add(new PostgreSqlIndex { Name = "ix\"1", IndexColumns = "id" })),
+            With(t => t.Indexes.Add(new PostgreSqlIndex { Name = Overlong, IndexColumns = "id" })),
             "Index").SetName("index name");
         yield return new TestCaseData(
             With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
-                { Name = "fk\"1", Columns = "id", RelatedTable = "customer", RelatedColumns = "id" })),
+                { Name = Overlong, Columns = "id", RelatedTable = "customer", RelatedColumns = "id" })),
             "Foreign key").SetName("foreign key name");
 
-        // The four table-tier kinds the original population missed.
         yield return new TestCaseData(
             With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
             {
-                Name = "fk_1", Columns = "id", RelatedTable = "cus\"tomer", RelatedColumns = "id"
+                Name = "fk_1", Columns = "id", RelatedTable = Overlong, RelatedColumns = "id"
             })),
             "Foreign key RelatedTable").SetName("FK RelatedTable");
         yield return new TestCaseData(
             With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
             {
                 Name = "fk_1", Columns = "id", RelatedTable = "customer", RelatedColumns = "id",
-                RelatedTableSchema = "ot\"her"
+                RelatedTableSchema = Overlong
             })),
             "Foreign key RelatedTableSchema").SetName("FK RelatedTableSchema");
         yield return new TestCaseData(
-            With(t => t.CheckConstraints.Add(new PostgreSqlCheckConstraint { Name = "ck\"1", Expression = "id > 0" })),
+            With(t => t.CheckConstraints.Add(new PostgreSqlCheckConstraint { Name = Overlong, Expression = "id > 0" })),
             "Check constraint").SetName("check constraint name");
         yield return new TestCaseData(
-            With(t => t.ExcludeConstraints.Add(new ExcludeConstraint { Name = "ex\"1" })),
+            With(t => t.ExcludeConstraints.Add(new ExcludeConstraint { Name = Overlong })),
             "Exclude constraint").SetName("exclude constraint name");
         yield return new TestCaseData(
-            With(t => t.Statistics.Add(new Schema.Domain.PostgreSQL.Statistic { Name = "st\"1", StatisticsColumns = "id" })),
+            With(t => t.Statistics.Add(new Schema.Domain.PostgreSQL.Statistic { Name = Overlong, StatisticsColumns = "id" })),
             "Statistics").SetName("statistics name");
 
-        // ReplicaIdentityIndex is a POINTER at an index, and the realistic shape is a quote in the pointer
-        // while the index it names is clean -- which is also the only shape that isolates this kind from
+        // ReplicaIdentityIndex is a POINTER at an index, and the realistic shape is an overlong pointer
+        // while the index it names is short -- which is also the only shape that isolates this kind from
         // the Index kind above.
         yield return new TestCaseData(
             With(t =>
             {
                 t.Indexes.Add(new PostgreSqlIndex { Name = "uq_invoice", IndexColumns = "id", Unique = true });
                 t.ReplicaIdentity = "INDEX";
-                t.ReplicaIdentityIndex = "uq\"invoice";
+                t.ReplicaIdentityIndex = Overlong;
             }),
             "ReplicaIdentityIndex").SetName("ReplicaIdentityIndex pointer");
     }
 
-    [TestCaseSource(nameof(QuotedTableNameKinds))]
-    public void EveryTableTierNameKind_WithAQuote_IsRefused(PostgreSqlTable table, string expectedKind)
+    [TestCaseSource(nameof(OverlongTableNameKinds))]
+    public void EveryTableTierNameKind_Overlong_IsRefused(PostgreSqlTable table, string expectedKind)
     {
-        var findings = RunPg(table).Where(f => f.Code == "SS-IDENT-001").ToList();
+        var findings = RunPg(table).Where(f => f.Code == "SS-IDENT-002").ToList();
 
         Assert.That(findings.Select(f => f.Message).ToList(),
             Has.Some.StartsWith($"{expectedKind} '"),
-            $"no SS-IDENT-001 names the '{expectedKind}' kind — the population helper has dropped it");
-        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "invalid DDL is not a warning");
+            $"no SS-IDENT-002 names the '{expectedKind}' kind — the population helper has dropped it");
+        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "a truncated name is not a warning");
     }
 
-    private static System.Collections.Generic.IEnumerable<TestCaseData> QuotedModeledObjectKinds()
+    private static System.Collections.Generic.IEnumerable<TestCaseData> OverlongModeledObjectKinds()
     {
         Template With(System.Action<Template> mutate)
         {
@@ -2603,50 +2554,50 @@ public class CoherenceCheckTests
 
         yield return new TestCaseData(
             With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
-                { Name = "mv\"1", Schema = "public", Definition = "SELECT 1" })),
+                { Name = Overlong, Schema = "public", Definition = "SELECT 1" })),
             "Materialized view").SetName("materialized view name");
         yield return new TestCaseData(
             With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
-                { Name = "mv_1", Schema = "pub\"lic", Definition = "SELECT 1" })),
+                { Name = "mv_1", Schema = Overlong, Definition = "SELECT 1" })),
             "Materialized view schema").SetName("materialized view schema");
         yield return new TestCaseData(
             With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
             {
                 Name = "mv_1", Schema = "public", Definition = "SELECT 1",
-                Indexes = { new PostgreSqlIndex { Name = "ix\"1", IndexColumns = "id" } }
+                Indexes = { new PostgreSqlIndex { Name = Overlong, IndexColumns = "id" } }
             })),
             "Materialized view index").SetName("materialized view index name");
         yield return new TestCaseData(
-            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = "st\"atus", Schema = "public" })),
+            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = Overlong, Schema = "public" })),
             "Enum type").SetName("enum type name");
         yield return new TestCaseData(
-            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = "status", Schema = "pub\"lic" })),
+            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = "status", Schema = Overlong })),
             "Enum type schema").SetName("enum type schema");
         yield return new TestCaseData(
-            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = "sq\"1", Schema = "public" })),
+            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = Overlong, Schema = "public" })),
             "Sequence").SetName("sequence name");
         yield return new TestCaseData(
-            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = "sq_1", Schema = "pub\"lic" })),
+            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = "sq_1", Schema = Overlong })),
             "Sequence schema").SetName("sequence schema");
         yield return new TestCaseData(
             With(t => t.DomainTypes.Add(new PostgreSqlDomainType
-                { Name = "em\"ail", Schema = "public", DataType = "text" })),
+                { Name = Overlong, Schema = "public", DataType = "text" })),
             "Domain type").SetName("domain type name");
         yield return new TestCaseData(
             With(t => t.DomainTypes.Add(new PostgreSqlDomainType
-                { Name = "email", Schema = "pub\"lic", DataType = "text" })),
+                { Name = "email", Schema = Overlong, DataType = "text" })),
             "Domain type schema").SetName("domain type schema");
         yield return new TestCaseData(
             With(t => t.DomainTypes.Add(new PostgreSqlDomainType
             {
                 Name = "email", Schema = "public", DataType = "text",
-                CheckConstraints = { new PostgreSqlDomainConstraint { Name = "ck\"1", Expression = "VALUE <> ''" } }
+                CheckConstraints = { new PostgreSqlDomainConstraint { Name = Overlong, Expression = "VALUE <> ''" } }
             })),
             "Domain type check constraint").SetName("domain type check constraint name");
     }
 
-    [TestCaseSource(nameof(QuotedModeledObjectKinds))]
-    public void EveryModeledObjectNameKind_WithAQuote_IsRefused(Template template, string expectedKind)
+    [TestCaseSource(nameof(OverlongModeledObjectKinds))]
+    public void EveryModeledObjectNameKind_Overlong_IsRefused(Template template, string expectedKind)
     {
         var product = new Product
         {
@@ -2655,16 +2606,16 @@ public class CoherenceCheckTests
             TemplateOrder = new System.Collections.Generic.List<string>()
         };
         var findings = new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg"))
-            .Where(f => f.Code == "SS-IDENT-001").ToList();
+            .Where(f => f.Code == "SS-IDENT-002").ToList();
 
         Assert.That(findings.Select(f => f.Message).ToList(),
             Has.Some.StartsWith($"{expectedKind} '"),
-            $"no SS-IDENT-001 names the '{expectedKind}' kind — the population helper has dropped it");
-        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "invalid DDL is not a warning");
+            $"no SS-IDENT-002 names the '{expectedKind}' kind — the population helper has dropped it");
+        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "a truncated name is not a warning");
     }
 
     [Test]
-    public void ACleanlyNamedModeledObjectPackage_IsNotRefused()
+    public void AShortNamedModeledObjectPackage_IsNotRefused()
     {
         // The control for the widened half. Every shipped PostgreSQL demo carries ordinary lowercase names
         // for these objects, so a check that fired on them would redden --Validate across the catalogue.
@@ -2690,26 +2641,7 @@ public class CoherenceCheckTests
         };
 
         Assert.That(new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg"))
-            .Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
-    }
-
-    [Test]
-    public void APolicyNameWithAQuote_IsNotRefused()
-    {
-        // Not an oversight -- CREATE/ALTER/DROP POLICY all wrap the name with QUOTE_IDENT, which doubles an
-        // embedded quote correctly, so the DDL is valid and there is nothing to refuse. Pinned because the
-        // obvious next move on this check is "add every remaining name", and this is the one that must not
-        // be added.
-        var table = new PostgreSqlTable
-        {
-            Name = "invoice",
-            Schema = "public",
-            Columns = { new PostgreSqlColumn { Name = "id", DataType = "integer" } },
-            RowLevelSecurity = true,
-            Policies = { new PostgreSqlPolicy { Name = "ten\"ant_read", UsingExpression = "true" } }
-        };
-
-        Assert.That(RunPg(table).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
+            .Where(f => f.Code == "SS-IDENT-002"), Is.Empty);
     }
 
     // ---- A foreign-key name reused across tables (SS-FK-006) ----

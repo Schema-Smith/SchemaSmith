@@ -120,7 +120,7 @@ BEGIN
       -- Drop any foreign key that REFERENCES a table about to be removed (from any table), so the
       -- table drop below does not fail on a still-present inbound dependency. Same removed-table
       -- predicate as the drop pass; catalog-driven so it is not limited to product-declared parents.
-      SELECT STRING_AGG('ALTER TABLE "' || pn.nspname || '"."' || pc.relname || '" DROP CONSTRAINT IF EXISTS "' || con.conname || '";' || CHR(10) ||
+      SELECT STRING_AGG('ALTER TABLE ' || "SchemaSmith"."QuoteName"(pn.nspname) || '.' || "SchemaSmith"."QuoteName"(pc.relname) || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(con.conname) || ';' || CHR(10) ||
                         'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || pn.nspname || '.' || pc.relname || '.' || con.conname || ''', ''dropped'');', CHR(10))
         INTO sql_script
         FROM temp_product_ownership tp
@@ -165,7 +165,7 @@ BEGIN
       SELECT STRING_AGG('RAISE NOTICE ''  Table ' || tp."Schema" || '.' || tp."TableName" || ' no longer in product'';' || CHR(10) ||
                         CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'CustomTableDrop' AND n.nspname = 'SchemaSmith' )
                              THEN 'CALL "SchemaSmith"."CustomTableDrop"(''' || tp."Schema" || ''', ''' || tp."TableName" || ''');'
-                             ELSE 'DROP TABLE IF EXISTS "' || tp."Schema" || '"."' || tp."TableName" || '";'
+                             ELSE 'DROP TABLE IF EXISTS ' || "SchemaSmith"."QuoteName"(tp."Schema") || '.' || "SchemaSmith"."QuoteName"(tp."TableName") || ';'
                              END || CHR(10) ||
                         'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''table'', ''' || tp."Schema" || '.' || tp."TableName" || ''', ''dropped'');', CHR(10))
         INTO sql_script
@@ -240,7 +240,7 @@ BEGIN
         FROM temp_tables t
         JOIN information_schema.columns c ON c.table_schema = t."Schema"
                                          AND c.table_name = t."Name"
-        JOIN pg_attribute a ON a.attrelid = ('"' || c.table_schema || '"' ||  '.' || '"' ||  c.table_name || '"')::regclass
+        JOIN pg_attribute a ON a.attrelid = ("SchemaSmith"."QuoteName"(c.table_schema) ||  '.' || "SchemaSmith"."QuoteName"(c.table_name))::regclass
                            AND a.attname = c.column_name
                            AND NOT a.attisdropped
         WHERE t."Schema" = c.table_schema
@@ -527,7 +527,7 @@ BEGIN
              con.condeferred AS "InitiallyDeferred",
              CASE con.confmatchtype WHEN 'f' THEN 'FULL' WHEN 'p' THEN 'PARTIAL' ELSE 'SIMPLE' END AS "MatchType"
         FROM temp_tables t
-        JOIN pg_catalog.pg_constraint con ON con.conrelid = to_regclass('"' || t."Schema" || '"' ||  '.' || '"' ||  t."Name" || '"')
+        JOIN pg_catalog.pg_constraint con ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(t."Schema") ||  '.' || "SchemaSmith"."QuoteName"(t."Name"))
         JOIN pg_catalog.pg_class frel ON frel.oid = con.confrelid
         JOIN pg_catalog.pg_namespace fnsp ON fnsp.oid = frel.relnamespace
         WHERE con.contype = 'f';
@@ -550,7 +550,7 @@ BEGIN
              COALESCE(con.connoinherit, FALSE) AS "NoInherit",
              "SchemaSmith"."ConstraintEnforced"(con.oid) AS "Enforced"
         FROM temp_tables t
-        JOIN pg_catalog.pg_constraint con ON con.conrelid = to_regclass('"' || t."Schema" || '"' ||  '.' || '"' ||  t."Name" || '"')
+        JOIN pg_catalog.pg_constraint con ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(t."Schema") ||  '.' || "SchemaSmith"."QuoteName"(t."Name"))
         WHERE con.contype = 'c';
 
     RAISE NOTICE 'Collect Existing Exclude Constraint Definitions';
@@ -577,7 +577,7 @@ BEGIN
                         WHERE a.attrelid = idx.indrelid AND u.idx > idx.indnkeyatts AND a.attnum = u.element), '') AS "IncludeColumns",
              COALESCE((SELECT STRING_AGG(opt, ',' ORDER BY opt) FROM UNNEST(i.reloptions) AS o(opt)), '') AS "StorageParameters"
         FROM temp_tables t
-        JOIN pg_index idx ON idx.indrelid = to_regclass('"' || t."Schema" || '"."' || t."Name" || '"')
+        JOIN pg_index idx ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name"))
         JOIN pg_class i ON i.oid = idx.indexrelid
         JOIN pg_catalog.pg_constraint con ON con.conrelid = idx.indrelid AND con.conname = i.relname AND con.contype = 'x';
 
@@ -594,7 +594,7 @@ BEGIN
                                                        FROM UNNEST(se.stxkind) AS k)) AS "Kind",
              "SchemaSmith"."StatisticsLiveColumns"(se.oid) AS "StatisticsColumns"
       FROM temp_tables t
-      JOIN  pg_statistic_ext se ON se.stxrelid = to_regclass('"' || t."Schema" || '"."' || t."Name" || '"');
+      JOIN  pg_statistic_ext se ON se.stxrelid = to_regclass("SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name"));
 
     -- #242, the same move as index predicates: where the mapping vouches that the declared column list produced
     -- the live one (an expression PostgreSQL rewrote), the snapshot adopts the declared list's normalised form,
@@ -627,13 +627,13 @@ BEGIN
                               WHERE ek."TableSchema" = fk."TableSchema"
                                 AND ek."TableName" = fk."TableName"
                                 AND ek."KeyName" = fk."Name"
-                                AND ek."Columns" = fk."Columns"
+                                AND ek."Columns" = "SchemaSmith"."BareColumnList"(fk."Columns")
                                 AND ek."RelatedTableSchema" = fk."RelatedTableSchema"
                                 AND ek."RelatedTable" = fk."RelatedTable"
-                                AND ek."RelatedColumns" = fk."RelatedColumns"
+                                AND ek."RelatedColumns" = "SchemaSmith"."BareColumnList"(fk."RelatedColumns")
                                 AND ek."DeleteAction" = fk."DeleteAction"
                                 AND ek."UpdateAction" = fk."UpdateAction"
-                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", '')
+                                AND COALESCE(ek."SetNullColumns", '') = COALESCE("SchemaSmith"."BareColumnList"(fk."SetNullColumns"), '')
                                 AND ek."MatchType" = COALESCE(NULLIF(UPPER(fk."MatchType"), ''), 'SIMPLE'))
             AND NOT EXISTS (SELECT 1
                               FROM temp_fks fk2
@@ -644,7 +644,7 @@ BEGIN
     END IF;
     RAISE NOTICE 'Drop Modified or Removed Foreign Keys';
     SELECT STRING_AGG('RAISE NOTICE ''  Foreign Key ' || ek."TableSchema" || '.' || ek."TableName" || '.' || ek."KeyName" || ' no longer in product'';' || CHR(10) ||
-                      'ALTER TABLE "' || ek."TableSchema" || '"."' || ek."TableName" || '" DROP CONSTRAINT IF EXISTS "' || ek."KeyName" || '" CASCADE;' || CHR(10) ||
+                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ek."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ek."TableName") || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(ek."KeyName") || ' CASCADE;' || CHR(10) ||
                       'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || ek."TableSchema" || '.' || ek."TableName" || '.' || ek."KeyName" || ''', ''dropped'');', CHR(10))
       INTO sql_script
       FROM temp_existing_foreignkeys ek
@@ -655,13 +655,13 @@ BEGIN
                           WHERE ek."TableSchema" = fk."TableSchema"
                             AND ek."TableName" = fk."TableName"
                             AND ek."KeyName" = fk."Name"
-                            AND ek."Columns" = fk."Columns"
+                            AND ek."Columns" = "SchemaSmith"."BareColumnList"(fk."Columns")
                             AND ek."RelatedTableSchema" = fk."RelatedTableSchema"
                             AND ek."RelatedTable" = fk."RelatedTable"
-                            AND ek."RelatedColumns" = fk."RelatedColumns"
+                            AND ek."RelatedColumns" = "SchemaSmith"."BareColumnList"(fk."RelatedColumns")
                             AND ek."DeleteAction" = fk."DeleteAction"
                             AND ek."UpdateAction" = fk."UpdateAction"
-                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", '')
+                                AND COALESCE(ek."SetNullColumns", '') = COALESCE("SchemaSmith"."BareColumnList"(fk."SetNullColumns"), '')
                                 AND ek."MatchType" = COALESCE(NULLIF(UPPER(fk."MatchType"), ''), 'SIMPLE'))
         -- Split modified vs removed: a same-named FK whose definition changed is dropped
         -- unconditionally (the create-missing pass recreates it); a FK whose name is gone
@@ -686,13 +686,13 @@ BEGIN
                               WHERE ek."TableSchema" = fk."TableSchema"
                                 AND ek."TableName" = fk."TableName"
                                 AND ek."KeyName" = fk."Name"
-                                AND ek."Columns" = fk."Columns"
+                                AND ek."Columns" = "SchemaSmith"."BareColumnList"(fk."Columns")
                                 AND ek."RelatedTableSchema" = fk."RelatedTableSchema"
                                 AND ek."RelatedTable" = fk."RelatedTable"
-                                AND ek."RelatedColumns" = fk."RelatedColumns"
+                                AND ek."RelatedColumns" = "SchemaSmith"."BareColumnList"(fk."RelatedColumns")
                                 AND ek."DeleteAction" = fk."DeleteAction"
                                 AND ek."UpdateAction" = fk."UpdateAction"
-                                AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", '')
+                                AND COALESCE(ek."SetNullColumns", '') = COALESCE("SchemaSmith"."BareColumnList"(fk."SetNullColumns"), '')
                                 AND ek."MatchType" = COALESCE(NULLIF(UPPER(fk."MatchType"), ''), 'SIMPLE'))
             AND (EXISTS (SELECT 1
                            FROM temp_fks fk2
@@ -705,7 +705,7 @@ BEGIN
     -- A changed DEFERRABLE / INITIALLY DEFERRED is applied in place: ALTER CONSTRAINT changes it without re-validating
     -- the rows, which a drop and re-create would. Only keys the pass above left standing, so every other attribute agrees.
     RAISE NOTICE 'Alter Foreign Key Deferral';
-    SELECT STRING_AGG('ALTER TABLE "' || ek."TableSchema" || '"."' || ek."TableName" || '" ALTER CONSTRAINT "' || ek."KeyName" || '"' ||
+    SELECT STRING_AGG('ALTER TABLE ' || "SchemaSmith"."QuoteName"(ek."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ek."TableName") || ' ALTER CONSTRAINT ' || "SchemaSmith"."QuoteName"(ek."KeyName") ||
                       CASE WHEN fk."Deferrable" THEN ' DEFERRABLE' || CASE WHEN fk."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE ' INITIALLY IMMEDIATE' END
                            ELSE ' NOT DEFERRABLE' END || ';' || CHR(10) ||
                       'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || ek."TableSchema" || '.' || ek."TableName" || '.' || ek."KeyName" || ''', ''modified'');', CHR(10))
@@ -714,13 +714,13 @@ BEGIN
       JOIN temp_fks fk ON ek."TableSchema" = fk."TableSchema"
                       AND ek."TableName" = fk."TableName"
                       AND ek."KeyName" = fk."Name"
-                      AND ek."Columns" = fk."Columns"
+                      AND ek."Columns" = "SchemaSmith"."BareColumnList"(fk."Columns")
                       AND ek."RelatedTableSchema" = fk."RelatedTableSchema"
                       AND ek."RelatedTable" = fk."RelatedTable"
-                      AND ek."RelatedColumns" = fk."RelatedColumns"
+                      AND ek."RelatedColumns" = "SchemaSmith"."BareColumnList"(fk."RelatedColumns")
                       AND ek."DeleteAction" = fk."DeleteAction"
                       AND ek."UpdateAction" = fk."UpdateAction"
-                      AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", '')
+                      AND COALESCE(ek."SetNullColumns", '') = COALESCE("SchemaSmith"."BareColumnList"(fk."SetNullColumns"), '')
                       AND ek."MatchType" = COALESCE(NULLIF(UPPER(fk."MatchType"), ''), 'SIMPLE')
      WHERE ek."Deferrable" <> fk."Deferrable"
         OR (fk."Deferrable" AND ek."InitiallyDeferred" <> fk."InitiallyDeferred");
@@ -732,13 +732,13 @@ BEGIN
           JOIN temp_fks fk ON ek."TableSchema" = fk."TableSchema"
                           AND ek."TableName" = fk."TableName"
                           AND ek."KeyName" = fk."Name"
-                          AND ek."Columns" = fk."Columns"
+                          AND ek."Columns" = "SchemaSmith"."BareColumnList"(fk."Columns")
                           AND ek."RelatedTableSchema" = fk."RelatedTableSchema"
                           AND ek."RelatedTable" = fk."RelatedTable"
-                          AND ek."RelatedColumns" = fk."RelatedColumns"
+                          AND ek."RelatedColumns" = "SchemaSmith"."BareColumnList"(fk."RelatedColumns")
                           AND ek."DeleteAction" = fk."DeleteAction"
                           AND ek."UpdateAction" = fk."UpdateAction"
-                          AND COALESCE(ek."SetNullColumns", '') = COALESCE(fk."SetNullColumns", '')
+                          AND COALESCE(ek."SetNullColumns", '') = COALESCE("SchemaSmith"."BareColumnList"(fk."SetNullColumns"), '')
                           AND ek."MatchType" = COALESCE(NULLIF(UPPER(fk."MatchType"), ''), 'SIMPLE')
          WHERE ek."Deferrable" <> fk."Deferrable"
             OR (fk."Deferrable" AND ek."InitiallyDeferred" <> fk."InitiallyDeferred");
@@ -779,7 +779,7 @@ BEGIN
     END IF;
     RAISE NOTICE 'Drop Modified or Removed Check Constraints';
     SELECT STRING_AGG('RAISE NOTICE ''  Check Constraint ' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."CheckName" || ' modified or no longer in product'';' || CHR(10) ||
-                      'ALTER TABLE "' || ec."TableSchema" || '"."' || ec."TableName" || '" DROP CONSTRAINT IF EXISTS "' || ec."CheckName" || '" CASCADE;' || CHR(10) ||
+                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ec."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ec."TableName") || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(ec."CheckName") || ' CASCADE;' || CHR(10) ||
                       'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."CheckName" || ''', ''dropped'');', CHR(10))
       INTO sql_script
       FROM temp_existing_checks ec
@@ -854,7 +854,7 @@ BEGIN
     -- SAME pg_get_constraintdef normalization (temp_existing_checks."Expression") as the table-level
     -- compare above, so an unchanged expression compares equal and is left untouched (idempotent).
     SELECT STRING_AGG('RAISE NOTICE ''  Column Check Constraint ' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."CheckName" || ' modified'';' || CHR(10) ||
-                      'ALTER TABLE "' || ec."TableSchema" || '"."' || ec."TableName" || '" DROP CONSTRAINT IF EXISTS "' || ec."CheckName" || '" CASCADE;', CHR(10))
+                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ec."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ec."TableName") || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(ec."CheckName") || ' CASCADE;', CHR(10))
       INTO sql_script
       FROM temp_existing_checks ec
       JOIN temp_columns col ON col."TableSchema" = ec."TableSchema"
@@ -896,7 +896,7 @@ BEGIN
     END IF;
     RAISE NOTICE 'Drop Modified or Removed Statistics';
     SELECT STRING_AGG('RAISE NOTICE ''  Statistics ' || es."TableSchema" || '.' || es."StatisticsName" || ' modified or no longer in product'';' || CHR(10) ||
-                      'DROP STATISTICS IF EXISTS "' || es."StatisticsSchema" || '"."' || es."StatisticsName" || '" CASCADE;', CHR(10))
+                      'DROP STATISTICS IF EXISTS ' || "SchemaSmith"."QuoteName"(es."StatisticsSchema") || '.' || "SchemaSmith"."QuoteName"(es."StatisticsName") || ' CASCADE;', CHR(10))
       INTO sql_script
       FROM temp_existing_statistics es
       JOIN temp_tables tt ON tt."Schema" = es."TableSchema"
@@ -952,7 +952,7 @@ BEGIN
     END IF;
     RAISE NOTICE 'Drop Modified or Removed Exclude Constraints';
     SELECT STRING_AGG('RAISE NOTICE ''  Exclude Constraint ' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."ExcludeName" || ' modified or no longer in product'';' || CHR(10) ||
-                      'ALTER TABLE "' || ec."TableSchema" || '"."' || ec."TableName" || '" DROP CONSTRAINT IF EXISTS "' || ec."ExcludeName" || '" CASCADE;', CHR(10))
+                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ec."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ec."TableName") || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(ec."ExcludeName") || ' CASCADE;', CHR(10))
       INTO sql_script
       FROM temp_existing_excludes ec
       JOIN temp_tables tt ON tt."Schema" = ec."TableSchema"
@@ -1026,8 +1026,8 @@ BEGIN
                             AND i."Name" = ei."IndexName");
     SELECT STRING_AGG('RAISE NOTICE ''  Renaming ' || CASE WHEN rn."PrimaryKey" OR rn."UniqueConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || rn."TableSchema" || '.' || rn."TableName" || '.' || rn."OldName" || ' to ' || rn."NewName" || ''';' || CHR(10) ||
                       CASE WHEN NOT (rn."PrimaryKey" OR rn."UniqueConstraint")
-                           THEN 'ALTER INDEX IF EXISTS "' || rn."TableSchema" || '"."' || rn."OldName" || '" RENAME TO "' || rn."NewName"  || '";'
-                           ELSE 'ALTER TABLE "' || rn."TableSchema" || '"."' || rn."TableName" || '" RENAME CONSTRAINT "' || rn."OldName" || '" TO "' || rn."NewName" || '";' END, CHR(10))
+                           THEN 'ALTER INDEX IF EXISTS ' || "SchemaSmith"."QuoteName"(rn."TableSchema") || '.' || "SchemaSmith"."QuoteName"(rn."OldName") || ' RENAME TO ' || "SchemaSmith"."QuoteName"(rn."NewName") || ';'
+                           ELSE 'ALTER TABLE ' || "SchemaSmith"."QuoteName"(rn."TableSchema") || '.' || "SchemaSmith"."QuoteName"(rn."TableName") || ' RENAME CONSTRAINT ' || "SchemaSmith"."QuoteName"(rn."OldName") || ' TO ' || "SchemaSmith"."QuoteName"(rn."NewName") || ';' END, CHR(10))
       INTO sql_script
       FROM temp_index_renames rn;
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
@@ -1159,8 +1159,8 @@ BEGIN
     RAISE NOTICE 'Drop Unknown, Removed, and Modified Indexes';
     SELECT STRING_AGG('RAISE NOTICE ''  Dropping ' || CASE WHEN "IsConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''';' || CHR(10) ||
                       CASE WHEN "IsConstraint"
-                           THEN 'ALTER TABLE "' || ti."TableSchema" || '"."' || ti."TableName" || '" DROP CONSTRAINT IF EXISTS "' || ti."IndexName" || '" CASCADE;'
-                           ELSE 'DROP INDEX IF EXISTS "' || ti."TableSchema" || '"."' || ti."IndexName" || '";' END || CHR(10) ||
+                           THEN 'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."TableName") || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(ti."IndexName") || ' CASCADE;'
+                           ELSE 'DROP INDEX IF EXISTS ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."IndexName") || ';' END || CHR(10) ||
                       'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN "IsConstraint" THEN 'constraint' ELSE 'index' END || ''', ''' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''', ''dropped'');', CHR(10))
       INTO sql_script
       FROM temp_indexes_to_drop ti;
@@ -1194,7 +1194,7 @@ BEGIN
     END IF;
     RAISE NOTICE 'Drop Columns No Longer Part of The Product Definition';
     SELECT STRING_AGG('RAISE NOTICE ''  Column ' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."ColumnName" || ' no longer in product'';' || CHR(10) ||
-                      'ALTER TABLE "' || ec."TableSchema" || '"."' || ec."TableName" || '" DROP COLUMN IF EXISTS "' || ec."ColumnName" || '" CASCADE;' || CHR(10) ||
+                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ec."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ec."TableName") || ' DROP COLUMN IF EXISTS ' || "SchemaSmith"."QuoteName"(ec."ColumnName") || ' CASCADE;' || CHR(10) ||
                       'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''column'', ''' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."ColumnName" || ''', ''dropped'');', CHR(10))
       INTO sql_script
       FROM temp_existing_columns ec
@@ -1227,13 +1227,13 @@ BEGIN
 
     RAISE NOTICE 'Fixup Any Modified Index Fill Factors';
     SELECT STRING_AGG('RAISE NOTICE ''  Modify Fillfactor for ' || ti."TableSchema" || '.' || ti."Name" || ''';' || CHR(10) ||
-                      'ALTER INDEX "' || ti."TableSchema" || '"."' || ti."Name" || '" SET (fillfactor = ' || ti."FillFactor" || ');', CHR(10))
+                      'ALTER INDEX ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."Name") || ' SET (fillfactor = ' || ti."FillFactor" || ');', CHR(10))
       INTO sql_script
       FROM temp_indexes ti
       JOIN temp_existing_indexes ei ON ei."TableSchema" = ti."TableSchema"
                                    AND ei."TableName" = ti."TableName"
                                    AND ei."IndexName" = ti."Name"
-      JOIN pg_index idx ON idx.indrelid = ('"' || ti."TableSchema" || '"' ||  '.' || '"' ||  ti."TableName" || '"')::regclass
+      JOIN pg_index idx ON idx.indrelid = ("SchemaSmith"."QuoteName"(ti."TableSchema") ||  '.' || "SchemaSmith"."QuoteName"(ti."TableName"))::regclass
       JOIN pg_class i ON i.oid = idx.indexrelid
                      AND i.relname = ti."Name"
       WHERE ti."UpdateFillFactor"
@@ -1246,7 +1246,7 @@ BEGIN
 
     RAISE NOTICE 'Drop Generated Columns Referencing Columns That Are Changing Data Type';
     SELECT STRING_AGG('RAISE NOTICE ''  Column ' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."ColumnName" || ' affected by type change'';' || CHR(10) ||
-                      'ALTER TABLE "' || ec."TableSchema" || '"."' || ec."TableName" || '" DROP COLUMN IF EXISTS "' || ec."ColumnName" || '" CASCADE;', CHR(10))
+                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ec."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ec."TableName") || ' DROP COLUMN IF EXISTS ' || "SchemaSmith"."QuoteName"(ec."ColumnName") || ' CASCADE;', CHR(10))
       INTO sql_script
       FROM temp_existing_columns ec
       WHERE ec."Generated" = 'ALWAYS'
@@ -1269,7 +1269,7 @@ BEGIN
 
     RAISE NOTICE 'Drop Columns Changing to Generated';
     SELECT STRING_AGG('RAISE NOTICE ''  Column ' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."ColumnName" || ' now generated'';' || CHR(10) ||
-                      'ALTER TABLE "' || ec."TableSchema" || '"."' || ec."TableName" || '" DROP COLUMN IF EXISTS "' || ec."ColumnName" || '" CASCADE;', CHR(10))
+                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ec."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ec."TableName") || ' DROP COLUMN IF EXISTS ' || "SchemaSmith"."QuoteName"(ec."ColumnName") || ' CASCADE;', CHR(10))
     INTO sql_script
     FROM temp_existing_columns ec
     JOIN temp_columns c ON c."TableSchema" = ec."TableSchema"
@@ -1290,7 +1290,7 @@ BEGIN
     IF "SchemaSmith"."ServerVersionNum"() >= 18 THEN
       RAISE NOTICE 'Drop Generated Columns Changing Between STORED and VIRTUAL';
       SELECT STRING_AGG('RAISE NOTICE ''  Column ' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."ColumnName" || ' becomes ' || CASE WHEN c."Virtual" THEN 'VIRTUAL' ELSE 'STORED' END || ''';' || CHR(10) ||
-                        'ALTER TABLE "' || ec."TableSchema" || '"."' || ec."TableName" || '" DROP COLUMN IF EXISTS "' || ec."ColumnName" || '" CASCADE;' || CHR(10) ||
+                        'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ec."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ec."TableName") || ' DROP COLUMN IF EXISTS ' || "SchemaSmith"."QuoteName"(ec."ColumnName") || ' CASCADE;' || CHR(10) ||
                         'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''column'', ''' || ec."TableSchema" || '.' || ec."TableName" || '.' || ec."ColumnName" || ''', ''dropped'');', CHR(10))
         INTO sql_script
         FROM temp_existing_columns ec
@@ -1436,12 +1436,12 @@ BEGIN
                                 REPLACE(view_ns.nspname || '.' || dep_view.relname, '''', '''''') || ''', ''dropped'');'
                            ELSE CASE WHEN dep_rule.rulename != '_RETURN'
                                      THEN 'RAISE NOTICE ''  Dropping Rule ' || rule_class.relnamespace::regnamespace || '.' || dep_rule.rulename || ''';' || CHR(10) ||
-                                          'DROP RULE IF EXISTS "' || rule_class.relnamespace::regnamespace || '"."' || dep_rule.rulename || '";'
+                                          'DROP RULE IF EXISTS ' || rule_class.relnamespace::regnamespace::text || '.' || "SchemaSmith"."QuoteName"(dep_rule.rulename) || ';'
                                      END
                            END, CHR(10))
       INTO sql_script
       FROM temp_existing_columns ec
-      JOIN pg_class AS ref_obj ON ref_obj.relnamespace::regnamespace = ('"' || ec."TableSchema" || '"')::regnamespace
+      JOIN pg_class AS ref_obj ON ref_obj.relnamespace::regnamespace = ("SchemaSmith"."QuoteName"(ec."TableSchema"))::regnamespace
                               AND ref_obj.relname = ec."TableName"
       JOIN pg_depend AS d ON ref_obj.oid = d.refobjid
       JOIN pg_attribute AS ref_attr ON ref_attr.attrelid = d.refobjid AND ref_attr.attnum = d.refobjsubid
@@ -1470,7 +1470,7 @@ BEGIN
                       CASE WHEN p.prokind = 'p' THEN 'procedure' ELSE 'function' END || ''', ''' || REPLACE(pn.nspname || '.' || p.proname, '''', '''''') || ''', ''dropped'');', CHR(10))
       INTO sql_script
       FROM temp_existing_columns ec
-      JOIN pg_class AS ref_obj ON ref_obj.relnamespace::regnamespace = ('"' || ec."TableSchema" || '"')::regnamespace
+      JOIN pg_class AS ref_obj ON ref_obj.relnamespace::regnamespace = ("SchemaSmith"."QuoteName"(ec."TableSchema"))::regnamespace
                               AND ref_obj.relname = ec."TableName"
       JOIN pg_attribute AS ref_attr ON ref_attr.attrelid = ref_obj.oid AND ref_attr.attname = ec."ColumnName"
       JOIN pg_depend AS d ON d.refclassid = 'pg_class'::regclass AND d.refobjid = ref_obj.oid AND d.refobjsubid = ref_attr.attnum
@@ -1493,8 +1493,8 @@ BEGIN
                            AND (COALESCE(tc."Generated", 'NEVER') = 'NEVER' OR COALESCE(tc."Generated", '') LIKE 'GENERATED%IDENTITY%')
                            AND NOT EXISTS (SELECT 1 FROM information_schema.columns ic WHERE ic.table_name = tc."TableName" AND ic.table_schema = tc."TableSchema" AND ic.column_name = tc."Name")) ||
                       ')'';' || CHR(10) ||
-                      'ALTER TABLE "' || tt."Schema" || '"."' || tt."Name" || '" ' ||
-                      (SELECT STRING_AGG('ADD "' || tc."Name" || '" ' || tc."DataType" ||
+                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(tt."Schema") || '.' || "SchemaSmith"."QuoteName"(tt."Name") || ' ' ||
+                      (SELECT STRING_AGG('ADD ' || "SchemaSmith"."QuoteName"(tc."Name") || ' ' || tc."DataType" ||
                               "SchemaSmith"."CollateClause"(tc."Collation") ||
                               CASE WHEN COALESCE(tc."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' THEN ' ' || tc."Generated" ELSE '' END ||
                               CASE WHEN tc."Nullable" THEN '' ELSE ' NOT NULL' END ||
@@ -1523,8 +1523,8 @@ BEGIN
     -- MUST match the "Alter Modified Columns" NOT (...) predicate below (Task A1 #296) — keep in lockstep.
     IF "SchemaSmith"."ServerVersionNum"() < 17 THEN
       SELECT STRING_AGG('RAISE NOTICE ''  Recreating generated column ' || c."TableSchema" || '.' || c."TableName" || '.' || c."Name" || ' (expression changed)'';' || CHR(10) ||
-                        'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '" DROP COLUMN IF EXISTS "' || c."Name" || '" CASCADE;' || CHR(10) ||
-                        'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '" ADD "' || c."Name" || '" ' || c."DataType" ||
+                        'ALTER TABLE ' || "SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName") || ' DROP COLUMN IF EXISTS ' || "SchemaSmith"."QuoteName"(c."Name") || ' CASCADE;' || CHR(10) ||
+                        'ALTER TABLE ' || "SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName") || ' ADD ' || "SchemaSmith"."QuoteName"(c."Name") || ' ' || c."DataType" ||
                         "SchemaSmith"."CollateClause"(c."Collation") ||
                         ' GENERATED ALWAYS AS (' || c."GenerationExpression" || ') STORED' ||
                         -- NOT NULL only when the package asked for it. An undeclared column's Nullable is the live
@@ -1534,10 +1534,10 @@ BEGIN
                         -- Re-added column is at default storage/compression; carry over any non-default target so
                         -- a combined expression+storage/compression change fully converges in this single pass.
                         CASE WHEN COALESCE(c."Storage", '') != '' AND COALESCE(c."Storage", '') != 'DEFAULT'
-                             THEN CHR(10) || 'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '" ALTER COLUMN "' || c."Name" || '" SET STORAGE ' || c."Storage" || ';'
+                             THEN CHR(10) || 'ALTER TABLE ' || "SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName") || ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET STORAGE ' || c."Storage" || ';'
                              ELSE '' END ||
                         CASE WHEN COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != 'DEFAULT' AND "SchemaSmith"."ServerVersionNum"() >= 14
-                             THEN CHR(10) || 'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '" ALTER COLUMN "' || c."Name" || '" SET COMPRESSION ' || c."Compression" || ';'
+                             THEN CHR(10) || 'ALTER TABLE ' || "SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName") || ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET COMPRESSION ' || c."Compression" || ';'
                              ELSE '' END, CHR(10))
         INTO sql_script
         FROM temp_columns c
@@ -1587,13 +1587,13 @@ BEGIN
       END IF;
 
       SELECT STRING_AGG('RAISE NOTICE ''  Un-generating column ' || c."TableSchema" || '.' || c."TableName" || '.' || c."Name" || ' (drop+re-add as plain; PG < 13 has no DROP EXPRESSION)'';' || CHR(10) ||
-                        'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '" DROP COLUMN IF EXISTS "' || c."Name" || '" CASCADE;' || CHR(10) ||
-                        'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '" ADD "' || c."Name" || '" ' || c."DataType" ||
+                        'ALTER TABLE ' || "SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName") || ' DROP COLUMN IF EXISTS ' || "SchemaSmith"."QuoteName"(c."Name") || ' CASCADE;' || CHR(10) ||
+                        'ALTER TABLE ' || "SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName") || ' ADD ' || "SchemaSmith"."QuoteName"(c."Name") || ' ' || c."DataType" ||
                         "SchemaSmith"."CollateClause"(c."Collation") ||
                         CASE WHEN c."Nullable" THEN '' ELSE ' NOT NULL' END ||
                         CASE WHEN COALESCE(c."Default", '') != '' THEN ' DEFAULT ' || c."Default" ELSE '' END || ';' ||
                         CASE WHEN COALESCE(c."Storage", '') != '' AND COALESCE(c."Storage", '') != 'DEFAULT'
-                             THEN CHR(10) || 'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '" ALTER COLUMN "' || c."Name" || '" SET STORAGE ' || c."Storage" || ';'
+                             THEN CHR(10) || 'ALTER TABLE ' || "SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName") || ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET STORAGE ' || c."Storage" || ';'
                              ELSE '' END, CHR(10))
         INTO sql_script
         FROM temp_columns c
@@ -1692,53 +1692,53 @@ BEGIN
                        JOIN temp_existing_columns sec ON sec."TableSchema" = sc."TableSchema" AND sec."TableName" = sc."TableName" AND sec."ColumnName" = sc."Name"
                       WHERE sc."TableSchema" = c."TableSchema" AND sc."TableName" = c."TableName" AND sc."IsSerial"
                         AND COALESCE("SchemaSmith"."StripTypeCast"(sc."Default"), '') != COALESCE("SchemaSmith"."StripTypeCast"(sec."Default"), '')) || CHR(10), '') ||
-           'ALTER TABLE "' || c."TableSchema" || '"."' || c."TableName" || '"' || CHR(10) ||
+           'ALTER TABLE ' || "SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName") || CHR(10) ||
            STRING_AGG(NULLIF(RTRIM(TRIM(TRAILING ',' FROM
                       CASE WHEN REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') OR COALESCE(c."Collation", '') != COALESCE(ec."Collation", '')
-                           THEN ' ALTER COLUMN "' || c."Name" || '" SET DATA TYPE ' || c."DataType" ||
+                           THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET DATA TYPE ' || c."DataType" ||
                                                     "SchemaSmith"."CollateClause"(c."Collation") || ','
                            ELSE '' END ||
                       CASE WHEN COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')
                            THEN CASE WHEN (COALESCE(c."Generated", 'NEVER') = 'NEVER' OR COALESCE(c."GenerationExpression", '') = '')
                                      THEN CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 13
-                                               THEN ' ALTER COLUMN "' || c."Name" || '" DROP EXPRESSION,'
+                                               THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' DROP EXPRESSION,'
                                                ELSE '' END  -- PG < 13: handled by the un-generate drop-and-re-add pass above
                                      WHEN "SchemaSmith"."ServerVersionNum"() >= 17
-                                     THEN ' ALTER COLUMN "' || c."Name" || '" SET EXPRESSION AS (' || COALESCE(c."GenerationExpression", '') || '),'
+                                     THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET EXPRESSION AS (' || COALESCE(c."GenerationExpression", '') || '),'
                                      ELSE '' END  -- PG < 17: expression change is handled by the drop-and-re-add pass below
                            ELSE '' END ||
                       CASE WHEN COALESCE(ec."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%'
                                 AND COALESCE(c."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%'
-                           THEN ' ALTER COLUMN "' || c."Name" || '" DROP IDENTITY IF EXISTS,'
+                           THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' DROP IDENTITY IF EXISTS,'
                            ELSE '' END ||
                       CASE WHEN c."Nullable" != ec."Nullable"
                            THEN CASE WHEN c."Nullable"
-                                     THEN ' ALTER COLUMN "' || c."Name" || '" DROP NOT NULL,'
-                                     ELSE ' ALTER COLUMN "' || c."Name" || '" SET NOT NULL,' END
+                                     THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' DROP NOT NULL,'
+                                     ELSE ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET NOT NULL,' END
                            ELSE '' END ||
                       CASE WHEN COALESCE("SchemaSmith"."StripTypeCast"(c."Default"), '') != COALESCE("SchemaSmith"."StripTypeCast"(ec."Default"), '')
                            THEN CASE WHEN COALESCE(c."Default", '') = ''
-                                     THEN ' ALTER COLUMN "' || c."Name" || '" DROP DEFAULT,'
-                                     ELSE ' ALTER COLUMN "' || c."Name" || '" SET DEFAULT ' || c."Default" || ',' END
+                                     THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' DROP DEFAULT,'
+                                     ELSE ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET DEFAULT ' || c."Default" || ',' END
                            ELSE '' END ||
                       CASE WHEN COALESCE(c."Storage", '') != COALESCE(ec."Storage", '') AND COALESCE(c."Storage", '') != ''
-                           THEN ' ALTER COLUMN "' || c."Name" || '" SET STORAGE ' || COALESCE(c."Storage", '') || ','
+                           THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET STORAGE ' || COALESCE(c."Storage", '') || ','
                            ELSE '' END ||
                       CASE WHEN COALESCE(c."Compression", '') != COALESCE(ec."Compression", '') AND COALESCE(c."Compression", '') != '' AND "SchemaSmith"."ServerVersionNum"() >= 14
-                           THEN ' ALTER COLUMN "' || c."Name" || '" SET COMPRESSION ' || COALESCE(c."Compression", '') || ','
+                           THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET COMPRESSION ' || COALESCE(c."Compression", '') || ','
                            ELSE '' END ||
                       -- Identity kind, in place: a switch between ALWAYS and BY DEFAULT, or a plain column becoming identity
                       -- with the declared sequence options. Last, after the NOT NULL and the dropped default identity needs.
                       CASE WHEN COALESCE(c."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%'
                                 AND REGEXP_REPLACE(c."Generated", '\s*\(.*$', '') != ec."Generated"
-                           THEN ' ALTER COLUMN "' || c."Name" || '" SET GENERATED ' || CASE WHEN UPPER(c."Generated") LIKE 'GENERATED ALWAYS%' THEN 'ALWAYS' ELSE 'BY DEFAULT' END || ','
+                           THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET GENERATED ' || CASE WHEN UPPER(c."Generated") LIKE 'GENERATED ALWAYS%' THEN 'ALWAYS' ELSE 'BY DEFAULT' END || ','
                            WHEN COALESCE(c."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", 'NEVER') = 'NEVER'
-                           THEN ' ALTER COLUMN "' || c."Name" || '" ADD ' || c."Generated" || ','
+                           THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' ADD ' || c."Generated" || ','
                            ELSE '' END ||
                       -- The declared sequence options, in place (only those declared, and only where they differ).
                       CASE WHEN (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
                       AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> '')
-                           THEN ' ALTER COLUMN "' || c."Name" || '"' || "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) || ','
+                           THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) || ','
                            ELSE '' END)), ''), ',' || CHR(10)) || ';' AS "code"
       FROM temp_columns c
       JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema"
@@ -1896,7 +1896,7 @@ BEGIN
 
     RAISE NOTICE 'Fixup Table Attributes';
     SELECT STRING_AGG('RAISE NOTICE ''  Fixing up attributes for ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
-                      'ALTER TABLE ' || '"' || t."Schema" || '"."' || t."Name" || '" ' ||
+                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
                       TRIM(TRAILING ',' FROM
                            CASE WHEN t."PersistenceType" != '' AND LOWER(t."PersistenceType") != CASE rls.relpersistence WHEN 'p' THEN 'logged' WHEN 'u' THEN 'unlogged' END
                                 THEN 'SET ' || UPPER(t."PersistenceType") || ','

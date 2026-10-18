@@ -576,6 +576,8 @@ Each platform's table definition extends the shared properties with engine-speci
 | `UpdateFillFactor` | bool | `false` | Enables fill-factor reconciliation for this table. |
 | `FillFactor` | short (0--100) | `0` | Table fill factor. `0` means use the server default. |
 
+**A name with a double quote in it.** PostgreSQL allows `"` inside a name, and so does SchemaSmith: write the name as it is in a `Name` property (`"Name": "Or\"ders"` in JSON). Inside a comma-separated list (`IndexColumns`, a foreign key's `Columns` and `RelatedColumns`, `StatisticsColumns`), write such a name quoted, with its inner quotes doubled (`"\"La\"\"bel\""` for the column `La"bel`), because a bare quote there cannot be told from the start of a quoted name. Extraction writes it that way. Expressions (`FilterExpression`, check constraints, a materialized view's `Definition`) are SQL, and take the name the way PostgreSQL does.
+
 ### MySQL (`MySqlTable`)
 
 | Property | Type | Default | Description |

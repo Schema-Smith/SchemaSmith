@@ -62,10 +62,10 @@ BEGIN
                        AND NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class rc ON rc.oid = a.attrelid JOIN pg_namespace nn ON nn.oid = rc.relnamespace WHERE nn.nspname = tc."TableSchema" AND rc.relname = tc."TableName" AND a.attname = tc."Name" AND a.attnum > 0 AND NOT a.attisdropped)
                        AND NOT (tc."Virtual" AND "SchemaSmith"."ServerVersionNum"() < 18)) ||
                     ')'';' || CHR(10) ||
-                    'ALTER TABLE "' || tt."Schema" || '"."' || tt."Name" || '" ' ||
+                    'ALTER TABLE ' || "SchemaSmith"."QuoteName"(tt."Schema") || '.' || "SchemaSmith"."QuoteName"(tt."Name") || ' ' ||
                     -- Nullability belongs in the ADD: leaving it out built every generated column nullable, and a declared
                     -- NOT NULL then arrived one deploy late as a SET NOT NULL. PostgreSQL 18 accepts it on VIRTUAL too.
-                    (SELECT STRING_AGG('ADD COLUMN "' || tc."Name" || '" ' || tc."DataType" || ' GENERATED ' || tc."Generated" || ' AS (' || tc."GenerationExpression" || ') ' || CASE WHEN tc."Virtual" THEN 'VIRTUAL' ELSE 'STORED' END
+                    (SELECT STRING_AGG('ADD COLUMN ' || "SchemaSmith"."QuoteName"(tc."Name") || ' ' || tc."DataType" || ' GENERATED ' || tc."Generated" || ' AS (' || tc."GenerationExpression" || ') ' || CASE WHEN tc."Virtual" THEN 'VIRTUAL' ELSE 'STORED' END
                                        || CASE WHEN tc."Nullable" THEN '' ELSE ' NOT NULL' END, ', ')
                        FROM temp_columns tc
                        WHERE tc."TableSchema" = tt."Schema" AND tc."TableName" = tt."Name"
@@ -141,7 +141,7 @@ BEGIN
   RAISE NOTICE 'Add Missing Indexes'; -- Includes Primary Keys and Unique Constraints
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing ' || CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'Constraint ' ELSE 'Index ' END || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || CASE WHEN COALESCE(ti."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ti."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
                     CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey"
-                         THEN 'ALTER TABLE "' || ti."TableSchema" || '"."' || ti."TableName" || '" ADD CONSTRAINT "' || ti."Name" || '" ' ||
+                         THEN 'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."TableName") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(ti."Name") || ' ' ||
                               CASE WHEN ti."PrimaryKey" THEN 'PRIMARY KEY ' ELSE 'UNIQUE ' || CASE WHEN ti."NullsNotDistinct" THEN 'NULLS NOT DISTINCT ' ELSE '' END END ||
                               '(' || "SchemaSmith"."QuoteIndexColumnList"(ti."IndexColumns") || CASE WHEN ti."WithoutOverlaps" THEN ' WITHOUT OVERLAPS' ELSE '' END || ')' ||
                               -- INCLUDE and the storage parameters, as the CREATE INDEX branch below emits them.
@@ -153,10 +153,10 @@ BEGIN
                               -- USING INDEX TABLESPACE precedes DEFERRABLE per the table-constraint grammar
                               -- (verified live on 16). Emitted only when declared: unset means placement is
                               -- not managed, so the backing index follows default_tablespace as before.
-                              CASE WHEN COALESCE(ti."Tablespace", '') <> '' THEN ' USING INDEX TABLESPACE "' || ti."Tablespace" || '"' ELSE '' END ||
+                              CASE WHEN COALESCE(ti."Tablespace", '') <> '' THEN ' USING INDEX TABLESPACE ' || "SchemaSmith"."QuoteName"(ti."Tablespace") ELSE '' END ||
                               CASE WHEN ti."Deferrable" THEN ' DEFERRABLE' ELSE '' END ||
                               CASE WHEN ti."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE '' END || ';'
-                         ELSE 'CREATE ' || CASE WHEN ti."Unique" THEN 'UNIQUE ' ELSE '' END || 'INDEX "' || ti."Name" || '" ON "' || ti."TableSchema" || '"."' || ti."TableName" || '" ' ||
+                         ELSE 'CREATE ' || CASE WHEN ti."Unique" THEN 'UNIQUE ' ELSE '' END || 'INDEX ' || "SchemaSmith"."QuoteName"(ti."Name") || ' ON ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."TableName") || ' ' ||
                               'USING ' || COALESCE(ti."AccessMethod", 'btree') || ' ' ||
                               '(' || "SchemaSmith"."QuoteIndexColumnList"(ti."IndexColumns") || ')' ||
                               CASE WHEN NULLIF(ti."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(ti."IncludeColumns") || ')' ELSE '' END ||
@@ -167,7 +167,7 @@ BEGIN
                               "SchemaSmith"."IndexWithClause"(ti."FillFactorDeclared", ti."FillFactor", ti."AccessMethod", ti."StorageParameters") || ' ' ||
                               -- TABLESPACE follows WITH and precedes WHERE per the CREATE INDEX grammar
                               -- (verified live on 16).
-                              CASE WHEN COALESCE(ti."Tablespace", '') <> '' THEN ' TABLESPACE "' || ti."Tablespace" || '"' ELSE '' END ||
+                              CASE WHEN COALESCE(ti."Tablespace", '') <> '' THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(ti."Tablespace") ELSE '' END ||
                               CASE WHEN NULLIF(ti."FilterExpression", '') IS NOT NULL THEN ' WHERE ' || ti."FilterExpression" ELSE '' END || ';'
                          END || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'constraint' ELSE 'index' END || ''', ''' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || ''', ''created'');', CHR(10))
@@ -211,9 +211,9 @@ BEGIN
 
   RAISE NOTICE 'Fixup Table Cluster';
   SELECT STRING_AGG('RAISE NOTICE ''  Fixing up attributes for ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
-                    'ALTER TABLE ' || '"' || t."Schema" || '"."' || t."Name" || '" ' ||
+                    'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
                     CASE WHEN new_clust."NewCluster" IS NOT NULL 
-                         THEN 'CLUSTER ON ' || '"' || new_clust."NewCluster" || '"'
+                         THEN 'CLUSTER ON ' || "SchemaSmith"."QuoteName"(new_clust."NewCluster")
                          ELSE 'SET WITHOUT CLUSTER' END || ';', CHR(10))
     INTO sql_script
     FROM temp_tables t
@@ -254,11 +254,11 @@ BEGIN
 
   RAISE NOTICE 'Add Missing Statistics';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing statistics ' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || CASE WHEN COALESCE(ts."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ts."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
-                    'CREATE STATISTICS "' || COALESCE(ts."StatisticsSchema", ts."TableSchema") || '"."' || ts."Name" || '"' ||
+                    'CREATE STATISTICS ' || "SchemaSmith"."QuoteName"(COALESCE(ts."StatisticsSchema", ts."TableSchema")) || '.' || "SchemaSmith"."QuoteName"(ts."Name") ||
                     -- EXPRESSIONS is not a kind CREATE STATISTICS accepts; an extracted package carries it.
                     "SchemaSmith"."StatisticsKindClause"(ts."Kind") ||
                     ' ON ' || "SchemaSmith"."QuoteIndexColumnList"(ts."StatisticsColumns") ||
-                    ' FROM "' || ts."TableSchema" || '"."' || ts."TableName" || '";' || CHR(10) ||
+                    ' FROM ' || "SchemaSmith"."QuoteName"(ts."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ts."TableName") || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''statistic'', ''' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || ''', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_statistics ts
@@ -292,14 +292,14 @@ BEGIN
 
   RAISE NOTICE 'Add Missing Exclude Constraints';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing exclude constraint ' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
-                    'ALTER TABLE  "' || tc."TableSchema" || '"."' || tc."TableName" || '" ADD CONSTRAINT "' || tc."Name" || '" EXCLUDE' || 
+                    'ALTER TABLE  ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(tc."Name") || ' EXCLUDE' || 
                     CASE WHEN NULLIF(TRIM(tc."AccessMethod"), '') IS NOT NULL THEN ' USING ' || tc."AccessMethod" ELSE '' END ||
                     ' (' || (SELECT STRING_AGG("SchemaSmith"."QuoteIndexColumnList"((celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',')
                                FROM JSON_ARRAY_ELEMENTS(tc."ExcludeColumns"::JSON) AS celem) || ')' ||
                     -- The backing index's extras, in the grammar's order: INCLUDE, WITH, USING INDEX TABLESPACE, WHERE.
                     CASE WHEN NULLIF(tc."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(tc."IncludeColumns") || ')' ELSE '' END ||
                     CASE WHEN NULLIF(tc."StorageParameters", '') IS NOT NULL THEN ' WITH (' || tc."StorageParameters" || ')' ELSE '' END ||
-                    CASE WHEN NULLIF(tc."Tablespace", '') IS NOT NULL THEN ' USING INDEX TABLESPACE "' || tc."Tablespace" || '"' ELSE '' END ||
+                    CASE WHEN NULLIF(tc."Tablespace", '') IS NOT NULL THEN ' USING INDEX TABLESPACE ' || "SchemaSmith"."QuoteName"(tc."Tablespace") ELSE '' END ||
                     CASE WHEN NULLIF(TRIM(tc."FilterExpression"), '') IS NOT NULL THEN ' WHERE (' || tc."FilterExpression" || ')' ELSE '' END ||
                     CASE WHEN tc."Deferrable" THEN ' DEFERRABLE' ELSE '' END ||
                     CASE WHEN tc."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE '' END || ';' || CHR(10) ||
@@ -497,7 +497,7 @@ BEGIN
 
   RAISE NOTICE 'Add Missing Defaults';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing default for ' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
-                    'ALTER TABLE  "' || tc."TableSchema" || '"."' || tc."TableName" || '" ALTER COLUMN "' || tc."Name" || '" SET DEFAULT ' || tc."Default" ||';' || CHR(10) ||
+                    'ALTER TABLE  ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(tc."Name") || ' SET DEFAULT ' || tc."Default" ||';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || ' (default)'', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_columns tc
@@ -532,7 +532,7 @@ BEGIN
                     -- NO INHERIT and NOT ENFORCED are part of the definition; NOT VALID is the ADD option that leaves the
                     -- existing rows unchecked. A NOT ENFORCED constraint is not validated by definition, so NOT VALID is
                     -- left off it. PostgreSQL rejects DEFERRABLE on a CHECK, so the deprecated keys are never emitted.
-                    'ALTER TABLE  "' || tc."TableSchema" || '"."' || tc."TableName" || '" ADD CONSTRAINT "' || tc."Name" || '" CHECK (' || tc."Expression" || ')' ||
+                    'ALTER TABLE  ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(tc."Name") || ' CHECK (' || tc."Expression" || ')' ||
                     CASE WHEN tc."NoInherit" THEN ' NO INHERIT' ELSE '' END ||
                     CASE WHEN NOT tc."Enforced" AND "SchemaSmith"."ServerVersionNum"() >= 18 THEN ' NOT ENFORCED' ELSE '' END ||
                     CASE WHEN NOT tc."Validated" AND NOT (NOT tc."Enforced" AND "SchemaSmith"."ServerVersionNum"() >= 18) THEN ' NOT VALID' ELSE '' END || ';' || CHR(10) ||
@@ -568,7 +568,7 @@ BEGIN
   -- and modify-detection (in ModifiedTableQuench) can both key on it.
   RAISE NOTICE 'Add Missing Column Check Constraints';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing column check constraint ' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
-                    'ALTER TABLE  "' || tc."TableSchema" || '"."' || tc."TableName" || '" ADD CONSTRAINT "CK_' || tc."TableName" || '_' || tc."Name" || '" CHECK (' || tc."CheckExpression" || ');' || CHR(10) ||
+                    'ALTER TABLE  ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"('CK_' || tc."TableName" || '_' || tc."Name") || ' CHECK (' || tc."CheckExpression" || ');' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || tc."TableSchema" || '.' || tc."TableName" || '.CK_' || tc."TableName" || '_' || tc."Name" || ''', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_columns tc

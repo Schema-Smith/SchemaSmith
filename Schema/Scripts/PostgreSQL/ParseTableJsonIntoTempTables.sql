@@ -122,7 +122,7 @@
     UPDATE temp_columns tc
        SET "Nullable" = COALESCE((SELECT NOT a.attnotnull
                                     FROM pg_attribute a
-                                   WHERE a.attrelid = to_regclass('"' || tc."TableSchema" || '"."' || tc."TableName" || '"')
+                                   WHERE a.attrelid = to_regclass("SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName"))
                                      AND a.attname = tc."Name" AND a.attnum > 0 AND NOT a.attisdropped), TRUE)
      WHERE NOT tc."NullableDeclared"
        AND tc."Generated" = 'ALWAYS' AND COALESCE(tc."GenerationExpression", '') <> '';
@@ -142,7 +142,7 @@
     UPDATE temp_columns tc
        SET "DataType" = r."Rendered"
       FROM (SELECT c."_RowId",
-                   (SELECT CASE WHEN ty.typtype = 'd' THEN '"' || ns.nspname || '"."' || ty.typname || '"'
+                   (SELECT CASE WHEN ty.typtype = 'd' THEN "SchemaSmith"."QuoteName"(ns.nspname) || '.' || "SchemaSmith"."QuoteName"(ty.typname)
                                 ELSE QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(ty.typname) END
                       FROM pg_type ty
                       JOIN pg_namespace ns ON ns.oid = ty.typnamespace

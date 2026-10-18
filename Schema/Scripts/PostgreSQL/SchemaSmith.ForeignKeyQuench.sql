@@ -33,8 +33,8 @@ BEGIN
 
   RAISE NOTICE 'Add Missing Foreign Keys';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing foreign key ' || fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name" || CASE WHEN COALESCE(fk."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(fk."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
-                    'ALTER TABLE  "' || fk."TableSchema" || '"."' || fk."TableName" || '" ADD CONSTRAINT "' || fk."Name" || '" FOREIGN KEY (' || "SchemaSmith"."QuoteColumnList"(fk."Columns") || ')' ||
-                    ' REFERENCES "' || fk."RelatedTableSchema" || '"."' || fk."RelatedTable" || '" (' || "SchemaSmith"."QuoteColumnList"(fk."RelatedColumns") || ')' ||
+                    'ALTER TABLE  ' || "SchemaSmith"."QuoteName"(fk."TableSchema") || '.' || "SchemaSmith"."QuoteName"(fk."TableName") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(fk."Name") || ' FOREIGN KEY (' || "SchemaSmith"."QuoteColumnList"(fk."Columns") || ')' ||
+                    ' REFERENCES ' || "SchemaSmith"."QuoteName"(fk."RelatedTableSchema") || '.' || "SchemaSmith"."QuoteName"(fk."RelatedTable") || ' (' || "SchemaSmith"."QuoteColumnList"(fk."RelatedColumns") || ')' ||
                     CASE WHEN NULLIF(fk."MatchType", '') IS NOT NULL THEN ' MATCH ' || fk."MatchType" ELSE '' END ||
                     -- The referential actions precede DEFERRABLE in the grammar; after it they are a syntax error.
                     CASE WHEN NULLIF(fk."DeleteAction", '') IS NOT NULL THEN ' ON DELETE ' || fk."DeleteAction" ELSE '' END ||

@@ -47,7 +47,7 @@ BEGIN
              'SELECT "SchemaSmith"."CheckPredicate"(oid) FROM pg_catalog.pg_constraint WHERE conrelid = ''pg_temp.schemasmith_probe''::regclass AND contype = ''c'''
         FROM temp_checks c
         JOIN pg_catalog.pg_constraint con
-          ON con.conrelid = to_regclass('"' || c."TableSchema" || '"."' || c."TableName" || '"') AND con.conname = c."Name" AND con.contype = 'c'
+          ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName")) AND con.conname = c."Name" AND con.contype = 'c'
        WHERE COALESCE(c."Expression", '') != ''
          AND c."Expression" != "SchemaSmith"."CheckPredicate"(con.oid)
          AND NOT "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'CHECK', c."Name", 'expression', c."Expression", "SchemaSmith"."CheckPredicate"(con.oid));
@@ -58,7 +58,7 @@ BEGIN
              'SELECT "SchemaSmith"."CheckPredicate"(oid) FROM pg_catalog.pg_constraint WHERE conrelid = ''pg_temp.schemasmith_probe''::regclass AND contype = ''c'''
         FROM temp_columns col
         JOIN pg_catalog.pg_constraint con
-          ON con.conrelid = to_regclass('"' || col."TableSchema" || '"."' || col."TableName" || '"')
+          ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(col."TableSchema") || '.' || "SchemaSmith"."QuoteName"(col."TableName"))
          AND con.conname = 'CK_' || col."TableName" || '_' || col."Name" AND con.contype = 'c'
        WHERE COALESCE(col."CheckExpression", '') != ''
          AND col."CheckExpression" != "SchemaSmith"."CheckPredicate"(con.oid)
@@ -86,7 +86,7 @@ BEGIN
              'CREATE INDEX ON {probe} ((1)) WHERE ' || i."FilterExpression",
              'SELECT pg_catalog.pg_get_expr(indpred, indrelid) FROM pg_catalog.pg_index WHERE indrelid = ''pg_temp.schemasmith_probe''::regclass AND indpred IS NOT NULL'
         FROM temp_indexes i
-        JOIN pg_catalog.pg_index idx ON idx.indrelid = to_regclass('"' || i."TableSchema" || '"."' || i."TableName" || '"')
+        JOIN pg_catalog.pg_index idx ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(i."TableSchema") || '.' || "SchemaSmith"."QuoteName"(i."TableName"))
         JOIN pg_catalog.pg_class ic ON ic.oid = idx.indexrelid AND ic.relname = i."Name" AND ic.relkind IN ('i', 'I')
        WHERE COALESCE(i."FilterExpression", '') != '' AND idx.indpred IS NOT NULL
          AND i."FilterExpression" != PG_GET_EXPR(idx.indpred, idx.indrelid)

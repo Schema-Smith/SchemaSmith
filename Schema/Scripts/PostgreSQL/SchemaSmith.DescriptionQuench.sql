@@ -20,7 +20,7 @@ BEGIN
       INTO sql_script
       FROM (SELECT 'RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of table ' ||
                    REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
-                   'COMMENT ON TABLE "' || t."Schema" || '"."' || t."Name" || '" IS ' ||
+                   'COMMENT ON TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' IS ' ||
                    CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                    'VALUES (pg_backend_pid(), ''table'', ''' || REPLACE(t."Schema" || '.' || t."Name", '''', '''''') || ''', ''modified'');' AS stmt
@@ -32,7 +32,7 @@ BEGIN
             UNION ALL
             SELECT 'RAISE NOTICE ''  ' || CASE WHEN tc."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of column ' ||
                    REPLACE(REPLACE(tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
-                   'COMMENT ON COLUMN "' || tc."TableSchema" || '"."' || tc."TableName" || '"."' || tc."Name" || '" IS ' ||
+                   'COMMENT ON COLUMN ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || '.' || "SchemaSmith"."QuoteName"(tc."Name") || ' IS ' ||
                    CASE WHEN tc."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(tc."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                    'VALUES (pg_backend_pid(), ''column'', ''' || REPLACE(tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name", '''', '''''') || ''', ''modified'');'
@@ -48,7 +48,7 @@ BEGIN
 
   SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN ti."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of index ' ||
                     REPLACE(REPLACE(ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
-                    'COMMENT ON INDEX "' || ti."TableSchema" || '"."' || ti."Name" || '" IS ' ||
+                    'COMMENT ON INDEX ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."Name") || ' IS ' ||
                     CASE WHEN ti."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(ti."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                     'VALUES (pg_backend_pid(), ''index'', ''' || REPLACE(ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name", '''', '''''') || ''', ''modified'');', CHR(10))

@@ -55,9 +55,9 @@ BEGIN
 
     RAISE NOTICE 'Fixup Replica Identity';
     SELECT STRING_AGG('RAISE NOTICE ''  Setting replica identity for ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
-                      'ALTER TABLE "' || t."Schema" || '"."' || t."Name" || '" REPLICA IDENTITY ' ||
+                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' REPLICA IDENTITY ' ||
                       CASE t."ReplicaIdentity"
-                           WHEN 'INDEX' THEN 'USING INDEX "' || t."ReplicaIdentityIndex" || '"'
+                           WHEN 'INDEX' THEN 'USING INDEX ' || "SchemaSmith"."QuoteName"(t."ReplicaIdentityIndex")
                            ELSE t."ReplicaIdentity"
                            END, ';' || CHR(10)) || ';'
       INTO sql_script

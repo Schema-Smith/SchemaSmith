@@ -14,7 +14,7 @@ DECLARE
 BEGIN
   RAISE NOTICE 'Handle Table Renames';
   SELECT STRING_AGG('RAISE NOTICE ''  Rename Table ' || tt."Schema" || '.' || tt."OldName" || ' to ' || tt."Name" || ''';' || CHR(10) ||
-                    'ALTER TABLE "' || tt."Schema" || '"."' || tt."OldName" || '" RENAME TO "' || tt."Name" || '";', CHR(10))
+                    'ALTER TABLE ' || "SchemaSmith"."QuoteName"(tt."Schema") || '.' || "SchemaSmith"."QuoteName"(tt."OldName") || ' RENAME TO ' || "SchemaSmith"."QuoteName"(tt."Name") || ';', CHR(10))
     INTO sql_script
     FROM temp_tables tt
     WHERE NOT EXISTS(SELECT * FROM information_schema.tables t WHERE t.table_schema = tt."Schema" AND t.table_name = tt."Name")
@@ -24,7 +24,7 @@ BEGIN
 
   RAISE NOTICE 'Handle Column Renames';
   SELECT STRING_AGG('RAISE NOTICE ''  Rename Column ' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."OldName" || ' to ' || tc."Name" || ''';' || CHR(10) ||
-                    'ALTER TABLE "' || tc."TableSchema" || '"."' || tc."TableName" || '" RENAME COLUMN "' || tc."OldName" || '" TO "' || tc."Name" || '";', CHR(10))
+                    'ALTER TABLE ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || ' RENAME COLUMN ' || "SchemaSmith"."QuoteName"(tc."OldName") || ' TO ' || "SchemaSmith"."QuoteName"(tc."Name") || ';', CHR(10))
     INTO sql_script
     FROM temp_columns tc
     WHERE NOT EXISTS(SELECT * FROM information_schema.columns c WHERE c.table_schema = tc."TableSchema" AND c.table_name = tc."TableName" AND c.column_name = tc."Name")
@@ -44,8 +44,8 @@ BEGIN
   
   RAISE NOTICE 'Add New Tables';
   SELECT STRING_AGG('RAISE NOTICE ''  Create new table ' || tt."Schema" || '.' || tt."Name" || CASE WHEN COALESCE(tt."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tt."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
-                    'CREATE TABLE "' || tt."Schema" || '"."' || tt."Name" || '" (' ||
-                    (SELECT STRING_AGG('"' || tc."Name" || '" ' || CASE WHEN tc."IsSerial" THEN tc."SerialKeyword" ELSE tc."DataType" END ||
+                    'CREATE TABLE ' || "SchemaSmith"."QuoteName"(tt."Schema") || '.' || "SchemaSmith"."QuoteName"(tt."Name") || ' (' ||
+                    (SELECT STRING_AGG("SchemaSmith"."QuoteName"(tc."Name") || ' ' || CASE WHEN tc."IsSerial" THEN tc."SerialKeyword" ELSE tc."DataType" END ||
                             "SchemaSmith"."CollateClause"(tc."Collation") ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' THEN ' ' || tc."Generated" ELSE '' END ||
                             CASE WHEN tc."Nullable" THEN '' ELSE ' NOT NULL' END ||
@@ -60,12 +60,12 @@ BEGIN
                     -- USING precedes WITH in the grammar and has existed since PostgreSQL 12, so a new table gets its
                     -- declared access method on every supported version. Only changing an existing table's method
                     -- needs 15 (SET ACCESS METHOD, in ModifiedTableQuench).
-                    CASE WHEN COALESCE(tt."AccessMethod", '') <> '' THEN ' USING "' || tt."AccessMethod" || '"' ELSE '' END ||
+                    CASE WHEN COALESCE(tt."AccessMethod", '') <> '' THEN ' USING ' || "SchemaSmith"."QuoteName"(tt."AccessMethod") ELSE '' END ||
                     ' WITH (fillfactor = ' || tt."FillFactor" || ')' ||
                     -- TABLESPACE follows WITH in the CREATE TABLE grammar. Emitted only when declared:
                     -- an unset Tablespace means placement is not managed, so the table lands wherever
                     -- default_tablespace puts it, exactly as it did before this shipped.
-                    CASE WHEN COALESCE(tt."Tablespace", '') <> '' THEN ' TABLESPACE "' || tt."Tablespace" || '"' ELSE '' END ||
+                    CASE WHEN COALESCE(tt."Tablespace", '') <> '' THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(tt."Tablespace") ELSE '' END ||
                     ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''table'', ''' || tt."Schema" || '.' || tt."Name" || ''', ''created'');', CHR(10))
     INTO sql_script
@@ -89,8 +89,8 @@ BEGIN
                          AND (COALESCE(tc."Generated", 'NEVER') = 'NEVER' OR COALESCE(tc."Generated", '') LIKE 'GENERATED%IDENTITY%')
                          AND NOT EXISTS (SELECT 1 FROM information_schema.columns ic WHERE ic.table_name = tc."TableName" AND ic.table_schema = tc."TableSchema" AND ic.column_name = tc."Name")) ||
                     ')'';' || CHR(10) ||
-                    'ALTER TABLE "' || tt."Schema" || '"."' || tt."Name" || '" ' ||
-                    (SELECT STRING_AGG('ADD "' || tc."Name" || '" ' || CASE WHEN tc."IsSerial" THEN tc."SerialKeyword" ELSE tc."DataType" END ||
+                    'ALTER TABLE ' || "SchemaSmith"."QuoteName"(tt."Schema") || '.' || "SchemaSmith"."QuoteName"(tt."Name") || ' ' ||
+                    (SELECT STRING_AGG('ADD ' || "SchemaSmith"."QuoteName"(tc."Name") || ' ' || CASE WHEN tc."IsSerial" THEN tc."SerialKeyword" ELSE tc."DataType" END ||
                             "SchemaSmith"."CollateClause"(tc."Collation") ||
                             CASE WHEN COALESCE(tc."Generated", 'NEVER') LIKE 'GENERATED%IDENTITY%' THEN ' ' || tc."Generated" ELSE '' END ||
                             CASE WHEN tc."Nullable" THEN '' ELSE ' NOT NULL' END ||

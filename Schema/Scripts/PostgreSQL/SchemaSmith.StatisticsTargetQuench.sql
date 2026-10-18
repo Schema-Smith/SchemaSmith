@@ -36,7 +36,7 @@ BEGIN
   -- stxstattarget is read through to_jsonb so this procedure also compiles below 13, where the column is absent;
   -- -1 (before 17) and NULL (17+) both mean the default.
   SELECT STRING_AGG('RAISE NOTICE ''  Set statistics target of ' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || ' to ' || ts."StatisticsTarget" || ''';' || CHR(10) ||
-                    'ALTER STATISTICS "' || COALESCE(ts."StatisticsSchema", ts."TableSchema") || '"."' || ts."Name" || '" SET STATISTICS ' || ts."StatisticsTarget" || ';' || CHR(10) ||
+                    'ALTER STATISTICS ' || "SchemaSmith"."QuoteName"(COALESCE(ts."StatisticsSchema", ts."TableSchema")) || '.' || "SchemaSmith"."QuoteName"(ts."Name") || ' SET STATISTICS ' || ts."StatisticsTarget" || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''statistic'', ''' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || ''', ''modified'');', CHR(10))
     INTO sql_script
     FROM temp_statistics ts

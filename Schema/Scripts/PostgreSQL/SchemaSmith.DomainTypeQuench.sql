@@ -74,11 +74,11 @@ BEGIN
   -- in one statement never exists in a half-declared state, which a follow-up ALTER pass would allow.
   RAISE NOTICE 'Add Missing Domain Types';
   SELECT STRING_AGG('RAISE NOTICE ''  Create domain type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
-                    'CREATE DOMAIN "' || t."Schema" || '"."' || t."Name" || '" AS ' || t."DataType" ||
+                    'CREATE DOMAIN ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' AS ' || t."DataType" ||
                     "SchemaSmith"."CollateClause"(t."Collation") ||
                     CASE WHEN t."Default" IS NOT NULL THEN ' DEFAULT ' || t."Default" ELSE '' END ||
                     CASE WHEN t."NotNull" THEN ' NOT NULL' ELSE '' END ||
-                    COALESCE((SELECT STRING_AGG(' CONSTRAINT "' || ck."ConstraintName" || '" CHECK (' || ck."Expression" || ')', '')
+                    COALESCE((SELECT STRING_AGG(' CONSTRAINT ' || "SchemaSmith"."QuoteName"(ck."ConstraintName") || ' CHECK (' || ck."Expression" || ')', '')
                                 FROM temp_domain_checks ck
                                WHERE ck."Schema" = t."Schema" AND ck."Name" = t."Name"), '') || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
@@ -190,7 +190,7 @@ BEGIN
   SELECT STRING_AGG(stmt, CHR(10))
     INTO sql_script
     FROM (SELECT 'RAISE NOTICE ''  Altering domain type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
-                 'ALTER DOMAIN "' || t."Schema" || '"."' || t."Name" || '" ' ||
+                 'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
                  CASE WHEN t."NotNull" THEN 'SET NOT NULL' ELSE 'DROP NOT NULL' END || ';' || CHR(10) ||
                  'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                  'VALUES (pg_backend_pid(), ''domain type'', ''' || t."Schema" || '.' || t."Name" || ''', ''modified'');' AS stmt
@@ -202,7 +202,7 @@ BEGIN
           -- A declared default replaces whatever is there; a cleared one drops it. Compared against
           -- pg_get_expr of the stored default, which is how the catalog renders it back.
           SELECT 'RAISE NOTICE ''  Altering domain type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
-                 'ALTER DOMAIN "' || t."Schema" || '"."' || t."Name" || '" ' ||
+                 'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
                  CASE WHEN t."Default" IS NOT NULL THEN 'SET DEFAULT ' || t."Default" ELSE 'DROP DEFAULT' END || ';' || CHR(10) ||
                  'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                  'VALUES (pg_backend_pid(), ''domain type'', ''' || t."Schema" || '.' || t."Name" || ''', ''modified'');'
@@ -223,8 +223,8 @@ BEGIN
   -- which both versions report identically.
   RAISE NOTICE 'Add Missing Domain Constraints';
   SELECT STRING_AGG('RAISE NOTICE ''  Add constraint ' || ck."ConstraintName" || ' on domain type ' || ck."Schema" || '.' || ck."Name" || ''';' || CHR(10) ||
-                    'ALTER DOMAIN "' || ck."Schema" || '"."' || ck."Name" || '" ADD CONSTRAINT "' || ck."ConstraintName" ||
-                    '" CHECK (' || ck."Expression" || ')' || CASE WHEN NOT ck."Validated" THEN ' NOT VALID' ELSE '' END || ';' || CHR(10) ||
+                    'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(ck."Schema") || '.' || "SchemaSmith"."QuoteName"(ck."Name") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(ck."ConstraintName") ||
+                    ' CHECK (' || ck."Expression" || ')' || CASE WHEN NOT ck."Validated" THEN ' NOT VALID' ELSE '' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                     'VALUES (pg_backend_pid(), ''domain constraint'', ''' || ck."Schema" || '.' || ck."Name" || '.' || ck."ConstraintName" || ''', ''created'');', CHR(10))
     INTO sql_script
@@ -241,7 +241,7 @@ BEGIN
   -- constraint cannot be un-validated.
   RAISE NOTICE 'Validate Domain Constraints';
   SELECT STRING_AGG('RAISE NOTICE ''  Validate constraint ' || ck."ConstraintName" || ' on domain type ' || ck."Schema" || '.' || ck."Name" || ''';' || CHR(10) ||
-                    'ALTER DOMAIN "' || ck."Schema" || '"."' || ck."Name" || '" VALIDATE CONSTRAINT "' || ck."ConstraintName" || '";' || CHR(10) ||
+                    'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(ck."Schema") || '.' || "SchemaSmith"."QuoteName"(ck."Name") || ' VALIDATE CONSTRAINT ' || "SchemaSmith"."QuoteName"(ck."ConstraintName") || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                     'VALUES (pg_backend_pid(), ''domain constraint'', ''' || ck."Schema" || '.' || ck."Name" || '.' || ck."ConstraintName" || ''', ''modified'');', CHR(10))
     INTO sql_script
@@ -307,8 +307,8 @@ BEGIN
     sql_script := sql_script || COALESCE((
       SELECT STRING_AGG(
                'RAISE NOTICE ''  Altering constraint ' || probe.conname || ' on domain type ' || dom."Schema" || '.' || dom."Name" || ''';' || CHR(10) ||
-               'ALTER DOMAIN "' || dom."Schema" || '"."' || dom."Name" || '" DROP CONSTRAINT "' || probe.conname || '";' || CHR(10) ||
-               'ALTER DOMAIN "' || dom."Schema" || '"."' || dom."Name" || '" ADD CONSTRAINT "' || probe.conname || '" ' || probe.def || ';' || CHR(10) ||
+               'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(dom."Schema") || '.' || "SchemaSmith"."QuoteName"(dom."Name") || ' DROP CONSTRAINT ' || "SchemaSmith"."QuoteName"(probe.conname) || ';' || CHR(10) ||
+               'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(dom."Schema") || '.' || "SchemaSmith"."QuoteName"(dom."Name") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(probe.conname) || ' ' || probe.def || ';' || CHR(10) ||
                'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                'VALUES (pg_backend_pid(), ''domain constraint'', ''' || dom."Schema" || '.' || dom."Name" || '.' || probe.conname || ''', ''modified'');', CHR(10))
         FROM (SELECT pc.conname, PG_GET_CONSTRAINTDEF(pc.oid) AS def
@@ -335,7 +335,7 @@ BEGIN
   -- the enum -- and safely so: it removes a rule, not data, and nothing depends on it.
   RAISE NOTICE 'Drop Domain Constraints Removed From Product';
   SELECT STRING_AGG('RAISE NOTICE ''  Drop constraint ' || c.conname || ' from domain type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
-                    'ALTER DOMAIN "' || t."Schema" || '"."' || t."Name" || '" DROP CONSTRAINT "' || c.conname || '";' || CHR(10) ||
+                    'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' DROP CONSTRAINT ' || "SchemaSmith"."QuoteName"(c.conname) || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                     'VALUES (pg_backend_pid(), ''domain constraint'', ''' || t."Schema" || '.' || t."Name" || '.' || c.conname || ''', ''dropped'');', CHR(10))
     INTO sql_script
@@ -352,7 +352,7 @@ BEGIN
   RAISE NOTICE 'Fixup Domain Type Descriptions';
   SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of domain type ' ||
                     REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
-                    'COMMENT ON DOMAIN "' || t."Schema" || '"."' || t."Name" || '" IS ' ||
+                    'COMMENT ON DOMAIN ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' IS ' ||
                     CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                     'VALUES (pg_backend_pid(), ''domain type'', ''' || REPLACE(t."Schema" || '.' || t."Name", '''', '''''') || ''', ''modified'');', CHR(10))

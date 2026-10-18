@@ -58,7 +58,7 @@ BEGIN
            "SchemaSmith"."CheckPredicate"(con.oid)
       FROM temp_checks c
       JOIN pg_catalog.pg_constraint con
-        ON con.conrelid = to_regclass('"' || c."TableSchema" || '"."' || c."TableName" || '"')
+        ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
        AND con.conname = c."Name"
        AND con.contype = 'c'
      WHERE COALESCE(c."Expression", '') != '';
@@ -68,7 +68,7 @@ BEGIN
            "SchemaSmith"."CheckPredicate"(con.oid)
       FROM temp_columns col
       JOIN pg_catalog.pg_constraint con
-        ON con.conrelid = to_regclass('"' || col."TableSchema" || '"."' || col."TableName" || '"')
+        ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(col."TableSchema") || '.' || "SchemaSmith"."QuoteName"(col."TableName"))
        AND con.conname = 'CK_' || col."TableName" || '_' || col."Name"
        AND con.contype = 'c'
      WHERE COALESCE(col."CheckExpression", '') != ''
@@ -101,7 +101,7 @@ BEGIN
       -- affect row a second time", after all the DDL had run; and where the declared index did not exist yet it
       -- recorded the FOREIGN index's predicate as this one's baseline. 'I' is a partitioned index.
       JOIN pg_catalog.pg_index idx
-        ON idx.indrelid = to_regclass('"' || i."TableSchema" || '"."' || i."TableName" || '"')
+        ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(i."TableSchema") || '.' || "SchemaSmith"."QuoteName"(i."TableName"))
       JOIN pg_catalog.pg_class ic
         ON ic.oid = idx.indexrelid AND ic.relname = i."Name" AND ic.relkind IN ('i', 'I')
      WHERE COALESCE(i."FilterExpression", '') != '';

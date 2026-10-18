@@ -27,7 +27,7 @@ BEGIN
             UNION ALL
             SELECT 'foreignKey', "TableSchema", "TableName", "Name", "Enforced", "Validated" FROM temp_fks) d
       JOIN pg_catalog.pg_constraint con
-        ON con.conrelid = to_regclass('"' || d."TableSchema" || '"."' || d."TableName" || '"')
+        ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(d."TableSchema") || '.' || "SchemaSmith"."QuoteName"(d."TableName"))
        AND con.conname = d."Name"
        AND con.contype IN ('c', 'f');
 
@@ -49,13 +49,13 @@ BEGIN
   SELECT STRING_AGG(
            CASE WHEN s."ObjectType" = 'foreignKey' AND NOT s."Enforced" AND s."LiveEnforced" AND v_pg18 THEN
                   'RAISE NOTICE ''  Not enforcing ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''';' || CHR(10) ||
-                  'ALTER TABLE "' || s."TableSchema" || '"."' || s."TableName" || '" ALTER CONSTRAINT "' || s."Name" || '" NOT ENFORCED;'
+                  'ALTER TABLE ' || "SchemaSmith"."QuoteName"(s."TableSchema") || '.' || "SchemaSmith"."QuoteName"(s."TableName") || ' ALTER CONSTRAINT ' || "SchemaSmith"."QuoteName"(s."Name") || ' NOT ENFORCED;'
                 WHEN s."ObjectType" = 'foreignKey' AND s."Enforced" AND NOT s."LiveEnforced" THEN
                   'RAISE NOTICE ''  Enforcing ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''';' || CHR(10) ||
-                  'ALTER TABLE "' || s."TableSchema" || '"."' || s."TableName" || '" ALTER CONSTRAINT "' || s."Name" || '" ENFORCED;'
+                  'ALTER TABLE ' || "SchemaSmith"."QuoteName"(s."TableSchema") || '.' || "SchemaSmith"."QuoteName"(s."TableName") || ' ALTER CONSTRAINT ' || "SchemaSmith"."QuoteName"(s."Name") || ' ENFORCED;'
                 ELSE
                   'RAISE NOTICE ''  Validating ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''';' || CHR(10) ||
-                  'ALTER TABLE "' || s."TableSchema" || '"."' || s."TableName" || '" VALIDATE CONSTRAINT "' || s."Name" || '";'
+                  'ALTER TABLE ' || "SchemaSmith"."QuoteName"(s."TableSchema") || '.' || "SchemaSmith"."QuoteName"(s."TableName") || ' VALIDATE CONSTRAINT ' || "SchemaSmith"."QuoteName"(s."Name") || ';'
            END || CHR(10) ||
            'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || s."ObjectType" || ''', ''' ||
            s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''', ''modified'');', CHR(10))

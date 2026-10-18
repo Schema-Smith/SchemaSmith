@@ -43,7 +43,7 @@ BEGIN
   -- MaterializedViewQuench (so an old target neither churns nor emits an unsupported clause).
   EXECUTE format($mv$
   SELECT STRING_AGG('RAISE NOTICE ''  Dropping changed materialized view index ' || n.nspname || '.' || i.relname || ''';' || CHR(10) ||
-                    'DROP INDEX IF EXISTS "' || n.nspname || '"."' || i.relname || '";' || CHR(10) ||
+                    'DROP INDEX IF EXISTS ' || "SchemaSmith"."QuoteName"(n.nspname) || '.' || "SchemaSmith"."QuoteName"(i.relname) || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || n.nspname || '.' || c.relname || '.' || i.relname || ''', ''dropped'');', CHR(10))
     FROM temp_mv_indexes t
     JOIN pg_class c ON c.relname = t."ViewName"
@@ -90,7 +90,7 @@ BEGIN
 
   -- Drop indexes that exist in DB but not in definitions (for views that still exist)
   SELECT STRING_AGG('RAISE NOTICE ''  Dropping removed materialized view index ' || n.nspname || '.' || i.relname || ''';' || CHR(10) ||
-                    'DROP INDEX IF EXISTS "' || n.nspname || '"."' || i.relname || '";' || CHR(10) ||
+                    'DROP INDEX IF EXISTS ' || "SchemaSmith"."QuoteName"(n.nspname) || '.' || "SchemaSmith"."QuoteName"(i.relname) || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || n.nspname || '.' || c.relname || '.' || i.relname || ''', ''dropped'');', CHR(10))
     INTO sql_script
     FROM temp_materialized_views tv
@@ -111,7 +111,7 @@ BEGIN
   SELECT STRING_AGG(
     'RAISE NOTICE ''  Creating materialized view index ' || t."ViewSchema" || '.' || t."ViewName" || '.' || t."Name" || ''';' || CHR(10) ||
     'CREATE' || CASE WHEN t."Unique" THEN ' UNIQUE' ELSE '' END
-    || ' INDEX "' || t."Name" || '" ON "' || t."ViewSchema" || '"."' || t."ViewName" || '"'
+    || ' INDEX ' || "SchemaSmith"."QuoteName"(t."Name") || ' ON ' || "SchemaSmith"."QuoteName"(t."ViewSchema") || '.' || "SchemaSmith"."QuoteName"(t."ViewName")
     || CASE WHEN t."AccessMethod" != 'btree' THEN ' USING ' || t."AccessMethod" ELSE '' END
     || ' (' || "SchemaSmith"."QuoteIndexColumnList"(t."IndexColumns") || ')'
     || CASE WHEN NULLIF(t."IncludeColumns", '') IS NOT NULL THEN ' INCLUDE (' || "SchemaSmith"."QuoteColumnList"(t."IncludeColumns") || ')' ELSE '' END
@@ -119,7 +119,7 @@ BEGIN
     -- CREATE INDEX grammar order: WITH, then TABLESPACE, then WHERE. One WITH clause: fillfactor only when declared
     -- (and only for the access methods that take it) plus the storage parameters (IndexWithClause).
     || "SchemaSmith"."IndexWithClause"(t."FillFactorDeclared", t."FillFactor", t."AccessMethod", t."StorageParameters")
-    || CASE WHEN COALESCE(t."Tablespace", '') <> '' THEN ' TABLESPACE "' || t."Tablespace" || '"' ELSE '' END
+    || CASE WHEN COALESCE(t."Tablespace", '') <> '' THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(t."Tablespace") ELSE '' END
     || CASE WHEN NULLIF(t."FilterExpression", '') IS NOT NULL THEN ' WHERE ' || t."FilterExpression" ELSE '' END
     || ';' || CHR(10)
     || 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || t."ViewSchema" || '.' || t."ViewName" || '.' || t."Name" || ''', ''created'');',
@@ -140,8 +140,8 @@ BEGIN
   IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- Cluster if specified
-  SELECT STRING_AGG('ALTER INDEX "' || t."ViewSchema" || '"."' || t."Name" || '" SET (fillfactor = ' || t."FillFactor" || ');'
-    || CASE WHEN t."Clustered" THEN CHR(10) || 'CLUSTER "' || t."ViewSchema" || '"."' || t."ViewName" || '" USING "' || t."Name" || '";' ELSE '' END,
+  SELECT STRING_AGG('ALTER INDEX ' || "SchemaSmith"."QuoteName"(t."ViewSchema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' SET (fillfactor = ' || t."FillFactor" || ');'
+    || CASE WHEN t."Clustered" THEN CHR(10) || 'CLUSTER ' || "SchemaSmith"."QuoteName"(t."ViewSchema") || '.' || "SchemaSmith"."QuoteName"(t."ViewName") || ' USING ' || "SchemaSmith"."QuoteName"(t."Name") || ';' ELSE '' END,
     CHR(10))
     INTO sql_script
     FROM temp_mv_indexes t

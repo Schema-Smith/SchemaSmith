@@ -14,3 +14,14 @@ CREATE OR REPLACE FUNCTION "SchemaSmith"."QuoteName"(p_Name TEXT)
 AS $$
   SELECT '"' || REPLACE(p_Name, '"', '""') || '"'
 $$;
+
+-- A name as extraction writes it inside a comma-separated list (IndexColumns, a key's Columns, StatisticsColumns): bare,
+-- unless it holds a double quote or a comma, which a list cannot carry bare, and then quoted with its quotes doubled.
+CREATE OR REPLACE FUNCTION "SchemaSmith"."ListName"(p_Name TEXT)
+    RETURNS TEXT
+    LANGUAGE sql
+    IMMUTABLE
+    STRICT
+AS $$
+  SELECT CASE WHEN p_Name LIKE '%"%' OR p_Name LIKE '%,%' THEN '"' || REPLACE(p_Name, '"', '""') || '"' ELSE p_Name END
+$$;

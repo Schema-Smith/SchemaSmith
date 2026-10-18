@@ -137,7 +137,7 @@ BEGIN
       FROM temp_mv_to_drop d;
 
   sql_script = '';
-  SELECT STRING_AGG('DROP INDEX IF EXISTS "' || n.nspname || '"."' || i.relname || '";', CHR(10))
+  SELECT STRING_AGG('DROP INDEX IF EXISTS ' || "SchemaSmith"."QuoteName"(n.nspname) || '.' || "SchemaSmith"."QuoteName"(i.relname) || ';', CHR(10))
     INTO sql_script
     -- Fence to this iteration's schema: pg_matviews.definition is pg_get_viewdef(oid), which OPENS
     -- the relation. Reading a *sibling* tenant's mat-view definition races with that sibling's
@@ -159,7 +159,7 @@ BEGIN
   -- Drop changed/removed views
   sql_script = '';
   SELECT STRING_AGG('RAISE NOTICE ''  Dropping materialized view ' || mv.schemaname || '.' || mv.matviewname || ''';' || CHR(10) ||
-                    'DROP MATERIALIZED VIEW IF EXISTS "' || mv.schemaname || '"."' || mv.matviewname || '";', CHR(10))
+                    'DROP MATERIALIZED VIEW IF EXISTS ' || "SchemaSmith"."QuoteName"(mv.schemaname) || '.' || "SchemaSmith"."QuoteName"(mv.matviewname) || ';', CHR(10))
     INTO sql_script
     -- Fence to this iteration's schema (see the note on the index-drop query above): keeps
     -- pg_get_viewdef (mv.definition) off sibling tenants' mat-views, which race with their
@@ -176,7 +176,7 @@ BEGIN
   sql_script = '';
   SELECT STRING_AGG(
     'RAISE NOTICE ''  Creating materialized view ' || t."Schema" || '.' || t."Name" || CASE WHEN COALESCE(t."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(t."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
-    'CREATE MATERIALIZED VIEW "' || t."Schema" || '"."' || t."Name" || '"'
+    'CREATE MATERIALIZED VIEW ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name")
     || CASE WHEN NULLIF(t."AccessMethod", '') IS NOT NULL AND t."AccessMethod" != 'heap' THEN ' USING ' || t."AccessMethod" ELSE '' END
     || CASE WHEN NULLIF(t."Tablespace", '') IS NOT NULL THEN ' TABLESPACE ' || t."Tablespace" ELSE '' END
     || ' AS ' || RTRIM(RTRIM(t."Definition"), ';')
@@ -245,7 +245,7 @@ BEGIN
   RAISE NOTICE 'Fixup Materialized View Descriptions';
   SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of materialized view ' ||
                     REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
-                    'COMMENT ON MATERIALIZED VIEW "' || t."Schema" || '"."' || t."Name" || '" IS ' ||
+                    'COMMENT ON MATERIALIZED VIEW ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' IS ' ||
                     CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                     'VALUES (pg_backend_pid(), ''materialized view'', ''' || REPLACE(t."Schema" || '.' || t."Name", '''', '''''') || ''', ''modified'');', CHR(10))

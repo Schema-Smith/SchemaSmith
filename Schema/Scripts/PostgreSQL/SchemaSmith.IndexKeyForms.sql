@@ -97,13 +97,13 @@ DECLARE
 BEGIN
   IF expr = '' THEN RETURN ''; END IF;
   IF expr NOT LIKE '%(%' THEN
-    -- A plain identifier: the live side trims the surrounding quotes and leaves a doubled inner quote alone.
-    expr := TRIM(BOTH '"' FROM expr);
-    IF p_quote THEN expr := '"' || expr || '"'; END IF;
+    -- A plain identifier, bare or quoted: both sides unwrap it the same way, so a quote inside the name compares equal.
+    expr := "SchemaSmith"."BareName"(expr);
+    IF p_quote THEN expr := "SchemaSmith"."QuoteName"(expr); END IF;
   END IF;
   rendered := expr;
   IF coll <> '' THEN
-    rendered := rendered || ' COLLATE ' || CASE WHEN coll LIKE '%.%' THEN coll ELSE '"' || TRIM(BOTH '"' FROM coll) || '"' END;
+    rendered := rendered || ' COLLATE ' || CASE WHEN coll LIKE '%.%' THEN coll ELSE "SchemaSmith"."QuoteName"("SchemaSmith"."BareName"(coll)) END;
   END IF;
   IF opclass <> '' THEN
     rendered := rendered || ' ' || opclass;
@@ -133,7 +133,7 @@ CREATE OR REPLACE FUNCTION "SchemaSmith"."IndexKeyDeclared"(p_schema TEXT, p_tab
 AS $$
 DECLARE
   parts TEXT[] := "SchemaSmith"."IndexKeyParts"(p_item);
-  rel REGCLASS := to_regclass('"' || p_schema || '"."' || p_table || '"');
+  rel REGCLASS := to_regclass("SchemaSmith"."QuoteName"(p_schema) || '.' || "SchemaSmith"."QuoteName"(p_table));
   col_type OID;
   col_coll TEXT;
   item TEXT := p_item;
@@ -145,7 +145,7 @@ BEGIN
   SELECT a.atttypid, c.collname INTO col_type, col_coll
     FROM pg_attribute a
     LEFT JOIN pg_collation c ON c.oid = a.attcollation
-   WHERE a.attrelid = rel AND a.attname = TRIM(BOTH '"' FROM parts[1]);
+   WHERE a.attrelid = rel AND a.attname = "SchemaSmith"."BareName"(parts[1]);
   IF col_type IS NULL THEN
     RETURN "SchemaSmith"."IndexKeyCanonical"(item, FALSE);
   END IF;
@@ -158,7 +158,7 @@ BEGIN
        AND oc.opcintype = col_type;
     IF COALESCE(is_default, FALSE) THEN parts[3] := ''; END IF;
   END IF;
-  IF parts[2] <> '' AND TRIM(BOTH '"' FROM parts[2]) = COALESCE(col_coll, '') THEN
+  IF parts[2] <> '' AND "SchemaSmith"."BareName"(parts[2]) = COALESCE(col_coll, '') THEN
     parts[2] := '';
   END IF;
   item := parts[1] || CASE WHEN parts[2] <> '' THEN ' COLLATE ' || parts[2] ELSE '' END
