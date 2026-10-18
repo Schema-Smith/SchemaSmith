@@ -870,24 +870,23 @@ SELECT JSON_AGG(ROW_TO_JSON(tbl))
 
         var qualifiedTable = $"`{Identifier.EscapeDelimited(databaseName, Platform.MySQL)}`.`{Identifier.EscapeDelimited(tableName, Platform.MySQL)}`";
 
-        // MariaDB's JSON_ARRAYAGG is built on GROUP_CONCAT and is cut off at group_concat_max_len (1 MiB by default)
-        // with only a warning, which left a large table's extracted JSON unterminated. So on every MariaDB version,
-        // not just the 10.2-10.4 GROUP_CONCAT fallback, raise it to the max_allowed_packet ceiling first.
-        if (isMariaDb)
-        {
-            cmd.CommandText = "SET SESSION group_concat_max_len = 1073741824";
-            cmd.ExecuteNonQuery();
-        }
+        // GROUP_CONCAT, and MariaDB's JSON_ARRAYAGG which is built on it, are cut off at group_concat_max_len (1 MiB by
+        // default) with only a warning, which left a large table's extracted JSON unterminated. Raise it to the
+        // max_allowed_packet ceiling first.
+        cmd.CommandText = "SET SESSION group_concat_max_len = 1073741824";
+        cmd.ExecuteNonQuery();
 
-        // JSON_ARRAYAGG is MySQL 5.7.22+ / MariaDB 10.5+. On MariaDB 10.2-10.4 it does not exist, so aggregate the
-        // rows with GROUP_CONCAT(JSON_OBJECT(...)) wrapped in brackets instead (empty table -> '[]').
-        if (!SupportsJsonArrayAgg(cmd))
+        // The rows are ordered inside the aggregate: an ORDER BY on the one-row result orders nothing. MySQL's
+        // JSON_ARRAYAGG takes no ORDER BY, so MySQL aggregates with GROUP_CONCAT, joined the way JSON_ARRAYAGG prints
+        // there (", "), and so does MariaDB 10.2-10.4, which has no JSON_ARRAYAGG (empty table -> '[]').
+        if (!isMariaDb || !SupportsJsonArrayAgg(cmd))
         {
+            var separator = isMariaDb ? "," : ", ";
             cmd.CommandText = $@"
 SELECT COALESCE(CONCAT('[', GROUP_CONCAT(
         JSON_OBJECT(
             {jsonObjectClause}
-        ) ORDER BY {orderColumns} SEPARATOR ','), ']'), '[]') AS json_data
+        ) ORDER BY {orderColumns} SEPARATOR '{separator}'), ']'), '[]') AS json_data
 FROM {qualifiedTable}
 {whereClause};";
             return cmd.ExecuteScalar()?.ToString() ?? "[]";
@@ -897,11 +896,10 @@ FROM {qualifiedTable}
 SELECT JSON_ARRAYAGG(
         JSON_OBJECT(
             {jsonObjectClause}
-        )
+        ) ORDER BY {orderColumns}
     ) AS json_data
 FROM {qualifiedTable}
-{whereClause}
-ORDER BY {orderColumns};";
+{whereClause};";
 
         var result = cmd.ExecuteScalar();
         return result?.ToString() ?? "[]";

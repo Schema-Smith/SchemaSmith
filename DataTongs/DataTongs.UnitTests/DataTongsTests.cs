@@ -472,14 +472,15 @@ public class DataTongsTests
     }
 
     [Test]
-    public void GetTableDataJson_MySQL_UsesJsonArrayAgg()
+    public void GetTableDataJson_MySQL_OrdersTheRowsInsideTheAggregate()
     {
         var dt = new global::DataTongs.DataTongs(Platform.MySQL);
         var cmd = Substitute.For<IDbCommand>();
         cmd.ExecuteScalar().Returns("[{\"id\":1}]");
 
         dt.GetTableDataJson(cmd, "`id`", "testdb", "users", "`id`", null);
-        Assert.That(cmd.CommandText, Does.Contain("JSON_ARRAYAGG"));
+        Assert.That(cmd.CommandText, Does.Match(@"GROUP_CONCAT\([\s\S]*ORDER BY `id` SEPARATOR ', '\)"),
+            "an ORDER BY outside the aggregate orders nothing");
     }
 
     [Test]
@@ -1254,7 +1255,7 @@ public class DataTongsTests
             dt.CastData();
 
             // The configured columns, with their real types, and nothing that was not selected
-            Assert.That(command.CommandText, Does.Contain("JSON_ARRAYAGG"));
+            Assert.That(command.CommandText, Does.Contain("GROUP_CONCAT"));
             Assert.That(command.CommandText, Does.Contain("JSON_OBJECT"));
             Assert.That(command.CommandText, Does.Contain("`id`"));
             Assert.That(command.CommandText, Does.Contain("`name`"));

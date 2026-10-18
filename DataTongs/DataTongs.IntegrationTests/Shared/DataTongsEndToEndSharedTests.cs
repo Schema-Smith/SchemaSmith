@@ -9,6 +9,7 @@ using System.Linq;
 
 using System.Collections.Generic;
 using NUnit.Framework;
+using Newtonsoft.Json.Linq;
 using Schema.Utility;
 
 namespace DataTongs.IntegrationTests.Shared;
@@ -637,6 +638,65 @@ public abstract class DataTongsEndToEndSharedTests
             command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
             command.ExecuteNonQuery();
             command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // The rows are written in key order so the file is stable across extractions. JSON_ARRAYAGG takes no ORDER BY on
+    // MySQL, and an ORDER BY on the one-row aggregate orders nothing, so the rows came out in scan order: the primary
+    // key's, not the key the data is matched on.
+    [Test]
+    public void TableDataJson_RowsFollowTheOrderColumns_NotTheScanOrder()
+    {
+        using var command = _connection.CreateCommand();
+        var table = $"_e2e_ord_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (id INT PRIMARY KEY, code VARCHAR(10) NOT NULL UNIQUE, note VARCHAR(10) NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{table}` VALUES (1, 'c', 'x'), (2, 'a', 'y'), (3, 'b', 'z')";
+            command.ExecuteNonQuery();
+
+            var json = _dataTongs.GetTableDataJsonMySql(command, _testDb, table, "`code`", null, null);
+
+            var codes = JArray.Parse(json).Select(row => (string)row["code"]).ToArray();
+            Assert.That(codes, Is.EqualTo(new[] { "a", "b", "c" }), json);
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // The file is written as the server prints it, so ordering the rows must not change how they print: in key order
+    // the output is exactly what the engine's own JSON_ARRAYAGG prints, and an existing data file does not churn.
+    [Test]
+    public void TableDataJson_InKeyOrder_PrintsAsJsonArrayAggDoes()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT VERSION()";
+        var version = Convert.ToString(command.ExecuteScalar()) ?? "";
+        var parts = version.Split('.', '-');
+        if (Platform == Platform.MariaDb && int.Parse(parts[0]) * 100 + int.Parse(parts[1]) < 1005)
+            Assert.Ignore("MariaDB has JSON_ARRAYAGG from 10.5.");
+        var table = $"_e2e_fmt_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (id INT PRIMARY KEY, s VARCHAR(50) NULL, d DECIMAL(10,3) NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{table}` VALUES (1, 'he said \\\"hi\\\"', 1.500), (2, NULL, NULL), (3, 'ünïcødé', -0.001)";
+            command.ExecuteNonQuery();
+
+            var json = _dataTongs.GetTableDataJsonMySql(command, _testDb, table, "`id`", null, null);
+
+            var decimalValue = Platform == Platform.MariaDb ? "d" : "CAST(d AS CHAR)";
+            command.CommandText = $"SELECT CAST(JSON_ARRAYAGG(JSON_OBJECT('id', id, 's', s, 'd', {decimalValue})) AS CHAR) FROM `{_testDb}`.`{table}`";
+            Assert.That(json, Is.EqualTo(Convert.ToString(command.ExecuteScalar())));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
             command.ExecuteNonQuery();
         }
     }
