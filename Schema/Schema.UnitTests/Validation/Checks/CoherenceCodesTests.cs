@@ -30,10 +30,11 @@ public class CoherenceCodesTests
         Assert.That(CoherenceCheck.Codes.Keys, Is.EquivalentTo(declared));
     }
 
-    // Two emission sites take the level or the code from a variable, so the source cannot say what they report.
+    // Some emission sites take the level or the code from a variable, so the source cannot say what they report.
     private static readonly Dictionary<string, Severity[]> NotLiteral = new()
     {
         ["SS-FK-006"] = [Severity.Error, Severity.Warning],
+        ["SS-PART-009"] = [Severity.Error, Severity.Warning],
         ["SS-ENUM-001"] = [Severity.Error],
         ["SS-SEQ-001"] = [Severity.Error],
         ["SS-DOM-001"] = [Severity.Error],

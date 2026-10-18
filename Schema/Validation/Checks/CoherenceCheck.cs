@@ -86,6 +86,9 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string MyPartitionKeyMissesColumnCode = "SS-PART-005";
     private const string SystemTimePartitioningCode = "SS-PART-006";
     private const string PartitionExpressionMissingCode = "SS-PART-007";
+    private const string PartitionedForeignKeyCode = "SS-PART-008";
+    private const string PartitionColumnRenamedCode = "SS-PART-009";
+    private const string PartitionCountMismatchCode = "SS-PART-010";
     private const string MemoryOptimizedPlacementCode = "SS-XTP-001";
     private const string Category = "Coherence";
 
@@ -160,6 +163,9 @@ public sealed class CoherenceCheck : ISchemaCheck
         [MyPartitionKeyMissesColumnCode] = ErrorLevel,
         [SystemTimePartitioningCode] = ErrorLevel,
         [PartitionExpressionMissingCode] = ErrorLevel,
+        [PartitionedForeignKeyCode] = ErrorLevel,
+        [PartitionColumnRenamedCode] = ErrorOrWarningLevel,
+        [PartitionCountMismatchCode] = ErrorLevel,
         [MemoryOptimizedPlacementCode] = ErrorLevel,
     };
 
@@ -240,7 +246,8 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckFullTextKeyIndex(table, location));
             findings.AddRange(CheckCompressionOptions(table, location));
             findings.AddRange(CheckPartitionPlacement(table, location));
-            findings.AddRange(CheckMyPartitioning(table, location));
+            findings.AddRange(CheckMyPartitioning(table, location, ctx.Product));
+            findings.AddRange(CheckPartitionedForeignKeys(table, location, tablesByKey));
             findings.AddRange(CheckMemoryOptimizedPlacement(table, location));
         }
 
@@ -1366,7 +1373,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// SS-PART-003 RANGE/LIST with no named Partitions (they need per-partition boundaries), and SS-PART-004
     /// a HASH/KEY partition carrying a VALUES boundary (HASH/KEY assign by hashing and have none).
     /// </summary>
-    private static IEnumerable<Finding> CheckMyPartitioning(Table table, string tableLocation)
+    private static IEnumerable<Finding> CheckMyPartitioning(Table table, string tableLocation, Product product)
     {
         if (table is not MySqlTable mySqlTable) yield break;
         var p = mySqlTable.Partitioning;
@@ -1406,6 +1413,52 @@ public sealed class CoherenceCheck : ISchemaCheck
             yield return new Finding(Severity.Error, PartitionExpressionMissingCode, Category, tableLocation,
                 $"Table '{table.Name}' partitions by {method} but declares no Expression: every method but SYSTEM_TIME " +
                 "partitions on an expression or a column list.");
+
+        // Both engines refuse PARTITIONS n beside a list of a different length (1064).
+        if (p.PartitionCount is { } count && hasNamedPartitions && count != p.Partitions.Count)
+            yield return new Finding(Severity.Error, PartitionCountMismatchCode, Category, tableLocation,
+                $"Table '{table.Name}' declares PartitionCount {count} and names {p.Partitions.Count} partition(s): " +
+                "the engine refuses the table. Drop PartitionCount, or name that many partitions.");
+
+        // MySQL refuses to rename a column a partitioning expression uses (3855, from 8.0.17); MariaDB renames it.
+        if (product.Platform == Platform.MySQL)
+        {
+            var severity = VersionHelper.ParseDeclaredVersion(product.MinimumVersion, product.Platform) is < 800
+                ? Severity.Warning : Severity.Error;
+            var expressions = $"{p.Expression} {p.Subpartitioning?.Expression}";
+            foreach (var column in table.Columns.Where(c => !string.IsNullOrWhiteSpace(c.OldName)))
+            {
+                var oldName = NormalizeIdentifier(column.OldName);
+                if (!System.Text.RegularExpressions.Regex.IsMatch(expressions,
+                        $@"(?<![\w$])`?{System.Text.RegularExpressions.Regex.Escape(oldName)}`?(?![\w$])",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1))) continue;
+                yield return new Finding(severity, PartitionColumnRenamedCode, Category, tableLocation,
+                    $"Column '{column.Name}' of table '{table.Name}' is renamed from '{oldName}', which the table's partitioning " +
+                    "uses: MySQL refuses to rename a partitioning column from 8.0.17 (3855). Rename it by hand after " +
+                    "removing the partitioning, or keep the name.");
+            }
+        }
+    }
+
+    // InnoDB has no foreign keys on a partitioned table, on either side: MySQL refuses both with 1506, MariaDB the child
+    // with 1506 and the parent with errno 150.
+    private static IEnumerable<Finding> CheckPartitionedForeignKeys(Table table, string tableLocation,
+        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey)
+    {
+        if (table is not MySqlTable mySqlTable) yield break;
+        if (!string.IsNullOrWhiteSpace(mySqlTable.Partitioning?.Method))
+            foreach (var fk in table.ForeignKeys)
+                yield return new Finding(Severity.Error, PartitionedForeignKeyCode, Category, $"{tableLocation} / FK '{fk.Name}'",
+                    $"Table '{table.Name}' is partitioned and declares foreign key '{fk.Name}': InnoDB has no foreign keys on " +
+                    "a partitioned table, so the engine refuses it.");
+        foreach (var fk in table.ForeignKeys)
+        {
+            if (!tablesByKey.TryGetValue(ResolveRelatedTarget(table, fk), out var related)) continue;
+            if (related.OfType<MySqlTable>().Any(r => !ReferenceEquals(r, table) && !string.IsNullOrWhiteSpace(r.Partitioning?.Method)))
+                yield return new Finding(Severity.Error, PartitionedForeignKeyCode, Category, $"{tableLocation} / FK '{fk.Name}'",
+                    $"Foreign key '{fk.Name}' references '{fk.RelatedTable}', which is partitioned: InnoDB has no foreign keys " +
+                    "to a partitioned table, so the engine refuses it.");
+        }
     }
 
     // Every primary and unique key must hold each partitioning column whole (1503 on every MySQL and MariaDB version);

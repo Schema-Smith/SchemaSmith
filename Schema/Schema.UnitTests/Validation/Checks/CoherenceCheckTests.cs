@@ -1034,6 +1034,63 @@ public class CoherenceCheckTests
         Assert.That(RunOnMy(table).Any(f => f.Code == "SS-PART-007"), Is.EqualTo(expected));
     }
 
+    // SS-PART-008 / 009 / 010 (probed on MySQL 8.0.46 and MariaDB 11.4.13).
+    private static Schema.Domain.MySQL.MySqlTable PartTable(string name, string method = "HASH", int? count = 2) => new()
+    {
+        Name = name,
+        Partitioning = method == null ? null : new Schema.Domain.MySQL.MySqlPartitioning { Method = method, Expression = "id", PartitionCount = count },
+        Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "id", DataType = "int" }, new Schema.Domain.MySQL.MySqlColumn { Name = "pid", DataType = "int" } },
+        Indexes = { new Schema.Domain.MySQL.MySqlIndex { Name = "PRIMARY", PrimaryKey = true, Unique = true, IndexColumns = "id" } }
+    };
+
+    private static Finding[] RunMyTables(Platform platform, string minimumVersion, params Schema.Domain.MySQL.MySqlTable[] tables)
+    {
+        var template = new Template { Name = "T" };
+        foreach (var table in tables) template.Tables.Add(table);
+        var product = new Product { Name = "Acme", Platform = platform, MinimumVersion = minimumVersion, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    [Test]
+    public void AForeignKeyOnOrToAPartitionedTable_IsError()
+    {
+        var parent = PartTable("parent", method: null);
+        var partitionedChild = PartTable("child");
+        partitionedChild.ForeignKeys.Add(new Schema.Domain.MySQL.MySqlForeignKey { Name = "fk_child", Columns = "pid", RelatedTable = "parent", RelatedColumns = "id" });
+        var partitionedParent = PartTable("pparent");
+        var plainChild = PartTable("child2", method: null);
+        plainChild.ForeignKeys.Add(new Schema.Domain.MySQL.MySqlForeignKey { Name = "fk_child2", Columns = "pid", RelatedTable = "pparent", RelatedColumns = "id" });
+        var plainChild3 = PartTable("child3", method: null);
+        plainChild3.ForeignKeys.Add(new Schema.Domain.MySQL.MySqlForeignKey { Name = "fk_child3", Columns = "pid", RelatedTable = "parent", RelatedColumns = "id" });
+
+        var findings = RunMyTables(Platform.MariaDb, null, parent, partitionedChild, partitionedParent, plainChild, plainChild3)
+            .Where(f => f.Code == "SS-PART-008").Select(f => f.Location).ToList();
+        Assert.That(findings, Is.EquivalentTo(new[] { "Template 'T' / Table 'child' / FK 'fk_child'", "Template 'T' / Table 'child2' / FK 'fk_child2'" }));
+    }
+
+    [TestCase(Platform.MySQL, null, "id", Severity.Error)]
+    [TestCase(Platform.MySQL, "5.7", "id", Severity.Warning)]
+    [TestCase(Platform.MySQL, null, "other", null)]
+    [TestCase(Platform.MariaDb, null, "id", null)]
+    public void RenamingAPartitioningColumn_IsReportedOnMySql(Platform platform, string minimumVersion, string oldName, Severity? expected)
+    {
+        var table = PartTable("t");
+        table.Columns[0].Name = "new_id";
+        table.Columns[0].OldName = oldName;
+        var finding = RunMyTables(platform, minimumVersion, table).SingleOrDefault(f => f.Code == "SS-PART-009");
+        Assert.That(finding?.Severity, Is.EqualTo(expected));
+    }
+
+    [TestCase(2, false)]
+    [TestCase(3, true)]
+    public void APartitionCountDisagreeingWithTheNamedPartitions_IsError(int count, bool expected)
+    {
+        var table = PartTable("t", count: count);
+        table.Partitioning.Partitions.Add(new Schema.Domain.MySQL.MySqlPartition { Name = "a" });
+        table.Partitioning.Partitions.Add(new Schema.Domain.MySQL.MySqlPartition { Name = "b" });
+        Assert.That(RunMyTables(Platform.MySQL, null, table).Any(f => f.Code == "SS-PART-010"), Is.EqualTo(expected));
+    }
+
     [Test]
     public void BackfillWithoutDefault_IsWarning()
     {

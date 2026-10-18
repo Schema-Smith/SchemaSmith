@@ -1967,6 +1967,8 @@ MySQL and MariaDB carry a table's partition definition in the table DDL itself â
 
 **MySQL requires every `UNIQUE` and `PRIMARY KEY` to contain every partitioning column, whole.** That is the engine's rule, not SchemaSmith's: a key that leaves a partitioning column out, or holds only a prefix of it (`` `code`(10) ``), fails with error `1503`. [`--Validate`](validate.md) reports it first (`SS-PART-005`) where the method names its columns, as `KEY` and the `COLUMNS` forms do.
 
+**A partitioned InnoDB table has no foreign keys**, in either direction: the engines refuse a foreign key on a partitioned table and one that references it, and `--Validate` reports both (`SS-PART-008`). MySQL also refuses to rename a column the partitioning uses (`SS-PART-009`); MariaDB renames it.
+
 ```json
 {
   "Name": "`order_history`",
