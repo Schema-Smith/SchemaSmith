@@ -20,7 +20,7 @@ No migration scripts. No dependency ordering. No guessing what the target looks 
 
 ## One toolset, four engines
 
-SchemaSmith Community supports **SQL Server**, **PostgreSQL**, **MySQL**, and **MariaDB** as first-class peers. Not "SQL Server with PostgreSQL bolted on." Four adapters, one shared package *format*, one workflow, one mental model. Each package declares its own platform and speaks that engine's native DDL -- and packages are platform-specific, not interchangeable: a MariaDB package targets MariaDB, a MySQL package targets MySQL, and neither applies to the other. Whether your team runs a single platform or a heterogeneous mix, SchemaSmith gives you one consistent declaration surface across all four.
+SchemaSmith supports **SQL Server**, **PostgreSQL**, **MySQL**, and **MariaDB** as first-class peers. Not "SQL Server with PostgreSQL bolted on." Four adapters, one shared package *format*, one workflow, one mental model. Each package declares its own platform and speaks that engine's native DDL -- and packages are platform-specific, not interchangeable: a MariaDB package targets MariaDB, a MySQL package targets MySQL, and neither applies to the other. Whether your team runs a single platform or a heterogeneous mix, SchemaSmith gives you one consistent declaration surface across all four.
 
 The platform is a property of each product, not of the tool. Point SchemaQuench at a SQL Server product and it quenches SQL Server. Point it at a MariaDB product and it quenches MariaDB. Same binary, same command line, same CI pipeline shape.
 

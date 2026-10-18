@@ -45,7 +45,7 @@ Two tokens are always available automatically: `{{ProductName}}` (from `Product.
 
 ### Advanced token tags -- the quiet superpower
 
-This is where tokens go from "find and replace" to "deployment-time content engine." The *value* you give a token can start with a special tag that tells SchemaSmith to resolve it dynamically: read a file from disk, query the live server, or embed a specific table's JSON. These aren't teaser features -- they're in Community today, free, for every supported platform.
+This is where tokens go from "find and replace" to "deployment-time content engine." The *value* you give a token can start with a special tag that tells SchemaSmith to resolve it dynamically: read a file from disk, query the live server, or embed a specific table's JSON. These aren't teaser features -- they're in the tools today, free, for every supported platform.
 
 **Embed a file's contents:**
 
@@ -601,4 +601,4 @@ For the complete deployment flow including per-platform modular procedures, see 
 
 ---
 
-Tokens, custom properties, `ShouldApplyExpression`, multi-database products, secondary servers, DataTongs, custom script folders, execution slots. That's the toolkit for 95% of what you'll encounter -- and all of it is in Community. When one tenant per database isn't the right shape, the next chapter shows how a single template can fan out across schemas inside one database. [Multi-Tenant Deployments](10-multi-tenant-deployments.md)
+Tokens, custom properties, `ShouldApplyExpression`, multi-database products, secondary servers, DataTongs, custom script folders, execution slots. That's the toolkit for 95% of what you'll encounter -- and all of it ships in the box. When one tenant per database isn't the right shape, the next chapter shows how a single template can fan out across schemas inside one database. [Multi-Tenant Deployments](10-multi-tenant-deployments.md)

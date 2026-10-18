@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to SchemaSmith Community Edition are documented here.
+All notable changes to SchemaSmith are documented here.
 
 For full release details and download links, see [GitHub Releases](https://github.com/Schema-Smith/SchemaSmith/releases).
 
@@ -996,4 +996,4 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ## [v1.0.4](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v1.0.4) — 2025-05-01
 
-Initial release of SchemaSmith Community Edition with SchemaQuench (deploy) and SchemaTongs (extract).
+Initial release of SchemaSmith with SchemaQuench (deploy) and SchemaTongs (extract).

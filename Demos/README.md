@@ -1,4 +1,4 @@
-# SchemaSmith Community Demos
+# SchemaSmith Demos
 
 Demo database schema packages for SQL Server, PostgreSQL, MySQL, and MariaDB, deployed by [SchemaSmith](https://github.com/Schema-Smith/SchemaSmith) (SchemaQuench).
 

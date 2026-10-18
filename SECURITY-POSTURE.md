@@ -1,6 +1,6 @@
 # Security Posture
 
-SchemaSmith Community is a set of command-line tools for declarative database schema
+SchemaSmith is a set of command-line tools for declarative database schema
 management. This document describes how the tools behave in your environment, how they
 are built and released, and how to reach us about a security issue.
 
@@ -83,7 +83,7 @@ will receive an acknowledgment within 48 hours. Full process, scope, and threat 
 
 ## Licensing
 
-SchemaSmith Community is distributed under the SchemaSmith Community License v2.0. For
+SchemaSmith is distributed under the SchemaSmith Community License v2.0. For
 SBOM and license-scanning tools, declare it as the SPDX custom identifier
 `LicenseRef-SSCL-2.0`. The authoritative text is in [LICENSE](LICENSE); the repository
 carries a machine-readable [REUSE](https://reuse.software) declaration.
@@ -121,5 +121,5 @@ surface we host — a penetration test has limited applicability.
 
 **Can you provide an SBOM?**
 Yes. Every release includes a CycloneDX SBOM as a downloadable asset, listing declared
-third-party dependencies with resolved licenses. SchemaSmith Community itself is declared
+third-party dependencies with resolved licenses. SchemaSmith itself is declared
 as `LicenseRef-SSCL-2.0`.

@@ -10,7 +10,7 @@
 
 		<PackageId>SchemaSmith.Schema</PackageId>
 		<RepositoryUrl>https://github.com/Schema-Smith/SchemaSmith</RepositoryUrl>
-		<Product>SchemaSmith Community</Product>
+		<Product>SchemaSmith</Product>
 		<Description>Domain models, data access, and utilities for SchemaSmith database schema management. Single source of truth referenced by SchemaSmith tools and add-ons.</Description>
 	</PropertyGroup>
 

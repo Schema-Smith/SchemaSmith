@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        We'd love to hear your ideas for improving SchemaSmith Community!
+        We'd love to hear your ideas for improving SchemaSmith!
 
   - type: dropdown
     id: tool

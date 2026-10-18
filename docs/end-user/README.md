@@ -1,8 +1,8 @@
-# SchemaSmith Community Documentation
+# SchemaSmith Documentation
 
 Welcome to the shop. Everything you need to master SchemaSmith is here -- the guide walks you through it front to back, and the reference docs are always within arm's reach when you need the details. Pick a starting point and dig in.
 
-SchemaSmith Community supports **SQL Server**, **PostgreSQL**, **MySQL**, and **MariaDB** as first-class peers. The same tools, the same schema package format, the same workflow -- pointed at whichever engine your team runs.
+SchemaSmith supports **SQL Server**, **PostgreSQL**, **MySQL**, and **MariaDB** as first-class peers. The same tools, the same schema package format, the same workflow -- pointed at whichever engine your team runs.
 
 ---
 

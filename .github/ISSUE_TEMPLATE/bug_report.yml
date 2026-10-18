@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug in SchemaSmith Community tools
+description: Report a bug in SchemaSmith
 labels: ["bug"]
 body:
   - type: markdown

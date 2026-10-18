@@ -7,7 +7,7 @@
 		<PublishSingleFile>true</PublishSingleFile>
 		<PublishAot>false</PublishAot>
 
-		<Product>SchemaShears Community</Product>
+		<Product>SchemaShears</Product>
 		<Description>Builds an object-level subset (patch) package from a full SchemaSmith product</Description>
 		<ApplicationIcon>..\DataTongs\images\SchemaTongs.ico</ApplicationIcon>
 		<UserSecretsId>d4e5f6a7-b8c9-0123-defa-234567890123</UserSecretsId>

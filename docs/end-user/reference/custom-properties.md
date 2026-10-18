@@ -12,7 +12,7 @@ Think of them as sidecar data. SchemaSmith doesn't care what they mean. *You* do
 
 ## The Extensions Carrier
 
-In Community, every custom value lives inside a single property on its containing object called `Extensions`. It's an open JSON bag: objects, arrays, strings, numbers, booleans -- anything the schema accepts. The core properties stay exactly where they've always been; your data rides in the `Extensions` object alongside them.
+Every custom value lives inside a single property on its containing object called `Extensions`. It's an open JSON bag: objects, arrays, strings, numbers, booleans -- anything the schema accepts. The core properties stay exactly where they've always been; your data rides in the `Extensions` object alongside them.
 
 **Table-level custom properties:**
 
@@ -285,7 +285,7 @@ To add column-level governance (constraining `Classification` on individual colu
 
 > **Note:** The fragment constrains what editors and CI see at authoring time. SchemaQuench reads the `Extensions` values at quench time and resolves them as script tokens -- it does not re-validate the fragment itself at deployment time. CI validation is the enforcement point.
 
-> **No GUI property builder in Community.** Community treats `Extensions` as a data-only feature -- you edit the JSON directly, you hand-author the optional `Extensions` schema fragment, and you consume the values through script tokens. That's intentional: it keeps the Community tooling focused on what every team needs. Schema authorship, not form design.
+> **`Extensions` is data, authored as JSON.** You edit the JSON directly, hand-author the optional `Extensions` schema fragment, and consume the values through script tokens. That keeps the tooling focused on what every team needs: schema authorship, not form design.
 
 ---
 

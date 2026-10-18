@@ -817,7 +817,6 @@ public class DatabaseQuench
 
                     if (_deliverData)
                     {
-                        // Data delivery — Pro determines behavior based on license.
                         var tableDataDeliverySw = Stopwatch.StartNew();
                         _checkpointing.Track(DbScope, "TableDataDelivery", () =>
                         {

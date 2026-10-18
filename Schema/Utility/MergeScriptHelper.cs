@@ -396,9 +396,9 @@ public static class MergeScriptHelper
     };
 
     /// <summary>
-    /// Returns structured column metadata for Pro's deferred merge assembly.
+    /// Returns structured column metadata for a caller that assembles the merge itself.
     /// Excludes computed columns and unsupported types. Includes JSON parse type
-    /// information so Pro can build type-safe NULL casts.
+    /// information so the caller can build type-safe NULL casts.
     /// </summary>
     public static List<MergeColumnInfo> GetColumnMetadata(Platform platform, IDbCommand cmd, string schemaOrDb, string tableName, HashSet<string> jsonKeys = null)
     {
