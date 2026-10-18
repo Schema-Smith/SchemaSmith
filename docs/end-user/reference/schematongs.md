@@ -509,9 +509,14 @@ New objects always appear in the root of their folder. Move them into subfolders
 
 ## Prerequisite Scripts (SQL Server)
 
-Some objects a package depends on are not modelled, so SchemaTongs writes them as generated scripts in the template's `Prerequisites/` folder, which deploys before the tables. Today that is `AlwaysEncryptedKeys.sql`: every column master key and column encryption key in the source database. Each key is created only where it is missing, and the script skips itself with a message below SQL Server 2016. It is written when the tables are extracted and removed when the source has no keys any more.
+Some objects a package depends on are not modelled, so SchemaTongs writes them as generated scripts in the template's `Prerequisites/` folder, which deploys before the tables. There are two:
 
-A prerequisite script is rewritten in full on every extraction. Change the source database rather than the file: `--Validate` warns about an edit the next extraction would overwrite (`SS-GEN-001`). Schema templates do not get one, because the keys belong to the database. See [the Prerequisites folder](schema-packages.md#sql-server-default-folders).
+- `AlwaysEncryptedKeys.sql`: every column master key and column encryption key in the source database. Each key is created only where it is missing, and the script skips itself with a message below SQL Server 2016. Removed when the source has no keys any more.
+- `PartitionSchemes.sql`: the partition functions and schemes the source's tables and indexes are stored on, with their boundaries and filegroups. Each is created only where it is missing; one that exists on the target is left exactly as it is, boundaries and all, so splitting and merging stay yours. The filegroups are the source's and must exist on the target. Removed when nothing in the source is partitioned.
+
+Both are written when the tables are extracted.
+
+A prerequisite script is rewritten in full on every extraction. Change the source database rather than the file: `--Validate` warns about an edit the next extraction would overwrite (`SS-GEN-001`). Schema templates do not get one, because what they create belongs to the database. See [the Prerequisites folder](schema-packages.md#sql-server-default-folders).
 
 ---
 

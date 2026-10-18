@@ -1144,6 +1144,7 @@ public class SchemaTongs
             if (_includeTables) ExtractTableDefinitions(command, targetDb);
             // Always Encrypted arrived in 2016 (major 13); below it there are no keys to read.
             if (_includeTables && !_isSchemaTemplate && sourceMajor is 0 or >= 13) ScriptSqlServerAlwaysEncryptedKeys(command, targetDb);
+            if (_includeTables && !_isSchemaTemplate) ScriptSqlServerPartitionSchemes(command, targetDb);
             if (_includeSchemas) ScriptSqlServerSchemas(command);
             if (_includeUserDefinedTypes) ScriptSqlServerUserDefinedTypes(command);
             if (_includeUserDefinedFunctions) ScriptSqlServerFunctions(command);
@@ -1967,6 +1968,112 @@ SELECT k.[name], m.[name], v.encryption_algorithm_name, v.encrypted_value
             Exec($"CREATE COLUMN ENCRYPTION KEY {Quote(key.Key)} WITH VALUES " +
                  string.Join(", ", key.Select(v => $"(COLUMN_MASTER_KEY = {Quote(v.MasterKey)}, ALGORITHM = '{EscapeSql(v.Algorithm)}', ENCRYPTED_VALUE = {Hex(v.Value)})"))) + "\r\n")));
         sb.Append("END\r\n");
+
+        DirectoryWrapper.GetFromFactory().CreateDirectory(folder);
+        EnsurePrerequisitesFolder();
+        _progressLog.Info($"  Casting {file}");
+        files.WriteAllText(file, GeneratedScript.Stamp(sb.ToString()));
+    }
+
+    internal const string PartitionSchemesScript = "PartitionSchemes.sql";
+
+    // The partition functions and schemes the database's tables and indexes are stored on. The package names a scheme on a
+    // table or index but never creates one, so a partitioned package failed on an empty database. They go to a generated
+    // prerequisite script that creates only what is missing: an existing function or scheme is the operator's, boundaries
+    // and all, and is left exactly as it is. Rewritten on every extraction; removed when nothing is partitioned.
+    private void ScriptSqlServerPartitionSchemes(IDbCommand command, string targetDb)
+    {
+        var functions = new List<(string Name, string Type, bool Right)>();
+        command.CommandText = @"
+SELECT DISTINCT pf.[name], t.[name] +
+       CASE WHEN t.[name] IN ('varchar', 'char', 'varbinary', 'binary')
+            THEN '(' + CASE WHEN pp.max_length = -1 THEN 'max' ELSE CAST(pp.max_length AS VARCHAR(10)) END + ')'
+            WHEN t.[name] IN ('nvarchar', 'nchar')
+            THEN '(' + CASE WHEN pp.max_length = -1 THEN 'max' ELSE CAST(pp.max_length / 2 AS VARCHAR(10)) END + ')'
+            WHEN t.[name] IN ('decimal', 'numeric') THEN '(' + CAST(pp.[precision] AS VARCHAR(10)) + ',' + CAST(pp.scale AS VARCHAR(10)) + ')'
+            WHEN t.[name] IN ('datetime2', 'time', 'datetimeoffset') THEN '(' + CAST(pp.scale AS VARCHAR(10)) + ')'
+            ELSE '' END,
+       pf.boundary_value_on_right
+  FROM sys.indexes i
+  JOIN sys.objects o ON o.[object_id] = i.[object_id] AND o.is_ms_shipped = 0
+  JOIN sys.partition_schemes ps ON ps.data_space_id = i.data_space_id
+  JOIN sys.partition_functions pf ON pf.function_id = ps.function_id
+  JOIN sys.partition_parameters pp ON pp.function_id = pf.function_id AND pp.parameter_id = 1
+  JOIN sys.types t ON t.user_type_id = pp.user_type_id
+ ORDER BY pf.[name]";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                functions.Add((reader.GetString(0), reader.GetString(1), Convert.ToBoolean(reader.GetValue(2))));
+
+        var folder = Path.Join(_templatePath, Template.PrerequisitesFolder);
+        var file = Path.Join(folder, PartitionSchemesScript);
+        var files = FileWrapper.GetFromFactory();
+        if (functions.Count == 0)
+        {
+            if (files.Exists(file) && GeneratedScript.IsGenerated(files.ReadAllText(file))) files.Delete(file);
+            return;
+        }
+
+        // Each boundary as a literal of its own type: the value is a sql_variant, and the default conversion of a date or
+        // a float loses precision.
+        var boundaries = new List<(string Function, string Value)>();
+        command.CommandText = @"
+SELECT pf.[name],
+       CASE WHEN rv.[value] IS NULL THEN 'NULL'
+            WHEN v.bt IN ('tinyint', 'smallint', 'int', 'bigint', 'bit', 'decimal', 'numeric') THEN CONVERT(NVARCHAR(4000), rv.[value])
+            WHEN v.bt IN ('money', 'smallmoney') THEN CONVERT(NVARCHAR(4000), CONVERT(MONEY, rv.[value]), 2)
+            WHEN v.bt IN ('float', 'real') THEN CONVERT(NVARCHAR(4000), CONVERT(FLOAT, rv.[value]), 2)
+            WHEN v.bt = 'date' THEN N'''' + CONVERT(NVARCHAR(30), CONVERT(DATE, rv.[value]), 23) + N''''
+            WHEN v.bt IN ('datetime', 'smalldatetime') THEN N'''' + CONVERT(NVARCHAR(30), CONVERT(DATETIME, rv.[value]), 126) + N''''
+            WHEN v.bt = 'datetime2' THEN N'''' + CONVERT(NVARCHAR(40), CONVERT(DATETIME2(7), rv.[value]), 126) + N''''
+            WHEN v.bt = 'datetimeoffset' THEN N'''' + CONVERT(NVARCHAR(40), CONVERT(DATETIMEOFFSET(7), rv.[value]), 126) + N''''
+            WHEN v.bt = 'time' THEN N'''' + CONVERT(NVARCHAR(20), CONVERT(TIME(7), rv.[value])) + N''''
+            WHEN v.bt IN ('binary', 'varbinary') THEN CONVERT(NVARCHAR(4000), CONVERT(VARBINARY(8000), rv.[value]), 1)
+            ELSE N'N''' + REPLACE(CONVERT(NVARCHAR(4000), rv.[value]), N'''', N'''''') + N'''' END
+  FROM sys.partition_functions pf
+  JOIN sys.partition_range_values rv ON rv.function_id = pf.function_id
+ CROSS APPLY (SELECT CONVERT(SYSNAME, SQL_VARIANT_PROPERTY(rv.[value], 'BaseType')) AS bt) v
+ ORDER BY pf.[name], rv.boundary_id";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                boundaries.Add((reader.GetString(0), reader.GetString(1)));
+
+        var schemes = new List<(string Name, string Function, string FileGroup)>();
+        command.CommandText = @"
+SELECT ps.[name], pf.[name], fg.[name]
+  FROM sys.partition_schemes ps
+  JOIN sys.partition_functions pf ON pf.function_id = ps.function_id
+  JOIN sys.destination_data_spaces dds ON dds.partition_scheme_id = ps.data_space_id
+  JOIN sys.filegroups fg ON fg.data_space_id = dds.data_space_id
+ WHERE ps.data_space_id IN (SELECT i.data_space_id FROM sys.indexes i JOIN sys.objects o ON o.[object_id] = i.[object_id] AND o.is_ms_shipped = 0)
+ ORDER BY ps.[name], dds.destination_id";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                schemes.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+
+        _progressLog.Info("Casting Partition Schemes");
+        string Quote(string name) => "[" + Identifier.EscapeDelimited(name, Platform.SqlServer) + "]";
+        string Exec(string sql) => $"EXEC(N'{EscapeSql(sql)}')";
+
+        var sb = new StringBuilder();
+        sb.Append($"-- The partition functions and schemes the tables of {targetDb} are stored on, written by SchemaTongs on every\r\n");
+        sb.Append("-- extraction: change the source database, not this file. One is created only where it is missing; one that exists is\r\n");
+        sb.Append("-- left as it is, boundaries and all. The filegroups are the source's and must exist on the target.\r\n");
+        foreach (var function in functions)
+            sb.Append($"IF NOT EXISTS (SELECT 1 FROM sys.partition_functions WHERE [name] = N'{EscapeSql(function.Name)}')\r\n  " +
+                      Exec($"CREATE PARTITION FUNCTION {Quote(function.Name)} ({function.Type}) AS RANGE {(function.Right ? "RIGHT" : "LEFT")} FOR VALUES (" +
+                           string.Join(", ", boundaries.Where(b => b.Function == function.Name).Select(b => b.Value)) + ")") + "\r\n");
+        foreach (var scheme in schemes.GroupBy(x => (x.Name, x.Function)))
+        {
+            var fileGroups = scheme.Select(x => x.FileGroup).ToList();
+            // ALL TO also marks a NEXT USED filegroup, so it is written only where the source has that extra destination.
+            var partitions = boundaries.Count(b => b.Function == scheme.Key.Function) + 1;
+            var to = fileGroups.All(fg => fg == "PRIMARY") && fileGroups.Count == partitions + 1
+                ? "ALL TO ([PRIMARY])"
+                : "TO (" + string.Join(", ", fileGroups.Select(Quote)) + ")";
+            sb.Append($"IF NOT EXISTS (SELECT 1 FROM sys.partition_schemes WHERE [name] = N'{EscapeSql(scheme.Key.Name)}')\r\n  " +
+                      Exec($"CREATE PARTITION SCHEME {Quote(scheme.Key.Name)} AS PARTITION {Quote(scheme.Key.Function)} {to}") + "\r\n");
+        }
 
         DirectoryWrapper.GetFromFactory().CreateDirectory(folder);
         EnsurePrerequisitesFolder();
