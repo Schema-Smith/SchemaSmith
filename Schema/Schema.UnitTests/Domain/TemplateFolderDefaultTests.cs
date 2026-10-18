@@ -399,9 +399,25 @@ namespace Schema.UnitTests.Domain
         public void SqlServer_AddDefaultScriptFolders_MatchesGetDefaultTemplateFolders()
         {
             var template = RepositoryHelper.CreateDefaultTemplate("Test", Platform.SqlServer);
-            var expected = Template.GetDefaultTemplateFolders(Platform.SqlServer);
+            var expected = Template.GetDefaultTemplateFolders(Platform.SqlServer)
+                .Where(f => !RepositoryHelper.FoldersWrittenOnUse.Contains(f.ObjectType)).ToList();
 
             AssertFolderListsMatch(expected, template.ScriptFolders);
+        }
+
+        // 2.7.x refuses a Template.json naming an ObjectType it does not know, so a package with no security policy
+        // must not declare their folder: written, it made every new SQL Server package unloadable there.
+        [Test]
+        public void SqlServer_AWrittenDefaultTemplate_DeclaresNoSecurityPolicyFolder()
+        {
+            var template = RepositoryHelper.CreateDefaultTemplate("Test", Platform.SqlServer);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(template.ScriptFolders.Select(f => f.ObjectType), Has.None.EqualTo(ScriptObjectType.SecurityPolicies));
+                Assert.That(Template.GetDefaultTemplateFolders(Platform.SqlServer).Select(f => f.ObjectType), Has.Some.EqualTo(ScriptObjectType.SecurityPolicies),
+                    "the deploy's own fallback still knows the folder");
+            });
         }
 
         [Test]

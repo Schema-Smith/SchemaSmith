@@ -172,7 +172,7 @@ public class SchemaTongs
                                       $"Extracting to '{templateFolder.FolderPath}' per template definition.");
                 }
             }
-            else
+            else if (!RepositoryHelper.FoldersWrittenOnUse.Contains(type))
             {
                 if (defaultSlots.TryGetValue(type, out var slot))
                 {
@@ -1548,7 +1548,6 @@ SELECT s.name AS SchemaName, sq.name AS SequenceName,
     {
         _progressLog.Info("Casting Security Policies");
         var castPath = GetCastPath(ScriptObjectType.SecurityPolicies, "SecurityPolicies");
-        DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
 
         command.CommandText = @"
 SELECT SCHEMA_NAME(p.[schema_id]), p.[name], p.is_enabled, p.is_schema_bound, p.is_not_for_replication,
@@ -1606,12 +1605,26 @@ SELECT SCHEMA_NAME(p.[schema_id]), p.[name], p.is_enabled, p.is_schema_bound, p.
                 "  END\r\n" +
                 "END\r\n";
 
+            if (_stats.SecurityPolicies == 0) DeclareFolderWrittenOnUse(ScriptObjectType.SecurityPolicies, castPath);
             var fileName = ResolveOutputPath(castPath, EncodeObjectFileName(policy.Key.Schema, policy.Key.Name, ".sql"));
             script = RewriteSqlBodyForSchemaTemplate(script, fileName);
             _progressLog.Info($"  Casting {fileName}");
             FileWrapper.GetFromFactory().WriteAllText(fileName, script);
             _stats.SecurityPolicies++;
         }
+    }
+
+    // A folder in FoldersWrittenOnUse joins the template's ScriptFolders with the first object extracted into it.
+    private void DeclareFolderWrittenOnUse(ScriptObjectType type, string castPath)
+    {
+        DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
+        var templateFile = Path.Combine(_templatePath, "Template.json");
+        if (!FileWrapper.GetFromFactory().Exists(templateFile)) return;
+        var template = JsonHelper.Load<Template>(templateFile);
+        if (template.ScriptFolders.Any(f => f.ObjectType == type)) return;
+        var folder = Template.GetDefaultTemplateFolders(_platform, _isSchemaTemplate).First(f => f.ObjectType == type);
+        template.ScriptFolders.Add(new TemplateFolder { FolderPath = ResolveFolderName(folder.FolderPath, type), QuenchSlot = folder.QuenchSlot, ObjectType = type });
+        WritePackageObject(templateFile, template, "templates");
     }
 
     // The catalog wraps each predicate in one pair of parentheses that CREATE SECURITY POLICY does not take.
@@ -2279,7 +2292,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier, tr.is_disab
 
             var createMatch = Regex.Match(definition, @"(?<!\w)CREATE(\s+)TRIGGER\b", RegexOptions.IgnoreCase);
             if (createMatch.Success)
-                definition = definition.Substring(0, createMatch.Index) + "CREATE OR ALTER" + createMatch.Value.Substring("CREATE".Length) + definition.Substring(createMatch.Index + createMatch.Length);
+                definition = WithOrAlter(definition, createMatch);
 
             var escapedName = Regex.Escape(triggerName);
             var namePattern = $@"(?<=TRIGGER\s+)\[?{escapedName}\]?";
@@ -2380,14 +2393,22 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier, tr.is_disab
         return definition[..full.Index] + $"[{Identifier.EscapeDelimited(schemaName, Platform.SqlServer)}].[{Identifier.EscapeDelimited(objectName, Platform.SqlServer)}]" + definition[(full.Index + full.Length)..];
     }
 
+    // SQL Server stores a CREATE OR ALTER module with the two words cut out and the whitespace around them kept, so a gap
+    // of three or more is where they were. They go back into it: inserted ahead of it, each round trip through the
+    // server widened the gap by two.
+    internal static string WithOrAlter(string definition, Match createMatch)
+    {
+        var gap = createMatch.Groups[1].Value;
+        var header = gap.Length >= 3 ? $"CREATE{gap[0]}OR{gap[1]}ALTER{gap[2..]}" : "CREATE OR ALTER" + gap;
+        return definition[..createMatch.Index] + header + definition[(createMatch.Index + "CREATE".Length + gap.Length)..];
+    }
+
     internal static string ConvertToCreateOrAlter(string definition, string schemaName, string objectName)
     {
         var createMatch = Regex.Match(definition,
             @"(?<!\w)CREATE(\s+)(PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\b",
             RegexOptions.IgnoreCase);
-        var result = createMatch.Success
-            ? definition.Substring(0, createMatch.Index) + "CREATE OR ALTER" + createMatch.Value.Substring("CREATE".Length) + definition.Substring(createMatch.Index + createMatch.Length)
-            : definition;
+        var result = createMatch.Success ? WithOrAlter(definition, createMatch) : definition;
 
         var escapedSchema = Regex.Escape(schemaName);
         var escapedName = Regex.Escape(objectName);

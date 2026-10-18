@@ -73,6 +73,8 @@ ALTER TABLE public.""MyFKTable"" ADD CONSTRAINT ""FK_MyFKTable_Col2_MyFKReferenc
         Assert.That(fk1.RelatedColumns, Is.EqualTo("Id"));
         Assert.That(fk1.DeleteAction, Is.EqualTo("CASCADE"));
         Assert.That(fk1.UpdateAction, Is.EqualTo(""));
+        // A key with no SET NULL column list extracted as "SetNullColumns": "", which 2.7.x refuses to load.
+        Assert.That(Schema.Utility.JsonHelper.Serialize(result), Does.Not.Contain("SetNullColumns"));
 
         conn.Close();
     }

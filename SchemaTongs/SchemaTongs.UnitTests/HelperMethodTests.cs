@@ -193,6 +193,31 @@ public class HelperMethodTests
         Assert.That(result, Does.StartWith("CREATE VIEW [dbo].[vNew] AS"), "only the created name changes; the body is the user's to review");
     }
 
+    // What SQL Server stores for each spelling (probed on 2022): the words OR ALTER cut out, the whitespace kept.
+    [TestCase("CREATE   PROCEDURE dbo.MyProc AS SELECT 1", "CREATE OR ALTER PROCEDURE [dbo].[MyProc] AS SELECT 1")]
+    [TestCase("CREATE     PROCEDURE dbo.MyProc AS SELECT 1", "CREATE OR ALTER   PROCEDURE [dbo].[MyProc] AS SELECT 1")]
+    [TestCase("CREATE  \r\nPROCEDURE dbo.MyProc AS SELECT 1", "CREATE OR ALTER\r\nPROCEDURE [dbo].[MyProc] AS SELECT 1")]
+    [TestCase("CREATE PROCEDURE dbo.MyProc AS SELECT 1", "CREATE OR ALTER PROCEDURE [dbo].[MyProc] AS SELECT 1")]
+    public void ConvertToCreateOrAlter_PutsOrAlterBackWhereTheServerCutItOut(string stored, string expected)
+    {
+        Assert.That(SchemaTongs.ConvertToCreateOrAlter(stored, "dbo", "MyProc"), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ConvertToCreateOrAlter_ADeployAndExtractRoundTrip_IsStable()
+    {
+        // The server's storage of a CREATE OR ALTER script: the words removed, every whitespace character kept.
+        static string Stored(string script) => System.Text.RegularExpressions.Regex.Replace(script, @"^CREATE(\s+)OR(\s+)ALTER(\s+)", "CREATE$1$2$3");
+        var script = "CREATE OR ALTER   PROCEDURE [dbo].[MyProc] AS SELECT 1";
+        var once = SchemaTongs.ConvertToCreateOrAlter(Stored(script), "dbo", "MyProc");
+        var twice = SchemaTongs.ConvertToCreateOrAlter(Stored(once), "dbo", "MyProc");
+        Assert.Multiple(() =>
+        {
+            Assert.That(once, Is.EqualTo(script), "an extraction gives back the script that was deployed");
+            Assert.That(twice, Is.EqualTo(script), "and does so on every cycle");
+        });
+    }
+
     [Test]
     public void ConvertToCreateOrAlter_ProcShorthand_ConvertsCorrectly()
     {
