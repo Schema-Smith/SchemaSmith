@@ -59,7 +59,7 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
                 cmd.ExecuteNonQuery();
                 return;
             }
-            catch (Exception e) when (tries++ < 10 && e.Message.Contains("deadlock victim", StringComparison.OrdinalIgnoreCase))
+            catch (SqlException e) when (tries++ < 10 && e.Message.Contains("deadlock victim", StringComparison.OrdinalIgnoreCase))
             {
                 Thread.Sleep(1000);
             }
