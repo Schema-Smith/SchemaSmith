@@ -499,6 +499,15 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                CASE WHEN i.using_xml_index_id IS NULL THEN 'true' ELSE 'false' END AS [IsPrimary],
                (SELECT QUOTENAME([Name] COLLATE DATABASE_DEFAULT) FROM sys.xml_indexes i2 WHERE i2.[object_id] = i.[object_id] AND i2.index_id = i.using_xml_index_id AND i.using_xml_index_id IS NOT NULL) AS [PrimaryIndex],
                i.secondary_type_desc COLLATE DATABASE_DEFAULT AS [SecondaryIndexType],
+               -- See the JSON twin.
+               (SELECT (SELECT 'true' AS [@json:Array], n.[Prefix], n.[Uri] FROM #SelectiveXmlNamespaces n
+                          WHERE n.[object_id] = i.[object_id] AND n.index_id = i.index_id ORDER BY n.[Prefix] FOR XML PATH('Namespaces'), TYPE),
+                       (SELECT 'true' AS [@json:Array], p.[Name], p.[Path], p.[Type], p.[MaxLength], CASE WHEN p.[Singleton] = 1 THEN 'true' END AS [SingletonCardinality]
+                          FROM #SelectiveXmlPaths p
+                          WHERE p.[object_id] = i.[object_id] AND p.index_id = i.index_id ORDER BY p.path_id FOR XML PATH('Paths'), TYPE)
+                  WHERE EXISTS (SELECT 1 FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id AND s.[ForPath] IS NULL)
+                  FOR XML PATH('Selective'), TYPE),
+               (SELECT s.[ForPath] FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id) AS [ForPath],
                (SELECT ep.[Name] AS [@n], CONVERT(NVARCHAR(MAX), ep.[Value]) AS [*]
                   FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) ep
                   WHERE ep.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)
@@ -506,7 +515,6 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
           FROM sys.xml_indexes i
           JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
           WHERE i.[object_id] = st.[object_id]
-            AND NOT EXISTS (SELECT 1 FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id)
           ORDER BY i.[Name]
           FOR XML PATH('XmlIndexes'), TYPE),
        -- Spatial indexes: see the JSON twin.

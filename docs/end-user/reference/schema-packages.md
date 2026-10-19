@@ -1019,7 +1019,7 @@ On a graph table, an index can name the engine's pseudo-columns as key parts: `$
 | `Disabled` | bool | `false` | The index is disabled (`ALTER INDEX … DISABLE`): its definition stays in the catalog, but it holds no data and enforces nothing. This is declared state, converged once the index exists. Declared `true`, a live index is disabled after it is created. Left at the default, an index someone disabled by hand is **rebuilt**, which is what enables it — so a unique index the package says exists enforces again, and the rebuild reports the truth if the rows no longer satisfy it. A disabled index whose definition changed is replaced like any other. Two engine facts worth knowing before declaring it: disabling a **clustered** index makes the table unreadable until it is rebuilt, and disabling a primary key's or unique constraint's index disables every foreign key that references it. SchemaTongs extracts a disabled index with `Disabled: true`. |
 | `Order` | string | `null` | `ColumnStore` only: the `ORDER (…)` columns of an ordered columnstore index, comma-separated in sort order (`"[OrderDate],[CustomerId]"`). A clustered columnstore index from SQL Server 2022, a nonclustered one from 2025; below that the index is created unordered and a downgrade recorded. A changed order re-creates the index. |
 
-**Index kinds a package cannot declare yet:** JSON indexes (SQL Server 2025) and selective XML indexes. SchemaTongs leaves them out of the table file and names each one in a warning, and SchemaQuench leaves them alone on deploy -- it neither compares them nor drops them, even with [`DropUnknownIndexes`](configuration.md#dropunknownindexes) on. Create and maintain them with a script in the template's `After` slot.
+**Index kinds a package cannot declare yet:** JSON indexes (SQL Server 2025). SchemaTongs leaves them out of the table file and names each one in a warning, and SchemaQuench leaves them alone on deploy -- it neither compares them nor drops them, even with [`DropUnknownIndexes`](configuration.md#dropunknownindexes) on. Create and maintain them with a script in the template's `After` slot. Selective XML indexes are declared in [`XmlIndexes`](#selective-xml-indexes).
 
 **On indexed views:** SQL Server rejects `IGNORE_DUP_KEY` on a view index outright ("Cannot define an index on a view with ignore_dup_key index option"), so there is nothing to declare there. `PadIndex` **is** supported on an index inside an `Indexed Views/` definition.
 
@@ -1365,9 +1365,39 @@ XML index definitions in the `XmlIndexes` array. A primary XML index must be cre
 | `PrimaryIndex` | string | Name of the primary XML index. Required for secondary indexes. |
 | `SecondaryIndexType` | string | `"VALUE"`, `"PATH"`, or `"PROPERTY"`. Required for secondary indexes. |
 | `XmlCompression` | bool | **SQL Server 2022+.** Creates the index `WITH (XML_COMPRESSION = ON)`. Each XML index has its own setting: a secondary does not inherit its primary's. A change re-creates the index. Read back where the server reports it, as for the table's `XmlCompression`; below 2022 the clause is suppressed and reported through `UnsupportedFeaturePolicy`. |
+| `Selective` | object | **SQL Server 2012 SP1+.** Makes this a selective XML index, which promotes only the paths it lists. See [Selective XML indexes](#selective-xml-indexes). `IsPrimary` and `SecondaryIndexType` do not apply. |
+| `ForPath` | string | **SQL Server 2012 SP1+.** Makes this a secondary selective XML index on the named path of the selective index in `PrimaryIndex` (`USING XML INDEX … FOR (path)`). `SecondaryIndexType` does not apply. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `Extensions` | object | Custom metadata. |
+
+### Selective XML indexes
+
+A selective XML index indexes the paths a workload queries instead of the whole document, so it is far smaller than a primary XML index. Declare one with `Selective`, and a secondary on one of its paths with `ForPath`:
+
+```json
+"XmlIndexes": [
+  { "Name": "[SXI_Orders_Doc]", "Column": "[Doc]",
+    "Selective": {
+      "Namespaces": [ { "Prefix": "o", "Uri": "http://example.com/order" } ],
+      "Paths": [
+        { "Name": "OrderId", "Path": "/o:order/o:id" },
+        { "Name": "Customer", "Path": "/o:order/o:customer", "Type": "xs:string", "MaxLength": 40, "SingletonCardinality": true },
+        { "Name": "Total", "Path": "/o:order/o:total", "Type": "DECIMAL(10,2)", "SingletonCardinality": true }
+      ] } },
+  { "Name": "[SXI_Orders_Doc_Total]", "Column": "[Doc]", "PrimaryIndex": "[SXI_Orders_Doc]", "ForPath": "Total" }
+]
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `Namespaces` | array | The `WITH XMLNAMESPACES` declarations the paths use: `Prefix` and `Uri`. A namespace with no `Prefix` is the `DEFAULT` namespace. |
+| `Paths` | array | **Required.** The promoted paths: `Name` (what a `ForPath` names), `Path` (the XQuery path), and the optional hints below. |
+| `Paths[].Type` | string | Omitted, the engine infers the type. An XQuery type (`"xs:string"`, `"xs:double"`, …) or `"node()"` maps the path `AS XQUERY`; anything else is a SQL type (`"NVARCHAR(40)"`, `"DECIMAL(10,2)"`) and maps it `AS SQL`. A SQL type is compared case- and space-insensitively, with the engine's default length or precision when you leave it out. |
+| `Paths[].MaxLength` | int | `MAXLENGTH` for an XQuery-typed path. |
+| `Paths[].SingletonCardinality` | bool | `SINGLETON`: the path occurs at most once per document. The engine accepts it, and `MaxLength`, only on a typed path. |
+
+The paths and namespaces are compared as sets, so their order does not matter. Any change to them re-creates the index, and its secondaries with it, because SQL Server drops a selective index's secondaries when it drops the index. SchemaTongs extracts them in the order the engine holds them. A column carries at most one selective XML index, which can sit beside an ordinary primary XML index. Below SQL Server 2012 SP1 a selective index and its secondaries are skipped and a downgrade is recorded; so they are on SQL Server 2012 in a database where `sys.sp_db_selective_xml_index` has not turned the feature on (from 2014 it is always on).
 
 ---
 

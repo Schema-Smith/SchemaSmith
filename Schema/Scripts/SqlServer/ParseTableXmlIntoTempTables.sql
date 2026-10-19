@@ -285,7 +285,8 @@
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), i.[IsPrimary],
          [Column] = SchemaSmith.fn_SafeBracketWrap(i.[Column]), [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap(i.[PrimaryIndex]),
-         i.[SecondaryIndexType], [XmlCompression] = ISNULL(i.[XmlCompression], 0), i.[ShouldApplyExpression], i.[VariantName]
+         i.[SecondaryIndexType], [XmlCompression] = ISNULL(i.[XmlCompression], 0), i.[ShouldApplyExpression], i.[VariantName],
+         i.[Selective], i.[ForPath], [KindPrefix] = CAST(NULL AS NVARCHAR(20)), [KindSuffix] = CAST(NULL AS NVARCHAR(MAX))
     INTO #XmlIndexes
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/XmlIndexes') AS Y(xi)
@@ -297,8 +298,11 @@
       [SecondaryIndexType] = xi.value('(SecondaryIndexType/text())[1]', 'NVARCHAR(500)'),
       [XmlCompression] = xi.value('(XmlCompression/text())[1]', 'BIT'),
       [ShouldApplyExpression] = xi.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
-      [VariantName] = xi.value('(VariantName/text())[1]', 'NVARCHAR(128)')
+      [VariantName] = xi.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
+      [Selective] = CASE WHEN xi.exist('Selective') = 1 THEN xi.query('Selective') END,
+      [ForPath] = xi.value('(ForPath/text())[1]', 'NVARCHAR(200)')
       ) i;
+{{ParseSelectiveXmlIndexesXml}}
 
   -- Identify XmlIndexes to skip based on ShouldApply expression (scoped by [_RowId]) — identical to JSON twin.
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('DELETE FROM #XmlIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX))

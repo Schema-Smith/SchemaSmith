@@ -10,13 +10,14 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 [Category("SqlServer")]
 public class TableQuench_UnrenderedIndexKindTests : BaseTableQuenchTests
 {
-    // A deploy that drops unknown indexes read a selective XML index as a primary one and dropped it -- an index a package
-    // cannot declare, so nothing ever put it back. It is now neither compared nor dropped. A spatial index can be declared
-    // (#526), so an undeclared one is unknown like any other and is dropped. The plain unknown index proves the step ran.
+    // A deploy that drops unknown indexes once read a selective XML index as a primary one and dropped it while no package
+    // could declare one (#471). Spatial (#526) and selective XML indexes can be declared now, so an undeclared one is
+    // unknown like any other and is dropped -- the selective one as itself, not as a primary XML index. The plain unknown
+    // index proves the step ran.
     [TestCase("TableQuench")]
     [TestCase("IndexOnlyQuench")]
     [TestCase("IndexOnlyXmlQuench")]
-    public void ADeployThatDropsUnknownIndexes_LeavesTheKindsItCannotDeclare(string path)
+    public void ADeployThatDropsUnknownIndexes_DropsUndeclaredSpatialAndSelectiveXmlIndexes(string path)
     {
         var table = "UnrKind" + path;
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
@@ -57,7 +58,7 @@ public class TableQuench_UnrenderedIndexKindTests : BaseTableQuenchTests
             {
                 Assert.That(IndexExists(cmd, table, $"IX_{table}_Code"), Is.False, "precondition: the deploy dropped an unknown index it can declare");
                 Assert.That(IndexExists(cmd, table, $"SX_{table}"), Is.False, "an undeclared spatial index is unknown, and dropped");
-                Assert.That(IndexExists(cmd, table, $"SXI_{table}"), Is.True, "a selective XML index must not be dropped as unknown");
+                Assert.That(IndexExists(cmd, table, $"SXI_{table}"), Is.False, "an undeclared selective XML index is unknown, and dropped");
             });
         }
         finally

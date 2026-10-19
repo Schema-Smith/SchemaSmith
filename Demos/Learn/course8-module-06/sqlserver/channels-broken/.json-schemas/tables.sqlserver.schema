@@ -490,6 +490,74 @@
             "type": "boolean",
             "description": "SQL Server 2022+. Compresses this XML index (XML_COMPRESSION). A secondary XML index has its own setting and does not inherit its primary's. Extracted where the server reports sys.partitions.xml_compression (2025, and 2022 from CU26); elsewhere SchemaTongs carries the value forward from the package it is refreshing."
           },
+          "Selective": {
+            "type": "object",
+            "properties": {
+              "Namespaces": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "Prefix": {
+                      "type": "string",
+                      "description": "The prefix the paths use. Omitted, this is the DEFAULT namespace."
+                    },
+                    "Uri": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "Uri"
+                  ]
+                },
+                "description": "The WITH XMLNAMESPACES declarations the paths use. A namespace with no Prefix is the DEFAULT namespace."
+              },
+              "Paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "Name": {
+                      "type": "string",
+                      "description": "The path's name, which a secondary selective index names in ForPath."
+                    },
+                    "Path": {
+                      "type": "string",
+                      "description": "The XQuery path, e.g. /order/id."
+                    },
+                    "Type": {
+                      "type": "string",
+                      "description": "Omitted, the engine infers it. An XQuery type (\"xs:string\", \"xs:double\", …) or \"node()\" maps the path AS XQUERY; anything else is a SQL type (\"DECIMAL(10,2)\", \"NVARCHAR(40)\") and maps it AS SQL."
+                    },
+                    "MaxLength": {
+                      "type": "integer",
+                      "description": "MAXLENGTH for an xs:string path."
+                    },
+                    "SingletonCardinality": {
+                      "type": "boolean",
+                      "description": "SINGLETON: the path occurs at most once per document."
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "Name",
+                    "Path"
+                  ]
+                },
+                "description": "The promoted paths, in the order they are declared."
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "Paths"
+            ],
+            "description": "SQL Server 2012 SP1+. Makes this a selective XML index (CREATE SELECTIVE XML INDEX) promoting the listed paths. IsPrimary, PrimaryIndex and SecondaryIndexType do not apply to it."
+          },
+          "ForPath": {
+            "type": "string",
+            "description": "SQL Server 2012 SP1+. Makes this a secondary selective XML index on the path of that name in the selective index named by PrimaryIndex (USING XML INDEX … FOR (path)). SecondaryIndexType does not apply to it."
+          },
           "Extensions": {}
         },
         "additionalProperties": false,

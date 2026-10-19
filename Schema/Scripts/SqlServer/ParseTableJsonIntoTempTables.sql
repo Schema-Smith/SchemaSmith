@@ -267,7 +267,13 @@
     [SecondaryIndexType] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
     [XmlCompression] BIT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
-    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    -- A selective XML index's declaration as JSON, and the path a secondary selective index is FOR; KindPrefix and
+    -- KindSuffix are what every create and compare renders around the index's name, table and column.
+    [Selective] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [ForPath] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [KindPrefix] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+    [KindSuffix] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #SpatialIndexes
@@ -972,12 +978,12 @@
   EXEC(@v_SQL)
   
   RAISERROR('Parse XML Indexes from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [XmlCompression], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [XmlCompression], [ShouldApplyExpression], [VariantName], [Selective], [ForPath])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          -- INGEST ONLY -- NORMALIZE below owns the transforms.
          t.[Schema], t.[Name] AS [TableName], i.[IndexName], i.[IsPrimary],
          i.[Column], i.[PrimaryIndex],
-         i.[SecondaryIndexType], i.[XmlCompression], i.[ShouldApplyExpression], i.[VariantName]
+         i.[SecondaryIndexType], i.[XmlCompression], i.[ShouldApplyExpression], i.[VariantName], i.[Selective], i.[ForPath]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(XmlIndexes) WITH (
       [IndexName] NVARCHAR(500) '$.Name',
@@ -987,7 +993,9 @@
 	  [SecondaryIndexType] NVARCHAR(500) '$.SecondaryIndexType',
       [XmlCompression] BIT '$.XmlCompression',
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
-      [VariantName] NVARCHAR(128) '$.VariantName'
+      [VariantName] NVARCHAR(128) '$.VariantName',
+      [Selective] NVARCHAR(MAX) '$.Selective' AS JSON,
+      [ForPath] NVARCHAR(200) '$.ForPath'
       ) i;
 
   -- NORMALIZE -- one definition, applied however the rows arrived.
@@ -996,6 +1004,7 @@
          [Column]       = SchemaSmith.fn_SafeBracketWrap([Column]),
          [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap([PrimaryIndex]),
          [XmlCompression] = ISNULL([XmlCompression], 0);
+{{ParseSelectiveXmlIndexesJson}}
 
   -- Identify XmlIndexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #XmlIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))

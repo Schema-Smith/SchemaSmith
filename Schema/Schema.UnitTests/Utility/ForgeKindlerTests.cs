@@ -346,7 +346,8 @@ public class ForgeKindlerTests
         // +2 on SQL Server = LiftLedgerColumns (a ledger table's declared generated columns, for both parse tiers) +
         //   LedgerQuench (an existing ledger table's column and view names converged).
         // +1 on SQL Server = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
-        Assert.That(sqlServer.Length, Is.EqualTo(65));
+        // +1 on SQL Server = DegradeUnsupportedSelectiveXmlIndexes (below 2012 SP1 a selective XML index is skipped).
+        Assert.That(sqlServer.Length, Is.EqualTo(66));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -897,6 +898,21 @@ public class ForgeKindlerTests
             Assert.That(Regex.Matches(raw, Regex.Escape("{{ParseJson}}")).Count, Is.EqualTo(1),
                 $"{platform}/{script.FileName} must name the ParseJson token exactly once -- every " +
                 "occurrence is substituted, including one written in prose.");
+        }
+    }
+
+    [Test]
+    public void TheParseScriptsSchemaQuenchInlines_CarryNoUnresolvedSelectiveXmlToken()
+    {
+        // SchemaQuench pastes these into its own batches, never through the kindle chain, so a token the
+        // loader leaves in is a syntax error on every SQL Server deploy.
+        var (createTables, fillTables) = ForgeKindler.GetParseTableJsonPhases(Platform.SqlServer);
+        foreach (var (name, script) in new[] { ("json", ForgeKindler.GetParseTableJsonScript(Platform.SqlServer)),
+                                               ("xml", ForgeKindler.GetParseTableXmlScript(Platform.SqlServer)),
+                                               ("json phases", createTables + fillTables) })
+        {
+            Assert.That(script, Does.Not.Contain("{{ParseSelectiveXmlIndexes"), name);
+            Assert.That(script, Does.Contain("#XmlIndexPaths"), $"{name}: the selective XML parse is inlined in its place");
         }
     }
 

@@ -79,7 +79,7 @@ public class IndexKindExtractionTests
     // The legacy encoding runs the XML generator, which reaches servers too old for xml_index_type.
     [TestCase(false)]
     [TestCase(true)]
-    public void IndexKindsAPackageCannotDeclare_AreLeftOut_NamedAndCountedAsSkipped(bool legacyEncoding)
+    public void EveryIndexKindAPackageCanDeclare_IsExtractedAsItself(bool legacyEncoding)
     {
         _tempProductPath = Path.Join(Path.GetTempPath(), $"TongsIdxKind_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempProductPath);
@@ -116,10 +116,11 @@ public class IndexKindExtractionTests
             Assert.That(table["Indexes"]?.Select(i => (string)i["Name"]), Has.None.Contains("SX_Kinds"), "a spatial index is not a plain index");
             Assert.That(table["SpatialIndexes"]?.Select(i => (string)i["Name"]), Is.EquivalentTo(new[] { "[SX_Kinds]" }), "it is extracted as a spatial index");
             Assert.That(warnings.Where(w => w.Contains("SX_Kinds") && !w.Contains("SXI_Kinds")), Is.Empty, "and no longer reported as left out");
-            Assert.That(json, Does.Not.Contain("SXI_Kinds"), "a selective XML index extracted as a primary one is silently not created");
-            Assert.That(warnings.Count(w => w.Contains("dbo.Kinds.SXI_Kinds") && w.Contains("SELECTIVE")), Is.EqualTo(1),
-                "each index left out is named, with its kind");
-            Assert.That(tongs.ExitCode, Is.EqualTo(1), "an object the package misses makes the run exit 1");
+            // A selective XML index read as a primary one was silently not created (#471); it is declarable now, as itself.
+            var sxi = table["XmlIndexes"]?.FirstOrDefault(i => (string)i["Name"] == "[SXI_Kinds]");
+            Assert.That(sxi?["Selective"]?["Paths"]?.Select(p => (string)p["Path"]), Is.EquivalentTo(new[] { "/a/b" }), "a selective XML index is extracted with its paths");
+            Assert.That(warnings.Where(w => w.Contains("SXI_Kinds")), Is.Empty, "and is not reported as left out");
+            Assert.That(tongs.ExitCode, Is.EqualTo(0), "with nothing left out, the run succeeds");
         });
     }
 

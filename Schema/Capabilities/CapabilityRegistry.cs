@@ -71,6 +71,10 @@ namespace Schema.Capabilities
             // Below 2012 an AUTO_GRID spatial index is created with the GRID scheme of its family, so it still indexes the column.
             rows.Add(new("spatial-auto-grid", "Spatial index AUTO_GRID tessellation", Platform.SqlServer,
                 11, "SQL Server 2012", null, DegradeKind.Reduced, "spatial AUTO_GRID tessellation (SQL Server 2012)"));
+            // Below 2012 SP1 a selective XML index and every secondary on one are skipped; the table deploys without them.
+            // The gate is sys.xml_indexes.xml_index_type, which arrived with them: the major version cannot tell SP1 from RTM.
+            rows.Add(new("selective-xml-index", "Selective XML index", Platform.SqlServer,
+                11, "SQL Server 2012 SP1", null, DegradeKind.Skip, "selective XML index (SQL Server 2012 SP1)"));
             rows.Add(new("columnstore-nonclustered", "Nonclustered columnstore index", Platform.SqlServer,
                 11, "SQL Server 2012", null, DegradeKind.Skip, "columnstore index (SQL Server 2012/2014)"));
             rows.Add(new("columnstore-clustered", "Clustered columnstore index", Platform.SqlServer,

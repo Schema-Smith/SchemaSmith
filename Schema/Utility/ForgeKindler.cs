@@ -208,7 +208,9 @@ public static class ForgeKindler
         // disagreement impossible by construction.
         script = script.Replace("{{CdcRotateTable}}", SqlServerCdcRotateTable)
                        .Replace("{{RenderableIndexTypes}}", SqlServerRenderableIndexTypes)
-                       .Replace("{{CollectSelectiveXmlIndexes}}", SqlServerCollectSelectiveXmlIndexes);
+                       .Replace("{{CollectSelectiveXmlIndexes}}", SqlServerCollectSelectiveXmlIndexes)
+                       .Replace("{{ParseSelectiveXmlIndexesJson}}", SqlServerParseSelectiveXmlIndexesJson)
+                       .Replace("{{ParseSelectiveXmlIndexesXml}}", SqlServerParseSelectiveXmlIndexesXml);
 
         var xmlReadable = xmlCompressionReadable ?? serverMajorVersion >= 17;
         script = script.Replace("{{XmlCompressionRead}}",
@@ -285,8 +287,10 @@ public static class ForgeKindler
     /// </summary>
     public static string GetParseTableJsonScript(Platform platform)
     {
-        return ResourceLoader.Load("ParseTableJsonIntoTempTables.sql", platform)
-            ?? throw new Exception($"ParseTableJsonIntoTempTables.sql not found for platform '{platform}'.");
+        // Resolved here as well as in the kindle chain: SchemaQuench inlines this script into its own batches.
+        return (ResourceLoader.Load("ParseTableJsonIntoTempTables.sql", platform)
+            ?? throw new Exception($"ParseTableJsonIntoTempTables.sql not found for platform '{platform}'."))
+            .Replace("{{ParseSelectiveXmlIndexesJson}}", SqlServerParseSelectiveXmlIndexesJson);
     }
 
     /// <summary>
@@ -334,8 +338,9 @@ public static class ForgeKindler
     /// </summary>
     public static string GetParseTableXmlScript(Platform platform)
     {
-        return ResourceLoader.Load("ParseTableXmlIntoTempTables.sql", platform)
-            ?? throw new Exception($"ParseTableXmlIntoTempTables.sql not found for platform '{platform}'.");
+        return (ResourceLoader.Load("ParseTableXmlIntoTempTables.sql", platform)
+            ?? throw new Exception($"ParseTableXmlIntoTempTables.sql not found for platform '{platform}'."))
+            .Replace("{{ParseSelectiveXmlIndexesXml}}", SqlServerParseSelectiveXmlIndexesXml);
     }
 
     /// <summary>
@@ -380,14 +385,114 @@ public static class ForgeKindler
         "FROM sys.index_columns oc WHERE oc.[object_id] = si.[object_id] AND oc.index_id = si.index_id AND oc.column_store_order_ordinal > 0 " +
         "ORDER BY oc.column_store_order_ordinal FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''))";
 
-    // Selective XML indexes cannot be declared yet, and without xml_index_type they read as primary XML indexes. The
-    // column arrived with them (2012 SP1), so a server without it has none to leave out, and the read is dynamic so
-    // the procedure still installs there.
-    internal const string SqlServerCollectSelectiveXmlIndexes =
+    // A selective XML index (2012 SP1) is compared as its rendered WITH XMLNAMESPACES ... FOR (...) clause, built by this one
+    // renderer from the declared paths and from the catalog's, so the compare is a string compare. Paths and namespaces are
+    // sorted, so neither order matters. In the match, {0} is the paths or namespaces alias.
+    private static string SelectiveXmlForClause(string paths, string namespaces, string match) =>
+        "ISNULL(' WITH XMLNAMESPACES (' + STUFF((SELECT ', ' + CASE WHEN n.[Prefix] IS NULL THEN 'DEFAULT ' ELSE '' END + '''' + REPLACE(n.[Uri], '''', '''''') + '''' + ISNULL(' AS ' + n.[Prefix], '') " +
+        $"FROM {namespaces} n WHERE {match.Replace("{0}", "n")} ORDER BY n.[Prefix] COLLATE Latin1_General_BIN2 " +
+        "FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '') + ')', '') + " +
+        "' FOR (' + STUFF((SELECT ', ' + QUOTENAME(p.[Name]) + ' = ''' + REPLACE(p.[Path], '''', '''''') + '''' + " +
+        "CASE WHEN p.[Type] IS NULL THEN '' WHEN p.[Type] = 'node()' OR p.[Type] LIKE 'xs:%' THEN ' AS XQUERY ''' + p.[Type] + '''' ELSE ' AS SQL ' + p.[Type] END + " +
+        "CASE WHEN p.[MaxLength] > 0 THEN ' MAXLENGTH(' + CAST(p.[MaxLength] AS NVARCHAR(10)) + ')' ELSE '' END + " +
+        "CASE WHEN p.[Singleton] = 1 THEN ' SINGLETON' ELSE '' END " +
+        $"FROM {paths} p WHERE {match.Replace("{0}", "p")} ORDER BY p.[Name] COLLATE Latin1_General_BIN2 " +
+        "FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '') + ')'";
+
+    // A SQL-typed path as the declared side normalizes it: upper case, no spaces, the engine's default length or precision.
+    private const string SqlServerSelectiveXmlLiveSqlType =
+        "UPPER(TYPE_NAME(p.user_type_id)) + CASE WHEN TYPE_NAME(p.user_type_id) IN ('nvarchar', 'nchar') THEN '(' + CASE WHEN p.max_length = -1 THEN 'MAX' ELSE CAST(p.max_length / 2 AS VARCHAR(10)) END + ')' " +
+        "WHEN TYPE_NAME(p.user_type_id) IN ('varchar', 'char', 'varbinary', 'binary') THEN '(' + CASE WHEN p.max_length = -1 THEN 'MAX' ELSE CAST(p.max_length AS VARCHAR(10)) END + ')' " +
+        "WHEN TYPE_NAME(p.user_type_id) IN ('decimal', 'numeric') THEN '(' + CAST(p.[precision] AS VARCHAR(10)) + ',' + CAST(p.scale AS VARCHAR(10)) + ')' " +
+        "WHEN TYPE_NAME(p.user_type_id) IN ('datetime2', 'time', 'datetimeoffset') THEN '(' + CAST(p.scale AS VARCHAR(10)) + ')' ELSE '' END";
+
+    // The catalog side: every selective XML index in the database, its paths and namespaces in the declared vocabulary, and
+    // the KindPrefix / KindSuffix the live script is built from. xml_index_type and the selective views arrived with them
+    // (2012 SP1), so a server without the column has none, and the reads are dynamic so the procedure still installs there.
+    internal static readonly string SqlServerCollectSelectiveXmlIndexes =
         "IF OBJECT_ID('tempdb..#SelectiveXmlIndexes') IS NOT NULL DROP TABLE #SelectiveXmlIndexes\n" +
-        "CREATE TABLE #SelectiveXmlIndexes ([object_id] INT, index_id INT)\n" +
+        "CREATE TABLE #SelectiveXmlIndexes ([object_id] INT, index_id INT, [ForPath] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [UsingIndex] NVARCHAR(200) COLLATE DATABASE_DEFAULT, " +
+        "[KindPrefix] NVARCHAR(20) COLLATE DATABASE_DEFAULT, [KindSuffix] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT)\n" +
+        "IF OBJECT_ID('tempdb..#SelectiveXmlPaths') IS NOT NULL DROP TABLE #SelectiveXmlPaths\n" +
+        "CREATE TABLE #SelectiveXmlPaths ([object_id] INT, index_id INT, path_id INT, [Name] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Path] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT, " +
+        "[Type] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [MaxLength] INT, [Singleton] BIT)\n" +
+        "IF OBJECT_ID('tempdb..#SelectiveXmlNamespaces') IS NOT NULL DROP TABLE #SelectiveXmlNamespaces\n" +
+        "CREATE TABLE #SelectiveXmlNamespaces ([object_id] INT, index_id INT, [Prefix] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Uri] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT)\n" +
         "IF COL_LENGTH('sys.xml_indexes', 'xml_index_type') IS NOT NULL\n" +
-        "  EXEC('INSERT #SelectiveXmlIndexes SELECT [object_id], index_id FROM sys.xml_indexes WHERE xml_index_type NOT IN (0, 1)')";
+        "  EXEC('" + (
+            "INSERT #SelectiveXmlIndexes ([object_id], index_id, [ForPath], [UsingIndex]) " +
+            "SELECT x.[object_id], x.index_id, sp.[name], u.[name] FROM sys.xml_indexes x " +
+            "LEFT JOIN sys.xml_indexes u ON u.[object_id] = x.[object_id] AND u.index_id = x.using_xml_index_id " +
+            "LEFT JOIN sys.selective_xml_index_paths sp ON sp.[object_id] = x.[object_id] AND sp.index_id = x.using_xml_index_id AND sp.path_id = x.path_id " +
+            "WHERE x.xml_index_type IN (2, 3); " +
+            "INSERT #SelectiveXmlPaths ([object_id], index_id, path_id, [Name], [Path], [Type], [MaxLength], [Singleton]) " +
+            "SELECT p.[object_id], p.index_id, p.path_id, p.[name], p.[path], " +
+            "CASE WHEN p.is_node = 1 THEN 'node()' WHEN p.path_type_desc = 'SQL' THEN " + SqlServerSelectiveXmlLiveSqlType + " " +
+            "WHEN p.is_xquery_type_inferred = 1 THEN NULL ELSE p.xquery_type_description END, " +
+            "CASE WHEN p.xquery_max_length > 0 AND p.is_xquery_max_length_inferred = 0 THEN p.xquery_max_length END, p.is_singleton " +
+            "FROM sys.selective_xml_index_paths p JOIN sys.xml_indexes x ON x.[object_id] = p.[object_id] AND x.index_id = p.index_id AND x.xml_index_type = 2; " +
+            "INSERT #SelectiveXmlNamespaces ([object_id], index_id, [Prefix], [Uri]) " +
+            "SELECT n.[object_id], n.index_id, CASE WHEN n.is_default_uri = 1 THEN NULL ELSE n.prefix END, n.uri FROM sys.selective_xml_index_namespaces n").Replace("'", "''") + "')\n" +
+        "UPDATE s SET [KindPrefix] = CASE WHEN s.[ForPath] IS NULL THEN 'SELECTIVE ' ELSE '' END,\n" +
+        "             [KindSuffix] = CASE WHEN s.[ForPath] IS NOT NULL THEN ' USING XML INDEX ' + QUOTENAME(s.[UsingIndex]) + ' FOR (' + QUOTENAME(s.[ForPath]) + ')'\n" +
+        "                                 ELSE " + SelectiveXmlForClause("#SelectiveXmlPaths", "#SelectiveXmlNamespaces", "{0}.[object_id] = s.[object_id] AND {0}.index_id = s.index_id") + " END\n" +
+        "  FROM #SelectiveXmlIndexes s";
+
+    // The declared side, after #XmlIndexes is parsed (its Selective column holds the declaration as JSON or as XML, by tier):
+    // the paths and namespaces into #XmlIndexPaths / #XmlIndexNamespaces, SQL types normalized as the catalog side renders
+    // them, IsPrimary settled (a selective index is a primary, a ForPath one a secondary), and the KindPrefix / KindSuffix
+    // every create and compare site renders the index with.
+    private const string SqlServerSelectiveXmlTables =
+        "IF OBJECT_ID('tempdb..#XmlIndexPaths') IS NOT NULL DROP TABLE #XmlIndexPaths\n" +
+        "CREATE TABLE #XmlIndexPaths ([_RowId] BIGINT, [Name] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Path] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT, " +
+        "[Type] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [MaxLength] INT, [Singleton] BIT)\n" +
+        "IF OBJECT_ID('tempdb..#XmlIndexNamespaces') IS NOT NULL DROP TABLE #XmlIndexNamespaces\n" +
+        "CREATE TABLE #XmlIndexNamespaces ([_RowId] BIGINT, [Prefix] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Uri] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT)\n";
+
+    private const string SqlServerParseSelectiveXmlJson =
+        "INSERT INTO #XmlIndexPaths ([_RowId], [Name], [Path], [Type], [MaxLength], [Singleton])\n" +
+        "SELECT x.[_RowId], SchemaSmith.fn_StripBracketWrapping(sp.[Name]), sp.[Path], NULLIF(LTRIM(RTRIM(sp.[Type])), ''), sp.[MaxLength], ISNULL(sp.[Singleton], 0)\n" +
+        "  FROM #XmlIndexes x\n" +
+        "  CROSS APPLY OPENJSON(x.[Selective], '$.Paths') WITH ([Name] NVARCHAR(200) '$.Name', [Path] NVARCHAR(MAX) '$.Path', [Type] NVARCHAR(200) '$.Type', " +
+        "[MaxLength] INT '$.MaxLength', [Singleton] BIT '$.SingletonCardinality') sp\n" +
+        "  WHERE x.[Selective] IS NOT NULL\n" +
+        "INSERT INTO #XmlIndexNamespaces ([_RowId], [Prefix], [Uri])\n" +
+        "SELECT x.[_RowId], NULLIF(sn.[Prefix], ''), sn.[Uri]\n" +
+        "  FROM #XmlIndexes x\n" +
+        "  CROSS APPLY OPENJSON(x.[Selective], '$.Namespaces') WITH ([Prefix] NVARCHAR(200) '$.Prefix', [Uri] NVARCHAR(MAX) '$.Uri') sn\n" +
+        "  WHERE x.[Selective] IS NOT NULL\n";
+
+    private const string SqlServerParseSelectiveXmlXml =
+        "INSERT INTO #XmlIndexPaths ([_RowId], [Name], [Path], [Type], [MaxLength], [Singleton])\n" +
+        "SELECT x.[_RowId], SchemaSmith.fn_StripBracketWrapping(sp.value('(Name/text())[1]', 'NVARCHAR(200)')), sp.value('(Path/text())[1]', 'NVARCHAR(MAX)'),\n" +
+        "       NULLIF(LTRIM(RTRIM(sp.value('(Type/text())[1]', 'NVARCHAR(200)'))), ''), sp.value('(MaxLength/text())[1]', 'INT'),\n" +
+        "       CASE LOWER(sp.value('(SingletonCardinality/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 ELSE 0 END\n" +
+        "  FROM #XmlIndexes x\n" +
+        "  CROSS APPLY x.[Selective].nodes('/Selective/Paths') AS SP(sp)\n" +
+        "  WHERE x.[Selective] IS NOT NULL\n" +
+        "INSERT INTO #XmlIndexNamespaces ([_RowId], [Prefix], [Uri])\n" +
+        "SELECT x.[_RowId], NULLIF(sn.value('(Prefix/text())[1]', 'NVARCHAR(200)'), ''), sn.value('(Uri/text())[1]', 'NVARCHAR(MAX)')\n" +
+        "  FROM #XmlIndexes x\n" +
+        "  CROSS APPLY x.[Selective].nodes('/Selective/Namespaces') AS SN(sn)\n" +
+        "  WHERE x.[Selective] IS NOT NULL\n";
+
+    private static readonly string SqlServerRenderDeclaredXmlIndexes =
+        "UPDATE #XmlIndexPaths SET [Type] = UPPER(REPLACE(REPLACE(REPLACE(REPLACE([Type], ' ', ''), CHAR(9), ''), CHAR(13), ''), CHAR(10), '')) " +
+        "WHERE [Type] <> 'node()' AND [Type] NOT LIKE 'xs:%'\n" +
+        "UPDATE #XmlIndexPaths SET [Type] = [Type] + CASE WHEN [Type] IN ('NVARCHAR', 'NCHAR', 'VARCHAR', 'CHAR', 'VARBINARY', 'BINARY') THEN '(1)' " +
+        "WHEN [Type] IN ('DECIMAL', 'NUMERIC') THEN '(18,0)' WHEN [Type] IN ('DATETIME2', 'TIME', 'DATETIMEOFFSET') THEN '(7)' ELSE '' END " +
+        "WHERE CHARINDEX('(', [Type]) = 0 AND [Type] NOT LIKE 'xs:%'\n" +
+        "UPDATE #XmlIndexPaths SET [Type] = REPLACE([Type], ')', ',0)') WHERE ([Type] LIKE 'DECIMAL(%' OR [Type] LIKE 'NUMERIC(%') AND CHARINDEX(',', [Type]) = 0\n" +
+        "UPDATE #XmlIndexes SET [IsPrimary] = CASE WHEN [ForPath] IS NOT NULL THEN 0 WHEN [Selective] IS NOT NULL THEN 1 ELSE [IsPrimary] END\n" +
+        "UPDATE x SET [KindPrefix] = CASE WHEN x.[ForPath] IS NOT NULL THEN '' WHEN x.[Selective] IS NOT NULL THEN 'SELECTIVE ' WHEN x.[IsPrimary] = 1 THEN 'PRIMARY ' ELSE '' END,\n" +
+        "             [KindSuffix] = CASE WHEN x.[ForPath] IS NOT NULL THEN ' USING XML INDEX ' + x.[PrimaryIndex] + ' FOR (' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(x.[ForPath])) + ')'\n" +
+        "                                 WHEN x.[Selective] IS NOT NULL THEN " + SelectiveXmlForClause("#XmlIndexPaths", "#XmlIndexNamespaces", "{0}.[_RowId] = x.[_RowId]") + "\n" +
+        "                                 WHEN x.[IsPrimary] = 0 THEN ' USING XML INDEX ' + x.[PrimaryIndex] + ' FOR ' + x.[SecondaryIndexType]\n" +
+        "                                 ELSE '' END\n" +
+        "  FROM #XmlIndexes x";
+
+    internal static readonly string SqlServerParseSelectiveXmlIndexesJson = SqlServerSelectiveXmlTables + SqlServerParseSelectiveXmlJson + SqlServerRenderDeclaredXmlIndexes;
+    internal static readonly string SqlServerParseSelectiveXmlIndexesXml = SqlServerSelectiveXmlTables + SqlServerParseSelectiveXmlXml + SqlServerRenderDeclaredXmlIndexes;
 
     internal readonly record struct KindleScript(string FileName, bool ReplaceParseJson = false, bool ReplaceTableDef = false);
 
@@ -438,6 +543,7 @@ public static class ForgeKindler
                 new("SchemaSmith.DegradeUnsupportedColumnStore.sql"),
                 new("SchemaSmith.DegradeUnsupportedFullText.sql"),
                 new("SchemaSmith.DegradeUnsupportedSpatialIndexes.sql"),
+                new("SchemaSmith.DegradeUnsupportedSelectiveXmlIndexes.sql"),
                 new("SchemaSmith.DegradeDatabaseToggles.sql"),
                 new("SchemaSmith.DegradeUnsupportedFeatures.sql"),
                 // Fills the caller's #GraphKeyParts: the graph columns behind a $from_id / $to_id key part (2017+, dynamic).

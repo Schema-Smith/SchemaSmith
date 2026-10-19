@@ -4346,20 +4346,16 @@ SELECT cc.name AS [Name],
 
     internal static string EscapeSql(string value) => value.Replace("'", "''");
 
-    // Index kinds a package cannot declare yet (JSON and selective XML indexes) are left out of the table file, so each one is
-    // named and counted as skipped. Primary and secondary XML indexes and spatial indexes have lists of their own, and the
-    // renderable types are ordinary indexes; a selective XML index is type 3 too, so it is found through sys.xml_indexes.
+    // Index kinds a package cannot declare yet (JSON and vector indexes) are left out of the table file, so each one is named
+    // and counted as skipped. XML indexes (selective ones included) and spatial indexes have lists of their own, and the
+    // renderable types are ordinary indexes.
     private void WarnIndexesNotExtracted(IDbCommand command, string tableSchema, string tableName)
     {
         command.CommandText = $@"
-DECLARE @o INT = OBJECT_ID(QUOTENAME(N'{EscapeSql(tableSchema)}') + N'.' + QUOTENAME(N'{EscapeSql(tableName)}'));
-DECLARE @k TABLE ([name] SYSNAME, kind NVARCHAR(60));
-INSERT @k SELECT [name], type_desc FROM sys.indexes
- WHERE [object_id] = @o AND index_id > 0 AND is_hypothetical = 0 AND [type] NOT IN (3, 4, {ForgeKindler.SqlServerRenderableIndexTypes});
-IF COL_LENGTH('sys.xml_indexes', 'xml_index_type') IS NOT NULL
-  INSERT @k EXEC sp_executesql N'SELECT [name], xml_index_type_description FROM sys.xml_indexes WHERE [object_id] = @o AND xml_index_type NOT IN (0, 1)',
-                               N'@o INT', @o = @o;
-SELECT [name], kind FROM @k ORDER BY [name];";
+SELECT [name], type_desc AS kind FROM sys.indexes
+ WHERE [object_id] = OBJECT_ID(QUOTENAME(N'{EscapeSql(tableSchema)}') + N'.' + QUOTENAME(N'{EscapeSql(tableName)}'))
+   AND index_id > 0 AND is_hypothetical = 0 AND [type] NOT IN (3, 4, {ForgeKindler.SqlServerRenderableIndexTypes})
+ ORDER BY [name];";
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {

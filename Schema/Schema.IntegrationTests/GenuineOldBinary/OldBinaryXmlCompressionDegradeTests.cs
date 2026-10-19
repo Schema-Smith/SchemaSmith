@@ -12,7 +12,9 @@ namespace Schema.IntegrationTests.GenuineOldBinary;
 // XML_COMPRESSION (SQL Server 2022) on a table, an index and both kinds of XML index, deployed to an older genuine
 // binary: everything is created uncompressed, and each suppressed setting is recorded as a downgrade. [Explicit]: run
 // once per old instance:
-//   SmithySettings_SqlServer__Server=127.0.0.1 SmithySettings_SqlServer__Port=14330 //   SmithySettings_SqlServer__User=sa SmithySettings_SqlServer__Password='SchemaSmith!Old2026' //   dotnet test Schema/Schema.IntegrationTests --filter FullyQualifiedName~OldBinaryXmlCompressionDegradeTests
+//   SmithySettings_SqlServer__Server=127.0.0.1 SmithySettings_SqlServer__Port=14330 \
+//   SmithySettings_SqlServer__User=sa SmithySettings_SqlServer__Password='SchemaSmith!Old2026' \
+//   dotnet test Schema/Schema.IntegrationTests --filter FullyQualifiedName~OldBinaryXmlCompressionDegradeTests
 [Explicit("Requires a genuine old SQL Server instance; run manually via the SmithySettings_SqlServer__* env vars.")]
 [TestFixture]
 public class OldBinaryXmlCompressionDegradeTests

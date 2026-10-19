@@ -1726,13 +1726,13 @@ BEGIN TRY
   {{CollectSelectiveXmlIndexes}}
   IF OBJECT_ID('tempdb..#ExistingXmlIndexes') IS NOT NULL DROP TABLE #ExistingXmlIndexes
   SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(i.[Name] COLLATE DATABASE_DEFAULT AS NVARCHAR(500)),
-         IndexScript = 'CREATE ' + CASE WHEN i.using_xml_index_id IS NULL THEN 'PRIMARY ' ELSE '' END +
+         IndexScript = 'CREATE ' + ISNULL(s.[KindPrefix], CASE WHEN i.using_xml_index_id IS NULL THEN 'PRIMARY ' ELSE '' END) +
                        'XML INDEX ' + QUOTENAME(i.[name] COLLATE DATABASE_DEFAULT) + ' ON ' + QUOTENAME(OBJECT_SCHEMA_NAME(i.[object_id])) + '.' + QUOTENAME(OBJECT_NAME(i.[object_id])) + ' ' + 
                        '(' + QUOTENAME(COL_NAME(i.[Object_id], ic.column_id)) + ')' + 
-                       CASE WHEN i.using_xml_index_id IS NOT NULL
+                       COALESCE(s.[KindSuffix], CASE WHEN i.using_xml_index_id IS NOT NULL
                             THEN ' USING XML INDEX ' + QUOTENAME((SELECT [Name] FROM sys.xml_indexes i2 WHERE i2.[object_id] = i.[object_id] AND i2.index_id = i.using_xml_index_id) COLLATE DATABASE_DEFAULT) + ' ' +
-                                 'FOR ' + i.secondary_type_desc COLLATE DATABASE_DEFAULT 
-                            ELSE '' END +
+                                 'FOR ' + i.secondary_type_desc COLLATE DATABASE_DEFAULT
+                            ELSE '' END) +
                        CASE WHEN (SELECT MAX(CONVERT(TINYINT, {{XmlCompressionRead}}))
                                     FROM sys.internal_tables it
                                     JOIN sys.indexes xsi ON xsi.[object_id] = it.[object_id] AND xsi.[name] = i.[name]
@@ -1743,8 +1743,8 @@ BEGIN TRY
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.xml_indexes i ON i.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
     JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
+    LEFT JOIN #SelectiveXmlIndexes s ON s.[object_id] = i.[object_id] AND s.index_id = i.index_id
     WHERE t.NewTable = 0
-      AND NOT EXISTS (SELECT 1 FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id)
 
   RAISERROR('Detect Xml Index Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#XmlIndexChanges') IS NOT NULL DROP TABLE #XmlIndexChanges
@@ -1758,11 +1758,9 @@ BEGIN TRY
                     FROM sys.xml_indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
                       AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
-      AND ei.IndexScript <> 'CREATE ' + CASE WHEN i.IsPrimary = 1 THEN 'PRIMARY ' ELSE '' END + 
+      AND ei.IndexScript <> 'CREATE ' + i.[KindPrefix] + 
                             'XML INDEX ' + i.[IndexName] COLLATE DATABASE_DEFAULT + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' + 
-                            CASE WHEN i.IsPrimary = 0
-                                 THEN ' USING XML INDEX ' + i.PrimaryIndex + ' FOR ' + i.SecondaryIndexType
-                                 ELSE '' END + CASE WHEN {{XmlCompressionCanRead}} = 1 AND i.[XmlCompression] = 1 THEN ' WITH (XML_COMPRESSION = ON)' ELSE '' END
+                            i.[KindSuffix] + CASE WHEN {{XmlCompressionCanRead}} = 1 AND i.[XmlCompression] = 1 THEN ' WITH (XML_COMPRESSION = ON)' ELSE '' END
   
   RAISERROR('Detect Xml Index Renames', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#XmlIndexRenames') IS NOT NULL DROP TABLE #XmlIndexRenames
@@ -1778,11 +1776,9 @@ BEGIN TRY
                     FROM sys.xml_indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
                       AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
-      AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + CASE WHEN i.IsPrimary = 1 THEN 'PRIMARY ' ELSE '' END + 
+      AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + i.[KindPrefix] + 
                                                                   'XML INDEX ' + i.[IndexName] COLLATE DATABASE_DEFAULT + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' + 
-                                                                  CASE WHEN i.IsPrimary = 0
-                                                                       THEN ' USING XML INDEX ' + i.PrimaryIndex + ' FOR ' + i.SecondaryIndexType
-                                                                       ELSE '' END + CASE WHEN {{XmlCompressionCanRead}} = 1 AND i.[XmlCompression] = 1 THEN ' WITH (XML_COMPRESSION = ON)' ELSE '' END
+                                                                  i.[KindSuffix] + CASE WHEN {{XmlCompressionCanRead}} = 1 AND i.[XmlCompression] = 1 THEN ' WITH (XML_COMPRESSION = ON)' ELSE '' END
 
   RAISERROR('Handle Renamed Xml Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Renaming ' + [OldName] + ' to ' + [NewName] + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
