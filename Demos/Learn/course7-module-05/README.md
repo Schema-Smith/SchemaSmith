@@ -35,7 +35,7 @@ failing tenants.
 Land the `baseline/` package fleet-wide so every tenant starts at the same known state before the rollout:
 
 ```bash
-cd sqlserver
+# from course7-module-05/<engine>
 schemaquench --ConfigFile:quench.settings.baseline.json
 ```
 
@@ -45,22 +45,26 @@ via the reset scripts in Step 5.
 ## Step 2: Stage the drift
 
 Real fleet failures come from tenants that changed between your last deploy and this one. Simulate both
-failure modes before the rollout:
+failure modes before the rollout. Each engine has its own drift files; run the lines for your engine.
 
 **Stage the index failure on tenant 002** (duplicate emails):
 
 ```bash
-cd ..            # back to the lab folder
+# from course7-module-05
 ../lab-sql.sh sqlserver fleet_tenant_002 --file sqlserver/drift-tenant-002.sql
-cd sqlserver     # back into the engine folder
+../lab-sql.sh postgres fleet_tenant_002 --file postgres/drift-tenant-002.sql
+../lab-sql.sh mysql fleet_tenant_002 --file mysql/drift-tenant-002.sql
+../lab-sql.sh mariadb fleet_tenant_002 --file mariadb/drift-tenant-002.sql
 ```
 
 **Stage the FK failure on tenant 004** (dropped FK + orphan row):
 
 ```bash
-cd ..            # back to the lab folder
+# from course7-module-05
 ../lab-sql.sh sqlserver fleet_tenant_004 --file sqlserver/drift-tenant-004.sql
-cd sqlserver     # back into the engine folder
+../lab-sql.sh postgres fleet_tenant_004 --file postgres/drift-tenant-004.sql
+../lab-sql.sh mysql fleet_tenant_004 --file mysql/drift-tenant-004.sql
+../lab-sql.sh mariadb fleet_tenant_004 --file mariadb/drift-tenant-004.sql
 ```
 
 Look at the comments at the top of each drift file — they describe exactly what broke and why the rollout
@@ -73,6 +77,7 @@ Deploy the `after/` package fleet-wide. The settings file already wires `Artifac
 `CheckpointDirectory` — you don't need to pass those flags:
 
 ```bash
+# from course7-module-05/<engine>
 schemaquench --ConfigFile:quench.settings.after.json
 ```
 
@@ -102,6 +107,15 @@ block per failed tenant — error, phase trail, and artifact pointer all in one 
 ```
 2 failure(s): 2 Template:Main
 
+─── FAILED  [Template:Main]  [localhost,11433].[fleet_tenant_002] ───
+Error: The CREATE UNIQUE INDEX statement terminated because a duplicate key was found...
+Debug SQL: ./artifacts\SchemaQuench - Quench Indexes localhost,11433.fleet_tenant_002.sql
+Context (last 25 lines):
+    ...
+        Add Missing Indexes
+          Creating index [dbo].[Customer].[UQ_Customer_Email]
+  The CREATE UNIQUE INDEX statement terminated...
+
 ─── FAILED  [Template:Main]  [localhost,11433].[fleet_tenant_004] ───
 Error: The ALTER TABLE statement conflicted with the FOREIGN KEY constraint "FK_OrderItem_Product"...
 Debug SQL: ./artifacts\SchemaQuench - Quench Foreign Keys localhost,11433.fleet_tenant_004.sql
@@ -111,18 +125,9 @@ Context (last 25 lines):
         Add Missing Foreign Keys
           Adding foreign key [dbo].[OrderItem].[FK_OrderItem_Product]
   The ALTER TABLE statement conflicted...
-
-─── FAILED  [Template:Main]  [localhost,11433].[fleet_tenant_002] ───
-Error: The CREATE UNIQUE INDEX statement terminated because a duplicate key was found...
-Debug SQL: ./artifacts\SchemaQuench - Quench Indexes localhost,11433.fleet_tenant_002.sql
-Context (last 25 lines):
-    ...
-        Add Missing Indexes
-          Creating index [dbo].[Customer].[UQ_Customer_Email]
-  The CREATE UNIQUE INDEX statement terminated...
 ```
 
-One read names both failed tenants, both errors, both phases (FK phase for 004, index phase for 002), and
+One read names both failed tenants, both errors, both phases (index phase for 002, FK phase for 004), and
 both artifact paths. That's everything you need before opening anything else.
 
 ### 4b) The interleaved Progress.log (deeper drill-down)
@@ -143,17 +148,17 @@ didn't cause the drift — it exposed it.
 **The checkpoint files**
 
 After a partial-failure run, **all five tenants** keep a checkpoint file — the checkpoint directory is not a
-"failed tenants" manifest. The diagnostic signal is `[Completed Steps]`:
+"failed tenants" manifest. The diagnostic signal is `[Completed Steps]`. On SQL Server:
 
-- `001`, `003`, `005` (succeeded): four mechanical steps recorded — `ModifiedTables`, `IndexesAndConstraints`,
-  `TableDataDelivery`, `ForeignKeys`
+- `001`, `003`, `005` (succeeded): five steps recorded — `ModifiedTables`, `IndexesAndConstraints`,
+  `TableFeatures` (SQL Server's FILESTREAM / CDC / Change Tracking step), `TableDataDelivery`, `ForeignKeys`
 - `002` (stopped at indexes): `[Completed Steps]` lists only `ModifiedTables`
-- `004` (stopped at FK): `[Completed Steps]` lists `ModifiedTables`, `IndexesAndConstraints`,
-  `TableDataDelivery`
+- `004` (stopped at FK): four steps — everything except `ForeignKeys`
 
 Read the checkpoint alongside the error: 002's one completed step tells you exactly what the engine
-*finished* before the failure. The unfinished phase is the next one — indexes. 004's three steps confirm it
-got all the way through index creation before the FK phase terminated it.
+*finished* before the failure. The unfinished phase is the next one — indexes. 004's four steps confirm it
+got all the way through index creation and the table-features step before the FK phase terminated it.
+PostgreSQL, MySQL, and MariaDB have no `TableFeatures` step, so their succeeded tenants record four steps and `004` three.
 
 **The resolved-SQL artifacts**
 
@@ -182,38 +187,46 @@ that succeeded skip past all their already-completed steps instantly.
 **Fix tenant 002** (deduplicate the emails):
 
 ```bash
-cd ..            # back to the lab folder
+# from course7-module-05
 ../lab-sql.sh sqlserver fleet_tenant_002 --file sqlserver/reset-tenant-002.sql
-cd sqlserver     # back into the engine folder
+../lab-sql.sh postgres fleet_tenant_002 --file postgres/reset-tenant-002.sql
+../lab-sql.sh mysql fleet_tenant_002 --file mysql/reset-tenant-002.sql
+../lab-sql.sh mariadb fleet_tenant_002 --file mariadb/reset-tenant-002.sql
 ```
 
 **Fix tenant 004** (remove the orphan):
 
 ```bash
-cd ..            # back to the lab folder
+# from course7-module-05
 ../lab-sql.sh sqlserver fleet_tenant_004 --file sqlserver/reset-tenant-004.sql
-cd sqlserver     # back into the engine folder
+../lab-sql.sh postgres fleet_tenant_004 --file postgres/reset-tenant-004.sql
+../lab-sql.sh mysql fleet_tenant_004 --file mysql/reset-tenant-004.sql
+../lab-sql.sh mariadb fleet_tenant_004 --file mariadb/reset-tenant-004.sql
 ```
 
 **Resume the run:**
 
 ```bash
+# from course7-module-05/<engine>
 schemaquench --ConfigFile:quench.settings.after.json --ResumeQuench
 ```
 
+On SQL Server:
+
 ```
-[fleet_tenant_001] Resuming from checkpoint (Completed Steps: 4, Completed Scripts: 0)
-[fleet_tenant_003] Resuming from checkpoint (Completed Steps: 4, Completed Scripts: 0)
-[fleet_tenant_005] Resuming from checkpoint (Completed Steps: 4, Completed Scripts: 0)
-[fleet_tenant_004] Resuming from checkpoint (Completed Steps: 3, Completed Scripts: 0)
+[fleet_tenant_003] Resuming from checkpoint (Completed Steps: 5, Completed Scripts: 0)
+[fleet_tenant_004] Resuming from checkpoint (Completed Steps: 4, Completed Scripts: 0)
+[fleet_tenant_001] Resuming from checkpoint (Completed Steps: 5, Completed Scripts: 0)
+[fleet_tenant_005] Resuming from checkpoint (Completed Steps: 5, Completed Scripts: 0)
 [fleet_tenant_002] Resuming from checkpoint (Completed Steps: 1, Completed Scripts: 0)
 ```
 
 All five report `Successfully Quenched`. Exit code `0`. The checkpoint files are cleared — the run finished
 clean.
 
-Read the step counts: 001/003/005 are at 4 — all steps already done, they do no real work. 004 restarts
-from step 4 (FK phase only). 002 restarts from step 2 (indexes onward). The checkpoint is the engine's
+Read the step counts: 001/003/005 are at 5 — every checkpointed step already done, so they skip past all
+of them. 004 restarts from step 5 (FK phase only). 002 restarts from step 2 (indexes onward). On the
+other engines the counts are one lower where `TableFeatures` would be: 001/003/005 at 4, 004 at 3, 002 at 1. The checkpoint is the engine's
 memory of exactly how far it got, so resume is surgical: you redeploy *only what didn't finish*.
 
 ## Step 6: Do it on PostgreSQL, MySQL, and MariaDB
@@ -231,29 +244,10 @@ exit `2`, resume exits `0`. Only the error text changes:
 > (invisible indexes, check-constraint drops, column-default reporting) that SchemaSmith handles for
 > you.* Its error text for both failures here matches the MySQL column above.
 
-**Stage drift on PostgreSQL:**
-
-```bash
-../lab-sql.sh postgres fleet_tenant_002 --file postgres/drift-tenant-002.sql
-../lab-sql.sh postgres fleet_tenant_004 --file postgres/drift-tenant-004.sql
-```
-
-**Stage drift on MySQL:**
-
-```bash
-../lab-sql.sh mysql fleet_tenant_002 --file mysql/drift-tenant-002.sql
-../lab-sql.sh mysql fleet_tenant_004 --file mysql/drift-tenant-004.sql
-```
-
-**Stage drift on MariaDB:**
-
-```bash
-../lab-sql.sh mariadb fleet_tenant_002 --file mariadb/drift-tenant-002.sql
-../lab-sql.sh mariadb fleet_tenant_004 --file mariadb/drift-tenant-004.sql
-```
-
-Run, diagnose, reset, and resume from each engine's folder. The checkpoint `[Completed Steps]` counts and
-the artifact naming pattern are the same across all four engines — only the error surface differs (on
+The drift and reset lines in Steps 2 and 5 already carry each engine's own files. Run, diagnose, reset, and
+resume from each engine's folder. The artifact naming pattern is the same across all four engines, and
+the checkpoint counts differ only by SQL Server's extra `TableFeatures` step — beyond that, only the error
+surface differs (on
 PostgreSQL, detail lands in `ProgressLog`; on MySQL and MariaDB, it surfaces via the
 `SchemaSmith_StatusMessages` sidecar and `ProgressLog` FAILED block — `Errors.log` is empty on all
 non-SS engines).
@@ -268,6 +262,7 @@ The reset scripts return both tenants to a clean, deployable state. A successful
 checkpoint files automatically; if you bailed out early, remove leftover directories:
 
 ```bash
+# from course7-module-05
 rm -rf sqlserver/checkpoints sqlserver/artifacts
 rm -rf postgres/checkpoints postgres/artifacts
 rm -rf mysql/checkpoints mysql/artifacts

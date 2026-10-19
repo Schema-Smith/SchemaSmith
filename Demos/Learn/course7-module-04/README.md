@@ -31,7 +31,7 @@ Before a fleet-wide run, confirm the fleet you *think* you're about to hit. `--P
 whole roster and prints it — and deploys **nothing**:
 
 ```bash
-cd sqlserver
+# from course7-module-04/<engine>
 schemaquench --ConfigFile:quench.settings.json --PreviewTargets
 ```
 
@@ -64,6 +64,7 @@ admin box; raise it for headroom on a large fleet. `quench.settings.tuned.json` 
 ```
 
 ```bash
+# from course7-module-04/<engine>
 schemaquench --ConfigFile:quench.settings.tuned.json
 ```
 
@@ -80,17 +81,20 @@ rollout and one that saturates your I/O.
 
 Real fleets drift. One tenant's schema gets touched out-of-band and no longer matches the package. Simulate
 it — `drift-tenant-003.sql` relaxes `fleet_tenant_003`'s `Product.Sku` to allow NULLs and parks a row with a
-NULL `Sku` in it:
+NULL `Sku` in it. Each engine has its own copy; run the line for your engine:
 
 ```bash
-cd ..            # back to the lab folder
+# from course7-module-04
 ../lab-sql.sh sqlserver fleet_tenant_003 --file sqlserver/drift-tenant-003.sql
-cd sqlserver     # back into the engine folder
+../lab-sql.sh postgres fleet_tenant_003 --file postgres/drift-tenant-003.sql
+../lab-sql.sh mysql fleet_tenant_003 --file mysql/drift-tenant-003.sql
+../lab-sql.sh mariadb fleet_tenant_003 --file mariadb/drift-tenant-003.sql
 ```
 
 Now run the fleet. Wire a checkpoint directory in — you'll need it in Step 4:
 
 ```bash
+# from course7-module-04/<engine>
 schemaquench --ConfigFile:quench.settings.json --CheckpointDirectory:./checkpoints
 ```
 
@@ -128,31 +132,34 @@ You've triaged: the failure was one drifted tenant. Fix it — `reset-tenant-003
 row so `Sku` can go back to NOT NULL:
 
 ```bash
-cd ..            # back to the lab folder
+# from course7-module-04
 ../lab-sql.sh sqlserver fleet_tenant_003 --file sqlserver/reset-tenant-003.sql
-cd sqlserver     # back into the engine folder
+../lab-sql.sh postgres fleet_tenant_003 --file postgres/reset-tenant-003.sql
+../lab-sql.sh mysql fleet_tenant_003 --file mysql/reset-tenant-003.sql
+../lab-sql.sh mariadb fleet_tenant_003 --file mariadb/reset-tenant-003.sql
 ```
 
 Now **resume** the run. The failed run left its checkpoints behind (a clean run deletes them); `--ResumeQuench`
 picks up where it stopped:
 
 ```bash
+# from course7-module-04/<engine>
 schemaquench --ConfigFile:quench.settings.json --CheckpointDirectory:./checkpoints --ResumeQuench
 ```
 
 ```
+[localhost,11433].[fleet_tenant_005]   [fleet_tenant_005] Resuming from checkpoint (Completed Steps: 5, Completed Scripts: 0)
+[localhost,11433].[fleet_tenant_004]   [fleet_tenant_004] Resuming from checkpoint (Completed Steps: 5, Completed Scripts: 0)
 [localhost,11433].[fleet_tenant_001]   [fleet_tenant_001] Resuming from checkpoint (Completed Steps: 5, Completed Scripts: 0)
 [localhost,11433].[fleet_tenant_002]   [fleet_tenant_002] Resuming from checkpoint (Completed Steps: 5, Completed Scripts: 0)
-[localhost,11433].[fleet_tenant_003]   [fleet_tenant_003] Resuming from checkpoint (Completed Steps: 1, Completed Scripts: 0)
-[localhost,11433].[fleet_tenant_004]   [fleet_tenant_004] Resuming from checkpoint (Completed Steps: 5, Completed Scripts: 0)
-[localhost,11433].[fleet_tenant_005]   [fleet_tenant_005] Resuming from checkpoint (Completed Steps: 5, Completed Scripts: 0)
 ...
 [localhost,11433].[fleet_tenant_003] Successfully Quenched
 ```
 
-Read the checkpoint counts: the four that finished are at `Completed Steps: 5` — every step already done, so
-they do **no real work**. Only `fleet_tenant_003`, stopped at `Completed Steps: 1`, picks its remaining
-steps back up and finishes. The run exits `0`, and on that clean success the checkpoint files are deleted.
+Read the checkpoint counts: the four that finished are at `Completed Steps: 5` — every checkpointed step
+already done, so they skip past all of them. `fleet_tenant_003` has no resume line: it failed inside its
+first checkpointed step, so it had no checkpoint to resume from, and it starts over from the top and
+finishes. The run exits `0`, and on that clean success the checkpoint files are deleted.
 On a thousand-tenant fleet where 999 succeeded, resume means you redeploy **one** — not all thousand.
 
 ## Step 5: Do it on PostgreSQL, MySQL, and MariaDB
@@ -170,6 +177,7 @@ ran the abort-mode aside, revert the `Template.json` edit too. Delete any leftov
 (the successful resume removes the checkpoint files; the empty folder is harmless):
 
 ```bash
+# from course7-module-04
 rm -rf sqlserver/checkpoints postgres/checkpoints mysql/checkpoints mariadb/checkpoints
 ```
 
