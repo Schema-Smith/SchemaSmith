@@ -104,7 +104,7 @@ MySQL:       [localhost].[sessions]       Create table `EventCategory`
 
 ## What to look for
 
-Open `sqlserver/package/Templates/Main/Tables/` — `Core/` holds `dbo.Customer.json`, `dbo.SalesOrder.json`, and `dbo.OrderItem.json`; `Reference/` holds `dbo.OrderStatus.json`. Same pattern across the other two engines: `postgres/` has `category.json` and `product.json` in `Core/` and `product_status.json` in `Reference/`; `mysql/` has `Session.json` and `Event.json` in `Core/` and `EventCategory.json` in `Reference/`. The run log lists every table regardless of its subfolder — the tree structure is for you, not the engine.
+Open `sqlserver/package/Templates/Main/Tables/` — `Core/` holds `dbo.Customer.json`, `dbo.SalesOrder.json`, and `dbo.OrderItem.json`; `Reference/` holds `dbo.OrderStatus.json`. Same pattern across the other two engines: `postgres/` has `public.category.json` and `public.product.json` in `Core/` and `public.product_status.json` in `Reference/`; `mysql/` has `Session.json` and `Event.json` in `Core/` and `EventCategory.json` in `Reference/`. The run log lists every table regardless of its subfolder — the tree structure is for you, not the engine.
 
 ## Up next
 

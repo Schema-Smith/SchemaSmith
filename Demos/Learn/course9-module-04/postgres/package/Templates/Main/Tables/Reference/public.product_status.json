@@ -1,16 +1,17 @@
 {
   "$schema": "../../../../.json-schemas/tables.postgresql.schema",
-  "Name": "category",
+  "Schema": "public",
+  "Name": "product_status",
   "Columns": [
     {
-      "Name": "categoryid",
-      "DataType": "int4",
+      "Name": "code",
+      "DataType": "text",
       "ShouldApplyExpression": "",
       "OldName": "",
       "VariantName": ""
     },
     {
-      "Name": "name",
+      "Name": "description",
       "DataType": "text",
       "ShouldApplyExpression": "",
       "OldName": "",
@@ -19,10 +20,10 @@
   ],
   "Indexes": [
     {
-      "Name": "pk_category",
+      "Name": "pk_product_status",
       "PrimaryKey": true,
       "Unique": true,
-      "IndexColumns": "categoryid",
+      "IndexColumns": "code",
       "ShouldApplyExpression": "",
       "VariantName": ""
     }
