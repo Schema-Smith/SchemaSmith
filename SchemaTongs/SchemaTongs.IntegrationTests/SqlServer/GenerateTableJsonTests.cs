@@ -210,6 +210,35 @@ EXEC sys.sp_addextendedproperty 'Description', 'Table level check constraint', '
     }
 
     [Test]
+    public void ADoubleQuoteOrBackslash_InAnExpressionOrAPropertyValue_IsExtractedExactly()
+    {
+        // The generator once rewrote every escaped quote in its output to a bare one, so any expression holding a double
+        // quote came back as JSON that could not be read, and the table could not be extracted at all.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.TestDoubleQuotes (
+    MyInt INT NOT NULL,
+    MyString NVARCHAR(100) NULL CONSTRAINT [DF_TestDoubleQuotes_MyString] DEFAULT (N'say ""hi""'),
+    CONSTRAINT [CK_TestDoubleQuotes_MyString] CHECK (MyString <> N'""')
+)
+
+EXEC sys.sp_addextendedproperty 'Note', N'a ""b"" \c / d', 'SCHEMA', [dbo], 'TABLE', [TestDoubleQuotes], 'COLUMN', [MyString];
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "dbo", "TestDoubleQuotes");
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.CheckConstraints.Single().Expression, Is.EqualTo("[MyString]<>N'\"'"), "a check holding a double quote");
+            Assert.That(result.Columns.Single(c => c.Name == "[MyString]").Default, Is.EqualTo("N'say \"hi\"'"), "and a default holding two");
+            Assert.That(result.Columns.Single(c => c.Name == "[MyString]").Extensions?["ExtendedProperties"]?["Note"]?.ToString(),
+                Is.EqualTo("a \"b\" \\c / d"), "and a property value holding quotes, a backslash and a solidus");
+        });
+        conn.Close();
+    }
+
+    [Test]
     public void ANamedSingleColumnCheck_KeepsItsName_ASystemNamedOne_IsTheColumnsExpression_AndTwoOnOneColumn_DoNotFail()
     {
         // SS-114 and SS-062: every check bound to one column used to fold into that column's CheckExpression, losing a

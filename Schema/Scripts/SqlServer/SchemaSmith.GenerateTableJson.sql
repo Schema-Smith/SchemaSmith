@@ -132,7 +132,7 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 15
      WHERE ec.parent_object_id = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table))',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128)', @p_Schema = @p_Schema, @p_Table = @p_Table
 {{CollectSelectiveXmlIndexes}}
-SELECT [Line] FROM SchemaSmith.fn_FormatJson(REPLACE(REPLACE(REPLACE((
+SELECT [Line] FROM SchemaSmith.fn_FormatJson((
 SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        QUOTENAME(TABLE_NAME) AS [Name],
        -- sys.partitions is one row PER PARTITION, and compression can legitimately differ across
@@ -321,7 +321,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                        CASE WHEN sc.generated_always_type IN (1, 2, 7, 8, 9, 10) AND sc.is_hidden = 1 THEN CAST(1 AS BIT) END AS [Hidden],
                        '' AS [OldName],
                        (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Column', c.COLUMN_NAME)) AS [Description],
-                       JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Column', c.COLUMN_NAME) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
+                       JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Column', c.COLUMN_NAME) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
                   FROM INFORMATION_SCHEMA.COLUMNS c
                   JOIN sys.columns sc ON sc.[object_id] = st.[object_id] AND sc.[name] = c.COLUMN_NAME
                   JOIN (SELECT CASE WHEN SCHEMA_NAME(typ.[schema_id]) IN ('sys', 'dbo')
@@ -429,7 +429,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                -- The property may sit on the index or, for a key constraint, on the constraint.
                COALESCE((SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Index', si.[Name])),
                         (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Constraint', si.[Name]))) AS [Description],
-			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + [Value] + '"' AS NVARCHAR(MAX)), ',')
+			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE([Value], 'json') + '"' AS NVARCHAR(MAX)), ',')
                         FROM (SELECT ISNULL(i.[Name], c.[Name]) AS [Name], RTRIM(COALESCE(CONVERT(NVARCHAR(MAX), c.[Value]) + ' ', '') + COALESCE(CONVERT(NVARCHAR(MAX), i.[Value]), '')) AS [Value]
                                 FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', si.[Name]) i
                                 FULL OUTER JOIN fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', si.[Name]) c ON i.[Name] = c.[Name]) x
@@ -473,7 +473,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                             WHERE i.xml_index_type = 2
                             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)) AS [Selective],
                (SELECT s.[ForPath] FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id) AS [ForPath],
-			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + x.[Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE(x.[Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.xml_indexes i
           JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
           WHERE i.[object_id] = st.[object_id]
@@ -512,7 +512,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                CASE WHEN fk.is_disabled = 1 THEN CAST(0 AS BIT) END AS [Enforced],
                CASE WHEN fk.is_not_trusted = 1 THEN CAST(0 AS BIT) END AS [Validated],
                CASE WHEN fk.is_not_for_replication = 1 THEN CAST(1 AS BIT) END AS [NotForReplication],
-               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', fk.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', fk.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.foreign_keys fk
           WHERE fk.parent_object_id = st.[object_id]
           ORDER BY [Name]
@@ -522,7 +522,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                   FROM sys.stats_columns sc
                   WHERE s.[object_id] = sc.[object_id] AND s.stats_id = sc.stats_id) AS [Columns],
                SchemaSmith.fn_StripParenWrapping([filter_definition]) AS FilterExpression,
-			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Statistic', s.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Statistic', s.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.stats s
           WHERE [object_id] = st.[object_id]
             AND auto_created = 0
@@ -536,7 +536,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                CASE WHEN cc.is_disabled = 1 THEN CAST(0 AS BIT) END AS [Enforced],
                CASE WHEN cc.is_not_trusted = 1 THEN CAST(0 AS BIT) END AS [Validated],
                CASE WHEN cc.is_not_for_replication = 1 THEN CAST(1 AS BIT) END AS [NotForReplication],
-               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', cc.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', cc.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.check_constraints cc
           WHERE parent_object_id = st.[object_id]
             -- Table-level, or bound to a column but not the one system-named check that column's CheckExpression carries.
@@ -557,7 +557,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
           FROM (SELECT DISTINCT [ConstraintName], [DeleteAction] FROM #EdgeConstraintsCat WITH (NOLOCK)) ec
           ORDER BY [Name]
           FOR JSON PATH) AS [EdgeConstraints],
-       (SELECT FullTextCatalog = QUOTENAME((SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
+       JSON_QUERY((SELECT FullTextCatalog = QUOTENAME((SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
                KeyIndex = QUOTENAME((SELECT i.[Name] FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
                ChangeTracking = change_tracking_state_desc,
                [StopList] = QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)),
@@ -589,8 +589,8 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                   WHERE fi.[object_id] = fc.[object_id]) AS [Columns]
           FROM sys.fulltext_indexes fi
           WHERE fi.[object_id] = st.[object_id]
-          FOR JSON PATH,WITHOUT_ARRAY_WRAPPER) AS [FullTextIndex],
-	   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, default, default) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
+          FOR JSON PATH,WITHOUT_ARRAY_WRAPPER)) AS [FullTextIndex],
+	   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, default, default) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
   FROM INFORMATION_SCHEMA.TABLES t
   JOIN sys.tables st ON st.[object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table))
   LEFT JOIN sys.change_tracking_tables ctt ON ctt.[object_id] = st.[object_id]
@@ -599,5 +599,5 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
   WHERE TABLE_NAME = @p_Table
     AND TABLE_SCHEMA = @p_Schema
   FOR JSON AUTO, WITHOUT_ARRAY_WRAPPER
-), '\"', '"'), '"}"', '" }'), '"{"', '{ "'), 1)
+), 1)
 ORDER BY [LineNo]

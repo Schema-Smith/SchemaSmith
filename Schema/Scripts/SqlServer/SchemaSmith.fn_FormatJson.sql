@@ -13,7 +13,13 @@ BEGIN
           @Indent NVARCHAR(200) = SPACE(@Level * 2),
           @key AS NVARCHAR(MAX), 
           @value AS NVARCHAR(MAX),
-          @type AS INT
+          @type AS INT,
+          @name AS NVARCHAR(MAX)
+
+  -- An array's members are written without keys; OPENJSON numbers them, which is not a key to write. Strings and keys are
+  -- escaped again, because OPENJSON returns them decoded -- except the solidus, which needs none and would churn every
+  -- extracted file that holds one.
+  DECLARE @IsArray BIT = CASE WHEN LEFT(LTRIM(@Json), 1) = '[' THEN 1 ELSE 0 END
 
   DECLARE @JsonTbl AS TABLE (Id INT IDENTITY(1,1), [key] NVARCHAR(MAX), [value] NVARCHAR(MAX), [type] INT)
   INSERT INTO @JsonTbl ([key], [value], [type])
@@ -28,19 +34,20 @@ BEGIN
     SELECT @key = [key], @value = [value], @type = [type] 
       FROM @JsonTbl 
       WHERE Id = @CurrentRow
+    SET @name = CASE WHEN @IsArray = 1 THEN '' ELSE '"' + REPLACE(STRING_ESCAPE(@key, 'json'), '\/', '/') + '": ' END
     IF @type = 1 -- String property
-      INSERT @r_Result ([Line]) VALUES(@Indent + '"' + @key + '": "' + @value + '"' + CASE WHEN @CurrentRow = @RowCount THEN '' ELSE ',' END)
+      INSERT @r_Result ([Line]) VALUES(@Indent + @name + '"' + REPLACE(STRING_ESCAPE(@value, 'json'), '\/', '/') + '"' + CASE WHEN @CurrentRow = @RowCount THEN '' ELSE ',' END)
     ELSE IF @type IN (2, 3) -- Numeric or boolean property
-      INSERT @r_Result ([Line]) VALUES(@Indent + '"' + @key + '": ' + @value + CASE WHEN @CurrentRow = @RowCount THEN '' ELSE ',' END)
+      INSERT @r_Result ([Line]) VALUES(@Indent + @name + @value + CASE WHEN @CurrentRow = @RowCount THEN '' ELSE ',' END)
     ELSE IF @type = 4 -- Array
     BEGIN
-      INSERT @r_Result ([Line]) VALUES(@Indent + '"' + @key + '": [')
+      INSERT @r_Result ([Line]) VALUES(@Indent + @name + '[')
       INSERT @r_Result ([Line]) SELECT [Line] FROM SchemaSmith.fn_FormatJson(@value, @Level + 1) ORDER BY [LineNo]
       INSERT @r_Result ([Line]) VALUES(@Indent + ']' + CASE WHEN @CurrentRow = @RowCount THEN '' ELSE ',' END)
     END
     ELSE IF @type = 5 -- Embedded object
     BEGIN      
-      INSERT @r_Result ([Line]) VALUES(@Indent + CASE WHEN @Level = 1 OR ISNUMERIC(@key) = 0 THEN '"' + @key + '": ' ELSE '' END + '{')
+      INSERT @r_Result ([Line]) VALUES(@Indent + @name + '{')
       INSERT @r_Result ([Line]) SELECT [Line] FROM SchemaSmith.fn_FormatJson(@value, @Level + 1) ORDER BY [LineNo]
       INSERT @r_Result ([Line]) VALUES(@Indent + '}' + CASE WHEN @CurrentRow = @RowCount THEN '' ELSE ',' END)
     END
