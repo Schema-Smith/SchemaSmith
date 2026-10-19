@@ -149,6 +149,8 @@ SchemaSmith adds these tokens automatically. You don't define them -- they appea
 
 The cross-template variants (`{{TableSchema_OtherTemplate}}`) are how a deployment script in one template can read the schema of another. This unlocks coordination between linked templates without copy-pasting JSON.
 
+> **`Nullable` is written only when it carries information.** In the table payload (`{{TableSchema}}`, `{{TableXml}}`, their cross-template forms and `<*SpecificTable*>`), an ordinary column carries `Nullable` only when it is `true`; a `NOT NULL` column has no `Nullable` key at all, even when its package file spells out `"Nullable": false`. A computed or generated column carries `Nullable` whenever its package declares it, `true` or `false`; an undeclared one has no key, which means the engine decides its nullability from the expression. So a script must read a missing `Nullable` as `false` on an ordinary column -- `ISNULL(Nullable, 0)` with `OPENJSON` or `.value()`, `COALESCE` on PostgreSQL, MySQL and MariaDB. Every other boolean property is written whether it is `true` or `false`.
+
 > **Note:** When the referenced template is a schema template, each table / view's `Schema` field would normally hold the per-iteration `{{SchemaName}}` token. The cross-template snapshot replaces that token with the literal placeholder `<per-iteration>` so the consuming template sees clearly that schemas in the referenced set are iteration-dependent. Use the cross-template variants for structural introspection (column counts, custom properties, table names) — schema-qualified DDL still needs to live inside the schema template itself, where `{{SchemaName}}` resolves per iteration.
 
 ### Custom property tokens
