@@ -114,6 +114,7 @@ public class CapabilityDocumentationTests
         ["MariaDb/long-unique-key"] = "**Long unique key**",
         ["MariaDb/sequence"] = "**Declared sequence**",
         ["MariaDb/sequence-type"] = "**Sequence data type**",
+        ["MariaDb/vector-index"] = "**Vector index**",
     };
 
     private static string RepoRoot()

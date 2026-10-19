@@ -198,6 +198,9 @@ namespace Schema.Capabilities
                 1107, "MariaDB 11.7", null, DegradeKind.Skip, "explicit system-time columns (MariaDB 11.7)"));
             rows.Add(new("temporal-key", "Temporal key (WITHOUT OVERLAPS)", Platform.MariaDb,
                 1005, "MariaDB 10.5.3", null, DegradeKind.Reduced, "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)"));
+            // A VECTOR index is skipped below 11.7. MySQL Community has none at any version, so it has no row.
+            rows.Add(new("vector-index", "Vector index", Platform.MariaDb,
+                1107, "MariaDB 11.7", null, DegradeKind.Skip, "INDEX (VECTOR, MariaDB 11.7)"));
 
             // Declared sequences (Sequences/*.json) arrived with CREATE SEQUENCE in MariaDB 10.3; below it a declared
             // one is skipped. CREATE SEQUENCE ... AS <type> is 11.5+; below it every sequence is a signed bigint.

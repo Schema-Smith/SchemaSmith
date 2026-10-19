@@ -381,6 +381,57 @@ public class CoherenceCheckTests
             Is.EqualTo(new[] { "SS-SPX-004" }));
     }
 
+    // ---- MariaDB vector indexes (SS-IDX-005, SS-IDX-006) ----
+    //
+    // A VECTOR index covers exactly one NOT NULL VECTOR column, and a table takes one.
+
+    private static Schema.Domain.MariaDb.MariaDbTable Embeddings(params Schema.Domain.MariaDb.MariaDbIndex[] indexes)
+    {
+        var table = new Schema.Domain.MariaDb.MariaDbTable
+        {
+            Name = "Embeddings",
+            Columns =
+            {
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "id", DataType = "int" },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "v", DataType = "vector(3)" },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "w", DataType = "VECTOR(3)" },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "maybe", DataType = "vector(3)", Nullable = true },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "label", DataType = "varchar(10)" }
+            }
+        };
+        table.Indexes.AddRange(indexes);
+        return table;
+    }
+
+    private static Schema.Domain.MariaDb.MariaDbIndex Vector(string name, string columns) =>
+        new() { Name = name, IndexType = "VECTOR", IndexColumns = columns, M = 8, Distance = "cosine" };
+
+    private static string[] VectorCodes(Schema.Domain.MariaDb.MariaDbTable table) =>
+        RunOnMaria(table).Where(f => f.Code is "SS-IDX-005" or "SS-IDX-006").Select(f => f.Code).ToArray();
+
+    [Test]
+    public void AVectorIndexOverOneNotNullVectorColumn_IsClean()
+    {
+        Assert.That(VectorCodes(Embeddings(Vector("`vx`", "`v`"))), Is.Empty);
+    }
+
+    [Test]
+    public void AVectorIndexOverANullableNonVectorOrSeveralColumns_IsAnError()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(VectorCodes(Embeddings(Vector("`vx`", "`maybe`"))), Is.EqualTo(new[] { "SS-IDX-005" }), "nullable");
+            Assert.That(VectorCodes(Embeddings(Vector("`vx`", "`label`"))), Is.EqualTo(new[] { "SS-IDX-005" }), "not a vector");
+            Assert.That(VectorCodes(Embeddings(Vector("`vx`", "`v`,`w`"))), Is.EqualTo(new[] { "SS-IDX-005" }), "two columns");
+        });
+    }
+
+    [Test]
+    public void ASecondVectorIndexOnATable_IsAnError()
+    {
+        Assert.That(VectorCodes(Embeddings(Vector("`vx`", "`v`"), Vector("`wx`", "`w`"))), Is.EqualTo(new[] { "SS-IDX-006" }));
+    }
+
     // ---- JSON indexes (SS-JSX-001 .. SS-JSX-004) ----
     //
     // A JSON index is on one json column, one per column, on a table with a clustered primary key; its paths start at $,

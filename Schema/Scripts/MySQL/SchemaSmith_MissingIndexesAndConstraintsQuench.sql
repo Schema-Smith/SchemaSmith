@@ -197,6 +197,7 @@ BEGIN
         SELECT CONNECTION_ID(), CONCAT(
                       'CREATE ',
                       CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL '
+                           WHEN UPPER(i.IndexType) = 'VECTOR' THEN 'VECTOR '
                            WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE '
                            ELSE '' END,
                       'INDEX ', i.IndexName,
@@ -205,6 +206,7 @@ BEGIN
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
+                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
                       CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
                            THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
                            ELSE '' END)
@@ -262,6 +264,7 @@ BEGIN
                                  ' DROP INDEX ', i.IndexName, ', ADD ')
                      ELSE 'CREATE ' END,
                 CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL '
+                     WHEN UPPER(i.IndexType) = 'VECTOR' THEN 'VECTOR '
                      WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE '
                      ELSE '' END,
                 'INDEX ', i.IndexName,
@@ -271,6 +274,7 @@ BEGIN
                 CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                      WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                      ELSE '' END,
+                CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
                 CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
                      THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
                      ELSE '' END,

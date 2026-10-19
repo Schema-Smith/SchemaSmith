@@ -86,6 +86,8 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | `SS-IDX-002` | Error | An index sets `WithoutOverlaps` but is not a primary key or unique constraint (PostgreSQL) or unique key (MariaDB), so the clause would not be emitted. |
 | `SS-IDX-003` | Error | A MariaDB index sets `WithoutOverlaps` but its last `IndexColumns` part is not one of the table's `Periods`. |
 | `SS-IDX-004` | Warning | A PostgreSQL primary key sets `NullsNotDistinct`. Its columns cannot be NULL, so the clause decides nothing and the engine never records it on a primary key; the deploy leaves it off. Declare it on a unique index or unique constraint instead. |
+| `SS-IDX-005` | Error | A MariaDB `VECTOR` index does not cover exactly one `NOT NULL` `VECTOR` column. MariaDB builds a vector index over one such column and refuses anything else (error 1252 for a nullable one). |
+| `SS-IDX-006` | Error | A MariaDB table declares more than one `VECTOR` index. MariaDB allows one per table (error 1235); the second and later are reported. |
 | `SS-TMP-001` | Error | A SQL Server column declares `GeneratedAlways` `RowStart` or `RowEnd` and no column declares the other: `PERIOD FOR SYSTEM_TIME` needs both. |
 | `SS-TMP-002` | Error | More than one column on a SQL Server table declares the same `GeneratedAlways` role. |
 | `SS-TMP-003` | Error | A SQL Server table declares period columns but not `IsTemporal`; they are created only with system versioning. |

@@ -543,7 +543,8 @@ public class ForgeKindlerTests
         // +3 = SupportsSystemTimePartitionCount + SupportsSystemTimeAutoPartitions + SystemTimePartitionable (D8 SYSTEM_TIME).
         // +1 = SchemaSmith_IsGeneratedInvisiblePrimaryKey (MySQL 8.0.30+'s my_row_id: neither extracted nor dropped).
         // +1 = SchemaSmith_ConvergePrimaryKeys (an existing table's declared primary key, added or replaced).
-        Assert.That(mysql.Length, Is.EqualTo(103));
+        // +2 = SchemaSmith_SupportsVectorIndex + SchemaSmith_DegradeVectorIndexes (MariaDB 11.7's VECTOR index).
+        Assert.That(mysql.Length, Is.EqualTo(105));
     }
 
     [Test]

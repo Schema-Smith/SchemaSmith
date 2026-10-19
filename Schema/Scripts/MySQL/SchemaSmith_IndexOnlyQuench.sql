@@ -36,6 +36,7 @@ BEGIN
 
     -- Declarations no degrade can rescue are refused before anything is created.
     CALL SchemaSmith_RefuseUnsupportedIndexes();
+    CALL SchemaSmith_DegradeVectorIndexes();
 
     -- Ensure _SchemaSmith_FullTextIndexes exists (ParseTableJson may not create it if there are no fulltext indexes).
     -- Keep this fallback schema in lockstep with ParseTableJson's primary definition (see
@@ -860,6 +861,7 @@ BEGIN
         SELECT CONNECTION_ID(), CONCAT(
                       'CREATE ',
                       CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL '
+                           WHEN UPPER(i.IndexType) = 'VECTOR' THEN 'VECTOR '
                            WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE '
                            ELSE '' END,
                       'INDEX ', i.IndexName,
@@ -868,6 +870,7 @@ BEGIN
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
+                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
                       CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
                            THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
                            ELSE '' END,
@@ -923,6 +926,7 @@ BEGIN
                       CASE WHEN d.IndexName IS NOT NULL THEN CONCAT('DROP INDEX ', i.IndexName, ', ') ELSE '' END,
                       'ADD ',
                       CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL INDEX '
+                           WHEN UPPER(i.IndexType) = 'VECTOR' THEN 'VECTOR INDEX '
                            WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE INDEX '
                            ELSE 'INDEX ' END,
                       i.IndexName,
@@ -930,6 +934,7 @@ BEGIN
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
+                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
                       CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
                            THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
                            ELSE '' END,

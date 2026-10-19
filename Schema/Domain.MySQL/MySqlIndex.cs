@@ -7,7 +7,8 @@ namespace Schema.Domain.MySQL
 {
     public class MySqlIndex : Index
     {
-        [SchemaProperty(Pattern = "BTREE|HASH|FULLTEXT|SPATIAL")]
+        // VECTOR is MariaDB 11.7's; MySQL Community has no vector index, and a declared one is skipped with a downgrade.
+        [SchemaProperty(Pattern = "BTREE|HASH|FULLTEXT|SPATIAL|VECTOR")]
         [JsonProperty(Order = 100)]
         [DefaultValue("BTREE")]
         public string IndexType { get; set; } = "BTREE";

@@ -146,7 +146,7 @@
           },
           "IndexType": {
             "type": "string",
-            "pattern": "^(?:BTREE|HASH|FULLTEXT|SPATIAL)$"
+            "pattern": "^(?:BTREE|HASH|FULLTEXT|SPATIAL|VECTOR)$"
           },
           "Visible": {
             "type": "boolean"
@@ -158,6 +158,17 @@
           "WithoutOverlaps": {
             "type": "boolean",
             "description": "MariaDB 10.5.3+. On a primary key or unique key whose last IndexColumns part names one of the table's Periods: rows with the same other key values may not have overlapping periods (WITHOUT OVERLAPS). Below 10.5.3 the key is created over the period's end and start columns and a downgrade is recorded."
+          },
+          "M": {
+            "type": "integer",
+            "minimum": 3.0,
+            "maximum": 200.0,
+            "description": "MariaDB 11.7+. A VECTOR index's M: how many neighbours each node keeps in the graph (3 to 200). Omitted, the server's mhnsw_default_m. Applied when the index is created."
+          },
+          "Distance": {
+            "type": "string",
+            "pattern": "^(?:[Ee][Uu][Cc][Ll][Ii][Dd][Ee][Aa][Nn]|[Cc][Oo][Ss][Ii][Nn][Ee])$",
+            "description": "MariaDB 11.7+. A VECTOR index's DISTANCE: euclidean or cosine. Omitted, the server's mhnsw_default_distance. Applied when the index is created."
           },
           "Extensions": {}
         },

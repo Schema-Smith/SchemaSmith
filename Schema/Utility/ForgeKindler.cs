@@ -918,6 +918,7 @@ public static class ForgeKindler
                 // Temporal keys: the gate (MariaDB 10.5.3; MySQL never) and the period a key is declared over (NULL on
                 // MySQL; the MariaDb override reads KEY_PERIOD_USAGE from 11.4).
                 new("SchemaSmith_SupportsWithoutOverlaps.sql"),
+                new("SchemaSmith_SupportsVectorIndex.sql"),
                 new("SchemaSmith_IndexPeriodJson.sql"),
                 new("SchemaSmith_IsSystemTimePeriodColumn.sql"),
                 // MySQL 8.0.30+'s generated invisible primary key (my_row_id): neither extracted nor dropped (0 on MariaDB).
@@ -975,6 +976,8 @@ public static class ForgeKindler
                 new("SchemaSmith_CatalogSnapshot.sql"),
                 new("SchemaSmith_ParseTableJson.sql"),
                 new("SchemaSmith_RefuseUnsupportedIndexes.sql"),
+                // A VECTOR index where the engine has none is skipped with a downgrade; called beside the refusals.
+                new("SchemaSmith_DegradeVectorIndexes.sql"),
                 new("SchemaSmith_MissingTableAndColumnQuench.sql"),
                 // #530: a table's FullTextIndexes, created and re-created by both index paths, not only the index-only one.
                 new("SchemaSmith_DropModifiedFullTextIndexes.sql"),

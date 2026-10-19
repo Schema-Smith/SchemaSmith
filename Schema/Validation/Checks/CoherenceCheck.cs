@@ -38,6 +38,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string TemporalKeyShapeCode = "SS-IDX-002";
     private const string TemporalKeyPeriodCode = "SS-IDX-003";
     private const string NullsNotDistinctOnKeyCode = "SS-IDX-004";
+    private const string VectorIndexColumnCode = "SS-IDX-005";
+    private const string VectorIndexCountCode = "SS-IDX-006";
     private const string PeriodPairIncompleteCode = "SS-TMP-001";
     private const string PeriodRoleRepeatedCode = "SS-TMP-002";
     private const string PeriodWithoutTemporalCode = "SS-TMP-003";
@@ -120,6 +122,8 @@ public sealed class CoherenceCheck : ISchemaCheck
         [TemporalKeyShapeCode] = ErrorLevel,
         [TemporalKeyPeriodCode] = ErrorLevel,
         [NullsNotDistinctOnKeyCode] = WarningLevel,
+        [VectorIndexColumnCode] = ErrorLevel,
+        [VectorIndexCountCode] = ErrorLevel,
         [PeriodPairIncompleteCode] = ErrorLevel,
         [PeriodRoleRepeatedCode] = ErrorLevel,
         [PeriodWithoutTemporalCode] = ErrorLevel,
@@ -862,6 +866,23 @@ public sealed class CoherenceCheck : ISchemaCheck
         if (index is PostgreSqlIndex { NullsNotDistinct: true } && index.PrimaryKey)
             yield return new Finding(Severity.Warning, NullsNotDistinctOnKeyCode, Category, location,
                 $"Index '{index.Name}' sets NullsNotDistinct on a primary key, whose columns cannot be NULL: the clause has no effect and is not applied.");
+
+        // A MariaDB VECTOR index covers one NOT NULL vector column (1252 otherwise), and a table takes one (1235).
+        if (table is MariaDbTable && index is MySqlIndex { IndexType: var indexType } && string.Equals(indexType?.Trim(), "VECTOR", StringComparison.OrdinalIgnoreCase))
+        {
+            var vectorColumn = keyParts.Count == 1
+                ? table.Columns.Find(c => string.Equals(NormalizeIdentifier(c.Name), NormalizeIdentifier(StripOrderingSuffix(keyParts[0])), StringComparison.OrdinalIgnoreCase))
+                : null;
+            if (vectorColumn == null || vectorColumn.Nullable
+                || !(vectorColumn.DataType ?? "").TrimStart().StartsWith("VECTOR", StringComparison.OrdinalIgnoreCase))
+                yield return new Finding(Severity.Error, VectorIndexColumnCode, Category, location,
+                    $"Index '{index.Name}' is a VECTOR index, which MariaDB builds over exactly one NOT NULL VECTOR column; IndexColumns names " +
+                    (keyParts.Count == 1 ? $"'{keyParts[0]}', which is not one." : $"{keyParts.Count} parts."));
+            var vectorIndexes = table.Indexes.Where(i => i is MySqlIndex { IndexType: var t } && string.Equals(t?.Trim(), "VECTOR", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (vectorIndexes.Count > 1 && !ReferenceEquals(vectorIndexes[0], index))
+                yield return new Finding(Severity.Error, VectorIndexCountCode, Category, location,
+                    $"Index '{index.Name}' is the table's second VECTOR index, after '{vectorIndexes[0].Name}': MariaDB allows one per table.");
+        }
 
         // A temporal key (WITHOUT OVERLAPS) is a primary key or unique key; on MariaDB its last part names one of the
         // table's periods rather than a column, so that part is not a missing column.

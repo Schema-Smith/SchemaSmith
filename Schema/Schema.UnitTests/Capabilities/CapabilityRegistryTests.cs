@@ -53,6 +53,7 @@ namespace Schema.UnitTests.Capabilities
             "column without its WITHOUT SYSTEM VERSIONING clause",
             "sequence (MariaDB 10.3)",
             "sequence type (MariaDB 11.5)",
+            "INDEX (VECTOR, MariaDB 11.7)",
             "CDC (database not enabled)",
             "Change Tracking (database not enabled)",
             "FILESTREAM (server or filegroup not available)",

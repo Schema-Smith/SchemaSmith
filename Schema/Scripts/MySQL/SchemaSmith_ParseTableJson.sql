@@ -870,6 +870,9 @@ BEGIN
         CompareColumns TEXT DEFAULT NULL,
         EmitColumns TEXT DEFAULT NULL,
         IsVisible TINYINT DEFAULT 1,
+        -- A VECTOR index's M and DISTANCE (MariaDB 11.7): NULL when not declared, so the server's default applies.
+        VectorM INT DEFAULT NULL,
+        VectorDistance VARCHAR(20) DEFAULT NULL,
         -- MySQL's index comment ceiling is 1024 characters. No pre-validation -- see the Tables
         -- temp table Comment column above for the same convention.
         Comment VARCHAR(1024) DEFAULT NULL,
@@ -889,7 +892,7 @@ BEGIN
             IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Name'))) IS NOT NULL
                AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables st WHERE st.TableName = SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Name'))))) THEN
                 INSERT INTO _SchemaSmith_Indexes (
-                    TableName, IndexName, IsPrimaryKey, IsUnique, IndexType, IndexColumns, WithoutOverlaps, IsVisible, Comment, ShouldApply, ShouldApplyExpression, VariantName
+                    TableName, IndexName, IsPrimaryKey, IsUnique, IndexType, IndexColumns, WithoutOverlaps, IsVisible, VectorM, VectorDistance, Comment, ShouldApply, ShouldApplyExpression, VariantName
                 )
                 SELECT
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Name')))) AS TableName,
@@ -900,6 +903,8 @@ BEGIN
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].IndexColumns'))) AS IndexColumns,
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].WithoutOverlaps'))), 0) AS WithoutOverlaps,
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Visible'))), 1) AS IsVisible,
+                    SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].M'))) AS VectorM,
+                    LOWER(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Distance')))), '')) AS VectorDistance,
                     COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Description')))), ''),
                          NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Comment')))), '')) AS Comment,
                     1 AS ShouldApply,

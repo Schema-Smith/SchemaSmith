@@ -54,7 +54,7 @@ public abstract class BaseTableQuenchTests
         if (indexOnly)
         {
             cmd.CommandText = $"CALL SchemaSmith_ParseTableJson('{_mainDb}', '{escapedJson}'); " +
-                             $"CALL SchemaSmith_IndexOnlyQuench('{_productName}', '{_mainDb}', 0, 1, 1);";
+                             $"CALL SchemaSmith_IndexOnlyQuench('{_productName}', '{_mainDb}', {(whatIf ? 1 : 0)}, 1, 1);";
         }
 
         // Was an inline copy of the same loop, narrower than it needed to be: it knew about deadlock and

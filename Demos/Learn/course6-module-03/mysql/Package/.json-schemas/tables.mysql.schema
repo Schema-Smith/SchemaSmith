@@ -133,7 +133,7 @@
           },
           "IndexType": {
             "type": "string",
-            "pattern": "^(?:BTREE|HASH|FULLTEXT|SPATIAL)$"
+            "pattern": "^(?:BTREE|HASH|FULLTEXT|SPATIAL|VECTOR)$"
           },
           "Visible": {
             "type": "boolean"

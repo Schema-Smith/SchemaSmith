@@ -4037,11 +4037,12 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                             continue;
                         }
 
-                        // A FULLTEXT parser (MY-A2), KEY partitioning's ALGORITHM and SYSTEM_TIME's options are reported only by
-                        // SHOW CREATE TABLE.
+                        // A FULLTEXT parser (MY-A2), KEY partitioning's ALGORITHM, SYSTEM_TIME's options and a VECTOR index's M and
+                        // DISTANCE are reported only by SHOW CREATE TABLE.
                         var keyPartitioned = mySqlTable.Partitioning?.Method?.Trim().EndsWith("KEY", StringComparison.OrdinalIgnoreCase) == true;
                         var systemTime = string.Equals(mySqlTable.Partitioning?.Method?.Trim(), "SYSTEM_TIME", StringComparison.OrdinalIgnoreCase);
-                        if (mySqlTable.FullTextIndexes.Count > 0 || keyPartitioned || systemTime)
+                        var vectorIndexed = mySqlTable.Indexes.Exists(i => i is MySqlIndex { IndexType: var type } && string.Equals(type, "VECTOR", StringComparison.OrdinalIgnoreCase));
+                        if (mySqlTable.FullTextIndexes.Count > 0 || keyPartitioned || systemTime || vectorIndexed)
                         {
                             commandJson.CommandText = $"SHOW CREATE TABLE `{MySqlReservedWords.Unquote(schema).Replace("`", "``")}`.`{MySqlReservedWords.Unquote(table).Replace("`", "``")}`";
                             using var createReader = commandJson.ExecuteReader();
@@ -4049,6 +4050,8 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                             {
                                 var createTable = createReader.GetString(1);
                                 MySqlFullTextParsers.Apply(mySqlTable, createTable);
+                                if (vectorIndexed)
+                                    MariaDbVectorIndexOptions.Apply(mySqlTable.Indexes, createTable);
                                 if (keyPartitioned)
                                     mySqlTable.Partitioning.KeyAlgorithm = MySqlKeyAlgorithm.Read(createTable);
                                 if (systemTime)
