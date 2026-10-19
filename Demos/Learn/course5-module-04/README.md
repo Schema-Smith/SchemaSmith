@@ -26,6 +26,7 @@ The `sqlserver/` folder ships a `SchemaTongs.settings.json` (the extract config)
 ## Step 1: Look at the SSDT source
 
 ```bash
+# from course5-module-04
 ls before/Tables/
 # → Customer.sql  Product.sql  SalesOrder.sql  OrderItem.sql
 ```
@@ -37,14 +38,13 @@ one. You're already declarative; the move is about the tooling around these file
 ## Step 2: Extract — cast the live database
 
 Even though you already have `.sql` files, the cleanest baseline is a cast of the live database your
-DACPAC published — it's guaranteed to match what's deployed. The whitelist names your four tables:
-
-```json
-"ShouldCast": { "ObjectList": "dbo.Customer,dbo.Product,dbo.SalesOrder,dbo.OrderItem" }
-```
+DACPAC published — it's guaranteed to match what's deployed. The whitelist — the `ObjectList` under
+`ShouldCast` in `sqlserver/SchemaTongs.settings.json`, already set for you (nothing to edit) — names
+your four tables, `dbo.Customer,dbo.Product,dbo.SalesOrder,dbo.OrderItem`. Print it, then extract:
 
 ```bash
-cd sqlserver
+# from course5-module-04/sqlserver
+grep '"ObjectList"' SchemaTongs.settings.json
 schematongs --ConfigFile:SchemaTongs.settings.json
 ls Package/Templates/Main/Tables/
 ```
@@ -59,6 +59,7 @@ dbo.Customer.json  dbo.OrderItem.json  dbo.Product.json  dbo.SalesOrder.json
 ## Step 3: Quench — adopt, then prove the no-op
 
 ```bash
+# from course5-module-04/sqlserver
 schemaquench --ConfigFile:quench.settings.json
 ```
 

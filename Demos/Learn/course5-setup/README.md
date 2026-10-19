@@ -17,14 +17,14 @@ and verify it is healthy before continuing.
 **macOS / Linux**
 
 ```bash
-cd Demos/Learn/course5-setup
+# from course5-setup
 bash setup-databases.sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-cd Demos\Learn\course5-setup
+# from course5-setup
 .\setup-databases.ps1
 ```
 
@@ -99,10 +99,12 @@ reseeding, useful if a lab has added extra objects alongside the shop schema and
 empty starting point:
 
 ```bash
+# from course5-setup
 bash setup-databases.sh --reset
 ```
 
 ```powershell
+# from course5-setup
 .\setup-databases.ps1 -Reset
 ```
 

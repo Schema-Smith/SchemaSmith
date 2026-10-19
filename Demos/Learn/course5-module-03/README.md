@@ -23,9 +23,12 @@ so you can diff your own extract against it.
 ## Step 1: Look at what EF left behind
 
 ```bash
-# SQL Server
+# from course5-module-03
 ../lab-sql.sh sqlserver shop_from_efcore "SELECT name FROM sys.tables ORDER BY name"
-# → Customer, OrderItem, Product, SalesOrder, __EFMigrationsHistory
+../lab-sql.sh postgres shop_from_efcore "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"
+../lab-sql.sh mysql shop_from_efcore "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_efcore' ORDER BY TABLE_NAME"
+../lab-sql.sh mariadb shop_from_efcore "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_efcore' ORDER BY TABLE_NAME"
+# → Customer, OrderItem, Product, SalesOrder, __EFMigrationsHistory   (SQL Server)
 ```
 
 Four shop tables and EF's migrations-history table. That history table is the thing you're walking
@@ -34,14 +37,19 @@ the database.)
 
 ## Step 2: Extract — name the tables you keep
 
-Open `sqlserver/SchemaTongs.settings.json`. The whitelist is the whole trick:
-
-```json
-"ShouldCast": { "ObjectList": "dbo.Customer,dbo.Product,dbo.SalesOrder,dbo.OrderItem" }
-```
+Open your engine folder's `SchemaTongs.settings.json`. The whitelist is the whole trick — the
+`ObjectList` under `ShouldCast`, already set for you (nothing to edit). Print it:
 
 ```bash
-cd sqlserver
+# from course5-module-03/<engine>
+grep '"ObjectList"' SchemaTongs.settings.json
+```
+
+On SQL Server it names `dbo.Customer,dbo.Product,dbo.SalesOrder,dbo.OrderItem` (the other engines'
+forms are in Step 4). Then extract:
+
+```bash
+# from course5-module-03/<engine>
 schematongs --ConfigFile:SchemaTongs.settings.json
 ls Package/Templates/Main/Tables/
 ```
@@ -59,6 +67,7 @@ wasn't on the list. You didn't delete it; you just didn't invite it.
 ## Step 3: Quench — adopt, then prove the no-op
 
 ```bash
+# from course5-module-03/<engine>
 schemaquench --ConfigFile:quench.settings.json
 ```
 
@@ -66,16 +75,21 @@ The first run adopts your existing tables (stamps them as managed, stands up Sch
 bookkeeping in a separate `SchemaSmith` schema). Run it a second time and nothing happens — a clean
 no-op. That no-op is the proof: the package is a faithful cast of the live database.
 
+Confirm `__EFMigrationsHistory` is still there, untouched — drop it whenever you like. From the lab
+folder:
+
 ```bash
-# confirm __EFMigrationsHistory is still there, untouched — drop it whenever you like
-cd ..            # back to the lab folder
+# from course5-module-03
 ../lab-sql.sh sqlserver shop_from_efcore "SELECT name FROM sys.tables WHERE name='__EFMigrationsHistory'"
+../lab-sql.sh postgres shop_from_efcore "SELECT tablename FROM pg_tables WHERE lower(tablename)='__efmigrationshistory'"
+../lab-sql.sh mysql shop_from_efcore "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_efcore' AND LOWER(TABLE_NAME)='__efmigrationshistory'"
+../lab-sql.sh mariadb shop_from_efcore "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_efcore' AND LOWER(TABLE_NAME)='__efmigrationshistory'"
 # → __EFMigrationsHistory  (left exactly where it was)
 ```
 
 ## Step 4: Do it on PostgreSQL, MySQL, and MariaDB
 
-Same three steps in `postgres/`, `mysql/`, and `mariadb/`. The `before/` EF project is shown for the SQL
+The steps above run the same in `postgres/`, `mysql/`, and `mariadb/`. The `before/` EF project is shown for the SQL
 Server provider; the same `ShopContext` on Npgsql (PostgreSQL) or Pomelo (MySQL/MariaDB) produces the
 identical four tables, and the sandbox databases were seeded to that end state. Only the whitelist's
 dialect differs:

@@ -23,9 +23,12 @@ so you can diff your own extract against it.
 ## Step 1: Look at what Liquibase left behind
 
 ```bash
-# SQL Server
+# from course5-module-02
 ../lab-sql.sh sqlserver shop_from_liquibase "SELECT name FROM sys.tables ORDER BY name"
-# → Customer, DATABASECHANGELOG, DATABASECHANGELOGLOCK, OrderItem, Product, SalesOrder
+../lab-sql.sh postgres shop_from_liquibase "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"
+../lab-sql.sh mysql shop_from_liquibase "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_liquibase' ORDER BY TABLE_NAME"
+../lab-sql.sh mariadb shop_from_liquibase "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_liquibase' ORDER BY TABLE_NAME"
+# → Customer, DATABASECHANGELOG, DATABASECHANGELOGLOCK, OrderItem, Product, SalesOrder   (SQL Server)
 ```
 
 Four shop tables and two bookkeeping tables — one ledger of every changeset, one lock to guard the run.
@@ -33,14 +36,19 @@ Both are what you're walking away from.
 
 ## Step 2: Extract — name the tables you keep
 
-Open `sqlserver/SchemaTongs.settings.json`. The whitelist is the whole trick:
-
-```json
-"ShouldCast": { "ObjectList": "dbo.Customer,dbo.Product,dbo.SalesOrder,dbo.OrderItem" }
-```
+Open your engine folder's `SchemaTongs.settings.json`. The whitelist is the whole trick — the
+`ObjectList` under `ShouldCast`, already set for you (nothing to edit). Print it:
 
 ```bash
-cd sqlserver
+# from course5-module-02/<engine>
+grep '"ObjectList"' SchemaTongs.settings.json
+```
+
+On SQL Server it names `dbo.Customer,dbo.Product,dbo.SalesOrder,dbo.OrderItem` (the other engines'
+forms are in Step 4). Then extract:
+
+```bash
+# from course5-module-02/<engine>
 schematongs --ConfigFile:SchemaTongs.settings.json
 ls Package/Templates/Main/Tables/
 ```
@@ -59,6 +67,7 @@ just didn't invite them.
 ## Step 3: Quench — adopt, then prove the no-op
 
 ```bash
+# from course5-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.json
 ```
 
@@ -66,16 +75,21 @@ The first run adopts your existing tables (stamps them as managed, stands up Sch
 bookkeeping in a separate `SchemaSmith` schema). Run it a second time and nothing happens — a clean
 no-op. That no-op is the proof: the package is a faithful cast of the live database.
 
+Confirm both Liquibase tables are still there, untouched — drop them whenever you like. From the lab
+folder:
+
 ```bash
-# confirm both Liquibase tables are still there, untouched — drop them whenever you like
-cd ..            # back to the lab folder
+# from course5-module-02
 ../lab-sql.sh sqlserver shop_from_liquibase "SELECT name FROM sys.tables WHERE name LIKE 'DATABASECHANGE%'"
+../lab-sql.sh postgres shop_from_liquibase "SELECT tablename FROM pg_tables WHERE tablename ILIKE 'databasechange%'"
+../lab-sql.sh mysql shop_from_liquibase "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_liquibase' AND UPPER(TABLE_NAME) LIKE 'DATABASECHANGE%'"
+../lab-sql.sh mariadb shop_from_liquibase "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_liquibase' AND UPPER(TABLE_NAME) LIKE 'DATABASECHANGE%'"
 # → DATABASECHANGELOG, DATABASECHANGELOGLOCK  (left exactly where they were)
 ```
 
 ## Step 4: Do it on PostgreSQL, MySQL, and MariaDB
 
-Same three steps in `postgres/`, `mysql/`, and `mariadb/`. The `before/` Liquibase changelog is
+The steps above run the same in `postgres/`, `mysql/`, and `mariadb/`. The `before/` Liquibase changelog is
 engine-agnostic XML — the same changelog drives all four — and the sandbox databases were seeded to
 the identical end state, so the extract works the same on each. Only the whitelist's dialect differs:
 

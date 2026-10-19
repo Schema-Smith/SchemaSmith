@@ -22,23 +22,31 @@ so you can diff your own extract against it.
 ## Step 1: Look at what Flyway left behind
 
 ```bash
-# SQL Server
+# from course5-module-01
 ../lab-sql.sh sqlserver shop_from_flyway "SELECT name FROM sys.tables ORDER BY name"
-# → Customer, OrderItem, Product, SalesOrder, flyway_schema_history
+../lab-sql.sh postgres shop_from_flyway "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"
+../lab-sql.sh mysql shop_from_flyway "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_flyway' ORDER BY TABLE_NAME"
+../lab-sql.sh mariadb shop_from_flyway "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_flyway' ORDER BY TABLE_NAME"
+# → Customer, OrderItem, Product, SalesOrder, flyway_schema_history   (SQL Server)
 ```
 
 Four shop tables and Flyway's history table. That history table is the thing you're walking away from.
 
 ## Step 2: Extract — name the tables you keep
 
-Open `sqlserver/SchemaTongs.settings.json`. The whitelist is the whole trick:
-
-```json
-"ShouldCast": { "ObjectList": "dbo.Customer,dbo.Product,dbo.SalesOrder,dbo.OrderItem" }
-```
+Open your engine folder's `SchemaTongs.settings.json`. The whitelist is the whole trick — the
+`ObjectList` under `ShouldCast`, already set for you (nothing to edit). Print it:
 
 ```bash
-cd sqlserver
+# from course5-module-01/<engine>
+grep '"ObjectList"' SchemaTongs.settings.json
+```
+
+On SQL Server it names `dbo.Customer,dbo.Product,dbo.SalesOrder,dbo.OrderItem` (the other engines'
+forms are in Step 4). Then extract:
+
+```bash
+# from course5-module-01/<engine>
 schematongs --ConfigFile:SchemaTongs.settings.json
 ls Package/Templates/Main/Tables/
 ```
@@ -56,6 +64,7 @@ on the list. You didn't delete it; you just didn't invite it.
 ## Step 3: Quench — adopt, then prove the no-op
 
 ```bash
+# from course5-module-01/<engine>
 schemaquench --ConfigFile:quench.settings.json
 ```
 
@@ -63,16 +72,21 @@ The first run adopts your existing tables (stamps them as managed, stands up Sch
 bookkeeping in a separate `SchemaSmith` schema). Run it a second time and nothing happens — a clean
 no-op. That no-op is the proof: the package is a faithful cast of the live database.
 
+Confirm `flyway_schema_history` is still there, untouched — drop it whenever you like. From the lab
+folder:
+
 ```bash
-# confirm flyway_schema_history is still there, untouched — drop it whenever you like
-cd ..            # back to the lab folder
+# from course5-module-01
 ../lab-sql.sh sqlserver shop_from_flyway "SELECT name FROM sys.tables WHERE name='flyway_schema_history'"
+../lab-sql.sh postgres shop_from_flyway "SELECT tablename FROM pg_tables WHERE tablename='flyway_schema_history'"
+../lab-sql.sh mysql shop_from_flyway "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_flyway' AND TABLE_NAME='flyway_schema_history'"
+../lab-sql.sh mariadb shop_from_flyway "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_flyway' AND TABLE_NAME='flyway_schema_history'"
 # → flyway_schema_history  (left exactly where it was)
 ```
 
 ## Step 4: Do it on PostgreSQL, MySQL, and MariaDB
 
-Same three steps in `postgres/`, `mysql/`, and `mariadb/`. The `before/` Flyway project is shown in its
+The steps above run the same in `postgres/`, `mysql/`, and `mariadb/`. The `before/` Flyway project is shown in its
 SQL Server form (Flyway migrations are written per engine); the PostgreSQL, MySQL, and MariaDB sandbox
 databases were seeded to the identical end state, so the extract works the same on each. Only the
 whitelist's dialect differs:
