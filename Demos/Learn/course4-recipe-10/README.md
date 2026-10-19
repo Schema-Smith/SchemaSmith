@@ -15,6 +15,11 @@ database on the same connection; PostgreSQL and MySQL/MariaDB can't, so this rec
 - The [sandbox](../docker) is up and verified.
 - The two databases exist — run [`./setup-dbs.sh`](./setup-dbs.sh) once. It creates `Shop_Primary`
   (the publisher) and `Shop_Replica` (the subscriber), both empty. `--reset` drops and recreates both.
+
+  ```bash
+  # from course4-recipe-10
+  ./setup-dbs.sh
+  ```
 - The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 `sqlserver/Package/Product.json` carries two templates, in order:
@@ -39,7 +44,7 @@ changes:
 ## Step 1: Deploy — publisher gets everything, subscriber gets the marked set
 
 ```bash
-cd sqlserver
+# from course4-recipe-10/sqlserver
 schemaquench --ConfigFile:quench.settings.json
 ```
 
@@ -54,8 +59,14 @@ After Script:
 [localhost,11433].[Shop_Primary] Successfully Quenched
 ```
 
-Check what actually landed on each database (`SELECT name FROM sys.tables WHERE name NOT IN
-('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp')` and `SELECT name FROM sys.foreign_keys`):
+Check what actually landed on each database:
+
+```bash
+# from course4-recipe-10
+../lab-sql.sh sqlserver Shop_Primary "SELECT name FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp') ORDER BY name"
+../lab-sql.sh sqlserver Shop_Replica "SELECT name FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp') ORDER BY name"
+../lab-sql.sh sqlserver Shop_Replica "SELECT name FROM sys.foreign_keys"
+```
 
 ```
 -- Shop_Primary user tables:        Customers, Inventory, Orders
@@ -99,6 +110,7 @@ to multi-line JSON, and everything after the first line escapes the comment and 
 Run the exact same command again:
 
 ```bash
+# from course4-recipe-10/sqlserver
 schemaquench --ConfigFile:quench.settings.json
 ```
 
@@ -109,8 +121,10 @@ safe to run over and over.
 
 ## Step 3: Toggle the model — Extensions is the control surface
 
-Edit `sqlserver/Package/Templates/Main/Tables/dbo.Inventory.json` and flip its flag:
+Edit `sqlserver/Package/Templates/Main/Tables/dbo.Inventory.json` and flip its flag — change
+`Extensions.ReplicationEnabled` from `false` to `true`:
 
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Tables/dbo.Inventory.json" set Extensions.ReplicationEnabled true -->
 ```json
 "Extensions": { "ReplicationEnabled": true }
 ```
@@ -118,6 +132,7 @@ Edit `sqlserver/Package/Templates/Main/Tables/dbo.Inventory.json` and flip its f
 Redeploy:
 
 ```bash
+# from course4-recipe-10/sqlserver
 schemaquench --ConfigFile:quench.settings.json
 ```
 
@@ -130,25 +145,37 @@ script edit, nothing but the flag changed:
 
 The subscriber now has all three tables:
 
+```bash
+# from course4-recipe-10
+../lab-sql.sh sqlserver Shop_Replica "SELECT name FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp') ORDER BY name"
+```
+
 ```
 -- Shop_Replica user tables:        Customers, Inventory, Orders
 ```
 
 `Inventory` joined the replica the moment the model said so. **Revert `dbo.Inventory.json` back to
 `"ReplicationEnabled": false` and redeploy** before moving on, so the lab is back at the Step 1
-baseline.
+baseline:
+
+```bash
+# from course4-recipe-10/sqlserver
+schemaquench --ConfigFile:quench.settings.json
+```
 
 ## Step 4: WhatIf previews, runs nothing
 
 Reset to fresh, empty databases first:
 
 ```bash
+# from course4-recipe-10
 ./setup-dbs.sh --reset
 ```
 
 Then run against the WhatIf settings, which set `WhatIfONLY: true`:
 
 ```bash
+# from course4-recipe-10/sqlserver
 schemaquench --ConfigFile:quench.settings.whatif.json
 ```
 
@@ -162,7 +189,14 @@ schemaquench --ConfigFile:quench.settings.whatif.json
 
 Every slot — including the `[ALWAYS]` After Script that would otherwise call `TableQuench` on the
 subscriber — is listed as a preview, not executed. Check `Shop_Replica` afterward and it has **no
-user tables**: the dry run touched nothing. WhatIf shows what *would* run; it never executes a script,
+user tables**: the dry run touched nothing.
+
+```bash
+# from course4-recipe-10
+../lab-sql.sh sqlserver Shop_Replica "SELECT COUNT(*) FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp')"
+```
+
+ WhatIf shows what *would* run; it never executes a script,
 which is exactly what makes it safe to preview a hook that reaches across databases.
 
 ## The FK-closed-set rule
@@ -178,12 +212,14 @@ isolation.
 ## Cleanup
 
 ```bash
+# from course4-recipe-10
 ./setup-dbs.sh --reset
 ```
 
 Or drop both databases by hand:
 
 ```bash
+# from course4-recipe-10
 ../lab-sql.sh sqlserver master "DROP DATABASE Shop_Primary"
 ../lab-sql.sh sqlserver master "DROP DATABASE Shop_Replica"
 ```

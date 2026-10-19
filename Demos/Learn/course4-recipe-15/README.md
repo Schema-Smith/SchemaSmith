@@ -36,10 +36,9 @@ an expression can only mean `ALWAYS`. None of the generated columns declares `Nu
 ## Step 1: Deploy it twice
 
 ```bash
-cd <engine>
+# from course4-recipe-15/<engine>
 schemaquench --ConfigFile:deploy.settings.json                     # exit 0 -- builds the table
 schemaquench --ConfigFile:deploy.settings.json --report:./rerun    # exit 0
-cd ..
 ```
 
 `--report:` writes a deployment summary (`rerun.json` and `rerun.md`). Open `rerun.md` and read **Object Changes**:
@@ -62,6 +61,7 @@ what the engine **stored** after applying it, and the engine version (and on SQL
 in force at the time:
 
 ```bash
+# from course4-recipe-15
 ../lab-sql.sh sqlserver cookbook_r15 "SELECT ObjectName, Slot, AuthoredText, CanonicalText, CompatLevel FROM SchemaSmith.ExpressionMap"
 # → CK_Subscription_Retention   expression  RetentionDays <= 365   ([RetentionDays]<=(365))   160
 # → CreatedAt                   default     SYSUTCDATETIME()       (sysutcdatetime())         160
@@ -77,6 +77,8 @@ in force at the time:
 ../lab-sql.sh mysql cookbook_r15 "SELECT ObjectName, AuthoredText, CanonicalText FROM SchemaSmith_ExpressionMap"
 # → PlanLabel       concat(PlanCode, '-', RetentionDays)   concat(`PlanCode`,_utf8mb4\\'-\\',`RetentionDays`)
 # → RetentionWeeks  RetentionDays DIV 7                    (`RetentionDays` DIV 7)
+
+../lab-sql.sh mariadb cookbook_r15 "SELECT ObjectName, AuthoredText, CanonicalText FROM SchemaSmith_ExpressionMap"
 ```
 
 Look at the two text columns side by side. No amount of whitespace trimming or paren stripping reconciles
@@ -91,8 +93,12 @@ The table is safe to empty — the worst it costs is one more comparison. Emptyi
 a deploy behaved before 2.7.0, because **no record means no opinion**: the comparison falls back to the text.
 
 ```bash
+# from course4-recipe-15
 ../lab-sql.sh sqlserver cookbook_r15 "DELETE FROM SchemaSmith.ExpressionMap"
-cd sqlserver && schemaquench --ConfigFile:deploy.settings.json --report:./norecord ; cd ..
+../lab-sql.sh postgres cookbook_r15 'DELETE FROM "SchemaSmith"."ExpressionMap"'
+../lab-sql.sh mysql cookbook_r15 "DELETE FROM SchemaSmith_ExpressionMap"
+../lab-sql.sh mariadb cookbook_r15 "DELETE FROM SchemaSmith_ExpressionMap"
+cd <engine> && schemaquench --ConfigFile:deploy.settings.json --report:./norecord ; cd ..
 ```
 
 ```
@@ -125,10 +131,22 @@ Going quiet on churn would be dangerous if it also went blind to drift. Change a
 someone fixes a production issue at 2am — and leave the package alone:
 
 ```bash
+# from course4-recipe-15
 ../lab-sql.sh sqlserver cookbook_r15 "ALTER TABLE dbo.Subscription DROP CONSTRAINT CK_Subscription_Retention; ALTER TABLE dbo.Subscription ADD CONSTRAINT CK_Subscription_Retention CHECK (RetentionDays <= 3650)"
 cd sqlserver && schemaquench --ConfigFile:deploy.settings.json ; cd ..
 #         Dropping check constraint [dbo].[Subscription].CK_Subscription_Retention
 #         Adding check constraint [dbo].[Subscription].CK_Subscription_Retention
+```
+
+The same move on the other engines — PostgreSQL loosens its check, MySQL and MariaDB (which have no check
+here) rewrite the virtual column's expression:
+
+```bash
+# from course4-recipe-15
+../lab-sql.sh postgres cookbook_r15 "ALTER TABLE public.subscription DROP CONSTRAINT ck_subscription_plan; ALTER TABLE public.subscription ADD CONSTRAINT ck_subscription_plan CHECK (starts_with(plan_code, 'Q'))"
+../lab-sql.sh mysql cookbook_r15 "ALTER TABLE Subscription MODIFY COLUMN PlanLabel VARCHAR(40) AS (concat(PlanCode, '+', RetentionDays)) VIRTUAL"
+../lab-sql.sh mariadb cookbook_r15 "ALTER TABLE Subscription MODIFY COLUMN PlanLabel VARCHAR(40) AS (concat(PlanCode, '+', RetentionDays)) VIRTUAL"
+cd <engine> && schemaquench --ConfigFile:deploy.settings.json ; cd ..
 ```
 
 The live text no longer matches what SchemaSmith recorded, so the declaration is put back. The comparison is
@@ -136,7 +154,14 @@ not one-sided: it trusts neither the package text nor the catalog text, it check
 
 ## Step 5: Change the declaration
 
-Edit the `Expression` in `dbo.Subscription.json` to `RetentionDays <= 730` and re-quench:
+Edit the `Expression` in `dbo.Subscription.json` to `RetentionDays <= 730` and re-quench (on PostgreSQL, edit
+`ck_subscription_plan`'s `Expression` in `public.subscription.json`; on MySQL and MariaDB, `RetentionWeeks`'s
+`GenerationExpression` in `Subscription.json`):
+
+```bash
+# from course4-recipe-15/<engine>
+schemaquench --ConfigFile:deploy.settings.json
+```
 
 ```
 Dropping check constraint [dbo].[Subscription].CK_Subscription_Retention
@@ -152,6 +177,7 @@ raised from 150 to 160 would hold both forms for years. Re-applying every expres
 time you deploy after that change would be a far bigger event than the churn it prevents. Try it:
 
 ```bash
+# from course4-recipe-15
 ../lab-sql.sh sqlserver master "ALTER DATABASE cookbook_r15 SET COMPATIBILITY_LEVEL = 150"
 cd sqlserver && schemaquench --ConfigFile:deploy.settings.json --report:./compat ; cd ..
 ```
@@ -185,6 +211,7 @@ so SchemaSmith never narrows it. Declare `"Nullable": false` when you genuinely 
 ## Cleanup
 
 ```bash
+# from course4-recipe-15
 ../lab-sql.sh sqlserver cookbook_r15 "ALTER DATABASE cookbook_r15 SET COMPATIBILITY_LEVEL = 160; DROP TABLE IF EXISTS dbo.Subscription"
 ../lab-sql.sh postgres  cookbook_r15 "DROP TABLE IF EXISTS public.subscription"
 for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r15 "DROP TABLE IF EXISTS Subscription"; done

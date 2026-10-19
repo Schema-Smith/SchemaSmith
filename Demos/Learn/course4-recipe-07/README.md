@@ -19,13 +19,16 @@ And `DataDelivery` is now either a single object (as before) or an **array** of 
 
 - **The sandbox is up.** SQL Server (`localhost,11433`), PostgreSQL (`localhost:15432`), MySQL (`localhost:13306`), MariaDB (`localhost:13307`), all `…/Learn!Passw0rd`.
 - **The CLI is on your PATH** — `schemaquench --version` answers **2.7.0** or later.
-- **Two databases per engine.** The lab creates `cookbook_r7_dev` and `cookbook_r7_main`; the template's `DatabaseIdentificationScript` targets both, so **one quench deploys to both** and the gates steer the data. Create them first (SQL Server shown):
-  ```sql
-  CREATE DATABASE cookbook_r7_dev;
-  CREATE DATABASE cookbook_r7_main;
-  ```
-  MariaDB:
+- **Two databases per engine.** The lab creates `cookbook_r7_dev` and `cookbook_r7_main`; the template's `DatabaseIdentificationScript` targets both, so **one quench deploys to both** and the gates steer the data. Create them first, on your engine
+  (PostgreSQL has no `IF NOT EXISTS` for databases, so its lines report "already exists" on a second run — harmless):
   ```bash
+  # from course4-recipe-07
+  ../lab-sql.sh sqlserver master "IF DB_ID('cookbook_r7_dev') IS NULL CREATE DATABASE cookbook_r7_dev"
+  ../lab-sql.sh sqlserver master "IF DB_ID('cookbook_r7_main') IS NULL CREATE DATABASE cookbook_r7_main"
+  ../lab-sql.sh postgres postgres "CREATE DATABASE cookbook_r7_dev"
+  ../lab-sql.sh postgres postgres "CREATE DATABASE cookbook_r7_main"
+  ../lab-sql.sh mysql information_schema "CREATE DATABASE IF NOT EXISTS cookbook_r7_dev"
+  ../lab-sql.sh mysql information_schema "CREATE DATABASE IF NOT EXISTS cookbook_r7_main"
   ../lab-sql.sh mariadb information_schema "CREATE DATABASE IF NOT EXISTS cookbook_r7_dev"
   ../lab-sql.sh mariadb information_schema "CREATE DATABASE IF NOT EXISTS cookbook_r7_main"
   ```
@@ -33,7 +36,8 @@ And `DataDelivery` is now either a single object (as before) or an **array** of 
 ## Deploy once, watch the gates decide
 
 ```bash
-schemaquench --ConfigFile:sqlserver/deploy.settings.json
+# from course4-recipe-07/<engine>
+schemaquench --ConfigFile:deploy.settings.json
 ```
 
 The schema — all three tables — deploys to *both* databases unconditionally. Only the **data** is gated. Watch the delivery step; the log names every decision by its `VariantName`:
@@ -48,7 +52,19 @@ The schema — all three tables — deploys to *both* databases unconditionally.
 [localhost,11433].[cookbook_r7_main]    Delivering dbo.StatusCode [Regional status codes]
 ```
 
-Count the rows and the gates are plain:
+Count the rows and the gates are plain. Each line prints `SampleOrder`, `ProductCatalog`, `StatusCode`:
+
+```bash
+# from course4-recipe-07
+../lab-sql.sh sqlserver cookbook_r7_dev "SELECT (SELECT COUNT(*) FROM dbo.SampleOrder), (SELECT COUNT(*) FROM dbo.ProductCatalog), (SELECT COUNT(*) FROM dbo.StatusCode)"
+../lab-sql.sh sqlserver cookbook_r7_main "SELECT (SELECT COUNT(*) FROM dbo.SampleOrder), (SELECT COUNT(*) FROM dbo.ProductCatalog), (SELECT COUNT(*) FROM dbo.StatusCode)"
+../lab-sql.sh postgres cookbook_r7_dev "SELECT (SELECT COUNT(*) FROM public.sampleorder), (SELECT COUNT(*) FROM public.productcatalog), (SELECT COUNT(*) FROM public.statuscode)"
+../lab-sql.sh postgres cookbook_r7_main "SELECT (SELECT COUNT(*) FROM public.sampleorder), (SELECT COUNT(*) FROM public.productcatalog), (SELECT COUNT(*) FROM public.statuscode)"
+../lab-sql.sh mysql cookbook_r7_dev "SELECT (SELECT COUNT(*) FROM SampleOrder), (SELECT COUNT(*) FROM ProductCatalog), (SELECT COUNT(*) FROM StatusCode)"
+../lab-sql.sh mysql cookbook_r7_main "SELECT (SELECT COUNT(*) FROM SampleOrder), (SELECT COUNT(*) FROM ProductCatalog), (SELECT COUNT(*) FROM StatusCode)"
+../lab-sql.sh mariadb cookbook_r7_dev "SELECT (SELECT COUNT(*) FROM SampleOrder), (SELECT COUNT(*) FROM ProductCatalog), (SELECT COUNT(*) FROM StatusCode)"
+../lab-sql.sh mariadb cookbook_r7_main "SELECT (SELECT COUNT(*) FROM SampleOrder), (SELECT COUNT(*) FROM ProductCatalog), (SELECT COUNT(*) FROM StatusCode)"
+```
 
 | Table | `cookbook_r7_dev` | `cookbook_r7_main` |
 | --- | :---: | :---: |
@@ -101,6 +117,25 @@ dev gets six rows, main gets two. The gates are the environment switch, and the 
 On `cookbook_r7_main` both slices deliver — three core (GLOBAL) rows plus two regional (EMEA/APAC), five total. On dev both skip. `Target` is the row already in the table, so each `MergeFilter` fences a slice's authority to its partition: the core slice governs `Region = 'GLOBAL'`, the regional slice governs `EMEA`/`APAC`, and neither can touch the other's rows.
 
 **Prove the partitioning.** Deploy the five rows, remove `HELD` from `dbo.StatusCode.core.tabledata`, and redeploy — `HELD` is deleted (it fell out of the GLOBAL source) while `EMEA` and `APAC` stay put (a different partition the core slice can't reach). Full-sync gives each slice authority; the disjoint filter keeps that authority in its lane.
+
+The file is `<engine>/Package/Templates/Main/data/` (`dbo.StatusCode.core.tabledata`, `public.statuscode.core.tabledata`, or `StatusCode.core.tabledata`); delete the line whose code is `HELD` (keep the JSON array valid — no trailing comma). Then redeploy and list the codes:
+
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/data/*.core.tabledata" remove-where . code=HELD -->
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/data/*.core.tabledata" remove-where . Code=HELD -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/data/*.core.tabledata" remove-where . Code=HELD -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/data/*.core.tabledata" remove-where . Code=HELD -->
+```bash
+# from course4-recipe-07/<engine>
+schemaquench --ConfigFile:deploy.settings.json
+```
+
+```bash
+# from course4-recipe-07
+../lab-sql.sh sqlserver cookbook_r7_main "SELECT Code, Region FROM dbo.StatusCode ORDER BY Region, Code"
+../lab-sql.sh postgres cookbook_r7_main "SELECT code, region FROM public.statuscode ORDER BY region, code"
+../lab-sql.sh mysql cookbook_r7_main "SELECT Code, Region FROM StatusCode ORDER BY Region, Code"
+../lab-sql.sh mariadb cookbook_r7_main "SELECT Code, Region FROM StatusCode ORDER BY Region, Code"
+```
 
 > **Portability.** The `MergeFilter` alias is `Target` (the row already in the table) on all four engines — `Target.Region` on SQL Server, MySQL, and MariaDB, `"Target".region` (PostgreSQL folds unquoted names to lowercase). Full-sync delivery uses a partitioned `MERGE`; PostgreSQL handles it on 16 as well as 17 (this lab's sandbox runs 16.13).
 

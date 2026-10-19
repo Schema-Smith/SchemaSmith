@@ -34,7 +34,7 @@ all targeting `cookbook_r9`.
 ## Step 2: Deploy — the dictionary builds itself
 
 ```bash
-cd <engine>
+# from course4-recipe-09/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
@@ -43,10 +43,12 @@ The `[ALWAYS]` script reads the whole-template model token, shreds it (`OPENJSON
 column:
 
 ```bash
-# SQL Server
-cd ..            # back to the lab folder
+# from course4-recipe-09
 ../lab-sql.sh sqlserver cookbook_r9 "SELECT TableName, ColumnName, SensitivityLevel, DataSteward FROM dbo.DataDictionary ORDER BY TableName, ColumnName"
 # → Customer/Email PII privacy-office ; SalesOrder/TotalAmount Confidential finance ; …  (6 rows)
+../lab-sql.sh postgres cookbook_r9 "SELECT table_name, column_name, sensitivity_level, data_steward FROM public.datadictionary ORDER BY table_name, column_name"
+../lab-sql.sh mysql cookbook_r9 "SELECT table_name, column_name, sensitivity_level, data_steward FROM DataDictionary ORDER BY table_name, column_name"
+../lab-sql.sh mariadb cookbook_r9 "SELECT table_name, column_name, sensitivity_level, data_steward FROM DataDictionary ORDER BY table_name, column_name"
 ```
 
 Now it's queryable metadata: *"show me every PII or Confidential column and who stewards it"* is one `SELECT`.
@@ -57,6 +59,15 @@ Change `Email`'s `SensitivityLevel` from `PII` to `Restricted`, drop the `Displa
 `Customer.json`, and re-quench. The dictionary updates the changed row and **removes the row for the dropped
 column** — the `MERGE` keeps it exactly in step with the model. Put them back and re-quench, and it's whole
 again. You never edit `DataDictionary`; it's computed from the declared metadata on every deploy.
+
+The table file is `<engine>/Package/Templates/Main/Tables/` (`dbo.Customer.json`, `public.customer.json`, or `Customer.json`); the key is the
+`Email` column's `Extensions.SensitivityLevel`, and the column to remove is the `DisplayName` entry in `Columns`.
+Re-quench and re-run the Step 2 query:
+
+```bash
+# from course4-recipe-09/<engine>
+schemaquench --ConfigFile:deploy.settings.json
+```
 
 ## Enforcing the metadata in CI (optional)
 

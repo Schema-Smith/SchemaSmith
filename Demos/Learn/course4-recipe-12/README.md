@@ -33,6 +33,7 @@ CREATE EVENT IF NOT EXISTS purge_old_sessions
 Give it a table to talk about, run it, and look:
 
 ```bash
+# from course4-recipe-12
 for e in mysql mariadb; do
   ../lab-sql.sh $e cookbook_r12 "CREATE TABLE IF NOT EXISTS app_session (session_id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, started_at DATETIME NOT NULL)"
   ../lab-sql.sh $e cookbook_r12 "$(cat scripted-before/purge_old_sessions.sql)"
@@ -45,6 +46,14 @@ Now **shorten the retention window**. Edit the file: `INTERVAL 30 DAY` → `INTE
 policy change, the kind that goes through review because someone decided you keep less data. Run the
 same file again, then look again:
 
+```bash
+# from course4-recipe-12
+for e in mysql mariadb; do
+  ../lab-sql.sh $e cookbook_r12 "$(cat scripted-before/purge_old_sessions.sql)"
+  echo "$e  deployed = $(../lab-sql.sh $e cookbook_r12 "SELECT EVENT_DEFINITION FROM information_schema.EVENTS WHERE EVENT_NAME='purge_old_sessions'")"
+done
+```
+
 ```
 mysql    deployed = DELETE FROM app_session WHERE started_at < NOW() - INTERVAL 30 DAY
 mariadb  deployed = DELETE FROM app_session WHERE started_at < NOW() - INTERVAL 30 DAY
@@ -54,9 +63,10 @@ Still 30. Both engines. No error, no warning — the statement is a no-op by des
 exists, and `IF NOT EXISTS` is precisely what makes it safe to re-run *and* deaf to every edit. Your
 approved retention change is live in git and absent from the database.
 
-Clear it before moving on:
+Put the file back to `INTERVAL 30 DAY`, and clear the event before moving on:
 
 ```bash
+# from course4-recipe-12
 for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r12 "DROP EVENT IF EXISTS purge_old_sessions"; done
 ```
 
@@ -88,6 +98,7 @@ An event declaration is its schedule plus its body:
 engines:
 
 ```bash
+# from course4-recipe-12
 for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.json); done
 # exit 0, both. Run it a second time -- still exit 0, nothing changes. It is idempotent.
 ```
@@ -95,9 +106,11 @@ for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.j
 ## Step 3: Change the body — this time it takes
 
 Make the same retention edit you made in Step 1, but in the declaration: `INTERVAL 30 DAY` →
-`INTERVAL 7 DAY` in `purge_old_sessions.json`. Re-quench and look:
+`INTERVAL 7 DAY` in the `Definition` of `<engine>/Package/Templates/Main/Events/purge_old_sessions.json`
+(both `mysql/` and `mariadb/`). Re-quench and look:
 
 ```bash
+# from course4-recipe-12
 for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.json); done
 #   Quenching scheduled events
 for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r12 "SELECT EVENT_DEFINITION FROM information_schema.EVENTS WHERE EVENT_NAME='purge_old_sessions'"; done
@@ -109,8 +122,11 @@ the declaration against being read. Put it back to 30 and re-quench, and it goes
 
 ## Step 4: Remove by absence — and watch what is *not* removed
 
-Drop-by-absence is opt-in. Turn it on at the environment level in `deploy.settings.json`:
+Drop-by-absence is opt-in. Turn it on at the environment level in `deploy.settings.json`: add
+`"DropEventsRemovedFromProduct": true` as a top-level key (beside `"WhatIfONLY"`) in both
+`mysql/deploy.settings.json` and `mariadb/deploy.settings.json`:
 
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/deploy.settings.json" set DropEventsRemovedFromProduct true -->
 ```json
 { "DropEventsRemovedFromProduct": true }
 ```
@@ -121,12 +137,17 @@ Drop-by-absence is opt-in. Turn it on at the environment level in `deploy.settin
 Now prove both halves. First, plant an event SchemaSmith did **not** create:
 
 ```bash
+# from course4-recipe-12
 for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r12 "CREATE EVENT IF NOT EXISTS handmade_probe ON SCHEDULE EVERY 1 DAY DO SELECT 1"; done
 ```
 
-Then delete `Events/archive_old_sessions.json` from both packages and re-quench:
+Then delete `Events/archive_old_sessions.json` from both packages
+(`<engine>/Package/Templates/Main/Events/`) and re-quench:
 
 ```bash
+# from course4-recipe-12
+for e in mysql mariadb; do rm $e/Package/Templates/Main/Events/archive_old_sessions.json; done
+for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.json); done
 for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r12 "SELECT GROUP_CONCAT(EVENT_NAME ORDER BY EVENT_NAME) FROM information_schema.EVENTS WHERE EVENT_SCHEMA='cookbook_r12'"; done
 # → handmade_probe,purge_old_sessions
 ```
@@ -140,6 +161,8 @@ Now take the package all the way down. Delete `Events/purge_old_sessions.json` t
 empty, and re-quench:
 
 ```bash
+# from course4-recipe-12
+for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.json); done
 for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r12 "SELECT GROUP_CONCAT(EVENT_NAME ORDER BY EVENT_NAME) FROM information_schema.EVENTS WHERE EVENT_SCHEMA='cookbook_r12'"; done
 # → handmade_probe
 ```
@@ -151,6 +174,7 @@ declares nothing. Restore both files and re-quench to bring the sweeps back.
 ## Cleanup
 
 ```bash
+# from course4-recipe-12
 for e in mysql mariadb; do
   ../lab-sql.sh $e cookbook_r12 "DROP EVENT IF EXISTS purge_old_sessions; DROP EVENT IF EXISTS archive_old_sessions; DROP EVENT IF EXISTS handmade_probe; DROP TABLE IF EXISTS app_session_archive; DROP TABLE IF EXISTS app_session"
 done

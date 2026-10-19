@@ -33,41 +33,77 @@ that snapshots the current rows. It runs that DDL dynamically — so it always r
 ## Step 2: Deploy — the script generates the mirror
 
 ```bash
-cd <engine>
+# from course4-recipe-05/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
 `ProductSnapshot` now exists, with `Product`'s columns plus a `SnapshotAt`:
 
 ```bash
-# SQL Server
-cd ..            # back to the lab folder
+# from course4-recipe-05
 ../lab-sql.sh sqlserver cookbook_r5 "SELECT name FROM sys.columns WHERE object_id=OBJECT_ID('dbo.ProductSnapshot') ORDER BY column_id"
 # → SnapshotAt, ProductId, Name, Price
+../lab-sql.sh postgres cookbook_r5 "SELECT column_name FROM information_schema.columns WHERE table_name='productsnapshot' ORDER BY ordinal_position"
+../lab-sql.sh mysql cookbook_r5 "SELECT column_name FROM information_schema.columns WHERE table_schema='cookbook_r5' AND table_name='ProductSnapshot' ORDER BY ordinal_position"
+../lab-sql.sh mariadb cookbook_r5 "SELECT column_name FROM information_schema.columns WHERE table_schema='cookbook_r5' AND table_name='ProductSnapshot' ORDER BY ordinal_position"
 ```
 
 ## Step 3: Put rows in Product, re-quench — they're captured
 
-```sql
-INSERT INTO Product (ProductId, Name, Price) VALUES (1, 'Widget', 9.99), (2, 'Gadget', 19.99);
+```bash
+# from course4-recipe-05
+../lab-sql.sh sqlserver cookbook_r5 "INSERT INTO dbo.Product (ProductId, Name, Price) VALUES (1, 'Widget', 9.99), (2, 'Gadget', 19.99)"
+../lab-sql.sh postgres cookbook_r5 "INSERT INTO public.product (productid, name, price) VALUES (1, 'Widget', 9.99), (2, 'Gadget', 19.99)"
+../lab-sql.sh mysql cookbook_r5 "INSERT INTO Product (ProductId, Name, Price) VALUES (1, 'Widget', 9.99), (2, 'Gadget', 19.99)"
+../lab-sql.sh mariadb cookbook_r5 "INSERT INTO Product (ProductId, Name, Price) VALUES (1, 'Widget', 9.99), (2, 'Gadget', 19.99)"
 ```
 
 ```bash
+# from course4-recipe-05/<engine>
 schemaquench --ConfigFile:deploy.settings.json
-# ProductSnapshot now holds a snapshot of those rows
+```
+
+`ProductSnapshot` now holds a snapshot of those rows:
+
+```bash
+# from course4-recipe-05
+../lab-sql.sh sqlserver cookbook_r5 "SELECT ProductId, Name FROM dbo.ProductSnapshot ORDER BY SnapshotAt, ProductId"
+../lab-sql.sh postgres cookbook_r5 "SELECT productid, name FROM public.productsnapshot ORDER BY snapshotat, productid"
+../lab-sql.sh mysql cookbook_r5 "SELECT ProductId, Name FROM ProductSnapshot ORDER BY SnapshotAt, ProductId"
+../lab-sql.sh mariadb cookbook_r5 "SELECT ProductId, Name FROM ProductSnapshot ORDER BY SnapshotAt, ProductId"
 ```
 
 ## Step 4: Add a column — the generated table follows
 
-Add `Sku NVARCHAR(50)` (or `VARCHAR(50)`) to `Product`'s JSON and re-quench. `ProductSnapshot` gains the `Sku`
-column, and the next snapshot includes it — you never touched `ProductSnapshot`'s definition, because it
-doesn't have one. It's generated from `Product` every deploy.
+Add `Sku NVARCHAR(50)` (or `VARCHAR(50)`) to `Product`'s JSON and re-quench. In
+`<engine>/Package/Templates/Main/Tables/` (`dbo.Product.json`, `public.product.json`, or `Product.json`), add one
+entry to the end of the `Columns` array, in that file's own naming style:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/dbo.Product.json" append Columns '{"Name": "[Sku]", "DataType": "NVARCHAR(50)", "Nullable": true}' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/public.product.json" append Columns '{"Name": "sku", "DataType": "VARCHAR(50)", "Nullable": true}' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Product.json" append Columns '{"Name": "`Sku`", "DataType": "VARCHAR(50)", "Nullable": true}' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Product.json" append Columns '{"Name": "`Sku`", "DataType": "VARCHAR(50)", "Nullable": true}' -->
+```json
+{ "Name": "Sku", "DataType": "NVARCHAR(50)", "Nullable": true }
+```
+
+(PostgreSQL: `"Name": "sku", "DataType": "VARCHAR(50)"`; MySQL and MariaDB: ``"Name": "`Sku`", "DataType": "VARCHAR(50)"``.)
 
 ```bash
-# PostgreSQL
-cd ..            # back to the lab folder
+# from course4-recipe-05/<engine>
+schemaquench --ConfigFile:deploy.settings.json
+```
+
+`ProductSnapshot` gains the `Sku` column, and the next snapshot includes it — you never touched
+`ProductSnapshot`'s definition, because it doesn't have one. It's generated from `Product` every deploy.
+
+```bash
+# from course4-recipe-05
+../lab-sql.sh sqlserver cookbook_r5 "SELECT name FROM sys.columns WHERE object_id=OBJECT_ID('dbo.ProductSnapshot') ORDER BY column_id"
 ../lab-sql.sh postgres cookbook_r5 "SELECT column_name FROM information_schema.columns WHERE table_name='productsnapshot' ORDER BY ordinal_position"
 # → snapshotat, productid, name, price, sku
+../lab-sql.sh mysql cookbook_r5 "SELECT column_name FROM information_schema.columns WHERE table_schema='cookbook_r5' AND table_name='ProductSnapshot' ORDER BY ordinal_position"
+../lab-sql.sh mariadb cookbook_r5 "SELECT column_name FROM information_schema.columns WHERE table_schema='cookbook_r5' AND table_name='ProductSnapshot' ORDER BY ordinal_position"
 ```
 
 ## Same lever, for a view
@@ -99,6 +135,7 @@ script it drives is **index-aware**. This package declares a `vProductSummary` v
 Verify after deploy:
 
 ```bash
+# from course4-recipe-05
 # SQL Server — the inventory reflects the view's declared indexes
 ../lab-sql.sh sqlserver cookbook_r5 "SELECT IndexName, IsUnique, IsClustered, KeyColumns FROM dbo.IndexedViewInventory WHERE ViewName='vProductSummary'"
 # → CIX_vProductSummary 1 1 Name ;  IX_vProductSummary_Count 0 0 ProductCount

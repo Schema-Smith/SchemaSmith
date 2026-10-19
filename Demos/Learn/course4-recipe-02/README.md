@@ -31,45 +31,62 @@ You never typed `90` or `365` into the default or the check. Both read from the 
 ## Step 2: Deploy and watch the policy take hold
 
 ```bash
-cd <engine>
+# from course4-recipe-02/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
 The default and the check are both built from the metadata:
 
 ```bash
-# SQL Server
-cd ..            # back to the lab folder
+# from course4-recipe-02
 ../lab-sql.sh sqlserver cookbook_r2 "SELECT definition FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID('dbo.Document')"
 # → ([RetentionDays]<=(365))
+../lab-sql.sh postgres cookbook_r2 "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='ck_document_retention'"
+../lab-sql.sh mysql cookbook_r2 "SELECT check_clause FROM information_schema.check_constraints WHERE constraint_schema='cookbook_r2' AND constraint_name='ck_document_retention'"
+../lab-sql.sh mariadb cookbook_r2 "SELECT check_clause FROM information_schema.check_constraints WHERE constraint_schema='cookbook_r2' AND constraint_name='ck_document_retention'"
 ```
 
-Prove the default applies and the check enforces:
+Prove the default applies and the check enforces. On your engine, the first insert omits `ArchiveAfterDays`
+(it defaults to 90) and succeeds; the second exceeds the ceiling and the check rejects it (Msg 547 /
+"violates check constraint" / Error 3819), so that command fails on purpose:
 
-```sql
--- omit ArchiveAfterDays → it defaults to 90
-INSERT INTO Document (DocumentId, Title, RetentionDays) VALUES (1, 'Contract', 50);    -- OK
--- exceed the ceiling → the check rejects it
-INSERT INTO Document (DocumentId, Title, ArchiveAfterDays, RetentionDays) VALUES (2, 'Forever', 90, 500);
--- → CHECK constraint violation (Msg 547 / "violates check constraint" / Error 3819)
+```bash
+# from course4-recipe-02
+../lab-sql.sh sqlserver cookbook_r2 "INSERT INTO dbo.Document (DocumentId, Title, RetentionDays) VALUES (1, 'Contract', 50)"
+../lab-sql.sh sqlserver cookbook_r2 "INSERT INTO dbo.Document (DocumentId, Title, ArchiveAfterDays, RetentionDays) VALUES (2, 'Forever', 90, 500)"
+../lab-sql.sh postgres cookbook_r2 "INSERT INTO document (documentid, title, retentiondays) VALUES (1, 'Contract', 50)"
+../lab-sql.sh postgres cookbook_r2 "INSERT INTO document (documentid, title, archiveafterdays, retentiondays) VALUES (2, 'Forever', 90, 500)"
+../lab-sql.sh mysql cookbook_r2 "INSERT INTO Document (DocumentId, Title, RetentionDays) VALUES (1, 'Contract', 50)"
+../lab-sql.sh mysql cookbook_r2 "INSERT INTO Document (DocumentId, Title, ArchiveAfterDays, RetentionDays) VALUES (2, 'Forever', 90, 500)"
+../lab-sql.sh mariadb cookbook_r2 "INSERT INTO Document (DocumentId, Title, RetentionDays) VALUES (1, 'Contract', 50)"
+../lab-sql.sh mariadb cookbook_r2 "INSERT INTO Document (DocumentId, Title, ArchiveAfterDays, RetentionDays) VALUES (2, 'Forever', 90, 500)"
 ```
 
 ## Step 3: Change the archive policy once — the default follows
 
-Edit the metadata — `ArchiveDays` from `90` to `30` — and re-quench:
+Edit the metadata — `ArchiveDays` from `90` to `30` — and re-quench. The table file is
+`<engine>/Package/Templates/Main/Tables/` (`dbo.Document.json`, `public.document.json`, or `Document.json`);
+change `Extensions.Retention.ArchiveDays` from `"90"` to `"30"`:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/*.json" set Extensions.Retention.ArchiveDays '"30"' -->
+```json
+"Extensions": { "Retention": { "ArchiveDays": "30", "MaxRetentionDays": "365" } }
+```
 
 ```bash
-cd <engine>       # back into the engine folder
+# from course4-recipe-02/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
 The column default re-derives from the new number, identically on all four engines:
 
 ```bash
-# PostgreSQL
-cd ..            # back to the lab folder
+# from course4-recipe-02
+../lab-sql.sh sqlserver cookbook_r2 "SELECT definition FROM sys.default_constraints WHERE parent_object_id=OBJECT_ID('dbo.Document')"
 ../lab-sql.sh postgres cookbook_r2 "SELECT column_default FROM information_schema.columns WHERE table_name='document' AND column_name='archiveafterdays'"
 # → 30
+../lab-sql.sh mysql cookbook_r2 "SELECT column_default FROM information_schema.columns WHERE table_schema='cookbook_r2' AND table_name='Document' AND column_name='ArchiveAfterDays'"
+../lab-sql.sh mariadb cookbook_r2 "SELECT column_default FROM information_schema.columns WHERE table_schema='cookbook_r2' AND table_name='Document' AND column_name='ArchiveAfterDays'"
 ```
 
 You didn't touch the column. You changed the *policy on the table*, and the next ordinary quench rebuilt the
