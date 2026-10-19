@@ -197,7 +197,8 @@ BEGIN TRY
                         THEN ', GRIDS = (' + STUFF(ISNULL(', LEVEL_1 = ' + s.[Level1], '') + ISNULL(', LEVEL_2 = ' + s.[Level2], '') +
                                                    ISNULL(', LEVEL_3 = ' + s.[Level3], '') + ISNULL(', LEVEL_4 = ' + s.[Level4], ''), 1, 2, '') + ')' ELSE '' END +
                    CASE WHEN s.[CellsPerObject] IS NOT NULL THEN ', CELLS_PER_OBJECT = ' + CONVERT(NVARCHAR(10), s.[CellsPerObject]) ELSE '' END +
-                   CASE WHEN s.[FillFactor] IS NOT NULL THEN ', FILLFACTOR = ' + CONVERT(NVARCHAR(10), s.[FillFactor]) ELSE '' END) o
+                   CASE WHEN s.[FillFactor] IS NOT NULL THEN ', FILLFACTOR = ' + CONVERT(NVARCHAR(10), s.[FillFactor]) ELSE '' END +
+                   CASE WHEN s.[CompressionType] IS NOT NULL THEN ', DATA_COMPRESSION = ' + s.[CompressionType] ELSE '' END) o
     WHERE OBJECT_ID(s.[Schema] + '.' + s.[TableName]) IS NOT NULL
       AND INDEXPROPERTY(OBJECT_ID(s.[Schema] + '.' + s.[TableName]), SchemaSmith.fn_StripBracketWrapping(s.[IndexName]), 'IndexID') IS NULL
     ORDER BY s.[Schema], s.[TableName], s.[IndexName]

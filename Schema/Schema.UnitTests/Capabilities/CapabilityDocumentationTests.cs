@@ -53,6 +53,7 @@ public class CapabilityDocumentationTests
         ["SqlServer/always-encrypted"] = "**Always Encrypted**",
         ["SqlServer/columnstore-nonclustered"] = "**Nonclustered columnstore index**",
         ["SqlServer/spatial-auto-grid"] = "**Spatial index AUTO_GRID tessellation**",
+        ["SqlServer/spatial-compression"] = "**Spatial index compression**",
         ["SqlServer/selective-xml-index"] = "**Selective XML index**",
         ["SqlServer/json-index"] = "**JSON index**",
         ["SqlServer/columnstore-clustered"] = "**Clustered columnstore index**",

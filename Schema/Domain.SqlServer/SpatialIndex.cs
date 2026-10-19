@@ -43,13 +43,17 @@ namespace Schema.Domain.SqlServer
         [JsonProperty(Order = 7, NullValueHandling = NullValueHandling.Ignore)]
         public byte? FillFactor { get; set; }
 
-        [JsonProperty(Order = 8)]
+        [SchemaProperty(Pattern = "NONE|ROW|PAGE", PatternIgnoreCase = true, Description = "DATA_COMPRESSION: NONE, ROW or PAGE. Omitted, the index is created uncompressed and its compression is not compared. SQL Server 2012+ on any edition; below 2012 the index is created uncompressed and a downgrade is recorded.")]
+        [JsonProperty(Order = 8, NullValueHandling = NullValueHandling.Ignore)]
+        public string CompressionType { get; set; }
+
+        [JsonProperty(Order = 9)]
         public string ShouldApplyExpression { get; set; }
 
         // Labels a conditional variant: the intent behind its ShouldApplyExpression,
         // echoed in quench log messages when the variant applies.
         [SchemaProperty(MaxLength = 128, Description = "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied.")]
-        [JsonProperty(Order = 9)]
+        [JsonProperty(Order = 10)]
         public string VariantName { get; set; }
     }
 

@@ -193,16 +193,17 @@ BEGIN TRY
     [Level4] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
     [CellsPerObject] INT NULL,
     [FillFactor] TINYINT NULL,
+    [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
 
   RAISERROR('Parse Spatial Indexes from Json', 10, 100) WITH NOWAIT
   INSERT INTO #SpatialIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Tessellation], [XMin], [YMin], [XMax], [YMax],
-                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [ShouldApplyExpression], [VariantName])
+                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], s.[IndexName], s.[Column], s.[Tessellation], s.[XMin], s.[YMin], s.[XMax], s.[YMax],
-         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[ShouldApplyExpression], s.[VariantName]
+         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[CompressionType], s.[ShouldApplyExpression], s.[VariantName]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(SpatialIndexes) WITH (
       [IndexName] NVARCHAR(500) '$.Name',
@@ -218,6 +219,7 @@ BEGIN TRY
       [Level4] NVARCHAR(10) '$.Grids.Level4',
       [CellsPerObject] INT '$.CellsPerObject',
       [FillFactor] TINYINT '$.FillFactor',
+      [CompressionType] NVARCHAR(100) '$.CompressionType',
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName'
       ) s;
@@ -231,7 +233,8 @@ BEGIN TRY
          [Level2]       = UPPER(NULLIF(RTRIM([Level2]), '')),
          [Level3]       = UPPER(NULLIF(RTRIM([Level3]), '')),
          [Level4]       = UPPER(NULLIF(RTRIM([Level4]), '')),
-         [FillFactor]   = NULLIF([FillFactor], 0);
+         [FillFactor]   = NULLIF([FillFactor], 0),
+         [CompressionType] = UPPER(NULLIF(RTRIM([CompressionType]), ''));
 
   -- Identify SpatialIndexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('DELETE FROM #SpatialIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX))
@@ -577,7 +580,10 @@ BEGIN TRY
          [xLevel1] = CAST(tz.level_1_grid_desc COLLATE DATABASE_DEFAULT AS NVARCHAR(60)), [xLevel2] = CAST(tz.level_2_grid_desc COLLATE DATABASE_DEFAULT AS NVARCHAR(60)),
          [xLevel3] = CAST(tz.level_3_grid_desc COLLATE DATABASE_DEFAULT AS NVARCHAR(60)), [xLevel4] = CAST(tz.level_4_grid_desc COLLATE DATABASE_DEFAULT AS NVARCHAR(60)),
          [xCellsPerObject] = tz.cells_per_object,
-         [xFillFactor] = CASE WHEN i.fill_factor = 0 THEN 100 ELSE i.fill_factor END
+         [xFillFactor] = CASE WHEN i.fill_factor = 0 THEN 100 ELSE i.fill_factor END,
+         -- DATA_COMPRESSION lands on the index's internal table, not on the index.
+         [xCompression] = CAST(ISNULL((SELECT MAX(p.data_compression_desc) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1
+                                        WHERE it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id), 'NONE') COLLATE DATABASE_DEFAULT AS NVARCHAR(60))
     INTO #ExistingSpatialIndexes
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.spatial_indexes i ON i.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
@@ -603,6 +609,7 @@ BEGIN TRY
        OR (s.[Level4] IS NOT NULL AND s.[Level4] <> ISNULL(ei.[xLevel4], '') COLLATE DATABASE_DEFAULT)
        OR (s.[CellsPerObject] IS NOT NULL AND s.[CellsPerObject] <> ei.[xCellsPerObject])
        OR (s.[FillFactor] IS NOT NULL AND s.[FillFactor] <> ei.[xFillFactor])
+       OR (s.[CompressionType] IS NOT NULL AND s.[CompressionType] <> ei.[xCompression] COLLATE DATABASE_DEFAULT)
 
   RAISERROR('Collect Existing FullText Indexes', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #ExistingFullTextIndexes
@@ -1231,7 +1238,8 @@ BEGIN TRY
                         THEN ', GRIDS = (' + STUFF(ISNULL(', LEVEL_1 = ' + s.[Level1], '') + ISNULL(', LEVEL_2 = ' + s.[Level2], '') +
                                                    ISNULL(', LEVEL_3 = ' + s.[Level3], '') + ISNULL(', LEVEL_4 = ' + s.[Level4], ''), 1, 2, '') + ')' ELSE '' END +
                    CASE WHEN s.[CellsPerObject] IS NOT NULL THEN ', CELLS_PER_OBJECT = ' + CONVERT(NVARCHAR(10), s.[CellsPerObject]) ELSE '' END +
-                   CASE WHEN s.[FillFactor] IS NOT NULL THEN ', FILLFACTOR = ' + CONVERT(NVARCHAR(10), s.[FillFactor]) ELSE '' END) o
+                   CASE WHEN s.[FillFactor] IS NOT NULL THEN ', FILLFACTOR = ' + CONVERT(NVARCHAR(10), s.[FillFactor]) ELSE '' END +
+                   CASE WHEN s.[CompressionType] IS NOT NULL THEN ', DATA_COMPRESSION = ' + s.[CompressionType] ELSE '' END) o
     WHERE OBJECT_ID(s.[Schema] + '.' + s.[TableName]) IS NOT NULL
       AND INDEXPROPERTY(OBJECT_ID(s.[Schema] + '.' + s.[TableName]), SchemaSmith.fn_StripBracketWrapping(s.[IndexName]), 'IndexID') IS NULL
     ORDER BY s.[Schema], s.[TableName], s.[IndexName]

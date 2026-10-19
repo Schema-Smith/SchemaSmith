@@ -89,6 +89,36 @@ public class OldBinarySpatialIndexTests
         });
     }
 
+    // CREATE SPATIAL INDEX takes DATA_COMPRESSION from 2012 on every edition (these are Express); 2008 R2 refuses it as
+    // syntax. Below 2012 a declared compression is left off, with a downgrade, and a redeploy does not re-create the index.
+    [Test]
+    public void ACompressedSpatialIndex_IsCompressedFrom2012OnExpress_AndDeploysUncompressedBelow_AndConverges()
+    {
+        var xml = ModelXmlSerializer.ToIngestXml(TableJson.Replace("\"CellsPerObject\": 32", "\"CellsPerObject\": 32, \"CompressionType\": \"PAGE\""), "Tables", "Table");
+        WithKindledDatabase("warn", cmd =>
+        {
+            var lacksCompression = _serverMajor < 11;
+            Run(cmd, "SchemaSmith.TableQuench", xml);
+            Assert.Multiple(() =>
+            {
+                Assert.That(Compression(cmd, "SX_Location"), Is.EqualTo(lacksCompression ? "NONE" : "PAGE"), $"major {_serverMajor}");
+                Assert.That(Count(cmd, "ActionType = 'downgraded' AND ObjectType = '" + "spatial index compression (SQL Server 2012)" + "' AND ObjectName LIKE '%SX_Location%'"), Is.EqualTo(lacksCompression ? 1 : 0));
+            });
+
+            Clear(cmd);
+            Run(cmd, "SchemaSmith.TableQuench", xml);
+            Run(cmd, "SchemaSmith.IndexOnlyQuench", xml);
+            Assert.That(Count(cmd, "ActionType IN ('created', 'dropped')"), Is.Zero, "full and index-only redeploys leave the index alone");
+        });
+    }
+
+    private static string Compression(IDbCommand cmd, string index)
+    {
+        cmd.CommandText = "SELECT MAX(p.data_compression_desc) FROM sys.indexes i JOIN sys.internal_tables it ON it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id "
+                        + $"JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1 WHERE i.[object_id] = OBJECT_ID('dbo.OldBinSpatial') AND i.name = '{index}'";
+        return cmd.ExecuteScalar() as string ?? "(no index)";
+    }
+
     [Test]
     public void AnAutoGridSpatialIndex_IsRefusedBelow2012_UnderTheFailPolicy()
     {

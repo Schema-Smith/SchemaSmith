@@ -1000,6 +1000,23 @@ This is the same approach SQL Server Management Studio uses for Always Encrypted
 
 Every entry in the `Indexes` array defines an index or key constraint on the table. The shared shape covers the common cases; per-platform index types extend it.
 
+### Index kinds by engine
+
+Where each kind of index is declared. Most are entries in `Indexes`; a kind keyed by something other than a column list has a list of its own.
+
+| Kind | SQL Server | PostgreSQL | MySQL | MariaDB |
+|---|---|---|---|---|
+| Ordinary index or key | `Indexes` | `Indexes` | `Indexes` | `Indexes` |
+| Columnstore | `Indexes`, `ColumnStore` | — | — | — |
+| Hash | `Indexes`, `BucketCount` (memory-optimized tables) | `Indexes`, `AccessMethod: hash` | `Indexes`, `IndexType: HASH` (MEMORY tables) | `Indexes`, `IndexType: HASH` (MEMORY tables) |
+| GIN, GiST, BRIN, SP-GiST | — | `Indexes`, `AccessMethod` | — | — |
+| Full-text | [`FullTextIndex`](#full-text-index-sql-server) | `Indexes`, `AccessMethod: gin` over a `tsvector` | [`FullTextIndexes`](#full-text-indexes-mysql) | [`FullTextIndexes`](#full-text-indexes-mysql) |
+| Spatial | [`SpatialIndexes`](#spatial-indexes-sql-server) | `Indexes`, `AccessMethod: gist` (PostGIS) | `Indexes`, `IndexType: SPATIAL` | `Indexes`, `IndexType: SPATIAL` |
+| XML | [`XmlIndexes`](#xml-indexes-sql-server), selective ones included | — | — | — |
+| JSON | [`JsonIndexes`](#json-indexes-sql-server) (2025) | `Indexes`, `AccessMethod: gin` over `jsonb` | `Indexes`, a functional key part (8.0.13+) | an index on a generated column |
+| Vector | not declarable ([below](#sql-server-index-extras)) | `Indexes`, `AccessMethod: hnsw` or `ivfflat` (pgvector) | none in the Community server | `Indexes`, `IndexType: VECTOR` (11.7+) |
+| Exclusion | — | [`ExcludeConstraints`](#exclude-constraints-postgresql) | — | — |
+
 ### Shared index properties
 
 | Property | Type | Default | Description |
@@ -1039,7 +1056,7 @@ On a graph table, an index can name the engine's pseudo-columns as key parts: `$
 | `Disabled` | bool | `false` | The index is disabled (`ALTER INDEX … DISABLE`): its definition stays in the catalog, but it holds no data and enforces nothing. This is declared state, converged once the index exists. Declared `true`, a live index is disabled after it is created. Left at the default, an index someone disabled by hand is **rebuilt**, which is what enables it — so a unique index the package says exists enforces again, and the rebuild reports the truth if the rows no longer satisfy it. A disabled index whose definition changed is replaced like any other. Two engine facts worth knowing before declaring it: disabling a **clustered** index makes the table unreadable until it is rebuilt, and disabling a primary key's or unique constraint's index disables every foreign key that references it. SchemaTongs extracts a disabled index with `Disabled: true`. |
 | `Order` | string | `null` | `ColumnStore` only: the `ORDER (…)` columns of an ordered columnstore index, comma-separated in sort order (`"[OrderDate],[CustomerId]"`). A clustered columnstore index from SQL Server 2022, a nonclustered one from 2025; below that the index is created unordered and a downgrade recorded. A changed order re-creates the index. |
 
-**Index kinds a package cannot declare yet:** vector indexes (SQL Server 2025). SchemaTongs leaves them out of the table file and names each one in a warning, and SchemaQuench leaves them alone on deploy -- it neither compares them nor drops them, even with [`DropUnknownIndexes`](configuration.md#dropunknownindexes) on. Create and maintain them with a script in the template's `After` slot. Selective XML indexes are declared in [`XmlIndexes`](#selective-xml-indexes), and JSON indexes in [`JsonIndexes`](#json-indexes-sql-server).
+**Index kinds a package cannot declare yet:** vector indexes (SQL Server 2025). On current 2025 builds `CREATE VECTOR INDEX` needs the `PREVIEW_FEATURES` database scoped configuration, and a table with a vector index refuses every `INSERT`, `UPDATE` and `DELETE`, so a declared one would make its table read-only to data delivery. SchemaTongs leaves them out of the table file and names each one in a warning, and SchemaQuench leaves them alone on deploy -- it neither compares them nor drops them, even with [`DropUnknownIndexes`](configuration.md#dropunknownindexes) on. Create and maintain them with a script in the template's `After` slot. Selective XML indexes are declared in [`XmlIndexes`](#selective-xml-indexes), and JSON indexes in [`JsonIndexes`](#json-indexes-sql-server).
 
 **On indexed views:** SQL Server rejects `IGNORE_DUP_KEY` on a view index outright ("Cannot define an index on a view with ignore_dup_key index option"), so there is nothing to declare there. `PadIndex` **is** supported on an index inside an `Indexed Views/` definition.
 
@@ -1448,13 +1465,16 @@ Spatial index definitions in the `SpatialIndexes` array, one `CREATE SPATIAL IND
 | `Grids` | object | `Level1` to `Level4`, each `LOW`, `MEDIUM` or `HIGH`. Only on the `GRID` schemes; a level left out is `MEDIUM`. |
 | `CellsPerObject` | int | 1 to 8192. Omitted, the engine's default: 16 for the `GRID` schemes, 8 for `GEOMETRY_AUTO_GRID`, 12 for `GEOGRAPHY_AUTO_GRID`. |
 | `FillFactor` | int | 1 to 100. Omitted, the server's default. |
+| `CompressionType` | string | `DATA_COMPRESSION`: `NONE`, `ROW` or `PAGE`. Omitted, the index is created uncompressed. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies. Max 128 characters. |
 | `Extensions` | object | Custom metadata. |
 
-**Only what you declare is compared.** An attribute you leave out is the engine's choice when the index is created, and a later deploy does not compare it, so a definition that names only the column keeps whatever the index has. A declared attribute that differs from the live index drops and re-creates it. A change to the clustered primary key takes the table's spatial indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A spatial index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and `--IndexOnly` deploys behave the same. `DATA_COMPRESSION` is not part of the definition: an index is created uncompressed, and a live index's compression is not compared.
+**Only what you declare is compared.** An attribute you leave out is the engine's choice when the index is created, and a later deploy does not compare it, so a definition that names only the column keeps whatever the index has. A declared attribute that differs from the live index drops and re-creates it. A change to the clustered primary key takes the table's spatial indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A spatial index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and `--IndexOnly` deploys behave the same. That includes `CompressionType`: left out, an index compressed by hand keeps its compression. SchemaTongs writes it when the index is compressed.
 
 **Before SQL Server 2012** there are no `AUTO_GRID` schemes. A declared `GEOMETRY_AUTO_GRID` or `GEOGRAPHY_AUTO_GRID` index is created with the `GRID` scheme of the same family, with that scheme's defaults for anything not declared, and a downgrade is recorded; a redeploy leaves it as it is. Under `UnsupportedFeaturePolicy` `fail` the deploy is refused instead. See [Engine Version Compatibility](schemaquench.md#engine-version-compatibility).
+
+**Before SQL Server 2012** a spatial index takes no `DATA_COMPRESSION`, on any edition. A declared `CompressionType` is left off, the index is created uncompressed and a downgrade is recorded; under `fail` the deploy is refused, naming the index. From 2012 a spatial index is compressed on every edition, Express included, unlike a rowstore index before 2016 SP1.
 
 `--Validate` checks the column, the scheme's family, the bounding box and the grids before a deploy (`SS-SPX-001` to `SS-SPX-004`).
 

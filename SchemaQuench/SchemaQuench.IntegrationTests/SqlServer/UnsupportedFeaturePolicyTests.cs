@@ -661,6 +661,80 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             });
         }
 
+        private static string CompressedSpatialJson(string tableName) => $$"""
+{
+    "Schema": "[dbo]",
+    "Name": "[{{tableName}}]",
+    "Columns": [
+        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+        {"Name": "[Location]", "DataType": "GEOGRAPHY", "Nullable": true}
+    ],
+    "Indexes": [ {"Name": "[PK_{{tableName}}]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]"} ],
+    "SpatialIndexes": [ {"Name": "[sx_{{tableName}}]", "Column": "[Location]", "Tessellation": "GEOGRAPHY_GRID", "CompressionType": "PAGE"} ]
+}
+""";
+
+        private static string SpatialCompressionOf(IDbCommand cmd, string tableName)
+        {
+            cmd.CommandText = $"SELECT MAX(p.data_compression_desc) FROM sys.spatial_indexes i JOIN sys.internal_tables it ON it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id " +
+                              $"JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1 WHERE i.[object_id] = OBJECT_ID('dbo.{tableName}')";
+            return cmd.ExecuteScalar() as string ?? "(no spatial index)";
+        }
+
+        // CREATE SPATIAL INDEX takes DATA_COMPRESSION from SQL Server 2012, on every edition (2008 R2 refuses it as syntax).
+        private const string SpatialCompressionObjectType = "spatial index compression (SQL Server 2012)";
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void SpatialCompression_Below2012_IsCreatedUncompressed_RecordsTheDowngrade_AndStaysQuietOnRedeploy(bool indexOnly)
+        {
+            var tableName = $"V10Spx_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("Bake10", serverMajorVersion: 10, policy: "warn");
+            using var cmd = conn.CreateCommand();
+
+            if (indexOnly) RunTableQuenchProc(cmd, CompressedSpatialJson(tableName).Replace("\"CompressionType\": \"PAGE\"", "\"CellsPerObject\": 16"), productName: tableName);
+            RunTableQuenchProc(cmd, CompressedSpatialJson(tableName), indexOnly: indexOnly, productName: tableName);
+            RunTableQuenchProc(cmd, CompressedSpatialJson(tableName), indexOnly: indexOnly, productName: tableName);
+
+            var compression = SpatialCompressionOf(cmd, tableName);
+            var downgrades = DowngradeRowCount(cmd, SpatialCompressionObjectType, $"[dbo].[{tableName}].[sx_{tableName}]");
+            cmd.CommandText = $"SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND ObjectType = 'index' AND ObjectName LIKE '%sx_{tableName}%' AND ActionType IN ('created', 'dropped')";
+            var changes = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Multiple(() =>
+            {
+                Assert.That(compression, Is.EqualTo("NONE"), "the index is created, uncompressed");
+                Assert.That(downgrades, Is.EqualTo(2), "once per quench");
+                Assert.That(changes, Is.EqualTo(1), "created once; the redeploy does not re-create it");
+            });
+        }
+
+        [Test]
+        public void SpatialCompression_Below2012_UnderFail_IsRefusedByName()
+        {
+            var tableName = $"V10SpxF_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("FailBake10", serverMajorVersion: 10, policy: "fail");
+            using var cmd = conn.CreateCommand();
+
+            var ex = Assert.Catch(() => RunTableQuenchProc(cmd, CompressedSpatialJson(tableName), productName: tableName));
+            Assert.That(ex!.Message, Does.Contain("Spatial index compression requires SQL Server 2012").And.Contain($"sx_{tableName}"));
+        }
+
+        [Test]
+        public void SpatialCompression_IsKept_OnAnEditionWithoutRowstoreCompression()
+        {
+            var tableName = $"EdSpx_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("EdBake13", serverMajorVersion: 13, policy: "warn");
+            using var cmd = conn.CreateCommand();
+            SimulateEditionWithoutEnterpriseFeatures(cmd, 13);
+
+            RunTableQuenchProc(cmd, CompressedSpatialJson(tableName), productName: tableName);
+            Assert.Multiple(() =>
+            {
+                Assert.That(SpatialCompressionOf(cmd, tableName), Is.EqualTo("PAGE"), "2012-2016 Express compress a spatial index");
+                Assert.That(DowngradeRowCount(cmd, SpatialCompressionObjectType, $"[dbo].[{tableName}].[sx_{tableName}]"), Is.Zero);
+            });
+        }
+
         [Test]
         public void ColumnStore_OnAnEditionWithoutIt_IsSkipped_AndRecordsTheDowngrade()
         {

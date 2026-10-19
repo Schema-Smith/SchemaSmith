@@ -342,14 +342,15 @@
     [Level4] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
     [CellsPerObject] INT NULL,
     [FillFactor] TINYINT NULL,
+    [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
   INSERT INTO #SpatialIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Tessellation], [XMin], [YMin], [XMax], [YMax],
-                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [ShouldApplyExpression], [VariantName])
+                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], s.[IndexName], s.[Column], s.[Tessellation], s.[XMin], s.[YMin], s.[XMax], s.[YMax],
-         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[ShouldApplyExpression], s.[VariantName]
+         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[CompressionType], s.[ShouldApplyExpression], s.[VariantName]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/SpatialIndexes') AS Y(sx)
     CROSS APPLY (SELECT
@@ -366,6 +367,7 @@
       [Level4] = sx.value('(Grids/Level4/text())[1]', 'NVARCHAR(10)'),
       [CellsPerObject] = sx.value('(CellsPerObject/text())[1]', 'INT'),
       [FillFactor] = sx.value('(FillFactor/text())[1]', 'TINYINT'),
+      [CompressionType] = sx.value('(CompressionType/text())[1]', 'NVARCHAR(100)'),
       [ShouldApplyExpression] = sx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = sx.value('(VariantName/text())[1]', 'NVARCHAR(128)')
       ) s;
@@ -379,7 +381,8 @@
          [Level2]       = UPPER(NULLIF(RTRIM([Level2]), '')),
          [Level3]       = UPPER(NULLIF(RTRIM([Level3]), '')),
          [Level4]       = UPPER(NULLIF(RTRIM([Level4]), '')),
-         [FillFactor]   = NULLIF([FillFactor], 0);
+         [FillFactor]   = NULLIF([FillFactor], 0),
+         [CompressionType] = UPPER(NULLIF(RTRIM([CompressionType]), ''));
 
   -- Identify SpatialIndexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('DELETE FROM #SpatialIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX))

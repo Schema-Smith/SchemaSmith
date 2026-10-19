@@ -155,6 +155,51 @@ public class TableQuench_SpatialIndexTests : BaseTableQuenchTests
         }, table);
     }
 
+    private static string Compression(IDbCommand cmd, string table, string index)
+    {
+        cmd.CommandText = $"""
+            SELECT MAX(p.data_compression_desc)
+              FROM sys.indexes i
+              JOIN sys.internal_tables it ON it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id
+              JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1
+             WHERE i.[object_id] = OBJECT_ID('dbo.{table}') AND i.name = '{index}'
+            """;
+        return cmd.ExecuteScalar() as string ?? "(no index)";
+    }
+
+    private static string Compressed(string type) => GeometryGrid.Replace("\"FillFactor\": 80", $"\"FillFactor\": 80, \"CompressionType\": \"{type}\"");
+
+    // DATA_COMPRESSION lands on the spatial index's internal table. A declared one is created and compared; an omitted one
+    // is not compared, so an index compressed by hand keeps its compression.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ADeclaredCompression_IsCreatedComparedAndExtracted_AndAnOmittedOneIsNotCompared(bool indexOnly)
+    {
+        var table = $"SpxComp_{Guid.NewGuid().ToString("N")[..8]}";
+        WithTables(cmd =>
+        {
+            if (indexOnly) RunTableQuenchProc(cmd, Json(table, GeographyAuto));
+            RunTableQuenchProc(cmd, Json(table, Compressed("page")), indexOnly: indexOnly);
+            Assert.That(Compression(cmd, table, "SX_Shape"), Is.EqualTo("PAGE"), "created compressed");
+
+            ClearAudit(cmd);
+            RunTableQuenchProc(cmd, Json(table, Compressed("PAGE")), indexOnly: indexOnly);
+            Assert.That(Audits(cmd, table), Is.Zero, "a redeploy leaves it alone");
+
+            RunTableQuenchProc(cmd, Json(table, Compressed("ROW")), indexOnly: indexOnly);
+            Assert.That(Compression(cmd, table, "SX_Shape"), Is.EqualTo("ROW"), "a changed compression re-creates the index");
+
+            ClearAudit(cmd);
+            RunTableQuenchProc(cmd, Json(table, GeometryGrid), indexOnly: indexOnly);
+            Assert.Multiple(() =>
+            {
+                Assert.That(Audits(cmd, table), Is.Zero, "an omitted compression is not compared");
+                Assert.That(Compression(cmd, table, "SX_Shape"), Is.EqualTo("ROW"));
+                Assert.That(Extract(cmd, table).SpatialIndexes.Single(s => s.Name == "[SX_Shape]").CompressionType, Is.EqualTo("ROW"), "extracted when compressed");
+            });
+        }, table);
+    }
+
     [Test]
     public void AChangedClusteredKey_TakesTheSpatialIndexWithIt_AndTheDeployPutsItBack()
     {

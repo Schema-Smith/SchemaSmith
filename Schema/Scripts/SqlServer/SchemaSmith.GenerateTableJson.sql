@@ -481,7 +481,8 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
           ORDER BY i.[Name]
           FOR JSON AUTO) AS [XmlIndexes],
        -- Spatial indexes (sys.spatial_indexes, 2008): the column, the scheme, the bounding box (geometry only), the four
-       -- grid densities (GRID schemes only) and the cells per object, as the engine holds them; FILLFACTOR when set.
+       -- grid densities (GRID schemes only) and the cells per object, as the engine holds them; FILLFACTOR when set,
+       -- DATA_COMPRESSION when not NONE (it lives on the index's internal table).
        (SELECT QUOTENAME(i.[name] COLLATE DATABASE_DEFAULT) AS [Name],
                QUOTENAME(COL_NAME(i.[object_id], ic.column_id)) AS [Column],
                i.tessellation_scheme COLLATE DATABASE_DEFAULT AS [Tessellation],
@@ -490,7 +491,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                tz.level_1_grid_desc COLLATE DATABASE_DEFAULT AS [Grids.Level1], tz.level_2_grid_desc COLLATE DATABASE_DEFAULT AS [Grids.Level2],
                tz.level_3_grid_desc COLLATE DATABASE_DEFAULT AS [Grids.Level3], tz.level_4_grid_desc COLLATE DATABASE_DEFAULT AS [Grids.Level4],
                tz.cells_per_object AS [CellsPerObject],
-               NULLIF(i.fill_factor, 0) AS [FillFactor]
+               NULLIF(i.fill_factor, 0) AS [FillFactor],
+               NULLIF((SELECT MAX(p.data_compression_desc) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1
+                        WHERE it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id) COLLATE DATABASE_DEFAULT, 'NONE') AS [CompressionType]
           FROM sys.spatial_indexes i
           JOIN sys.spatial_index_tessellations tz ON tz.[object_id] = i.[object_id] AND tz.index_id = i.index_id
           JOIN sys.index_columns ic ON ic.[object_id] = i.[object_id] AND ic.index_id = i.index_id

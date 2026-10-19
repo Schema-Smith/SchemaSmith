@@ -315,7 +315,7 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
         conn.Open();
         using var cmd = conn.CreateCommand();
         const string geometry = "{\"Name\": \"[SX_Shape]\", \"Column\": \"[Shape]\", \"Tessellation\": \"GEOMETRY_GRID\", \"BoundingBox\": {\"XMin\": 0, \"YMin\": 0, \"XMax\": 500, \"YMax\": 200}, "
-                              + "\"Grids\": {\"Level1\": \"MEDIUM\", \"Level2\": \"LOW\", \"Level3\": \"HIGH\", \"Level4\": \"MEDIUM\"}, \"CellsPerObject\": 64, \"FillFactor\": 80}";
+                              + "\"Grids\": {\"Level1\": \"MEDIUM\", \"Level2\": \"LOW\", \"Level3\": \"HIGH\", \"Level4\": \"MEDIUM\"}, \"CellsPerObject\": 64, \"FillFactor\": 80, \"CompressionType\": \"PAGE\"}";
         const string geography = "{\"Name\": \"[SX_Location]\", \"Column\": \"[Location]\", \"Tessellation\": \"GEOGRAPHY_GRID\"}";
         string Xml(string spatial) => ModelXmlSerializer.ToIngestXml("[{\"Schema\": \"[dbo]\", \"Name\": \"[XmlSpatial]\", \"Columns\": ["
             + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false}, {\"Name\": \"[Shape]\", \"DataType\": \"GEOMETRY\", \"Nullable\": true}, {\"Name\": \"[Location]\", \"DataType\": \"GEOGRAPHY\", \"Nullable\": true}],"
@@ -328,6 +328,12 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
                             + "WHERE i.[object_id] = OBJECT_ID('dbo.XmlSpatial') ORDER BY i.name FOR XML PATH('')";
             return cmd.ExecuteScalar() as string ?? "";
         }
+        string Compression(string index)
+        {
+            cmd.CommandText = "SELECT MAX(p.data_compression_desc) FROM sys.indexes i JOIN sys.internal_tables it ON it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id "
+                            + $"JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1 WHERE i.[object_id] = OBJECT_ID('dbo.XmlSpatial') AND i.name = '{index}'";
+            return cmd.ExecuteScalar() as string ?? "(no index)";
+        }
         int Audits()
         {
             cmd.CommandText = "SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND ObjectName LIKE '%XmlSpatial%'";
@@ -339,6 +345,7 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
             cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Xml(geometry + "," + geography).Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
             cmd.ExecuteNonQuery();
             Assert.That(Shape(), Is.EqualTo("SX_Location:GEOGRAPHY_GRID:-:MEDIUM:16,SX_Shape:GEOMETRY_GRID:500:LOW:64,"), "created as declared");
+            Assert.That(Compression("SX_Shape") + "|" + Compression("SX_Location"), Is.EqualTo("PAGE|NONE"), "compressed as declared");
 
             cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
             cmd.ExecuteNonQuery();
@@ -356,13 +363,26 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
             Assert.Multiple(() =>
             {
                 Assert.That(table.SpatialIndexes.Select(s => s.Name), Is.EquivalentTo(new[] { "[SX_Shape]", "[SX_Location]" }));
-                Assert.That($"{shape.Column}|{shape.Tessellation}|{shape.BoundingBox?.XMin}|{shape.BoundingBox?.YMax}|{shape.Grids?.Level3}|{shape.CellsPerObject}|{shape.FillFactor}",
-                    Is.EqualTo("[Shape]|GEOMETRY_GRID|0|200|HIGH|64|80"), "extracted as declared");
+                Assert.That($"{shape.Column}|{shape.Tessellation}|{shape.BoundingBox?.XMin}|{shape.BoundingBox?.YMax}|{shape.Grids?.Level3}|{shape.CellsPerObject}|{shape.FillFactor}|{shape.CompressionType}",
+                    Is.EqualTo("[Shape]|GEOMETRY_GRID|0|200|HIGH|64|80|PAGE"), "extracted as declared");
+                Assert.That(table.SpatialIndexes.Single(s => s.Name == "[SX_Location]").CompressionType, Is.Null, "an uncompressed index is extracted without it");
             });
 
-            cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Xml(geometry.Replace("\"CellsPerObject\": 64", "\"CellsPerObject\": 32")).Replace("'", "''")}'";
+            cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Xml(geometry.Replace("\"CellsPerObject\": 64", "\"CellsPerObject\": 32").Replace("PAGE", "ROW")).Replace("'", "''")}'";
             cmd.ExecuteNonQuery();
             Assert.That(Shape(), Is.EqualTo("SX_Shape:GEOMETRY_GRID:500:LOW:32,"), "the index-only path re-creates a changed one and drops one no longer declared");
+            Assert.That(Compression("SX_Shape"), Is.EqualTo("ROW"), "with the compression it declares");
+
+            string Changed(string compression) => Xml(geometry.Replace("\"CellsPerObject\": 64", "\"CellsPerObject\": 32").Replace("PAGE", compression)).Replace("'", "''");
+            cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Changed("ROW")}'";
+            cmd.ExecuteNonQuery();
+            Assert.That(Audits(), Is.Zero, "an index-only redeploy leaves the compressed index alone");
+
+            cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Changed("PAGE")}'";
+            cmd.ExecuteNonQuery();
+            Assert.That(Compression("SX_Shape"), Is.EqualTo("PAGE"), "a compression change alone re-creates it on the index-only path");
         }
         finally
         {
