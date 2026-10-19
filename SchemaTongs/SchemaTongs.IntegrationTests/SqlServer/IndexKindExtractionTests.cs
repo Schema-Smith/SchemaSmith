@@ -33,6 +33,7 @@ public class IndexKindExtractionTests
     private string _db = "";
     private string _masterConnectionString = "";
     private string _tempProductPath = "";
+    private bool _jsonIndexes;
 
     [OneTimeSetUp]
     public void OneTimeSetUp()
@@ -52,6 +53,12 @@ public class IndexKindExtractionTests
             Run(cmd, "CREATE PRIMARY XML INDEX PX_Kinds ON dbo.Kinds (x)");
             Run(cmd, "CREATE XML INDEX XX_Kinds ON dbo.Kinds (x) USING XML INDEX PX_Kinds FOR PATH");
             Run(cmd, "CREATE SELECTIVE XML INDEX SXI_Kinds ON dbo.Kinds (sx) FOR (p1 = '/a/b')");
+            // JSON indexes and json columns are SQL Server 2025.
+            cmd.CommandText = "SELECT CASE WHEN OBJECT_ID('sys.json_indexes') IS NULL THEN 0 ELSE 1 END";
+            _jsonIndexes = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+            if (!_jsonIndexes) return;
+            Run(cmd, "EXEC('ALTER TABLE dbo.Kinds ADD j JSON NULL')");
+            Run(cmd, "EXEC('CREATE JSON INDEX JX_Kinds ON dbo.Kinds (j) FOR (''$.a'')')");
         });
     }
 
@@ -120,6 +127,12 @@ public class IndexKindExtractionTests
             var sxi = table["XmlIndexes"]?.FirstOrDefault(i => (string)i["Name"] == "[SXI_Kinds]");
             Assert.That(sxi?["Selective"]?["Paths"]?.Select(p => (string)p["Path"]), Is.EquivalentTo(new[] { "/a/b" }), "a selective XML index is extracted with its paths");
             Assert.That(warnings.Where(w => w.Contains("SXI_Kinds")), Is.Empty, "and is not reported as left out");
+            if (_jsonIndexes)
+            {
+                Assert.That(table["JsonIndexes"]?.Select(i => (string)i["Name"] + ":" + string.Join(",", i["Paths"]?.Select(p => (string)p) ?? [])),
+                    Is.EquivalentTo(new[] { "[JX_Kinds]:$.a" }), "a JSON index is extracted as one, with its paths");
+                Assert.That(warnings.Where(w => w.Contains("JX_Kinds")), Is.Empty, "and is not reported as left out");
+            }
             Assert.That(tongs.ExitCode, Is.EqualTo(0), "with nothing left out, the run succeeds");
         });
     }

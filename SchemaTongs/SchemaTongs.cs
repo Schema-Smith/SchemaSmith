@@ -4346,15 +4346,15 @@ SELECT cc.name AS [Name],
 
     internal static string EscapeSql(string value) => value.Replace("'", "''");
 
-    // Index kinds a package cannot declare yet (JSON and vector indexes) are left out of the table file, so each one is named
-    // and counted as skipped. XML indexes (selective ones included) and spatial indexes have lists of their own, and the
+    // Index kinds a package cannot declare yet (vector indexes) are left out of the table file, so each one is named and
+    // counted as skipped. XML indexes (selective ones included), spatial and JSON indexes have lists of their own, and the
     // renderable types are ordinary indexes.
     private void WarnIndexesNotExtracted(IDbCommand command, string tableSchema, string tableName)
     {
         command.CommandText = $@"
 SELECT [name], type_desc AS kind FROM sys.indexes
  WHERE [object_id] = OBJECT_ID(QUOTENAME(N'{EscapeSql(tableSchema)}') + N'.' + QUOTENAME(N'{EscapeSql(tableName)}'))
-   AND index_id > 0 AND is_hypothetical = 0 AND [type] NOT IN (3, 4, {ForgeKindler.SqlServerRenderableIndexTypes})
+   AND index_id > 0 AND is_hypothetical = 0 AND [type] NOT IN (3, 4, 9, {ForgeKindler.SqlServerRenderableIndexTypes})
  ORDER BY [name];";
         using var reader = command.ExecuteReader();
         while (reader.Read())

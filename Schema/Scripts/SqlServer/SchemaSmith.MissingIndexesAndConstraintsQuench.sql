@@ -204,6 +204,9 @@ BEGIN TRY
     FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
 
+  -- One CREATE JSON INDEX per declared index the table does not have (a changed one was dropped by ModifiedTableQuench).
+{{CreateMissingJsonIndexes}}  IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
+
   RAISERROR('Resume System Versioning Suspended For A Primary Key Rebuild', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Resuming system versioning on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' + CAST(ep.[value] AS NVARCHAR(600)) + ', DATA_CONSISTENCY_CHECK = ON));' + CHAR(13) + CHAR(10) +
@@ -332,14 +335,16 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
-  RAISERROR('Add missing ProductName extended property to xml and spatial indexes', 10, 100) WITH NOWAIT
+  RAISERROR('Add missing ProductName extended property to xml, spatial and JSON indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +
                                                               '@level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ' +
                                                               '@level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', ' +
                                                               '@level2type = N''Index'', @level2name = ''' + SchemaSmith.fn_StripBracketWrapping(i.IndexName) + ''';' AS NVARCHAR(MAX))
                            FROM (SELECT [Schema], [TableName], [IndexName] FROM #XmlIndexes WITH (NOLOCK)
                                  UNION ALL
-                                 SELECT [Schema], [TableName], [IndexName] FROM #SpatialIndexes WITH (NOLOCK)) i
+                                 SELECT [Schema], [TableName], [IndexName] FROM #SpatialIndexes WITH (NOLOCK)
+                                 UNION ALL
+                                 SELECT [Schema], [TableName], [IndexName] FROM #JsonIndexes WITH (NOLOCK)) i
                            JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = i.[Schema] AND t.[Name] = i.[TableName]
                            WHERE INDEXPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name]), SchemaSmith.fn_StripBracketWrapping(i.IndexName), 'IndexID') IS NOT NULL
                              AND t.[MemoryOptimized] = 0  -- memory-optimized indexes are inline and reject extended properties; they live and die with the table

@@ -51,6 +51,10 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string SpatialFamilyCode = "SS-SPX-002";
     private const string SpatialBoundingBoxCode = "SS-SPX-003";
     private const string SpatialGridsCode = "SS-SPX-004";
+    private const string JsonIndexColumnCode = "SS-JSX-001";
+    private const string JsonIndexSameColumnCode = "SS-JSX-002";
+    private const string JsonIndexPathCode = "SS-JSX-003";
+    private const string JsonIndexKeyCode = "SS-JSX-004";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RemovedFunctionCode = "SS-COL-004";
@@ -129,6 +133,10 @@ public sealed class CoherenceCheck : ISchemaCheck
         [SpatialFamilyCode] = ErrorLevel,
         [SpatialBoundingBoxCode] = ErrorLevel,
         [SpatialGridsCode] = ErrorLevel,
+        [JsonIndexColumnCode] = ErrorLevel,
+        [JsonIndexSameColumnCode] = ErrorLevel,
+        [JsonIndexPathCode] = ErrorLevel,
+        [JsonIndexKeyCode] = ErrorLevel,
         [BackfillWithoutDefaultCode] = WarningLevel,
         [CharsetWithoutCollationCode] = WarningLevel,
         [RemovedFunctionCode] = WarningLevel,
@@ -233,6 +241,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckLedgerColumns(table, location));
             findings.AddRange(CheckMariaDbPeriodColumns(table, location));
             findings.AddRange(CheckSpatialIndexes(table, location, columnsAreOwnedElsewhere));
+            findings.AddRange(CheckJsonIndexes(table, location, columnsAreOwnedElsewhere));
             findings.AddRange(CheckEdgeConstraints(table, location, tablesByKey));
             findings.AddRange(CheckCharsetWithoutCollation(table, location));
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
@@ -535,6 +544,48 @@ public sealed class CoherenceCheck : ISchemaCheck
                         $"Clause table '{name}' is not a node table in the package (resolved '{resolvedSchema}.{NormalizeIdentifier(parts[^1])}'). The deploy succeeds only if a node table of that name already exists on the target.");
                 }
         }
+    }
+
+    /// <summary>
+    /// A SQL Server JSON index covers one json column, which takes no second one, on a table with a clustered primary key; its
+    /// paths start at <c>$</c>, have no wildcard, and none contains another. The engine refuses each other shape at create
+    /// time, so it is reported here. An index-only template owns no columns, so the column and key checks are skipped there.
+    /// </summary>
+    private static IEnumerable<Finding> CheckJsonIndexes(Table table, string tableLocation, bool columnsAreOwnedElsewhere)
+    {
+        if (table is not SqlServerTable sqlTable || sqlTable.JsonIndexes.Count == 0) yield break;
+        if (!columnsAreOwnedElsewhere && !sqlTable.Indexes.OfType<SqlServerIndex>().Any(i => i.PrimaryKey && i.Clustered))
+            yield return new Finding(Severity.Error, JsonIndexKeyCode, Category, tableLocation,
+                $"Table '{table.Name}' declares a JSON index but no clustered primary key, which a JSON index requires.");
+        foreach (var group in sqlTable.JsonIndexes.Where(j => j.Column != null)
+                     .GroupBy(j => NormalizeIdentifier(j.Column), StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+            yield return new Finding(Severity.Error, JsonIndexSameColumnCode, Category, tableLocation,
+                $"JSON indexes {string.Join(", ", group.Select(j => $"'{j.Name}'"))} are all on column '{group.First().Column}', which takes one JSON index: declare its paths on one index.");
+        foreach (var index in sqlTable.JsonIndexes)
+        {
+            var location = $"{tableLocation} / JSON index '{index.Name}'";
+            if (!columnsAreOwnedElsewhere)
+            {
+                var column = sqlTable.Columns.FirstOrDefault(c => string.Equals(NormalizeIdentifier(c.Name), NormalizeIdentifier(index.Column), StringComparison.OrdinalIgnoreCase));
+                if (column?.DataType?.Trim().Trim('[', ']').ToUpperInvariant() != "JSON")
+                    yield return new Finding(Severity.Error, JsonIndexColumnCode, Category, location,
+                        column == null
+                            ? $"JSON index '{index.Name}' names column '{index.Column}', which the table does not declare."
+                            : $"JSON index '{index.Name}' is on column '{index.Column}', which is {column.DataType}: a JSON index needs a json column.");
+            }
+            var paths = index.Paths ?? [];
+            foreach (var path in paths.Where(p => p == null || !p.StartsWith('$') || p.Contains('*')))
+                yield return new Finding(Severity.Error, JsonIndexPathCode, Category, location,
+                    $"JSON index '{index.Name}' has path '{path}': a path starts at $ and has no wildcard.");
+            var valid = paths.Where(p => p != null && p.StartsWith('$') && !p.Contains('*')).ToList();
+            foreach (var (outer, inner) in valid.SelectMany((p, i) => valid.Skip(i + 1).Select(q => (p, q)))
+                         .Where(x => Contains(x.p, x.q) || Contains(x.q, x.p)))
+                yield return new Finding(Severity.Error, JsonIndexPathCode, Category, location,
+                    $"JSON index '{index.Name}' has paths '{outer}' and '{inner}', and one contains the other: keep the outer one.");
+        }
+
+        static bool Contains(string outer, string inner) =>
+            outer == inner || outer == "$" || inner.StartsWith(outer + ".", StringComparison.Ordinal) || inner.StartsWith(outer + "[", StringComparison.Ordinal);
     }
 
     /// <summary>

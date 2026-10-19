@@ -381,6 +381,76 @@ public class CoherenceCheckTests
             Is.EqualTo(new[] { "SS-SPX-004" }));
     }
 
+    // ---- JSON indexes (SS-JSX-001 .. SS-JSX-004) ----
+    //
+    // A JSON index is on one json column, one per column, on a table with a clustered primary key; its paths start at $,
+    // have no wildcard, and do not contain one another. The engine refuses every other shape.
+
+    private static SqlServerTable Documents(bool clusteredKey, params JsonIndex[] indexes)
+    {
+        var table = new SqlServerTable
+        {
+            Name = "Documents", Schema = "dbo",
+            Columns =
+            {
+                new SqlServerColumn { Name = "Id", DataType = "int" },
+                new SqlServerColumn { Name = "Doc", DataType = "json" },
+                new SqlServerColumn { Name = "Meta", DataType = "[JSON]" },
+                new SqlServerColumn { Name = "Label", DataType = "nvarchar(max)" }
+            },
+            Indexes = { new SqlServerIndex { Name = "PK_Documents", PrimaryKey = true, Unique = true, Clustered = clusteredKey, IndexColumns = "Id" } }
+        };
+        table.JsonIndexes.AddRange(indexes);
+        return table;
+    }
+
+    private static string[] JsonIndexCodes(SqlServerTable table) => RunOn(table).Where(f => f.Code.StartsWith("SS-JSX")).Select(f => f.Code).ToArray();
+
+    [Test]
+    public void JsonIndexes_OfEveryWellFormedShape_AreClean()
+    {
+        Assert.That(JsonIndexCodes(Documents(true,
+            new JsonIndex { Name = "JX_Doc", Column = "[Doc]", Paths = ["$.a", "$.ab", "$.b[0]", "$.\"a.c\""], OptimizeForArraySearch = true, FillFactor = 80 },
+            new JsonIndex { Name = "JX_Meta", Column = "Meta" })), Is.Empty);
+    }
+
+    [Test]
+    public void AJsonIndexOnAMissingOrNonJsonColumn_IsAnError()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX_Gone", Column = "Gone" })), Is.EqualTo(new[] { "SS-JSX-001" }));
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX_Label", Column = "Label" })), Is.EqualTo(new[] { "SS-JSX-001" }));
+        });
+    }
+
+    [Test]
+    public void TwoJsonIndexesOnOneColumn_AreAnError()
+    {
+        Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX_A", Column = "Doc", Paths = ["$.a"] }, new JsonIndex { Name = "JX_B", Column = "[doc]", Paths = ["$.b"] })),
+            Is.EqualTo(new[] { "SS-JSX-002" }));
+    }
+
+    [Test]
+    public void AJsonIndexPath_StartsAtTheRoot_HasNoWildcard_AndContainsNoOther()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["a.b"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "not from $");
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["$.a[*]"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "a wildcard");
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["$.a", "$.a.b"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "a member of another");
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["$.a[1]", "$.a"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "an element of another");
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["$", "$.a"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "the whole document and a part");
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["$.a", "$.a"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "the same path twice");
+        });
+    }
+
+    [Test]
+    public void AJsonIndex_OnATableWithoutAClusteredPrimaryKey_IsAnError()
+    {
+        Assert.That(JsonIndexCodes(Documents(false, new JsonIndex { Name = "JX", Column = "Doc" })), Is.EqualTo(new[] { "SS-JSX-004" }));
+    }
+
     // ---- Period columns (SS-TMP-001 .. SS-TMP-004) ----
     //
     // A temporal table's period columns are declared as a pair: one RowStart and one RowEnd, both DATETIME2, on a table

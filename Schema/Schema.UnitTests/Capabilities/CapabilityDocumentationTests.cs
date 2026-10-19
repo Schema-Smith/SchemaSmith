@@ -54,6 +54,7 @@ public class CapabilityDocumentationTests
         ["SqlServer/columnstore-nonclustered"] = "**Nonclustered columnstore index**",
         ["SqlServer/spatial-auto-grid"] = "**Spatial index AUTO_GRID tessellation**",
         ["SqlServer/selective-xml-index"] = "**Selective XML index**",
+        ["SqlServer/json-index"] = "**JSON index**",
         ["SqlServer/columnstore-clustered"] = "**Clustered columnstore index**",
         ["SqlServer/columnstore-nonclustered-writable"] = "**Writable nonclustered columnstore**",
         ["SqlServer/columnstore-clustered-with-rowstore"] = "**Clustered columnstore beside rowstore indexes**",

@@ -533,6 +533,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | `IsTemporal` | bool | `false` | When `true`, SchemaQuench manages the table as system-versioned temporal: emits `ALTER TABLE ... SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = <Schema>.<Name>_Hist))` and protects the period columns from drop detection. They are `ValidFrom` / `ValidTo` unless the package declares its own (see [SQL Server column extras](#sql-server-column-extras)). When toggled back to `false`, SchemaQuench emits `SET (SYSTEM_VERSIONING = OFF)`. The history table itself (`<Name>_Hist` in the same schema) is not auto-created -- declare it as a sibling table JSON in your package or rely on a Before script that creates it before the `IsTemporal=true` table is quenched. |
 | `XmlIndexes` | array | `[]` | XML index definitions. See [XML Indexes (SQL Server)](#xml-indexes-sql-server). |
 | `SpatialIndexes` | array | `[]` | Spatial index definitions. See [Spatial Indexes (SQL Server)](#spatial-indexes-sql-server). |
+| `JsonIndexes` | array | `[]` | JSON index definitions (SQL Server 2025). See [JSON Indexes (SQL Server)](#json-indexes-sql-server). |
 | `Statistics` | array | `[]` | Custom statistics definitions. See [Statistics (SQL Server / PostgreSQL)](#statistics-sql-server--postgresql). |
 | `FullTextIndex` | object or array | `null` | Full-text index on the table -- a single definition, or an array of conditional variants. See [Full-Text Index (SQL Server)](#full-text-index-sql-server). |
 | `UpdateFillFactor` | bool | `false` | When `true`, index fill factors on this table are updated to match JSON definitions during quench. |
@@ -1019,7 +1020,7 @@ On a graph table, an index can name the engine's pseudo-columns as key parts: `$
 | `Disabled` | bool | `false` | The index is disabled (`ALTER INDEX … DISABLE`): its definition stays in the catalog, but it holds no data and enforces nothing. This is declared state, converged once the index exists. Declared `true`, a live index is disabled after it is created. Left at the default, an index someone disabled by hand is **rebuilt**, which is what enables it — so a unique index the package says exists enforces again, and the rebuild reports the truth if the rows no longer satisfy it. A disabled index whose definition changed is replaced like any other. Two engine facts worth knowing before declaring it: disabling a **clustered** index makes the table unreadable until it is rebuilt, and disabling a primary key's or unique constraint's index disables every foreign key that references it. SchemaTongs extracts a disabled index with `Disabled: true`. |
 | `Order` | string | `null` | `ColumnStore` only: the `ORDER (…)` columns of an ordered columnstore index, comma-separated in sort order (`"[OrderDate],[CustomerId]"`). A clustered columnstore index from SQL Server 2022, a nonclustered one from 2025; below that the index is created unordered and a downgrade recorded. A changed order re-creates the index. |
 
-**Index kinds a package cannot declare yet:** JSON indexes (SQL Server 2025). SchemaTongs leaves them out of the table file and names each one in a warning, and SchemaQuench leaves them alone on deploy -- it neither compares them nor drops them, even with [`DropUnknownIndexes`](configuration.md#dropunknownindexes) on. Create and maintain them with a script in the template's `After` slot. Selective XML indexes are declared in [`XmlIndexes`](#selective-xml-indexes).
+**Index kinds a package cannot declare yet:** vector indexes (SQL Server 2025). SchemaTongs leaves them out of the table file and names each one in a warning, and SchemaQuench leaves them alone on deploy -- it neither compares them nor drops them, even with [`DropUnknownIndexes`](configuration.md#dropunknownindexes) on. Create and maintain them with a script in the template's `After` slot. Selective XML indexes are declared in [`XmlIndexes`](#selective-xml-indexes), and JSON indexes in [`JsonIndexes`](#json-indexes-sql-server).
 
 **On indexed views:** SQL Server rejects `IGNORE_DUP_KEY` on a view index outright ("Cannot define an index on a view with ignore_dup_key index option"), so there is nothing to declare there. `PadIndex` **is** supported on an index inside an `Indexed Views/` definition.
 
@@ -1433,6 +1434,37 @@ Spatial index definitions in the `SpatialIndexes` array, one `CREATE SPATIAL IND
 **Before SQL Server 2012** there are no `AUTO_GRID` schemes. A declared `GEOMETRY_AUTO_GRID` or `GEOGRAPHY_AUTO_GRID` index is created with the `GRID` scheme of the same family, with that scheme's defaults for anything not declared, and a downgrade is recorded; a redeploy leaves it as it is. Under `UnsupportedFeaturePolicy` `fail` the deploy is refused instead. See [Engine Version Compatibility](schemaquench.md#engine-version-compatibility).
 
 `--Validate` checks the column, the scheme's family, the bounding box and the grids before a deploy (`SS-SPX-001` to `SS-SPX-004`).
+
+---
+
+## JSON Indexes (SQL Server)
+
+JSON index definitions in the `JsonIndexes` array, one `CREATE JSON INDEX` each (SQL Server 2025). A JSON index covers one `json` column and the SQL/JSON paths your queries filter on, so queries that filter on those paths with `JSON_VALUE`, `JSON_PATH_EXISTS` or `JSON_CONTAINS` can use the index rather than read every document. SQL Server builds one only on a table with a clustered primary key, and a column takes one JSON index.
+
+```json
+"JsonIndexes": [
+  { "Name": "[JX_Orders_Doc]", "Column": "[Doc]", "Paths": [ "$.customer.id", "$.status" ],
+    "OptimizeForArraySearch": true },
+  { "Name": "[JX_Orders_Audit]", "Column": "[Audit]" }
+]
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `Name` | string | Index name. Required. |
+| `Column` | string | The `json` column the index covers. Required. |
+| `Paths` | array | The `FOR` list: the SQL/JSON paths to index, each starting at `$`. No two may overlap (`$.a` already covers `$.a.b`), and wildcards such as `[*]` are not allowed. Omitted or empty, the whole document (`$`) is indexed. |
+| `OptimizeForArraySearch` | bool | `OPTIMIZE_FOR_ARRAY_SEARCH`: also index the elements of arrays, for `JSON_CONTAINS` searches. Omitted, off. |
+| `FillFactor` | int | 1 to 100. Omitted, the server's default, and not compared. |
+| `ShouldApplyExpression` | string | Conditional inclusion. |
+| `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies. Max 128 characters. |
+| `Extensions` | object | Custom metadata. |
+
+**The paths are a set, compared as written.** Their order does not matter, but their text does: JSON keys are case-sensitive, so changing `$.status` to `$.Status` is a change, and SQL Server keeps a path exactly as it was written, spacing included. A changed path, column or `OptimizeForArraySearch` drops and re-creates the index; a `FillFactor` you leave out is not compared. A change to the clustered primary key takes the table's JSON indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A JSON index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and `--IndexOnly` deploys behave the same. `DATA_COMPRESSION` is not part of the definition: an index is created uncompressed, and a live index's compression is not compared.
+
+**Before SQL Server 2025** there are no JSON indexes, and no `json` columns either. A declared JSON index is skipped, the table deploys without it, and a downgrade is recorded; under `UnsupportedFeaturePolicy` `fail` the deploy is refused instead. See [Engine Version Compatibility](schemaquench.md#engine-version-compatibility).
+
+`--Validate` checks the column, one index per column, the paths and the clustered primary key before a deploy (`SS-JSX-001` to `SS-JSX-004`).
 
 ---
 

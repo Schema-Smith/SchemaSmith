@@ -210,7 +210,13 @@ public static class ForgeKindler
                        .Replace("{{RenderableIndexTypes}}", SqlServerRenderableIndexTypes)
                        .Replace("{{CollectSelectiveXmlIndexes}}", SqlServerCollectSelectiveXmlIndexes)
                        .Replace("{{ParseSelectiveXmlIndexesJson}}", SqlServerParseSelectiveXmlIndexesJson)
-                       .Replace("{{ParseSelectiveXmlIndexesXml}}", SqlServerParseSelectiveXmlIndexesXml);
+                       .Replace("{{ParseSelectiveXmlIndexesXml}}", SqlServerParseSelectiveXmlIndexesXml)
+                       .Replace("{{CollectJsonIndexes}}", SqlServerCollectJsonIndexes)
+                       .Replace("{{JsonIndexesTable}}", SqlServerJsonIndexesTable)
+                       .Replace("{{ParseJsonIndexesJson}}", SqlServerParseJsonIndexesJson)
+                       .Replace("{{ParseJsonIndexesXml}}", SqlServerParseJsonIndexesXml)
+                       .Replace("{{DetectJsonIndexChanges}}", SqlServerDetectJsonIndexChanges)
+                       .Replace("{{CreateMissingJsonIndexes}}", SqlServerCreateMissingJsonIndexes);
 
         var xmlReadable = xmlCompressionReadable ?? serverMajorVersion >= 17;
         script = script.Replace("{{XmlCompressionRead}}",
@@ -290,7 +296,9 @@ public static class ForgeKindler
         // Resolved here as well as in the kindle chain: SchemaQuench inlines this script into its own batches.
         return (ResourceLoader.Load("ParseTableJsonIntoTempTables.sql", platform)
             ?? throw new Exception($"ParseTableJsonIntoTempTables.sql not found for platform '{platform}'."))
-            .Replace("{{ParseSelectiveXmlIndexesJson}}", SqlServerParseSelectiveXmlIndexesJson);
+            .Replace("{{ParseSelectiveXmlIndexesJson}}", SqlServerParseSelectiveXmlIndexesJson)
+            .Replace("{{JsonIndexesTable}}", SqlServerJsonIndexesTable)
+            .Replace("{{ParseJsonIndexesJson}}", SqlServerParseJsonIndexesJson);
     }
 
     /// <summary>
@@ -340,7 +348,9 @@ public static class ForgeKindler
     {
         return (ResourceLoader.Load("ParseTableXmlIntoTempTables.sql", platform)
             ?? throw new Exception($"ParseTableXmlIntoTempTables.sql not found for platform '{platform}'."))
-            .Replace("{{ParseSelectiveXmlIndexesXml}}", SqlServerParseSelectiveXmlIndexesXml);
+            .Replace("{{ParseSelectiveXmlIndexesXml}}", SqlServerParseSelectiveXmlIndexesXml)
+            .Replace("{{JsonIndexesTable}}", SqlServerJsonIndexesTable)
+            .Replace("{{ParseJsonIndexesXml}}", SqlServerParseJsonIndexesXml);
     }
 
     /// <summary>
@@ -494,6 +504,99 @@ public static class ForgeKindler
     internal static readonly string SqlServerParseSelectiveXmlIndexesJson = SqlServerSelectiveXmlTables + SqlServerParseSelectiveXmlJson + SqlServerRenderDeclaredXmlIndexes;
     internal static readonly string SqlServerParseSelectiveXmlIndexesXml = SqlServerSelectiveXmlTables + SqlServerParseSelectiveXmlXml + SqlServerRenderDeclaredXmlIndexes;
 
+    // JSON indexes (2025): one json column and a set of SQL/JSON paths. Both sides render the FOR list the same way -- every
+    // path quoted, sorted binary (JSON keys are case-sensitive), none meaning the whole document -- so one binary comparison
+    // of the rendered list finds any change, and the create writes the same text.
+    private static string JsonIndexForClause(string pathsFrom) =>
+        "' FOR (' + ISNULL(STUFF((SELECT ', N''' + REPLACE(p.[Path], '''', '''''') + '''' FROM " + pathsFrom +
+        " AND RTRIM(p.[Path]) <> '' ORDER BY p.[Path] COLLATE Latin1_General_BIN2 FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''), 'N''$''') + ')'";
+
+    // The catalog side: every JSON index in the database. sys.json_indexes arrived with them, so the reads are dynamic and
+    // the procedures still install on a server without it, where the list is simply empty.
+    internal static readonly string SqlServerCollectJsonIndexes =
+        "IF OBJECT_ID('tempdb..#LiveJsonIndexes') IS NOT NULL DROP TABLE #LiveJsonIndexes\n" +
+        "CREATE TABLE #LiveJsonIndexes ([object_id] INT, index_id INT, [Name] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT, " +
+        "[OptimizeForArraySearch] BIT, [FillFactor] TINYINT, [ForClause] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT)\n" +
+        "IF OBJECT_ID('tempdb..#LiveJsonIndexPaths') IS NOT NULL DROP TABLE #LiveJsonIndexPaths\n" +
+        "CREATE TABLE #LiveJsonIndexPaths ([object_id] INT, index_id INT, [Path] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT)\n" +
+        "IF OBJECT_ID('sys.json_indexes') IS NOT NULL\n" +
+        "  EXEC('" + (
+            "INSERT #LiveJsonIndexes ([object_id], index_id, [Name], [Column], [OptimizeForArraySearch], [FillFactor]) " +
+            "SELECT j.[object_id], j.index_id, j.[name], QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)), j.optimize_for_array_search, NULLIF(j.fill_factor, 0) " +
+            "FROM sys.json_indexes j JOIN sys.index_columns ic ON ic.[object_id] = j.[object_id] AND ic.index_id = j.index_id; " +
+            "INSERT #LiveJsonIndexPaths ([object_id], index_id, [Path]) SELECT p.[object_id], p.index_id, p.[path] FROM sys.json_index_paths p").Replace("'", "''") + "')\n" +
+        "UPDATE l SET [ForClause] = " + JsonIndexForClause("#LiveJsonIndexPaths p WHERE p.[object_id] = l.[object_id] AND p.index_id = l.index_id") + "\n" +
+        "  FROM #LiveJsonIndexes l";
+
+    // The declared side's working set. On the JSON tier it is created before the ingest split, so it outlives the fill.
+    internal const string SqlServerJsonIndexesTable =
+        "IF OBJECT_ID('tempdb..#JsonIndexes') IS NOT NULL DROP TABLE #JsonIndexes\n" +
+        "CREATE TABLE #JsonIndexes ([_RowId] BIGINT NULL, [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, " +
+        "[IndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Paths] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, " +
+        "[ForClause] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, [OptimizeForArraySearch] BIT NULL, [FillFactor] TINYINT NULL, " +
+        "[ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL)\n";
+
+    // NORMALIZE, then the ShouldApplyExpression filter, for either tier's rows.
+    private const string SqlServerNormalizeJsonIndexes =
+        "UPDATE #JsonIndexes SET [IndexName] = SchemaSmith.fn_SafeBracketWrap([IndexName]), [Column] = SchemaSmith.fn_SafeBracketWrap([Column]),\n" +
+        "       [OptimizeForArraySearch] = ISNULL([OptimizeForArraySearch], 0), [FillFactor] = NULLIF([FillFactor], 0)\n" +
+        "SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('DELETE FROM #JsonIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX))\n" +
+        "                         FROM #JsonIndexes WITH (NOLOCK)\n" +
+        "                         WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''\n" +
+        "                         FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')\n" +
+        "EXEC(@v_SQL)\n";
+
+    internal static readonly string SqlServerParseJsonIndexesJson =
+        "RAISERROR('Parse JSON Indexes from Json', 10, 100) WITH NOWAIT\n" +
+        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Paths], [OptimizeForArraySearch], [FillFactor], [ShouldApplyExpression], [VariantName])\n" +
+        "SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), t.[Schema], t.[Name], j.[IndexName], j.[Column], j.[Paths], j.[OptimizeForArraySearch], j.[FillFactor], j.[ShouldApplyExpression], j.[VariantName]\n" +
+        "  FROM #TableDefinitions t WITH (NOLOCK)\n" +
+        "  CROSS APPLY OPENJSON(t.[JsonIndexes]) WITH ([IndexName] NVARCHAR(500) '$.Name', [Column] NVARCHAR(500) '$.Column', [Paths] NVARCHAR(MAX) '$.Paths' AS JSON, " +
+        "[OptimizeForArraySearch] BIT '$.OptimizeForArraySearch', [FillFactor] TINYINT '$.FillFactor', [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression', " +
+        "[VariantName] NVARCHAR(128) '$.VariantName') j\n" +
+        "UPDATE j SET [ForClause] = " + JsonIndexForClause("OPENJSON(j.[Paths]) WITH ([Path] NVARCHAR(MAX) '$') p WHERE 1 = 1") + ", [Paths] = NULL FROM #JsonIndexes j\n" +
+        SqlServerNormalizeJsonIndexes;
+
+    internal static readonly string SqlServerParseJsonIndexesXml =
+        "RAISERROR('Parse JSON Indexes from Xml', 10, 100) WITH NOWAIT\n" +
+        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [ForClause], [OptimizeForArraySearch], [FillFactor], [ShouldApplyExpression], [VariantName])\n" +
+        "SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), t.[Schema], t.[Name], jx.value('(Name/text())[1]', 'NVARCHAR(500)'), jx.value('(Column/text())[1]', 'NVARCHAR(500)'),\n" +
+        "       " + JsonIndexForClause("(SELECT n.value('.', 'NVARCHAR(MAX)') AS [Path] FROM jx.nodes('Paths') AS P(n)) p WHERE 1 = 1") + ",\n" +
+        "       jx.value('(OptimizeForArraySearch/text())[1]', 'BIT'), jx.value('(FillFactor/text())[1]', 'TINYINT'),\n" +
+        "       jx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'), jx.value('(VariantName/text())[1]', 'NVARCHAR(128)')\n" +
+        "  FROM #TableDefinitions t WITH (NOLOCK)\n" +
+        "  CROSS APPLY t.[TableXml].nodes('/Table/JsonIndexes') AS Y(jx)\n" +
+        SqlServerNormalizeJsonIndexes;
+
+    // A declared index whose column, paths or array-search option differ from the live one, or whose declared fill factor
+    // does, is re-created. Needs {{CollectJsonIndexes}} first.
+    internal const string SqlServerDetectJsonIndexChanges =
+        "IF OBJECT_ID('tempdb..#JsonIndexChanges') IS NOT NULL DROP TABLE #JsonIndexChanges\n" +
+        "SELECT j.[Schema], j.[TableName], j.[IndexName]\n" +
+        "  INTO #JsonIndexChanges\n" +
+        "  FROM #JsonIndexes j WITH (NOLOCK)\n" +
+        "  JOIN #LiveJsonIndexes l WITH (NOLOCK) ON l.[object_id] = OBJECT_ID(j.[Schema] + '.' + j.[TableName]) AND l.[Name] = SchemaSmith.fn_StripBracketWrapping(j.[IndexName])\n" +
+        "  WHERE l.[Column] <> j.[Column] COLLATE DATABASE_DEFAULT\n" +
+        "     OR l.[ForClause] <> j.[ForClause] COLLATE Latin1_General_BIN2\n" +
+        "     OR l.[OptimizeForArraySearch] <> j.[OptimizeForArraySearch]\n" +
+        "     OR (j.[FillFactor] IS NOT NULL AND j.[FillFactor] <> ISNULL(l.[FillFactor], 100))\n";
+
+    // Sets @v_SQL to one CREATE JSON INDEX per declared index the table does not have; each caller runs it its own way.
+    internal const string SqlServerCreateMissingJsonIndexes =
+        "RAISERROR('Add Missing JSON Indexes', 10, 100) WITH NOWAIT\n" +
+        "SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Creating JSON index ' + j.[Schema] + '.' + j.[TableName] + '.' + j.[IndexName] +\n" +
+        "                                CASE WHEN RTRIM(ISNULL(j.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(j.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +\n" +
+        "                                'CREATE JSON INDEX ' + j.[IndexName] + ' ON ' + j.[Schema] + '.' + j.[TableName] + ' (' + j.[Column] + ')' + j.[ForClause] +\n" +
+        "                                CASE WHEN j.[OptimizeForArraySearch] = 1 OR j.[FillFactor] IS NOT NULL\n" +
+        "                                     THEN ' WITH (' + STUFF(CASE WHEN j.[OptimizeForArraySearch] = 1 THEN ', OPTIMIZE_FOR_ARRAY_SEARCH = ON' ELSE '' END +\n" +
+        "                                                            ISNULL(', FILLFACTOR = ' + CONVERT(NVARCHAR(10), j.[FillFactor]), ''), 1, 2, '') + ')' ELSE '' END + ';' + CHAR(13) + CHAR(10) +\n" +
+        "                                'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''index'', ''' + REPLACE(j.[Schema] + '.' + j.[TableName] + '.' + j.[IndexName], '''', '''''') + ''', ''created'');' AS NVARCHAR(MAX))\n" +
+        "  FROM #JsonIndexes j WITH (NOLOCK)\n" +
+        "  WHERE OBJECT_ID(j.[Schema] + '.' + j.[TableName]) IS NOT NULL\n" +
+        "    AND INDEXPROPERTY(OBJECT_ID(j.[Schema] + '.' + j.[TableName]), SchemaSmith.fn_StripBracketWrapping(j.[IndexName]), 'IndexID') IS NULL\n" +
+        "  ORDER BY j.[Schema], j.[TableName], j.[IndexName]\n" +
+        "  FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')\n";
+
     internal readonly record struct KindleScript(string FileName, bool ReplaceParseJson = false, bool ReplaceTableDef = false);
 
     internal static KindleScript[] GetKindlingScripts(Platform platform, IngestEncoding encoding = IngestEncoding.Json)
@@ -544,6 +647,7 @@ public static class ForgeKindler
                 new("SchemaSmith.DegradeUnsupportedFullText.sql"),
                 new("SchemaSmith.DegradeUnsupportedSpatialIndexes.sql"),
                 new("SchemaSmith.DegradeUnsupportedSelectiveXmlIndexes.sql"),
+                new("SchemaSmith.DegradeUnsupportedJsonIndexes.sql"),
                 new("SchemaSmith.DegradeDatabaseToggles.sql"),
                 new("SchemaSmith.DegradeUnsupportedFeatures.sql"),
                 // Fills the caller's #GraphKeyParts: the graph columns behind a $from_id / $to_id key part (2017+, dynamic).

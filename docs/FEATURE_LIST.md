@@ -41,7 +41,8 @@ Every database object SchemaSmith reads from a live database, models as part of 
 | Columnstore indexes | ✓ | n/a | n/a | n/a | `ColumnStore` flag |
 | Full-text indexes | ✓ | n/a | ✓ | ✓ | SQL Server: 1 per table; MySQL: multiple |
 | XML indexes | ✓ | n/a | n/a | n/a | `XmlIndexes` array; primary + secondary, selective + secondary selective (2012 SP1+) |
-| Spatial indexes | n/a | ✓ | ✓ | ✓ | PG via `gist`/`spgist` AccessMethod; MySQL via index on spatial column |
+| JSON indexes | ✓ | n/a | n/a | n/a | `JsonIndexes` array (2025+); paths, array search |
+| Spatial indexes | ✓ | ✓ | ✓ | ✓ | SQL Server via `SpatialIndexes` array; PG via `gist`/`spgist` AccessMethod; MySQL via index on spatial column |
 | Statistics | ✓ | ✓ | n/a | n/a | SQL Server traditional; PG extended (`ndistinct`, `dependencies`, `mcv`) |
 | Views | ✓ | ✓ | ✓ | ✓ | Script folder |
 | Indexed views | ✓ | n/a | n/a | n/a | `Indexed Views/*.json` |

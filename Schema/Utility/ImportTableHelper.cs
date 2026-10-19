@@ -98,6 +98,7 @@ public static class ImportTableHelper
         {
             CopyComponentDynamicProperties(ssOriginal.XmlIndexes, ssNew.XmlIndexes, isVariantActive);
             CopyComponentDynamicProperties(ssOriginal.SpatialIndexes, ssNew.SpatialIndexes, isVariantActive);
+            CopyComponentDynamicProperties(ssOriginal.JsonIndexes, ssNew.JsonIndexes, isVariantActive);
             CopyComponentDynamicProperties(ssOriginal.Statistics, ssNew.Statistics, isVariantActive);
             // FT has no Name to match on, so the whole list is one variant group. A variant set gets
             // gate-aware attribution (the extractor DOES reconstruct the FT index); a single authored
@@ -209,6 +210,7 @@ public static class ImportTableHelper
             Reorder(ssNew.Statistics, ssOrig.Statistics, fallbackOrder);
             Reorder(ssNew.XmlIndexes, ssOrig.XmlIndexes, fallbackOrder);
             Reorder(ssNew.SpatialIndexes, ssOrig.SpatialIndexes, fallbackOrder);
+            Reorder(ssNew.JsonIndexes, ssOrig.JsonIndexes, fallbackOrder);
         }
     }
 

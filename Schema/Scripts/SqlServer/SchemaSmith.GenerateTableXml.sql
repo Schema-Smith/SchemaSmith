@@ -170,6 +170,7 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_en
     N'@p_ObjId INT, @p_Net BIT OUTPUT, @p_Idx NVARCHAR(260) OUTPUT', @p_ObjId = @v_ObjectId, @p_Net = @v_CdcNetChanges OUTPUT, @p_Idx = @v_CdcIndexName OUTPUT
 
 {{CollectSelectiveXmlIndexes}}
+{{CollectJsonIndexes}}
 
 -- Memory-optimized (Hekaton) is 2014 (major 12); is_memory_optimized / durability_desc are 2014 columns,
 -- staged behind the >= 12 guard (like @v_GraphType/@v_Ledger) and simply 0/NULL below it, where a
@@ -534,6 +535,20 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
           WHERE i.[object_id] = st.[object_id]
           ORDER BY i.[name]
           FOR XML PATH('SpatialIndexes'), TYPE),
+       -- JSON indexes: see the JSON twin.
+       (SELECT 'true' AS [@json:Array],
+               QUOTENAME(l.[Name]) AS [Name], l.[Column] AS [Column],
+               (SELECT 'true' AS [@json:Array], p.[Path] AS [text()]
+                  FROM #LiveJsonIndexPaths p
+                  WHERE p.[object_id] = l.[object_id] AND p.index_id = l.index_id AND p.[Path] <> '$'
+                  ORDER BY p.[Path] COLLATE Latin1_General_BIN2
+                  FOR XML PATH('Paths'), TYPE),
+               CASE WHEN l.[OptimizeForArraySearch] = 1 THEN 'true' END AS [OptimizeForArraySearch],
+               l.[FillFactor] AS [FillFactor]
+          FROM #LiveJsonIndexes l
+          WHERE l.[object_id] = st.[object_id]
+          ORDER BY l.[Name]
+          FOR XML PATH('JsonIndexes'), TYPE),
 	   (SELECT 'true' AS [@json:Array],
                QUOTENAME([Name]) AS [Name],
                STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[parent_object_id], fc.parent_column_id))

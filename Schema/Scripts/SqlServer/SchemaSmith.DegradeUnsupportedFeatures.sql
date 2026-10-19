@@ -227,6 +227,7 @@ BEGIN
   EXEC SchemaSmith.DegradeUnsupportedFullText
   EXEC SchemaSmith.DegradeUnsupportedSpatialIndexes
   EXEC SchemaSmith.DegradeUnsupportedSelectiveXmlIndexes
+  EXEC SchemaSmith.DegradeUnsupportedJsonIndexes
 
   -- Table compression where the edition lacks it: below SQL Server 2016 SP1, Standard, Web and Express refuse
   -- DATA_COMPRESSION with 7738. The table is created uncompressed; index compression is handled with the indexes above.

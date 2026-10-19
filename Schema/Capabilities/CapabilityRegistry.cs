@@ -75,6 +75,9 @@ namespace Schema.Capabilities
             // The gate is sys.xml_indexes.xml_index_type, which arrived with them: the major version cannot tell SP1 from RTM.
             rows.Add(new("selective-xml-index", "Selective XML index", Platform.SqlServer,
                 11, "SQL Server 2012 SP1", null, DegradeKind.Skip, "selective XML index (SQL Server 2012 SP1)"));
+            // Below 2025 a JSON index is skipped; the gate is sys.json_indexes, which arrived with them.
+            rows.Add(new("json-index", "JSON index", Platform.SqlServer,
+                17, "SQL Server 2025", null, DegradeKind.Skip, "JSON index (SQL Server 2025)"));
             rows.Add(new("columnstore-nonclustered", "Nonclustered columnstore index", Platform.SqlServer,
                 11, "SQL Server 2012", null, DegradeKind.Skip, "columnstore index (SQL Server 2012/2014)"));
             rows.Add(new("columnstore-clustered", "Clustered columnstore index", Platform.SqlServer,

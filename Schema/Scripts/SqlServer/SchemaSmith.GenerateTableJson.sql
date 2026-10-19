@@ -132,6 +132,7 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 15
      WHERE ec.parent_object_id = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table))',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128)', @p_Schema = @p_Schema, @p_Table = @p_Table
 {{CollectSelectiveXmlIndexes}}
+{{CollectJsonIndexes}}
 SELECT [Line] FROM SchemaSmith.fn_FormatJson((
 SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        QUOTENAME(TABLE_NAME) AS [Name],
@@ -496,6 +497,18 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
           WHERE i.[object_id] = st.[object_id]
           ORDER BY i.[name]
           FOR JSON PATH) AS [SpatialIndexes],
+       -- JSON indexes (2025): the column, the paths (left out when the whole document is indexed), the array-search option
+       -- when it is on, FILLFACTOR when set. Paths sort binary, as the compare renders them.
+       (SELECT QUOTENAME(l.[Name]) AS [Name], l.[Column] AS [Column],
+               JSON_QUERY((SELECT '[' + STRING_AGG(CAST('"' + STRING_ESCAPE(p.[Path], 'json') + '"' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY p.[Path] COLLATE Latin1_General_BIN2) + ']'
+                             FROM #LiveJsonIndexPaths p
+                             WHERE p.[object_id] = l.[object_id] AND p.index_id = l.index_id AND p.[Path] <> '$')) AS [Paths],
+               CASE WHEN l.[OptimizeForArraySearch] = 1 THEN CAST(1 AS BIT) END AS [OptimizeForArraySearch],
+               l.[FillFactor] AS [FillFactor]
+          FROM #LiveJsonIndexes l
+          WHERE l.[object_id] = st.[object_id]
+          ORDER BY l.[Name]
+          FOR JSON PATH) AS [JsonIndexes],
 	   (SELECT QUOTENAME([Name]) AS [Name],
                (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(fc.[parent_object_id], fc.parent_column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY fc.constraint_column_id)
                             FROM sys.foreign_key_columns fc

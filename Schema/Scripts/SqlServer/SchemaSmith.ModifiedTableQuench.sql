@@ -379,6 +379,11 @@ BEGIN TRY
                         WHERE i.[Schema] = xp.[Schema]
                           AND i.TableName = xp.TableName
                           AND i.IndexName = QUOTENAME(xp.IndexName))
+      AND NOT EXISTS (SELECT *
+                        FROM #JsonIndexes i WITH (NOLOCK)
+                        WHERE i.[Schema] = xp.[Schema]
+                          AND i.TableName = xp.TableName
+                          AND i.IndexName = QUOTENAME(xp.IndexName))
 
   -- 2016-era per-column catalog metadata (dynamic data masking + Always Encrypted) is version-gated so this
   -- shared apply proc CREATEs on a genuine pre-2016 binary: a STATIC sys.masked_columns / encryption_* column
@@ -1790,6 +1795,19 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
+  -- JSON indexes (2025): the live set, read dynamically because sys.json_indexes exists only there.
+  RAISERROR('Collect Existing JSON Index Definitions', 10, 100) WITH NOWAIT
+{{CollectJsonIndexes}}
+  IF OBJECT_ID('tempdb..#ExistingJsonIndexes') IS NOT NULL DROP TABLE #ExistingJsonIndexes
+  SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(l.[Name] AS NVARCHAR(500))
+    INTO #ExistingJsonIndexes
+    FROM #Tables t WITH (NOLOCK)
+    JOIN #LiveJsonIndexes l WITH (NOLOCK) ON l.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+    WHERE t.NewTable = 0
+
+  RAISERROR('Detect JSON Index Changes', 10, 100) WITH NOWAIT
+{{DetectJsonIndexChanges}}
+
   -- Spatial indexes (sys.spatial_indexes and its tessellation, both 2008). A declared attribute that differs from the
   -- live index re-creates it; an attribute the package omits is not compared, so an index declared by its column alone
   -- keeps whatever the engine chose. fill_factor 0 is the server default, read as 100.
@@ -1877,6 +1895,12 @@ BEGIN TRY
                [ObjName] = ei.[xSchema] + '.' + ei.[xTableName] + '.' + ei.[xIndexName]
           FROM #ExistingSpatialIndexes ei WITH (NOLOCK)
           WHERE NOT EXISTS (SELECT * FROM #SpatialIndexes s WITH (NOLOCK) WHERE s.[Schema] = ei.[xSchema] AND s.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(s.[IndexName]) = ei.[xIndexName])
+        UNION
+        -- Arm (e): unknown JSON indexes, the same as (c).
+        SELECT [ObjType] = 'index',
+               [ObjName] = ei.[xSchema] + '.' + ei.[xTableName] + '.' + ei.[xIndexName]
+          FROM #ExistingJsonIndexes ei WITH (NOLOCK)
+          WHERE NOT EXISTS (SELECT * FROM #JsonIndexes j WITH (NOLOCK) WHERE j.[Schema] = ei.[xSchema] AND j.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(j.[IndexName]) = ei.[xIndexName])
       ) x
       FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @v_SQL IS NOT NULL EXEC(@v_SQL)
@@ -1927,6 +1951,15 @@ BEGIN TRY
   UNION
   SELECT [Schema], [TableName], SchemaSmith.fn_StripBracketWrapping([IndexName]), [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
     FROM #SpatialIndexChanges WITH (NOLOCK)
+  UNION
+  -- Unknown JSON indexes if we're dropping unknown, and JSON indexes where a declared attribute differs
+  SELECT [xSchema], [xTableName], [xIndexName], [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
+    FROM #ExistingJsonIndexes ei WITH (NOLOCK)
+    WHERE @DropUnknownIndexes = 1
+      AND NOT EXISTS (SELECT * FROM #JsonIndexes j WITH (NOLOCK) WHERE j.[Schema] = ei.[xSchema] AND j.[TableName] = ei.[xTableName] AND SchemaSmith.fn_StripBracketWrapping(j.[IndexName]) = ei.[xIndexName])
+  UNION
+  SELECT [Schema], [TableName], SchemaSmith.fn_StripBracketWrapping([IndexName]), [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
+    FROM #JsonIndexChanges WITH (NOLOCK)
 
   -- A foreign key this deploy will not re-create references an index it would drop or change, and SQL Server will not
   -- drop such an index while the key exists. Dropping the key first lost it for good, so the index is kept as it is.
@@ -1965,6 +1998,12 @@ BEGIN TRY
   INSERT #IndexesToDrop ([Schema], [TableName], [IndexName], [IsConstraint], [IsUnique], [IsClustered])
     SELECT [xSchema], [xTableName], [xIndexName], [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
       FROM #ExistingSpatialIndexes ei WITH (NOLOCK)
+      WHERE EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND id.[IsClustered] = 1)
+        AND NOT EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND [xIndexName] = [IndexName])
+  -- and the JSON indexes, which cannot exist without it.
+  INSERT #IndexesToDrop ([Schema], [TableName], [IndexName], [IsConstraint], [IsUnique], [IsClustered])
+    SELECT [xSchema], [xTableName], [xIndexName], [IsConstraint] = 0, [IsUnique] = 0, [IsClustered] = 0
+      FROM #ExistingJsonIndexes ei WITH (NOLOCK)
       WHERE EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND id.[IsClustered] = 1)
         AND NOT EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND [xIndexName] = [IndexName])
   

@@ -80,6 +80,7 @@
     [Indexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [XmlIndexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [SpatialIndexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [JsonIndexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [Columns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [Statistics] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [FullTextIndex] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
@@ -276,6 +277,8 @@
     [KindSuffix] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
   )
 
+  -- A JSON index's key is one column and a set of paths, so it has its own working set too.
+{{JsonIndexesTable}}
   DROP TABLE IF EXISTS #SpatialIndexes
   -- A spatial index's key is one column and a tessellation, so it has its own working set, as #XmlIndexes does.
   -- Every attribute but the column is NULL when the package omits it: the engine's default on create, not compared after.
@@ -430,6 +433,7 @@
   TRUNCATE TABLE #Indexes
   TRUNCATE TABLE #XmlIndexes
   TRUNCATE TABLE #SpatialIndexes
+  TRUNCATE TABLE #JsonIndexes
   TRUNCATE TABLE #ForeignKeys
   TRUNCATE TABLE #CheckConstraints
   TRUNCATE TABLE #Statistics
@@ -466,7 +470,7 @@
     THROW 51000, @v_Msg, 1;
   END
 
-  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [SpatialIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn])
+  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [SpatialIndexes], [JsonIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn])
   -- INGEST ONLY -- raw values straight off the shred. Every transform that used to live in this
   -- SELECT moved to the NORMALIZE pass below, so a second ingestion path (C# bulk-loading these rows
   -- instead of shredding JSON) gets the identical treatment from one definition rather than a
@@ -484,7 +488,7 @@
          [CdcFilegroup],
          [CdcSupportsNetChanges],
          [CdcIndexName],
-         [Indexes], [XmlIndexes], [SpatialIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints],
+         [Indexes], [XmlIndexes], [SpatialIndexes], [JsonIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints],
          [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName],
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch],
@@ -512,6 +516,7 @@
 	  [Indexes] NVARCHAR(MAX) '$.Indexes' AS JSON,
 	  [XmlIndexes] NVARCHAR(MAX) '$.XmlIndexes' AS JSON,
 	  [SpatialIndexes] NVARCHAR(MAX) '$.SpatialIndexes' AS JSON,
+	  [JsonIndexes] NVARCHAR(MAX) '$.JsonIndexes' AS JSON,
       [Columns] NVARCHAR(MAX) '$.Columns' AS JSON,
 	  [Statistics] NVARCHAR(MAX) '$.Statistics' AS JSON,
 	  [FullTextIndex] NVARCHAR(MAX) '$.FullTextIndex' AS JSON,
@@ -1056,6 +1061,7 @@
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   EXEC(@v_SQL)
 
+{{ParseJsonIndexesJson}}
   RAISERROR('Parse Foreign Keys from Json', 10, 100) WITH NOWAIT
   -- I5: missing/blank RelatedTableSchema is a programmer error after slice-1's resolver
   -- (which fills it from the platform default for regular templates or {{SchemaName}} for

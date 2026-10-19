@@ -379,6 +379,8 @@
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   EXEC(@v_SQL)
 
+{{JsonIndexesTable}}
+{{ParseJsonIndexesXml}}
   RAISERROR('Parse Foreign Keys from Xml', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ForeignKeys') IS NOT NULL DROP TABLE #ForeignKeys
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),

@@ -41,6 +41,11 @@ namespace Schema.Domain.SqlServer
                 var scriptTokens = tableTokens.Concat(GetCustomTokens(spatialIndex.Extensions)).ToList();
                 spatialIndex.ShouldApplyExpression = TableTokenReplace(spatialIndex.ShouldApplyExpression, scriptTokens);
             }
+            foreach (var jsonIndex in JsonIndexes)
+            {
+                var scriptTokens = tableTokens.Concat(GetCustomTokens(jsonIndex.Extensions)).ToList();
+                jsonIndex.ShouldApplyExpression = TableTokenReplace(jsonIndex.ShouldApplyExpression, scriptTokens);
+            }
             foreach (var statistic in Statistics)
             {
                 var scriptTokens = tableTokens.Concat(GetCustomTokens(statistic.Extensions)).ToList();
@@ -111,6 +116,12 @@ namespace Schema.Domain.SqlServer
         public List<SpatialIndex> SpatialIndexes { get; set; } = [];
 
         public bool ShouldSerializeSpatialIndexes() => SpatialIndexes is { Count: > 0 };
+
+        // JSON indexes (2025) have their own list for the same reason: the key is a column and a set of paths.
+        [JsonProperty(Order = 128)]
+        public List<JsonIndex> JsonIndexes { get; set; } = [];
+
+        public bool ShouldSerializeJsonIndexes() => JsonIndexes is { Count: > 0 };
 
         [JsonProperty(Order = 104)]
         public List<Statistic> Statistics { get; set; } = [];

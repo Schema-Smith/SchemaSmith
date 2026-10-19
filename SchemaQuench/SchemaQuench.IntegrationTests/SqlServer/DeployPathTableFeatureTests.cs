@@ -281,6 +281,35 @@ public class DeployPathTableFeatureTests
         }, xmlIngest: xmlIngest, contained: true);
     }
 
+    // SchemaQuench feeds the parse script to the server itself, outside the kindled procedures, so a JSON index has to
+    // survive that path too: created, and left alone by a redeploy.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AJsonIndex_IsCreatedAndLeftAloneByARealDeploy(bool xmlIngest)
+    {
+        RunScenario("DeployJsonIndex", null, (deploy, db, cmd) =>
+        {
+            cmd.CommandText = "SELECT CASE WHEN OBJECT_ID('sys.json_indexes') IS NULL THEN 0 ELSE 1 END";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0) Assert.Ignore("JSON indexes need SQL Server 2025.");
+            const string table = """
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[Doc]", "DataType": "JSON", "Nullable": true } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ],
+                  "JsonIndexes": [ { "Name": "[JX_DeployProbe]", "Column": "[Doc]", "Paths": [ "$.b", "$.a" ] } ] }
+                """;
+            const string rowset = "SELECT MAX(p.partition_id) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] "
+                                  + "WHERE it.parent_object_id = OBJECT_ID('dbo.DeployProbe') AND it.parent_minor_id = INDEXPROPERTY(OBJECT_ID('dbo.DeployProbe'), 'JX_DeployProbe', 'IndexID')";
+            deploy(table);
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.json_index_paths WHERE [object_id] = OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(2), "the declared JSON index reaches the database with its paths");
+            cmd.CommandText = rowset;
+            var before = cmd.ExecuteScalar();
+            deploy(table);
+            cmd.CommandText = rowset;
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(before), "and a redeploy leaves it alone");
+        }, xmlIngest: xmlIngest);
+    }
+
     [Test]
     public void ADeclaredDisabledIndex_IsDisabledByARealDeploy()
     {

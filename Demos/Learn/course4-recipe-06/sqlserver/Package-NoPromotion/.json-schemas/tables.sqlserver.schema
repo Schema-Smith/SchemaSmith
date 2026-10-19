@@ -931,6 +931,52 @@
       "additionalProperties": false,
       "description": "SQL Server 2022, with Ledger. The ledger view and its four column names; a member left out takes the engine's default (<table>_Ledger in the table's schema, ledger_transaction_id and so on). A new name for the view, in its schema, is applied with sp_rename; another schema or other column names are reported, since SQL Server cannot change them."
     },
+    "JsonIndexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Column": {
+            "type": "string",
+            "description": "The json column the index covers. The table needs a clustered primary key, and a column takes one JSON index."
+          },
+          "Paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The FOR list: the SQL/JSON paths to index, such as $.customer.id. No two may overlap, and wildcards are not allowed. Omitted or empty, the whole document ($) is indexed."
+          },
+          "OptimizeForArraySearch": {
+            "type": "boolean",
+            "description": "OPTIMIZE_FOR_ARRAY_SEARCH: also index array elements, for JSON_CONTAINS searches. Omitted, off."
+          },
+          "FillFactor": {
+            "type": "integer",
+            "minimum": 1.0,
+            "maximum": 100.0,
+            "description": "FILLFACTOR. Omitted, the server's default, and not compared."
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Column"
+        ]
+      }
+    },
     "Extensions": {}
   },
   "additionalProperties": false,
