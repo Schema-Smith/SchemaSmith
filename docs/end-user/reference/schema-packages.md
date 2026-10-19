@@ -596,6 +596,24 @@ Each platform's table definition extends the shared properties with engine-speci
 | `Tablespace` | string | `null` | **MySQL only.** The general tablespace the table is placed in. Same posture as `DataDirectory` — applied at create, a move refused by name, unset means unmanaged. MariaDB has no general tablespaces. |
 | `Partitioning` | object | `null` | How the table is partitioned. See [Partitioning (MySQL / MariaDB)](#partitioning-mysql--mariadb). Leave it unset and SchemaSmith does not manage partitioning at all, so a table someone partitioned by hand is left exactly as it is. |
 
+### Generated invisible primary keys (MySQL)
+
+From MySQL 8.0.30 a server with `sql_generate_invisible_primary_key` on gives every table created without a primary key
+one of its own: an invisible `my_row_id BIGINT UNSIGNED AUTO_INCREMENT` column and a primary key over it. That key is the
+server's, not your package's, so SchemaSmith treats it the way the server does:
+
+- **SchemaTongs leaves it out.** The table is extracted with the columns and indexes you would have written. (If
+  `show_gipk_in_create_table_and_information_schema` is off, MySQL hides it anyway.)
+- **A deploy leaves it alone.** It is not dropped as a column the package no longer declares, even with
+  `DropColumnsRemovedFromProduct`.
+- **Declaring a primary key replaces it.** When the package gives the table a primary key of its own, `my_row_id` is
+  dropped in the same statement that adds the declared key, which is the only form MySQL accepts. That holds when the
+  generated key is hidden from the catalog too.
+
+A `my_row_id` column you declare yourself is yours and is managed like any other column. One thing the server refuses
+outright with this setting on: a table that declares an `AUTO_INCREMENT` column but no primary key cannot be created
+(error 4109, "Auto-increment column already exists"). Declare the auto-increment column as the primary key.
+
 ### MariaDB (`MariaDbTable`)
 
 MariaDB tables carry every MySQL property above, plus the ones below for features MySQL has no equivalent for.
@@ -1066,6 +1084,8 @@ comparison is order-insensitive, because PostgreSQL returns `reloptions` in its 
 ### MySQL index extras
 
 `IndexType` (e.g., `BTREE`, `HASH`), `Visible`/`Invisible` flag where supported.
+
+**Primary keys on an existing table.** A table that already exists takes the primary key its package declares: one is added where the table has none, and a key over different columns is replaced in a single `ALTER TABLE`, rows intact. An `AUTO_INCREMENT` column that no longer leads the key gets an index of its own unless another index already leads with it. A key a foreign key needs, on either side of the relationship, is kept as it is and the deploy says so; change the foreign key first. A primary key the package does not declare is never dropped. Full and `--IndexOnly` deploys behave the same, and `--WhatIf` reports the change without making it.
 
 **MariaDB: temporal keys.** `WithoutOverlaps: true` on a primary key or unique key whose last `IndexColumns` part names one of the table's [`Periods`](configuration.md#application-time-periods) deploys `UNIQUE KEY (col, period WITHOUT OVERLAPS)`: rows with the same values in the other parts may not have overlapping periods (MariaDB 10.5.3+). The catalog lists such a key over the period's end and start columns, and the deploy compares a declared key the same way, so a redeploy leaves it alone on every version. Extraction names the period last and writes the flag from 11.4, where the catalog can say which period a key is over; below that -- the same blind spot the periods themselves have -- it reads back as a plain unique key over those two columns. Below 10.5.3 the key is created over the period's columns without the clause, per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). `--Validate` stops a `WithoutOverlaps` on a key that is not unique (`SS-IDX-002`) or whose last part is not a declared period (`SS-IDX-003`).
 

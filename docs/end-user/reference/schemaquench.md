@@ -582,6 +582,7 @@ scripts (Before, After, Objects, migration scripts and `ValidationScript`) alway
 | `time_zone` | DataTongs extracts at `+00:00` and records that on the delivery it configures (`TimeZone`). Delivery uses the recorded zone, so `TIMESTAMP` values arrive unchanged whatever zone either server runs in. A delivery without `TimeZone` runs in the session's zone. |
 | `sql_mode` during data delivery | `NO_AUTO_VALUE_ON_ZERO` is added, so a row whose `AUTO_INCREMENT` key is `0` keeps `0`. |
 | `sql_require_primary_key` (MySQL), `innodb_force_primary_key` (MariaDB) | SchemaSmith's own tables all have primary keys. Your tables must declare one, because the server refuses any table without it. |
+| `sql_generate_invisible_primary_key` (MySQL 8.0.30+) | A table created without a primary key gets the server's invisible `my_row_id` key. Extraction leaves it out, a deploy never drops it, and a primary key you declare replaces it. See [Generated invisible primary keys](schema-packages.md#generated-invisible-primary-keys-mysql). |
 | `information_schema_stats_expiry` (MySQL 8.0+) | Read past for `AUTO_INCREMENT`, on deploy and on extraction, so a stale statistics cache cannot hide the table's current value. |
 | `lower_case_table_names` | See [Name case on MySQL](#name-case-on-mysql). |
 

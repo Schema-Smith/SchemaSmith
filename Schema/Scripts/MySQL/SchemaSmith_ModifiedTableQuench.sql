@@ -2141,6 +2141,7 @@ BEGIN
       AND dc.ColumnName IS NULL
       -- A system-versioned table's ROW START / ROW END columns are the engine's: never dropped by absence.
       AND SchemaSmith_IsSystemTimePeriodColumn(p_DatabaseName, SchemaSmith_StripBacktickWrapping(t.TableName), isc.COLUMN_NAME) = 0
+      AND SchemaSmith_IsGeneratedInvisiblePrimaryKey(p_DatabaseName, SchemaSmith_StripBacktickWrapping(t.TableName), isc.COLUMN_NAME) = 0
       AND p_DropColumnsRemovedFromProduct = 1
       AND COALESCE(t.DropColumnsRemovedFromProduct, 1) = 1;
 
@@ -2171,6 +2172,7 @@ BEGIN
             )
         WHERE t.NewTable = 0
           AND SchemaSmith_IsSystemTimePeriodColumn(p_DatabaseName, SchemaSmith_StripBacktickWrapping(t.TableName), isc.COLUMN_NAME) = 0
+          AND SchemaSmith_IsGeneratedInvisiblePrimaryKey(p_DatabaseName, SchemaSmith_StripBacktickWrapping(t.TableName), isc.COLUMN_NAME) = 0
           AND dc.ColumnName IS NULL
           AND COALESCE(t.DropColumnsRemovedFromProduct, 1) = 1;
 

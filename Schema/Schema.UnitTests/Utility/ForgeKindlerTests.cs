@@ -541,7 +541,9 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_ColumnTypeDiffers (MA-054: a type change takes down the foreign keys on its column first).
         // +1 = SchemaSmith_CaseRespellKeepsOldSpelling (a case-only respelling a foreign key blocks, on old MariaDB patches).
         // +3 = SupportsSystemTimePartitionCount + SupportsSystemTimeAutoPartitions + SystemTimePartitionable (D8 SYSTEM_TIME).
-        Assert.That(mysql.Length, Is.EqualTo(101));
+        // +1 = SchemaSmith_IsGeneratedInvisiblePrimaryKey (MySQL 8.0.30+'s my_row_id: neither extracted nor dropped).
+        // +1 = SchemaSmith_ConvergePrimaryKeys (an existing table's declared primary key, added or replaced).
+        Assert.That(mysql.Length, Is.EqualTo(103));
     }
 
     [Test]

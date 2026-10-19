@@ -244,7 +244,9 @@ BEGIN
     ), ']') INTO v_columns
     FROM INFORMATION_SCHEMA.COLUMNS c
     WHERE c.TABLE_SCHEMA = p_Schema
-      AND c.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table);
+      AND c.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
+      -- The key the server generated for a table created without one is the server's, not the package's.
+      AND SchemaSmith_IsGeneratedInvisiblePrimaryKey(p_Schema, p_Table, c.COLUMN_NAME) = 0;
       -- A system-versioned table's explicit ROW START / ROW END columns are written with their role (GeneratedAlways);
       -- the implicit pair is not in INFORMATION_SCHEMA.COLUMNS at all, so a table that has it extracts without them.
 
@@ -339,6 +341,7 @@ BEGIN
               -- MariaDB adds a versioned table's ROW END column to its unique keys itself, so a unique key is written
               -- without it; the deploy compares the two as one. Any other index naming a period column keeps it.
               AND (s.COLUMN_NAME IS NULL OR s.NON_UNIQUE = 1 OR SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, s.COLUMN_NAME) <> 2)
+              AND NOT (s.INDEX_NAME = 'PRIMARY' AND SchemaSmith_IsGeneratedInvisiblePrimaryKey(p_Schema, p_Table, s.COLUMN_NAME) = 1)
             GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT, pj.PeriodJson
         ) idx_subquery;
     ELSE
@@ -379,6 +382,7 @@ BEGIN
               -- MariaDB adds a versioned table's ROW END column to its unique keys itself, so a unique key is written
               -- without it; the deploy compares the two as one. Any other index naming a period column keeps it.
               AND (s.COLUMN_NAME IS NULL OR s.NON_UNIQUE = 1 OR SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, s.COLUMN_NAME) <> 2)
+              AND NOT (s.INDEX_NAME = 'PRIMARY' AND SchemaSmith_IsGeneratedInvisiblePrimaryKey(p_Schema, p_Table, s.COLUMN_NAME) = 1)
             GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT, pj.PeriodJson
         ) idx_subquery;
     END IF;

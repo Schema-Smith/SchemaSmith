@@ -914,6 +914,8 @@ public static class ForgeKindler
                 new("SchemaSmith_SupportsWithoutOverlaps.sql"),
                 new("SchemaSmith_IndexPeriodJson.sql"),
                 new("SchemaSmith_IsSystemTimePeriodColumn.sql"),
+                // MySQL 8.0.30+'s generated invisible primary key (my_row_id): neither extracted nor dropped (0 on MariaDB).
+                new("SchemaSmith_IsGeneratedInvisiblePrimaryKey.sql"),
                 // A declared system-time period column's role, and the gate for adding explicit ones to an implicit table (11.7).
                 new("SchemaSmith_SystemTimePeriodRole.sql"),
                 // Read by ModifiedTableQuench's generated-status passes: a VIRTUAL <-> STORED switch is a drop and re-add.
@@ -972,6 +974,8 @@ public static class ForgeKindler
                 new("SchemaSmith_DropModifiedFullTextIndexes.sql"),
                 new("SchemaSmith_CreateMissingFullTextIndexes.sql"),
                 new("SchemaSmith_ModifiedTableQuench.sql"),
+                // An existing table's declared primary key, added or replaced; both index paths call it.
+                new("SchemaSmith_ConvergePrimaryKeys.sql"),
                 new("SchemaSmith_MissingIndexesAndConstraintsQuench.sql"),
                 new("SchemaSmith_ForeignKeyQuench.sql"),
                 new("SchemaSmith_IndexOnlyQuench.sql"),

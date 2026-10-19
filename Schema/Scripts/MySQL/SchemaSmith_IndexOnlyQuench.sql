@@ -980,6 +980,8 @@ BEGIN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCreateStmts;
     END IF;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DeferredIndexSwaps;
+    -- An existing table's declared primary key, added or replaced now that the secondary indexes exist.
+    CALL SchemaSmith_ConvergePrimaryKeys(p_DatabaseName, p_WhatIf);
 
     -- =========================================================================
     -- STEP 5: Update ProductOwnership for managed indexes
