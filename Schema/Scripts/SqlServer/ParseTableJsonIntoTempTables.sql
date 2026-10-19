@@ -976,6 +976,15 @@
                                  FROM STRING_SPLIT([Order], ',')
                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '');
 
+  -- A nonclustered columnstore index has no key: its columns are included columns, which is how they are read back. Declared
+  -- in IndexColumns instead, they are moved there, so the index is created and compares equal to its extraction.
+  UPDATE #Indexes
+     SET [IncludeColumns] = STUFF((SELECT ',' + [value]
+                                     FROM SchemaSmith.fn_SplitList([IndexColumns], ',')
+                                     ORDER BY [value] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
+         [IndexColumns] = NULL
+   WHERE [ColumnStore] = 1 AND [Clustered] = 0 AND RTRIM(ISNULL([IncludeColumns], '')) = '' AND RTRIM(ISNULL([IndexColumns], '')) <> ''
+
   -- Identify Indexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #Indexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
     FROM #Indexes WITH (NOLOCK)

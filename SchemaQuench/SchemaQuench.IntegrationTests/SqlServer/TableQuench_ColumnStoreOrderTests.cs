@@ -2,6 +2,7 @@
 
 using System;
 using System.Data;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -124,6 +125,87 @@ public class TableQuench_ColumnStoreOrderTests : BaseTableQuenchTests
             RunTableQuenchProc(cmd, Json(table, "[A]"));
             Assert.That(LiveOrder(cmd, table, major), Is.EqualTo("A"));
             RunTableQuenchProc(cmd, Json(table, null));
+            Assert.That(LiveOrder(cmd, table, major), Is.Empty, "an Order no longer declared is removed");
+        });
+    }
+
+    private static string NonClusteredJson(string table, string order) => $$"""
+        [{
+            "Schema": "dbo",
+            "Name": "{{table}}",
+            "Columns": [
+                { "Name": "A", "DataType": "INT", "Nullable": false },
+                { "Name": "B", "DataType": "INT", "Nullable": false },
+                { "Name": "C", "DataType": "VARCHAR(10)", "Nullable": true }
+            ],
+            "Indexes": [
+                { "Name": "PK_{{table}}", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[A]" },
+                { "Name": "NCCI_{{table}}", "ColumnStore": true, "IndexColumns": "[A],[B],[C]"{{(order == null ? "" : $", \"Order\": \"{order}\"")}} }
+            ]
+        }]
+        """;
+
+    // A nonclustered columnstore index's columns are included columns, and only IncludeColumns reached its CREATE: declared
+    // in IndexColumns, the statement came out NULL and the index was silently never created.
+    [TestCase("IndexColumns")]
+    [TestCase("IncludeColumns")]
+    public void ANonClusteredColumnstore_IsCreatedFromEitherColumnList_AndRedeploysAsANoOp(string columnList)
+    {
+        var table = "NcsCols" + columnList[..4];
+        var name = $"[dbo].[{table}].[NCCI_{table}]";
+        var json = NonClusteredJson(table, null).Replace("\"IndexColumns\": \"[A],[B],[C]\"", $"\"{columnList}\": \"[C], B,[A]\"");
+        WithTable(table, cmd =>
+        {
+            if (Major(cmd) < 13) Assert.Ignore("A nonclustered columnstore index is writable from SQL Server 2016.");
+            RunTableQuenchProc(cmd, json);
+            cmd.CommandText = $"""
+                SELECT ISNULL(STUFF((SELECT ',' + COL_NAME(ic.[object_id], ic.column_id) FROM sys.indexes si
+                  JOIN sys.index_columns ic ON ic.[object_id] = si.[object_id] AND ic.index_id = si.index_id
+                 WHERE si.[object_id] = OBJECT_ID('dbo.{table}') AND si.[type] = 6 ORDER BY COL_NAME(ic.[object_id], ic.column_id) FOR XML PATH('')), 1, 1, ''), '')
+                """;
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("A,B,C"), "the index is created over the declared columns");
+
+            ClearAudit(cmd);
+            RunTableQuenchProc(cmd, json);
+            Assert.That(Audit(cmd, name, "created") + Audit(cmd, name, "dropped"), Is.Empty, "and a redeploy leaves it alone");
+        });
+    }
+
+    [Test]
+    public void AnOrderedNonClusteredColumnstore_IsCreatedOrderedFrom2025_AndUnorderedWithADowngradeBelow()
+    {
+        const string table = "NcsOrder";
+        var name = $"[dbo].[{table}].[NCCI_{table}]";
+        WithTable(table, cmd =>
+        {
+            var major = Major(cmd);
+            if (major < 13) Assert.Ignore("A nonclustered columnstore index is writable from SQL Server 2016.");
+            ClearAudit(cmd);
+            RunTableQuenchProc(cmd, NonClusteredJson(table, "[B],[A]"));
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.{table}') AND [name] = 'NCCI_{table}' AND [type] = 6";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the index is created either way");
+            if (major < 17)
+            {
+                Assert.That(Audit(cmd, name, "downgraded"), Is.EqualTo("columnstore index without its ORDER"));
+                Assert.That(LiveOrder(cmd, table, major), Is.Empty, "and created unordered");
+                return;
+            }
+            Assert.That(LiveOrder(cmd, table, major), Is.EqualTo("B,A"), "the index is created in the declared order");
+
+            ClearAudit(cmd);
+            RunTableQuenchProc(cmd, NonClusteredJson(table, "B, A"));
+            Assert.That(Audit(cmd, name, "created") + Audit(cmd, name, "dropped"), Is.Empty, "the same order, written differently, is not a change");
+
+            cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
+            var json = new System.Text.StringBuilder();
+            using (var reader = cmd.ExecuteReader())
+                while (reader.Read()) json.Append(reader.GetString(0));
+            var index = ((JArray)JObject.Parse(json.ToString())["Indexes"])?.First(i => (string)i["Name"] == $"[NCCI_{table}]");
+            Assert.That((string)index?["Order"], Is.EqualTo("[B],[A]"), json.ToString());
+
+            RunTableQuenchProc(cmd, NonClusteredJson(table, "[C]"));
+            Assert.That(LiveOrder(cmd, table, major), Is.EqualTo("C"), "a changed order re-creates the index");
+            RunTableQuenchProc(cmd, NonClusteredJson(table, null));
             Assert.That(LiveOrder(cmd, table, major), Is.Empty, "an Order no longer declared is removed");
         });
     }

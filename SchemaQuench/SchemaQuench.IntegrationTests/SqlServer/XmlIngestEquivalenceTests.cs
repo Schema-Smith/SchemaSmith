@@ -38,7 +38,8 @@ namespace SchemaQuench.IntegrationTests.SqlServer
   ],
   ""Indexes"":[
     {""Name"":""PK_XmlEquivTable"",""PrimaryKey"":true,""Unique"":true,""Clustered"":true,""IndexColumns"":""Id""},
-    {""Name"":""IX_Amount"",""Unique"":false,""IndexColumns"":""Amount DESC"",""IncludeColumns"":""Note"",""FileGroup"":""FG_Test""}
+    {""Name"":""IX_Amount"",""Unique"":false,""IndexColumns"":""Amount DESC"",""IncludeColumns"":""Note"",""FileGroup"":""FG_Test""},
+    {""Name"":""NCCI_Equiv"",""ColumnStore"":true,""IndexColumns"":""Note, Amount""}
   ],
   ""XmlIndexes"":[
     {""Name"":""XI_Data"",""IsPrimary"":true,""Column"":""DataXml"",""PrimaryIndex"":null,""SecondaryIndexType"":null}
@@ -122,6 +123,10 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                 var jsonIndexRows = string.Join("\n", jsonTables[System.Array.IndexOf(ConsumedTables, "#JsonIndexes")]);
                 Assert.That(jsonIndexRows, Does.Contain("IndexName=[jx_doc]|Column=[Doc]|Paths=<null>|ForClause= FOR (N'$.\"it''s\"', N'$.a', N'$.b')|OptimizeForArraySearch=True|FillFactor=<null>|")
                                               .And.Contain("IndexName=[JX_Whole]|Column=[Whole]|Paths=<null>|ForClause= FOR (N'$')|OptimizeForArraySearch=False|"), "the JSON index rows are normalized");
+                // A nonclustered columnstore index declared with IndexColumns carries them as its included columns.
+                var ncci = jsonTables[System.Array.IndexOf(ConsumedTables, "#Indexes")].SingleOrDefault(r => r.Contains("IndexName=[NCCI_Equiv]|"));
+                Assert.That(ncci, Is.Not.Null, "the nonclustered columnstore row is shredded");
+                Assert.That(ncci, Does.Contain("|IndexColumns=<null>|").And.Contain("|IncludeColumns=[Amount],[Note]|"), "its columns are included columns");
             });
         }
 
