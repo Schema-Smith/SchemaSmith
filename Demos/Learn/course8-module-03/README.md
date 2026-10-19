@@ -12,15 +12,28 @@ error, recover.
 
 ## Step 1 — create the sandbox database
 
-**macOS / Linux:** `cd Demos/Learn/course8-module-03 && bash setup-databases.sh`
-**Windows:** `cd Demos\Learn\course8-module-03 ; .\setup-databases.ps1`
+**macOS / Linux**
 
-Prints `PASS` per engine once `diag_keys` exists. Re-running is safe (guarded `CREATE`).
+```bash
+# from course8-module-03
+bash setup-databases.sh --reset
+```
+
+**Windows (PowerShell)**
+
+```powershell
+# from course8-module-03
+.\setup-databases.ps1 -Reset
+```
+
+`--reset` (`-Reset`) drops `diag_keys` and recreates it empty, so every attempt — the first or a retake — starts from the same clean state. Prints `PASS (reset)` per engine. Only a database the labs created is ever dropped.
 
 ## Step 2 — deploy the baseline (green)
 
-```
-cd sqlserver            # or postgres, mysql, or mariadb
+Change into your engine's folder (`sqlserver`, `postgres`, `mysql`, or `mariadb`); every `schemaquench` below runs there:
+
+```bash
+# from course8-module-03/<engine>
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
@@ -41,7 +54,8 @@ whole point: **a constraint you haven't declared can't protect you.** Each beat 
 is dropped in the modified-tables phase and rebuilt as "missing," the build lands one phase later —
 at the index phase — where it meets the duplicate emails:
 
-```
+```bash
+# from course8-module-03/<engine>
 schemaquench --ConfigFile:quench.settings.beat1-broken.json --LogPath:"$PWD/logs"
 ```
 
@@ -52,20 +66,25 @@ Fails **the same way on all four** — exit `2` at `Quenching indexes and constr
 | **SQL Server** | `The CREATE UNIQUE INDEX statement terminated because a duplicate key was found for the object name 'dbo.Customer' and the index name 'IX_Customer_Email'. The duplicate key value is (ana.f@shop.test).` (error `1505`) |
 | **PostgreSQL** | `23505: could not create unique index "ix_customer_email"` |
 | **MySQL** | `Duplicate entry 'ana.f@shop.test' for key 'Customer.IX_Customer_Email'` (error `1062`) |
-| **MariaDB** | `Duplicate entry 'ana.f@shop.test' for key 'Customer.IX_Customer_Email'` (error `1062`) |
+| **MariaDB** | `Duplicate entry 'ana.f@shop.test' for key 'IX_Customer_Email'` (error `1062`) — MariaDB names the key without the table prefix |
 
 The phase left a **copy-runnable** artifact — `artifacts/SchemaQuench - Quench Indexes ….sql` — a one
 -line `EXEC`/`CALL …MissingIndexesAndConstraintsQuench`. Paste it into your client and the phase fails
 identically: that is your reproduction.
 
-**The fix is data** — the two rows genuinely collide on a column you're about to make unique. Dedupe,
-then redeploy the same flip:
+**The fix is data** — the two rows genuinely collide on a column you're about to make unique. Dedupe
+(from the lab folder), then redeploy the same flip from your engine's folder:
 
+```bash
+# from course8-module-03
+../lab-sql.sh sqlserver diag_keys "UPDATE dbo.Customer SET Email = 'ana.f7@shop.test' WHERE CustomerId = 7;"
+../lab-sql.sh postgres diag_keys "UPDATE public.customer SET email = 'ana.f7@shop.test' WHERE customerid = 7;"
+../lab-sql.sh mysql diag_keys "UPDATE Customer SET Email = 'ana.f7@shop.test' WHERE CustomerId = 7;"
+../lab-sql.sh mariadb diag_keys "UPDATE Customer SET Email = 'ana.f7@shop.test' WHERE CustomerId = 7;"
 ```
--- SQL Server (PG / MySQL / MariaDB analogous)
-UPDATE dbo.Customer SET Email = 'ana.f7@shop.test' WHERE CustomerId = 7;
-```
-```
+
+```bash
+# from course8-module-03/<engine>
 schemaquench --ConfigFile:quench.settings.beat1-broken.json --LogPath:"$PWD/logs"
 ```
 
@@ -77,7 +96,8 @@ Green on all four — the unique index now builds, PostgreSQL included.
 the time the FK is created, the rows are already resident — so the orphan (`CustomerId 999`) surfaces
 here, at the last structural phase, not earlier:
 
-```
+```bash
+# from course8-module-03/<engine>
 schemaquench --ConfigFile:quench.settings.beat2-broken.json --LogPath:"$PWD/logs"
 ```
 
@@ -94,13 +114,18 @@ Same shape as Beat 1: a copy-runnable `artifacts/SchemaQuench - Quench Foreign K
 `EXEC`/`CALL …ForeignKeyQuench`) reproduces it by hand.
 
 **The fix is data** — the FK caught a real gap. Reparent the orphan to a customer that exists (or
-delete it), then redeploy the same FK add:
+delete it) from the lab folder, then redeploy the same FK add from your engine's folder:
 
+```bash
+# from course8-module-03
+../lab-sql.sh sqlserver diag_keys "UPDATE dbo.SalesOrder SET CustomerId = 1 WHERE CustomerId = 999;"
+../lab-sql.sh postgres diag_keys "UPDATE public.salesorder SET customerid = 1 WHERE customerid = 999;"
+../lab-sql.sh mysql diag_keys "UPDATE SalesOrder SET CustomerId = 1 WHERE CustomerId = 999;"
+../lab-sql.sh mariadb diag_keys "UPDATE SalesOrder SET CustomerId = 1 WHERE CustomerId = 999;"
 ```
--- SQL Server (PG / MySQL / MariaDB analogous)
-UPDATE dbo.SalesOrder SET CustomerId = 1 WHERE CustomerId = 999;
-```
-```
+
+```bash
+# from course8-module-03/<engine>
 schemaquench --ConfigFile:quench.settings.beat2-broken.json --LogPath:"$PWD/logs"
 ```
 

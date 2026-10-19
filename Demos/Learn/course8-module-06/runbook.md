@@ -61,7 +61,7 @@ The same failure, three codes:
 | Foreign-key orphan | `547` | `23503` | `1452` |
 | NOT NULL violation | `515` | `23502` | `1048` |
 | Duplicate / unique key | `2601` / `2627` | `23505` | `1062` |
-| String/binary truncation | `8152` | `22001` | `1406` |
+| String/binary truncation | `2628` (`8152` below compatibility level 150) | `22001` | `1406` |
 | Type / cast mismatch | `245` / `8115` | `22P02` | `1366` |
 
 (SQL Server prints the *message*, not always the number; PostgreSQL prints the SQLSTATE literally;
