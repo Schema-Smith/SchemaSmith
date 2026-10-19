@@ -53,7 +53,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 
 ```jsonc
 {
-  "schemaVersion": "1.1",           // contract version of this report shape
+  "schemaVersion": "1.2",           // contract version of this report shape
   "tool": "SchemaQuench",
   "toolVersion": "2.2.0.0",
   "run": {
@@ -133,7 +133,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 
 | Key | Meaning |
 | --- | --- |
-| `schemaVersion` | Contract version of the report shape — currently `"1.1"`. |
+| `schemaVersion` | Contract version of the report shape — currently `"1.2"`. |
 | `tool` | Always `"SchemaQuench"`. |
 | `toolVersion` | The CLI version that wrote the report — the same string `--version` prints. |
 | `run` | Run-level facts: product, platform, timing, mode, outcome. |
@@ -251,6 +251,8 @@ Where the counts are the summary, `details[]` is the itemized list — one row p
 - **`changeDataCapture`**, **`changeTracking`** and **`temporal`** — SQL Server CDC, change tracking and system versioning on a table: `created` when turned on, `dropped` when turned off, `modified` for a CDC capture-instance rotation or a change-tracking reset. Disabling CDC on a table with two capture instances records one row for each.
 
 These appear as `details[]` rows with their real `objectType` and `action` even though no top-level count field aggregates them — the detail is preserved even where the summary doesn't bucket it.
+
+A row also carries `mode` when [`OnlineApply`](configuration.md#onlineapply) decided how the change ran: `online`, `resumable`, or `unavailable` for the plain statement where the online one could not be used. A row has no `mode` key at all when nothing chose a form, so a deploy with `OnlineApply` off reports exactly what it did before the field existed (schema version 1.2 added it).
 
 ### `instrumented`
 

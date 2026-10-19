@@ -320,4 +320,22 @@ public class DeploymentSummaryJsonTests
         Assert.That(whatIf, Is.Not.Null, "whatIf key must remain present in the contract");
         Assert.That(whatIf.Type, Is.EqualTo(JTokenType.Null));
     }
+
+    [Test]
+    public void Serialize_WritesAnObjectChangesMode_OnlyWhenTheChangeHasOne()
+    {
+        // A deploy without OnlineApply reports exactly what it reported before Mode existed: no "mode": null on every row.
+        var summary = BuildFullyPopulatedSummary() with
+        {
+            ObjectChanges = new ObjectChangeSummary(true, new CreatedCounts(0, 0, 2, 0, 0, 0, 0, 0), new ModifiedCounts(0, 0),
+                new DroppedCounts(0, 0, 0, 0), 0,
+                [new ObjectChangeDetail("index", "[dbo].[T].[IX_A]", "created", "online"), new ObjectChangeDetail("index", "[dbo].[T].[IX_B]", "created")])
+        };
+        var details = (JArray)JObject.Parse(DeploymentSummaryJson.Serialize(summary)).SelectToken("objectChanges.details")!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(details[0]["mode"]?.Value<string>(), Is.EqualTo("online"));
+            Assert.That(((JObject)details[1]).ContainsKey("mode"), Is.False);
+        });
+    }
 }

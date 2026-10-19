@@ -374,6 +374,11 @@
       "additionalProperties": false,
       "description": "When set, overrides the template-, product- and environment-level RebuildPolicy for this table only. Null inherits from the nearest level that declares one. The winning policy applies whole — a policy declared here does NOT pick up fields it omits from a higher level."
     },
+    "OnlineApply": {
+      "type": "string",
+      "pattern": "^\\s*(?:[Oo][Ff][Ff]|[Pp][Rr][Ee][Ff][Ee][Rr]|[Rr][Ee][Qq][Uu][Ii][Rr][Ee])\\s*$",
+      "description": "When set, overrides the environment's OnlineApply for this table only. Off runs the plain statements; Prefer uses the engine's online or instant form where the version and edition allow it, and the plain form otherwise; Require uses the online or instant form or refuses the deploy, naming the statement. Null inherits the environment setting."
+    },
     "Engine": {
       "type": "string"
     },

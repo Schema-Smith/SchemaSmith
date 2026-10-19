@@ -85,7 +85,7 @@ public static class DeploymentSummaryAssembler
         var unsupportedDowngrade = BuildUnsupportedDowngrade(changeAudit);
 
         return new DeploymentSummary(
-            SchemaVersion: "1.1",
+            SchemaVersion: "1.2",
             Tool: "SchemaQuench",
             ToolVersion: toolVersion,
             Run: run,
@@ -195,7 +195,7 @@ public static class DeploymentSummaryAssembler
         // rows ARE previewed changes and stay in the detail.
         var details = rows
             .Where(r => r.Action != "dropSuppressed" && r.Action != "downgraded")
-            .Select(r => new ObjectChangeDetail(r.ObjectType, r.ObjectName, r.Action))
+            .Select(r => new ObjectChangeDetail(r.ObjectType, r.ObjectName, r.Action, r.Mode))
             .ToArray();
 
         return new ObjectChangeSummary(true, created, modified, dropped, scriptsRan, details, scriptsUnchanged);

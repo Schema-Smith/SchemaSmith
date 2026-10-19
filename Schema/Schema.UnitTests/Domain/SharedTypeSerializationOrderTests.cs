@@ -62,7 +62,7 @@ namespace Schema.UnitTests.Domain
             "ShouldApplyExpression", "DataDelivery", "VariantName", "DropColumnsRemovedFromProduct",
             "DropForeignKeysRemovedFromProduct", "DropCheckConstraintsRemovedFromProduct",
             "DropExcludeConstraintsRemovedFromProduct", "DropStatisticsRemovedFromProduct",
-            "DropIndexesRemovedFromProduct", "OldName", "PreventDrop", "RebuildPolicy", "Extensions");
+            "DropIndexesRemovedFromProduct", "OldName", "PreventDrop", "RebuildPolicy", "OnlineApply", "Extensions");
 
         [Test]
         // "NullableDeclared" leads for the DataDeliveries reason above: it is [JsonIgnore]d, so it is in this

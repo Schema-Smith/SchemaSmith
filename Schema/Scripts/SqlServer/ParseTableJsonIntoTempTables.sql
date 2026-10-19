@@ -108,6 +108,7 @@
     [RebuildPolicyOnOrderMismatch] BIT NULL,
     [RebuildPolicySpecified] BIT NULL,
     [PreventDrop] BIT NULL,
+    [OnlineApply] VARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
     [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [LedgerViewSchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [LedgerViewName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
@@ -168,6 +169,7 @@
     [RebuildPolicyOnOrderMismatch] BIT NULL,
     [RebuildPolicySpecified] BIT NULL,
     [PreventDrop] BIT NOT NULL,
+    [OnlineApply] VARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
     [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [LedgerViewSchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [LedgerViewName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
@@ -471,7 +473,7 @@
     THROW 51000, @v_Msg, 1;
   END
 
-  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [SpatialIndexes], [JsonIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn])
+  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [SpatialIndexes], [JsonIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [OnlineApply], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn])
   -- INGEST ONLY -- raw values straight off the shred. Every transform that used to live in this
   -- SELECT moved to the NORMALIZE pass below, so a second ingestion path (C# bulk-loading these rows
   -- instead of shredding JSON) gets the identical treatment from one definition rather than a
@@ -496,7 +498,7 @@
          [RebuildPolicySpecified] = CONVERT(BIT, CASE WHEN [RebuildPolicyJson] IS NOT NULL THEN 1 ELSE 0 END),
          -- NULL stays NULL (omitted: leave the database's description alone); '' stays '' (remove it). An
          -- MS_Description left inside Extensions.ExtendedProperties, where extraction used to put it, still counts.
-         [PreventDrop], [Description] = COALESCE([Description], [LegacyDescription]),
+         [PreventDrop], [OnlineApply] = UPPER(NULLIF(LTRIM(RTRIM([OnlineApply])), '')), [Description] = COALESCE([Description], [LegacyDescription]),
          [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn]
     FROM OPENJSON(@TableDefinitions) WITH (
       [Schema] NVARCHAR(500) '$.Schema',
@@ -548,6 +550,7 @@
       -- The OBJECT, read only to answer "did this table declare a policy at all?" -- see the sentinel above.
       [RebuildPolicyJson] NVARCHAR(MAX) '$.RebuildPolicy' AS JSON,
       [PreventDrop] BIT '$.PreventDrop',
+      [OnlineApply] NVARCHAR(20) '$.OnlineApply',
       [Description] NVARCHAR(MAX) '$.Description',
       [LegacyDescription] NVARCHAR(MAX) '$.Extensions.ExtendedProperties.MS_Description',
       [LedgerViewSchema] NVARCHAR(500) '$.LedgerView.Schema',
@@ -613,12 +616,12 @@
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
 
-  INSERT INTO #Tables ([Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName], [NewTable], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn])
+  INSERT INTO #Tables ([Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName], [NewTable], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [OnlineApply], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn])
   SELECT [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName],
          CONVERT(BIT, CASE WHEN OBJECT_ID([Schema] + '.' + [Name], 'U') IS NULL AND OBJECT_ID([Schema] + '.' + [OldName], 'U') IS NULL THEN 1 ELSE 0 END) AS NewTable,
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified],
-         ISNULL([PreventDrop], 0) AS [PreventDrop], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn]
+         ISNULL([PreventDrop], 0) AS [PreventDrop], [OnlineApply], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn]
     FROM #TableDefinitions WITH (NOLOCK);
   
   -- Removed outright by an ingest path that supplies these rows itself, for the same reason as

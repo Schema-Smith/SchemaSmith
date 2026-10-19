@@ -74,6 +74,15 @@ namespace Schema.Capabilities
             // Below 2012 CREATE SPATIAL INDEX has no DATA_COMPRESSION, on any edition: the index is created uncompressed.
             rows.Add(new("spatial-compression", "Spatial index compression", Platform.SqlServer,
                 11, "SQL Server 2012", null, DegradeKind.Reduced, "spatial index compression (SQL Server 2012)"));
+            // OnlineApply Prefer: below these, or on an edition without online operations (Standard, Web, Express at any
+            // version), the statement runs plain and the audit's Mode says "unavailable"; Require refuses instead. No
+            // manifest row: nothing declared is changed, only how it is built.
+            rows.Add(new("online-index", "Online index build", Platform.SqlServer,
+                11, "SQL Server 2012", null, DegradeKind.Reduced, null));
+            rows.Add(new("online-alter-column", "Online column change", Platform.SqlServer,
+                13, "SQL Server 2016", null, DegradeKind.Reduced, null));
+            rows.Add(new("resumable-index", "Resumable index build", Platform.SqlServer,
+                15, "SQL Server 2019", null, DegradeKind.Reduced, null));
             // Below 2012 SP1 a selective XML index and every secondary on one are skipped; the table deploys without them.
             // The gate is sys.xml_indexes.xml_index_type, which arrived with them: the major version cannot tell SP1 from RTM.
             rows.Add(new("selective-xml-index", "Selective XML index", Platform.SqlServer,

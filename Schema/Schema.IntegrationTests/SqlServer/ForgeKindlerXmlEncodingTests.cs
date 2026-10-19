@@ -392,6 +392,62 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
         conn.Close();
     }
 
+    // The XML tier parses a table's OnlineApply on its own, on both the full and the index-only paths: a table that asks for
+    // Prefer gets its new index built online with the environment left at Off, and an option-only change is rebuilt in place.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void OnlineApply_OnTheXmlTier_ATablesOwnPrefer_BuildsOnline_AndAnOptionOnlyChangeIsRebuiltInPlace(bool indexOnly)
+    {
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        var table = indexOnly ? "XmlOnlineIdx" : "XmlOnlineFull";
+        string Xml(string indexes) => ModelXmlSerializer.ToIngestXml("[{\"Schema\": \"[dbo]\", \"Name\": \"[" + table + "]\", \"OnlineApply\": \"Prefer\", \"Columns\": ["
+            + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false}, {\"Name\": \"[V]\", \"DataType\": \"INT\", \"Nullable\": true}],"
+            + "\"Indexes\": [{\"Name\": \"[PK_" + table + "]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"}" + indexes + "]}]", "Tables", "Table");
+        void Quench(string indexes, bool path)
+        {
+            var defs = Xml(indexes).Replace("'", "''");
+            cmd.CommandText = path
+                ? $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = 'XmlOnline', @TableDefinitions = N'{defs}', @DropUnknownIndexes = 1"
+                : $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlOnline', @TableDefinitions = N'{defs}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+        }
+        string Audits()
+        {
+            cmd.CommandText = "SELECT STUFF((SELECT ',' + ObjectName + '|' + ActionType + '|' + ISNULL(Mode, '-') FROM SchemaSmith.ChangeAudit "
+                            + $"WHERE SessionId = @@SPID AND ObjectName LIKE '%{table}%' ORDER BY Id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '')";
+            return cmd.ExecuteScalar() as string ?? "";
+        }
+        try
+        {
+            cmd.CommandTimeout = 300;
+            Quench("", false);
+            cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+            cmd.ExecuteNonQuery();
+            Quench(",{\"Name\": \"[IX_" + table + "]\", \"IndexColumns\": \"[V]\"}", indexOnly);
+            Assert.That(Audits(), Is.EqualTo($"[dbo].[{table}].[IX_{table}]|created|online"));
+
+            cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+            cmd.ExecuteNonQuery();
+            Quench(",{\"Name\": \"[IX_" + table + "]\", \"IndexColumns\": \"[V]\", \"PadIndex\": true}", indexOnly);
+            cmd.CommandText = $"SELECT is_padded FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.{table}') AND name = 'IX_{table}'";
+            var padded = Convert.ToBoolean(cmd.ExecuteScalar());
+            Assert.Multiple(() =>
+            {
+                Assert.That(Audits(), Is.EqualTo($"[dbo].[{table}].[IX_{table}]|modified|online"), "rebuilt in place, online");
+                Assert.That(padded, Is.True);
+            });
+        }
+        finally
+        {
+            DropTables(cmd, $"dbo.{table}");
+        }
+
+        conn.Close();
+    }
+
     [Test]
     public void LedgerNames_OnTheXmlTier_AreCreatedAsDeclared_AndExtractedWhereTheyDiffer()
     {

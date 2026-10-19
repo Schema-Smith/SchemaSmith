@@ -769,6 +769,66 @@ policy cannot be evaluated, so it is an error rather than a setting that quietly
 
 ---
 
+## OnlineApply
+
+Changing an index or a column on a table in use takes locks while the change runs, and on a large table that can be
+long enough to stall the application. Engines have lower-lock forms of many of these statements. `OnlineApply` lets a
+deploy use them, per environment, with a per-table override.
+
+| Scope | Where to set | Default |
+|---|---|---|
+| Environment | `OnlineApply` in `SchemaQuench.settings.json` (or the `SmithySettings_OnlineApply` environment variable, or `--OnlineApply=Prefer` on the command line) | `Off` |
+| Table | `OnlineApply` in the table's `.json` | inherits the environment |
+
+| Value | Effect |
+|---|---|
+| `Off` (default) | The plain statements, exactly as a deploy has always run them. |
+| `Prefer` | The online form wherever the engine's version and edition allow it, and the plain form otherwise. |
+| `Require` | The online form, or the deploy is refused, naming each statement that could not run online. The refusal comes before anything on the table changes. |
+
+It is off by default because each online form costs something you did not ask for: an online index build takes about
+twice the space and the time, and a resumable one leaves its progress behind if the deploy's session ends. Those are
+deployment-window decisions, so you opt in per environment.
+
+The [Deployment Summary](deployment-summary-report.md#details) says which form each change used: `mode` is `online`,
+`resumable` or `unavailable` (the plain form, where the online one could not be used). A change has no `mode` when
+`OnlineApply` is `Off`, and the progress log says the same thing, with the reason for an offline one.
+
+A table this deploy creates is empty, so its indexes are built the plain way whatever `OnlineApply` says.
+
+### SQL Server
+
+Online operations need Enterprise, Developer or Evaluation edition, Azure SQL Database or Managed Instance, on SQL
+Server 2012 or later. Standard, Web and Express have none at any version: there `Prefer` deploys with the plain
+statements, and `Require` is refused at the start of the deploy, naming the tables that asked for it.
+
+| Change on an existing table | Under `Prefer` or `Require` |
+|---|---|
+| A new index, primary key or unique constraint, or one built again because it changed | `WITH (ONLINE = ON)` |
+| A compression or fill-factor rebuild | `ALTER INDEX … REBUILD WITH (…, ONLINE = ON)` |
+| A changed clustered index or primary key, dropped to be built again | dropped `WITH (ONLINE = ON)` |
+| A column whose type, length, nullability or collation changes (SQL Server 2016+) | `ALTER COLUMN … WITH (ONLINE = ON)` |
+| A columnstore, XML, spatial or JSON index | built the plain way: none has an online build here |
+
+A column change runs offline when SQL Server cannot make it online: a text, ntext, image, CLR or FILESTREAM column on
+either side of the change, an XML column bound to a schema collection, an Always Encrypted column, and a table that is
+system-versioned, memory-optimized, has change tracking or merge replication, or has a columnstore index.
+
+### OnlineApplyMaxDuration
+
+From SQL Server 2019, `OnlineApplyMaxDuration` (whole minutes, 1 to 10080) makes each new index a resumable build:
+`CREATE INDEX … WITH (ONLINE = ON, RESUMABLE = ON, MAX_DURATION = n MINUTES)`. A primary key or unique constraint, an
+index over a computed or `timestamp` key column, and an index on a table with a columnstore index are built online
+without it, because SQL Server refuses a resumable build there. Unset, nothing is resumable.
+
+When the time runs out SQL Server pauses the build and **ends the deploy's session**, so the deploy fails at that
+statement. A paused build blocks every other change to its table, so the next deploy deals with it first, whatever its
+own settings: it resumes the build when the package still declares the index, and abandons it when it does not.
+
+| Scope | Where to set | Default |
+|---|---|---|
+| Environment | `OnlineApplyMaxDuration` in `SchemaQuench.settings.json` (or `SmithySettings_OnlineApplyMaxDuration`, or `--OnlineApplyMaxDuration=60`) | _unset_ |
+
 ## System-versioned tables (MariaDB)
 
 MariaDB can keep a table's own history: every update leaves the superseded row behind, queryable

@@ -348,7 +348,7 @@ public class ForgeKindlerTests
         // +1 on SQL Server = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
         // +1 on SQL Server = DegradeUnsupportedSelectiveXmlIndexes (below 2012 SP1 a selective XML index is skipped).
         // +1 on SQL Server = DegradeUnsupportedJsonIndexes (below 2025 a JSON index is skipped).
-        Assert.That(sqlServer.Length, Is.EqualTo(67));
+        Assert.That(sqlServer.Length, Is.EqualTo(74));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns

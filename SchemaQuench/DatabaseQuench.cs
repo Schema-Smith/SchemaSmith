@@ -170,6 +170,34 @@ public class DatabaseQuench
     private string TemplateCdcSupportsNetChanges =>
         _template?.CdcSupportsNetChanges is { } v ? (v ? "1" : "0") : "NULL";
 
+    /// <summary>OFF, PREFER or REQUIRE; a table's own OnlineApply overrides it in the procedures.</summary>
+    internal static string ResolveOnlineApply(string configured)
+    {
+        var value = (configured ?? "").Trim();
+        if (value.Length == 0) return "OFF";
+        return value.ToUpperInvariant() switch
+        {
+            "OFF" or "PREFER" or "REQUIRE" => value.ToUpperInvariant(),
+            _ => throw new InvalidOperationException($"OnlineApply must be Off, Prefer or Require, not '{value}'.")
+        };
+    }
+
+    /// <summary>The SQL literal NULL when unset: no resumable build.</summary>
+    internal static string ResolveOnlineApplyMaxDuration(string configured)
+    {
+        var value = (configured ?? "").Trim();
+        if (value.Length == 0) return "NULL";
+        if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) && minutes is >= 1 and <= 10080)
+            return minutes.ToString(CultureInfo.InvariantCulture);
+        throw new InvalidOperationException($"OnlineApplyMaxDuration must be a whole number of minutes from 1 to 10080, not '{value}'.");
+    }
+
+    private string OnlineApply =>
+        ResolveOnlineApply(FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.OnlineApply]);
+
+    private string OnlineApplyMaxDuration =>
+        ResolveOnlineApplyMaxDuration(FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.OnlineApplyMaxDuration]);
+
     /// <summary>NEVER when no tier declared a policy — the domain object's own default.</summary>
     private string RebuildPolicyMode =>
         EscapeSqlLiteral((CascadedRebuildPolicy?.Mode ?? "NEVER").Trim().ToUpperInvariant());
@@ -1668,7 +1696,7 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
         switch (_product.Platform.GetBasePlatform())
         {
             case Platform.SqlServer:
-                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @WhatIf = {_whatIfOnly}, @DropTablesRemovedFromProduct = {_dropRemovedTables}, @DropColumnsRemovedFromProduct = {_dropRemovedColumns}, @DropForeignKeysRemovedFromProduct = {_dropRemovedForeignKeys}, @DropCheckConstraintsRemovedFromProduct = {_dropRemovedCheckConstraints}, @DropExcludeConstraintsRemovedFromProduct = {_dropRemovedExcludeConstraints}, @DropStatisticsRemovedFromProduct = {_dropRemovedStatistics}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}";
+                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @WhatIf = {_whatIfOnly}, @DropTablesRemovedFromProduct = {_dropRemovedTables}, @DropColumnsRemovedFromProduct = {_dropRemovedColumns}, @DropForeignKeysRemovedFromProduct = {_dropRemovedForeignKeys}, @DropCheckConstraintsRemovedFromProduct = {_dropRemovedCheckConstraints}, @DropExcludeConstraintsRemovedFromProduct = {_dropRemovedExcludeConstraints}, @DropStatisticsRemovedFromProduct = {_dropRemovedStatistics}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}, @OnlineApply = '{OnlineApply}', @OnlineApplyMaxDuration = {OnlineApplyMaxDuration}";
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"
@@ -1810,8 +1838,8 @@ EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
                 var updateFillFactor = _template.UpdateFillFactor ? "1" : "0";
                 var indexOnlyTableDefs = _ingestEncoding == IngestEncoding.Xml ? IterationTableXml : IterationTableSchema;
                 tableCommand.CommandText = _template.IndexOnlyTableQuenches
-                    ? $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.IndexOnlyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @TableDefinitions = '{EscapeSqlLiteral(indexOnlyTableDefs)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @UpdateFillFactor = {updateFillFactor}, @WhatIf = {_whatIfOnly}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}"
-                    : $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}";
+                    ? $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.IndexOnlyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @TableDefinitions = '{EscapeSqlLiteral(indexOnlyTableDefs)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @UpdateFillFactor = {updateFillFactor}, @WhatIf = {_whatIfOnly}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}, @OnlineApply = '{OnlineApply}', @OnlineApplyMaxDuration = {OnlineApplyMaxDuration}"
+                    : $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}, @OnlineApply = '{OnlineApply}', @OnlineApplyMaxDuration = {OnlineApplyMaxDuration}";
                 break;
             }
             case Platform.PostgreSQL:
@@ -2498,7 +2526,7 @@ SET NOCOUNT ON
         // returns null, leaving the run honestly not-instrumented; the record/mark steps can't throw.
         var rows = ChangeAuditReader.ReadAndDrain(_product.Platform, auditCmd);
         if (rows == null) return;
-        foreach (var r in rows) ChangeAudit.Record(r.ObjectType, r.ObjectName, r.Action);
+        foreach (var r in rows) ChangeAudit.Record(r.ObjectType, r.ObjectName, r.Action, r.Mode);
         ChangeAudit.MarkInstrumented();
     }
 

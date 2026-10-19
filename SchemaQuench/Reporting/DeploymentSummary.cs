@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json;
 
 namespace SchemaQuench.Reporting;
 
@@ -113,7 +114,9 @@ public sealed record ModifiedCounts(int Tables, int Columns);
 
 public sealed record DroppedCounts(int Tables, int Indexes, int Constraints, int ForeignKeys);
 
-public sealed record ObjectChangeDetail(string ObjectType, string ObjectName, string Action);
+// Mode is left out of the report when null, so a deploy without OnlineApply reports exactly what it did before.
+public sealed record ObjectChangeDetail(string ObjectType, string ObjectName, string Action,
+    [property: JsonProperty(NullValueHandling = NullValueHandling.Ignore)] string Mode = null);
 
 /// <summary>
 /// No-drop protection tier manifest (#270 Slice E). Present only when the environment-level

@@ -590,14 +590,19 @@ public static class ForgeKindler
     internal const string SqlServerCreateMissingJsonIndexes =
         "RAISERROR('Add Missing JSON Indexes', 10, 100) WITH NOWAIT\n" +
         "SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Creating JSON index ' + j.[Schema] + '.' + j.[TableName] + '.' + j.[IndexName] +\n" +
-        "                                CASE WHEN RTRIM(ISNULL(j.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(j.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +\n" +
+        "                                CASE WHEN RTRIM(ISNULL(j.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(j.[VariantName]), '''', '''''') + ')' ELSE '' END +\n" +
+        "                                CASE WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +\n" +
         "                                'CREATE JSON INDEX ' + j.[IndexName] + ' ON ' + j.[Schema] + '.' + j.[TableName] + ' (' + j.[Column] + ')' + j.[ForClause] +\n" +
         "                                CASE WHEN j.[OptimizeForArraySearch] = 1 OR j.[FillFactor] IS NOT NULL OR j.[CompressionType] IS NOT NULL\n" +
         "                                     THEN ' WITH (' + STUFF(CASE WHEN j.[OptimizeForArraySearch] = 1 THEN ', OPTIMIZE_FOR_ARRAY_SEARCH = ON' ELSE '' END +\n" +
         "                                                            ISNULL(', FILLFACTOR = ' + CONVERT(NVARCHAR(10), j.[FillFactor]), '') +\n" +
         "                                                            ISNULL(', DATA_COMPRESSION = ' + j.[CompressionType], ''), 1, 2, '') + ')' ELSE '' END + ';' + CHAR(13) + CHAR(10) +\n" +
-        "                                'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''index'', ''' + REPLACE(j.[Schema] + '.' + j.[TableName] + '.' + j.[IndexName], '''', '''''') + ''', ''created'');' AS NVARCHAR(MAX))\n" +
+        "                                'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''index'', ''' + REPLACE(j.[Schema] + '.' + j.[TableName] + '.' + j.[IndexName], '''', '''''') + ''', ''created'', ' +\n" +
+        "                                CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');' AS NVARCHAR(MAX))\n" +
         "  FROM #JsonIndexes j WITH (NOLOCK)\n" +
+        // The caller's #OnlineForms: a JSON index has no online build, so under OnlineApply it is recorded as built offline.
+        "  LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'jsonIndex' AND ol.[Schema] = j.[Schema] AND ol.[TableName] = j.[TableName]\n" +
+        "                                         AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(j.[IndexName])\n" +
         "  WHERE OBJECT_ID(j.[Schema] + '.' + j.[TableName]) IS NOT NULL\n" +
         "    AND INDEXPROPERTY(OBJECT_ID(j.[Schema] + '.' + j.[TableName]), SchemaSmith.fn_StripBracketWrapping(j.[IndexName]), 'IndexID') IS NULL\n" +
         "  ORDER BY j.[Schema], j.[TableName], j.[IndexName]\n" +
@@ -649,6 +654,13 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_RebuildBlockedReason.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.fn_EnterpriseFeaturesUnavailable.sql"),
+                new("SchemaSmith.fn_OnlineOperationsAvailable.sql"),
+                new("SchemaSmith.fn_OnlineIndexForm.sql"),
+                new("SchemaSmith.fn_OnlineAlterColumnForm.sql"),
+                new("SchemaSmith.StageOnlineForms.sql"),
+                new("SchemaSmith.ResolvePausedIndexBuilds.sql"),
+                new("SchemaSmith.RefuseUnmetOnlineRequire.sql"),
+                new("SchemaSmith.RebuildOptionOnlyIndexChanges.sql"),
                 new("SchemaSmith.DegradeUnsupportedColumnStore.sql"),
                 new("SchemaSmith.DegradeUnsupportedFullText.sql"),
                 new("SchemaSmith.DegradeUnsupportedSpatialIndexes.sql"),

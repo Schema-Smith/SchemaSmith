@@ -207,6 +207,15 @@ public static class SettingsKeys
     /// history to the new shape. Anything else leaves the engine default, which refuses the change.
     /// </summary>
     public const string SystemVersioningAlterHistory = "SystemVersioningAlterHistory";
+
+    /// <summary>
+    /// Off (default), Prefer or Require: whether a deploy uses the engine's lower-lock form of a statement on an
+    /// existing table. A table's own <c>OnlineApply</c> overrides it.
+    /// </summary>
+    public const string OnlineApply = "OnlineApply";
+
+    /// <summary>SQL Server: minutes a resumable online index build may run before it pauses. Unset: not resumable.</summary>
+    public const string OnlineApplyMaxDuration = "OnlineApplyMaxDuration";
     public const string PreventDrop = "PreventDrop";
     public const string UpdateTables = "UpdateTables";
     public const string KindleTheForge = "KindleTheForge";

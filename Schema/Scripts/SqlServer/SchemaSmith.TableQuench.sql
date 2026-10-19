@@ -26,7 +26,10 @@ CREATE PROCEDURE SchemaSmith.TableQuench
     -- Template-level CdcFilegroup (#417): the default for tables that declare none. NULL = unmanaged.
     @CdcFilegroup NVARCHAR(128) = NULL,
     -- Template-level CdcSupportsNetChanges (#426): the default for CDC tables that declare none. NULL = unset.
-    @CdcSupportsNetChanges BIT = NULL
+    @CdcSupportsNetChanges BIT = NULL,
+    -- OnlineApply (OFF, PREFER or REQUIRE) and the resumable build's minutes, forwarded to the table and index passes.
+    @OnlineApply VARCHAR(7) = 'OFF',
+    @OnlineApplyMaxDuration INT = NULL
 AS
 BEGIN TRY
     SET NOCOUNT ON
@@ -51,8 +54,9 @@ BEGIN TRY
   -- Filled by ModifiedTableQuench's CDC headroom check, consumed by CdcQuench once every column exists.
   {{CdcRotateTable}}
   EXEC SchemaSmith.ModifiedTableQuench @ProductName = @ProductName, @WhatIf = @WhatIf, @DropUnknownIndexes = @DropUnknownIndexes, @DropTablesRemovedFromProduct = @DropTablesRemovedFromProduct, @DropSchemaBoundDependents = @DropSchemaBoundDependents,
-                                       @RebuildPolicyMode = @RebuildPolicyMode, @RebuildPolicyThreshold = @RebuildPolicyThreshold, @RebuildPolicyOnOrderMismatch = @RebuildPolicyOnOrderMismatch
-  EXEC SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName, @WhatIf
+                                       @RebuildPolicyMode = @RebuildPolicyMode, @RebuildPolicyThreshold = @RebuildPolicyThreshold, @RebuildPolicyOnOrderMismatch = @RebuildPolicyOnOrderMismatch,
+                                       @OnlineApply = @OnlineApply, @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
+  EXEC SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName, @WhatIf, @OnlineApply = @OnlineApply, @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
   -- Once every index exists: a declared Disabled state is state on an index that must already be there. Before the
   -- foreign keys and constraint states, because disabling a key's index disables the keys that reference it, and
   -- ConstraintStateQuench is what puts a declared Enforced back.

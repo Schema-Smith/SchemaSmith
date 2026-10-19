@@ -73,6 +73,7 @@
          [RebuildPolicyOnOrderMismatch] = CONVERT(BIT, CASE LOWER(t.value('(RebuildPolicy/OnOrderMismatch/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
          [RebuildPolicySpecified] = CONVERT(BIT, t.exist('RebuildPolicy/*/text()')),
          [PreventDrop] = ISNULL(CONVERT(BIT, CASE LOWER(t.value('(PreventDrop/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END), 0),
+         [OnlineApply] = CONVERT(VARCHAR(10), UPPER(NULLIF(LTRIM(RTRIM(t.value('(OnlineApply/text())[1]', 'NVARCHAR(20)'))), ''))),
          -- Omitted stays NULL (leave the database's description alone), '' stays '' (remove it); an MS_Description
          -- left inside Extensions.ExtendedProperties, where extraction used to put it, still counts.
          [Description] = COALESCE(t.value('(Description/text())[1]', 'NVARCHAR(MAX)'), t.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)')),
@@ -97,7 +98,7 @@
          CONVERT(BIT, CASE WHEN OBJECT_ID([Schema] + '.' + [Name], 'U') IS NULL AND OBJECT_ID([Schema] + '.' + [OldName], 'U') IS NULL THEN 1 ELSE 0 END) AS NewTable,
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified],
-         ISNULL([PreventDrop], 0) AS [PreventDrop], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn]
+         ISNULL([PreventDrop], 0) AS [PreventDrop], [OnlineApply], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn]
     INTO #Tables
     FROM #TableDefinitions WITH (NOLOCK);
 

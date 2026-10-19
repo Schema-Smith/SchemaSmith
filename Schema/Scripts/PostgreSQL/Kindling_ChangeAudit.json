@@ -28,6 +28,11 @@
       "Nullable": false
     },
     {
+      "Name": "Mode",
+      "DataType": "VARCHAR(16)",
+      "Nullable": true
+    },
+    {
       "Name": "CreatedAt",
       "DataType": "TIMESTAMP",
       "Nullable": false,

@@ -25,7 +25,7 @@ BEGIN
   DECLARE @v_End INT
   DECLARE @v_Last BIT = 0
   DECLARE @v_Audit INT
-  DECLARE @v_AuditEnd INT
+  DECLARE @v_AuditEnd INT, @v_AuditNull INT
 
   IF @Message IS NULL OR LEN(@Message) = 0
     RETURN
@@ -59,9 +59,13 @@ BEGIN
     BEGIN
       WHILE @v_Audit > 0
       BEGIN
+        -- A row ends with a quoted value, or with a NULL Mode.
         SET @v_AuditEnd = CHARINDEX(''');', @v_Line, @v_Audit)
+        IF @v_AuditEnd > 0 SET @v_AuditEnd = @v_AuditEnd + 3
+        SET @v_AuditNull = CHARINDEX(', NULL);', @v_Line, @v_Audit)
+        IF @v_AuditNull > 0 AND (@v_AuditEnd = 0 OR @v_AuditNull + 8 < @v_AuditEnd) SET @v_AuditEnd = @v_AuditNull + 8
         IF @v_AuditEnd = 0 BREAK
-        SET @v_Line = STUFF(@v_Line, @v_Audit, @v_AuditEnd + 3 - @v_Audit, '')
+        SET @v_Line = STUFF(@v_Line, @v_Audit, @v_AuditEnd - @v_Audit, '')
         SET @v_Audit = CHARINDEX('INSERT INTO SchemaSmith.ChangeAudit', @v_Line)
       END
       IF LTRIM(@v_Line) = '' SET @v_Line = NULL

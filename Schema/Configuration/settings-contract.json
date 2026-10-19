@@ -23,6 +23,8 @@
       "KindleTheForge",
       "LogHygiene",
       "MaxThreads",
+      "OnlineApply",
+      "OnlineApplyMaxDuration",
       "PreventDrop",
       "PruneObsoleteMigrationTracking",
       "RebuildPolicyMode",

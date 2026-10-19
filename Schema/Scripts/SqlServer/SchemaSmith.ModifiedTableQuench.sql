@@ -28,12 +28,35 @@ CREATE PROCEDURE SchemaSmith.ModifiedTableQuench
   -- every pre-existing caller, and every package with no RebuildPolicy anywhere -- can never elect a rebuild.
   @RebuildPolicyMode NVARCHAR(20) = 'NEVER',
   @RebuildPolicyThreshold INT = NULL,
-  @RebuildPolicyOnOrderMismatch BIT = 0
+  @RebuildPolicyOnOrderMismatch BIT = 0,
+  -- OnlineApply (OFF, PREFER or REQUIRE), which a table's own OnlineApply overrides, and the minutes a resumable index
+  -- build may run before it pauses (NULL: no resumable build).
+  @OnlineApply VARCHAR(7) = 'OFF',
+  @OnlineApplyMaxDuration INT = NULL
 AS
 BEGIN TRY
   DECLARE @v_SQL NVARCHAR(MAX) = '',
           @v_DatabaseCollation NVARCHAR(200) = CAST(DATABASEPROPERTYEX(DB_NAME(), 'COLLATION') AS NVARCHAR(200))
   SET NOCOUNT ON
+
+  -- OnlineApply: each table's mode, OFF for a table this deploy creates (it is empty).
+  IF OBJECT_ID('tempdb..#OnlineTables') IS NOT NULL DROP TABLE #OnlineTables
+  SELECT t.[Schema], t.[Name], [Mode] = CAST(CASE WHEN t.[NewTable] = 1 THEN 'OFF' ELSE COALESCE(t.[OnlineApply], @OnlineApply) END AS VARCHAR(7))
+    INTO #OnlineTables
+    FROM #Tables t WITH (NOLOCK)
+  IF SchemaSmith.fn_OnlineOperationsAvailable() = 0 AND EXISTS (SELECT 1 FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] = 'REQUIRE')
+  BEGIN
+    DECLARE @v_OnlineRequired NVARCHAR(MAX) = STUFF((SELECT ', ' + [Schema] + '.' + [Name] FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] = 'REQUIRE'
+                                                      ORDER BY [Schema], [Name] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+    RAISERROR('OnlineApply is Require for %s, but this server cannot change an index or a column online: that needs Enterprise or Developer edition, or Azure SQL, on SQL Server 2012 or later. Set OnlineApply to Prefer to deploy with the plain statements.', 16, 1, @v_OnlineRequired)
+  END
+  IF OBJECT_ID('tempdb..#OnlineForms') IS NOT NULL DROP TABLE #OnlineForms
+  CREATE TABLE #OnlineForms ([Kind] VARCHAR(16) COLLATE DATABASE_DEFAULT, [Schema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
+                             [IndexName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [Mode] VARCHAR(7) COLLATE DATABASE_DEFAULT,
+                             [Form] VARCHAR(12) COLLATE DATABASE_DEFAULT, [Options] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Reason] NVARCHAR(400) COLLATE DATABASE_DEFAULT)
+  EXEC SchemaSmith.StageOnlineForms @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
+
+  EXEC SchemaSmith.ResolvePausedIndexBuilds @OnlineApplyMaxDuration = @OnlineApplyMaxDuration, @WhatIf = @WhatIf
   RAISERROR('Override table compression to match clustered index', 10, 100) WITH NOWAIT
   UPDATE t
     SET [CompressionType] = CASE WHEN [ColumnStore] = 1 THEN 'COLUMNSTORE' ELSE i.[CompressionType] END
@@ -1064,6 +1087,28 @@ BEGIN TRY
     RAISERROR('Index %s declares one half of a partition placement but not the other -- %s is missing. PartitionScheme and PartitionColumn are declared together or not at all.', 16, 1, @v_IdxPsHalf, @v_IdxPsHalfMissing)
   END
 
+  -- OnlineApply: how each column definition change runs, and a REQUIRE that cannot be met is refused here, before
+  -- anything on the table has changed.
+  IF OBJECT_ID('tempdb..#ColumnOnline') IS NOT NULL DROP TABLE #ColumnOnline
+  SELECT cc.[Schema], cc.[TableName], cc.[ColumnName], ot.[Mode], f.[Form], f.[Reason]
+    INTO #ColumnOnline
+    FROM #ColumnChanges cc WITH (NOLOCK)
+    JOIN #OnlineTables ot WITH (NOLOCK) ON ot.[Schema] = cc.[Schema] AND ot.[Name] = cc.[TableName]
+    CROSS APPLY SchemaSmith.fn_OnlineAlterColumnForm(ot.[Mode], OBJECT_ID(cc.[Schema] + '.' + cc.[TableName]), cc.[ColumnName], cc.[ColumnScript],
+                  CASE WHEN cc.[ColumnScript] LIKE '% ENCRYPTED WITH %'
+                         OR EXISTS (SELECT 1 FROM #ColMeta cm JOIN sys.columns sc ON sc.[object_id] = cm.[object_id] AND sc.column_id = cm.column_id
+                                     WHERE cm.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName]) AND QUOTENAME(sc.[name]) COLLATE DATABASE_DEFAULT = cc.[ColumnName]
+                                       AND ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> 'NONE')
+                       THEN 1 ELSE 0 END) f
+    WHERE cc.[DefinitionChanged] = 1 AND cc.[MustDropAndRecreate] = 0 AND cc.[MustSwapColumn] = 0 AND cc.[DropOnly] = 0
+  IF EXISTS (SELECT 1 FROM #ColumnOnline WITH (NOLOCK) WHERE [Mode] = 'REQUIRE' AND [Form] = 'unavailable')
+  BEGIN
+    DECLARE @v_OnlineColumns NVARCHAR(MAX) = STUFF((SELECT '; ' + [Schema] + '.' + [TableName] + '.' + [ColumnName] + ' (' + [Reason] + ')'
+                                                     FROM #ColumnOnline WITH (NOLOCK) WHERE [Mode] = 'REQUIRE' AND [Form] = 'unavailable'
+                                                     ORDER BY [Schema], [TableName], [ColumnName] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+    RAISERROR('OnlineApply is Require, and these column changes cannot run online: %s. Set the table''s OnlineApply to Prefer to make them with the plain statement.', 16, 1, @v_OnlineColumns)
+  END
+
   RAISERROR('Check for SCHEMABINDING dependents blocking column changes', 10, 100) WITH NOWAIT
   -- SQL Server refuses ALTER COLUMN while a SCHEMABINDING module references the column, with error 4922
   -- ("one or more objects access this column") -- which names neither the module nor what to do about it.
@@ -1510,10 +1555,13 @@ BEGIN TRY
   -- Compared raw, the declared default NONE differed on every run and the rebuild to NONE was refused by the engine.
   -- MIXED is SchemaTongs' word for partitions compressed differently: leave them as they are, as the table fixup does.
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering index compression for ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ' TO ' + CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD PARTITION=ALL WITH (DATA_COMPRESSION=' + CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END + ');' AS NVARCHAR(MAX))
+                                  'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD PARTITION=ALL WITH (DATA_COMPRESSION=' + CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END +
+                                  CASE WHEN ol.[Form] IN ('online', 'resumable') THEN ', ONLINE = ON' ELSE '' END + ');' AS NVARCHAR(MAX))
                            FROM #Indexes i WITH (NOLOCK)
                            JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                                                             AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
+                           LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'index' AND ol.[Schema] = i.[Schema] AND ol.[TableName] = i.[TableName]
+                                                                  AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
                            LEFT JOIN sys.partitions p ON p.[object_id] = si.[object_id]
                                                                    AND p.index_id = si.index_id
                            WHERE ISNULL(i.[CompressionType], '') <> 'MIXED' AND COALESCE(p.data_compression_desc COLLATE DATABASE_DEFAULT, 'NONE') <> CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END
@@ -1636,7 +1684,8 @@ BEGIN TRY
 
   RAISERROR('Detect Index Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexChanges') IS NOT NULL DROP TABLE #IndexChanges
-  SELECT i.[Schema], i.[TableName], i.[IndexName], ei.[IsConstraint], IsUnique = i.[Unique], IsClustered = i.[Clustered]
+  SELECT i.[Schema], i.[TableName], i.[IndexName], ei.[IsConstraint], IsUnique = i.[Unique], IsClustered = i.[Clustered],
+         [LiveScript] = ei.IndexScript, [DeclaredScript] = d.[Script], i.[ColumnStore], i.[PadIndex], i.[IgnoreDuplicateKey]
     INTO #IndexChanges
     FROM #ExistingIndexes ei WITH (NOLOCK)
     JOIN #Indexes i WITH (NOLOCK) ON ei.[xSchema] = i.[Schema]
@@ -1648,11 +1697,7 @@ BEGIN TRY
                         THEN ', DATA_COMPRESSION=' + RTRIM(CASE WHEN RTRIM(ISNULL(i.[CompressionType], '')) = 'MIXED' THEN ei.[LiveCompression] ELSE ISNULL(i.[CompressionType], '') END) ELSE '' END +
                    CASE WHEN i.[IgnoreDuplicateKey] = 1 THEN ', IGNORE_DUP_KEY=ON' ELSE '' END +
                    CASE WHEN i.[PadIndex] = 1 THEN ', PAD_INDEX=ON' ELSE '' END) o
-    WHERE EXISTS (SELECT * 
-                    FROM sys.indexes si
-                    WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
-                      AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
-      AND ei.IndexScript <> 'CREATE ' + 
+    CROSS APPLY (SELECT [Script] = 'CREATE ' + 
                             CASE WHEN i.[Unique] = 1 THEN 'UNIQUE ' ELSE '' END + 
                             CASE WHEN i.[Clustered] = 1 THEN '' ELSE 'NON' END + 'CLUSTERED ' +
                             CASE WHEN i.[ColumnStore] = 1 THEN 'COLUMNSTORE ' ELSE '' END + 
@@ -1663,8 +1708,15 @@ BEGIN TRY
                                  CASE WHEN i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[Order], '')) <> '' THEN ' ORDER (' + i.[Order] + ')' ELSE '' END +
                             -- #242: the engine's own rendering of the filter when the mapping vouches for it (fn_ExpressionMapEffective).
                             CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(i.[Schema], i.[TableName], 'INDEX', i.[IndexName], 'filter', i.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT si2.filter_definition FROM sys.indexes si2 WHERE si2.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si2.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))) ELSE '' END +
-                            CASE WHEN o.[WithOptions] <> '' THEN ' WITH (' + STUFF(o.[WithOptions], 1, 2, '') + ')' ELSE '' END
-  
+                            CASE WHEN o.[WithOptions] <> '' THEN ' WITH (' + STUFF(o.[WithOptions], 1, 2, '') + ')' ELSE '' END) d
+    WHERE EXISTS (SELECT * 
+                    FROM sys.indexes si
+                    WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
+                      AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
+      AND ei.IndexScript <> d.[Script]
+
+  EXEC SchemaSmith.RebuildOptionOnlyIndexChanges @WhatIf = @WhatIf
+
   RAISERROR('Detect Index Renames', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexRenames') IS NOT NULL DROP TABLE #IndexRenames
   SELECT i.[Schema], i.[TableName], [NewName] = i.[IndexName], ei.[IsConstraint], IsUnique = i.[Unique], [OldName] = ei.[xIndexName]
@@ -2018,6 +2070,9 @@ BEGIN TRY
   -- an empty history. The column changes are mirrored onto the history table further down, and
   -- MissingIndexesAndConstraintsQuench turns versioning back on once the key exists again. Recorded in the database
   -- rather than in this run, so a run that fails part-way is resumed by the next one.
+  -- OnlineApply REQUIRE: refused before any index is dropped.
+  EXEC SchemaSmith.RefuseUnmetOnlineRequire
+
   RAISERROR('Suspend System Versioning On Temporal Tables Losing Their Primary Key', 10, 100) WITH NOWAIT
   IF SchemaSmith.fn_ServerMajorVersion() >= 13
   BEGIN
@@ -2066,11 +2121,15 @@ BEGIN TRY
   RAISERROR('Drop Unknown and Modified Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Dropping ' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + di.[Schema] + '.' + di.[TableName] + '.' + di.[IndexName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN IsConstraint = 1
-                                       THEN 'IF OBJECT_ID(''' + di.[Schema] + '.' + QUOTENAME(di.[IndexName]) + ''') IS NOT NULL ALTER TABLE ' + di.[Schema] + '.' + di.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(di.[IndexName]) + ';'
-                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + di.[Schema] + '.' + di.[TableName] + '''), ''' + di.[IndexName] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(di.[IndexName]) + ' ON ' + di.[Schema] + '.' + di.[TableName] + ';'
+                                       THEN 'IF OBJECT_ID(''' + di.[Schema] + '.' + QUOTENAME(di.[IndexName]) + ''') IS NOT NULL ALTER TABLE ' + di.[Schema] + '.' + di.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(di.[IndexName]) + od.[With] + ';'
+                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + di.[Schema] + '.' + di.[TableName] + '''), ''' + di.[IndexName] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(di.[IndexName]) + ' ON ' + di.[Schema] + '.' + di.[TableName] + od.[With] + ';'
                                        END + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + di.[Schema] + '.' + di.[TableName] + '.' + di.[IndexName] + ''', ''dropped'');'
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + di.[Schema] + '.' + di.[TableName] + '.' + di.[IndexName] + ''', ''dropped'', ' + CASE WHEN od.[With] <> '' THEN '''online''' ELSE 'NULL' END + ');'
                                   FROM #IndexesToDrop di WITH (NOLOCK)
+                                  -- Only a clustered index can be dropped online (3745); its heap is then built without blocking.
+                                  CROSS APPLY (SELECT [With] = CASE WHEN di.[IsClustered] = 1 AND SchemaSmith.fn_OnlineOperationsAvailable() = 1
+                                                                         AND EXISTS (SELECT 1 FROM #OnlineTables ot WITH (NOLOCK) WHERE ot.[Schema] = di.[Schema] AND ot.[Name] = di.[TableName] AND ot.[Mode] <> 'OFF')
+                                                                    THEN ' WITH (ONLINE = ON)' ELSE '' END) od
                                   ORDER BY CASE WHEN [IsClustered] = 0 THEN 0 ELSE 1 END
                                   FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
@@ -2083,11 +2142,14 @@ BEGIN TRY
 
   RAISERROR('Fixup Modified Fillfactors', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Fixup ' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ' fillfactor in ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ''', 10, 100) WITH NOWAIT; ' +
-                                  'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD WITH (FILLFACTOR = ' + CONVERT(NVARCHAR(5), i.[FillFactor]) + ', SORT_IN_TEMPDB = ON);' AS NVARCHAR(MAX))
+                                  'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD WITH (FILLFACTOR = ' + CONVERT(NVARCHAR(5), i.[FillFactor]) + ', SORT_IN_TEMPDB = ON' +
+                                  CASE WHEN ol.[Form] IN ('online', 'resumable') THEN ', ONLINE = ON' ELSE '' END + ');' AS NVARCHAR(MAX))
                            FROM #ExistingIndexes ei WITH (NOLOCK)
                            JOIN #Indexes i WITH (NOLOCK) ON ei.[xSchema] = i.[Schema]
                                                         AND ei.[xTableName] = i.[TableName]
                                                         AND ei.[xIndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
+                           LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'index' AND ol.[Schema] = i.[Schema] AND ol.[TableName] = i.[TableName]
+                                                                  AND ol.[IndexName] = ei.[xIndexName]
                            WHERE i.[UpdateFillFactor] = 1
                              AND ei.[FillFactor] <> i.[FillFactor]
                              AND INDEXPROPERTY(OBJECT_ID(i.[Schema] + '.' + i.[TableName]), ei.[xIndexName], 'IndexID') IS NOT NULL
@@ -2701,16 +2763,20 @@ BEGIN TRY
                               AND ec.[CheckName] = SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName]))
 
   RAISERROR('Alter Modified Columns', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering Column ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ColumnName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering Column ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ColumnName] +
+                                  CASE WHEN co.[Form] = 'online' THEN ' (online)' WHEN co.[Form] = 'unavailable' THEN ' (offline: ' + co.[Reason] + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   -- The options SQL Server wants off first, the definition when it changed, then the options to put on or
                                   -- back (#510): each its own ALTER COLUMN.
                                   [OptionsBefore] +
                                   CASE WHEN [DefinitionChanged] = 1
-                                       THEN 'ALTER TABLE ' + cc.[Schema] + '.' + cc.[TableName] + ' ALTER COLUMN ' + cc.[ColumnName] + ' ' + [ColumnScript] + ';' + CHAR(13) + CHAR(10)
+                                       THEN 'ALTER TABLE ' + cc.[Schema] + '.' + cc.[TableName] + ' ALTER COLUMN ' + cc.[ColumnName] + ' ' + [ColumnScript] +
+                                            CASE WHEN co.[Form] = 'online' THEN ' WITH (ONLINE = ON)' ELSE '' END + ';' + CHAR(13) + CHAR(10)
                                        ELSE '' END +
                                   [OptionsAfter] +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''column'', ''' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ColumnName] + ''', ''modified'');' AS NVARCHAR(MAX))
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''column'', ''' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ColumnName] + ''', ''modified'', ' +
+                                  CASE WHEN co.[Form] IS NULL THEN 'NULL' ELSE '''' + co.[Form] + '''' END + ');' AS NVARCHAR(MAX))
                            FROM #ColumnChanges cc WITH (NOLOCK)
+                           LEFT JOIN #ColumnOnline co WITH (NOLOCK) ON co.[Schema] = cc.[Schema] AND co.[TableName] = cc.[TableName] AND co.[ColumnName] = cc.[ColumnName]
                            WHERE [MustDropAndRecreate] = 0
                              AND [MustSwapColumn] = 0
                              AND [DropOnly] = 0
@@ -2719,9 +2785,10 @@ BEGIN TRY
 
   -- #363: WhatIf twin of the embedded 'column'/'modified' audit above; same predicate.
   IF @WhatIf = 1
-    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-      SELECT @@SPID, 'column', cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ColumnName], 'wouldModify'
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
+      SELECT @@SPID, 'column', cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ColumnName], 'wouldModify', co.[Form]
         FROM #ColumnChanges cc WITH (NOLOCK)
+        LEFT JOIN #ColumnOnline co WITH (NOLOCK) ON co.[Schema] = cc.[Schema] AND co.[TableName] = cc.[TableName] AND co.[ColumnName] = cc.[ColumnName]
         WHERE [MustDropAndRecreate] = 0
           AND [MustSwapColumn] = 0
           AND [DropOnly] = 0

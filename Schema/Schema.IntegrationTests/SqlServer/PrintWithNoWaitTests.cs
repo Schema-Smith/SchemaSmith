@@ -142,4 +142,16 @@ public class PrintWithNoWaitTests
 
         Assert.That(Print(message.ToString()), Is.EqualTo(expected));
     }
+
+    [Test]
+    public void AChangeAuditRowIsNotPrinted_WhetherItsModeIsQuotedOrNull()
+    {
+        // WhatIf does not write the rows, so printed they read as statements the run would execute. A row
+        // with no Mode ends in NULL rather than a quoted value, and must be cut just the same.
+        const string quoted = "INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, 'index', '[dbo].[T].[IX]', 'created', 'online');";
+        const string nullMode = "INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, 'column', '[dbo].[T].[C]', 'modified', NULL);";
+        var printed = Print($"ALTER TABLE [dbo].[T] ADD [X] INT;\n{quoted}\n{nullMode}\nCREATE INDEX [IX] ON [dbo].[T] ([X]); {nullMode}\n");
+
+        Assert.That(printed, Is.EqualTo(new[] { "ALTER TABLE [dbo].[T] ADD [X] INT;", "CREATE INDEX [IX] ON [dbo].[T] ([X]); " }));
+    }
 }

@@ -54,13 +54,13 @@ public static class ChangeAuditReader
         platform.GetBasePlatform() switch
         {
             Platform.SqlServer => (
-                "SELECT ObjectType, ObjectName, ActionType FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID ORDER BY Id",
+                "SELECT ObjectType, ObjectName, ActionType, Mode FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID ORDER BY Id",
                 "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID"),
             Platform.PostgreSQL => (
-                "SELECT \"ObjectType\", \"ObjectName\", \"ActionType\" FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() ORDER BY \"Id\"",
+                "SELECT \"ObjectType\", \"ObjectName\", \"ActionType\", \"Mode\" FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() ORDER BY \"Id\"",
                 "DELETE FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid()"),
             Platform.MySQL => (
-                "SELECT ObjectType, ObjectName, ActionType FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() ORDER BY Id",
+                "SELECT ObjectType, ObjectName, ActionType, Mode FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() ORDER BY Id",
                 "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()"),
             _ => null
         };
@@ -75,7 +75,8 @@ public static class ChangeAuditReader
             using (var reader = command.ExecuteReader())
             {
                 while (reader.Read())
-                    rows.Add(new ChangeAuditRow(reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+                    rows.Add(new ChangeAuditRow(reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3)));
             }
 
             if (deleteSql != null)
