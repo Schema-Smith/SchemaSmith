@@ -729,6 +729,9 @@ SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '].STSrid AS [' + c.COLUMN_NAME + '.STSrid]'
                        WHEN c.DATA_TYPE = 'hierarchyid'
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + ']'
+                       -- A vector as its text, which SQL Server writes exactly; FOR JSON would write an array delivery cannot read.
+                       WHEN c.DATA_TYPE = 'vector'
+                       THEN 'CAST([' + c.COLUMN_NAME + '] AS NVARCHAR(MAX)) AS [' + c.COLUMN_NAME + ']'
                        ELSE '[' + c.COLUMN_NAME + ']' END, ',') WITHIN GROUP (ORDER BY c.COLUMN_NAME)
   FROM INFORMATION_SCHEMA.COLUMNS c
   JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
@@ -778,7 +781,7 @@ SELECT STRING_AGG(
         cmd.CommandText = $@"
 SELECT GROUP_CONCAT(
     CASE
-        WHEN c.DATA_TYPE IN ('binary','varbinary','tinyblob','blob','mediumblob','longblob')
+        WHEN c.DATA_TYPE IN ('binary','varbinary','tinyblob','blob','mediumblob','longblob','vector')
             THEN CONCAT('REPLACE(REPLACE(TO_BASE64(`', c.COLUMN_NAME, '`), ''\n'', ''''), ''\r'', '''') AS `', c.COLUMN_NAME, '`')
         WHEN c.DATA_TYPE IN ('geometry','point','linestring','polygon','multipoint','multilinestring','multipolygon','geometrycollection','geomcollection')
             THEN CONCAT('ST_AsText(`', c.COLUMN_NAME, '`) AS `', c.COLUMN_NAME, '`, ST_SRID(`', c.COLUMN_NAME, '`) AS `', c.COLUMN_NAME, '.STSrid`')
@@ -1074,7 +1077,8 @@ ORDER BY c.ORDINAL_POSITION;";
             "time" when column.DatetimePrecision > 0
                 => $"{quotedName}, CONCAT(TIME_FORMAT({columnRef}, '%H:%i:%s.'), LEFT(TIME_FORMAT({columnRef}, '%f'), {column.DatetimePrecision}))",
             "time" => $"{quotedName}, TIME_FORMAT({columnRef}, '%H:%i:%s')",
-            "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob"
+            // A vector goes as its raw bytes too: the engines' text form keeps six significant digits, which changes a float32.
+            "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob" or "vector"
                 => $"{quotedName}, REPLACE(REPLACE(TO_BASE64({columnRef}), '\n', ''), '\r', '')",
             "geometry" or "point" or "linestring" or "polygon" or "multipoint"
                 or "multilinestring" or "multipolygon" or "geometrycollection" or "geomcollection"

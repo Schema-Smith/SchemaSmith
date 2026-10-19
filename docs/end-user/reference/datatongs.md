@@ -321,6 +321,7 @@ DataTongs detects column types and applies the correct extraction and restoratio
 - **Geography** -- full round-trip via WKT (`.ToString()`) plus the SRID captured separately.
 - **Geometry** -- extracted as WKT (basic support; restoration may need manual adjustment for complex cases).
 - **HierarchyID** -- canonical string round-trip.
+- **Vector** (SQL Server 2025) -- carried as its text form (`[0.1,0.2]`), which SQL Server writes exactly, so every float32 arrives with the bits it left with.
 - **XML / NTEXT / TEXT / IMAGE** -- mapped through the OPENJSON layer with type-appropriate cast for change detection.
 - **ROWGUIDCOL columns** -- extracted and delivered like any other column, so a row keeps its GUID rather than taking a new one from the column's default.
 - **Memory-optimized tables** -- SQL Server refuses `MERGE` on them, so delivery to one runs the same work as separate `UPDATE`, `INSERT` and `DELETE` statements. The result is the same.
@@ -336,6 +337,8 @@ DataTongs detects column types and applies the correct extraction and restoratio
 - **Arrays** -- extracted as PostgreSQL's own array literal, so multi-dimensional arrays, non-default lower bounds and elements containing commas or quotes round-trip unchanged.
 - **PostGIS types** -- `geometry` and `geography` extracted as WKT with their SRID.
 - **`point` / `polygon`** -- PostgreSQL's built-in geometric types, carried in their own text form; PostGIS is not required.
+- **pgvector** -- `vector` carried as its text form, which pgvector writes exactly.
+- **Extension types under any `search_path`** -- PostGIS's functions are called through the schema the extension lives in, and a column of an extension's type (PostGIS, pgvector, citext) is compared as text when deciding whether a row changed, so a delivery script runs the same whatever `search_path` the session has.
 - **Auto-excluded with warning:** `tsvector`, `tsquery`, `money`, geometric types (`box`, `circle`, `line`, `lseg`, `path`), and user-defined composite types. These are skipped because their JSON representation can't reliably round-trip without manual intervention.
 
 ### MySQL
@@ -343,6 +346,7 @@ DataTongs detects column types and applies the correct extraction and restoratio
 - **Auto-increment columns** -- handled at the `INSERT` level so explicit values can be carried.
 - **Generated / virtual columns** -- auto-excluded.
 - **Spatial types** -- basic support via WKT.
+- **Vector** (MySQL 9.0+, MariaDB 11.7+) -- carried as its raw bytes in base64, like a binary column. The engines' text form (`VECTOR_TO_STRING`, `VEC_ToText`) keeps six significant digits, which would change a stored float32; base64 keeps it exact.
 - **TEXT / BLOB families** -- supported through string and binary literals.
 - **DECIMAL / NUMERIC** -- written as JSON strings (`"12345678901234567890.123456789012345678"`). MySQL reads a JSON number back as a double, so a value with more digits than a double holds would be rounded on delivery. A file that carries a decimal as a number -- one written by hand, by another tool or by an earlier DataTongs -- is converted the same way when SchemaQuench delivers it.
 

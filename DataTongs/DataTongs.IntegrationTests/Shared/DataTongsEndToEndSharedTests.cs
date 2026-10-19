@@ -4,6 +4,7 @@ using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
 using System;
+using System.Data.Common;
 using System.IO;
 using System.Linq;
 
@@ -495,6 +496,70 @@ public abstract class DataTongsEndToEndSharedTests
                 FROM `{_testDb}`.`{sourceTable}` s LEFT JOIN `{_testDb}`.`{targetTable}` d ON d.id = s.id";
             Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty,
                 "every column must arrive equal to its source; the list names the ones that did not");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // A VECTOR (MySQL 9, MariaDB 11.7) failed extraction on MySQL (1210) and was written as mangled bytes on MariaDB. The
+    // engines' text form keeps six significant digits, so the bytes travel as base64 and must arrive identical: 0.123456789
+    // is a float32 the text form would change.
+    [Test]
+    public void EndToEnd_RoundTrip_VectorArrivesWithItsExactBytes()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_vec_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_vec_t_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            try
+            {
+                command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` (id INT PRIMARY KEY, e VECTOR(3) NULL)";
+                command.ExecuteNonQuery();
+            }
+            catch (DbException)
+            {
+                Assert.Ignore("VECTOR arrived in MySQL 9.0 and MariaDB 11.7.");
+            }
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` (id INT PRIMARY KEY, e VECTOR(3) NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` VALUES (1, UNHEX('EAD6FC3D0000804B0000C0BF')), (2, NULL)";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT GROUP_CONCAT(s.id) FROM `{_testDb}`.`{sourceTable}` s LEFT JOIN `{_testDb}`.`{targetTable}` d ON d.id = s.id
+                WHERE d.id IS NULL OR NOT (HEX(d.e) <=> HEX(s.e))";
+            Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty,
+                "every vector must arrive with its source's bytes; the list names the rows that did not. Extracted: " + json);
+
+            // Delivering the same file again changes nothing.
+            command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{targetTable}`";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(2));
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+            command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{targetTable}` WHERE HEX(e) = 'EAD6FC3D0000804B0000C0BF'";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(1), "a second delivery leaves the vector as it is");
         }
         finally
         {

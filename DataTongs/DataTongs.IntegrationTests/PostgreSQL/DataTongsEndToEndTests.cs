@@ -329,6 +329,64 @@ public class DataTongsEndToEndTests
         }
     }
 
+    // An extension's type keeps its = operator in the extension's schema, so delivered under search_path = pg_catalog the
+    // changed-row comparison failed to compile (vector: no operator; geometry: not unique). Delivered twice, so the second
+    // run compares the rows already there. pgvector writes its text exactly (the shortest form that reads back as the same
+    // float32): 0.123456789 is a value a six-digit form would change.
+    [TestCase("Json", "vector", "vector(3)", "'[0.123456789, 16777216, -1.5]'", TestName = "EndToEnd_RoundTrip_ExtensionType_PgVector_Json")]
+    [TestCase("Xml", "vector", "vector(3)", "'[0.123456789, 16777216, -1.5]'", TestName = "EndToEnd_RoundTrip_ExtensionType_PgVector_Xml")]
+    [TestCase("Json", "postgis", "geometry(Point, 4326)", "'SRID=4326;POINT(1.5 2.25)'", TestName = "EndToEnd_RoundTrip_ExtensionType_PostGis_Json")]
+    [TestCase("Xml", "postgis", "geometry(Point, 4326)", "'SRID=4326;POINT(1.5 2.25)'", TestName = "EndToEnd_RoundTrip_ExtensionType_PostGis_Xml")]
+    public void EndToEnd_RoundTrip_ExtensionType_UnderAnotherSearchPath(string encoding, string extension, string columnType, string literal)
+    {
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"E2EVecS_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"E2EVecT_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE EXTENSION IF NOT EXISTS {extension}";
+            command.ExecuteNonQuery();
+        }
+        catch (Npgsql.PostgresException)
+        {
+            Assert.Ignore($"The {extension} extension is not installed on this server.");
+        }
+        try
+        {
+            command.CommandText = $@"CREATE TABLE public.""{sourceTable}"" (""Id"" INT PRIMARY KEY, ""E"" {columnType});
+                CREATE TABLE public.""{targetTable}"" (""Id"" INT PRIMARY KEY, ""E"" {columnType});
+                INSERT INTO public.""{sourceTable}"" VALUES (1, {literal}), (2, NULL)";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, "public", sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, "public", sourceTable, "\"Id\"", null);
+            var content = encoding == "Xml" ? MergeScriptHelper.JsonPayloadToXml(json) : json;
+            var script = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, command, "public", targetTable, content, "\"Id\"",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false,
+                tokenizeScripts: false, mergeFilter: null, pgServerVersionNum: _pgServerVersionNum, contentEncoding: encoding);
+            for (var run = 0; run < 2; run++)
+            {
+                command.CommandText = "SET search_path TO pg_catalog";
+                command.ExecuteNonQuery();
+                command.CommandText = script;
+                command.ExecuteNonQuery();
+                command.CommandText = "RESET search_path";
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT COALESCE(STRING_AGG(s.""Id""::text, ','), '')
+                FROM public.""{sourceTable}"" s LEFT JOIN public.""{targetTable}"" d ON d.""Id"" = s.""Id""
+                WHERE d.""Id"" IS NULL OR s.""E""::text IS DISTINCT FROM d.""E""::text";
+            Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty,
+                "the list names the rows whose value did not arrive equal; extracted: " + json);
+        }
+        finally
+        {
+            command.CommandText = $@"RESET search_path; DROP TABLE IF EXISTS public.""{sourceTable}""; DROP TABLE IF EXISTS public.""{targetTable}""";
+            command.ExecuteNonQuery();
+        }
+    }
+
     #region Database Setup
 
     private static string GenerateUniqueDBName(string dbName)
