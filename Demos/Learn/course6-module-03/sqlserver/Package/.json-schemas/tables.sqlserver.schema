@@ -977,6 +977,11 @@
             "maximum": 100.0,
             "description": "FILLFACTOR. Omitted, the server's default, and not compared."
           },
+          "CompressionType": {
+            "type": "string",
+            "pattern": "^(?:[Nn][Oo][Nn][Ee]|[Rr][Oo][Ww]|[Pp][Aa][Gg][Ee])$",
+            "description": "DATA_COMPRESSION: NONE, ROW or PAGE. Omitted, the index is created uncompressed and its compression is not compared."
+          },
           "ShouldApplyExpression": {
             "type": "string"
           },

@@ -544,7 +544,8 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                   ORDER BY p.[Path] COLLATE Latin1_General_BIN2
                   FOR XML PATH('Paths'), TYPE),
                CASE WHEN l.[OptimizeForArraySearch] = 1 THEN 'true' END AS [OptimizeForArraySearch],
-               l.[FillFactor] AS [FillFactor]
+               l.[FillFactor] AS [FillFactor],
+               NULLIF(l.[Compression], 'NONE') AS [CompressionType]
           FROM #LiveJsonIndexes l
           WHERE l.[object_id] = st.[object_id]
           ORDER BY l.[Name]

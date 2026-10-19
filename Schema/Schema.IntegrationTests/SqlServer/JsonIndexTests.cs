@@ -103,11 +103,12 @@ public class JsonIndexTests
     // The paths are written out of order on purpose: the FOR list is a set, so the order a package lists them in is not a change.
     private const string DeclaredPaths = "\"$.b\", \"$.a.c\"";
 
-    private static string JsonIndexes(string paths = DeclaredPaths, bool arraySearch = true, int? fillFactor = 80, bool withDocIndex = true) =>
+    private static string JsonIndexes(string paths = DeclaredPaths, bool arraySearch = true, int? fillFactor = 80, bool withDocIndex = true, string compression = null) =>
         "[ " + (withDocIndex
                    ? "{ \"Name\": \"" + DocIndex + "\", \"Column\": \"doc\", \"Paths\": [ " + paths + " ]"
                      + (arraySearch ? ", \"OptimizeForArraySearch\": true" : "")
-                     + (fillFactor == null ? "" : ", \"FillFactor\": " + fillFactor) + " }, "
+                     + (fillFactor == null ? "" : ", \"FillFactor\": " + fillFactor)
+                     + (compression == null ? "" : ", \"CompressionType\": \"" + compression + "\"") + " }, "
                    : "")
         + "{ \"Name\": \"" + WholeIndex + "\", \"Column\": \"whole\" } ]";
 
@@ -150,6 +151,10 @@ public class JsonIndexTests
 
     private long Option(bool xmlTier, string index, string column) => Scalar(Connection(xmlTier),
         $"SELECT CONVERT(INT, {column}) FROM sys.json_indexes WHERE [object_id] = OBJECT_ID('dbo.{TableName}') AND [name] = '{index}'");
+
+    private string CompressionOf(bool xmlTier, string index) => Value(Connection(xmlTier),
+        "SELECT MAX(p.data_compression_desc) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1 "
+        + $"WHERE it.parent_object_id = OBJECT_ID('dbo.{TableName}') AND it.parent_minor_id = INDEXPROPERTY(OBJECT_ID('dbo.{TableName}'), '{index}', 'IndexID')") as string;
 
     private static readonly object[] Paths4 =
     [
@@ -216,6 +221,37 @@ public class JsonIndexTests
         doc = RowsetOf(xmlTier, DocIndex);
         Deploy(xmlTier, indexOnly, JsonIndexes("\"$.b\", \"$.A.c\"", arraySearch: false, fillFactor: null));
         Assert.That(RowsetOf(xmlTier, DocIndex), Is.EqualTo(doc), "a fill factor the package leaves out is not compared");
+    }
+
+    // DATA_COMPRESSION is kept on the index's internal table, which is where it is read back from.
+    [TestCaseSource(nameof(Paths4))]
+    public void ADeclaredCompression_IsApplied_ComparedAndChanged_AndAnOmittedOneIsNotCompared(bool xmlTier, bool indexOnly)
+    {
+        Deploy(xmlTier, indexOnly, JsonIndexes(compression: "page"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(CompressionOf(xmlTier, DocIndex), Is.EqualTo("PAGE"), "the index is created compressed, whatever the case it is declared in");
+            Assert.That(CompressionOf(xmlTier, WholeIndex), Is.EqualTo("NONE"), "and one that declares none is not");
+        });
+
+        var doc = RowsetOf(xmlTier, DocIndex);
+        Deploy(xmlTier, indexOnly, JsonIndexes(compression: "PAGE"));
+        Assert.That(RowsetOf(xmlTier, DocIndex), Is.EqualTo(doc), "the same compression redeploys as a no-op");
+
+        Deploy(xmlTier, indexOnly, JsonIndexes(compression: "ROW"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(RowsetOf(xmlTier, DocIndex), Is.Not.EqualTo(doc), "a changed compression re-creates the index");
+            Assert.That(CompressionOf(xmlTier, DocIndex), Is.EqualTo("ROW"));
+        });
+
+        doc = RowsetOf(xmlTier, DocIndex);
+        Deploy(xmlTier, indexOnly, JsonIndexes());
+        Assert.Multiple(() =>
+        {
+            Assert.That(RowsetOf(xmlTier, DocIndex), Is.EqualTo(doc), "a compression the package leaves out is not compared");
+            Assert.That(CompressionOf(xmlTier, DocIndex), Is.EqualTo("ROW"));
+        });
     }
 
     [TestCaseSource(nameof(Paths4))]
@@ -285,7 +321,7 @@ public class JsonIndexTests
     [TestCase(true)]
     public void WhatExtractionReturns_DeploysBackWithoutReCreatingAnything(bool xmlTier)
     {
-        Deploy(xmlTier, indexOnly: false, JsonIndexes("\"$.b\", \"$.a.c\", \"$.\\\"quoted key\\\"\""));
+        Deploy(xmlTier, indexOnly: false, JsonIndexes("\"$.b\", \"$.a.c\", \"$.\\\"quoted key\\\"\"", compression: "PAGE"));
         var doc = RowsetOf(xmlTier, DocIndex);
         var whole = RowsetOf(xmlTier, WholeIndex);
 
@@ -298,6 +334,8 @@ public class JsonIndexTests
             Assert.That(docIndex!.Paths, Is.EqualTo(new[] { "$.\"quoted key\"", "$.a.c", "$.b" }), "and its paths, sorted");
             Assert.That(docIndex.OptimizeForArraySearch, Is.True);
             Assert.That(docIndex.FillFactor, Is.EqualTo(80));
+            Assert.That(docIndex.CompressionType, Is.EqualTo("PAGE"), "and its compression");
+            Assert.That(wholeIndex?.CompressionType, Is.Null, "an uncompressed index is extracted without one");
             Assert.That(wholeIndex?.Paths, Is.Empty, "a whole-document index is extracted without paths");
             Assert.That(wholeIndex!.OptimizeForArraySearch, Is.Null, "and without the option it does not have");
             Assert.That(table.Indexes.Exists(i => i.Name.Contains("jx_")), Is.False, "and never as an ordinary index");

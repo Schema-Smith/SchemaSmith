@@ -9,7 +9,7 @@ namespace Schema.Domain.SqlServer
     /// A JSON index (<c>CREATE JSON INDEX</c>, SQL Server 2025) on a <c>json</c> column. Its key is one column and a set of
     /// SQL/JSON paths, not a column list, so it is its own list on the table, as <see cref="XmlIndex"/> is. The paths are a
     /// set compared as written; none means the whole document (<c>$</c>). A declared attribute that differs re-creates
-    /// the index; <see cref="FillFactor"/> is compared only when declared.
+    /// the index; <see cref="FillFactor"/> and <see cref="CompressionType"/> are compared only when declared.
     /// </summary>
     public class JsonIndex : DynamicBase
     {
@@ -35,13 +35,17 @@ namespace Schema.Domain.SqlServer
         [JsonProperty(Order = 5, NullValueHandling = NullValueHandling.Ignore)]
         public byte? FillFactor { get; set; }
 
-        [JsonProperty(Order = 6)]
+        [SchemaProperty(Pattern = "NONE|ROW|PAGE", PatternIgnoreCase = true, Description = "DATA_COMPRESSION: NONE, ROW or PAGE. Omitted, the index is created uncompressed and its compression is not compared.")]
+        [JsonProperty(Order = 6, NullValueHandling = NullValueHandling.Ignore)]
+        public string CompressionType { get; set; }
+
+        [JsonProperty(Order = 7)]
         public string ShouldApplyExpression { get; set; }
 
         // Labels a conditional variant: the intent behind its ShouldApplyExpression,
         // echoed in quench log messages when the variant applies.
         [SchemaProperty(MaxLength = 128, Description = "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied.")]
-        [JsonProperty(Order = 7)]
+        [JsonProperty(Order = 8)]
         public string VariantName { get; set; }
     }
 }
