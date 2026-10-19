@@ -1,20 +1,9 @@
 {
   "$schema": "../../../.json-schemas/tables.postgresql.schema",
-  "Schema": "public",
-  "Name": "product",
+  "Name": "customer",
   "Columns": [
     {
-      "Name": "name",
-      "DataType": "varchar(200)",
-      "ShouldApplyExpression": "",
-      "OldName": "",
-      "VariantName": "",
-      "Generated": "NEVER",
-      "Storage": "EXTENDED",
-      "Compression": "DEFAULT"
-    },
-    {
-      "Name": "productid",
+      "Name": "customerid",
       "DataType": "int4",
       "ShouldApplyExpression": "",
       "OldName": "",
@@ -24,8 +13,8 @@
       "Compression": "DEFAULT"
     },
     {
-      "Name": "sku",
-      "DataType": "varchar(64)",
+      "Name": "email",
+      "DataType": "text",
       "ShouldApplyExpression": "",
       "OldName": "",
       "VariantName": "",
@@ -34,22 +23,23 @@
       "Compression": "DEFAULT"
     },
     {
-      "Name": "unitprice",
-      "DataType": "numeric(10, 2)",
+      "Name": "fullname",
+      "DataType": "text",
+      "Nullable": true,
       "ShouldApplyExpression": "",
       "OldName": "",
       "VariantName": "",
       "Generated": "NEVER",
-      "Storage": "MAIN",
+      "Storage": "EXTENDED",
       "Compression": "DEFAULT"
     }
   ],
   "Indexes": [
     {
-      "Name": "pk_product",
+      "Name": "pk_customer",
       "PrimaryKey": true,
       "Unique": true,
-      "IndexColumns": "productid",
+      "IndexColumns": "customerid",
       "ShouldApplyExpression": "",
       "VariantName": "",
       "AccessMethod": "btree",
