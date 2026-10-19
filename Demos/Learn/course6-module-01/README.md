@@ -11,13 +11,14 @@ A pricing bug double-applied a discount: every `OrderItem` on a **May 2026** `Sa
 - The four-engine sandbox is up (`Demos/Learn/docker`) and `schemaquench --version` answers **2.7.0 or later** on your PATH.
 - Run **[`course6-setup`](../course6-setup/)** first. It seeds `shop_tenant_a`, `shop_tenant_b`, `shop_tenant_c` on each engine with the price defect, and creates the scoped **`datafix_user`** role (see [`course6-setup/seed/<engine>/datafix_role.sql`](../course6-setup/seed/)).
 
-Confirm the defect is present (SQL Server shown; swap the client per engine):
+Confirm the defect is present in the canary tenant — each line prints `10` (10 affected rows per tenant):
 
-```sql
--- 10 affected rows per tenant
-SELECT COUNT(*) FROM dbo.OrderItem oi
-JOIN dbo.SalesOrder so ON so.OrderId = oi.OrderId
-WHERE so.OrderDate >= '2026-05-01' AND so.OrderDate < '2026-06-01';
+```bash
+# from course6-module-01
+../lab-sql.sh sqlserver shop_tenant_a "SELECT COUNT(*) FROM dbo.OrderItem oi JOIN dbo.SalesOrder so ON so.OrderId = oi.OrderId WHERE so.OrderDate >= '2026-05-01' AND so.OrderDate < '2026-06-01'"
+../lab-sql.sh postgres shop_tenant_a "SELECT COUNT(*) FROM orderitem oi JOIN salesorder so ON so.orderid = oi.orderid WHERE so.orderdate >= '2026-05-01' AND so.orderdate < '2026-06-01'"
+../lab-sql.sh mysql shop_tenant_a "SELECT COUNT(*) FROM OrderItem oi JOIN SalesOrder so ON so.OrderId = oi.OrderId WHERE so.OrderDate >= '2026-05-01' AND so.OrderDate < '2026-06-01'"
+../lab-sql.sh mariadb shop_tenant_a "SELECT COUNT(*) FROM OrderItem oi JOIN SalesOrder so ON so.OrderId = oi.OrderId WHERE so.OrderDate >= '2026-05-01' AND so.OrderDate < '2026-06-01'"
 ```
 
 ## Step 1 — Look at the deploy account before you trust it
@@ -45,7 +46,7 @@ The four flags are the **datafix profile**: SchemaSmith runs your migration scri
 ## Step 3 — Canary: deploy to one tenant, as the scoped account
 
 ```bash
-cd sqlserver        # or postgres / mysql / mariadb
+# from course6-module-01/<engine>
 schemaquench --ConfigFile:quench.settings.json
 ```
 
@@ -60,38 +61,55 @@ The log shows it connect **as `datafix_user`**, filter **1 of 3** discovered dat
 
 ## Step 4 — Verify the canary
 
-SQL Server shown; adapt the schema/identifier style per the [per-engine notes](#per-engine-notes) below for PostgreSQL (`datafix.orderitem_pricefix_backup`, lowercase) and MySQL/MariaDB (`OrderItem_PriceFix_Backup` in the tenant db).
+Two checks per engine, each identifier in its engine's style (see the [per-engine notes](#per-engine-notes) below): PostgreSQL's backup is `datafix.orderitem_pricefix_backup` (lowercase), MySQL/MariaDB's is `OrderItem_PriceFix_Backup` in the tenant db. The first line of each pair counts the backup — the 10 originals, in the backup table the account owns — and prints `10`; the second counts May lines still mispriced in `shop_tenant_a` and prints `0`:
 
-```sql
--- backup captured the 10 originals (in the datafix schema the account owns)
-SELECT COUNT(*) FROM datafix.OrderItem_PriceFix_Backup;          -- 10
--- prices corrected in tenant_a
-SELECT COUNT(*) FROM dbo.OrderItem oi
-  JOIN dbo.SalesOrder so ON so.OrderId = oi.OrderId
-  JOIN dbo.Product p ON p.ProductId = oi.ProductId
- WHERE so.OrderDate >= '2026-05-01' AND so.OrderDate < '2026-06-01'
-   AND oi.UnitPrice <> ROUND(p.UnitPrice * 0.90, 2);             -- 0
+```bash
+# from course6-module-01
+../lab-sql.sh sqlserver shop_tenant_a "SELECT COUNT(*) FROM datafix.OrderItem_PriceFix_Backup"
+../lab-sql.sh sqlserver shop_tenant_a "SELECT COUNT(*) FROM dbo.OrderItem oi JOIN dbo.SalesOrder so ON so.OrderId = oi.OrderId JOIN dbo.Product p ON p.ProductId = oi.ProductId WHERE so.OrderDate >= '2026-05-01' AND so.OrderDate < '2026-06-01' AND oi.UnitPrice <> ROUND(p.UnitPrice * 0.90, 2)"
+../lab-sql.sh postgres shop_tenant_a "SELECT COUNT(*) FROM datafix.orderitem_pricefix_backup"
+../lab-sql.sh postgres shop_tenant_a "SELECT COUNT(*) FROM orderitem oi JOIN salesorder so ON so.orderid = oi.orderid JOIN product p ON p.productid = oi.productid WHERE so.orderdate >= '2026-05-01' AND so.orderdate < '2026-06-01' AND oi.unitprice <> ROUND(p.unitprice * 0.90, 2)"
+../lab-sql.sh mysql shop_tenant_a "SELECT COUNT(*) FROM OrderItem_PriceFix_Backup"
+../lab-sql.sh mysql shop_tenant_a "SELECT COUNT(*) FROM OrderItem oi JOIN SalesOrder so ON so.OrderId = oi.OrderId JOIN Product p ON p.ProductId = oi.ProductId WHERE so.OrderDate >= '2026-05-01' AND so.OrderDate < '2026-06-01' AND oi.UnitPrice <> ROUND(p.UnitPrice * 0.90, 2)"
+../lab-sql.sh mariadb shop_tenant_a "SELECT COUNT(*) FROM OrderItem_PriceFix_Backup"
+../lab-sql.sh mariadb shop_tenant_a "SELECT COUNT(*) FROM OrderItem oi JOIN SalesOrder so ON so.OrderId = oi.OrderId JOIN Product p ON p.ProductId = oi.ProductId WHERE so.OrderDate >= '2026-05-01' AND so.OrderDate < '2026-06-01' AND oi.UnitPrice <> ROUND(p.UnitPrice * 0.90, 2)"
 ```
 
 `shop_tenant_b` and `shop_tenant_c` are **untouched** — no `datafix` backup table, defect intact. The canary changed exactly one tenant.
 
 ## Step 5 — Idempotency, then widen
 
-Re-run the same command. The backup count stays **10** and 0 rows change — the script is a no-op on already-fixed data (it must be, since run-once tracking is off). Now widen: edit `Target.Databases` to `["shop_tenant_b","shop_tenant_c"]` and deploy again. Both fix; the rollout is complete.
+Re-run the same command. The backup count stays **10** and 0 rows change — the script is a no-op on already-fixed data (it must be, since run-once tracking is off):
+
+```bash
+# from course6-module-01/<engine>
+schemaquench --ConfigFile:quench.settings.json
+```
+
+Now widen: in `<engine>/quench.settings.json`, edit `Target.Databases` to `["shop_tenant_b","shop_tenant_c"]` and deploy again. Both fix; the rollout is complete.
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.json" set Target.Databases '["shop_tenant_b","shop_tenant_c"]' -->
+```bash
+# from course6-module-01/<engine>
+schemaquench --ConfigFile:quench.settings.json
+```
 
 ## Step 6 — Prove the boundary
 
 Two layers held the line, and you can demonstrate both:
 
 1. **The profile** — `UpdateTables: false` meant SchemaSmith never entered a table-quench phase. Even pointed at the full package, it would not have reconciled structure.
-2. **The account** — try to drop a product table *as* `datafix_user`:
+2. **The account** — try to drop a product table *as* `datafix_user`. On SQL Server and PostgreSQL the admin connection takes on the account's identity first (`EXECUTE AS USER` / `SET ROLE`); the SQL Server line drops only if `USER_NAME()` really is `datafix_user`, and PostgreSQL runs both statements as one transaction, so a failed `SET ROLE` stops the drop. MySQL and MariaDB cannot switch to another account mid-session, so their line lists the account's grants instead — and `DROP` is not among them:
 
-```sql
--- SQL Server
-DROP TABLE dbo.OrderItem;     -- Msg 3701: ... you do not have permission
+```bash
+# from course6-module-01
+../lab-sql.sh sqlserver shop_tenant_a "EXECUTE AS USER = 'datafix_user'; IF USER_NAME() = 'datafix_user' DROP TABLE dbo.OrderItem;"
+../lab-sql.sh postgres shop_tenant_a "SET ROLE datafix_user; DROP TABLE orderitem"
+../lab-sql.sh mysql information_schema "SHOW GRANTS FOR 'datafix_user'@'%'"
+../lab-sql.sh mariadb information_schema "SHOW GRANTS FOR 'datafix_user'@'%'"
 ```
 
-Denied. The account can back up and fix data; it cannot alter or drop the product schema. The boundary doesn't depend on remembering to set a flag — it's enforced by what the account *can't do*.
+The SQL Server line fails with `Msg 3701: ... you do not have permission` and the PostgreSQL line with `ERROR:  must be owner of table orderitem`; that failure is the proof. Denied. The account can back up and fix data; it cannot alter or drop the product schema. The boundary doesn't depend on remembering to set a flag — it's enforced by what the account *can't do*.
 
 ## Per-engine notes
 

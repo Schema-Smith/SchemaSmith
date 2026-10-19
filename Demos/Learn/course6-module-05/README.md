@@ -28,31 +28,34 @@ fleet. Each engine folder ships:
 ## Setup: stand up an owned fleet
 
 SchemaSmith only drops tables it **owns** (ones it deployed itself) — so first deploy the `baseline/` product to
-both tenants. Create + seed them, then deploy the baseline. SQL Server:
+both tenants. Create + seed them — one loop per engine, each with its own seed (PostgreSQL has no
+`IF NOT EXISTS` for databases, so its create reports "already exists" on a second run — harmless):
 
 ```bash
-cd sqlserver
-# create + seed both tenants (repeat the pattern for postgres/mysql/mariadb with their seed)
-cd ..            # back to the lab folder
+# from course6-module-05
 for db in shop_patch_canary shop_patch_scratch; do
   ../lab-sql.sh sqlserver master "IF DB_ID('$db') IS NULL CREATE DATABASE [$db]"
   ../lab-sql.sh sqlserver "$db" --file ../course6-setup/seed/sqlserver/shop.sql
 done
-cd sqlserver     # back into the engine folder
-schemaquench --ConfigFile:quench.settings.baseline.json      # deploys baseline/ to both tenants (takes ownership)
-```
-
-MariaDB is the same pattern with its own client and seed:
-
-```bash
-cd mariadb
-cd ..            # back to the lab folder
+for db in shop_patch_canary shop_patch_scratch; do
+  ../lab-sql.sh postgres postgres "CREATE DATABASE $db"
+  ../lab-sql.sh postgres "$db" --file ../course6-setup/seed/postgres/shop.sql
+done
+for db in shop_patch_canary shop_patch_scratch; do
+  ../lab-sql.sh mysql information_schema "CREATE DATABASE IF NOT EXISTS \`$db\`"
+  ../lab-sql.sh mysql "$db" --file ../course6-setup/seed/mysql/shop.sql
+done
 for db in shop_patch_canary shop_patch_scratch; do
   ../lab-sql.sh mariadb information_schema "CREATE DATABASE IF NOT EXISTS \`$db\`"
   ../lab-sql.sh mariadb "$db" --file ../course6-setup/seed/mariadb/shop.sql
 done
-cd mariadb       # back into the engine folder
-schemaquench --ConfigFile:quench.settings.baseline.json
+```
+
+Then deploy the baseline from your engine folder:
+
+```bash
+# from course6-module-05/<engine>
+schemaquench --ConfigFile:quench.settings.baseline.json      # deploys baseline/ to both tenants (takes ownership)
 ```
 
 Now both tenants carry the owned `Shop` schema. Neither has `PriceReviewBatch` yet — that's the change we ship.
@@ -64,6 +67,7 @@ batch touched each line). It lives in `Package/` (the "after"). `git diff` again
 one-line manifest we ship as `patch-manifest.txt`:
 
 ```bash
+# from course6-module-05/<engine>
 git diff --name-only <before> <after> -- Package/
 # Templates/Main/Tables/dbo.OrderItem.json
 ```
@@ -74,6 +78,7 @@ Deploy the hand-carved subset (`naive-subset/` — just `OrderItem` + scaffoldin
 throwaway `shop_patch_scratch`:
 
 ```bash
+# from course6-module-05/<engine>
 schemaquench --ConfigFile:quench.settings.scratch.json      # SchemaPackagePath: ./naive-subset
 ```
 
@@ -98,6 +103,7 @@ tables; the message wording differs by engine.)
 Same change, built safely. Point SchemaShears at the full `Package/` and the manifest:
 
 ```bash
+# from course6-module-05/<engine>
 schemashears --Source:Package --Manifest:patch-manifest.txt --Output:patch
 ```
 
@@ -137,6 +143,7 @@ MariaDB have no `DropStatisticsRemovedFromProduct` to stamp.
 Lint it before it goes anywhere:
 
 ```bash
+# from course6-module-05/<engine>
 schemaquench --Validate --SchemaPackagePath:./patch
 ```
 
@@ -155,15 +162,19 @@ anyway: the same warning in a package you meant to be complete is a misspelled `
 Deploy the SchemaShears patch to the real canary, `shop_patch_canary`:
 
 ```bash
+# from course6-module-05/<engine>
 schemaquench --ConfigFile:quench.settings.canary.json       # SchemaPackagePath: ./patch
 ```
 
 The `PriceReviewBatch` column is added; `Customer`, `Product`, and `SalesOrder` are **untouched** — still there,
-with all their data. Confirm:
+with all their data. Confirm — each line counts the four Shop tables in the canary on one engine:
 
 ```bash
-cd ..            # back to the lab folder
+# from course6-module-05
 ../lab-sql.sh sqlserver shop_patch_canary "SELECT COUNT(*) FROM sys.tables WHERE name IN ('Customer','Product','SalesOrder','OrderItem')"
+../lab-sql.sh postgres shop_patch_canary "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('customer','product','salesorder','orderitem')"
+../lab-sql.sh mysql shop_patch_canary "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'shop_patch_canary' AND table_name IN ('Customer','Product','SalesOrder','OrderItem')"
+../lab-sql.sh mariadb shop_patch_canary "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'shop_patch_canary' AND table_name IN ('Customer','Product','SalesOrder','OrderItem')"
 # -> 4  (all survive; the stamp held the line)
 ```
 
@@ -182,15 +193,29 @@ those categories enabled. Rebuild the patch allowing table drops, and deploy it 
 baseline cannot put foreign keys back over orphaned rows:
 
 ```bash
+# from course6-module-05
 ../lab-sql.sh sqlserver master "DROP DATABASE IF EXISTS shop_patch_scratch; CREATE DATABASE shop_patch_scratch"
 ../lab-sql.sh sqlserver shop_patch_scratch --file ../course6-setup/seed/sqlserver/shop.sql
-cd sqlserver     # back into the engine folder
+../lab-sql.sh postgres postgres "DROP DATABASE IF EXISTS shop_patch_scratch WITH (FORCE)"
+../lab-sql.sh postgres postgres "CREATE DATABASE shop_patch_scratch"
+../lab-sql.sh postgres shop_patch_scratch --file ../course6-setup/seed/postgres/shop.sql
+../lab-sql.sh mysql information_schema "DROP DATABASE IF EXISTS shop_patch_scratch; CREATE DATABASE shop_patch_scratch"
+../lab-sql.sh mysql shop_patch_scratch --file ../course6-setup/seed/mysql/shop.sql
+../lab-sql.sh mariadb information_schema "DROP DATABASE IF EXISTS shop_patch_scratch; CREATE DATABASE shop_patch_scratch"
+../lab-sql.sh mariadb shop_patch_scratch --file ../course6-setup/seed/mariadb/shop.sql
+```
+
+Then, from your engine folder, restore the owned fleet, carve the override patch, and deploy it:
+
+```bash
+# from course6-module-05/<engine>
 schemaquench --ConfigFile:quench.settings.baseline.json     # restore the owned fleet
 schemashears --Source:Package --Manifest:patch-manifest.txt --Output:patch-allowdrops --AllowDrops:Tables
 schemaquench --ConfigFile:quench.settings.allowdrops.json   # SchemaPackagePath: ./patch-allowdrops -- exit 2
 ```
 
-Now `patch-allowdrops/Product.json` leaves `DropTablesRemovedFromProduct` alone (the other six stay `false`),
+Now `patch-allowdrops/Product.json` leaves `DropTablesRemovedFromProduct` alone (the other stamped flags stay
+`false` — six on SQL Server, seven on PostgreSQL, five on MySQL and MariaDB),
 and the deploy drops `Customer`, `Product` and `SalesOrder` — because you said so. Then it fails exactly as
 Step 1 did, exit `2`: the patch still carries `OrderItem`, whose foreign keys point at the tables it just
 dropped. (Every engine stops there; the message differs.)
@@ -204,7 +229,7 @@ go — here, that is never, which is exactly why the stamp is the default.
 Drop the two dedicated tenants on each engine:
 
 ```bash
-cd ..            # back to the lab folder
+# from course6-module-05
 ../lab-sql.sh sqlserver master "DROP DATABASE IF EXISTS shop_patch_canary; DROP DATABASE IF EXISTS shop_patch_scratch"
 ../lab-sql.sh postgres postgres "DROP DATABASE IF EXISTS shop_patch_canary WITH (FORCE)"
 ../lab-sql.sh postgres postgres "DROP DATABASE IF EXISTS shop_patch_scratch WITH (FORCE)"

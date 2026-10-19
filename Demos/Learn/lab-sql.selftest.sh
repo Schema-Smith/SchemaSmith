@@ -48,10 +48,10 @@ assert_equal '1' "$(lab_sql sqlserver master 'SELECT 1')" 'sqlserver local-clien
 
 echo 'failures are loud'
 set_lab_env sqlserver 11499   # nothing listening
-assert_fails 'could not reach sqlserver' 'unreachable endpoint fails, never returns text' -- \
+assert_fails 'LAB-SQL: sqlserver at .* failed' 'unreachable endpoint fails, never returns text' -- \
   lab_sql sqlserver master 'SELECT 1'
 set_lab_env sqlserver 11433
-assert_fails 'could not reach sqlserver' 'a failed query fails rather than returning the error text' -- \
+assert_fails 'LAB-SQL: sqlserver at .* failed' 'a failed query fails rather than returning the error text' -- \
   lab_sql sqlserver master 'SELECT * FROM no_such_table_here'
 
 clear_lab_env

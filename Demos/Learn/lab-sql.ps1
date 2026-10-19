@@ -144,7 +144,7 @@ function Invoke-LabSql {
     $streams = Split-LabStreams $out
     if ($LASTEXITCODE -ne 0) {
         $detail = if ($streams.Error) { $streams.Error } else { $streams.Output }
-        throw "LAB-SQL: could not reach $Engine at $(Get-LabEndpointLabel $Engine) [database '$Database'] -- $detail"
+        throw "LAB-SQL: $Engine at $(Get-LabEndpointLabel $Engine) [database '$Database'] failed -- $detail"
     }
     return $streams.Output
 }

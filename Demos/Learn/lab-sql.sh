@@ -123,7 +123,7 @@ lab_sql() {
   err="$(cat "$errfile" 2>/dev/null)"
   rm -f "$errfile"
   if [ "$rc" -ne 0 ]; then
-    echo "LAB-SQL: could not reach $engine at $(lab_endpoint_label "$engine") [database '$db'] -- $(lab_trim "${err:-$out}")" >&2
+    echo "LAB-SQL: $engine at $(lab_endpoint_label "$engine") [database '$db'] failed -- $(lab_trim "${err:-$out}")" >&2
     return 1
   fi
   lab_trim "$out"
