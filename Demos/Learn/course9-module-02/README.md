@@ -31,8 +31,26 @@ Every modern application stores flexible JSON alongside structured columns. How 
 ## Prerequisites
 
 - Three-engine sandbox is up (`Demos/Learn/docker`).
-- **Run course9-setup first** ([`../course9-setup/README.md`](../course9-setup/README.md)) so the `orders`, `catalog`, and `sessions` databases exist. This module is additive — it deploys one new table per service into those existing databases.
+- **Run course9-setup first** ([`../course9-setup/README.md`](../course9-setup/README.md)) so the `orders`, `catalog`, and `sessions` databases exist. This module deploys one new table per service into those existing databases.
 - Module 1 does not need to have been deployed first. The new tables have no foreign keys to Module 1's tables.
+- **This module is not additive.** Each Module 2 package is the same product as its Module 1 package (`Orders`, `Catalog`, `Sessions`), and it declares only the one new table. To SchemaQuench, Module 1's tables are now tables removed from the product, so deploying Module 2 over Module 1 drops them. If you deployed Module 1, you will see:
+
+  ```text
+  SQL Server:  [localhost,11433].[orders]         Dropping table [dbo].Customer
+               [localhost,11433].[orders]         Dropping table [dbo].OrderItem
+               [localhost,11433].[orders]         Dropping table [dbo].SalesOrder
+               [localhost,11433].[orders]         Dropping table [dbo].OrderStatus
+  PostgreSQL:  [localhost].[catalog]       Drop tables removed from the product
+               [localhost].[catalog]         Table public.product no longer in product
+               [localhost].[catalog]         Table public.category no longer in product
+               [localhost].[catalog]         Table public.product_status no longer in product
+  MySQL:       [localhost].[sessions]       Drop inbound FK: ALTER TABLE `sessions`.`Event` DROP FOREIGN KEY `FK_Event_Session`
+               [localhost].[sessions]       Drop table: Event
+               [localhost].[sessions]       Drop table: EventCategory
+               [localhost].[sessions]       Drop table: Session
+  ```
+
+  That is ownership working as designed: one product, one declared set of tables. Each module in this course is its own snapshot of the service, not a layer on the last one.
 - `schemaquench --version` answers **2.7.0** or later.
 
 ## Steps
@@ -43,17 +61,17 @@ Each engine has a single package — deploy it once. There is no baseline/after 
 
 ### Orders — SQL Server
 
-```
-cd sqlserver
-```
+Deploy from the `sqlserver` folder.
 
 macOS / Linux:
-```
+```bash
+# from course9-module-02/sqlserver
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 ```
 
 Windows:
-```
+```powershell
+# from course9-module-02/sqlserver
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD\logs"
 ```
 
@@ -63,17 +81,17 @@ Exit 0. `[dbo].[OrderEvent]` is created in `orders` with `[EventId]` as `INT IDE
 
 ### Catalog — PostgreSQL
 
-```
-cd postgres
-```
+Deploy from the `postgres` folder.
 
 macOS / Linux:
-```
+```bash
+# from course9-module-02/postgres
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 ```
 
 Windows:
-```
+```powershell
+# from course9-module-02/postgres
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD\logs"
 ```
 
@@ -83,17 +101,17 @@ Exit 0. `price_history` is created in `catalog` with `history_id` as `int4 GENER
 
 ### Sessions — MySQL
 
-```
-cd mysql
-```
+Deploy from the `mysql` folder.
 
 macOS / Linux:
-```
+```bash
+# from course9-module-02/mysql
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 ```
 
 Windows:
-```
+```powershell
+# from course9-module-02/mysql
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD\logs"
 ```
 
@@ -103,7 +121,16 @@ Exit 0. `` `PageHit` `` is created in `sessions` with `` `HitId` `` as `int AUTO
 
 ## What to notice
 
-Look at `artifacts/` in each engine folder after the deploy. The DDL SchemaSmith wrote for the identity column is engine-native in every case: `INT IDENTITY(1, 1)` in T-SQL, `GENERATED ALWAYS AS IDENTITY` appended to the column definition in PostgreSQL, `AUTO_INCREMENT` in MySQL. The package JSON described it at the right level of abstraction for each engine — not a single cross-platform property that gets translated.
+The run log names the table it created (`Adding new table [dbo].[OrderEvent]` on SQL Server, `Create new table public.price_history` on PostgreSQL, ``Create table `PageHit` `` on MySQL) but does not print the DDL. Ask each engine what it built instead, from the lab folder:
+
+```bash
+# from course9-module-02
+../lab-sql.sh sqlserver orders "SELECT c.name, TYPE_NAME(c.user_type_id) AS type_name, c.max_length, c.is_identity FROM sys.columns c WHERE c.object_id = OBJECT_ID('dbo.OrderEvent') ORDER BY c.column_id"
+../lab-sql.sh postgres catalog "SELECT column_name, udt_name, is_identity, identity_generation FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'price_history' ORDER BY ordinal_position"
+../lab-sql.sh mysql sessions "SELECT COLUMN_NAME, COLUMN_TYPE, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'sessions' AND TABLE_NAME = 'PageHit' ORDER BY ORDINAL_POSITION"
+```
+
+The identity column is engine-native in every case: an identity `int` on SQL Server, `GENERATED ALWAYS AS IDENTITY` in PostgreSQL, `auto_increment` in MySQL. The package JSON described it at the right level of abstraction for each engine — not a single cross-platform property that gets translated.
 
 The same is true for JSON storage. `NVARCHAR(MAX)` in T-SQL, `jsonb` in PostgreSQL, `json` in MySQL. No translation layer — just native types modeled natively.
 

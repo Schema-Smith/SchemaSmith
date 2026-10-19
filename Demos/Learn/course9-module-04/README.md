@@ -6,7 +6,7 @@ Module 3 gave each service a clean, organized package and file-less connection c
 
 **One shape, three independent pipelines.** Each service gets an identical CI structure: a WhatIf gate on pull request, a real deploy on merge to main, and path filtering so a change to `orders` never triggers a `catalog` or `sessions` run. In production each service is its own repository with its own `.github/workflows/deploy.yml`; the lab co-locates all three to keep the parity visible.
 
-**WhatIf-PR gating.** Every PR that touches a service folder runs a WhatIf deploy driven by a dedicated settings file (`quench.settings.whatif.json`, which sets `"WhatIfONLY": true`). The job generates the full artifact output — exactly what _would_ change — and exits 0 without applying anything. Reviewers see the diff before it hits the database; merge only happens after human review of what the pipeline previewed.
+**WhatIf-PR gating.** Every PR that touches a service folder runs a WhatIf deploy driven by a dedicated settings file (`quench.settings.whatif.json`, which sets `"WhatIfONLY": true`). The job runs every quench phase against the target, writes its run log and `SchemaQuench - Summary.json` to `logs/`, and exits 0 without applying anything. Reviewers read that preview before it hits the database; merge only happens after human review of what the pipeline previewed.
 
 **CI config from secrets.** The same `SmithySettings_Target__*` environment variables from Module 3 are now sourced from GitHub Actions secrets. No credentials in the repo. The settings files for each service are identical between local dev and CI — only the environment changes, and the environment is always injected, never committed.
 
@@ -32,27 +32,25 @@ The `whatif` job fires on `pull_request` and runs `--ConfigFile:quench.settings.
 
 ## Try it locally
 
-Run the WhatIf gate from the command line before CI does it. Set environment variables exactly as in Module 3, then run from each service directory with the WhatIf settings file.
+Run the WhatIf gate from the command line before CI does it. Set environment variables exactly as in Module 3 (one service at a time, SQL Server first, since it sets no `Port`), then run from each service's folder with the WhatIf settings file.
 
 ### SQL Server (orders)
 
 macOS / Linux:
 ```bash
+# from course9-module-04/sqlserver
 export SmithySettings_Target__Server="localhost,11433"
 export SmithySettings_Target__User="sa"
 export SmithySettings_Target__Password="Learn!Passw0rd"
-
-cd sqlserver
 schemaquench --ConfigFile:quench.settings.whatif.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
+# from course9-module-04/sqlserver
 $env:SmithySettings_Target__Server = "localhost,11433"
 $env:SmithySettings_Target__User = "sa"
 $env:SmithySettings_Target__Password = "Learn!Passw0rd"
-
-cd sqlserver
 schemaquench --ConfigFile:quench.settings.whatif.json --LogPath:"$PWD\logs"
 ```
 
@@ -60,23 +58,21 @@ schemaquench --ConfigFile:quench.settings.whatif.json --LogPath:"$PWD\logs"
 
 macOS / Linux:
 ```bash
+# from course9-module-04/postgres
 export SmithySettings_Target__Server="localhost"
 export SmithySettings_Target__Port="15432"
 export SmithySettings_Target__User="postgres"
 export SmithySettings_Target__Password="Learn!Passw0rd"
-
-cd postgres
 schemaquench --ConfigFile:quench.settings.whatif.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
+# from course9-module-04/postgres
 $env:SmithySettings_Target__Server = "localhost"
 $env:SmithySettings_Target__Port = "15432"
 $env:SmithySettings_Target__User = "postgres"
 $env:SmithySettings_Target__Password = "Learn!Passw0rd"
-
-cd postgres
 schemaquench --ConfigFile:quench.settings.whatif.json --LogPath:"$PWD\logs"
 ```
 
@@ -84,42 +80,51 @@ schemaquench --ConfigFile:quench.settings.whatif.json --LogPath:"$PWD\logs"
 
 macOS / Linux:
 ```bash
+# from course9-module-04/mysql
 export SmithySettings_Target__Server="localhost"
 export SmithySettings_Target__Port="13306"
 export SmithySettings_Target__User="root"
 export SmithySettings_Target__Password="Learn!Passw0rd"
-
-cd mysql
 schemaquench --ConfigFile:quench.settings.whatif.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
+# from course9-module-04/mysql
 $env:SmithySettings_Target__Server = "localhost"
 $env:SmithySettings_Target__Port = "13306"
 $env:SmithySettings_Target__User = "root"
 $env:SmithySettings_Target__Password = "Learn!Passw0rd"
-
-cd mysql
 schemaquench --ConfigFile:quench.settings.whatif.json --LogPath:"$PWD\logs"
 ```
 
-Each run exits 0 and writes artifacts showing what would change. Nothing is applied. To run the real deploy, use the normal settings file instead:
+Each run exits 0 and applies nothing. The log opens with `WhatIfONLY: True` in its configuration block, and the script phases are reported as `[WhatIf]` lines instead of being run:
+
+```text
+[localhost,11433].[orders]   [WhatIf] Before database scripts:
+[localhost,11433].[orders]   [WhatIf] After table scripts:
+[localhost,11433].[orders]   [WhatIf] Table data delivery:
+[localhost,11433].[orders]   [WhatIf] After database scripts:
+```
+
+The run writes no SQL files: what it leaves behind is the run log and `SchemaQuench - Summary.json` in the engine folder's `logs/`. If Module 3's packages are already deployed, the preview has nothing to change. To run the real deploy, use the normal settings file instead, from the same engine folder and with that service's variables still set:
 
 macOS / Linux:
 ```bash
+# from course9-module-04/<engine>
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
+# from course9-module-04/<engine>
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD\logs"
 ```
 
 ## What to look for
 
 - **Path filtering is the independence proof.** Edit a file under `sqlserver/` — only the Orders pipeline triggers. The Catalog and Sessions pipelines don't run. That's the boundary.
-- **WhatIf artifacts are the review surface.** Open `logs/` after a WhatIf run. The artifact files show the exact SQL that would execute. In CI these upload as a GitHub Actions artifact so reviewers can download and inspect them before approving merge.
+- **The WhatIf log is the review surface.** Open `logs/` after a WhatIf run: the run log walks every phase against the real target, and `SchemaQuench - Summary.json` is the run's structured receipt. In CI the `whatif` job uploads `logs/` as a GitHub Actions artifact (`whatif-logs-<engine>`) so reviewers can download and read it before approving merge.
 - **Secret names encode the service boundary.** `ORDERS_DB_SERVER`, `CATALOG_DB_SERVER`, `SESSIONS_DB_SERVER` — three separate secrets, three separate databases, three separate teams who can rotate them independently.
 
 ## Up next

@@ -30,19 +30,19 @@ Work through each service in order. Each is self-contained — you can deploy th
 
 ### Orders — SQL Server
 
-```
-cd sqlserver
-```
+Both deploys run from the `sqlserver` folder.
 
 **Baseline deploy:**
 
 macOS / Linux:
-```
+```bash
+# from course9-module-01/sqlserver
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
 Windows:
-```
+```powershell
+# from course9-module-01/sqlserver
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD\logs"
 ```
 
@@ -51,12 +51,14 @@ Exit 0. The `Orders` schema is deployed to `orders` with `[Customer]`, `[SalesOr
 **After deploy:**
 
 macOS / Linux:
-```
+```bash
+# from course9-module-01/sqlserver
 schemaquench --ConfigFile:quench.settings.after.json --LogPath:"$PWD/logs"
 ```
 
 Windows:
-```
+```powershell
+# from course9-module-01/sqlserver
 schemaquench --ConfigFile:quench.settings.after.json --LogPath:"$PWD\logs"
 ```
 
@@ -66,19 +68,19 @@ Exit 0. `[Customer]` gains `[Phone]` NVARCHAR(30) NULL and index `[IX_Customer_P
 
 ### Catalog — PostgreSQL
 
-```
-cd postgres
-```
+Both deploys run from the `postgres` folder.
 
 **Baseline deploy:**
 
 macOS / Linux:
-```
+```bash
+# from course9-module-01/postgres
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
 Windows:
-```
+```powershell
+# from course9-module-01/postgres
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD\logs"
 ```
 
@@ -87,12 +89,14 @@ Exit 0. The `Catalog` schema is deployed to `catalog` with `category` and `produ
 **After deploy:**
 
 macOS / Linux:
-```
+```bash
+# from course9-module-01/postgres
 schemaquench --ConfigFile:quench.settings.after.json --LogPath:"$PWD/logs"
 ```
 
 Windows:
-```
+```powershell
+# from course9-module-01/postgres
 schemaquench --ConfigFile:quench.settings.after.json --LogPath:"$PWD\logs"
 ```
 
@@ -102,19 +106,19 @@ Exit 0. `product` gains `brand` text NULL and index `ix_product_brand`. The new 
 
 ### Sessions — MySQL
 
-```
-cd mysql
-```
+Both deploys run from the `mysql` folder.
 
 **Baseline deploy:**
 
 macOS / Linux:
-```
+```bash
+# from course9-module-01/mysql
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
 Windows:
-```
+```powershell
+# from course9-module-01/mysql
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD\logs"
 ```
 
@@ -123,12 +127,14 @@ Exit 0. The `Sessions` schema is deployed to `sessions` with `` `Session` `` and
 **After deploy:**
 
 macOS / Linux:
-```
+```bash
+# from course9-module-01/mysql
 schemaquench --ConfigFile:quench.settings.after.json --LogPath:"$PWD/logs"
 ```
 
 Windows:
-```
+```powershell
+# from course9-module-01/mysql
 schemaquench --ConfigFile:quench.settings.after.json --LogPath:"$PWD\logs"
 ```
 
@@ -138,7 +144,18 @@ Exit 0. `` `Session` `` gains `` `DeviceModel` `` varchar(60) NULL (utf8mb4) and
 
 ## What to notice
 
-After the three after-deploys finish, look at what SchemaSmith wrote. Open `artifacts/` in each engine folder and compare the index DDL — the change was described once per package (one JSON entry per column, one index entry) and the engine-native DDL fell out on the other side. That is SchemaSmith's core proposition for polyglot environments: the authoring model is consistent, the output is native.
+After the three after-deploys finish, compare what each run reports doing. The run narrative is in each engine folder's `logs/` (alongside `SchemaQuench - Summary.json`, the run's structured receipt). The change was described once per package (one JSON entry per column, one index entry), and each engine's run names the objects in its own quoting:
+
+```text
+SQL Server:  [localhost,11433].[orders]         Adding 1 new columns to [dbo].[Customer]
+             [localhost,11433].[orders]         Creating index [dbo].[Customer].[IX_Customer_Phone]
+PostgreSQL:  [localhost].[catalog]         Add new physical columns to public.product (brand)
+             [localhost].[catalog]         Add missing Index public.product.ix_product_brand
+MySQL:       [localhost].[sessions]       Add column: ALTER TABLE `sessions`.`Session` ADD COLUMN `DeviceModel` VARCHAR(60) CHARACTER SET utf8mb4 NULL
+             [localhost].[sessions]       Create index: Session.IX_Session_DeviceModel
+```
+
+The MySQL run prints the column DDL itself; the other two name the object they changed. That is SchemaSmith's core proposition for polyglot environments: the authoring model is consistent, the output is native.
 
 Each service was also deployed independently — three `schemaquench` commands, each targeting one database, each exiting cleanly without knowing the others exist. In a real pipeline you would run the SQL Server, PostgreSQL, and MySQL deploys in parallel pipelines that share nothing. SchemaSmith supports that naturally because the package boundary is the service boundary.
 
