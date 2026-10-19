@@ -51,20 +51,20 @@ around it.
 Deploy `before/package` to each tier and watch the fleet split, exactly as in Module 2. PG16
 takes the modern `any_value()` view; PG12 takes the legacy `min()` view.
 
-```
-cd postgres
+```bash
+# from course10-module-05/postgres
 schemaquench --ConfigFile:quench.settings.before.pg16.json --LogPath:"$PWD/logs"   # macOS / Linux
 schemaquench --ConfigFile:quench.settings.before.pg12.json --LogPath:"$PWD/logs"
 ```
 
 ```
 # BEFORE -> pg16 (15432): Modern applied, Legacy skipped
-[localhost].[learn]   Skipping folder 'Programmability/Legacy' — ShouldApplyExpression evaluated false
+[localhost].[learn]   Skipping folder 'Programmability/Legacy' on [localhost].[learn] - ShouldApplyExpression evaluated false
 [localhost].[learn]     Quenched ./before/package/Templates/Main/Programmability/Modern/public.v_reading_summary.sql
 [localhost].[learn] Successfully Quenched
 
 # BEFORE -> pg12 (15433): Legacy applied, Modern skipped
-[localhost].[learn]   Skipping folder 'Programmability/Modern' — ShouldApplyExpression evaluated false
+[localhost].[learn]   Skipping folder 'Programmability/Modern' on [localhost].[learn] - ShouldApplyExpression evaluated false
 [localhost].[learn]     Quenched ./before/package/Templates/Main/Programmability/Legacy/public.v_reading_summary.sql
 [localhost].[learn] Successfully Quenched
 ```
@@ -83,7 +83,8 @@ Look at what `after/package` changed from `before/package` — it's the whole mo
 
 Point the retired package at PG16 and it deploys clean — one view, no gate, floor cleared:
 
-```
+```bash
+# from course10-module-05/postgres
 schemaquench --ConfigFile:quench.settings.after.pg16.json --LogPath:"$PWD/logs"
 ```
 
@@ -95,7 +96,8 @@ schemaquench --ConfigFile:quench.settings.after.pg16.json --LogPath:"$PWD/logs"
 Now point the identical retired package at the PG12 floor. `MinimumVersion` refuses it at
 pre-flight — **before any change is attempted:**
 
-```
+```bash
+# from course10-module-05/postgres
 schemaquench --ConfigFile:quench.settings.after.pg12.json --LogPath:"$PWD/logs"
 ```
 
@@ -133,10 +135,10 @@ The package carries one table, `dbo.Gadget`, as **two token-gated component vari
 | `dbo.Gadget.Legacy.json` | `Legacy` | `'{{Edition}}'='Legacy'` | `Id` only |
 
 `Product.json` sets the script token `Edition` to `Modern`, so the Modern variant is the active
-one. Deploy it:
+one. Deploy it, from the `sqlserver` folder:
 
-```
-cd sqlserver
+```bash
+# from course10-module-05/sqlserver
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 ```
 
@@ -148,7 +150,8 @@ schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 
 Now re-extract `dbo.Gadget` from the live database back into the same package with SchemaTongs:
 
-```
+```bash
+# from course10-module-05/sqlserver
 schematongs --ConfigFile:SchemaTongs.settings.json
 ```
 

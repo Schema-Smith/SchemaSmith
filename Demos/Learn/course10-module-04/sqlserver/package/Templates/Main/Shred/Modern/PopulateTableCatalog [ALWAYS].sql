@@ -6,7 +6,8 @@
 -- per table in this template. In JSON the Nullable flag arrives as a real boolean,
 -- so OPENJSON ... WITH ([IsNullable] BIT '$.Nullable') reads it straight into a BIT
 -- with no conversion. Contrast the Legacy variant, where the same flag arrives as
--- the text 'true'/'false' and needs a CASE.
+-- the text 'true'/'false' and needs a CASE. The payload leaves Nullable out for a
+-- column that is NOT NULL, so a missing flag reads as NULL: ISNULL makes it 0.
 --
 -- Paired with Shred/Legacy/PopulateTableCatalog.sql (gated on compatibility level
 -- < 130). Exactly one of the two folders applies per database — the engine picks
@@ -23,7 +24,7 @@ DECLARE @model NVARCHAR(MAX) = N'{{TableSchema}}';
 DELETE FROM dbo.TableCatalog;
 
 INSERT INTO dbo.TableCatalog ([TableName], [ColumnName], [IsNullable], [Encoding])
-SELECT tbl.[Name], col.[ColumnName], col.[IsNullable], N'JSON (OPENJSON)'
+SELECT tbl.[Name], col.[ColumnName], ISNULL(col.[IsNullable], 0), N'JSON (OPENJSON)'
 FROM OPENJSON(@model)
        WITH ([Name]    NVARCHAR(128) '$.Name',
              [Columns] NVARCHAR(MAX) '$.Columns' AS JSON) AS tbl

@@ -16,7 +16,7 @@ SQL Server is the one engine that does *not* get a second container. Instead, th
 on the single `learn-sqlserver` instance sit at different **compatibility levels** — `learn_2022`
 (160), `learn_2016` (130), `learn_2008` (100). Compatibility level, not the binary, is what
 actually gates T-SQL syntax, so this is both the cheaper option (a SQL Server container is
-~2 GB of RAM) and the *more accurate* teacher for the footgun Module 3 turns on.
+~2 GB of RAM) and the *more accurate* teacher for the footgun Module 2 turns on.
 
 The other three engines each get a floor-version container from the opt-in `mixed-fleet`
 compose profile: PostgreSQL 12 beside the current 16, MySQL 5.7 beside 8.0, MariaDB 10.2
@@ -46,14 +46,14 @@ mixed-version story itself needs the sandbox.
 **macOS / Linux**
 
 ```bash
-cd Demos/Learn/course10-setup
+# from course10-setup
 bash setup-fleet.sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-cd Demos\Learn\course10-setup
+# from course10-setup
 .\setup-fleet.ps1
 ```
 
@@ -62,6 +62,37 @@ The script starts the `mixed-fleet` compose profile (`docker compose --profile m
 healthy, then provisions every tier. It prints `PASS` per tier/engine and finishes with a
 ports-and-tiers reference table. **Re-running is safe** — every step is idempotent, so a
 second run just re-confirms the fleet.
+
+## Starting over (retaking the course)
+
+The script has no reset: a re-run keeps whatever the modules already deployed, so a retake would
+skip the first-deploy beats (new tables created, the forge kindled). To get back to a clean start,
+drop the tier databases, then run Step 1 again — it recreates every one of them empty.
+
+The SQL Server tiers live on the main sandbox instance:
+
+```bash
+# from course10-setup
+for db in learn_2022 learn_2016 learn_2008; do ../lab-sql.sh sqlserver master "IF DB_ID('$db') IS NOT NULL BEGIN ALTER DATABASE [$db] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$db]; END"; done
+```
+
+The floor engines are their own containers, which `lab-sql.sh` does not reach, so use each
+container's client the way `setup-fleet.sh` does:
+
+```bash
+# from course10-setup
+docker exec learn-postgres-12 psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tAc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'learn' AND pid <> pg_backend_pid()"
+docker exec learn-postgres-12 psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tAc "DROP DATABASE IF EXISTS learn"
+docker exec -e 'MYSQL_PWD=Learn!Passw0rd' learn-mysql-57 mysql -uroot -N -s -e "DROP DATABASE IF EXISTS \`learn\`"
+docker exec -e 'MYSQL_PWD=Learn!Passw0rd' learn-mariadb-102 mysql -uroot -N -s -e "DROP DATABASE IF EXISTS \`learn\`"
+```
+
+Then run Step 1 again to recreate them (`.\setup-fleet.ps1` on Windows):
+
+```bash
+# from course10-setup
+bash setup-fleet.sh
+```
 
 ## Ports and tiers
 
@@ -87,19 +118,18 @@ The SQL Server tiers live in `learn_2022` / `learn_2016` / `learn_2008` on the o
 | `learn` | `learn-mysql-57` (13316) | database exists (env-var auto-create verified) |
 | `learn` | `learn-mariadb-102` (13317) | database exists (env-var auto-create verified) |
 
-No schema is deployed here. Module 1 reads the detected version of every target with the
-pre-flight pair; the later modules deploy one package across all of them.
+No schema is deployed here. Module 0's lesson reads the detected version of every target with
+the pre-flight pair; Modules 1–5 deploy packages across them.
 
 ## Tearing the floor engines back down
 
 The floor containers stop with the profile flag; the current-tier sandbox stays up:
 
 ```bash
-cd Demos/Learn/docker
+# from docker
 docker compose --profile mixed-fleet down        # stop floor + current
 docker compose --profile mixed-fleet down -v      # also drop the data volumes
 ```
 
-Next: **Module 1 — the mixed-version farm**, where you read each target's detected version and
-separate two numbers learners routinely conflate — the floor *you* declare, and the version
-*the engine* reports.
+Next: **Module 1 — let the engine adapt**, where you author a feature the floor tier can't take
+and watch SchemaSmith skip it and record a downgrade, or refuse outright — your call, one setting.

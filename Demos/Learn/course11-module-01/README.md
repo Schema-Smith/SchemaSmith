@@ -26,7 +26,7 @@ Three engine families, three different mechanisms, one posture. All against `vau
 ## Step 1: Deploy the baseline
 
 `LedgerEntry` is the Vault's append-only financial record. Each engine declares its placement in its
-own idiom:
+own idiom (each engine's `baseline/` package already carries it; nothing to edit):
 
 ```json
 // SQL Server -- a scheme NAME the DBA created, plus the column the function is applied to
@@ -41,11 +41,12 @@ own idiom:
 { "Tablespace": "vault_ts" }
 ```
 
+From your engine's folder:
+
 ```bash
-cd <engine>
+# from course11-module-01/<engine>
 schemaquench --ConfigFile:quench.settings.baseline.json      # exit 0
 schemaquench --ConfigFile:quench.settings.baseline.json      # exit 0 again -- idempotent
-cd ..
 ```
 
 ## Step 2: Ask to move it
@@ -54,7 +55,8 @@ The `changed/` package declares the same table somewhere else — a different pa
 different tablespace, a different partitioning expression:
 
 ```bash
-cd <engine> && schemaquench --ConfigFile:quench.settings.changed.json ; echo "exit=$?" ; cd ..
+# from course11-module-01/<engine>
+schemaquench --ConfigFile:quench.settings.changed.json ; echo "exit=$?"
 ```
 
 **SQL Server** — exit `2`:
@@ -88,14 +90,18 @@ name both sides and stop.* Nothing was attempted — check the table and it is e
 RANGE partitioning has a calendar problem: without a `MAXVALUE` catch-all, the table rejects the first
 row of a year it has no partition for (`ERROR 1526: Table has no partition for value 2027`). So one
 change is not a move at all. Append next year's partition to `baseline/`'s list — **above** the
-deployed maximum — and re-quench:
+deployed maximum — and re-quench. In `<engine>/baseline/Templates/Main/Tables/LedgerEntry.json`
+(MySQL or MariaDB), add a `p2027` entry after `p2026` at the end of `Partitioning.Partitions`:
 
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "mysql/baseline/Templates/Main/Tables/LedgerEntry.json" append Partitioning.Partitions '{"Name": "p2027", "Values": "2028"}' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "mariadb/baseline/Templates/Main/Tables/LedgerEntry.json" append Partitioning.Partitions '{"Name": "p2027", "Values": "2028"}' -->
 ```json
 { "Name": "p2026", "Values": "2027" }, { "Name": "p2027", "Values": "2028" }
 ```
 
 ```bash
-cd <engine> && schemaquench --ConfigFile:quench.settings.baseline.json ; echo "exit=$?" ; cd ..
+# from course11-module-01/<engine>
+schemaquench --ConfigFile:quench.settings.baseline.json ; echo "exit=$?"
 #       Adding partition p2027 to LedgerEntry
 # exit=0
 ```
@@ -153,7 +159,10 @@ them at all: memory-optimized durability and inline-index shape, `Ledger`, `Grap
 
 ## Cleanup
 
+From the lab folder:
+
 ```bash
+# from course11-module-01
 for e in sqlserver postgres mysql mariadb; do
   ../lab-sql.sh $e vault_m1 "DROP TABLE IF EXISTS LedgerEntry"
 done

@@ -8,6 +8,7 @@ Every guard in the course is motivated by the database you are about to create.
 Run this once before Module 1.
 
 ```bash
+# from course11-setup
 ./setup-databases.sh          # or:  .\setup-databases.ps1
 ```
 
@@ -51,7 +52,8 @@ So this script is doing the DBA's half of the job, on purpose, so that Module 1 
 
 Worth reading if you ever need to do this yourself. `CREATE TABLESPACE` needs a server-side directory
 that already exists — PostgreSQL will not create one for you. Rather than assume a path is there, the
-script has the server make it over the same connection:
+script has the server make it over the same connection (it has already run these for you; they
+are shown for reading):
 
 ```sql
 COPY (SELECT 1) TO PROGRAM 'mkdir -p /var/lib/postgresql/vault_ts';
@@ -62,8 +64,10 @@ CREATE TABLESPACE vault_ts LOCATION '/var/lib/postgresql/vault_ts';
 
 Both script twins **confirm every object exists** after creating it rather than assuming the create
 worked, and guard `CREATE TABLESPACE` with an existence check rather than discarding the error — a
-swallowed failure and an already-present tablespace must not look the same. A setup that reports PASS
-over a missing object is worse than one that fails.
+swallowed failure and an already-present tablespace must not look the same. For the tablespace they
+go one step further: a catalogued tablespace is not necessarily a usable one, so they create and drop
+a small table in `vault_ts` and report `FAIL` with the reason if that does not work. A setup that
+reports PASS over a missing or unusable object is worse than one that fails.
 
 ## What each module uses
 
@@ -77,12 +81,14 @@ over a missing object is worse than one that fails.
 ## Cleanup
 
 ```bash
+# from course11-setup
 ./setup-databases.sh --reset      # empty them again
 ```
 
 To remove the server-side objects the script created:
 
 ```bash
+# from course11-setup
 ../lab-sql.sh postgres postgres "DROP TABLESPACE IF EXISTS vault_ts"
 ../lab-sql.sh sqlserver vault_m1 "DROP PARTITION SCHEME ps_vault_year_alt; DROP PARTITION SCHEME ps_vault_year; DROP PARTITION FUNCTION pf_vault_year"
 ```

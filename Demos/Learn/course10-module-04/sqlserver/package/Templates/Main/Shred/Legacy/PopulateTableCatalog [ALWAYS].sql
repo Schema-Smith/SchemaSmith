@@ -13,7 +13,8 @@
 -- Nullable flag arrives as the literal 'true'/'false'. A direct CAST('true' AS
 -- BIT) errors ("Msg 245 ... conversion ... to data type bit"). Convert it through
 -- an explicit CASE instead. In the JSON variant this was a typed boolean and
--- needed none of this.
+-- needed none of this. Both encodings leave Nullable out for a NOT NULL column,
+-- so a missing element counts as 'false'.
 
 DECLARE @model xml = N'{{TableXml}}';
 
@@ -22,7 +23,7 @@ DELETE FROM dbo.TableCatalog;
 INSERT INTO dbo.TableCatalog ([TableName], [ColumnName], [IsNullable], [Encoding])
 SELECT t.n.value('(Name/text())[1]', 'nvarchar(128)'),
        c.col.value('(Name/text())[1]', 'nvarchar(128)'),
-       CONVERT(BIT, CASE LOWER(c.col.value('(Nullable/text())[1]', 'varchar(8)'))
+       CONVERT(BIT, CASE LOWER(ISNULL(c.col.value('(Nullable/text())[1]', 'varchar(8)'), 'false'))
                       WHEN 'true'  THEN 1
                       WHEN 'false' THEN 0
                     END),

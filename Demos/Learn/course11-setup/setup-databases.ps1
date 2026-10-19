@@ -38,7 +38,16 @@ function Seed-PostgresTablespace {
         Invoke-LabSql -Engine postgres -Database 'postgres' -Sql "CREATE TABLESPACE vault_ts LOCATION '/var/lib/postgresql/vault_ts'" | Out-Null
     }
     $n = (Invoke-LabSql -Engine postgres -Database 'postgres' -Sql "SELECT COUNT(*) FROM pg_tablespace WHERE spcname = 'vault_ts'") -replace '\D',''
-    return ($n -eq '1')
+    if ($n -ne '1') { $script:tsErr = 'vault_ts tablespace could not be confirmed.'; return $false }
+    # Catalogued is not usable: a tablespace whose directory is gone or unwritable still has its
+    # pg_tablespace row, and Module 1's deploy would be the first thing to find out.
+    try {
+        Invoke-LabSql -Engine postgres -Database 'vault_m1' -Sql "DROP TABLE IF EXISTS vault_ts_probe; CREATE TABLE vault_ts_probe (id INT) TABLESPACE vault_ts; DROP TABLE vault_ts_probe;" | Out-Null
+    } catch {
+        $script:tsErr = 'no table can be created in the vault_ts tablespace: ' + ($_.Exception.Message -replace '\r?\n',' ')
+        return $false
+    }
+    return $true
 }
 
 foreach ($engine in (Get-LabEngines)) {
@@ -59,7 +68,8 @@ foreach ($engine in (Get-LabEngines)) {
             if (-not (Seed-SqlServerPartitioning)) { $ok = $false; $err = 'partition function/scheme could not be confirmed.' }
         }
         if ($ok -and $engine -eq 'postgres' -and $db -eq 'vault_m1') {
-            if (-not (Seed-PostgresTablespace)) { $ok = $false; $err = 'vault_ts tablespace could not be confirmed.' }
+            $script:tsErr = ''
+            if (-not (Seed-PostgresTablespace)) { $ok = $false; $err = $script:tsErr }
         }
         if ($ok) {
             if ($engine -eq 'sqlserver' -and $db -eq 'vault_m1') { Write-Host 'PASS (+ pf_vault_year / ps_vault_year / ps_vault_year_alt)' }

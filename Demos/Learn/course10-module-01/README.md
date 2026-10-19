@@ -37,19 +37,19 @@ Each engine is self-contained. Deploy in any order.
 
 ### PostgreSQL — the degrade you can flip
 
-```
-cd postgres
-```
+Run these from the `postgres` folder.
 
 **Warn (default) — degrade and record:**
 
 macOS / Linux:
-```
+```bash
+# from course10-module-01/postgres
 schemaquench --ConfigFile:quench.settings.warn.json --LogPath:"$PWD/logs"
 ```
 
 Windows:
-```
+```powershell
+# from course10-module-01/postgres
 schemaquench --ConfigFile:quench.settings.warn.json --LogPath:"$PWD\logs"
 ```
 
@@ -60,12 +60,14 @@ deployment summary's **Unsupported Feature Downgrades** section.
 **Fail — refuse instead:**
 
 macOS / Linux:
-```
+```bash
+# from course10-module-01/postgres
 schemaquench --ConfigFile:quench.settings.fail.json --LogPath:"$PWD/logs"
 ```
 
 Windows:
-```
+```powershell
+# from course10-module-01/postgres
 schemaquench --ConfigFile:quench.settings.fail.json --LogPath:"$PWD\logs"
 ```
 
@@ -76,8 +78,8 @@ feature and the version it requires, rather than deploying a silently-degraded s
 
 ### MySQL — a CHECK the floor can't keep
 
-```
-cd mysql
+```bash
+# from course10-module-01/mysql
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"     # macOS / Linux
 ```
 
@@ -86,7 +88,8 @@ need 8.0.16), so SchemaSmith emits the table without the check and records a dow
 the identical package to MySQL 8.0 and the check is created — same package, target decides.
 
 To see the refusal instead, flip the knob for one run:
-```
+```bash
+# from course10-module-01/mysql
 SmithySettings_Target__UnsupportedFeaturePolicy=fail schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 ```
 
@@ -94,8 +97,8 @@ SmithySettings_Target__UnsupportedFeaturePolicy=fail schemaquench --ConfigFile:q
 
 ### MariaDB — two downgrades in one deploy
 
-```
-cd mariadb
+```bash
+# from course10-module-01/mariadb
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"     # macOS / Linux
 ```
 
@@ -107,8 +110,8 @@ Each records its own `downgraded` row — two lines in the summary.
 
 ### SQL Server — the honest contrast (no degrade)
 
-```
-cd sqlserver
+```bash
+# from course10-module-01/sqlserver
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"     # macOS / Linux
 ```
 
@@ -117,8 +120,8 @@ feature — and the target is `learn_2008`, a **compatibility level 100** databa
 engines that mismatch degrades. Here it does **not**: the `Unsupported Feature Downgrades` section
 is absent, and the mask is applied. SQL Server feature support gates on the server *binary*
 (this instance is 2022), not the database's compatibility level. The 100-level database changes
-how SchemaSmith *encodes* its model on the wire (Module 5's topic), not which features it can
-deploy — and that gap between compat level and server version is exactly the footgun Module 3 turns on.
+how SchemaSmith *encodes* its model on the wire (Module 4's topic), not which features it can
+deploy — and that gap between compat level and server version is exactly the footgun Module 2 turns on.
 
 ## What each folder is
 

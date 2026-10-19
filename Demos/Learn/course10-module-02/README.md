@@ -56,8 +56,8 @@ variable.
 
 ### Deploy to `learn_2022` (compat 160) — the modern path
 
-```
-cd sqlserver
+```bash
+# from course10-module-02/sqlserver
 schemaquench --ConfigFile:quench.settings.2022.json --LogPath:"$PWD/logs"     # macOS / Linux
 schemaquench --ConfigFile:quench.settings.2022.json --LogPath:"$PWD\logs"     # Windows
 ```
@@ -75,7 +75,8 @@ runs (it inserts the marker row).
 
 ### Deploy to `learn_2016` (compat 130) — the legacy path
 
-```
+```bash
+# from course10-module-02/sqlserver
 schemaquench --ConfigFile:quench.settings.2016.json --LogPath:"$PWD/logs"     # macOS / Linux
 ```
 
@@ -94,7 +95,17 @@ legacy index variant is chosen, and the sentinel migration gates *itself* out �
 ### Why the gate has to be compatibility level, not server version
 
 Proof that both databases report the **same** server binary, yet `GENERATE_SERIES` still
-parse-errors on the compat-130 one — the whole argument for gating syntax on compat level:
+parse-errors on the compat-130 one — the whole argument for gating syntax on compat level. Run
+these from the lab folder; the first two print the server major (`16`) beside each database's
+compatibility level, and the third runs the Modern view's `GENERATE_SERIES` against `learn_2016`
+and fails with `Invalid object name 'GENERATE_SERIES'`:
+
+```bash
+# from course10-module-02
+../lab-sql.sh sqlserver learn_2022 "SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS INT), compatibility_level FROM sys.databases WHERE name = DB_NAME()"
+../lab-sql.sh sqlserver learn_2016 "SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS INT), compatibility_level FROM sys.databases WHERE name = DB_NAME()"
+../lab-sql.sh sqlserver learn_2016 "SELECT value FROM GENERATE_SERIES(0, 29)"
+```
 
 <!-- CERT: negative-control transcript. Must show, against learn_2016 (compat 130):
      (a) SELECT SERVERPROPERTY('ProductMajorVersion') = 16 AND compatibility_level = 130
@@ -112,8 +123,8 @@ splitting a view on the real PG12-vs-PG16 boundary with `{{ServerMajorVersion}}`
 
 ### Deploy to PostgreSQL 16 (port 15432) — the modern path
 
-```
-cd ../postgres
+```bash
+# from course10-module-02/postgres
 schemaquench --ConfigFile:quench.settings.pg16.json --LogPath:"$PWD/logs"     # macOS / Linux
 ```
 
@@ -125,7 +136,8 @@ PG16 aggregate) applies.
 
 ### Deploy to PostgreSQL 12 (port 15433) — the legacy path
 
-```
+```bash
+# from course10-module-02/postgres
 schemaquench --ConfigFile:quench.settings.pg12.json --LogPath:"$PWD/logs"     # macOS / Linux
 ```
 

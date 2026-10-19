@@ -17,6 +17,7 @@ Everything runs against `vault_m3`.
 
 > SQL Server needs a partition scheme in `vault_m3`. Create it once:
 > ```bash
+> # from course11-module-03
 > ../lab-sql.sh sqlserver vault_m3 "IF NOT EXISTS (SELECT 1 FROM sys.partition_functions WHERE name='pf_vault_year') CREATE PARTITION FUNCTION pf_vault_year (INT) AS RANGE RIGHT FOR VALUES (2024,2025,2026); IF NOT EXISTS (SELECT 1 FROM sys.partition_schemes WHERE name='ps_vault_year') CREATE PARTITION SCHEME ps_vault_year AS PARTITION pf_vault_year ALL TO ([PRIMARY]);"
 > ```
 
@@ -29,8 +30,11 @@ every settings file here already carries the switch this module is about:
 { "DropTablesRemovedFromProduct": true }
 ```
 
+From your engine's folder:
+
 ```bash
-cd <engine> && schemaquench --ConfigFile:quench.settings.baseline.json ; cd ..   # exit 0
+# from course11-module-03/<engine>
+schemaquench --ConfigFile:quench.settings.baseline.json   # exit 0
 ```
 
 **Both tables were created by SchemaSmith**, including the partitioned one. Hold on to that — it
@@ -42,7 +46,8 @@ matters in a moment.
 no longer declared, the switch is on, so the table should be dropped.
 
 ```bash
-cd <engine> && schemaquench --ConfigFile:quench.settings.removed.json ; echo "exit=$?" ; cd ..
+# from course11-module-03/<engine>
+schemaquench --ConfigFile:quench.settings.removed.json ; echo "exit=$?"
 ```
 
 **SQL Server** — exit `2`:
@@ -95,17 +100,17 @@ while they are still looking.
 ## Step 4: Say what you meant
 
 The guard is a safety net, not the mechanism. If you genuinely want the table kept, say so — mark it
-`PreventDrop` **while it is still declared**:
+`PreventDrop` **while it is still declared**. The `protected/` package is `baseline/` with exactly
+that marker on `LedgerEntry`; nothing to edit:
 
 ```json
 { "Name": "[LedgerEntry]", "PreventDrop": true, "...": "..." }
 ```
 
 ```bash
-cd <engine>
+# from course11-module-03/<engine>
 schemaquench --ConfigFile:quench.settings.protected.json   # exit 0 -- marks it, still declared
 schemaquench --ConfigFile:quench.settings.removed.json     # exit 0 -- now the removal is clean
-cd ..
 ```
 
 **SQL Server:**
@@ -130,7 +135,10 @@ catches you when you forgot to.
 
 ## Cleanup
 
+From the lab folder:
+
 ```bash
+# from course11-module-03
 ../lab-sql.sh sqlserver vault_m3 "DROP TABLE IF EXISTS dbo.LedgerEntry; DROP TABLE IF EXISTS dbo.LegalHold"
 for e in mysql mariadb; do ../lab-sql.sh $e vault_m3 "DROP TABLE IF EXISTS LedgerEntry; DROP TABLE IF EXISTS LegalHold"; done
 ```

@@ -34,8 +34,8 @@ level, including the oldest tier in the fleet.
 with a plain JSON `DataDelivery` — no `ContentEncoding`, so it defaults to `Json` — pointed at a
 JSON `.tabledata` array. Deploy it to `learn_2008`:
 
-```
-cd sqlserver
+```bash
+# from course10-xml-data-delivery/sqlserver
 schemaquench --ConfigFile:quench.settings.json-attempt.json --LogPath:"$PWD/logs"
 ```
 
@@ -63,7 +63,8 @@ Now flip the policy. `quench.settings.json-attempt-fail.json` is identical excep
 `"UnsupportedFeaturePolicy": "fail"` under `Target`. Same package, same target, same JSON
 delivery — this time SchemaQuench aborts the run instead of skipping:
 
-```
+```bash
+# from course10-xml-data-delivery/sqlserver
 schemaquench --ConfigFile:quench.settings.json-attempt-fail.json --LogPath:"$PWD/logs"
 ```
 
@@ -84,7 +85,7 @@ on the legacy tier. That's the fix this recipe teaches.
 ## Part 2 — the fix: `ContentEncoding: "Xml"`
 
 `sqlserver/package` is the *same* `RefData` product, redeployed with one change: `dbo.CountryCode`
-is unchanged, but its `DataDelivery` is:
+is unchanged, but its `DataDelivery` is (already in `sqlserver/package`; nothing to edit):
 
 ```json
 "DataDelivery": {
@@ -114,7 +115,8 @@ encoding, and it's the row this recipe uses to prove it.
 
 Deploy the XML package to `learn_2008`:
 
-```
+```bash
+# from course10-xml-data-delivery/sqlserver
 schemaquench --ConfigFile:quench.settings.legacy.json --LogPath:"$PWD/logs"
 ```
 
@@ -127,10 +129,11 @@ compatibility level 100, so all five rows land, including `JP` with a `NULL` con
 [localhost,11433].[learn_2008] Successfully Quenched
 ```
 
-Exit code `0`. Read the rows back and confirm the `NULL`:
+Exit code `0`. Read the rows back from the lab folder and confirm the `NULL`:
 
-```
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -d learn_2008 -Q "SELECT Code, Name, Continent FROM dbo.CountryCode ORDER BY Code;"
+```bash
+# from course10-xml-data-delivery
+../lab-sql.sh sqlserver learn_2008 "SELECT Code, Name, Continent FROM dbo.CountryCode ORDER BY Code;"
 ```
 
 ```
@@ -151,9 +154,10 @@ compat-130 cliff now lands cleanly, on the oldest tier in the fleet.
 
 `ContentEncoding: "Xml"` isn't a legacy-only mode — it's just a different shred path, and it
 works everywhere SQL Server does. Deploy the *same* `sqlserver/package` to `learn_2022`
-(compat 160):
+(compat 160), from the `sqlserver` folder:
 
-```
+```bash
+# from course10-xml-data-delivery/sqlserver
 schemaquench --ConfigFile:quench.settings.modern.json --LogPath:"$PWD/logs"
 ```
 
@@ -163,8 +167,9 @@ schemaquench --ConfigFile:quench.settings.modern.json --LogPath:"$PWD/logs"
 [localhost,11433].[learn_2022] Successfully Quenched
 ```
 
-```
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -d learn_2022 -Q "SELECT Code, Name, Continent FROM dbo.CountryCode ORDER BY Code;"
+```bash
+# from course10-xml-data-delivery
+../lab-sql.sh sqlserver learn_2022 "SELECT Code, Name, Continent FROM dbo.CountryCode ORDER BY Code;"
 ```
 
 ```
@@ -197,10 +202,10 @@ legacy tier as well. Without that, a shared package needed an XML declaration fo
 JSON one for its siblings — the exact divergence this course keeps warning about.
 
 `postgres/package` declares `public.countrycode` with the same `ContentEncoding: "Xml"` block,
-lowercase-named for PostgreSQL. Deploy it:
+lowercase-named for PostgreSQL. Deploy it from the `postgres` folder:
 
-```
-cd ../postgres
+```bash
+# from course10-xml-data-delivery/postgres
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 ```
 
@@ -213,10 +218,11 @@ schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 [localhost].[learn] Successfully Quenched
 ```
 
-Exit code `0`. Read it back:
+Exit code `0`. Read it back from the lab folder:
 
-```
-PGPASSWORD="Learn!Passw0rd" psql -h localhost -p 15432 -U postgres -d learn -c "SELECT * FROM public.countrycode ORDER BY code;"
+```bash
+# from course10-xml-data-delivery
+../lab-sql.sh postgres learn "SELECT * FROM public.countrycode ORDER BY code;"
 ```
 
 ```
@@ -257,8 +263,8 @@ actually use.
 **DataTongs writes the file.** It is the same tool that casts your reference data into a content
 file in the first place — it just needs telling which encoding you want:
 
-```
-cd ../sqlserver
+```bash
+# from course10-xml-data-delivery/sqlserver
 datatongs --ConfigFile:tongs.settings.json --DeliveryEncoding:Xml
 ```
 
@@ -289,8 +295,8 @@ SQL Server builds the XML natively; PostgreSQL, MySQL and MariaDB extract their 
 convert it to this identical dialect, so the file you get does not betray which engine it came
 from. Try it against the PostgreSQL tier you deployed in Part 4:
 
-```
-cd ../postgres
+```bash
+# from course10-xml-data-delivery/postgres
 datatongs --ConfigFile:tongs.settings.json --DeliveryEncoding:Xml
 ```
 
@@ -306,8 +312,9 @@ The file DataTongs just wrote is a drop-in for the one you were given. Copy it o
 `package/Templates/Main/data/`, redeploy to the compat-100 tier, and the rows land unchanged —
 `JP` still NULL:
 
-```
-cd ../sqlserver
+```bash
+# from course10-xml-data-delivery/sqlserver
+cp extracted/dbo.CountryCode.tabledata package/Templates/Main/data/dbo.CountryCode.xml.tabledata
 schemaquench --ConfigFile:quench.settings.legacy.json --LogPath:"$PWD/logs"
 ```
 
@@ -337,13 +344,11 @@ portable.
 
 ## Cleanup
 
-```
-cd ../sqlserver
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -d learn_2022 -Q "DROP TABLE IF EXISTS dbo.CountryCode;"
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -d learn_2008 -Q "DROP TABLE IF EXISTS dbo.CountryCode;"
-
-cd ../postgres
-PGPASSWORD="Learn!Passw0rd" psql -h localhost -p 15432 -U postgres -d learn -c "DROP TABLE IF EXISTS public.countrycode;"
+```bash
+# from course10-xml-data-delivery
+../lab-sql.sh sqlserver learn_2022 "DROP TABLE IF EXISTS dbo.CountryCode;"
+../lab-sql.sh sqlserver learn_2008 "DROP TABLE IF EXISTS dbo.CountryCode;"
+../lab-sql.sh postgres learn "DROP TABLE IF EXISTS public.countrycode;"
 ```
 
 ## What's in here
