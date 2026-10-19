@@ -13,6 +13,7 @@ package and adds your first table.
   - **Your own server (no Docker).** Already run one of these engines? From [`Demos/Learn`](..), point the helper at it and it creates (or cleanly resets) the empty `learn` database for you — the database-level equivalent of the Docker sandbox, minus the containers:
 
     ```bash
+    # from Demos/Learn
     ./deploy-to-endpoint.sh --engine postgres --server your-host --port 5432 --user you --password '…'
     # engines: sqlserver | postgres | mysql | mariadb   (Windows: deploy-to-endpoint.ps1 -Engine … -Server …)
     ```
@@ -22,6 +23,7 @@ package and adds your first table.
 ## Step 1: Confirm the install
 
 ```bash
+# from module-01
 schemaquench --version
 ```
 
@@ -36,10 +38,11 @@ Your exact version may be later — anything from `2.7.0.0` up is fine. The lab 
 ## Step 2: Connect and kindle each engine
 
 Each engine has its own folder with a ready-to-run settings file and a minimal package
-(`Package/`) whose template targets the sandbox's `learn` database. From this directory:
+(`Package/`) whose template targets the sandbox's `learn` database. Run it from the engine's folder
+(`sqlserver/`, `postgres/`, `mysql/` or `mariadb/`):
 
 ```bash
-cd sqlserver    # or: postgres  |  mysql  |  mariadb
+# from module-01/<engine>
 schemaquench --ConfigFile:connect.settings.json
 ```
 
@@ -49,7 +52,7 @@ Expected (engine name and host vary):
 localhost,11433 (…) connection succeeded
 Validate Server
 Quenching Template: Main
-Locate Databases To Quench
+Locate Databases To Quench (localhost,11433)
 [localhost,11433].[learn] Begin Quench
 [localhost,11433].[learn]   Kindling the forge
 [localhost,11433].[learn] Successfully Quenched

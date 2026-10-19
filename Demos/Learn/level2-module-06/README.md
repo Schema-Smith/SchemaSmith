@@ -27,6 +27,11 @@ Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships the f
 
 Open `<engine>/Package/Templates/Main/Tables/…Customer.json` (SQL Server shown):
 
+```bash
+# from level2-module-06/<engine>
+cat Package/Templates/Main/Tables/*ustomer.json
+```
+
 ```json
 "Extensions": { "OwningTeam": "Identity" },
 "Columns": [
@@ -52,16 +57,28 @@ it rebuilds from scratch so the catalog can't drift.
 ## Step 3: Deploy and read the catalog
 
 ```bash
-cd <engine>
+# from level2-module-06/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
 ```bash
-# SQL Server (from a SQL client):
-#   SELECT TableName, ColumnName, ISNULL(Classification,'(none)') AS Classification, OwningTeam
-#   FROM dbo.DataCatalog ORDER BY ColumnName;
+# from level2-module-06
+../lab-sql.sh sqlserver learn "SELECT TableName, ColumnName, ISNULL(Classification,'(none)') AS Classification, OwningTeam FROM dbo.DataCatalog ORDER BY ColumnName"
 ../lab-sql.sh postgres learn "SELECT tablename, columnname, COALESCE(classification,'(none)') AS classification, owningteam FROM public.datacatalog ORDER BY columnname"
+../lab-sql.sh mysql learn "SELECT TableName, ColumnName, COALESCE(Classification,'(none)') AS Classification, OwningTeam FROM DataCatalog ORDER BY ColumnName"
+../lab-sql.sh mariadb learn "SELECT TableName, ColumnName, COALESCE(Classification,'(none)') AS Classification, OwningTeam FROM DataCatalog ORDER BY ColumnName"
 ```
+
+PostgreSQL folds the names to lowercase:
+
+```
+customer|customerid|(none)|Identity
+customer|displayname|Internal|Identity
+customer|email|PII|Identity
+customer|ssn|PII|Identity
+```
+
+SQL Server, MySQL and MariaDB keep the declared casing:
 
 ```
 TableName | ColumnName  | Classification | OwningTeam
@@ -76,11 +93,34 @@ it has no `OwningTeam` tag, so the walk skips it.
 
 ## Step 4: The aha — change a tag, re-deploy
 
-Edit `DisplayName`'s `Classification` from `Internal` to `Public`, then re-deploy:
+Edit `DisplayName`'s `Classification` from `Internal` to `Public`. In
+`<engine>/Package/Templates/Main/Tables/…Customer.json`, the `DisplayName` column (`displayname` on
+PostgreSQL) becomes, on SQL Server:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/*ustomer.json" set "Columns[Name=DisplayName].Extensions.Classification" '"Public"' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/*ustomer.json" set "Columns[Name=displayname].Extensions.Classification" '"Public"' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/*ustomer.json" set 'Columns[Name=`DisplayName`].Extensions.Classification' '"Public"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/*ustomer.json" set 'Columns[Name=`DisplayName`].Extensions.Classification' '"Public"' -->
+```json
+{ "Name": "DisplayName", "DataType": "NVARCHAR(128)", "Extensions": { "Classification": "Public" } }
+```
+
+Then re-deploy and read the catalog again:
 
 ```bash
+# from level2-module-06/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
+
+```bash
+# from level2-module-06
+../lab-sql.sh sqlserver learn "SELECT TableName, ColumnName, Classification, OwningTeam FROM dbo.DataCatalog WHERE ColumnName = 'DisplayName'"
+../lab-sql.sh postgres learn "SELECT tablename, columnname, classification, owningteam FROM public.datacatalog WHERE columnname = 'displayname'"
+../lab-sql.sh mysql learn "SELECT TableName, ColumnName, Classification, OwningTeam FROM DataCatalog WHERE ColumnName = 'DisplayName'"
+../lab-sql.sh mariadb learn "SELECT TableName, ColumnName, Classification, OwningTeam FROM DataCatalog WHERE ColumnName = 'DisplayName'"
+```
+
+The row now reads (SQL Server, MySQL and MariaDB casing; PostgreSQL prints the names lowercase):
 
 ```
 Customer | DisplayName | Public | Identity

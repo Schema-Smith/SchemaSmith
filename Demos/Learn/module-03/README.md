@@ -22,6 +22,7 @@ edited `starter/` should look like when you're done.
 Open your table file under `<engine>/starter/Package/Templates/Main/Tables/` and edit two things —
 widen `Name` from 100 to 200, and add a nullable `Price` column. On **SQL Server** (`dbo.Widget.json`):
 
+<!-- walk: cp <engine>/solution/Package/Templates/Main/Tables/*.json <engine>/starter/Package/Templates/Main/Tables/ -->
 ```json
 {
   "Schema": "dbo",
@@ -46,6 +47,7 @@ engine's `solution/Package/.../Tables/`:
 | SQL Server | `dbo.Widget.json`    | `NVARCHAR(200)`, `DECIMAL(10,2)`                    |
 | PostgreSQL | `public.Widget.json` | `VARCHAR(200)`, `DECIMAL(10,2)` (reported `NUMERIC`) |
 | MySQL      | `Widget.json`        | `VARCHAR(200)`, `DECIMAL(10,2)`                     |
+| MariaDB    | `Widget.json`        | `VARCHAR(200)`, `DECIMAL(10,2)`                     |
 
 > *MariaDB is a fourth platform in the MySQL family — its own `Platform: MariaDb` selection and native package, not the MySQL package retargeted. Its dialect matches MySQL except for a few DDL specifics (invisible indexes, check-constraint drops, column-default reporting) that SchemaSmith handles for you.*
 
@@ -53,10 +55,13 @@ engine's `solution/Package/.../Tables/`:
 
 The `solution/` folder ships a `whatif.settings.json` — identical to `deploy.settings.json` but with
 `"WhatIfONLY": true`. It computes the difference and prints the SQL it *would* run, without applying
-anything. Add `--report` so the run also writes a structured receipt of the same preview:
+anything. Copy it next to your edited package in `starter/`, so the preview reads *your* edit (both
+settings files point at `./Package`). Add `--report` so the run also writes a structured receipt of
+the same preview:
 
 ```bash
-cd <engine>/solution
+# from module-03/<engine>/starter
+cp ../solution/whatif.settings.json .
 schemaquench --ConfigFile:whatif.settings.json --report:./out/whatif-summary
 ```
 
@@ -78,6 +83,11 @@ MySQL prints `ADD COLUMN \`Price\` DECIMAL(10,2) NULL` and `MODIFY COLUMN \`Name
 The `[WhatIf]` markers above are for a human watching the log scroll by. `--report` writes the identical
 preview as two files a program can read instead. Open `out/whatif-summary.md` first — the human receipt:
 
+```bash
+# from module-03/<engine>/starter
+cat out/whatif-summary.md
+```
+
 ```text
 ## Object Changes
 - Created: tables=0, columns=1, indexes=0, constraints=0, foreignKeys=0, procedures=0, views=0, functions=0
@@ -87,7 +97,12 @@ preview as two files a program can read instead. Open `out/whatif-summary.md` fi
 ```
 
 Now `out/whatif-summary.json` — the machine-readable twin a CI gate reads, with the mode that marks it a
-preview and the two changes itemized:
+preview and the two changes itemized (an excerpt):
+
+```bash
+# from module-03/<engine>/starter
+cat out/whatif-summary.json
+```
 
 ```json
 "run": { "mode": "WhatIf", "outcome": "Success", "exitCode": 0 },
@@ -110,7 +125,7 @@ Those two `details[]` rows are the exact machine-readable twin of the two `ALTER
 empty `whatIf.wouldApply` are the tell that nothing behind these entries was actually applied.
 
 `--report:` takes a base path with no extension — SchemaSmith writes both `.json` and `.md`. This lab's
-`out/` folder is scratch output: remove `solution/out/` once you've looked, or leave it — nothing later
+`out/` folder is scratch output: remove `starter/out/` once you've looked, or leave it — nothing later
 in this lab reads it back.
 
 ## Step 3: Confirm WhatIf changed nothing
@@ -118,12 +133,11 @@ in this lab reads it back.
 The preview is read-only. The table is still in its Module 2 shape:
 
 ```bash
-# SQL Server (from a SQL client): in the `learn` DB —
-#   SELECT name, max_length FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Widget');
-cd ../..                              # back to the lab folder
+# from module-03
+../lab-sql.sh sqlserver learn "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='Widget' ORDER BY ORDINAL_POSITION"
 ../lab-sql.sh postgres learn "SELECT column_name, data_type, character_maximum_length FROM information_schema.columns WHERE table_schema='public' AND table_name='Widget' ORDER BY ordinal_position"
 ../lab-sql.sh mysql learn "SELECT column_name, column_type FROM information_schema.columns WHERE table_schema='learn' AND table_name='Widget' ORDER BY ordinal_position"
-cd <engine>/solution                  # back to the engine folder
+../lab-sql.sh mariadb learn "SELECT column_name, column_type FROM information_schema.columns WHERE table_schema='learn' AND table_name='Widget' ORDER BY ordinal_position"
 ```
 
 `Name` is still 100, and there's no `Price` yet — WhatIf looked but didn't touch.
@@ -131,6 +145,7 @@ cd <engine>/solution                  # back to the engine folder
 ## Step 4: Deploy the change
 
 ```bash
+# from module-03/<engine>/starter
 schemaquench --ConfigFile:deploy.settings.json
 ```
 

@@ -25,9 +25,10 @@ No tables yet. Let's add one.
 
 ## Step 2: Declare a table
 
-Create a table file under `starter/Package/Templates/Main/Tables/`. On **SQL Server**, make
-`dbo.Widget.json`:
+Create a table file under `starter/Package/Templates/Main/Tables/` (make the `Tables/` folder first;
+the starter has none). On **SQL Server**, make `dbo.Widget.json`:
 
+<!-- walk: mkdir -p <engine>/starter/Package/Templates/Main/Tables && cp <engine>/solution/Package/Templates/Main/Tables/*.json <engine>/starter/Package/Templates/Main/Tables/ -->
 ```json
 {
   "Schema": "dbo",
@@ -51,13 +52,14 @@ engine's `solution/Package/.../Tables/`:
 | SQL Server | `dbo.Widget.json`    | `NVARCHAR`, clustered PK named `PK_Widget` |
 | PostgreSQL | `public.Widget.json` | `Schema: public`, `VARCHAR`, PK named `pk_widget` |
 | MySQL      | `Widget.json`        | no `Schema`, `VARCHAR`, PK index **must** be named `PRIMARY` |
+| MariaDB    | `Widget.json`        | same as MySQL |
 
 > *MariaDB is a fourth platform in the MySQL family — its own `Platform: MariaDb` selection and native package, not the MySQL package retargeted. Its dialect matches MySQL except for a few DDL specifics (invisible indexes, check-constraint drops, column-default reporting) that SchemaSmith handles for you.*
 
 ## Step 3: Deploy it
 
 ```bash
-cd <engine>/starter
+# from module-02/<engine>/starter
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
@@ -75,17 +77,20 @@ PostgreSQL says `Create new table public.Widget`; MySQL says ``Create table `Wid
 
 ## Step 4: Prove it's there
 
+Run your engine's line; it prints the table name back when `Widget` exists:
+
 ```bash
-# SQL Server (from a SQL client): SELECT name FROM sys.tables WHERE name = 'Widget';
-cd ../..                              # back to the lab folder
+# from module-02
+../lab-sql.sh sqlserver learn "SELECT name FROM sys.tables WHERE name = 'Widget'"
 ../lab-sql.sh postgres learn "SELECT to_regclass('public.\"Widget\"')"
 ../lab-sql.sh mysql learn "SELECT table_name FROM information_schema.tables WHERE table_schema='learn' AND table_name='Widget'"
-cd <engine>/starter                   # back to the engine folder
+../lab-sql.sh mariadb learn "SELECT table_name FROM information_schema.tables WHERE table_schema='learn' AND table_name='Widget'"
 ```
 
 ## Step 5: Run it again — the "aha"
 
 ```bash
+# from module-02/<engine>/starter
 schemaquench --ConfigFile:deploy.settings.json
 ```
 

@@ -31,7 +31,7 @@ Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships the f
 ## Step 2: Deploy to dev
 
 ```bash
-cd <engine>
+# from level2-module-03/<engine>
 schemaquench --ConfigFile:dev.settings.json
 ```
 
@@ -48,24 +48,25 @@ What happened, per tier:
 - **Script:** the backfill finds no `LegacyOrders` table and raises the sentinel — logged
   `Skipped (ShouldNotApply)`, recorded as a completed run-once migration (won't retry).
 
-Verify:
+Verify — your engine's line prints `3`:
 
 ```bash
-# SQL Server: SELECT COUNT(*) FROM dbo.Orders;  -- 3
-#             index IX_Orders_Region is absent
-cd ..                                  # back to the lab folder
+# from level2-module-03
+../lab-sql.sh sqlserver learn "SELECT COUNT(*) FROM dbo.Orders"
 ../lab-sql.sh postgres learn "SELECT count(*) FROM public.orders"
-cd <engine>                            # back to the engine folder
+../lab-sql.sh mysql learn "SELECT COUNT(*) FROM Orders"
+../lab-sql.sh mariadb learn "SELECT COUNT(*) FROM Orders"
 ```
 
 ## Step 3: Deploy the SAME package to prod
 
 ```bash
+# from level2-module-03/<engine>
 schemaquench --ConfigFile:prod.settings.json
 ```
 
 ```
-Skipping folder 'TestData' — ShouldApplyExpression evaluated false
+Skipping folder 'TestData' on [localhost,11433].[learn] - ShouldApplyExpression evaluated false
 Creating index [dbo].[Orders].[IX_Orders_Region]
 Successfully Quenched
 ```
@@ -80,9 +81,11 @@ Now the calls flip:
 Verify the index now exists:
 
 ```bash
-# SQL Server: index IX_Orders_Region is present on dbo.Orders
-cd ..                                  # back to the lab folder
+# from level2-module-03
+../lab-sql.sh sqlserver learn "SELECT name FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.Orders') AND name = 'IX_Orders_Region'"
 ../lab-sql.sh postgres learn "SELECT indexname FROM pg_indexes WHERE tablename='orders' AND indexname='ix_orders_region'"
+../lab-sql.sh mysql learn "SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema='learn' AND table_name='Orders' AND LOWER(index_name)='ix_orders_region'"
+../lab-sql.sh mariadb learn "SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema='learn' AND table_name='Orders' AND LOWER(index_name)='ix_orders_region'"
 ```
 
 (Both settings target the same `learn` database, so the dev sample rows persist into the prod

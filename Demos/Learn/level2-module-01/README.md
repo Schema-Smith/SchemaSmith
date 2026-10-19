@@ -55,6 +55,7 @@ aborts before touching anything. Here it confirms the `learn` database exists on
 | SQL Server | `SELECT CASE WHEN DB_ID('learn') IS NOT NULL THEN 1 ELSE 0 END` |
 | PostgreSQL | `SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_database WHERE datname = 'learn') THEN 1 ELSE 0 END` |
 | MySQL      | `SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'learn') THEN 1 ELSE 0 END` |
+| MariaDB    | same as MySQL |
 
 These are server-level catalog checks on purpose: the validation runs against the engine's
 admin/init database (`master`, `postgres`, `information_schema`) before the template picks the
@@ -69,7 +70,7 @@ target database, so it asks "is the right database *present on this server?*" �
 ## Step 2: Deploy the common product
 
 ```bash
-cd <engine>/common
+# from level2-module-01/<engine>/common
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
@@ -90,7 +91,7 @@ PostgreSQL says `Create new table public.Currency`; MySQL says ``Create table `C
 ## Step 3: Deploy the appserver product into the *same* database
 
 ```bash
-cd ../appserver
+# from level2-module-01/<engine>/appserver
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
@@ -111,14 +112,15 @@ it. That's the boundary doing its job.
 
 ## Step 4: Prove both products coexist — no duplication
 
-Both tables now live in the one `learn` database, side by side:
+Both tables now live in the one `learn` database, side by side. Your engine's line prints `Currency`
+and `SalesOrder`:
 
 ```bash
-# SQL Server (from a SQL client): SELECT name FROM sys.tables WHERE name IN ('Currency','SalesOrder');
-cd ../..                              # back to the lab folder
+# from level2-module-01
+../lab-sql.sh sqlserver learn "SELECT name FROM sys.tables WHERE name IN ('Currency','SalesOrder') ORDER BY name"
 ../lab-sql.sh postgres learn "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename IN ('Currency','SalesOrder') ORDER BY tablename"
 ../lab-sql.sh mysql learn "SELECT table_name FROM information_schema.tables WHERE table_schema='learn' AND table_name IN ('Currency','SalesOrder') ORDER BY table_name"
-cd <engine>/appserver                 # back to the engine folder
+../lab-sql.sh mariadb learn "SELECT table_name FROM information_schema.tables WHERE table_schema='learn' AND table_name IN ('Currency','SalesOrder') ORDER BY table_name"
 ```
 
 Two tables, one shared lookup, declared in exactly one place. If `Currency` had been copied into both
@@ -128,6 +130,7 @@ other. Decomposing by role keeps the shared product the single source of truth.
 ## Step 5: Re-run each — the no-op
 
 ```bash
+# from level2-module-01/<engine>/appserver
 cd ../common && schemaquench --ConfigFile:deploy.settings.json
 cd ../appserver && schemaquench --ConfigFile:deploy.settings.json
 ```
@@ -140,8 +143,24 @@ database.
 ## Step 6 (optional): Watch the guardrail refuse the wrong target
 
 The `ValidationScript` only lets a deploy proceed against a server that actually has the `learn`
-database. To see it abort, temporarily edit a `Product.json` so the validation looks for a database
-that isn't there (e.g. change `'learn'` to `'wrong_target'`) and run the deploy:
+database. To see it abort, temporarily edit `<engine>/common/Package/Product.json` so the validation
+looks for a database that isn't there: in its `ValidationScript` value, change `'learn'` to
+`'wrong_target'`. On SQL Server the line becomes:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/common/Package/Product.json" set ValidationScript "\"SELECT CASE WHEN DB_ID('wrong_target') IS NOT NULL THEN 1 ELSE 0 END\"" -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/common/Package/Product.json" set ValidationScript "\"SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_database WHERE datname = 'wrong_target') THEN 1 ELSE 0 END\"" -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/common/Package/Product.json" set ValidationScript "\"SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'wrong_target') THEN 1 ELSE 0 END\"" -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/common/Package/Product.json" set ValidationScript "\"SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'wrong_target') THEN 1 ELSE 0 END\"" -->
+```json
+"ValidationScript": "SELECT CASE WHEN DB_ID('wrong_target') IS NOT NULL THEN 1 ELSE 0 END",
+```
+
+Then run the deploy:
+
+```bash
+# from level2-module-01/<engine>/common
+schemaquench --ConfigFile:deploy.settings.json
+```
 
 ```
 Begin Quench of CommonLookups
@@ -150,9 +169,19 @@ System.Exception: Invalid server for this product
 ```
 
 The run stops at `Validate Server` and the exit code is non-zero (`3`) — nothing in the database is
-touched. Put `'learn'` back when you're done. This is the guardrail you'd point at a production
-hostname, a known environment marker, or an expected schema version to keep a package from ever
-deploying somewhere it shouldn't.
+touched. This is the guardrail you'd point at a production hostname, a known environment marker, or
+an expected schema version to keep a package from ever deploying somewhere it shouldn't.
+
+Put `'learn'` back when you're done — the original value for each engine is in the table in Step 1.
+On SQL Server:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/common/Package/Product.json" set ValidationScript "\"SELECT CASE WHEN DB_ID('learn') IS NOT NULL THEN 1 ELSE 0 END\"" -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/common/Package/Product.json" set ValidationScript "\"SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_database WHERE datname = 'learn') THEN 1 ELSE 0 END\"" -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/common/Package/Product.json" set ValidationScript "\"SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'learn') THEN 1 ELSE 0 END\"" -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/common/Package/Product.json" set ValidationScript "\"SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'learn') THEN 1 ELSE 0 END\"" -->
+```json
+"ValidationScript": "SELECT CASE WHEN DB_ID('learn') IS NOT NULL THEN 1 ELSE 0 END",
+```
 
 ## Per-engine notes
 

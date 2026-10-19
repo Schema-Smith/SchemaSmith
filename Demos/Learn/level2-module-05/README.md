@@ -31,6 +31,11 @@ Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships the f
 
 Open `<engine>/Package/Templates/Main/Tables/…IsoCurrency.json` (SQL Server shown):
 
+```bash
+# from level2-module-05/<engine>
+cat Package/Templates/Main/Tables/*.json
+```
+
 ```json
 "DataDelivery": {
   "ContentFile": "data/dbo.IsoCurrency.tabledata",
@@ -45,7 +50,7 @@ five currency rows. That's the entire data-delivery surface: a block on the tabl
 ## Step 2: Deploy — the rows ride in with the schema
 
 ```bash
-cd <engine>
+# from level2-module-05/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
@@ -56,12 +61,16 @@ schemaquench --ConfigFile:deploy.settings.json
 [localhost,11433].[learn] Successfully Quenched
 ```
 
-One run created the table and delivered its rows.
+One run created the table and delivered its rows. (SQL Server shown. PostgreSQL logs
+`Delivering public.isocurrency`; MySQL and MariaDB log `Delivering IsoCurrency`.)
 
 ## Step 3: Verify, and prove idempotency
 
+Your engine's line prints `5`:
+
 ```bash
-# SQL Server (from a SQL client): SELECT COUNT(*) FROM dbo.IsoCurrency;   -- 5
+# from level2-module-05
+../lab-sql.sh sqlserver learn "SELECT COUNT(*) FROM dbo.IsoCurrency"
 ../lab-sql.sh postgres learn "SELECT count(*) FROM public.isocurrency"
 ../lab-sql.sh mysql learn "SELECT COUNT(*) FROM IsoCurrency"
 ../lab-sql.sh mariadb learn "SELECT COUNT(*) FROM IsoCurrency"
@@ -72,15 +81,34 @@ so an unchanged row is a no-op. No duplicates, no PK errors.
 
 ## Step 4: Edit a row, re-deploy — watch Insert/Update
 
-Change one row in the content file — `JPY` from `Yen` to `Japanese Yen` — and re-deploy:
+Change one row in the content file — `JPY` from `Yen` to `Japanese Yen`. The file is
+`<engine>/Package/Templates/Main/data/` (`dbo.IsoCurrency.tabledata`, `public.isocurrency.tabledata`,
+or `IsoCurrency.tabledata`); on the `JPY` row, set `CurrencyName` (`currency_name` on PostgreSQL) to
+`Japanese Yen`. On SQL Server the row becomes:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/data/*.tabledata" set "[Code=JPY].CurrencyName" '"Japanese Yen"' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/data/*.tabledata" set "[code=JPY].currency_name" '"Japanese Yen"' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/data/*.tabledata" set "[Code=JPY].CurrencyName" '"Japanese Yen"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/data/*.tabledata" set "[Code=JPY].CurrencyName" '"Japanese Yen"' -->
+```json
+{"Code":"JPY","CurrencyName":"Japanese Yen","IsoNumber":392},
+```
+
+Then re-deploy:
 
 ```bash
+# from level2-module-05/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
-```sql
--- SQL Server
-SELECT Code, CurrencyName FROM dbo.IsoCurrency WHERE Code = 'JPY';   -- JPY  Japanese Yen
+Read the row back — your engine's line prints `JPY` and `Japanese Yen`:
+
+```bash
+# from level2-module-05
+../lab-sql.sh sqlserver learn "SELECT Code, CurrencyName FROM dbo.IsoCurrency WHERE Code = 'JPY'"
+../lab-sql.sh postgres learn "SELECT code, currency_name FROM public.isocurrency WHERE code = 'JPY'"
+../lab-sql.sh mysql learn "SELECT Code, CurrencyName FROM IsoCurrency WHERE Code = 'JPY'"
+../lab-sql.sh mariadb learn "SELECT Code, CurrencyName FROM IsoCurrency WHERE Code = 'JPY'"
 ```
 
 Still five rows: the `JPY` row was **updated** (matched on `Code`), not duplicated. The other four
@@ -93,16 +121,39 @@ You won't hand-type content files for real tables — **DataTongs** casts them o
 SchemaTongs casts schema:
 
 ```bash
+# from level2-module-05/<engine>
 datatongs --ConfigFile:tongs.settings.json
 ```
 
+SQL Server:
+
 ```
 Casting data for: dbo.IsoCurrency
+  Extracted 5 row(s) from dbo.IsoCurrency.
   Writing contents to : ./cast\dbo.IsoCurrency.tabledata
   Writing merge script to : ./cast\Populate dbo.IsoCurrency.sql
 ```
 
-Look in the generated `cast/` folder. Two artifacts, and the difference matters:
+PostgreSQL:
+
+```
+Casting data for: public.isocurrency
+  Extracted 5 row(s) from public.isocurrency.
+  Writing contents to : ./cast\public.isocurrency.tabledata
+  Writing merge script to : ./cast\Populate public.isocurrency.sql
+```
+
+MySQL and MariaDB:
+
+```
+Casting data for: IsoCurrency
+  Extracted 5 row(s) from IsoCurrency.
+  Writing contents to : ./cast\IsoCurrency.tabledata
+  Writing merge script to : ./cast\Populate IsoCurrency.sql
+```
+
+Look in the generated `cast/` folder. Two artifacts, and the difference matters (SQL Server names
+shown):
 
 - **`dbo.IsoCurrency.tabledata`** — the rows. This is what you drop into a package's `data/` folder
   for `DataDelivery` to ship; SchemaQuench builds its own merge from it at deploy time.
@@ -116,6 +167,13 @@ Look in the generated `cast/` folder. Two artifacts, and the difference matters:
 
 **Open that script before you hand it to anybody.** You are about to give someone a statement that writes
 to their table, and the shape of it is the whole question:
+
+```bash
+# from level2-module-05/<engine>
+cat cast/Populate*.sql
+```
+
+On SQL Server it reads (trimmed):
 
 ```sql
 MERGE INTO [dbo].[IsoCurrency] AS Target
@@ -151,7 +209,7 @@ two lines. Read the branches before you run it, every time.
 | | SQL Server | PostgreSQL | MySQL |
 | --- | --- | --- | --- |
 | New-table wording | `Adding new table [dbo].[IsoCurrency]` | `Create new table public.isocurrency` | ``Create table `IsoCurrency` `` |
-| Merge idiom | `MERGE` + `OPENJSON` | `MERGE` + `jsonb_to_recordset` | `INSERT … ON DUPLICATE KEY UPDATE` (+ `DELETE` for full sync) |
+| Merge idiom | `MERGE` + `OPENJSON` | `MERGE` + `JSON_ARRAY_ELEMENTS` over `json` | `INSERT … ON DUPLICATE KEY UPDATE` (+ `DELETE` for full sync) |
 | Content file | `data/dbo.IsoCurrency.tabledata` | `data/public.isocurrency.tabledata` | `data/IsoCurrency.tabledata` |
 | Identifier case | bracketed, mixed-case | folded to lowercase | backticked |
 
