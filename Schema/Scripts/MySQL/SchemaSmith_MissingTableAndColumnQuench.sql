@@ -760,6 +760,7 @@ BEGIN
         -- one row per column, matching the per-column statement the ELSE branch would issue
         -- one-at-a-time before it folds them into a single ALTER per table).
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add missing columns to existing tables');
+        CALL SchemaSmith_StageOnlineApply();
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
@@ -767,9 +768,12 @@ BEGIN
                       -- WhatIf preview must match the real run: strip WITHOUT SYSTEM VERSIONING on a
                       -- not-yet-versioned table exactly as the ELSE branch's exec does (MariaDB 4124).
                       CASE WHEN ist.TABLE_TYPE = 'SYSTEM VERSIONED' THEN c.ColumnScript
-                           ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END)
+                           ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END,
+                      COALESCE(op.Clause, ''),
+                      CASE WHEN t.OnlineMode <> 'OFF' THEN ' (online: ALGORITHM=INSTANT, else INPLACE, LOCK=NONE)' ELSE '' END)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        LEFT JOIN _SchemaSmith_OnlineColumnPositions op ON op.TableName = c.TableName AND op.ColumnName = c.ColumnName
         LEFT JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = c.TableKey
         WHERE t.NewTable = 0
@@ -1102,6 +1106,7 @@ BEGIN
 
         -- Step 2: Add non-generated columns to existing tables
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add missing columns to existing tables');
+        CALL SchemaSmith_StageOnlineApply();
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Add column: ',
@@ -1109,10 +1114,12 @@ BEGIN
                              ' ADD COLUMN ',
                              -- Match the exec below: strip WITHOUT SYSTEM VERSIONING on a not-yet-versioned table.
                              CASE WHEN ist.TABLE_TYPE = 'SYSTEM VERSIONED' THEN c.ColumnScript
-                                  ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END),
+                                  ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END,
+                             COALESCE(op.Clause, '')),
                       CASE WHEN COALESCE(c.VariantName, '') <> '' THEN CONCAT(' (variant: ', c.VariantName, ')') ELSE '' END)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        LEFT JOIN _SchemaSmith_OnlineColumnPositions op ON op.TableName = c.TableName AND op.ColumnName = c.ColumnName
         LEFT JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = c.TableKey
         WHERE t.NewTable = 0
@@ -1123,9 +1130,10 @@ BEGIN
 
         -- Fold each table's missing-column adds into one multi-clause ALTER, materialize, execute.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_AddColumnStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_AddColumnStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_AddColumnStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT,
+                                                            TableName VARCHAR(128) COLLATE utf8mb4_bin, Mode VARCHAR(8), Form VARCHAR(16))
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_AddColumnStmts (Stmt)
+        INSERT INTO _SchemaSmith_AddColumnStmts (Stmt, TableName, Mode)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
                       -- Strip WITHOUT SYSTEM VERSIONING from the ADD COLUMN clause when the target table is
                       -- not (yet) system-versioned: MariaDB refuses that clause on an ALTER ADD COLUMN
@@ -1134,40 +1142,47 @@ BEGIN
                       -- adds the versioning AFTER this pass). The clause is valid inline on CREATE (unchanged)
                       -- and on ADD COLUMN against an already-versioned table (kept). The column's exclusion is
                       -- (re)applied post-versioning by ModifiedTableQuench's exclusion pass.
+                      -- In declared order, each AFTER the one before it, so a column added ahead of another is there
+                      -- when the later one names it (OnlineApply; no position under OFF, which appends as always).
                       GROUP_CONCAT(CONCAT('ADD COLUMN ',
                           CASE WHEN ist.TABLE_TYPE = 'SYSTEM VERSIONED' THEN c.ColumnScript
-                               ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END)
-                          ORDER BY c.OrdinalPosition SEPARATOR ', '))
+                               ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END,
+                          COALESCE(op.Clause, ''))
+                          ORDER BY c.OrdinalPosition, c.RowId SEPARATOR ', ')),
+               c.TableName, t.OnlineMode
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        LEFT JOIN _SchemaSmith_OnlineColumnPositions op ON op.TableName = c.TableName AND op.ColumnName = c.ColumnName
         LEFT JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = c.TableKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 1
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)
-        GROUP BY c.TableName, ist.TABLE_TYPE;
+        GROUP BY c.TableName, ist.TABLE_TYPE, t.OnlineMode;
 
         SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts);
         WHILE @v_addcol_id IS NOT NULL DO
-            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_AddColumnStmts WHERE RowId = @v_addcol_id;
-            PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            DEALLOCATE PREPARE stmt;
+            SELECT Stmt, Mode, SchemaSmith_StripBacktickWrapping(TableName) INTO @exec_sql, @ss_online_mode, @ss_online_table
+              FROM _SchemaSmith_AddColumnStmts WHERE RowId = @v_addcol_id;
+            CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
+            UPDATE _SchemaSmith_AddColumnStmts SET Form = @ss_online_form WHERE RowId = @v_addcol_id;
             SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts WHERE RowId > @v_addcol_id);
         END WHILE;
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_AddColumnStmts;
 
         -- Object-change audit (#243 E5): one row per physical column added to an existing table.
         -- Set-based over temp tables only (no INFORMATION_SCHEMA — not the #337 segfault shape).
-        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT CONNECTION_ID(), 'column', CONCAT(c.TableName, '.', c.ColumnName), 'created'
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
+        SELECT CONNECTION_ID(), 'column', CONCAT(c.TableName, '.', c.ColumnName), 'created', s.Form
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        LEFT JOIN _SchemaSmith_AddColumnStmts s ON s.TableName = c.TableName
         WHERE t.NewTable = 0
           AND c.NewColumn = 1
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0);
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_AddColumnStmts;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_OnlineColumnPositions;
 
     END IF;
 

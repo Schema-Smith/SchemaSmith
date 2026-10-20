@@ -1663,6 +1663,7 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
             case Platform.MySQL:
             {
                 ParseMySqlTableJson(tableCommand);
+                SetMySqlOnlineApply(tableCommand);
                 var whatIf = _whatIfOnly == "1" ? 1 : 0;
                 // #508: before any table or column is created (skipped under WhatIf inside the procedure: its copy is a real table).
                 tableCommand.CommandText = $"CALL SchemaSmith_ExpressionMapAdopt('{EscapeSqlLiteral(_databaseName)}', {whatIf}); CALL SchemaSmith_MissingTableAndColumnQuench('{EscapeSqlLiteral(_databaseName)}', {whatIf})";
@@ -1715,6 +1716,7 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
                 // and QuenchForeignKeys already do. Must precede the CommandText assignment below,
                 // because SetMySqlCaptureFlag reuses the same command.
                 SetMySqlCaptureFlag(tableCommand);
+                SetMySqlOnlineApply(tableCommand);
                 var whatIf = _whatIfOnly == "1" ? 1 : 0;
                 var dropRemoved = _dropRemovedTables == "1" ? 1 : 0;
                 var dropRemovedCols = _dropRemovedColumns == "1" ? 1 : 0;
@@ -1863,6 +1865,7 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
                 if (!MySqlTempTablesExist(tableCommand))
                     ParseMySqlTableJson(tableCommand);
                 SetMySqlCaptureFlag(tableCommand);
+                SetMySqlOnlineApply(tableCommand);
                 var whatIf = _whatIfOnly == "1" ? 1 : 0;
                 var dropUnknown = _dropUnknownIndexes == "1" ? 1 : 0;
                 var dropRemovedChecks = _dropRemovedCheckConstraints == "1" ? 1 : 0;
@@ -1891,6 +1894,14 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
     private void SetMySqlCaptureFlag(IDbCommand tableCommand)
     {
         tableCommand.CommandText = $"SET @ss_capture_would_drop = {(CaptureWouldDrop ? 1 : 0)}";
+        tableCommand.ExecuteNonQuery();
+    }
+
+    // OnlineApply reaches the MySQL-family procedures the same way, as a session variable (SchemaSmith_StageOnlineApply
+    // reads it), set before every pass so a pooled connection never carries another deploy's value.
+    private void SetMySqlOnlineApply(IDbCommand tableCommand)
+    {
+        tableCommand.CommandText = $"SET @ss_online_apply = '{OnlineApply}'";
         tableCommand.ExecuteNonQuery();
     }
 

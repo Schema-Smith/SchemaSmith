@@ -95,6 +95,7 @@ public class CapabilityDocumentationTests
         // ---- MySQL ----
         ["MySQL/invisible-index"] = "**Invisible index**",
         ["MySQL/descending-index"] = "**Descending index key parts**",
+        ["MySQL/instant-alter"] = "**Instant column add or drop**",
         ["MySQL/check-constraint"] = "**CHECK constraints**",
         ["MySQL/data-delivery"] = "**Automatic table-data delivery**",
         ["MySQL/default-expression"] = "**Column `DEFAULT` expression**",
@@ -105,6 +106,7 @@ public class CapabilityDocumentationTests
         ["MySQL/page-compression"] = "**Page compression**",
 
         // ---- MariaDB (shares three rows with MySQL above; the doc cell names both thresholds) ----
+        ["MariaDb/instant-alter"] = "**Instant column add or drop**",
         ["MariaDb/check-constraint"] = "**CHECK constraints**",
         ["MariaDb/invisible-index"] = "**Invisible index**",
         ["MariaDb/descending-index"] = "**Descending index key parts**",

@@ -150,6 +150,10 @@ namespace Schema.Capabilities
                 15, "PostgreSQL 15", null, DegradeKind.Reduced, "ON DELETE SET NULL (columns) (PG15)"));
 
             // ---- MySQL (comparable major*100+minor via SchemaSmith_ServerVersionNum) ------------------------
+            // OnlineApply: an instant add anywhere and an instant drop are 8.0.29 (8.0.12 adds at the end only). Below that
+            // the change runs ALGORITHM=INPLACE, LOCK=NONE, and the change's Mode says online.
+            rows.Add(new("instant-alter", "Instant column add or drop", Platform.MySQL,
+                800, "MySQL 8.0.29", null, DegradeKind.Reduced, null, IntroducedInPatchComparable: 80029));
             rows.Add(new("invisible-index", "Invisible index", Platform.MySQL,
                 800, "MySQL 8.0", null, DegradeKind.Skip, "INDEX (invisible, MySQL 8.0 / MariaDB 10.6)"));
             rows.Add(new("descending-index", "Descending index key part", Platform.MySQL,
@@ -204,6 +208,9 @@ namespace Schema.Capabilities
             // arrives in 11.4, so between those releases a period deploys correctly and cannot be read
             // from the catalog at all. The row encodes the declare threshold, because that is what the
             // gate compares against; the read gap is documented on MariaDbTable.Periods.
+            // OnlineApply: an instant add anywhere and an instant drop are 10.4 (10.3 adds at the end only).
+            rows.Add(new("instant-alter", "Instant column add or drop", Platform.MariaDb,
+                1004, "MariaDB 10.4", null, DegradeKind.Reduced, null));
             rows.Add(new("application-time-period", "Application-time period", Platform.MariaDb,
                 1004, "MariaDB 10.4.3", null, DegradeKind.Reduced, "table without its PERIOD FOR clause"));
             // A unique or primary key WITHOUT OVERLAPS over a period (10.5.3). Below it the key is created over the

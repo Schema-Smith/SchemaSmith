@@ -852,6 +852,41 @@ removed. A validation the rows fail fails the deploy as a plain add would, and l
 next deploy validates it again. A `Require` refusal rolls back the step it stops. `OnlineApplyMaxDuration` does not
 apply to PostgreSQL.
 
+### MySQL and MariaDB
+
+SchemaQuench asks the engine for the lightest form and lets it decide. Each statement below is sent with
+`ALGORITHM=INSTANT` where that can apply (MySQL 8.0.12 and later, MariaDB 10.3 and later), then with
+`ALGORITHM=INPLACE, LOCK=NONE`, and a form the engine refuses moves on to the next. Under `Prefer` the last step is
+the statement as written, recorded as `unavailable` with the engine's reason; under `Require` the deploy stops at that
+statement, naming it.
+
+| Change on an existing table | Forms asked for |
+|---|---|
+| A column added | `INSTANT`, then `INPLACE, LOCK=NONE`; the column goes `AFTER` the declared column before it |
+| A column the package no longer declares | dropped `INSTANT`, then `INPLACE, LOCK=NONE` |
+| A new index, or one built again because it changed, and an index dropped | `INPLACE, LOCK=NONE` |
+
+The [Deployment Summary](deployment-summary-report.md#details) records `instant`, `online` (`INPLACE, LOCK=NONE`) or
+`unavailable`. Under `WhatIf` the preview shows each statement with its position and the forms it would ask for, and
+the preview's changes carry no `mode`: only the engine can say which form it accepts.
+
+Under `Off` a new column is added at the end of the table, as it always has been. Under `Prefer` or `Require` it goes
+where the package declares it, so the table needs no rebuild to put its columns in order. MySQL adds a column
+instantly anywhere from 8.0.29 (8.0.12 to 8.0.28 only at the end of the table), and MariaDB from 10.4 (10.3 only at the
+end); elsewhere the add runs `INPLACE, LOCK=NONE`.
+
+The engine refuses both forms for some changes, and they run as written under `Prefer`: a column added to a table
+that has a full-text index, for example.
+
+**Row versions (MySQL 8.0.29 and later).** Each statement that adds or drops columns instantly spends one of the
+table's row versions: 64 through MySQL 9.0, 255 from 9.1. Within 8 of the limit the progress log warns, naming the
+table and the count. At the limit the next change runs `INPLACE, LOCK=NONE`, which rebuilds the table and resets the
+count; the log says so.
+
+MySQL and MariaDB do not roll DDL back, so a `Require` refusal stops the deploy at that statement, with the changes
+before it in place. Full-text indexes, column type changes, keys and foreign keys run as before.
+`OnlineApplyMaxDuration` does not apply.
+
 ## System-versioned tables (MariaDB)
 
 MariaDB can keep a table's own history: every update leaves the superseded row behind, queryable

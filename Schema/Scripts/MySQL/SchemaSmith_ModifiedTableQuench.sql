@@ -2183,10 +2183,17 @@ BEGIN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_WouldDropColumns;
     END IF;
 
+    -- OnlineApply: each table's mode, for the column drops below.
+    CALL SchemaSmith_StageOnlineApply();
+
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unused columns');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP COLUMN `', ColumnName, '`')
+        FROM _SchemaSmith_ColumnsToDrop;
+        -- WhatIf twin of the 'column'/'dropped' rows below.
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'column', CONCAT(TableName, '.', ColumnName), 'wouldDrop'
         FROM _SchemaSmith_ColumnsToDrop;
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unused columns');
@@ -2426,6 +2433,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DEALLOCATE PREPARE stmt;
             SET @v_gencol_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenColDropStmts WHERE RowId > @v_gencol_id);
         END WHILE;
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'column', CONCAT(TableName, '.', ColumnName), 'dropped'
+        FROM _SchemaSmith_GenColsToDrop;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColDropStmts;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColsToDrop;
 
@@ -2444,28 +2454,49 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
         -- Materialize: fold each table's remaining column drops into one multi-clause ALTER, then drain.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColDropStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_ColDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_ColDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT,
+                                                          TableKey VARCHAR(260) COLLATE utf8mb4_bin, TableName VARCHAR(128), Form VARCHAR(16))
+            ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        -- The columns each statement drops, for their change rows once it has run.
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColDropped;
+        CREATE TEMPORARY TABLE _SchemaSmith_ColDropped (RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY, TableKey VARCHAR(260) COLLATE utf8mb4_bin, ObjectName VARCHAR(400))
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
-        INSERT INTO _SchemaSmith_ColDropStmts (Stmt)
+        INSERT INTO _SchemaSmith_ColDropStmts (Stmt, TableKey, TableName)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
                       CONVERT(ctd.TableName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '` ',
-                      GROUP_CONCAT(CONCAT('DROP COLUMN `', CONVERT(ctd.ColumnName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`') ORDER BY ctd.ColumnName SEPARATOR ', '))
+                      GROUP_CONCAT(CONCAT('DROP COLUMN `', CONVERT(ctd.ColumnName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`') ORDER BY ctd.ColumnName SEPARATOR ', ')),
+               ctd.TableKey, ctd.TableName
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN _SchemaSmith_CatColumns isc
             ON isc.TableKey = ctd.TableKey
             AND isc.ColumnKey = ctd.ColumnKey
         WHERE (isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
-        GROUP BY ctd.TableName;
+        GROUP BY ctd.TableKey, ctd.TableName;
+        INSERT INTO _SchemaSmith_ColDropped (TableKey, ObjectName)
+        SELECT ctd.TableKey, CONCAT(ctd.TableName, '.', ctd.ColumnName)
+        FROM _SchemaSmith_ColumnsToDrop ctd
+        INNER JOIN _SchemaSmith_CatColumns isc
+            ON isc.TableKey = ctd.TableKey
+            AND isc.ColumnKey = ctd.ColumnKey
+        WHERE (isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '');
 
         SET @v_dropcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColDropStmts);
         WHILE @v_dropcol_id IS NOT NULL DO
-            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_ColDropStmts WHERE RowId = @v_dropcol_id;
-            PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            DEALLOCATE PREPARE stmt;
+            SELECT s.Stmt, COALESCE(MAX(t.OnlineMode), 'OFF'), s.TableName INTO @exec_sql, @ss_online_mode, @ss_online_table
+              FROM _SchemaSmith_ColDropStmts s
+              LEFT JOIN _SchemaSmith_Tables t ON t.TableKey = s.TableKey
+             WHERE s.RowId = @v_dropcol_id
+             GROUP BY s.Stmt, s.TableName;
+            CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
+            UPDATE _SchemaSmith_ColDropStmts SET Form = @ss_online_form WHERE RowId = @v_dropcol_id;
             SET @v_dropcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColDropStmts WHERE RowId > @v_dropcol_id);
         END WHILE;
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
+        SELECT CONNECTION_ID(), 'column', d.ObjectName, 'dropped', s.Form
+        FROM _SchemaSmith_ColDropped d
+        INNER JOIN _SchemaSmith_ColDropStmts s ON s.TableKey = d.TableKey;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColDropped;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColDropStmts;
     END IF;
 
@@ -4019,33 +4050,44 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop and recreate modified indexes');
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropModIdxStmts;
+        -- AlterStmt and OnlineMode: OnlineApply drops through the online forms, which MariaDB takes only on an ALTER TABLE.
         CREATE TEMPORARY TABLE _SchemaSmith_DropModIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT,
-                                                             TableName VARCHAR(128) COLLATE utf8mb4_bin, IndexName VARCHAR(128) COLLATE utf8mb4_bin)
+                                                             TableName VARCHAR(128) COLLATE utf8mb4_bin, IndexName VARCHAR(128) COLLATE utf8mb4_bin,
+                                                             AlterStmt TEXT, OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF')
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_DropModIdxStmts (LogMsg, Stmt, AuditName, TableName, IndexName)
+        INSERT INTO _SchemaSmith_DropModIdxStmts (LogMsg, Stmt, AuditName, TableName, IndexName, AlterStmt)
         SELECT
             CONCAT('  Drop and recreate index: ', TableName, '.', IndexName),
             CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
-            CONCAT(TableName, '.', IndexName), TableName, IndexName
+            CONCAT(TableName, '.', IndexName), TableName, IndexName,
+            CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP INDEX `', IndexName, '`')
         FROM _SchemaSmith_ModifiedIndexes;
+        UPDATE _SchemaSmith_DropModIdxStmts s
+          JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
+           SET s.OnlineMode = t.OnlineMode;
 
         SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModIdxStmts);
         WHILE @ss_id IS NOT NULL DO
-            SELECT LogMsg, Stmt, AuditName, TableName, IndexName INTO @ss_log, @exec_sql, @ss_auditname, @ss_tbl, @ss_idx
+            SELECT LogMsg, Stmt, AuditName, TableName, IndexName, AlterStmt, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_tbl, @ss_idx, @ss_online_sql_alter, @ss_online_mode
               FROM _SchemaSmith_DropModIdxStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
             PREPARE stmt FROM @exec_sql;
             SET @ss_fk_needs_index := 0;
+            SET @ss_online_form := NULL;
             BEGIN
                 DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
-                EXECUTE stmt;
+                IF @ss_online_mode = 'OFF' THEN
+                    EXECUTE stmt;
+                ELSE
+                    CALL SchemaSmith_ExecuteOnline(@ss_online_sql_alter, @ss_online_mode, 0, 0, p_DatabaseName, @ss_tbl, @ss_online_form);
+                END IF;
             END;
             IF @ss_fk_needs_index = 1 THEN
                 INSERT INTO _SchemaSmith_DeferredIndexSwaps (TableName, IndexName) VALUES (@ss_tbl, @ss_idx);
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
                 VALUES (CONNECTION_ID(), CONCAT('    A foreign key needs ', @ss_auditname, ': it is replaced in one statement when it is recreated'));
             ELSE
-                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
+                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped', @ss_online_form);
             END IF;
             DEALLOCATE PREPARE stmt;
             SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModIdxStmts WHERE RowId > @ss_id);
@@ -4315,26 +4357,37 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown indexes');
 
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropIdxStmts;
-            CREATE TEMPORARY TABLE _SchemaSmith_DropIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT)
+            CREATE TEMPORARY TABLE _SchemaSmith_DropIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT,
+                                                          TableName VARCHAR(128) COLLATE utf8mb4_bin, AlterStmt TEXT, OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF')
                 ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-            INSERT INTO _SchemaSmith_DropIdxStmts (LogMsg, Stmt, AuditName)
+            INSERT INTO _SchemaSmith_DropIdxStmts (LogMsg, Stmt, AuditName, TableName, AlterStmt)
             SELECT
                 CONCAT('  Drop unknown index: ', TableName, '.', IndexName),
                 CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
-                CONCAT(TableName, '.', IndexName)
+                CONCAT(TableName, '.', IndexName), TableName,
+                CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP INDEX `', IndexName, '`')
             FROM _SchemaSmith_IndexesToDrop;
+            UPDATE _SchemaSmith_DropIdxStmts s
+              JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
+               SET s.OnlineMode = t.OnlineMode;
 
             SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropIdxStmts);
             WHILE @ss_id IS NOT NULL DO
-                SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_DropIdxStmts WHERE RowId = @ss_id;
+                SELECT LogMsg, Stmt, AuditName, TableName, AlterStmt, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_tbl, @ss_online_sql_alter, @ss_online_mode
+                  FROM _SchemaSmith_DropIdxStmts WHERE RowId = @ss_id;
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
                 PREPARE stmt FROM @exec_sql;
                 -- An index a foreign key on the table still needs cannot be dropped (1553): MySQL creates one for any
                 -- key with no declared index. It is kept, with its ownership; once the key goes, a later deploy drops it.
                 SET @ss_fk_needs_index := 0;
+                SET @ss_online_form := NULL;
                 BEGIN
                     DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
-                    EXECUTE stmt;
+                    IF @ss_online_mode = 'OFF' THEN
+                        EXECUTE stmt;
+                    ELSE
+                        CALL SchemaSmith_ExecuteOnline(@ss_online_sql_alter, @ss_online_mode, 0, 0, p_DatabaseName, @ss_tbl, @ss_online_form);
+                    END IF;
                 END;
                 IF @ss_fk_needs_index = 1 THEN
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -4343,7 +4396,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                      WHERE CONCAT(TableName, '.', IndexName) = CONVERT(@ss_auditname USING utf8mb4) COLLATE utf8mb4_bin;
                 ELSE
                     -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
-                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
+                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped', @ss_online_form);
                 END IF;
                 DEALLOCATE PREPARE stmt;
                 SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropIdxStmts WHERE RowId > @ss_id);

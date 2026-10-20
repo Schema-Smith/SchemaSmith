@@ -250,7 +250,8 @@ BEGIN
         -- Versioned: 1 for a system-versioned table created in this run (its index work runs under KEEP, which has no
         -- history to protect there), 2 for an existing one (KEEP only if the environment asks; a refusal names it).
         CREATE TEMPORARY TABLE _SchemaSmith_CreateIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT, IsSwap TINYINT,
-                                                            TableKey VARCHAR(260) COLLATE utf8mb4_bin, Versioned TINYINT NOT NULL DEFAULT 0)
+                                                            TableKey VARCHAR(260) COLLATE utf8mb4_bin, Versioned TINYINT NOT NULL DEFAULT 0,
+                                                            OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF')
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         -- Detection reads the post-drop snapshot _SchemaSmith_IdxExistPostDrop (taken after ModifiedTableQuench's
         -- modified-index drops) so a just-dropped modified index is correctly seen as missing here and recreated.
@@ -302,14 +303,19 @@ BEGIN
 
         -- A statement of its own: MySQL cannot open a temporary table twice in one statement, and the insert above
         -- already reads _SchemaSmith_Tables for the engine.
+        -- OnlineApply: each table's mode, so a new index is built ALGORITHM=INPLACE, LOCK=NONE where the engine can.
+        CALL SchemaSmith_StageOnlineApply();
         UPDATE _SchemaSmith_CreateIdxStmts s
           JOIN _SchemaSmith_Tables t ON t.TableKey = s.TableKey
            SET s.Versioned = CASE WHEN t.IsSystemVersioned = 1 AND t.NewTable = 1 THEN 1
-                                  WHEN t.IsSystemVersioned = 1 THEN 2 ELSE 0 END;
+                                  WHEN t.IsSystemVersioned = 1 THEN 2 ELSE 0 END,
+               s.OnlineMode = t.OnlineMode;
 
         SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts);
         WHILE @ss_id IS NOT NULL DO
-            SELECT LogMsg, Stmt, AuditName, IsSwap, Versioned INTO @ss_log, @exec_sql, @ss_auditname, @ss_swap, @ss_versioned FROM _SchemaSmith_CreateIdxStmts WHERE RowId = @ss_id;
+            SELECT LogMsg, Stmt, AuditName, IsSwap, Versioned, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_swap, @ss_versioned, @ss_online_mode
+              FROM _SchemaSmith_CreateIdxStmts WHERE RowId = @ss_id;
+            SET @ss_online_form = NULL;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
             PREPARE stmt FROM @exec_sql;
             SET @ss_fk_needs_index := 0;
@@ -332,7 +338,13 @@ BEGIN
                         RESIGNAL;
                     END IF;
                 END;
-                EXECUTE stmt;
+                -- A swap (DROP INDEX, ADD in one ALTER) stays as written: its drop is the change, and the index is gone
+                -- in between either way.
+                IF @ss_swap = 1 THEN
+                    EXECUTE stmt;
+                ELSE
+                    CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 0, 1, p_DatabaseName, SUBSTRING_INDEX(@ss_auditname, '.', 1), @ss_online_form);
+                END IF;
             END;
             IF @ss_versioned = 1 THEN CALL SchemaSmith_KeepHistoryForNewVersionedTable(0); END IF;
             IF @ss_fk_needs_index = 1 THEN
@@ -343,7 +355,7 @@ BEGIN
                 IF @ss_swap = 1 THEN
                     INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
                 END IF;
-                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created');
+                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created', @ss_online_form);
             END IF;
             DEALLOCATE PREPARE stmt;
             SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts WHERE RowId > @ss_id);

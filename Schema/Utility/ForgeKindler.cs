@@ -995,6 +995,10 @@ public static class ForgeKindler
                 new("SchemaSmith_RefuseUnsupportedIndexes.sql"),
                 // A VECTOR index where the engine has none is skipped with a downgrade; called beside the refusals.
                 new("SchemaSmith_DegradeVectorIndexes.sql"),
+                // OnlineApply: each table's mode and its added columns' positions, and the INSTANT / INPLACE, LOCK=NONE
+                // ladder every converted ALTER runs through. Called by the table and index quenches below.
+                new("SchemaSmith_StageOnlineApply.sql"),
+                new("SchemaSmith_ExecuteOnline.sql"),
                 new("SchemaSmith_MissingTableAndColumnQuench.sql"),
                 // #530: a table's FullTextIndexes, created and re-created by both index paths, not only the index-only one.
                 new("SchemaSmith_DropModifiedFullTextIndexes.sql"),

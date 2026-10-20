@@ -141,6 +141,10 @@ BEGIN
         -- ModifiedTableQuench STEP 7.5 -- which reads this same flag -- so this is not a NewTable = 1
         -- value. (It said it was: that was true when written and stopped being true when 7.5 shipped.)
         IsSystemVersioned TINYINT DEFAULT 0,
+        -- OnlineApply: the table's own value (OFF, PREFER, REQUIRE; NULL inherits the deploy's), and OnlineMode, the one
+        -- in force, which SchemaSmith_StageOnlineApply resolves once NewTable is known.
+        OnlineApply VARCHAR(8) DEFAULT NULL,
+        OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF',
         KEY ix_tables_name (TableName),
         KEY ix_tables_key (TableKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -153,7 +157,7 @@ BEGIN
     SET v_TblIdx = 0;
     WHILE v_TblIdx < v_TblCnt DO
         IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name'))) IS NOT NULL THEN
-            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, CharacterSet, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, PartitionKeyAlgorithm, SubpartitionMethod, SubpartitionExpression, SubpartitionCount, SystemTimeInterval, SystemTimeStarts, SystemTimeLimit, SystemTimeAuto, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned)
+            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, CharacterSet, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, PartitionKeyAlgorithm, SubpartitionMethod, SubpartitionExpression, SubpartitionCount, SystemTimeInterval, SystemTimeStarts, SystemTimeLimit, SystemTimeAuto, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned, OnlineApply)
             SELECT
                 SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name')))) AS TableName,
                 COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Engine')))), ''), 'InnoDB') AS Engine,
@@ -209,7 +213,8 @@ BEGIN
                 -- so both fall out as 0.
                 COALESCE(JSON_TYPE(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].RebuildPolicy'))) = 'OBJECT', 0) AS RebuildPolicySpecified,
                 COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].PreventDrop'))), 0) AS PreventDrop,
-                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].IsSystemVersioned'))), 0) AS IsSystemVersioned;
+                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].IsSystemVersioned'))), 0) AS IsSystemVersioned,
+                UPPER(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].OnlineApply')))), '')) AS OnlineApply;
         END IF;
         SET v_TblIdx = v_TblIdx + 1;
     END WHILE;
