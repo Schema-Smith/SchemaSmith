@@ -1,5 +1,7 @@
 # Course 6, Module 6 — Lint before you deploy: the `--Validate` semantic linter (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (SS-STALE-001 on 2.7.x boards): delete the "On 2.7.x" callouts -->
+
 **Goal:** catch the cross-object errors JSON Schema can't express — a dangling foreign key, an ungated duplicate column, an undefined token, a stale editor schema, a drifted file name — with a single static command that needs no database, no credentials, and no running engine. Read a broken package's findings board, fix each error to green, prove the linter is *semantic* (not dumb), surface a misnamed-file warning that never gates the exit code, clear an induced staleness finding, then wire it in as a CI gate. SQL Server, PostgreSQL, MySQL, and MariaDB.
 
 ## The scenario
@@ -33,6 +35,8 @@ ERROR [SS-TOK-001] .../dbo.Customer.json: References undefined token '{{IncludeP
 WARN [SS-FK-002] Template 'Main' / Table '[OrderItem]' / FK '[FK_OrderItem_Supplier]': RelatedTable '[Supplier]' does not resolve to any table in the package (resolved schema 'dbo'). The deploy succeeds only if it already exists on the target.
 2 error(s), 1 warning(s)
 ```
+
+> **On 2.7.x** the board carries one more error, `ERROR [SS-STALE-001] .../tables.sqlserver.schema: Committed .json-schemas are stale - regenerate via --WriteSchemasOnly. Structural validation used the current model merged with this file's authored custom-property governance.`, and counts `3 error(s), 1 warning(s)` (PostgreSQL flags `tables`, `domaintypes` and `sequences`: `5 error(s), 1 warning(s)`); it stays on every board until Scenario 5 regenerates the schemas, so Scenario 2 reads `1 error(s), 0 warning(s)` (`3 error(s)` on PostgreSQL) and exits `2` instead of `PASS`. Scenario 5 is where it clears.
 
 > **Your `SS-TOK-001` will show the real path where you cloned the repo** in place of the `...` above. Every
 > finding is prefixed with where it lives — a file path for file-scoped checks, the object's position in the

@@ -1,0 +1,23 @@
+{
+  "Source": {
+    "Platform": "SqlServer",
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "Database": "learn_2008",
+    "ConnectionProperties": {
+      "TrustServerCertificate": "True"
+    }
+  },
+  "ContentPath": "./extracted",
+  "Tables": [
+    {
+      "Name": "dbo.CountryCode",
+      "KeyColumns": "Code"
+    }
+  ],
+  "ShouldCast": {
+    "OutputContentFiles": true,
+    "OutputScripts": false
+  }
+}

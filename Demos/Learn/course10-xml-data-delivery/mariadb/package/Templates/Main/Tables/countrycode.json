@@ -1,0 +1,32 @@
+{
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
+  "Name": "countrycode",
+  "Columns": [
+    {
+      "Name": "code",
+      "DataType": "CHAR(2)"
+    },
+    {
+      "Name": "name",
+      "DataType": "VARCHAR(100)"
+    },
+    {
+      "Name": "continent",
+      "DataType": "VARCHAR(50)",
+      "Nullable": true
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "IndexColumns": "code"
+    }
+  ],
+  "DataDelivery": {
+    "ContentFile": "data/countrycode.xml.tabledata",
+    "ContentEncoding": "Xml",
+    "MergeType": "Insert/Update",
+    "MatchColumns": "code"
+  }
+}

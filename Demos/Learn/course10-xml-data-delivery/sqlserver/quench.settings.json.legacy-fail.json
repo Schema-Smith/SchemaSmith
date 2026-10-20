@@ -1,0 +1,15 @@
+{
+  "Target": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": { "TrustServerCertificate": "True" },
+    "Databases": ["learn_2008"],
+    "UnsupportedFeaturePolicy": "fail"
+  },
+  "WhatIfONLY": false,
+  "SchemaPackagePath": "./json",
+  "KindleTheForge": true,
+  "ArtifactPath": "./artifacts",
+  "CheckpointDirectory": "./checkpoints"
+}

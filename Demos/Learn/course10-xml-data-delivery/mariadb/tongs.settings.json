@@ -1,0 +1,22 @@
+{
+  "Source": {
+    "Platform": "MariaDb",
+    "Server": "localhost",
+    "Port": "13307",
+    "User": "root",
+    "Password": "Learn!Passw0rd",
+    "Database": "learn",
+    "ConnectionProperties": {}
+  },
+  "ContentPath": "./extracted",
+  "Tables": [
+    {
+      "Name": "countrycode",
+      "KeyColumns": "code"
+    }
+  ],
+  "ShouldCast": {
+    "OutputContentFiles": true,
+    "OutputScripts": false
+  }
+}

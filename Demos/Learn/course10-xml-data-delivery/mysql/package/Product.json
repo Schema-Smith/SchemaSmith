@@ -1,0 +1,11 @@
+{
+  "$schema": ".json-schemas/products.mysql.schema",
+  "Name": "RefData",
+  "ValidationScript": "SELECT 1",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptTokens": {},
+  "ScriptFolders": [],
+  "Platform": "MySQL"
+}

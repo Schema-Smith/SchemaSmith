@@ -7,7 +7,7 @@
     "Databases": ["learn_2008"]
   },
   "WhatIfONLY": false,
-  "SchemaPackagePath": "./json-attempt",
+  "SchemaPackagePath": "./json",
   "KindleTheForge": true,
   "ArtifactPath": "./artifacts",
   "CheckpointDirectory": "./checkpoints"

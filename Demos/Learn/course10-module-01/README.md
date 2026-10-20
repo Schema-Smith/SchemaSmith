@@ -1,5 +1,7 @@
 # Course 10 · Module 1 — Let the engine adapt
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (warn downgrade exits 1): delete the "On 2.7.x" callouts -->
+
 You author one modern feature per engine and deploy the same package to a **floor-version**
 target that predates it. SchemaSmith detects the target version, emits the degraded form the
 old engine can take, and records what it couldn't in the `downgraded` manifest — surfaced in
@@ -53,9 +55,12 @@ Windows:
 schemaquench --ConfigFile:quench.settings.warn.json --LogPath:"$PWD\logs"
 ```
 
-Exit 0. The `metric` table deploys, but the expression statistic `ST_metric_expr` cannot exist
-on PostgreSQL 12 (it needs 14). SchemaSmith skips it and records a `downgraded` row. Read the
+Deploys, exits 1. The `metric` table lands, but the expression statistic `ST_metric_expr` cannot exist
+on PostgreSQL 12 (it needs 14). SchemaSmith skips it and records a `downgraded` row, and a run
+that downgraded something finishes as incomplete — exit 1, not 0. Read the
 deployment summary's **Unsupported Feature Downgrades** section.
+
+> **On 2.7.x** the same run exits 0; the statistic is still skipped and the downgrade still recorded.
 
 **Fail — refuse instead:**
 
@@ -83,9 +88,12 @@ feature and the version it requires, rather than deploying a silently-degraded s
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"     # macOS / Linux
 ```
 
-Exit 0. The `Ledger` table deploys, but MySQL 5.7 parses-and-ignores `CHECK` constraints (they
-need 8.0.16), so SchemaSmith emits the table without the check and records a downgrade. Deploy
+Deploys, exits 1. The `Ledger` table lands, but MySQL 5.7 parses-and-ignores `CHECK` constraints (they
+need 8.0.16), so SchemaSmith emits the table without the check and records a downgrade — and the
+downgrade makes the run finish as incomplete. Deploy
 the identical package to MySQL 8.0 and the check is created — same package, target decides.
+
+> **On 2.7.x** the same run exits 0; the check is still left out and the downgrade still recorded.
 
 To see the refusal instead, flip the knob for one run:
 ```bash
@@ -102,9 +110,11 @@ SmithySettings_Target__UnsupportedFeaturePolicy=fail schemaquench --ConfigFile:q
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"     # macOS / Linux
 ```
 
-Exit 0. `Ledger` deploys, but MariaDB 10.2 is below both features it declares: the **descending**
+Deploys, exits 1. `Ledger` lands, but MariaDB 10.2 is below both features it declares: the **descending**
 index key part (10.8) is stored ascending, and the **invisible** index (10.6) is created visible.
-Each records its own `downgraded` row — two lines in the summary.
+Each records its own `downgraded` row — two lines in the summary — and the run finishes as incomplete.
+
+> **On 2.7.x** the same run exits 0; both indexes are still downgraded the same way.
 
 ---
 

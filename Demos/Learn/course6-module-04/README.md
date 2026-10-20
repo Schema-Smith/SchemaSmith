@@ -1,5 +1,7 @@
 # Course 6, Module 4 — Runtime validation gates (validation scripts) (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (server-validation failure exits 2): delete the "On 2.7.x" callouts -->
+
 **Goal:** make a deployment refuse the wrong server and refuse to run an older release over a newer one — before it touches the schema. This lab exercises SchemaQuench's runtime validation gates: the product-level `ValidationScript` (a server-identity / dependency / version gate) and the template-level `BaselineValidationScript` + `VersionStampScript` (the anti-rollback pairing). SQL Server, PostgreSQL, MySQL, and MariaDB.
 
 ## The scenario
@@ -56,10 +58,12 @@ The gate fails immediately:
 
 ```
 Validate Server
-Invalid server for this product
+FAILED: Invalid server for this product
 ```
 
-Exit code 3. Nothing is deployed — the quench never reaches a target database. Restore `DependencyDb` to `shop_tenant_a`.
+Exit code 2. Nothing is deployed — the quench never reaches a target database. Restore `DependencyDb` to `shop_tenant_a`.
+
+> **On 2.7.x** the run ends with `System.Exception: Invalid server for this product` and a stack trace instead of the `FAILED:` line, and exits `3`.
 
 <!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/v1/Package/Product.json" set ScriptTokens.DependencyDb '"shop_tenant_a"' -->
 
@@ -125,4 +129,6 @@ To return to a clean first-deploy state:
 
 ## Cross-platform
 
-The workflow is identical on all four engines; only the native SQL spelling differs. The admin database the product `ValidationScript` runs against is `master` (SQL Server), `postgres` (PostgreSQL), or `information_schema` (MySQL, MariaDB). Identifier quoting and types follow each engine (`dbo` + `SYSNAME`/`INT`; lowercase `public` + `text`/`integer`; backtick-quoted + `VARCHAR`/`INT` on MySQL and MariaDB). The gate names, the abort messages, and the exit codes (3 for a failed server validation, 2 for a failed baseline) are the same everywhere.
+The workflow is identical on all four engines; only the native SQL spelling differs. The admin database the product `ValidationScript` runs against is `master` (SQL Server), `postgres` (PostgreSQL), or `information_schema` (MySQL, MariaDB). Identifier quoting and types follow each engine (`dbo` + `SYSNAME`/`INT`; lowercase `public` + `text`/`integer`; backtick-quoted + `VARCHAR`/`INT` on MySQL and MariaDB). The gate names, the abort messages, and the exit code (2, for a failed server validation and a failed baseline alike) are the same everywhere.
+
+> **On 2.7.x** a failed server validation exits `3`, not `2`, on every engine.

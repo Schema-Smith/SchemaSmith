@@ -1,0 +1,23 @@
+{
+  "Source": {
+    "Platform": "MySQL",
+    "Server": "localhost",
+    "Port": "13306",
+    "User": "root",
+    "Password": "Learn!Passw0rd",
+    "Database": "learn",
+    "ConnectionProperties": {}
+  },
+  "ContentPath": "./extracted",
+  "ScriptPath": "./extracted",
+  "Tables": [
+    {
+      "Name": "countrycode",
+      "KeyColumns": "code"
+    }
+  ],
+  "ShouldCast": {
+    "OutputContentFiles": true,
+    "OutputScripts": true
+  }
+}

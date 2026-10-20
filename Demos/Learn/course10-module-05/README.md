@@ -1,5 +1,7 @@
 # Course 10 · Module 5 — Retiring the gates
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (MinimumVersion refusal exits 2): delete the "On 2.7.x" callouts -->
+
 This is the finale. Across Modules 1–4 you built version gates — the engine adapting its own
 DDL, `ShouldApplyExpression` on the scripts you wrote, two shapes of one query, the oldest tier's
 encoding switch. Every one of those gates was **debt with a payoff date.** This module collects
@@ -102,10 +104,12 @@ schemaquench --ConfigFile:quench.settings.after.pg12.json --LogPath:"$PWD/logs"
 ```
 
 ```
-One or more target servers are below the product's declared MinimumVersion; aborting before any deployment:
+FAILED: One or more target servers are below the product's declared MinimumVersion; aborting before any deployment:
   localhost: detected version 12 is below the product's declared MinimumVersion 16
 ```
-Non-zero exit (3); nothing deployed.
+Non-zero exit (2); nothing deployed.
+
+> **On 2.7.x** the refusal surfaces as an unhandled exception, `System.Exception: One or more target servers are below the product's declared MinimumVersion; aborting before any deployment:` followed by a stack trace, and the exit code is 3; nothing is deployed either way.
 
 That refusal is the point of Part 2 of the retirement. Without the `MinimumVersion` bump, the
 gate is simply gone and a forgotten PG12 server would sail past pre-flight and fail deep in the
@@ -178,8 +182,11 @@ dbo.Gadget.Legacy.json
 dbo.Gadget.Modern.json
 
 $ schemaquench --Validate --SchemaPackagePath:./package
-0 error(s), 0 warning(s)
+WARN [SS-TOK-003] ./package\Product.json: ScriptTokens entry 'MainDb' (defined in ./package\Product.json) is never referenced anywhere in the package.
+0 error(s), 1 warning(s)
 ```
+
+The one warning is SchemaTongs' doing, not the gate's: the re-extraction rewrote `Product.json`, adding a `MainDb` token nothing uses and dropping keys it doesn't own, `DropTablesRemovedFromProduct` among them ([#551](https://github.com/Schema-Smith/SchemaSmith/issues/551)). Put the file back as it was before you deploy this package again.
 
 This is why a token-gated variant is safe to keep in a package indefinitely: extracting the live
 shape doesn't duplicate it or lose the gate. The gate is transitional by design — you author it,
