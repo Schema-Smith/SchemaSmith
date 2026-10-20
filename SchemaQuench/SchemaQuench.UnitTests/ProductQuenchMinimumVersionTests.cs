@@ -115,6 +115,43 @@ namespace SchemaQuench.UnitTests
             }
         }
 
+        [TestCase("OnlineApply", "Sometimes", "OnlineApply must be Off, Prefer or Require, not 'Sometimes'")]
+        [TestCase("OnlineApplyMaxDuration", "0", "OnlineApplyMaxDuration must be a whole number of minutes")]
+        public void ValidateOnlineApply_RefusesAValueItCannotRead_BeforeAnythingRuns(string key, string value, string message)
+        {
+            lock (FactoryContainer.SharedLockObject)
+            {
+                FactoryContainer.Clear();
+                try
+                {
+                    ConfigureProduct("PostgreSQL", minimumVersion: "");
+                    FactoryContainer.Resolve<IConfigurationRoot>()[key] = value;
+                    var quench = new StubDetectProductQuench("160004");
+
+                    var ex = Assert.Throws<RunFailedException>(() => quench.ValidateOnlineApply());
+                    Assert.That(ex!.Message, Does.Contain(message));
+                }
+                finally { FactoryContainer.Clear(); }
+            }
+        }
+
+        [Test]
+        public void ValidateOnlineApply_TakesTheValuesItCanRead()
+        {
+            lock (FactoryContainer.SharedLockObject)
+            {
+                FactoryContainer.Clear();
+                try
+                {
+                    ConfigureProduct("PostgreSQL", minimumVersion: "");
+                    FactoryContainer.Resolve<IConfigurationRoot>()["OnlineApply"] = "prefer";
+                    FactoryContainer.Resolve<IConfigurationRoot>()["OnlineApplyMaxDuration"] = "60";
+                    Assert.DoesNotThrow(() => new StubDetectProductQuench("160004").ValidateOnlineApply());
+                }
+                finally { FactoryContainer.Clear(); }
+            }
+        }
+
         [Test]
         public void ValidateMinimumVersion_DoesNotThrow_WhenDetectedMeetsFloor()
         {

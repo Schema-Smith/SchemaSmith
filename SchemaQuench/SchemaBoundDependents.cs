@@ -4,10 +4,11 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace SchemaQuench;
 
-public enum SchemaBoundDependentKind { Module, IndexedView, CheckConstraint, ComputedColumn, Other }
+public enum SchemaBoundDependentKind { Module, IndexedView, CheckConstraint, ComputedColumn, SecurityPolicy, Other }
 
 /// <summary>
 /// One object SQL Server will not let a module change under: a schema-bound view or function, an indexed view, a
@@ -31,10 +32,20 @@ public sealed record SchemaBoundDependent(
 /// <summary>What the package declares, keyed by lower-cased bare names, so a dependent can be told from a stranger.</summary>
 public sealed record DeclaredTable(ISet<string> CheckConstraints, ISet<string> ComputedColumns, ISet<string> Indexes);
 
-public sealed record DeclaredObjects(ISet<string> Modules, ISet<string> IndexedViews, IReadOnlyDictionary<string, DeclaredTable> Tables)
+public sealed record DeclaredObjects(ISet<string> Modules, ISet<string> IndexedViews, IReadOnlyDictionary<string, DeclaredTable> Tables,
+    ISet<string> SecurityPolicies = null)
 {
     public static string Key(string schema, string name) => $"{Bare(schema)}.{Bare(name)}";
     public static string Bare(string name) => (name ?? "").Trim().TrimStart('[').TrimEnd(']').Trim().ToLowerInvariant();
+
+    private static readonly Regex CreateSecurityPolicy = new(
+        @"CREATE\s+SECURITY\s+POLICY\s+(?:(?<schema>\[(?:[^\]]|\]\])+\]|\w+)\s*\.\s*)?(?<name>\[(?:[^\]]|\]\])+\]|\w+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>The key of each security policy a script creates.</summary>
+    public static IEnumerable<string> SecurityPoliciesCreatedBy(IEnumerable<string> batches) =>
+        batches.SelectMany(b => CreateSecurityPolicy.Matches(b ?? "").Select(m =>
+            Key(m.Groups["schema"].Success ? m.Groups["schema"].Value : "dbo", m.Groups["name"].Value)));
 }
 
 public sealed record SchemaBoundDrop(SchemaBoundDependent Dependent, IReadOnlyList<string> Statements, string AuditType, string AuditName);
@@ -91,7 +102,9 @@ OPTION (MAXRECURSION 32)";
             var minorId = reader.GetInt32(1);
             var type = reader.GetString(3).Trim();
             var isIndexedView = reader.GetInt32(9) == 1;
-            var kind = minorId > 0 ? SchemaBoundDependentKind.ComputedColumn
+            // A security policy's dependency rows carry its predicate's id as the minor id, so its type is read first.
+            var kind = type == "SP" ? SchemaBoundDependentKind.SecurityPolicy
+                : minorId > 0 ? SchemaBoundDependentKind.ComputedColumn
                 : type == "C" ? SchemaBoundDependentKind.CheckConstraint
                 : type == "V" && isIndexedView ? SchemaBoundDependentKind.IndexedView
                 : type is "V" or "FN" or "IF" or "TF" ? SchemaBoundDependentKind.Module
@@ -102,6 +115,9 @@ OPTION (MAXRECURSION 32)";
             // A computed column's referencing object is its table, so the table is the parent; a constraint's parent is in the catalog.
             var parentSchema = kind == SchemaBoundDependentKind.ComputedColumn ? objectSchema : reader.IsDBNull(6) ? null : reader.GetString(6);
             var parentName = kind == SchemaBoundDependentKind.ComputedColumn ? objectName : reader.IsDBNull(7) ? null : reader.GetString(7);
+            // One row per predicate: the policy is one dependent, dropped once.
+            if (kind == SchemaBoundDependentKind.SecurityPolicy
+                && results.Exists(r => r.Kind == kind && r.Schema == objectSchema && r.Name == objectName)) continue;
             results.Add(new SchemaBoundDependent(kind, objectSchema, objectName, parentSchema, parentName,
                 reader.IsDBNull(8) ? null : reader.GetString(8),
                 reader.GetInt32(2), reader.GetInt32(10) == 1, TypeDescription(type), indexes));
@@ -132,6 +148,10 @@ OPTION (MAXRECURSION 32)";
             {
                 case SchemaBoundDependentKind.Module when declared.Modules.Contains(DeclaredObjects.Key(d.Schema, d.Name)):
                     drops.Add(new SchemaBoundDrop(d, [$"DROP {(d.TypeDescription == "view" ? "VIEW" : "FUNCTION")} {Q(d.Schema)}.{Q(d.Name)}"], "schemaBoundModule", $"{d.Schema}.{d.Name}"));
+                    break;
+                // A schema-bound security policy binds its predicate functions; the package's own script puts it back.
+                case SchemaBoundDependentKind.SecurityPolicy when declared.SecurityPolicies?.Contains(DeclaredObjects.Key(d.Schema, d.Name)) == true:
+                    drops.Add(new SchemaBoundDrop(d, [$"DROP SECURITY POLICY {Q(d.Schema)}.{Q(d.Name)}"], "securityPolicy", $"{d.Schema}.{d.Name}"));
                     break;
                 case SchemaBoundDependentKind.IndexedView when declared.IndexedViews.Contains(DeclaredObjects.Key(d.Schema, d.Name)):
                     drops.Add(new SchemaBoundDrop(d, [$"DROP VIEW {Q(d.Schema)}.{Q(d.Name)}"], "indexedView", $"{d.Schema}.{d.Name}"));

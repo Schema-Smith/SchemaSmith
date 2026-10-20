@@ -269,13 +269,16 @@ MissingTablesAndColumns
         }
     }
 
-    [Test]
-    // A failed deploy of the same product to another database keeps its resume point through a successful run here.
-    public void ShouldKeepAnotherTargetsCheckpoint_WhenTheRunSucceeds()
+    // A failed deploy of the same product to another database keeps its resume point through a successful run here,
+    // a plain run as well as a resumed one: the plain run was the one that deleted every checkpoint of the product.
+    [TestCase("--SkipKindlingForge")]
+    [TestCase("--SkipKindlingForge --ResumeQuench")]
+    public void ShouldKeepAnotherTargetsCheckpoint_WhenTheRunSucceeds(string commandLine)
     {
         lock (FactoryContainer.SharedLockObject)
         {
             SetupSharedMocks();
+            _environment.CommandLine.Returns(commandLine);
 
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "ValidProduct");
             FactoryContainer.Resolve<IConfigurationRoot>()["CheckpointDirectory"] = _checkpointDir;

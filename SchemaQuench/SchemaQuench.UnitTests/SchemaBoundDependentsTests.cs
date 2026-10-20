@@ -29,6 +29,31 @@ public class SchemaBoundDependentsTests
         new(new HashSet<string>(checks ?? []), new HashSet<string>(computed ?? []), new HashSet<string>(indexes ?? []));
 
     [Test]
+    public void ADeclaredSecurityPolicy_IsDropped_AndAnUndeclaredOneStopsTheChange()
+    {
+        var policy = new SchemaBoundDependent(SchemaBoundDependentKind.SecurityPolicy, "dbo", "Sales Filter", null, null, null, 1, false, "security policy", []);
+        var declared = new DeclaredObjects(new HashSet<string>(), new HashSet<string>(), new Dictionary<string, DeclaredTable>(), new HashSet<string> { "dbo.sales filter" });
+
+        var plan = SchemaBoundDependents.Plan([policy], declared);
+        var stopped = SchemaBoundDependents.Plan([policy], Declared());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.CanProceed, Is.True);
+            Assert.That(plan.Drops.Single().Statements, Is.EqualTo(new[] { "DROP SECURITY POLICY [dbo].[Sales Filter]" }));
+            Assert.That(plan.Drops.Single().AuditType, Is.EqualTo("securityPolicy"));
+            Assert.That(stopped.CanProceed, Is.False, "a policy no script of the package creates is not SchemaSmith's to drop");
+        });
+    }
+
+    [TestCase("CREATE SECURITY POLICY [dbo].[Sales Filter] ADD FILTER PREDICATE dbo.f(Rep) ON dbo.Sales", "dbo.sales filter")]
+    [TestCase("EXEC (N'CREATE SECURITY POLICY dbo.[Sales Filter] ADD FILTER PREDICATE dbo.f(Rep) ON dbo.Sales')", "dbo.sales filter")]
+    [TestCase("create security policy rls.p1 add filter predicate rls.f(x) on dbo.t", "rls.p1")]
+    [TestCase("CREATE SECURITY POLICY p2 ADD FILTER PREDICATE dbo.f(x) ON dbo.t", "dbo.p2")]
+    public void SecurityPoliciesCreatedBy_ReadsThePolicyAScriptCreates(string script, string key) =>
+        Assert.That(DeclaredObjects.SecurityPoliciesCreatedBy([script]), Is.EqualTo(new[] { key }));
+
+    [Test]
     public void DeclaredModules_AreDroppedDeepestFirst()
     {
         var plan = SchemaBoundDependents.Plan([Module("Inner", 1), Module("Outer", 2)], Declared(modules: ["dbo.inner", "dbo.outer"]));

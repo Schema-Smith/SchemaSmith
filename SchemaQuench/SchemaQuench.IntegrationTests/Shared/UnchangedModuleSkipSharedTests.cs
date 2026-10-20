@@ -2,6 +2,7 @@
 
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
 using Schema.Domain;
 
@@ -79,6 +80,37 @@ public abstract class UnchangedModuleSkipSharedTests : ObjectScriptDeployFixture
         Assert.That(fifth.Values, Is.All.EqualTo(ScriptOutcome.Unchanged), "the re-applied function must be stamped again: " + Describe(fifth));
     }
 
+    // A view takes its table's columns when it is created, so its text and its rendering stayed as stamped while the
+    // table grew: a SELECT * view skipped as unchanged never showed a column the same deploy added.
+    [Test]
+    public void ASelectStarView_PicksUpAColumnTheSameDeployAddsToItsTable_AndIsStampedAgain()
+    {
+        var starView = Scripts["Views"].Replace("SELECT x FROM", "SELECT * FROM").Replace("select `x` from", "select * from");
+        Assert.That(starView, Is.Not.EqualTo(Scripts["Views"]), "setup: the view must read every column");
+        var scripts = new Dictionary<string, string>(Scripts) { ["Views"] = starView };
+        var schema = Platform switch { Platform.SqlServer => "dbo", Platform.PostgreSQL => "public", _ => MainDb };
+        long ViewColumns() => Count($"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = 'v_unchanged'");
+
+        WritePackage(scripts);
+        Deploy();
+        Assert.That(Deploy().Outcomes["Views"], Is.EqualTo(ScriptOutcome.Unchanged), "setup: the view is stamped");
+        Assert.That(ViewColumns(), Is.EqualTo(2), "setup");
+
+        var widened = Regex.Replace(TableJson, @"\{ ""Name"": ""(\[?`?)w(\]?`?)"", ""DataType"": ""([^""]+)"", ""Nullable"": true \}",
+            m => m.Value + $@", {{ ""Name"": ""{m.Groups[1].Value}z{m.Groups[2].Value}"", ""DataType"": ""{m.Groups[3].Value}"", ""Nullable"": true }}");
+        Assert.That(widened, Is.Not.EqualTo(TableJson), "setup: the table gains a column");
+        WritePackage(scripts, tableJson: widened);
+        var third = Deploy();
+        Assert.Multiple(() =>
+        {
+            Assert.That(ViewColumns(), Is.EqualTo(3), "the view shows the column its table gained: " + third.Describe());
+            Assert.That(third.Outcomes["Views"], Is.EqualTo(ScriptOutcome.Applied));
+        });
+
+        var fourth = Deploy().Outcomes;
+        Assert.That(fourth.Values, Is.All.EqualTo(ScriptOutcome.Unchanged), "the re-run view is stamped again: " + Describe(fourth));
+    }
+
     [Test]
     public void AlwaysMarker_Sentinel_RunScriptsTwice_AndTheSettingOff_RunEveryTime()
     {
@@ -140,7 +172,7 @@ public abstract class UnchangedModuleSkipSharedTests : ObjectScriptDeployFixture
 
     private static string Describe(Dictionary<string, ScriptOutcome> outcomes) => string.Join(", ", outcomes.Select(kv => $"{kv.Key}={kv.Value}"));
 
-    private void WritePackage(Dictionary<string, string> scripts, string viewFileName = "v_unchanged.sql", bool customFolder = false)
+    private void WritePackage(Dictionary<string, string> scripts, string viewFileName = "v_unchanged.sql", bool customFolder = false, string tableJson = null)
     {
         // A folder declared without an ObjectType: the design's opt-out for scripts with side effects.
         var customFolderJson = customFolder ? """, { "FolderPath": "Custom", "QuenchSlot": "Objects" }""" : "";
@@ -149,7 +181,7 @@ public abstract class UnchangedModuleSkipSharedTests : ObjectScriptDeployFixture
             { "FolderPath": "Procedures", "QuenchSlot": "Objects", "ObjectType": "Procedures" }, { "FolderPath": "Triggers", "QuenchSlot": "AfterTablesObjects", "ObjectType": "Triggers" }
             """ + customFolderJson,
             "Views", "Functions", "Procedures", "Triggers", "Custom");
-        WriteFile("Tables", "unchanged_t.json", TableJson);
+        WriteFile("Tables", "unchanged_t.json", tableJson ?? TableJson);
         WriteFile("Views", viewFileName, scripts["Views"]);
         WriteFile("Functions", "f_unchanged.sql", scripts["Functions"]);
         WriteFile("Procedures", "p_unchanged.sql", scripts["Procedures"]);

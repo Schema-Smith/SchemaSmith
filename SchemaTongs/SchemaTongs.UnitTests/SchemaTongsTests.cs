@@ -1200,6 +1200,53 @@ public class SchemaTongsTests
         }
     }
 
+    // An overload is named with its argument types, so ObjectsToCast listing the routine's name matched none of them.
+    [TestCase("public.my_func")]
+    [TestCase("my_func")]
+    public void CastTemplate_PostgreSQL_ObjectListNamingARoutine_CastsEveryOverload(string listed)
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetUpMocks();
+            RegisterConfig(Platform.PostgreSQL, new Dictionary<string, string>
+            {
+                ["ShouldCast:Tables"] = "false",
+                ["ShouldCast:Schemas"] = "false",
+                ["ShouldCast:DomainTypes"] = "false",
+                ["ShouldCast:EnumTypes"] = "false",
+                ["ShouldCast:CompositeTypes"] = "false",
+                ["ShouldCast:Functions"] = "true",
+                ["ShouldCast:Aggregates"] = "false",
+                ["ShouldCast:Procedures"] = "false",
+                ["ShouldCast:Sequences"] = "false",
+                ["ShouldCast:Rules"] = "false",
+                ["ShouldCast:TableTriggers"] = "false",
+                ["ShouldCast:Views"] = "false",
+                ["ShouldCast:MaterializedViews"] = "false",
+                ["ShouldCast:ObjectList"] = listed
+            });
+            RegisterConnectionFactory(Platform.PostgreSQL);
+
+            var rows = new[] { "public.my_func(integer)", "public.my_func(text)", "public.other(integer)" };
+            var row = -1;
+            var reader = Substitute.For<IDataReader>();
+            reader.Read().Returns(_ => ++row < rows.Length);
+            reader["Folder"].Returns("Functions");
+            reader["FullName"].Returns(_ => rows[row]);
+            reader["BaseName"].Returns(_ => rows[row][..rows[row].IndexOf('(')]);
+            reader["Code"].Returns(_ => $"CREATE OR REPLACE FUNCTION {rows[row]} RETURNS INT AS $$ SELECT 1 $$ LANGUAGE sql;");
+            _command.StubReaders(reader);
+
+            new SchemaTongs(Platform.PostgreSQL).CastTemplate();
+
+            _fileWrapper.Received(2).WriteAllText(Arg.Is<string>(s => s.Contains("my_func") && s.EndsWith(".sql")), Arg.Any<string>());
+            _fileWrapper.DidNotReceive().WriteAllText(Arg.Is<string>(s => s.Contains("other") && s.EndsWith(".sql")), Arg.Any<string>());
+
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
     [Test]
     public void CastTemplate_PostgreSQL_AggregatesOnly_CastsAggregates()
     {

@@ -50,6 +50,7 @@ public class SchemaBoundModuleChangeTests : ObjectScriptDeployFixture
 
     private static readonly string[] Drops =
     [
+        "IF OBJECT_ID('dbo.sb_filter') IS NOT NULL DROP SECURITY POLICY [dbo].[sb_filter]", "DROP FUNCTION IF EXISTS [dbo].[fn_sb_rep]",
         "DROP VIEW IF EXISTS [dbo].[vw_sb_hand]", "DROP VIEW IF EXISTS [dbo].[vw_sb_orders]", "DROP VIEW IF EXISTS [dbo].[iv_sb_orders]", "DROP TABLE IF EXISTS [dbo].[sb_orders]",
         "DROP FUNCTION IF EXISTS [dbo].[fn_sb_price]", "DELETE FROM SchemaSmith.ProductOwnership WHERE ProductName = 'SchemaBoundChangeProduct'"
     ];
@@ -98,6 +99,43 @@ public class SchemaBoundModuleChangeTests : ObjectScriptDeployFixture
             Assert.That(Count("SELECT COUNT(*) FROM sys.database_permissions WHERE class = 1 AND major_id = OBJECT_ID('dbo.iv_sb_orders') AND grantee_principal_id = USER_ID('sb_perm_user') AND permission_name = 'SELECT'"), Is.EqualTo(1),
                 "the grant on the indexed view has to be put back after the view pass re-creates it");
             Assert.That(second.Audit.Any(r => r.ObjectType == "indexedView" && r.Action == "dropped"), Is.True, "the manifest names the dropped indexed view; audit: " + second.DescribeAudit());
+        });
+    }
+
+    // A schema-bound security policy binds its predicate function. The policy's script is the package's, but the
+    // dependent walk knew only modules, so it called the policy undeclared and refused the function change.
+    [Test]
+    public void AChangedPredicateFunction_UnderADeclaredSchemaBoundSecurityPolicy_DropsIt_AndThePolicyComesBack()
+    {
+        static string Predicate(string body) =>
+            "SET ANSI_NULLS ON\r\nSET QUOTED_IDENTIFIER ON\r\nGO\r\n\r\n" +
+            $"CREATE OR ALTER FUNCTION [dbo].[fn_sb_rep](@qty INT) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS ok WHERE {body}\r\nGO\r\n";
+        const string policy = "IF OBJECT_ID(N'dbo.sb_filter') IS NULL\r\n" +
+                              "  EXEC(N'CREATE SECURITY POLICY [dbo].[sb_filter] ADD FILTER PREDICATE dbo.fn_sb_rep(qty) ON dbo.sb_orders WITH (STATE = ON, SCHEMABINDING = ON)')\r\n";
+        void Package(string body)
+        {
+            WritePackage("""
+                { "FolderPath": "Functions", "QuenchSlot": "Objects", "ObjectType": "Functions" },
+                { "FolderPath": "Security Policies", "QuenchSlot": "AfterTablesObjects", "ObjectType": "SecurityPolicies" }
+                """, "Functions", "Security Policies");
+            WriteFile("Functions", "fn_sb_price.sql", FunctionScript(2));
+            WriteFile("Functions", "fn_sb_rep.sql", Predicate(body));
+            WriteFile("Tables", "sb_orders.json", TableJson);
+            WriteFile("Security Policies", "sb_filter.sql", policy);
+        }
+
+        Package("@qty >= 0");
+        Deploy();
+        Assert.That(Count("SELECT COUNT(*) FROM sys.security_policies WHERE name = 'sb_filter'"), Is.EqualTo(1), "setup: the policy is in place");
+
+        Package("@qty >= 1");
+        var second = Deploy();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Scalar("SELECT OBJECT_DEFINITION(OBJECT_ID('dbo.fn_sb_rep'))")?.ToString(), Does.Contain("@qty >= 1"), "the changed predicate must have been applied: " + second.Describe());
+            Assert.That(Count("SELECT COUNT(*) FROM sys.security_policies WHERE name = 'sb_filter' AND is_schema_bound = 1"), Is.EqualTo(1), "the policy is back, still schema-bound");
+            Assert.That(second.Audit.Any(r => r.ObjectType == "securityPolicy" && r.Action == "dropped"), Is.True, "the manifest names the dropped policy; audit: " + second.DescribeAudit());
         });
     }
 

@@ -29,6 +29,7 @@ public class ScriptObjectFidelityTests
     private string _sourceDb = "";
     private string _targetDb = "";
     private bool _fullTextInstalled;
+    private bool _memoryOptimizedSupported;
     private readonly Dictionary<string, string> _scripts = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _warnings = [];
 
@@ -97,6 +98,25 @@ SELECT i.type_desc COLLATE DATABASE_DEFAULT + ':' + CASE WHEN i.is_primary_key =
             "the index forms, the named index or IGNORE_DUP_KEY were lost: " + script);
         cmd.CommandText = "SELECT COUNT(*) FROM sys.table_types tt JOIN sys.check_constraints ck ON ck.parent_object_id = tt.type_table_object_id WHERE tt.name = 'TT'";
         Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the CHECK was lost");
+    }
+
+    // A hash index takes no sort order, and a key scripted with ASC was refused when the type was re-created.
+    [Test]
+    public void MemoryOptimizedTableType_KeepsItsHashIndexAndBucketCount()
+    {
+        if (!_memoryOptimizedSupported) Assert.Ignore("This SQL Server edition does not support memory-optimized tables (IsXTPSupported = 0).");
+        using var conn = Open(_targetDb);
+        using var cmd = conn.CreateCommand();
+        var script = Script("DataTypes", "dbo.TTMem");
+        Deploy(cmd, script);
+
+        cmd.CommandText = @"
+SELECT CONVERT(VARCHAR(1), tt.is_memory_optimized) + ':' + i.type_desc COLLATE DATABASE_DEFAULT + ':' + CONVERT(VARCHAR(20), hi.bucket_count)
+  FROM sys.table_types tt
+  JOIN sys.hash_indexes hi ON hi.object_id = tt.type_table_object_id
+  JOIN sys.indexes i ON i.object_id = hi.object_id AND i.index_id = hi.index_id
+ WHERE tt.name = 'TTMem'";
+        Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("1:NONCLUSTERED HASH:1024"), "the engine rounds 1000 up to 1024; the script must carry it: " + script);
     }
 
     // ---- sequences -------------------------------------------------------------------------------------------
@@ -228,9 +248,16 @@ SELECT sq.name COLLATE DATABASE_DEFAULT + ':' + TYPE_NAME(sq.user_type_id) COLLA
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT FULLTEXTSERVICEPROPERTY('IsFullTextInstalled')";
         _fullTextInstalled = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+        cmd.CommandText = "SELECT CONVERT(INT, ISNULL(SERVERPROPERTY('IsXTPSupported'), 0))";
+        _memoryOptimizedSupported = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
         foreach (var db in new[] { _sourceDb, _targetDb })
         {
             Run(cmd, $"CREATE DATABASE [{db}]");
+            if (_memoryOptimizedSupported)
+                Run(cmd, $@"
+DECLARE @v_Path NVARCHAR(500) = (SELECT LEFT(physical_name, LEN(physical_name) - CHARINDEX('\', REVERSE(physical_name)) + 1) FROM sys.master_files WHERE database_id = DB_ID('{db}') AND file_id = 1);
+ALTER DATABASE [{db}] ADD FILEGROUP [MOD_fg] CONTAINS MEMORY_OPTIMIZED_DATA;
+EXEC('ALTER DATABASE [{db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' + @v_Path + '{db}_MOD'') TO FILEGROUP [MOD_fg]');");
             conn.ChangeDatabase(db);
             Run(cmd, "CREATE TYPE dbo.MyInt FROM INT NOT NULL");
             conn.ChangeDatabase("master");
@@ -249,6 +276,8 @@ CREATE TYPE dbo.TT AS TABLE (
     UNIQUE CLUSTERED (Code, Id) WITH (IGNORE_DUP_KEY = ON),
     CHECK (Amount >= 0)
 )");
+        if (_memoryOptimizedSupported)
+            Run(cmd, "CREATE TYPE dbo.TTMem AS TABLE (Id INT NOT NULL, Code INT NOT NULL, INDEX IX_Id HASH (Id) WITH (BUCKET_COUNT = 1000), PRIMARY KEY NONCLUSTERED (Code)) WITH (MEMORY_OPTIMIZED = ON)");
         Run(cmd, "CREATE SEQUENCE dbo.SqBig AS DECIMAL(38, 0) START WITH 1 INCREMENT BY 1 CACHE 50");
         Run(cmd, "CREATE SEQUENCE dbo.SqNoCache AS INT START WITH 5 INCREMENT BY 2 MINVALUE 0 MAXVALUE 100 CYCLE NO CACHE");
         Run(cmd, "CREATE SEQUENCE dbo.SqAlias AS dbo.MyInt START WITH 1 INCREMENT BY 1");

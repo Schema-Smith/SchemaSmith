@@ -53,7 +53,10 @@ public class ExtractionScopeTests
         using var cmd = conn.CreateCommand();
         foreach (var db in new[] { _sourceDb, _targetDb })
         {
-            cmd.CommandText = $"DROP DATABASE IF EXISTS \"{db}\" WITH (FORCE)";
+            // WITH (FORCE) is PostgreSQL 13; ending the sessions first works on every supported version.
+            cmd.CommandText = $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db}' AND pid <> pg_backend_pid()";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"DROP DATABASE IF EXISTS \"{db}\"";
             cmd.ExecuteNonQuery();
         }
     }

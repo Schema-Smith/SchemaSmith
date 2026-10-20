@@ -376,6 +376,21 @@ public class ProductQuench
         }
     }
 
+    // Read at the first table pass, a mistyped OnlineApply failed the deploy after the product's Before scripts and
+    // everything ahead of that pass had run. Checked here, it fails before anything is touched.
+    internal void ValidateOnlineApply()
+    {
+        try
+        {
+            DatabaseQuench.ResolveOnlineApply(_config[SettingsKeys.OnlineApply]);
+            DatabaseQuench.ResolveOnlineApplyMaxDuration(_config[SettingsKeys.OnlineApplyMaxDuration]);
+        }
+        catch (InvalidOperationException e)
+        {
+            throw new RunFailedException(e.Message);
+        }
+    }
+
     internal void ValidateMinimumVersion()
     {
         if (string.IsNullOrWhiteSpace(_product.MinimumVersion))
@@ -821,6 +836,8 @@ public class ProductQuench
             _progressLog.Warn($"PreventDrop value '{_config[SettingsKeys.PreventDrop]}' is not a recognized boolean (true/false) — the no-drop protection tier is NOT enabled.");
 
         LogProductInfo();
+
+        ValidateOnlineApply();
 
         TestServerConnections();
 

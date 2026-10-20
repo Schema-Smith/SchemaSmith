@@ -1,8 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace SchemaQuench;
 
@@ -19,18 +17,33 @@ public sealed record ChangeAuditRow(string ObjectType, string ObjectName, string
 /// </summary>
 public sealed class ChangeAuditCapture
 {
-    private readonly ConcurrentBag<ChangeAuditRow> _rows = new();
+    private readonly List<ChangeAuditRow> _rows = new();
+    private readonly object _gate = new();
     private volatile bool _instrumented;
 
     public bool Instrumented => _instrumented;
 
     public void MarkInstrumented() => _instrumented = true;
 
-    public void Record(string objectType, string objectName, string action, string mode = null) =>
-        _rows.Add(new ChangeAuditRow(objectType, objectName, action, mode));
+    public void Record(string objectType, string objectName, string action, string mode = null)
+    {
+        lock (_gate) _rows.Add(new ChangeAuditRow(objectType, objectName, action, mode));
+    }
 
-    public void RecordRan(string objectType, string objectName) =>
-        _rows.Add(new ChangeAuditRow(objectType, objectName, "ran"));
+    public void RecordRan(string objectType, string objectName) => Record(objectType, objectName, "ran");
 
-    public IReadOnlyList<ChangeAuditRow> Snapshot() => _rows.ToArray();
+    /// <summary>Withdraws one row recorded earlier, for a script skipped as unchanged that this run then runs after all.</summary>
+    public void Retract(string objectType, string objectName, string action)
+    {
+        lock (_gate)
+        {
+            var index = _rows.FindLastIndex(r => r.ObjectType == objectType && r.ObjectName == objectName && r.Action == action);
+            if (index >= 0) _rows.RemoveAt(index);
+        }
+    }
+
+    public IReadOnlyList<ChangeAuditRow> Snapshot()
+    {
+        lock (_gate) return _rows.ToArray();
+    }
 }

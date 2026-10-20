@@ -264,6 +264,7 @@ public class DatabaseQuench
     private int _mySqlServerVersionNum; // 0 until detected (major*100+minor); only meaningful for MySQL/MariaDb
     private int _sqlServerCompatibilityLevel; // 0 until detected; SQL-Server-only; gates JSON data delivery below 130 (B1 slice 2)
     private bool _skipUnchangedObjects = true; // Target:SkipUnchangedObjects (default true)
+    private bool _tablesChangedThisRun;
     private bool _stampWriteFailureLogged;
     private string _unsupportedFeaturePolicy; // Target:UnsupportedFeaturePolicy (warn | fail, default warn); general all-engine policy, not just the MySQL data-delivery gate
 
@@ -2708,6 +2709,8 @@ SET NOCOUNT ON
                 ChangeAudit?.Record(drop.AuditType, drop.AuditName, "dropped");
                 if (drop.Dependent.Kind == SchemaBoundDependentKind.Module)
                     droppedModuleScripts.AddRange(ScriptsCreating(drop.Dependent.Schema, drop.Dependent.Name));
+                if (drop.Dependent.Kind == SchemaBoundDependentKind.SecurityPolicy)
+                    droppedModuleScripts.AddRange(ScriptsCreatingSecurityPolicy(drop.Dependent.Schema, drop.Dependent.Name));
             }
         }
         catch (System.Data.Common.DbException ex)
@@ -2841,6 +2844,32 @@ SET NOCOUNT ON
                 script.Outcome = ScriptOutcome.Applied;
             }
         }
+        RequeueViewsOverChangedTables(rows);
+    }
+
+    // A view takes its table's columns when it is created (SELECT * is expanded then, or its metadata fixed), so after a
+    // table change its text and its rendering can both match the stamp while it still describes the old table. When this
+    // run changed a table or a column, every view skipped as unchanged goes back to the after-tables pass, and no view is
+    // skipped from here on.
+    private void RequeueViewsOverChangedTables(IReadOnlyList<ChangeAuditRow> rows)
+    {
+        if (!rows.Any(r => r.ObjectType is "table" or "column" && r.Action is "created" or "modified" or "dropped" or "renamed" or "rebuilt")) return;
+        _tablesChangedThisRun = true;
+        foreach (var script in _iteration.ObjectScripts.Concat(_iteration.AfterTablesObjectScripts)
+                     .Where(s => s.Outcome == ScriptOutcome.Unchanged && ModuleScriptIdentity.Parse(s.Batches, _product.Platform) is { Kind: ModuleKind.View }))
+        {
+            script.HasBeenQuenched = false;
+            script.Outcome = ScriptOutcome.Applied;
+            ChangeAudit?.Retract(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged");
+        }
+    }
+
+    private List<SqlScript> ScriptsCreatingSecurityPolicy(string schema, string name)
+    {
+        var key = DeclaredObjects.Key(schema, name);
+        return _iteration.ObjectScripts.Concat(_iteration.AfterTablesObjectScripts)
+            .Where(s => DeclaredObjects.SecurityPoliciesCreatedBy(s.Batches).Contains(key))
+            .ToList();
     }
 
     private List<SqlScript> ScriptsCreating(string schema, string name)
@@ -2868,7 +2897,10 @@ SET NOCOUNT ON
                 new HashSet<string>((table["Columns"] as JArray ?? []).Where(c => !string.IsNullOrWhiteSpace(c["ComputedExpression"]?.ToString())).Select(c => DeclaredObjects.Bare(c["Name"]?.ToString()))),
                 new HashSet<string>((table["Indexes"] as JArray ?? []).Select(i => DeclaredObjects.Bare(i["Name"]?.ToString()))));
         }
-        return new DeclaredObjects(modules, indexedViews, tables);
+        var securityPolicies = new HashSet<string>(
+            _iteration.ObjectScripts.Concat(_iteration.AfterTablesObjectScripts).SelectMany(s => DeclaredObjects.SecurityPoliciesCreatedBy(s.Batches)),
+            StringComparer.Ordinal);
+        return new DeclaredObjects(modules, indexedViews, tables, securityPolicies);
     }
 
     private static IEnumerable<JObject> JsonObjects(string json)
@@ -3069,7 +3101,7 @@ SET NOCOUNT ON
             {
                 if (reader.Read()) { storedText = reader.GetString(0); storedDefinition = reader.GetString(1); }
             }
-            if (storedText == textHash)
+            if (storedText == textHash && !(_tablesChangedThisRun && identity.Kind == ModuleKind.View))
             {
                 var rendering = ModuleDefinitionReader.Read(destCmd, _product.Platform, identity);
                 unchanged = rendering != null && Sha256(rendering) == storedDefinition;

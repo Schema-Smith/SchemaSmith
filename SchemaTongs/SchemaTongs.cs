@@ -1444,7 +1444,8 @@ SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key, i.is_uniq
                             reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetInt32(8), [], []));
                     var column = $"[{Identifier.EscapeDelimited(reader.GetString(10), Platform.SqlServer)}]";
                     if (reader.GetBoolean(9)) indexes[^1].Includes.Add(column);
-                    else indexes[^1].Keys.Add(column + (reader.GetBoolean(11) ? " DESC" : " ASC"));
+                    // A hash index takes no sort order: ASC or DESC on its key is refused.
+                    else indexes[^1].Keys.Add(column + (indexes[^1].TypeDesc.Contains("HASH", StringComparison.OrdinalIgnoreCase) ? "" : reader.GetBoolean(11) ? " DESC" : " ASC"));
                 }
             }
 
@@ -2860,10 +2861,11 @@ SELECT t.schemaname, t.tablename, c.relkind, c.relispartition,
         {
             if (_objectsToCast.Length > 0 && !_objectsToCast.Contains($"{schema}.{table}".ToLower()) && !_objectsToCast.Contains(table.ToLower())) continue;
 
+            // A warning and a skip, not an error: the rest of the database extracts, and the run exits 1 as for any skip.
             if (refusal != null)
             {
-                _progressLog.Error($"    ERROR: {schema}.{table} {refusal}");
-                _stats.TableErrors++;
+                _progressLog.Warn($"    WARNING: {schema}.{table} {refusal}");
+                _stats.SkippedObjects++;
                 continue;
             }
 
@@ -3718,6 +3720,16 @@ SELECT mv.schemaname, mv.matviewname
         }
     }
 
+    // An overloaded routine is named with its argument types (public.f(integer)), so listing public.f, or f, takes every
+    // overload as it takes a routine that has none; the full signature takes that one alone.
+    private bool IsListedToCast(string fullName)
+    {
+        var open = fullName.IndexOf('(');
+        var baseName = open > 0 ? fullName[..open] : fullName;
+        return new[] { fullName, baseName }.Any(n =>
+            _objectsToCast.Contains(n.ToLower()) || _objectsToCast.Contains(Identifier.SplitQualifiedName(n, _platform).Name.ToLower()));
+    }
+
     private void PerformPostgreSqlCasting(IDbCommand command, string castType)
     {
         _progressLog.Info($"Casting {castType}");
@@ -3730,7 +3742,7 @@ SELECT mv.schemaname, mv.matviewname
                 var castPath = Path.Combine(_templatePath, reader["Folder"].ToString());
                 DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
                 var fullName = reader["FullName"].ToString();
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(fullName.ToLower()) && !_objectsToCast.Contains(Identifier.SplitQualifiedName(fullName, _platform).Name.ToLower())) continue;
+                if (_objectsToCast.Length > 0 && !IsListedToCast(fullName)) continue;
 
                 // Schema-template mode: skip objects outside the source schema; emit unqualified filenames.
                 // Delimiter-aware split so a dotted delimited schema name ([my.schema]) is not mis-split (#272).

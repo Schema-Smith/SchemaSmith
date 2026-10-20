@@ -25,7 +25,11 @@ public class DatafixLeastPrivilegeTests : ObjectScriptDeployFixture
     protected override string ProductName => "DatafixLeastPrivilege";
 
     private const string Role = "ss_datafix_lp";
-    private readonly string _password = "Df" + Guid.NewGuid().ToString("N")[..20];
+    // A fresh password for each test: PostgreSQL drops a role that still has a session, and a pooled connection of the
+    // dropped role, keyed by the same name and password, came back to the next test without its rights.
+    private string _password = NewPassword();
+
+    private static string NewPassword() => "Df" + Guid.NewGuid().ToString("N")[..20];
 
     private void DropAll()
     {
@@ -38,12 +42,16 @@ public class DatafixLeastPrivilegeTests : ObjectScriptDeployFixture
     }
 
     [SetUp]
-    public void SetUp() => DropAll();
+    public void SetUp()
+    {
+        DropAll();
+        _password = NewPassword();
+    }
 
     [TearDown]
     public void TearDown() => DropAll();
 
-    private void ArrangeTheDatafix(bool withTrackingGrants)
+    private void ArrangeTheDatafix(bool withTrackingGrants, string trackingGrants = "SELECT, INSERT, DELETE")
     {
         WritePackage("""{ "FolderPath": "Before", "QuenchSlot": "Before" }""", "Before");
         WriteFile("Tables", "public.df_price.json", """
@@ -64,7 +72,7 @@ public class DatafixLeastPrivilegeTests : ObjectScriptDeployFixture
             GRANT EXECUTE ON ALL PROCEDURES IN SCHEMA public TO {Role};
             """);
         if (withTrackingGrants)
-            Exec($"GRANT USAGE ON SCHEMA \"SchemaSmith\" TO {Role}; GRANT SELECT, INSERT, DELETE ON \"SchemaSmith\".\"CompletedMigrationScripts\" TO {Role}");
+            Exec($"GRANT USAGE ON SCHEMA \"SchemaSmith\" TO {Role}; GRANT {trackingGrants} ON \"SchemaSmith\".\"CompletedMigrationScripts\" TO {Role}");
         WriteFile("Before", "fix-price.sql", "UPDATE public.df_price SET price = price + 1 WHERE id = 1;");
     }
 
@@ -96,6 +104,23 @@ public class DatafixLeastPrivilegeTests : ObjectScriptDeployFixture
             Assert.That(Count("SELECT price FROM public.df_price WHERE id = 1"), Is.EqualTo(10), "the fix did not run, so it cannot run twice");
             Assert.That(result.Log.Any(l => l != null && l.Contains("CompletedMigrationScripts") && l.Contains("would run again")), Is.True,
                 "the stop names the table and why; log: " + string.Join(" | ", result.Log.Where(l => l != null && l.StartsWith("ERROR"))));
+        });
+    }
+
+    // The record half: a login that can read the run-once record but not write to it applied the fix and lost the
+    // record, so the next deploy ran it again. The script now fails, naming why.
+    [Test]
+    public void ADatafixDeploy_ThatCannotRecordTheScript_FailsTheScript_AndSaysItWouldRunAgain()
+    {
+        ArrangeTheDatafix(withTrackingGrants: true, trackingGrants: "SELECT");
+
+        var result = Deploy(updateTables: false, login: (Role, _password), expectSuccess: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Log.Any(l => l != null && l.Contains("could not be recorded as run") && l.Contains("run it again")), Is.True,
+                "the failure says the script ran and why it will run again; log: " + string.Join(" | ", result.Log.Where(l => l != null && l.StartsWith("ERROR"))));
+            Assert.That(Count("SELECT price FROM " + "public.df_price" + " WHERE id = 1"), Is.EqualTo(11), "it applied once in this run");
         });
     }
 

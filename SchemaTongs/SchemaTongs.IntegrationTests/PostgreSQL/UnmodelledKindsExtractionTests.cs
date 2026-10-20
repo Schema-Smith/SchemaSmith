@@ -38,6 +38,8 @@ public class UnmodelledKindsExtractionTests
     private string _targetDb = "";
     private string _productPath = "";
     private readonly List<string> _errors = [];
+    private readonly List<string> _warnings = [];
+    private int _extractExitCode;
     private int _major;
 
     private string TemplatePath => Path.Join(_productPath, "Templates", TemplateName);
@@ -65,7 +67,10 @@ public class UnmodelledKindsExtractionTests
         {
             foreach (var db in new[] { _sourceDb, _targetDb })
             {
-                cmd.CommandText = $"DROP DATABASE IF EXISTS \"{db}\" WITH (FORCE)";
+                // WITH (FORCE) is PostgreSQL 13; ending the sessions first works on every supported version.
+                cmd.CommandText = $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db}' AND pid <> pg_backend_pid()";
+                cmd.ExecuteNonQuery();
+                cmd.CommandText = $"DROP DATABASE IF EXISTS \"{db}\"";
                 cmd.ExecuteNonQuery();
             }
         }
@@ -111,16 +116,20 @@ public class UnmodelledKindsExtractionTests
         Assert.That(declared, Is.SupersetOf(new[] { "RangeTypes", "TextSearchConfigurations", "Operators", "Casts", "EventTriggers" }), template.ToString());
     }
 
+    // Skipped with a warning rather than failing the run: inheritance is how older databases partition, and the rest of
+    // such a database extracts. A skipped object is exit 1, as every other one SchemaTongs skips, not the failure's 2.
     [Test]
-    public void AnInheritanceChildAndATypedTable_AreRefusedByName_AndTheParentIsExtracted()
+    public void AnInheritanceChildAndATypedTable_AreSkippedWithAWarningByName_AndTheParentIsExtracted()
     {
         var tables = Directory.GetFiles(Path.Join(TemplatePath, "Tables")).Select(Path.GetFileName).ToList();
         Assert.Multiple(() =>
         {
             Assert.That(tables, Does.Contain("app.parent.json"), string.Join(", ", tables));
             Assert.That(tables.Where(t => t!.Contains("child") || t.Contains("typed")), Is.Empty, string.Join(", ", tables));
-            Assert.That(_errors.Any(e => e.Contains("app.child") && e.Contains("inherits")), Is.True, string.Join(" | ", _errors));
-            Assert.That(_errors.Any(e => e.Contains("app.typed") && e.Contains("typed table")), Is.True, string.Join(" | ", _errors));
+            Assert.That(_warnings.Any(e => e.Contains("app.child") && e.Contains("inherits")), Is.True, string.Join(" | ", _warnings));
+            Assert.That(_warnings.Any(e => e.Contains("app.typed") && e.Contains("typed table")), Is.True, string.Join(" | ", _warnings));
+            Assert.That(_errors.Where(e => e.Contains("app.child") || e.Contains("app.typed")), Is.Empty, "a warning, not an error");
+            Assert.That(_extractExitCode, Is.EqualTo(1), "skipped, as any object SchemaTongs cannot write, not failed");
             Assert.That(Written("Triggers").Where(t => t.Contains("child") || t.Contains("typed")), Is.Empty, "a refused table's triggers name a table the package lacks");
         });
     }
@@ -232,6 +241,7 @@ public class UnmodelledKindsExtractionTests
         errorLog.When(l => l.Error(Arg.Any<object>())).Do(ci => _errors.Add(ci.ArgAt<object>(0)?.ToString() ?? ""));
         var progressLog = Substitute.For<ILog>();
         progressLog.When(l => l.Error(Arg.Any<object>())).Do(ci => _errors.Add(ci.ArgAt<object>(0)?.ToString() ?? ""));
+        progressLog.When(l => l.Warn(Arg.Any<object>())).Do(ci => _warnings.Add(ci.ArgAt<object>(0)?.ToString() ?? ""));
         lock (FactoryContainer.SharedLockObject)
         {
             FactoryContainer.Clear();
@@ -240,7 +250,9 @@ public class UnmodelledKindsExtractionTests
             FactoryContainer.Register(Substitute.For<IEnvironment>());
             LogFactory.Register("ErrorLog", errorLog);
             LogFactory.Register("ProgressLog", progressLog);
-            new SchemaTongs(Platform.PostgreSQL).CastTemplate();
+            var tongs = new SchemaTongs(Platform.PostgreSQL);
+            tongs.CastTemplate();
+            _extractExitCode = tongs.ExitCode;
             FactoryContainer.Clear();
             LogFactory.Clear();
         }
