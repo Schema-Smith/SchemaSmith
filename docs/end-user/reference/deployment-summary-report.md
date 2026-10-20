@@ -252,7 +252,7 @@ Where the counts are the summary, `details[]` is the itemized list — one row p
 
 These appear as `details[]` rows with their real `objectType` and `action` even though no top-level count field aggregates them — the detail is preserved even where the summary doesn't bucket it.
 
-A row also carries `mode` when [`OnlineApply`](configuration.md#onlineapply) decided how the change ran: `online`, `resumable`, or `unavailable` for the plain statement where the online one could not be used. A row has no `mode` key at all when nothing chose a form, so a deploy with `OnlineApply` off reports exactly what it did before the field existed (schema version 1.2 added it).
+A row also carries `mode` when [`OnlineApply`](configuration.md#onlineapply) decided how the change ran: `online`, `instant` (MySQL and MariaDB), `resumable` (SQL Server), or `unavailable` for the plain statement where the online one could not be used. On MySQL and MariaDB a `WhatIf` row carries no `mode`, since only the engine can say which form it accepts. A row has no `mode` key at all when nothing chose a form, so a deploy with `OnlineApply` off reports exactly what it did before the field existed (schema version 1.2 added it).
 
 ### `instrumented`
 

@@ -784,14 +784,16 @@ deploy use them, per environment, with a per-table override.
 |---|---|
 | `Off` (default) | The plain statements, exactly as a deploy has always run them. |
 | `Prefer` | The online form wherever the engine's version and edition allow it, and the plain form otherwise. |
-| `Require` | The online form, or the deploy is refused, naming each statement that could not run online. The refusal comes before any existing index, key or column on the table changes (a column the deploy adds is added first). |
+| `Require` | The online form, or the deploy is refused, naming each statement that could not run online. On SQL Server and PostgreSQL the refusal comes before any existing index, key or column on the table changes (a column the deploy adds is added first); MySQL and MariaDB cannot take DDL back, so there it stops the deploy at that statement. |
 
 It is off by default because each online form costs something you did not ask for: an online index build takes about
-twice the space and the time, and a resumable one leaves its progress behind if the deploy's session ends. Those are
-deployment-window decisions, so you opt in per environment.
+twice the space and the time, a resumable one leaves its progress behind if the deploy's session ends, a PostgreSQL
+`CONCURRENTLY` build that fails leaves an invalid index to clean up, and a MySQL instant change spends one of the
+table's row versions. Those are deployment-window decisions, so you opt in per environment.
 
 The [Deployment Summary](deployment-summary-report.md#details) says which form each change used: `mode` is `online`,
-`resumable` or `unavailable` (the plain form, where the online one could not be used). A change has no `mode` when
+`instant` (MySQL and MariaDB), `resumable` (SQL Server) or `unavailable` (the plain form, where the online one could not
+be used). A change has no `mode` when
 `OnlineApply` is `Off`, and the progress log says the same thing, with the reason for an offline one.
 
 A table this deploy creates is empty, so its indexes are built the plain way whatever `OnlineApply` says.
