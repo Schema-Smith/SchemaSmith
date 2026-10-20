@@ -1,0 +1,44 @@
+{
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
+  "Name": "`app_setting`",
+  "Columns": [
+    {
+      "Name": "`setting_name`",
+      "DataType": "varchar(64)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "CharacterSet": "utf8mb4"
+    },
+    {
+      "Name": "`setting_value`",
+      "DataType": "varchar(400)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "CharacterSet": "utf8mb4"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "UniqueConstraint": true,
+      "IndexColumns": "`setting_name`",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "IndexType": "BTREE"
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": "",
+  "Engine": "InnoDB",
+  "RowFormat": "Dynamic",
+  "CharacterSet": "utf8mb4",
+  "Collation": "utf8mb4_unicode_ci",
+  "FullTextIndexes": []
+}

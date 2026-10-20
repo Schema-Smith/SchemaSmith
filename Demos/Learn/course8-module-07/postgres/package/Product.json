@@ -1,0 +1,17 @@
+{
+  "$schema": ".json-schemas/products.postgresql.schema",
+  "Name": "Settings",
+  "ValidationScript": "SELECT TRUE",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptTokens": {
+    "Region": "us-east",
+    "DeployKey": "dk-7f3a91c2",
+    "ReportingApiKey": "rk-55aa01be",
+    "WebhookUrl": "https://deploybot:hunter2@hooks.shop.test/deploys",
+    "AuditDsn": "Server=audit.shop.test;User Id=auditor;Password=Aud1t-Only;"
+  },
+  "ScriptFolders": [],
+  "Platform": "PostgreSQL"
+}

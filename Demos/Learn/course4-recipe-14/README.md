@@ -1,5 +1,7 @@
 # Course 4, Recipe 14 — Subfolder organization: your layout survives re-extraction (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (--ExitNonZeroOnWarning): delete the "On 2.7.x" callouts -->
+
 Goal: extraction tools usually flatten. You organise your procedures by domain, run the tool that
 refreshes them from the database, and get back one directory with two hundred files in alphabetical
 order — so the organising never sticks, and after the second time nobody bothers.
@@ -102,6 +104,26 @@ Found dbo.usp_invoice_total.sql in multiple subfolders:
 
 Exit **0** — a warning, not a failure. The index found two candidate homes and will not pick one for
 you, so the object goes to the folder root.
+
+A pipeline that only checks the return code sails straight past that warning. To make it stop the
+line, run the same extraction with `--ExitNonZeroOnWarning` — from inside the engine folder, so the
+exit code you check is SchemaTongs' own and not that of a trailing `cd ..`:
+
+```bash
+# from course4-recipe-14/<engine>
+schematongs --ConfigFile:SchemaTongs.settings.json --ExitNonZeroOnWarning
+echo "exit $?"
+cd ..
+```
+
+The warning now names the folder root as well, because the last run wrote a copy there.
+
+Exit **1**: the run finished, and it logged a warning. The last line still reads
+`Casting Completed Successfully` — the exit code is the signal. The switch never changes a failure
+code; it only turns a `0` that logged a warning into a `1`. `"ExitNonZeroOnWarning": true` in the
+settings file does the same.
+
+> **On 2.7.x** the switch does not exist: the run logs a line starting `Ignored - not recognized: --ExitNonZeroOnWarning` and exits 0.
 
 **Read what is on disk afterwards, because this is the trap:**
 

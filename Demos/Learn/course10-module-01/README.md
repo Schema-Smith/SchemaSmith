@@ -1,6 +1,6 @@
 # Course 10 · Module 1 — Let the engine adapt
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (warn downgrade exits 1): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (warn downgrade exits 1; --ExitNonZeroOnWarning): delete the "On 2.7.x" callouts -->
 
 You author one modern feature per engine and deploy the same package to a **floor-version**
 target that predates it. SchemaSmith detects the target version, emits the degraded form the
@@ -61,6 +61,19 @@ that downgraded something finishes as incomplete — exit 1, not 0. Read the
 deployment summary's **Unsupported Feature Downgrades** section.
 
 > **On 2.7.x** the same run exits 0; the statistic is still skipped and the downgrade still recorded.
+
+Add `--ExitNonZeroOnWarning`, the switch that turns a `0` into a `1` when a run logged a warning:
+
+```bash
+# from course10-module-01/postgres
+schemaquench --ConfigFile:quench.settings.warn.json --LogPath:"$PWD/logs" --ExitNonZeroOnWarning
+```
+
+Still exit 1, for the same reason. A downgrade is not a warning: the run already exits 1, and the switch
+only ever changes a `0`. So the exit code alone can't tell a downgraded run from a warned one — the
+deployment summary's `outcome` can: `Incomplete` here.
+
+> **On 2.7.x** the switch does not exist: the run logs a line starting `Ignored - not recognized: --ExitNonZeroOnWarning` and exits 0.
 
 **Fail — refuse instead:**
 

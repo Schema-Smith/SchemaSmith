@@ -1,0 +1,24 @@
+{
+  "Target": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": {
+      "TrustServerCertificate": "True"
+    },
+    "Databases": [
+      "diag_hygiene"
+    ]
+  },
+  "WhatIfONLY": false,
+  "SchemaPackagePath": "./package",
+  "KindleTheForge": true,
+  "ArtifactPath": "./artifacts",
+  "CheckpointDirectory": "./checkpoints",
+  "LogHygiene": {
+    "ScrubTokens": [
+      "DeployKey"
+    ],
+    "LogTokens": false
+  }
+}
