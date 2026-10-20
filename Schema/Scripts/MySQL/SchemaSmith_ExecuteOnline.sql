@@ -26,6 +26,7 @@ BEGIN
     DECLARE v_errno INT DEFAULT 0;
     DECLARE v_reason TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
     DECLARE v_cap INT DEFAULT NULL;
+    DECLARE v_copied TINYINT DEFAULT 0;
     SET p_Form = NULL;
 
     IF COALESCE(p_Mode, 'OFF') = 'OFF' THEN
@@ -93,6 +94,26 @@ BEGIN
             END online_form;
         END IF;
 
+        -- MariaDB 11.2+ copies a table without blocking writes (ALGORITHM=COPY, LOCK=NONE), which takes the changes
+        -- INPLACE cannot, a column type change among them. Earlier MariaDB and MySQL refuse it (1846), so it is not asked.
+        IF p_Form IS NULL AND v_maria = 1 AND SchemaSmith_ServerVersionNum() >= 1102 THEN
+            copy_form: BEGIN
+                DECLARE EXIT HANDLER FOR SQLEXCEPTION
+                BEGIN
+                    GET DIAGNOSTICS CONDITION 1 v_errno = MYSQL_ERRNO, v_reason = MESSAGE_TEXT;
+                    IF v_errno NOT IN (1845, 1846) THEN
+                        RESIGNAL;
+                    END IF;
+                END;
+                SET @ss_online_sql = CONCAT(p_Sql, v_sep, 'ALGORITHM=COPY', v_sep, 'LOCK=NONE');
+                PREPARE ss_online_stmt FROM @ss_online_sql;
+                EXECUTE ss_online_stmt;
+                DEALLOCATE PREPARE ss_online_stmt;
+                SET p_Form = 'online';
+                SET v_copied = 1;
+            END copy_form;
+        END IF;
+
         IF p_Form IS NULL THEN
             IF p_Mode = 'REQUIRE' THEN
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -109,6 +130,8 @@ BEGIN
             SET p_Form = 'unavailable';
         ELSEIF p_Form = 'instant' THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), '    (instant: ALGORITHM=INSTANT)');
+        ELSEIF v_copied = 1 THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), '    (online: ALGORITHM=COPY, LOCK=NONE)');
         ELSE
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), '    (online: ALGORITHM=INPLACE, LOCK=NONE)');
         END IF;

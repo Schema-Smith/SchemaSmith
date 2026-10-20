@@ -856,7 +856,8 @@ apply to PostgreSQL.
 
 SchemaQuench asks the engine for the lightest form and lets it decide. Each statement below is sent with
 `ALGORITHM=INSTANT` where that can apply (MySQL 8.0.12 and later, MariaDB 10.3 and later), then with
-`ALGORITHM=INPLACE, LOCK=NONE`, and a form the engine refuses moves on to the next. Under `Prefer` the last step is
+`ALGORITHM=INPLACE, LOCK=NONE`, then on MariaDB 11.2 and later with `ALGORITHM=COPY, LOCK=NONE` (a copy that does not
+block writes), and a form the engine refuses moves on to the next. Under `Prefer` the last step is
 the statement as written, recorded as `unavailable` with the engine's reason; under `Require` the deploy stops at that
 statement, naming it.
 
@@ -864,7 +865,9 @@ statement, naming it.
 |---|---|
 | A column added | `INSTANT`, then `INPLACE, LOCK=NONE`; the column goes `AFTER` the declared column before it |
 | A column the package no longer declares | dropped `INSTANT`, then `INPLACE, LOCK=NONE` |
+| A column whose definition changes | `INSTANT`, then `INPLACE, LOCK=NONE` (a `VARCHAR` widened within its length class is instant on MariaDB; a type change needs the MariaDB 11.2 copy) |
 | A new index, or one built again because it changed, and an index dropped | `INPLACE, LOCK=NONE` |
+| A table whose `RebuildPolicy` sets `OnOrderMismatch`, rebuilt only because its columns are out of order | its columns are moved into order in one statement (`MODIFY COLUMN … AFTER`), instant on MariaDB 10.4 and later, instead of the rebuild. A table with a generated column, and a system-versioned table, is still rebuilt |
 
 The [Deployment Summary](deployment-summary-report.md#details) records `instant`, `online` (`INPLACE, LOCK=NONE`) or
 `unavailable`. Under `WhatIf` the preview shows each statement with its position and the forms it would ask for, and
@@ -884,8 +887,7 @@ table and the count. At the limit the next change runs `INPLACE, LOCK=NONE`, whi
 count; the log says so.
 
 MySQL and MariaDB do not roll DDL back, so a `Require` refusal stops the deploy at that statement, with the changes
-before it in place. Full-text indexes, column type changes, keys and foreign keys run as before.
-`OnlineApplyMaxDuration` does not apply.
+before it in place. Full-text indexes, keys and foreign keys run as before. `OnlineApplyMaxDuration` does not apply.
 
 ## System-versioned tables (MariaDB)
 

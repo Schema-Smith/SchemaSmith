@@ -239,7 +239,8 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
         finally { Drop(cmd, table); }
     }
 
-    // A full-text index makes the table refuse both forms for a column add (InnoDB rebuilds such a table under a lock).
+    // A full-text index makes the table refuse INSTANT and INPLACE, LOCK=NONE for a column add (InnoDB rebuilds such a
+    // table under a lock). MariaDB 11.2+ still adds it online by copying (COPY, LOCK=NONE).
     [Test]
     public void Prefer_FallsBackToThePlainStatement_WhenTheEngineRefusesBothForms_AndRequireRefuses()
     {
@@ -250,6 +251,17 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
             Seed(cmd, "onl_ft", ", c TEXT NULL, FULLTEXT KEY ft_onl_ft_c (c)");
             var json = Table("onl_ft", string.Join(", ", Col("id", nullable: false), Col("a"), Col("n"), Col("b"), Col("c", "TEXT")),
                 """, "FullTextIndexes": [{ "Name": "ft_onl_ft_c", "Columns": "c" }]""");
+            if (Platform == Platform.MariaDb && VersionPatch() >= 110200)
+            {
+                Deploy(cmd, json, "REQUIRE");
+                Assert.Multiple(() =>
+                {
+                    Assert.That(ColumnOrder(cmd, "onl_ft"), Is.EqualTo("id,a,n,b,c"));
+                    Assert.That(Mode(cmd, "onl_ft.n", "created"), Is.EqualTo("online"));
+                    Assert.That(Messages(cmd), Does.Contain("(online: ALGORITHM=COPY, LOCK=NONE)"));
+                });
+                return;
+            }
             var refusal = Assert.Catch(() => Deploy(cmd, json, "REQUIRE"));
             Assert.Multiple(() =>
             {
@@ -312,6 +324,121 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
             });
         }
         finally { Drop(cmd, "onl_cap"); }
+    }
+
+    private static int AuditCount(IDbCommand cmd, string objectName, string action) =>
+        Convert.ToInt32(Scalar(cmd, $"SELECT COUNT(*) FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND REPLACE(ObjectName, '`', '') = '{objectName}' AND ActionType = '{action}'"));
+
+    private const string OrderPolicy = """, "RebuildPolicy": { "OnOrderMismatch": true }""";
+
+    // MA-057: a table the policy would rebuild only to put its columns in order has them moved in place instead.
+    [Test]
+    public void Prefer_PutsADriftedTableInOrderInPlace_InsteadOfRebuildingIt()
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            Seed(cmd, "onl_ord", ", c VARCHAR(10) NULL");
+            Sql(cmd, $"UPDATE `{_mainDb}`.`onl_ord` SET c = CONCAT('c', id)");
+            Deploy(cmd, Table("onl_ord", string.Join(", ", Col("id", nullable: false), Col("a"), Col("c", "VARCHAR(10)"), Col("b")), OrderPolicy), "PREFER");
+            var expected = Platform == Platform.MariaDb && VersionPatch() >= 100400 ? "instant" : "online";
+            Assert.Multiple(() =>
+            {
+                Assert.That(ColumnOrder(cmd, "onl_ord"), Is.EqualTo("id,a,c,b"));
+                Assert.That(AuditCount(cmd, "onl_ord", "rebuilt"), Is.Zero, "moved in place, not rebuilt");
+                Assert.That(Mode(cmd, "onl_ord", "modified"), Is.EqualTo(expected));
+                Assert.That(Scalar(cmd, $"SELECT CONCAT(c, '|', b) FROM `{_mainDb}`.`onl_ord` WHERE id = 2")?.ToString(), Is.EqualTo("c2|2"), "the values moved with their columns");
+            });
+            Deploy(cmd, Table("onl_ord", string.Join(", ", Col("id", nullable: false), Col("a"), Col("c", "VARCHAR(10)"), Col("b")), OrderPolicy), "PREFER");
+            Assert.That(AuditCount(cmd, "onl_ord", "modified"), Is.Zero, "in order now, so the next deploy has nothing to move");
+        }
+        finally { Drop(cmd, "onl_ord"); }
+    }
+
+    [Test]
+    public void Off_StillRebuildsADriftedTable()
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            Seed(cmd, "onl_ord_off", ", c INT NULL");
+            Deploy(cmd, Table("onl_ord_off", string.Join(", ", Col("id", nullable: false), Col("a"), Col("c"), Col("b")), OrderPolicy), "OFF");
+            Assert.Multiple(() =>
+            {
+                Assert.That(ColumnOrder(cmd, "onl_ord_off"), Is.EqualTo("id,a,c,b"));
+                Assert.That(AuditCount(cmd, "onl_ord_off", "rebuilt"), Is.EqualTo(1));
+            });
+        }
+        finally { Drop(cmd, "onl_ord_off"); }
+    }
+
+    // A generated column needs more than its declared column script to MODIFY, so its table still rebuilds.
+    [Test]
+    public void Prefer_ADriftedTableWithAGeneratedColumn_IsStillRebuilt()
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            Seed(cmd, "onl_ord_gen", ", c INT NULL, g INT AS (a + 1) VIRTUAL");
+            Deploy(cmd, Table("onl_ord_gen", string.Join(", ", Col("id", nullable: false), Col("a"), Col("c"), Col("b"),
+                """{ "Name": "g", "DataType": "INT", "Nullable": true, "GenerationExpression": "`a` + 1", "Generated": "VIRTUAL" }"""), OrderPolicy), "PREFER");
+            Assert.Multiple(() =>
+            {
+                Assert.That(ColumnOrder(cmd, "onl_ord_gen"), Is.EqualTo("id,a,c,b,g"));
+                Assert.That(AuditCount(cmd, "onl_ord_gen", "rebuilt"), Is.EqualTo(1));
+            });
+        }
+        finally { Drop(cmd, "onl_ord_gen"); }
+    }
+
+    [Test]
+    public void Prefer_WidensAVarchar_InstantlyOnMariaDb_AndOnlineOnMySql()
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            Seed(cmd, "onl_wide", ", s VARCHAR(10) NULL");
+            Deploy(cmd, Table("onl_wide", string.Join(", ", Col("id", nullable: false), Col("a"), Col("b"), Col("s", "VARCHAR(40)"))), "PREFER");
+            var expected = Platform == Platform.MariaDb && VersionPatch() >= 100300 ? "instant" : "online";
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar(cmd, $"SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = 'onl_wide' AND COLUMN_NAME = 's'"), Is.EqualTo(40L));
+                Assert.That(Mode(cmd, "onl_wide.s", "modified"), Is.EqualTo(expected));
+            });
+        }
+        finally { Drop(cmd, "onl_wide"); }
+    }
+
+    // A type change copies the table. MariaDB 11.2+ copies without blocking writes (COPY, LOCK=NONE); elsewhere the
+    // engine refuses every online form, so Prefer runs the plain statement and Require refuses.
+    [Test]
+    public void Prefer_ChangesAColumnType_OnlineOnMariaDb112_AndPlainElsewhere_AndRequireRefusesThere()
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            Seed(cmd, "onl_type");
+            var json = Table("onl_type", string.Join(", ", Col("id", nullable: false), Col("a", "BIGINT"), Col("b")));
+            var copyOnline = Platform == Platform.MariaDb && VersionPatch() >= 110200;
+            if (!copyOnline)
+            {
+                var refusal = Assert.Catch(() => Deploy(cmd, json, "REQUIRE"));
+                Assert.That(refusal!.Message, Does.Contain("OnlineApply is Require"));
+            }
+            Deploy(cmd, json, "PREFER");
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar(cmd, $"SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = 'onl_type' AND COLUMN_NAME = 'a'")?.ToString(), Is.EqualTo("bigint"));
+                Assert.That(Mode(cmd, "onl_type.a", "modified"), Is.EqualTo(copyOnline ? "online" : "unavailable"));
+                if (copyOnline) Assert.That(Messages(cmd), Does.Contain("(online: ALGORITHM=COPY, LOCK=NONE)"));
+            });
+        }
+        finally { Drop(cmd, "onl_type"); }
     }
 
     [Test]

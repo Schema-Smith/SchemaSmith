@@ -211,6 +211,10 @@ namespace Schema.Capabilities
             // OnlineApply: an instant add anywhere and an instant drop are 10.4 (10.3 adds at the end only).
             rows.Add(new("instant-alter", "Instant column add or drop", Platform.MariaDb,
                 1004, "MariaDB 10.4", null, DegradeKind.Reduced, null));
+            // OnlineApply: a change INPLACE cannot take (a column type change, an add to a table with a full-text index)
+            // copies without blocking writes from 11.2; below it the change runs as written and its Mode is unavailable.
+            rows.Add(new("copy-lock-none", "Online table copy (COPY, LOCK=NONE)", Platform.MariaDb,
+                1102, "MariaDB 11.2", null, DegradeKind.Reduced, null));
             rows.Add(new("application-time-period", "Application-time period", Platform.MariaDb,
                 1004, "MariaDB 10.4.3", null, DegradeKind.Reduced, "table without its PERIOD FOR clause"));
             // A unique or primary key WITHOUT OVERLAPS over a period (10.5.3). Below it the key is created over the

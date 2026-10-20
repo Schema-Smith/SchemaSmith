@@ -107,6 +107,7 @@ public class CapabilityDocumentationTests
 
         // ---- MariaDB (shares three rows with MySQL above; the doc cell names both thresholds) ----
         ["MariaDb/instant-alter"] = "**Instant column add or drop**",
+        ["MariaDb/copy-lock-none"] = "**Online table copy**",
         ["MariaDb/check-constraint"] = "**CHECK constraints**",
         ["MariaDb/invisible-index"] = "**Invisible index**",
         ["MariaDb/descending-index"] = "**Descending index key parts**",

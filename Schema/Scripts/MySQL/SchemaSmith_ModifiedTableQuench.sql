@@ -1069,6 +1069,9 @@ BEGIN
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildColumnOrder;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildColumnOrderPeer;
 
+    -- OnlineApply: each table's mode, which the election below and every later step read.
+    CALL SchemaSmith_StageOnlineApply();
+
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildElection;
     CREATE TEMPORARY TABLE _SchemaSmith_RebuildElection (
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
@@ -1100,7 +1103,12 @@ BEGIN
                COALESCE(f.ModificationPasses, 0) AS ModificationPasses,
                COALESCE(f.HasColumnDrop, 0) AS HasColumnDrop,
                COALESCE(f.HasOrderMismatch, 0) AS HasOrderMismatch,
-               COALESCE(t.DropColumnsRemovedFromProduct, 1) AS TableDropColumns
+               COALESCE(t.DropColumnsRemovedFromProduct, 1) AS TableDropColumns,
+               -- MA-057: under OnlineApply the columns are moved in place (STEP 4.5) instead. A generated column or a
+               -- system-versioned table needs more than its declared column script to MODIFY, so those still rebuild.
+               IF(t.OnlineMode <> 'OFF' AND t.IsSystemVersioned = 0
+                  AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Columns gc
+                                   WHERE gc.TableName = t.TableName AND COALESCE(TRIM(gc.GeneratedExpression), '') <> ''), 1, 0) AS ReorderOnline
         FROM _SchemaSmith_Tables t
         LEFT JOIN _SchemaSmith_RebuildFacts f ON f.TableName = t.TableName
         WHERE t.NewTable = 0
@@ -1127,8 +1135,27 @@ BEGIN
           -- order is a standing reason to rebuild on its own, and on a table whose columns are merely in
           -- the wrong order there is no column CHANGE to detect -- requiring one would make the trigger
           -- unreachable in exactly the case it was added for.
-          (p.PolicyOnOrderMismatch = 1 AND p.HasOrderMismatch = 1)
+          (p.PolicyOnOrderMismatch = 1 AND p.HasOrderMismatch = 1 AND p.ReorderOnline = 0)
       );
+
+    -- The tables STEP 4.5 puts in order: drifted, asked to converge, online, and not rebuilt for another reason.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_OnlineReorder;
+    CREATE TEMPORARY TABLE _SchemaSmith_OnlineReorder (
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    INSERT INTO _SchemaSmith_OnlineReorder (TableName)
+    SELECT t.TableName
+    FROM _SchemaSmith_Tables t
+    INNER JOIN _SchemaSmith_RebuildFacts f ON f.TableName = t.TableName AND f.HasOrderMismatch = 1
+    WHERE t.NewTable = 0
+      AND t.OnlineMode <> 'OFF'
+      AND t.IsSystemVersioned = 0
+      AND COALESCE(IF(COALESCE(t.RebuildPolicySpecified, 0) = 1, t.RebuildPolicyOnOrderMismatch,
+                      CAST(@ss_rebuild_policy_on_order_mismatch AS SIGNED)), 0) = 1
+      AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Columns gc
+                       WHERE gc.TableName = t.TableName AND COALESCE(TRIM(gc.GeneratedExpression), '') <> '')
+      AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_RebuildElection e
+                       WHERE e.TableName = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) COLLATE utf8mb4_bin);
 
     -- p_WhatIf goes straight through: SchemaSmith_RebuildTable prints its whole sequence and records
     -- 'wouldRebuild' without executing anything, and it applies its refusals in BOTH modes. So a policy
@@ -1703,6 +1730,7 @@ BEGIN
         -- statement-build below uses — not the #337 set-based-UPDATE shape.
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
+        SET @ss_modify_audit_mark := (SELECT COALESCE(MAX(Id), 0) FROM SchemaSmith_ChangeAudit);
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT CONNECTION_ID(), 'column', CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName)), 'modified'
         FROM _SchemaSmith_Columns c
@@ -1799,7 +1827,9 @@ BEGIN
 
         -- Materialize: fold each table's column modifications into one multi-clause ALTER, then drain.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_ModifyColStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_ModifyColStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT,
+                                                            TableName VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
+                                                            OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF', Form VARCHAR(16) DEFAULT NULL)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         -- The same-named table-level check goes first (a lower RowId drains first): from MariaDB 11.4.13 / 13.0.2 the
         -- MODIFY below is refused with it in place (1826), and below that the two coexist and the column stays text.
@@ -1819,9 +1849,10 @@ BEGIN
         WHERE t.NewTable = 0 AND c.NewColumn = 0 AND c.CompareCheckExpression IS NOT NULL;
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
-        INSERT INTO _SchemaSmith_ModifyColStmts (Stmt)
+        INSERT INTO _SchemaSmith_ModifyColStmts (Stmt, TableName, OnlineMode)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
-                      GROUP_CONCAT(CONCAT('MODIFY COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', '))
+                      GROUP_CONCAT(CONCAT('MODIFY COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', ')),
+               SchemaSmith_StripBacktickWrapping(c.TableName), MAX(t.OnlineMode)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
         INNER JOIN _SchemaSmith_CatColumns isc
@@ -1917,12 +1948,17 @@ BEGIN
 
         SET @v_modifycol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ModifyColStmts);
         WHILE @v_modifycol_id IS NOT NULL DO
-            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_ModifyColStmts WHERE RowId = @v_modifycol_id;
-            PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            DEALLOCATE PREPARE stmt;
+            SELECT Stmt, OnlineMode, TableName INTO @exec_sql, @ss_online_mode, @ss_online_table FROM _SchemaSmith_ModifyColStmts WHERE RowId = @v_modifycol_id;
+            CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
+            UPDATE _SchemaSmith_ModifyColStmts SET Form = @ss_online_form WHERE RowId = @v_modifycol_id;
             SET @v_modifycol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ModifyColStmts WHERE RowId > @v_modifycol_id);
         END WHILE;
+        UPDATE SchemaSmith_ChangeAudit a
+          JOIN _SchemaSmith_ModifyColStmts s
+            ON CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin LIKE CONCAT(s.TableName, '.%')
+           SET a.Mode = s.Form
+         WHERE a.SessionId = CONNECTION_ID() AND a.Id > @ss_modify_audit_mark
+           AND a.ObjectType = 'column' AND a.ActionType = 'modified' AND s.Form IS NOT NULL;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColStmts;
     END IF;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_TableLevelColumnChecks;
@@ -2503,6 +2539,79 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- Clean up helper tables
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColumnsToDrop;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DefinedColumns;
+
+    -- =======================
+    -- STEP 4.5: COLUMN ORDER IN PLACE (OnlineApply, MA-057)
+    -- =======================
+    -- A table STEP 2.95 would have rebuilt only for its column order: every declared column, in declared order, is
+    -- MODIFIED FIRST or AFTER the one before it, in one statement through the online forms (instant on MariaDB 10.4+,
+    -- INPLACE, LOCK=NONE elsewhere). Its definitions match the declaration by now (STEP 3), so the statement moves the
+    -- columns and changes nothing else; the columns the package no longer declares went in STEP 4.
+    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ReorderCols;
+    CREATE TEMPORARY TABLE _SchemaSmith_ReorderCols (
+        RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ColumnScript TEXT,
+        Pos INT NOT NULL,
+        Seq INT NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    INSERT INTO _SchemaSmith_ReorderCols (TableName, ColumnName, ColumnScript, Pos, Seq)
+    SELECT c.TableName, c.ColumnName, c.ColumnScript, c.OrdinalPosition, c.RowId
+    FROM _SchemaSmith_Columns c
+    INNER JOIN _SchemaSmith_OnlineReorder r ON r.TableName = c.TableName
+    INNER JOIN _SchemaSmith_CatColumns isc ON isc.TableKey = c.TableKey AND isc.ColumnKey = c.ColumnKey;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ReorderColsPeer;
+    CREATE TEMPORARY TABLE _SchemaSmith_ReorderColsPeer (
+        RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        Pos INT NOT NULL,
+        Seq INT NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    INSERT INTO _SchemaSmith_ReorderColsPeer (TableName, ColumnName, Pos, Seq)
+    SELECT TableName, ColumnName, Pos, Seq FROM _SchemaSmith_ReorderCols;
+
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ReorderStmts;
+    CREATE TEMPORARY TABLE _SchemaSmith_ReorderStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt LONGTEXT,
+                                                      TableName VARCHAR(128) COLLATE utf8mb4_bin, OnlineMode VARCHAR(8))
+        ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    INSERT INTO _SchemaSmith_ReorderStmts (Stmt, TableName)
+    SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', a.TableName, ' ',
+                  GROUP_CONCAT(CONCAT('MODIFY COLUMN ', a.ColumnScript,
+                                      COALESCE((SELECT CONCAT(' AFTER `', SchemaSmith_StripBacktickWrapping(b.ColumnName), '`')
+                                                  FROM _SchemaSmith_ReorderColsPeer b
+                                                 WHERE b.TableName = a.TableName
+                                                   AND (b.Pos < a.Pos OR (b.Pos = a.Pos AND b.Seq < a.Seq))
+                                                 ORDER BY b.Pos DESC, b.Seq DESC
+                                                 LIMIT 1), ' FIRST'))
+                               ORDER BY a.Pos, a.Seq SEPARATOR ', ')),
+           a.TableName
+    FROM _SchemaSmith_ReorderCols a
+    GROUP BY a.TableName;
+    UPDATE _SchemaSmith_ReorderStmts s JOIN _SchemaSmith_Tables t ON t.TableName = s.TableName SET s.OnlineMode = t.OnlineMode;
+
+    IF EXISTS (SELECT 1 FROM _SchemaSmith_ReorderStmts) THEN
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Put columns in their declared order');
+    END IF;
+    SET @v_reorder_id := (SELECT MIN(RowId) FROM _SchemaSmith_ReorderStmts);
+    WHILE @v_reorder_id IS NOT NULL DO
+        SELECT Stmt, OnlineMode, SchemaSmith_StripBacktickWrapping(TableName) INTO @exec_sql, @ss_online_mode, @ss_online_table
+          FROM _SchemaSmith_ReorderStmts WHERE RowId = @v_reorder_id;
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Reorder columns: ', @exec_sql));
+        IF p_WhatIf = 1 THEN
+            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'table', @ss_online_table, 'wouldModify');
+        ELSE
+            CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
+            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'table', @ss_online_table, 'modified', @ss_online_form);
+        END IF;
+        SET @v_reorder_id := (SELECT MIN(RowId) FROM _SchemaSmith_ReorderStmts WHERE RowId > @v_reorder_id);
+    END WHILE;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ReorderStmts;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ReorderCols;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ReorderColsPeer;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_OnlineReorder;
 
     -- =======================
     -- STEP 5: ALTER TABLE ENGINE
