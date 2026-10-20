@@ -1740,6 +1740,44 @@ public class SchemaTongsTests
         }
     }
 
+    // MY-#24. A JavaScript routine (MySQL Enterprise's MLE) has a body SHOW CREATE renders but a server without the
+    // component cannot create, so it is named in a warning and skipped rather than written.
+    [Test]
+    public void CastTemplate_MySQL_AJavaScriptRoutine_IsSkippedWithAWarning()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetUpMocks();
+            StubMySqlKindleGate();
+            RegisterConfig(Platform.MySQL, new Dictionary<string, string>
+            {
+                ["ShouldCast:Tables"] = "false",
+                ["ShouldCast:Functions"] = "true",
+                ["ShouldCast:Views"] = "false",
+                ["ShouldCast:Procedures"] = "false",
+                ["ShouldCast:TableTriggers"] = "false",
+                ["ShouldCast:Events"] = "false"
+            });
+            RegisterConnectionFactory(Platform.MySQL);
+
+            var names = Substitute.For<IDataReader>();
+            var nameCalls = 0;
+            names.Read().Returns(_ => nameCalls++ < 1, _ => false);
+            names.GetString(0).Returns("js_func");
+            names.GetString(1).Returns("JAVASCRIPT");
+            _command.StubReaders(names);
+
+            var tongs = new SchemaTongs(Platform.MySQL);
+            Assert.DoesNotThrow(() => tongs.CastTemplate());
+
+            _progressLog.Received().Warn(Arg.Is<string>(s => s.Contains("js_func") && s.Contains("JAVASCRIPT")));
+            _fileWrapper.DidNotReceive().WriteAllText(Arg.Is<string>(s => s.Contains("js_func")), Arg.Any<string>());
+
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
     [Test]
     public void CastTemplate_MySQL_ViewsOnly_CastsViews()
     {

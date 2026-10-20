@@ -86,8 +86,9 @@
         "Procedures": true,
         "TableTriggers": true,
 
-        // MySQL only
-        "Events": true
+        // MySQL and MariaDB
+        "Events": true,
+        "Packages": true // MariaDB 10.3+ only
     },
     "OrphanHandling": {
         "Mode": "Detect" // Detect, DetectWithCleanupScripts, or DetectDeleteAndCleanup

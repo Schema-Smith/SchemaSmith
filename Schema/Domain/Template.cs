@@ -836,6 +836,10 @@ namespace Schema.Domain
             if (platform == Platform.MariaDb)
                 folders.Insert(folders.FindIndex(f => f.FolderPath == "Triggers"),
                     new TemplateFolder { FolderPath = "Sequences", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Sequences });
+            // MariaDB packages (10.3+), after the routines a package body may call.
+            if (platform == Platform.MariaDb)
+                folders.Insert(folders.FindIndex(f => f.FolderPath == "Procedures") + 1,
+                    new TemplateFolder { FolderPath = "Packages", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Packages });
 
             if (!isSchemaTemplate) return folders;
 

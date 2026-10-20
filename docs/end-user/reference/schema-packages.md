@@ -367,13 +367,14 @@ When `Template.json` does not declare its own `ScriptFolders`, SchemaSmith fills
 | `Events/` | Objects | Events |
 | `Functions/` | Objects | Functions |
 | `Procedures/` | Objects | Procedures |
+| `Packages/` | Objects | Packages |
 | `Sequences/` | Objects | Sequences |
 | `Triggers/` | AfterTablesObjects | Triggers |
 | `Views/` | AfterTablesObjects | Views |
 | `Table Data/` | TableData | — |
 | `After Scripts/` | After | — |
 
-MariaDB has a native `SEQUENCE` object and so gets a `Sequences/` folder; MySQL has no equivalent at any version, which is why its default set has none -- a `Sequences/` folder in a MySQL package is simply not read.
+MariaDB has a native `SEQUENCE` object and so gets a `Sequences/` folder; MySQL has no equivalent at any version, which is why its default set has none -- a `Sequences/` folder in a MySQL package is simply not read. `Packages/` is MariaDB's too (10.3+), and a template declares it only once a package has been extracted into it.
 
 Tables are always loaded from `Tables/` regardless of platform. SQL Server adds `Indexed Views/`; PostgreSQL adds `Materialized Views/`. These are not script folders -- they hold structured JSON object definitions, not `.sql` files.
 

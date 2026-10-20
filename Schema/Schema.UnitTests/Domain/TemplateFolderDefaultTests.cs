@@ -450,6 +450,20 @@ namespace Schema.UnitTests.Domain
             });
         }
 
+        [Test]
+        public void MariaDb_Packages_FollowProcedures_AreWrittenOnUse_AndMySqlHasNone()
+        {
+            var maria = Template.GetDefaultTemplateFolders(Platform.MariaDb);
+            var paths = maria.Select(f => f.FolderPath).ToList();
+            Assert.Multiple(() =>
+            {
+                Assert.That(paths.IndexOf("Packages"), Is.EqualTo(paths.IndexOf("Procedures") + 1), string.Join(", ", paths));
+                Assert.That(maria.Single(f => f.FolderPath == "Packages").ObjectType, Is.EqualTo(ScriptObjectType.Packages));
+                Assert.That(RepositoryHelper.CreateDefaultTemplate("Test", Platform.MariaDb).ScriptFolders.Select(f => f.ObjectType), Has.None.EqualTo(ScriptObjectType.Packages));
+                Assert.That(Template.GetDefaultTemplateFolders(Platform.MySQL).Select(f => f.ObjectType), Has.None.EqualTo(ScriptObjectType.Packages));
+            });
+        }
+
         // Event triggers belong to the last folder of their slot, so they do not fire on the package's own views.
         [Test]
         public void PostgreSQL_EventTriggers_DeployAfterEveryOtherObjectFolderOfTheirSlot()
@@ -485,7 +499,8 @@ namespace Schema.UnitTests.Domain
         public void MariaDb_AddDefaultScriptFolders_MatchesGetDefaultTemplateFolders()
         {
             var template = RepositoryHelper.CreateDefaultTemplate("Test", Platform.MariaDb);
-            var expected = Template.GetDefaultTemplateFolders(Platform.MariaDb);
+            var expected = Template.GetDefaultTemplateFolders(Platform.MariaDb)
+                .Where(f => !RepositoryHelper.FoldersWrittenOnUse.Contains(f.ObjectType)).ToList();
 
             AssertFolderListsMatch(expected, template.ScriptFolders);
         }

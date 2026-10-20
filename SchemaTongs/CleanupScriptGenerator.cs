@@ -20,6 +20,9 @@ public static class CleanupScriptGenerator
         if (objectName == null) return null;
 
         var quotedName = QuoteIdentifier(objectName, platform);
+        // Before MariaDB 11.4, PACKAGE is a keyword only under ORACLE mode.
+        if (objectType == ScriptObjectType.Packages)
+            return $"SET @ss_saved_sql_mode = @@SESSION.sql_mode; SET SESSION sql_mode = 'ORACLE'; {dropKeyword} IF EXISTS {quotedName}; SET SESSION sql_mode = @ss_saved_sql_mode;";
         return $"{dropKeyword} IF EXISTS {quotedName};";
     }
 
@@ -80,6 +83,7 @@ public static class CleanupScriptGenerator
             ScriptObjectType.RangeTypes => "DROP TYPE",
             ScriptObjectType.TextSearchConfigurations => "DROP TEXT SEARCH CONFIGURATION",
             ScriptObjectType.EventTriggers => "DROP EVENT TRIGGER",
+            ScriptObjectType.Packages => "DROP PACKAGE",
             // The DROP needs the argument types, which the file name does not carry in a form that can be read back.
             ScriptObjectType.Operators => null,
             ScriptObjectType.Casts => null,

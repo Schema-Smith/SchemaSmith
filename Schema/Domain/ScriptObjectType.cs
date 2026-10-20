@@ -48,6 +48,8 @@ namespace Schema.Domain
         TextSearchConfigurations,
         Operators,
         Casts,
-        EventTriggers
+        EventTriggers,
+        // MariaDB, likewise.
+        Packages
     }
 }

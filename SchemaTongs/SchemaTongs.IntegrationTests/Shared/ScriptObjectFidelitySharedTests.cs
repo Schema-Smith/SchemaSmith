@@ -33,6 +33,7 @@ public abstract class ScriptObjectFidelitySharedTests
     private string _otherDb = "";
     private int _version;
     private readonly Dictionary<string, string> _scripts = new(StringComparer.OrdinalIgnoreCase);
+    private string _templateJson;
 
     private bool IsMariaDb => Platform == Platform.MariaDb;
     private bool AtLeast(int patchComparable) => _version >= patchComparable;
@@ -259,6 +260,56 @@ public abstract class ScriptObjectFidelitySharedTests
         Assert.That(cmd.ExecuteScalar()?.ToString(), Does.Contain("ORACLE"), "the routine lost its Oracle mode");
     }
 
+    // ---- packages (MariaDB) -----------------------------------------------------------------------------------
+
+    // A package and its body are one file, each half under the sql_mode it was created in, so a redeploy replaces both.
+    [Test]
+    public void Package_OracleMode_RoundTrips_SpecAndBody_AndRedeploys()
+    {
+        if (!IsMariaDb || !AtLeast(100300)) Assert.Ignore("Packages are MariaDB 10.3+.");
+        var script = Script("Packages", "pkg_ora");
+        Assert.That(script, Does.Contain("DROP PACKAGE IF EXISTS `pkg_ora`;").And.Not.Contain("DEFINER="), script);
+        using var conn = Open(_targetDb);
+        using var cmd = conn.CreateCommand();
+        Deploy(cmd, script);
+        Deploy(cmd, script);
+        // Before 11.4 a package member is called from an Oracle-mode session only.
+        Run(cmd, "SET SESSION sql_mode = 'ORACLE'");
+        cmd.CommandText = "SELECT pkg_ora.next_id() + pkg_ora.next_id()";
+        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(3), "the body's state and both members came back");
+        cmd.CommandText = $"SELECT GROUP_CONCAT(ROUTINE_TYPE, ':', LOCATE('ORACLE', SQL_MODE) > 0 ORDER BY ROUTINE_TYPE) FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = '{_targetDb}' AND ROUTINE_NAME = 'pkg_ora'";
+        Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("PACKAGE:1,PACKAGE BODY:1"), "both halves, each in Oracle mode");
+
+        // The orphan cleanup line drops it from a session in the default mode.
+        Run(cmd, "SET SESSION sql_mode = DEFAULT");
+        Run(cmd, CleanupScriptGenerator.GenerateDropStatement("pkg_ora.sql", ScriptObjectType.Packages, Platform.MariaDb));
+        cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = '{_targetDb}' AND ROUTINE_NAME = 'pkg_ora'";
+        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero, "the cleanup line dropped the package and its body");
+    }
+
+    [Test]
+    public void Packages_AreDeclaredInTheTemplate_OnlyOnMariaDb()
+    {
+        if (IsMariaDb && AtLeast(100300))
+            Assert.That(_templateJson, Does.Contain("\"ObjectType\": \"Packages\""), _templateJson);
+        else
+            Assert.That(_templateJson ?? "", Does.Not.Contain("Packages"), "MySQL has no packages");
+    }
+
+    [Test]
+    public void Package_DefaultMode_AndSpecOnly_RoundTrip()
+    {
+        if (!IsMariaDb || !AtLeast(110400)) Assert.Ignore("A package outside Oracle mode is MariaDB 11.4+.");
+        using var conn = Open(_targetDb);
+        using var cmd = conn.CreateCommand();
+        Deploy(cmd, Script("Packages", "pkg_def"));
+        Deploy(cmd, Script("Packages", "pkg_spec"));
+        cmd.CommandText = "SELECT pkg_def.seven()";
+        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(7));
+        cmd.CommandText = $"SELECT GROUP_CONCAT(ROUTINE_NAME, ':', ROUTINE_TYPE, ':', LOCATE('ORACLE', SQL_MODE) > 0 ORDER BY ROUTINE_NAME, ROUTINE_TYPE) FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = '{_targetDb}' AND ROUTINE_NAME IN ('pkg_def', 'pkg_spec')";
+        Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("pkg_def:PACKAGE:0,pkg_def:PACKAGE BODY:0,pkg_spec:PACKAGE:0"), "a package with no body is written without one");
+    }
+
     // ---- triggers --------------------------------------------------------------------------------------------
 
     [Test]
@@ -459,13 +510,17 @@ public abstract class ScriptObjectFidelitySharedTests
     private void ExtractEverything()
     {
         var file = Substitute.For<IFile>();
+        // An existing Template.json, so a folder written on use is declared in it.
+        file.Exists(Arg.Is<string>(p => p.EndsWith("Template.json"))).Returns(true);
+        file.ReadAllText(Arg.Is<string>(p => p.EndsWith("Template.json"))).Returns(_ => _templateJson ?? "{ \"Name\": \"Main\" }");
         file.When(f => f.WriteAllText(Arg.Any<string>(), Arg.Any<string>())).Do(ci =>
         {
             var path = ci.ArgAt<string>(0).Replace('\\', '/');
+            if (path.EndsWith("Template.json")) _templateJson = ci.ArgAt<string>(1);
             var parts = path.Split('/');
             if (parts.Length < 2) return;
             var folder = parts[^2];
-            if (folder is "Views" or "Functions" or "Procedures" or "Triggers" or "Events")
+            if (folder is "Views" or "Functions" or "Procedures" or "Triggers" or "Events" or "Packages")
                 _scripts[$"{folder}/{System.IO.Path.GetFileNameWithoutExtension(parts[^1])}"] = ci.ArgAt<string>(1);
         });
         lock (FactoryContainer.SharedLockObject)
@@ -481,6 +536,7 @@ public abstract class ScriptObjectFidelitySharedTests
             config["ShouldCast:Procedures"] = "true";
             config["ShouldCast:TableTriggers"] = "true";
             config["ShouldCast:Events"] = "true";
+            config["ShouldCast:Packages"] = "true";
             FactoryContainer.Register<IConfigurationRoot>(config);
             new SchemaTongs(Platform).CastTemplate();
             FactoryContainer.Clear();
@@ -553,7 +609,15 @@ BEGIN
 END");
             Run(cmd, "SET SESSION sql_mode = 'ORACLE'");
             Run(cmd, "CREATE FUNCTION f_ora (a INT) RETURN INT AS BEGIN RETURN a + 1; END");
+            Run(cmd, "CREATE PACKAGE pkg_ora AS FUNCTION next_id RETURN INT; END");
+            Run(cmd, "CREATE PACKAGE BODY pkg_ora AS current_id INT := 0; FUNCTION next_id RETURN INT AS BEGIN current_id := current_id + 1; RETURN current_id; END; END");
             Run(cmd, "SET SESSION sql_mode = DEFAULT");
+        }
+        if (IsMariaDb && AtLeast(110400))
+        {
+            Run(cmd, "CREATE PACKAGE pkg_def FUNCTION seven() RETURNS INT; END");
+            Run(cmd, "CREATE PACKAGE BODY pkg_def FUNCTION seven() RETURNS INT BEGIN RETURN 7; END; END");
+            Run(cmd, "CREATE PACKAGE pkg_spec FUNCTION unused() RETURNS INT; END");
         }
         if (IsMariaDb && AtLeast(100800))
             Run(cmd, "CREATE FUNCTION f_out (IN a INT, OUT b INT) RETURNS INT DETERMINISTIC BEGIN SET b = a * 2; RETURN a; END");

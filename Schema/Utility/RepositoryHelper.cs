@@ -729,6 +729,6 @@ public static class RepositoryHelper
     public static readonly IReadOnlySet<ScriptObjectType> FoldersWrittenOnUse = new HashSet<ScriptObjectType>
     {
         ScriptObjectType.SecurityPolicies, ScriptObjectType.RangeTypes, ScriptObjectType.TextSearchConfigurations,
-        ScriptObjectType.Operators, ScriptObjectType.Casts, ScriptObjectType.EventTriggers
+        ScriptObjectType.Operators, ScriptObjectType.Casts, ScriptObjectType.EventTriggers, ScriptObjectType.Packages
     };
 }

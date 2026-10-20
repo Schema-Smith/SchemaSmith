@@ -106,6 +106,7 @@ public class SchemaTongs
 
     // MySQL specific
     private bool _includeEvents;
+    private bool _includePackages;
 
     // Orphan handling
     private OrphanHandlingMode _orphanHandlingMode;
@@ -627,6 +628,7 @@ public class SchemaTongs
                 // MariaDb-only: MySQL has no native SEQUENCE object, so the flag stays false on plain MySQL
                 // regardless of config — there is nothing for ShouldCast:Sequences to mean there.
                 _includeSequences = _platform == Platform.MariaDb && config[SettingsKeys.ShouldCast.Sequences]?.ToLower() != "false";
+                _includePackages = _platform == Platform.MariaDb && config[SettingsKeys.ShouldCast.Packages]?.ToLower() != "false";
                 break;
         }
 
@@ -1088,6 +1090,7 @@ public class SchemaTongs
                 if (_includeTableTriggers) folders.Add(ResolveFolderName("Triggers", ScriptObjectType.Triggers));
                 if (_includeEvents) folders.Add(ResolveFolderName("Events", ScriptObjectType.Events));
                 if (_includeSequences) folders.Add(ResolveFolderName("Sequences", ScriptObjectType.Sequences)); // MariaDb-only; _includeSequences is gated in LoadShouldCastSettings
+                if (_includePackages) folders.Add(ResolveFolderName("Packages", ScriptObjectType.Packages)); // MariaDb-only, likewise
                 break;
         }
 
@@ -3747,6 +3750,7 @@ SELECT mv.schemaname, mv.matviewname
                 if (_includeTableTriggers) ScriptMySqlTriggers(command, targetSchema);
                 if (_includeEvents) ScriptMySqlEvents(command, targetSchema);
                 if (_includeSequences) ScriptMariaDbSequences(command, targetSchema);
+                if (_includePackages) ScriptMariaDbPackages(command, targetSchema);
             }
             finally
             {
@@ -3781,14 +3785,27 @@ SELECT mv.schemaname, mv.matviewname
     private int ScriptMySqlRoutines(IDbCommand command, string targetSchema, string kind, string folder, ScriptObjectType objectType)
     {
         command.CommandText = $@"
-SELECT ROUTINE_NAME
+SELECT ROUTINE_NAME, COALESCE(EXTERNAL_LANGUAGE, 'SQL')
   FROM INFORMATION_SCHEMA.ROUTINES
   WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
     AND ROUTINE_TYPE = '{kind}'
     AND ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
   ORDER BY ROUTINE_NAME";
+        // MY-#24. A JavaScript routine (MySQL Enterprise's MLE component) cannot be created on a server without it, and
+        // its libraries are not modelled, so it is named and skipped rather than written.
+        var names = new List<string>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                var language = reader.GetString(1);
+                if (language is "" or "SQL") { names.Add(reader.GetString(0)); continue; }
+                _progressLog.Warn($"  Skipping {folder}/{reader.GetString(0)}: a {language} routine is not extracted (it needs the server's {language} language component)");
+                _stats.SkippedObjects++;
+            }
+        }
         var createColumn = kind == "FUNCTION" ? "Create Function" : "Create Procedure";
-        return ScriptMySqlShowCreateObjects(command, ReadNames(command), folder, objectType, name =>
+        return ScriptMySqlShowCreateObjects(command, names, folder, objectType, name =>
         {
             var shown = ShowCreate(command, kind, targetSchema, name, createColumn);
             return shown == null ? null : WrapMySqlDelimitedScript(kind, name, shown.Value.SqlMode, StripDefiner(shown.Value.Create));
@@ -4056,6 +4073,66 @@ SELECT EVENT_NAME
     /// SHOW CREATE SEQUENCE is the source: it is the engine's own rendering of the options, and the current value is
     /// not in it. A .sql file in Sequences/ still deploys as before.
     /// </summary>
+    // MA-c24. A package and its body are one file: DROP PACKAGE drops both, and each half is created under the sql_mode
+    // it was created in (ORACLE, or from 11.4 any mode). Its members are not routines of their own and are not listed.
+    private void ScriptMariaDbPackages(IDbCommand command, string targetSchema)
+    {
+        _progressLog.Info("Casting Package Scripts");
+        command.CommandText = $@"
+SELECT p.ROUTINE_NAME,
+       EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.ROUTINES b
+                WHERE b.ROUTINE_SCHEMA = p.ROUTINE_SCHEMA AND b.ROUTINE_NAME = p.ROUTINE_NAME AND b.ROUTINE_TYPE = 'PACKAGE BODY') AS HAS_BODY
+  FROM INFORMATION_SCHEMA.ROUTINES p
+  WHERE {MySqlNameMatch.FoldedRoutineSchema("p.ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
+    AND p.ROUTINE_TYPE = 'PACKAGE'
+    AND p.ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
+  ORDER BY p.ROUTINE_NAME";
+        var withBody = new HashSet<string>(StringComparer.Ordinal);
+        var names = new List<string>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                names.Add(reader.GetString(0));
+                if (Convert.ToInt32(reader.GetValue(1)) == 1) withBody.Add(reader.GetString(0));
+            }
+        }
+        var castPath = GetCastPath(ScriptObjectType.Packages, "Packages");
+        _stats.Packages = ScriptMySqlShowCreateObjects(command, names, "Packages", ScriptObjectType.Packages, name =>
+        {
+            var spec = ShowCreate(command, "PACKAGE", targetSchema, name, "Create Package");
+            if (spec == null) return null;
+            var body = withBody.Contains(name) ? ShowCreate(command, "PACKAGE BODY", targetSchema, name, "Create Package Body") : null;
+            return WrapMariaDbPackageScript(name, spec.Value, body);
+        });
+        if (_stats.Packages > 0) DeclareFolderWrittenOnUse(ScriptObjectType.Packages, castPath);
+    }
+
+    // Before 11.4 PACKAGE is a keyword only under ORACLE mode, so the DROP runs under the package's own mode too.
+    internal static string WrapMariaDbPackageScript(string name, (string Create, string SqlMode) spec, (string Create, string SqlMode)? body)
+    {
+        var lines = new List<string>
+        {
+            "SET @ss_saved_sql_mode = @@SESSION.sql_mode;",
+            $"SET SESSION sql_mode = '{EscapeSql(spec.SqlMode ?? "")}';",
+            $"DROP PACKAGE IF EXISTS `{name.Replace("`", "``")}`;",
+            "DELIMITER //",
+            $"{StripDefiner(spec.Create).TrimEnd()} //",
+            "DELIMITER ;"
+        };
+        if (body != null)
+            lines.AddRange(new[]
+            {
+                $"SET SESSION sql_mode = '{EscapeSql(body.Value.SqlMode ?? "")}';",
+                "DELIMITER //",
+                $"{StripDefiner(body.Value.Create).TrimEnd()} //",
+                "DELIMITER ;"
+            });
+        lines.Add("SET SESSION sql_mode = @ss_saved_sql_mode;");
+        lines.Add("");
+        return string.Join("\n", lines);
+    }
+
     private void ScriptMariaDbSequences(IDbCommand command, string targetSchema)
     {
         _progressLog.Info("Casting Sequences");
@@ -4725,6 +4802,7 @@ SELECT [name], type_desc AS kind FROM sys.indexes
                 LogIfPositive("  Triggers:   ", _stats.Triggers);
                 LogIfPositive("  Events:     ", _stats.Events);
                 LogIfPositive("  Sequences:  ", _stats.Sequences);
+                LogIfPositive("  Packages:   ", _stats.Packages);
                 break;
         }
 
@@ -4769,6 +4847,7 @@ SELECT [name], type_desc AS kind FROM sys.indexes
         public int Sequences { get; set; }
         public int Rules { get; set; }
         public int Events { get; set; }
+        public int Packages { get; set; }
         public int FullTextCatalogs { get; set; }
         public int FullTextStopLists { get; set; }
         public int XmlSchemaCollections { get; set; }

@@ -177,6 +177,12 @@ public class CleanupScriptGeneratorTests
         Assert.That(CleanupScriptGenerator.GenerateDropStatement(file, type, Platform.PostgreSQL), Is.EqualTo(expected));
     }
 
+    [Test]
+    public void GenerateDropStatement_MariaDb_Packages_ReturnsCorrectDrop()
+    {
+        Assert.That(CleanupScriptGenerator.GenerateDropStatement("pkg_ora.sql", ScriptObjectType.Packages, Platform.MariaDb), Is.EqualTo("SET @ss_saved_sql_mode = @@SESSION.sql_mode; SET SESSION sql_mode = 'ORACLE'; DROP PACKAGE IF EXISTS `pkg_ora`; SET SESSION sql_mode = @ss_saved_sql_mode;"));
+    }
+
     // An operator's or a cast's file name cannot be turned back into the signature its DROP needs.
     [TestCase("app.===(app.cents, app.cents).sql", ScriptObjectType.Operators)]
     [TestCase("app.cents AS integer.sql", ScriptObjectType.Casts)]

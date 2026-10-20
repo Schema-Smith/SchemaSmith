@@ -50,6 +50,7 @@ namespace Schema.UnitTests.Domain
         [TestCase(ScriptObjectType.Operators, "Operators")]
         [TestCase(ScriptObjectType.Casts, "Casts")]
         [TestCase(ScriptObjectType.EventTriggers, "EventTriggers")]
+        [TestCase(ScriptObjectType.Packages, "Packages")]
         public void AllValues_RoundTripThroughJsonSerialization(ScriptObjectType value, string expectedString)
         {
             var json = JsonConvert.SerializeObject(value);

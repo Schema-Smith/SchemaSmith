@@ -38,6 +38,7 @@ public static class ScriptFolderTypeInference
         ["Operators"] = ScriptObjectType.Operators,
         ["Casts"] = ScriptObjectType.Casts,
         ["Event Triggers"] = ScriptObjectType.EventTriggers,
+        ["Packages"] = ScriptObjectType.Packages,
         ["Events"] = ScriptObjectType.Events,
     };
 

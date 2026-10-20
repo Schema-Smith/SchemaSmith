@@ -35,6 +35,7 @@ public class ScriptFolderTypeInferenceTests
     [TestCase("Operators", ScriptObjectType.Operators)]
     [TestCase("Casts", ScriptObjectType.Casts)]
     [TestCase("Event Triggers", ScriptObjectType.EventTriggers)]
+    [TestCase("Packages", ScriptObjectType.Packages)]
     [TestCase("Events", ScriptObjectType.Events)]
     public void InferFromFolderName_KnownScriptFolder_ReturnsExpectedType(string folderName, ScriptObjectType expected)
     {

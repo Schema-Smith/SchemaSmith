@@ -80,6 +80,7 @@
       "ShouldCast:ModuleSyntax",
       "ShouldCast:ObjectList",
       "ShouldCast:Operators",
+      "ShouldCast:Packages",
       "ShouldCast:Procedures",
       "ShouldCast:Publications",
       "ShouldCast:RangeTypes",

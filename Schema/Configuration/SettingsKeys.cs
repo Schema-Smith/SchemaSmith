@@ -139,6 +139,8 @@ public static class SettingsKeys
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string EventTriggers = "ShouldCast:EventTriggers";
         [ReadBy(SettingsTool.SchemaTongs)]
+        public const string Packages = "ShouldCast:Packages";
+        [ReadBy(SettingsTool.SchemaTongs)]
         public const string Rules = "ShouldCast:Rules";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string SaveInvalidScripts = "ShouldCast:SaveInvalidScripts";
