@@ -66,14 +66,14 @@ Same binary, same compatibility level 100 that drives every other degrade in thi
 tier too and you will see `Json (auto)` at compatibility level 130, which is the boundary itself: 130 is
 modern, and only below it does the payload go to XML.
 
-```
-cd sqlserver
+```bash
+# from course10-module-04/sqlserver
 schemaquench --ConfigFile:quench.settings.2022.json --LogPath:"$PWD/logs"     # macOS / Linux
 schemaquench --ConfigFile:quench.settings.2022.json --LogPath:"$PWD\logs"     # Windows
 ```
 
 ```
-[localhost,11433].[learn_2022]   Skipping folder 'Shred/Legacy' — ShouldApplyExpression evaluated false
+[localhost,11433].[learn_2022]   Skipping folder 'Shred/Legacy' on [localhost,11433].[learn_2022] - ShouldApplyExpression evaluated false
 [localhost,11433].[learn_2022]     Quenching Shred/Modern\PopulateTableCatalog [ALWAYS].sql
 [localhost,11433].[learn_2022] Successfully Quenched
 ```
@@ -88,7 +88,8 @@ used XML ingest — is the point. You'll see that deploy in Part C.
 The package's `Shred/Modern` and `Shred/Legacy` folders are a matched pair, folder-gated on
 `{{CompatibilityLevel}}`. Each runs an `After` script that shreds the deployed model and writes
 one row per column into `dbo.TableCatalog`, tagging the `Encoding` it used — so the audit table
-itself proves which variant fired.
+itself proves which variant fired. The two scripts below are the package's own files, shown for
+reading: the deploy resolves their tokens and runs them, so there is nothing to paste.
 
 **Modern** (`ShouldApplyExpression: {{CompatibilityLevel}} >= 130`) shreds the JSON token:
 
@@ -96,7 +97,7 @@ itself proves which variant fired.
 DECLARE @model NVARCHAR(MAX) = N'{{TableSchema}}';   -- resolves to a JSON array [{...},{...}]
 DELETE FROM dbo.TableCatalog;   -- [ALWAYS] script: clear then repopulate, so a re-run stays idempotent
 INSERT INTO dbo.TableCatalog (TableName, ColumnName, IsNullable, Encoding)
-SELECT tbl.[Name], col.[ColumnName], col.[IsNullable], N'JSON (OPENJSON)'
+SELECT tbl.[Name], col.[ColumnName], ISNULL(col.[IsNullable], 0), N'JSON (OPENJSON)'
 FROM OPENJSON(@model) WITH ([Name] NVARCHAR(128) '$.Name', [Columns] NVARCHAR(MAX) '$.Columns' AS JSON) AS tbl
 CROSS APPLY OPENJSON(tbl.[Columns]) WITH ([ColumnName] NVARCHAR(128) '$.Name', [IsNullable] BIT '$.Nullable') AS col;
 ```
@@ -109,7 +110,7 @@ DELETE FROM dbo.TableCatalog;   -- [ALWAYS] script: clear then repopulate, so a 
 INSERT INTO dbo.TableCatalog (TableName, ColumnName, IsNullable, Encoding)
 SELECT t.n.value('(Name/text())[1]', 'nvarchar(128)'),
        c.col.value('(Name/text())[1]', 'nvarchar(128)'),
-       CONVERT(BIT, CASE LOWER(c.col.value('(Nullable/text())[1]', 'varchar(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
+       CONVERT(BIT, CASE LOWER(ISNULL(c.col.value('(Nullable/text())[1]', 'varchar(8)'), 'false')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
        N'XML (.nodes/.value)'
 FROM @model.nodes('/Tables/Table') AS t(n)
 CROSS APPLY t.n.nodes('Columns') AS c(col);
@@ -118,10 +119,11 @@ CROSS APPLY t.n.nodes('Columns') AS c(col);
 ### `learn_2022` (compat 160) ran the Modern shred
 
 The deploy in Part A already ran the `After` scripts. `Shred/Modern` applied; `Shred/Legacy` was
-skipped. Read the catalog back:
+skipped. Read the catalog back, from the lab folder:
 
-```
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -d learn_2022 -Q "SELECT TableName, ColumnName, IsNullable, Encoding FROM dbo.TableCatalog ORDER BY TableName, CatalogId;"
+```bash
+# from course10-module-04
+../lab-sql.sh sqlserver learn_2022 "SELECT TableName, ColumnName, IsNullable, Encoding FROM dbo.TableCatalog ORDER BY TableName, CatalogId;"
 ```
 
 ```
@@ -141,15 +143,21 @@ Widget        Notes        1           JSON (OPENJSON)
 ### `learn_2008` (compat 100) ran the Legacy shred
 
 Deploy to the oldest tier. `OPENJSON` would parse-error here, so `Shred/Modern` is gated off and
-`Shred/Legacy` shreds the XML twin instead:
+`Shred/Legacy` shreds the XML twin instead. Deploy from the `sqlserver` folder, then read the
+catalog back from the lab folder:
 
-```
+```bash
+# from course10-module-04/sqlserver
 schemaquench --ConfigFile:quench.settings.2008.json --LogPath:"$PWD/logs"
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -d learn_2008 -Q "SELECT TableName, ColumnName, IsNullable, Encoding FROM dbo.TableCatalog ORDER BY TableName, CatalogId;"
+```
+
+```bash
+# from course10-module-04
+../lab-sql.sh sqlserver learn_2008 "SELECT TableName, ColumnName, IsNullable, Encoding FROM dbo.TableCatalog ORDER BY TableName, CatalogId;"
 ```
 
 ```
-[localhost,11433].[learn_2008]   Skipping folder 'Shred/Modern' — ShouldApplyExpression evaluated false
+[localhost,11433].[learn_2008]   Skipping folder 'Shred/Modern' on [localhost,11433].[learn_2008] - ShouldApplyExpression evaluated false
 [localhost,11433].[learn_2008]     Quenching Shred/Legacy\PopulateTableCatalog [ALWAYS].sql
 [localhost,11433].[learn_2008] Successfully Quenched
 
@@ -197,12 +205,26 @@ XML ingest uses. When you hand-write a legacy shred, this is the tax the text en
 The JSON-vs-XML *choice* is SQL-Server-only, but the promise that **one package deploys to the
 floor of every engine** is not. Deploy the light single-table package to each engine's oldest
 supported tier and watch them all take it — the encoding, wherever it applies, is automatic.
+Each engine's folder carries its own settings file:
 
+```bash
+# from course10-module-04/sqlserver
+schemaquench --ConfigFile:quench.settings.2008.json --LogPath:"$PWD/logs"   # SQL Server compat 100
 ```
-cd ../sqlserver && schemaquench --ConfigFile:quench.settings.2008.json --LogPath:"$PWD/logs"   # SQL Server compat 100
-cd ../postgres  && schemaquench --ConfigFile:quench.settings.pg12.json  --LogPath:"$PWD/logs"   # PostgreSQL 12
-cd ../mysql     && schemaquench --ConfigFile:quench.settings.json       --LogPath:"$PWD/logs"   # MySQL 5.7
-cd ../mariadb   && schemaquench --ConfigFile:quench.settings.json       --LogPath:"$PWD/logs"   # MariaDB 10.2
+
+```bash
+# from course10-module-04/postgres
+schemaquench --ConfigFile:quench.settings.pg12.json --LogPath:"$PWD/logs"   # PostgreSQL 12
+```
+
+```bash
+# from course10-module-04/mysql
+schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"   # MySQL 5.7
+```
+
+```bash
+# from course10-module-04/mariadb
+schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"   # MariaDB 10.2
 ```
 
 ```

@@ -45,10 +45,10 @@ Assert-Equal '1' (Invoke-LabSql -Engine sqlserver -Database master -Sql 'SELECT 
 Write-Host 'failures are loud'
 Set-LabEnv 'sqlserver' 11499   # nothing listening
 Assert-Throws { Invoke-LabSql -Engine sqlserver -Database master -Sql 'SELECT 1' } `
-    'could not reach sqlserver' 'unreachable endpoint raises, never returns text'
+    'LAB-SQL: sqlserver at .* failed' 'unreachable endpoint raises, never returns text'
 Set-LabEnv 'sqlserver' 11433
 Assert-Throws { Invoke-LabSql -Engine sqlserver -Database master -Sql 'SELECT * FROM no_such_table_here' } `
-    'could not reach sqlserver' 'a failed query raises rather than returning the error text'
+    'LAB-SQL: sqlserver at .* failed' 'a failed query raises rather than returning the error text'
 
 Clear-LabEnv
 Write-Host 'sql files'

@@ -36,16 +36,11 @@ Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships two p
 ## Step 1: Install the hooks
 
 ```bash
-# SQL Server
+# from course4-recipe-08
 ../lab-sql.sh sqlserver cookbook_r8 --file sqlserver/install-audit-hooks.sql
-# PostgreSQL
 ../lab-sql.sh postgres cookbook_r8 --file postgres/install-audit-hooks.sql
-# MySQL
 ../lab-sql.sh mysql cookbook_r8 --file mysql/install-audit-hooks.sql
-# MariaDB
 ../lab-sql.sh mariadb cookbook_r8 --file mariadb/install-audit-hooks.sql
-
-cd <engine>       # into the engine folder, for Step 2
 ```
 
 Installing the procedures opts this database into the recyclebin — no settings change needed. SchemaQuench
@@ -54,28 +49,36 @@ probes for the hooks by name before every quench.
 ## Step 2: Deploy and seed
 
 ```bash
+# from course4-recipe-08/<engine>
 schemaquench --ConfigFile:deploy.settings.json      # creates Keeper + Coupon
 ```
 
-Put rows in `Coupon` (SQL Server shown):
+Put rows in `Coupon`:
 
-```sql
-INSERT INTO dbo.Coupon (CouponId, Code, DiscountPct) VALUES (1,'SAVE10',10),(2,'SAVE20',20);
+```bash
+# from course4-recipe-08
+../lab-sql.sh sqlserver cookbook_r8 "INSERT INTO dbo.Coupon (CouponId, Code, DiscountPct) VALUES (1,'SAVE10',10),(2,'SAVE20',20)"
+../lab-sql.sh postgres cookbook_r8 "INSERT INTO public.coupon (couponid, code, discountpct) VALUES (1,'SAVE10',10),(2,'SAVE20',20)"
+../lab-sql.sh mysql cookbook_r8 "INSERT INTO Coupon (CouponId, Code, DiscountPct) VALUES (1,'SAVE10',10),(2,'SAVE20',20)"
+../lab-sql.sh mariadb cookbook_r8 "INSERT INTO Coupon (CouponId, Code, DiscountPct) VALUES (1,'SAVE10',10),(2,'SAVE20',20)"
 ```
 
 ## Step 3: Remove Coupon — the drop hook archives and audits
 
 ```bash
+# from course4-recipe-08/<engine>
 schemaquench --ConfigFile:remove-coupon.settings.json   # Coupon left the product
 ```
 
 `Coupon` isn't dropped — it's renamed to a timestamped archive, and the move is recorded:
 
 ```bash
-# SQL Server — archived table + audit row
-cd ..            # back to the lab folder
+# from course4-recipe-08
 ../lab-sql.sh sqlserver cookbook_r8 "SELECT TableName, ArchivedName, RowsArchived, RetentionDays, Action FROM SchemaSmith.TableDropAudit"
 # → Coupon  Coupon__dropped_20260704215904493  2  90  DROP
+../lab-sql.sh postgres cookbook_r8 "SELECT table_name, archived_name, rows_archived, retention_days, action FROM \"SchemaSmith\".\"TableDropAudit\""
+../lab-sql.sh mysql cookbook_r8 "SELECT table_name, archived_name, rows_archived, retention_days, action FROM SchemaSmith_TableDropAudit"
+../lab-sql.sh mariadb cookbook_r8 "SELECT table_name, archived_name, rows_archived, retention_days, action FROM SchemaSmith_TableDropAudit"
 ```
 
 The row count (`2`) was captured before the table moved, and the retention window (`90`) is on the record.
@@ -83,7 +86,7 @@ The row count (`2`) was captured before the table moved, and the retention windo
 ## Step 4: Bring Coupon back — the restore hook completes the trail
 
 ```bash
-cd <engine>       # back into the engine folder
+# from course4-recipe-08/<engine>
 schemaquench --ConfigFile:deploy.settings.json      # Coupon returns to the product
 ```
 
@@ -91,10 +94,13 @@ schemaquench --ConfigFile:deploy.settings.json      # Coupon returns to the prod
 engine would recreate the table. The rows survive, and the trail is complete:
 
 ```bash
-# SQL Server — Coupon back with its rows, DROP + RESTORE both audited
-cd ..            # back to the lab folder
+# from course4-recipe-08
 ../lab-sql.sh sqlserver cookbook_r8 "SELECT CouponId, Code FROM dbo.Coupon; SELECT Action, ArchivedName FROM SchemaSmith.TableDropAudit ORDER BY AuditId"
 # → 1 SAVE10 / 2 SAVE20 ;  DROP + RESTORE
+../lab-sql.sh postgres cookbook_r8 "SELECT couponid, code FROM public.coupon ORDER BY couponid"
+../lab-sql.sh postgres cookbook_r8 "SELECT action, archived_name FROM \"SchemaSmith\".\"TableDropAudit\" ORDER BY audit_id"
+../lab-sql.sh mysql cookbook_r8 "SELECT CouponId, Code FROM Coupon ORDER BY CouponId; SELECT action, archived_name FROM SchemaSmith_TableDropAudit ORDER BY audit_id"
+../lab-sql.sh mariadb cookbook_r8 "SELECT CouponId, Code FROM Coupon ORDER BY CouponId; SELECT action, archived_name FROM SchemaSmith_TableDropAudit ORDER BY audit_id"
 ```
 
 ## Per-engine notes

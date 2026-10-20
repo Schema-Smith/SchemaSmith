@@ -19,6 +19,7 @@ targeting `ordersservice_dev`.
 - The target databases exist. Run the Course 3 setup once (idempotent — safe to re-run):
 
   ```bash
+  # from course3-module-01
   pwsh ../course3-setup/setup-environments.ps1     # or: ../course3-setup/setup-environments.sh
   ```
 
@@ -32,7 +33,7 @@ The `starter/` package is the `Customer` table *before* anyone touched it — th
 key, no `LoyaltyTier`. Quench it so the database matches the v1 state a teammate would branch from:
 
 ```bash
-cd starter/<engine>            # sqlserver | postgres | mysql | mariadb
+# from course3-module-01/starter/<engine>
 schemaquench --ConfigFile:dev.settings.json
 ```
 
@@ -45,7 +46,7 @@ A teammate wants a loyalty tier on every customer. Instead of writing an `ALTER`
 table definition. The pull request shows it as a plain diff. Run that diff yourself:
 
 ```bash
-# from this module's root
+# from course3-module-01
 git diff --no-index \
   starter/sqlserver/Package/Templates/Main/Tables/dbo.Customer.json \
   solution/sqlserver/Package/Templates/Main/Tables/dbo.Customer.json
@@ -80,7 +81,7 @@ with no scene, forcing the reviewer to imagine the table it mutates.
 Approve the diff, then deploy it. The `solution/` package is the v1 package plus that one column:
 
 ```bash
-cd solution/<engine>
+# from course3-module-01/solution/<engine>
 schemaquench --ConfigFile:dev.settings.json
 ```
 
@@ -103,22 +104,24 @@ deploy.
 
 ## Step 4: Confirm the column is there
 
+From the lab folder:
+
 ```bash
-cd ../..                              # back to the lab folder
+# from course3-module-01
 ../lab-sql.sh sqlserver ordersservice_dev "SELECT name, TYPE_NAME(system_type_id), max_length FROM sys.columns WHERE object_id=OBJECT_ID('dbo.Customer') AND name='LoyaltyTier'"
 ../lab-sql.sh postgres ordersservice_dev "SELECT column_name, data_type, character_maximum_length FROM information_schema.columns WHERE table_name='Customer' AND column_name='LoyaltyTier'"
 ../lab-sql.sh mysql ordersservice_dev "SELECT COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='ordersservice_dev' AND TABLE_NAME='Customer' AND COLUMN_NAME='LoyaltyTier'"
 ../lab-sql.sh mariadb ordersservice_dev "SELECT COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='ordersservice_dev' AND TABLE_NAME='Customer' AND COLUMN_NAME='LoyaltyTier'"
-cd solution/<engine>                  # back to the engine folder
 ```
 
 You'll see `LoyaltyTier` as a 20-character string column on each engine (`nvarchar` length 40 on SQL Server — `NVARCHAR(20)` is 40 bytes).
 
 ## Step 5: Re-run — the no-op
 
-Run the solution quench a second time:
+Run the solution quench a second time, back in the engine folder:
 
 ```bash
+# from course3-module-01/solution/<engine>
 schemaquench --ConfigFile:dev.settings.json
 ```
 

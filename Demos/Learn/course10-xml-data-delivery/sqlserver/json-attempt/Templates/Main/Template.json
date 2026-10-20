@@ -1,7 +1,0 @@
-{
-  "$schema": "../../.json-schemas/templates.sqlserver.schema",
-  "Name": "Main",
-  "DatabaseIdentificationScript": "SELECT [name] FROM sys.databases WHERE [name] = 'learn_2008'",
-  "ScriptFolders": [],
-  "ScriptTokens": {}
-}

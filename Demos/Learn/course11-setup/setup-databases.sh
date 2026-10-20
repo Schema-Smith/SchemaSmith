@@ -63,7 +63,16 @@ seed_postgres_tablespace() {
   fi
   # Confirm rather than assume -- a tablespace that silently failed to create must not report PASS.
   n="$(lab_sql postgres postgres "SELECT COUNT(*) FROM pg_tablespace WHERE spcname = 'vault_ts'" 2>/dev/null | tr -dc '0-9')"
-  [ "$n" = "1" ]
+  if [ "$n" != "1" ]; then
+    ts_err="the vault_ts tablespace could not be confirmed."
+    return 1
+  fi
+  # Catalogued is not usable: a tablespace whose directory is gone or unwritable still has its
+  # pg_tablespace row, and Module 1's deploy would be the first thing to find out.
+  if ! probe="$(lab_sql postgres vault_m1 "DROP TABLE IF EXISTS vault_ts_probe; CREATE TABLE vault_ts_probe (id INT) TABLESPACE vault_ts; DROP TABLE vault_ts_probe;" 2>&1)"; then
+    ts_err="no table can be created in the vault_ts tablespace: $(printf '%s' "$probe" | tr '\n' ' ')"
+    return 1
+  fi
 }
 
 engines="$(lab_engines)" || exit 1
@@ -91,8 +100,9 @@ for engine in $engines; do
       fi
     fi
     if [ "$rc" -eq 0 ] && [ "$engine" = "postgres" ] && [ "$db" = "vault_m1" ]; then
+      ts_err=''
       if ! seed_postgres_tablespace; then
-        err="database created, but the vault_ts tablespace could not be confirmed."
+        err="database created, but $ts_err"
         rc=1
       fi
     fi

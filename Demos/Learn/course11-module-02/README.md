@@ -21,13 +21,18 @@ Everything runs against `vault_m2`.
 
 Course 8 showed a rebuild refused because Change Data Capture was on. CDC is one member of a family.
 `mysql/` and `mariadb/` deploy a **partitioned** `AuditTrail`, then ask for a column reorder — which,
-as you know from Course 8, only a rebuild can deliver:
+as you know from Course 8, only a rebuild can deliver. From the `mysql` or `mariadb` folder:
 
 ```bash
-cd <engine>
+# from course11-module-02/mysql
 schemaquench --ConfigFile:quench.settings.baseline.json        # exit 0
 schemaquench --ConfigFile:quench.settings.rebuild-blocked.json # exit 2
-cd ..
+```
+
+```bash
+# from course11-module-02/mariadb
+schemaquench --ConfigFile:quench.settings.baseline.json        # exit 0
+schemaquench --ConfigFile:quench.settings.rebuild-blocked.json # exit 2
 ```
 
 ```text
@@ -48,7 +53,8 @@ tool cannot promise to put back what it never had written down.
 
 ## Part 2 — where SchemaSmith *does* force it through
 
-Now the counterweight. `sqlserver/` deploys `AuditTrail` plus a **schema-bound view** over it:
+Now the counterweight. `sqlserver/` deploys `AuditTrail` plus a **schema-bound view** over it (the
+`baseline/` package's `SchemaBound Views/dbo.vw_AuditActors.sql`; nothing to run by hand):
 
 ```sql
 CREATE OR ALTER VIEW dbo.vw_AuditActors WITH SCHEMABINDING AS
@@ -56,12 +62,18 @@ CREATE OR ALTER VIEW dbo.vw_AuditActors WITH SCHEMABINDING AS
 ```
 
 ```bash
-cd sqlserver && schemaquench --ConfigFile:quench.settings.baseline.json ; cd ..   # exit 0
+# from course11-module-02/sqlserver
+schemaquench --ConfigFile:quench.settings.baseline.json   # exit 0
 ```
 
 Now widen `Actor` from `NVARCHAR(64)` to `NVARCHAR(128)`. SQL Server refuses to alter a column while a
 schema-bound module references it — error **4922**, which names neither the module nor the remedy.
 Deploy `widen-blocked` (the setting off, which is the default) and read what SchemaSmith says instead:
+
+```bash
+# from course11-module-02/sqlserver
+schemaquench --ConfigFile:quench.settings.widen-blocked.json ; echo "exit=$?"
+```
 
 ```text
 Column change blocked by SCHEMABINDING: dbo.vw_AuditActors (blocks [dbo].[AuditTrail].[Actor]).
@@ -81,7 +93,8 @@ Now turn the setting on. `quench.settings.widen-allowed.json` carries:
 ```
 
 ```bash
-cd sqlserver && schemaquench --ConfigFile:quench.settings.widen-allowed.json ; cd ..   # exit 0
+# from course11-module-02/sqlserver
+schemaquench --ConfigFile:quench.settings.widen-allowed.json   # exit 0
 ```
 
 ```text
@@ -94,9 +107,10 @@ a copy of what was on the server. That is why the module has to live in a `Schem
 on the `AfterTablesObjects` slot: your script is the authority on what the view should be, and it has
 to run *after* the table work. A module left in the ordinary `Views/` folder is recreated too early.
 
-Check it:
+Check it, from the lab folder:
 
 ```bash
+# from course11-module-02
 ../lab-sql.sh sqlserver vault_m2 "SELECT c.name, ty.name, c.max_length/2 FROM sys.columns c JOIN sys.types ty ON ty.user_type_id=c.user_type_id WHERE c.object_id=OBJECT_ID('dbo.AuditTrail') AND c.name='Actor'"
 # → Actor nvarchar 128
 ```
@@ -112,12 +126,15 @@ Make the view **encrypted** and try the same widening with the setting still on.
 to attempt, and `encrypt-view` (which declares the baseline's `NVARCHAR(64)`) is refused as a narrowing.
 
 ```bash
+# from course11-module-02
 ../lab-sql.sh sqlserver vault_m2 "DROP VIEW IF EXISTS dbo.vw_AuditActors; DROP TABLE IF EXISTS dbo.AuditTrail"
-cd sqlserver
+```
+
+```bash
+# from course11-module-02/sqlserver
 schemaquench --ConfigFile:quench.settings.baseline.json       # exit 0 -- back to NVARCHAR(64)
 schemaquench --ConfigFile:quench.settings.encrypt-view.json   # exit 0 -- the view is now WITH ENCRYPTION
 schemaquench --ConfigFile:quench.settings.encrypted.json      # exit 2
-cd ..
 ```
 
 ```text
@@ -138,6 +155,7 @@ opt-in at all.
 ## Cleanup
 
 ```bash
+# from course11-module-02
 ../lab-sql.sh sqlserver vault_m2 "DROP VIEW IF EXISTS dbo.vw_AuditActors; DROP TABLE IF EXISTS dbo.AuditTrail"
 for e in mysql mariadb; do ../lab-sql.sh $e vault_m2 "DROP TABLE IF EXISTS AuditTrail"; done
 ```

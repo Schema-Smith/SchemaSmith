@@ -1,5 +1,7 @@
 # Course 6, Module 2 — Pre-flight diagnostics: `--TestConnection` and `--PreviewTargets` (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (patch-level MySQL and MariaDB floors): delete the "On 2.7.x" callouts -->
+
 **Goal:** run SchemaQuench's two read-only pre-flight switches to validate a deployment before committing to the maintenance window — confirming connectivity, the minimum-version floor, and the exact target roster, then wire both checks as a CI gate that aborts on failure.
 
 ## The scenario
@@ -19,7 +21,8 @@ Your team is about to push a schema update to three tenant databases across a fl
 
 Run from any of the four engine directories:
 
-```
+```bash
+# from course6-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.json --TestConnection
 ```
 
@@ -51,7 +54,12 @@ This scenario shows what the check looks like when the server is reachable but b
 
 Re-run:
 
-```
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"99"' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"99"' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"9.9"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"99.9"' -->
+```bash
+# from course6-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.json --TestConnection
 ```
 
@@ -71,29 +79,39 @@ PostgreSQL output (floor `99`, detected version `16`):
   localhost: detected version 16 is below the product's declared MinimumVersion 99
 ```
 
-MySQL output (floor `9.9`, detected version `8.0.45`):
+MySQL output (floor `9.9`, detected version `8.0.46`):
 
 ```
-  localhost: detected version 8.0.45 is below the product's declared MinimumVersion 9.9
+  localhost: detected version 8.0.46 is below the product's declared MinimumVersion 9.9
 ```
 
-MariaDB output (floor `99.9`, detected version `11.4.12-MariaDB-ubu2404`):
+MariaDB output (floor `99.9`, detected version `11.4.13-MariaDB-ubu2404`):
 
 ```
-  localhost: detected version 11.4.12-MariaDB-ubu2404 is below the product's declared MinimumVersion 99.9
+  localhost: detected version 11.4.13-MariaDB-ubu2404 is below the product's declared MinimumVersion 99.9
 ```
+
+The MySQL and MariaDB numbers are the sandbox image's current version; yours will show whatever your server runs.
 
 Exit code: `2` on all four engines. The manifest names the server, the detected version, and the declared floor — enough information to act without opening a separate database client.
 
 **Restore `MinimumVersion`** to its original value before continuing (`2019` for SQL Server, `15` for PostgreSQL, `8.0` for MySQL, `10.6` for MariaDB).
 
-Those originals are values *this lab declares* — deliberately well above what it needs, so Scenario 2 has room to fail against. They are not SchemaSmith's floors, which are SQL Server 2008, PostgreSQL 12, MySQL 5.7, and MariaDB 10.2. A real product declares the floor *it* needs.
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"2019"' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"15"' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"8.0"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"10.6"' -->
+
+Those originals are values *this lab declares* — deliberately well above what it needs, so Scenario 2 has room to fail against. They are not SchemaSmith's floors, which are SQL Server 2008, PostgreSQL 12, MySQL 5.7.22 (8.0.23 on the 8.0 line), and MariaDB 10.2.7 — patch-level on the MySQL family, so a server below them is refused. A real product declares the floor *it* needs.
+
+> **On 2.7.x** the MySQL and MariaDB floors are 5.7 and 10.2, any patch.
 
 ## Scenario 3 — `--PreviewTargets` pass
 
 `--PreviewTargets` runs the full target-discovery phase — connects, validates the version floor, evaluates the `DatabaseIdentificationScript` for each template, and prints the resolved target tree — without deploying anything. Exit code 0 means discovery succeeded and at least one target was found for each required template.
 
-```
+```bash
+# from course6-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.json --PreviewTargets
 ```
 
@@ -104,6 +122,8 @@ Pre-flight diagnostics for Shop (--PreviewTargets)
 Testing connection to configured servers
   localhost,11433 (a742c1f6fc50) connection succeeded
 
+Validate server version floor
+  localhost,11433: detected SqlServer version 16.0.4260.1
 Validate Minimum Version
 Load Template Schema: Main
 Check for Template Special Script Tokens
@@ -123,21 +143,21 @@ This scenario shows what happens when the `DatabaseIdentificationScript` would r
 
 **Edit `Package/Templates/Main/Template.json`** in the engine directory you're using. Change the LIKE pattern in `DatabaseIdentificationScript` to `shop_tenant_z%` (matches nothing in any engine's sandbox). `RequireAtLeastOneTarget` defaults to `true`, so an empty match is a failure.
 
-SQL Server `Template.json` before the change:
+On SQL Server the `DatabaseIdentificationScript` line changes like this (the other engines' queries are in the [per-engine notes](#per-engine-notes); change `shop_tenant_%` to `shop_tenant_z%` the same way):
 
-```json
-"DatabaseIdentificationScript": "SELECT [Name] FROM master.sys.databases WHERE [Name] LIKE 'shop_tenant_%'"
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript "\"SELECT [Name] FROM master.sys.databases WHERE [Name] LIKE 'shop_tenant_z%'\"" -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript "\"SELECT datname FROM pg_database WHERE datname LIKE 'shop_tenant_z%'\"" -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript "\"SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME LIKE 'shop_tenant_z%'\"" -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript "\"SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME LIKE 'shop_tenant_z%'\"" -->
+```diff
+-"DatabaseIdentificationScript": "SELECT [Name] FROM master.sys.databases WHERE [Name] LIKE 'shop_tenant_%'"
++"DatabaseIdentificationScript": "SELECT [Name] FROM master.sys.databases WHERE [Name] LIKE 'shop_tenant_z%'"
 ```
 
-Change it to:
+Re-run:
 
-```json
-"DatabaseIdentificationScript": "SELECT [Name] FROM master.sys.databases WHERE [Name] LIKE 'shop_tenant_z%'"
-```
-
-Apply the equivalent change to the PostgreSQL, MySQL, or MariaDB `Template.json` if you're running those engines. Re-run:
-
-```
+```bash
+# from course6-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.json --PreviewTargets
 ```
 
@@ -153,6 +173,11 @@ Exit code: `2`. The error names the template and the failure reason — useful w
 
 **Restore the original LIKE pattern** (`shop_tenant_%`) before continuing.
 
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript "\"SELECT [Name] FROM master.sys.databases WHERE [Name] LIKE 'shop_tenant_%'\"" -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript "\"SELECT datname FROM pg_database WHERE datname LIKE 'shop_tenant_%'\"" -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript "\"SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME LIKE 'shop_tenant_%'\"" -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript "\"SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME LIKE 'shop_tenant_%'\"" -->
+
 ## Scenario 5 — CI readiness gate
 
 Both switches return exit code 0 on success and 2 on failure, which maps directly onto CI gate patterns. The typical pipeline runs `--TestConnection` first, then `--PreviewTargets`, and aborts on the first non-zero exit rather than running both to completion.
@@ -160,6 +185,7 @@ Both switches return exit code 0 on success and 2 on failure, which maps directl
 **Bash:**
 
 ```bash
+# from course6-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.json --TestConnection || { echo "GATE: pre-flight failed — aborting deploy"; exit 1; }
 schemaquench --ConfigFile:quench.settings.json --PreviewTargets || { echo "GATE: target preview failed — aborting deploy"; exit 1; }
 echo "GATE: pre-flight green — safe to deploy"
@@ -168,6 +194,7 @@ echo "GATE: pre-flight green — safe to deploy"
 **PowerShell:**
 
 ```powershell
+# from course6-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.json --TestConnection
 if ($LASTEXITCODE -ne 0) { Write-Error "Pre-flight failed — aborting deploy"; exit 1 }
 schemaquench --ConfigFile:quench.settings.json --PreviewTargets
@@ -185,14 +212,16 @@ The exit codes — 0 and 2 — are the contract. Whether the gate is GitHub Acti
 |---|---|---|---|---|
 | Connection | `localhost,11433` (sa) | `localhost:15432` (postgres) | `localhost:13306` (root) | `localhost:13307` (root) |
 | `DatabaseIdentificationScript` | `SELECT [Name] FROM master.sys.databases WHERE [Name] LIKE 'shop_tenant_%'` | `SELECT datname FROM pg_database WHERE datname LIKE 'shop_tenant_%'` | `SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME LIKE 'shop_tenant_%'` | `SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME LIKE 'shop_tenant_%'` |
-| Detected version display | `16.0.4260.1` | `16` | `8.0.45` | `11.4.12-MariaDB-ubu2404` |
+| Detected version display | `16.0.4260.1` | `16` | `8.0.46` | `11.4.13-MariaDB-ubu2404` |
 | Floor **this lab declares** | `2019` | `15` | `8.0` | `10.6` |
 
 Each engine reports its version in its own native form, so that row is what the sandbox's current images happen to return — yours will differ. The shapes vary because the precision does: SQL Server's full build number distinguishes 2016 **SP1** from 2016 RTM (`CREATE OR ALTER` is an SP1 feature), the MySQL family gates mid-major (CHECK at MySQL **8.0.16**, `RENAME COLUMN` at MariaDB **10.5.2**), and PostgreSQL gates on the major alone. SchemaSmith prints what the server publishes rather than trimming all four to a common shape, because the trimmed digits are the ones that explain a degrade.
 
 The declared floor is a separate, friendlier grammar — you never match the detected string's shape. This lab declares `2019` and passes against a server reporting `16.0.4260.1`.
 
-The last row is what each lab package declares in its own `Product.json`, chosen well above what the lab actually needs so Scenario 2 has something to fail against. It is **not** SchemaSmith's supported floor — those are SQL Server 2008, PostgreSQL 12, MySQL 5.7, and MariaDB 10.2.
+The last row is what each lab package declares in its own `Product.json`, chosen well above what the lab actually needs so Scenario 2 has something to fail against. It is **not** SchemaSmith's supported floor — those are SQL Server 2008, PostgreSQL 12, MySQL 5.7.22 (8.0.23 on the 8.0 line), and MariaDB 10.2.7.
+
+> **On 2.7.x** the MySQL and MariaDB floors are 5.7 and 10.2, any patch.
 
 > *MariaDB is a fourth platform in the MySQL family — its own `Platform: MariaDb` selection and native package, not the MySQL package retargeted. Its dialect matches MySQL except for a few DDL specifics (invisible indexes, check-constraint drops, column-default reporting) that SchemaSmith handles for you.*
 

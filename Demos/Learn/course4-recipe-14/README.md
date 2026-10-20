@@ -31,6 +31,7 @@ Nothing declares that structure — there is no manifest, no `FolderMapping`, no
 the files sit on disk. Deploy:
 
 ```bash
+# from course4-recipe-14
 cd <engine> && schemaquench --ConfigFile:deploy.settings.json ; cd ..
 # exit 0 on all four engines; both procedures land in the database
 ```
@@ -40,6 +41,7 @@ cd <engine> && schemaquench --ConfigFile:deploy.settings.json ; cd ..
 Now pull the database back into the package — the operation that would normally flatten your work:
 
 ```bash
+# from course4-recipe-14
 cd <engine> && schematongs --ConfigFile:SchemaTongs.settings.json ; cd ..
 find <engine>/Package/Templates/Main/Procedures -type f
 ```
@@ -64,6 +66,16 @@ the same place.
 Create a procedure directly in the database that the package has never seen, then re-extract. It
 appears in `Procedures/` — the folder root, not in `Billing/` or `Identity/`.
 
+```bash
+# from course4-recipe-14
+../lab-sql.sh sqlserver cookbook_r14 "EXEC('CREATE PROCEDURE dbo.usp_new_report AS SELECT 1')"
+../lab-sql.sh postgres cookbook_r14 'CREATE OR REPLACE PROCEDURE public.usp_new_report() LANGUAGE plpgsql AS $$ BEGIN PERFORM 1; END $$'
+../lab-sql.sh mysql cookbook_r14 "CREATE PROCEDURE usp_new_report() SELECT 1"
+../lab-sql.sh mariadb cookbook_r14 "CREATE PROCEDURE usp_new_report() SELECT 1"
+cd <engine> && schematongs --ConfigFile:SchemaTongs.settings.json ; cd ..
+find <engine>/Package/Templates/Main/Procedures -type f
+```
+
 That is the correct behaviour, and it is worth understanding rather than working around: SchemaTongs
 has no way to know which domain a brand-new object belongs to, and guessing would put files somewhere
 you did not choose. So new work surfaces in one predictable place where you will see it. **Move it into
@@ -74,6 +86,13 @@ so filing an object is a one-time act.
 
 Put the *same filename* in two subfolders — copy `usp_invoice_total.sql` into `Identity/` alongside
 `Billing/` — and re-extract:
+
+```bash
+# from course4-recipe-14
+cp <engine>/Package/Templates/Main/Procedures/Billing/*usp_invoice_total.sql <engine>/Package/Templates/Main/Procedures/Identity/
+cd <engine> && schematongs --ConfigFile:SchemaTongs.settings.json ; cd ..
+find <engine>/Package/Templates/Main/Procedures -type f
+```
 
 ```
 Found dbo.usp_invoice_total.sql in multiple subfolders:
@@ -100,11 +119,16 @@ re-extract to confirm the tree is back to two files.
 ## Cleanup
 
 ```bash
+# from course4-recipe-14
 for e in sqlserver postgres mysql mariadb; do
   ../lab-sql.sh $e cookbook_r14 "DROP PROCEDURE IF EXISTS usp_invoice_total"
   ../lab-sql.sh $e cookbook_r14 "DROP PROCEDURE IF EXISTS usp_customer_lookup"
+  ../lab-sql.sh $e cookbook_r14 "DROP PROCEDURE IF EXISTS usp_new_report"
 done
 ```
+
+Step 3's extraction also wrote a `usp_new_report` file into `<engine>/Package/Templates/Main/Procedures/`;
+delete it so the package is back to its two procedures.
 
 ## The principle
 

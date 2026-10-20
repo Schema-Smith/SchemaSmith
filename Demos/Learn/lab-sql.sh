@@ -101,7 +101,7 @@ lab_sql() {
     client="$(lab_client "$engine")" || { rm -f "$errfile"; return 1; }
     case "$engine" in
       sqlserver) out=$(sqlcmd -S "${LEARN_SERVER},${LEARN_PORT}" -U "$LEARN_USER" -P "$LEARN_PASSWORD" \
-                         -C -b -d "$db" -h -1 -W -Q "SET NOCOUNT ON; $sql" 2>"$errfile"); rc=$? ;;
+                         -C -I -b -d "$db" -h -1 -W -Q "SET NOCOUNT ON; $sql" 2>"$errfile"); rc=$? ;;
       postgres)  out=$(PGPASSWORD="$LEARN_PASSWORD" psql -h "$LEARN_SERVER" -p "$LEARN_PORT" -U "$LEARN_USER" \
                          -d "$db" -w -v ON_ERROR_STOP=1 --no-psqlrc -tAc "$sql" 2>"$errfile"); rc=$? ;;
       *)         out=$(MYSQL_PWD="$LEARN_PASSWORD" "$client" -h "$LEARN_SERVER" -P "$LEARN_PORT" \
@@ -113,7 +113,7 @@ lab_sql() {
       # MSYS_NO_PATHCONV keeps Git Bash from rewriting the container's /opt/... path;
       # it's harmless on Linux/macOS.
       sqlserver) sc=$(lab_container_sqlcmd "$container"); out=$(MSYS_NO_PATHCONV=1 docker exec "$container" "$sc" \
-                         -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d "$db" -h -1 -W \
+                         -S localhost -U sa -P 'Learn!Passw0rd' -C -I -b -d "$db" -h -1 -W \
                          -Q "SET NOCOUNT ON; $sql" 2>"$errfile"); rc=$? ;;
       postgres)  out=$(docker exec "$container" psql -U postgres -d "$db" -v ON_ERROR_STOP=1 -tAc "$sql" 2>"$errfile"); rc=$? ;;
       mysql)     out=$(docker exec -e 'MYSQL_PWD=Learn!Passw0rd' "$container" mysql -uroot -N -s -D "$db" -e "$sql" 2>"$errfile"); rc=$? ;;
@@ -123,7 +123,7 @@ lab_sql() {
   err="$(cat "$errfile" 2>/dev/null)"
   rm -f "$errfile"
   if [ "$rc" -ne 0 ]; then
-    echo "LAB-SQL: could not reach $engine at $(lab_endpoint_label "$engine") [database '$db'] -- $(lab_trim "${err:-$out}")" >&2
+    echo "LAB-SQL: $engine at $(lab_endpoint_label "$engine") [database '$db'] failed -- $(lab_trim "${err:-$out}")" >&2
     return 1
   fi
   lab_trim "$out"
@@ -148,7 +148,7 @@ lab_sql_file() {
     path="$(lab_winpath "$path")"
     case "$engine" in
       sqlserver) out=$(sqlcmd -S "${LEARN_SERVER},${LEARN_PORT}" -U "$LEARN_USER" -P "$LEARN_PASSWORD" \
-                         -C -b -d "$db" -i "$path" 2>&1); rc=$? ;;
+                         -C -I -b -d "$db" -i "$path" 2>&1); rc=$? ;;
       postgres)  out=$(PGPASSWORD="$LEARN_PASSWORD" psql -h "$LEARN_SERVER" -p "$LEARN_PORT" -U "$LEARN_USER" \
                          -d "$db" -w -v ON_ERROR_STOP=1 --no-psqlrc -f "$path" 2>&1); rc=$? ;;
       *)         out=$(MYSQL_PWD="$LEARN_PASSWORD" "$client" -h "$LEARN_SERVER" -P "$LEARN_PORT" \
@@ -163,7 +163,7 @@ lab_sql_file() {
     fi
     case "$engine" in
       sqlserver) sc=$(lab_container_sqlcmd "$container"); out=$(MSYS_NO_PATHCONV=1 docker exec "$container" "$sc" \
-                         -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d "$db" -i /tmp/lab-seed.sql 2>&1); rc=$? ;;
+                         -S localhost -U sa -P 'Learn!Passw0rd' -C -I -b -d "$db" -i /tmp/lab-seed.sql 2>&1); rc=$? ;;
       postgres)  out=$(MSYS_NO_PATHCONV=1 docker exec "$container" psql -U postgres -d "$db" -v ON_ERROR_STOP=1 -f /tmp/lab-seed.sql 2>&1); rc=$? ;;
       # The seed file is fed on STDIN, not via -e 'source ...'. `source` is a mysql CLIENT command rather
       # than SQL: it worked on 8.0 and MySQL 26.7 rejects it outright (ERROR 1064 near 'source /tmp/lab-seed.sql'),

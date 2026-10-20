@@ -29,14 +29,14 @@ only because that is how lab bundles ship.
 **macOS / Linux**
 
 ```bash
-cd Demos/Learn/course9-setup
+# from course9-setup
 bash setup-databases.sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-cd Demos\Learn\course9-setup
+# from course9-setup
 .\setup-databases.ps1
 ```
 
@@ -64,10 +64,12 @@ Any time you want a clean slate for one of the services — say a module's deplo
 failed partway and left it in a state a later module doesn't expect — reset it:
 
 ```bash
+# from course9-setup
 bash setup-databases.sh --reset
 ```
 
 ```powershell
+# from course9-setup
 .\setup-databases.ps1 -Reset
 ```
 

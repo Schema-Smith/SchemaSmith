@@ -38,7 +38,7 @@ of its **own** custom property and the **deploy** token `{{DeployEnv}}`:
 ## Step 2: Deploy to production
 
 ```bash
-cd <engine>
+# from course4-recipe-01/<engine>
 schemaquench --ConfigFile:prod.settings.json
 ```
 
@@ -46,35 +46,48 @@ schemaquench --ConfigFile:prod.settings.json
 Begin Quench of CookbookShop
 […].[cookbook_r1_prod] Begin Quench
     Adding new table [dbo].[Customer]
+    Creating index [dbo].[Customer].[IX_Customer_Email]
 […].[cookbook_r1_prod] Successfully Quenched
 ```
 
-The production shape: the perf index **is** built, the diagnostic column is **not**.
+The production shape: the perf index **is** built, the diagnostic column is **not**. Check the columns,
+then the indexes, on your engine:
 
 ```bash
-# SQL Server
-cd ..            # back to the lab folder
+# from course4-recipe-01
 ../lab-sql.sh sqlserver cookbook_r1_prod "SELECT name FROM sys.columns WHERE object_id=OBJECT_ID('dbo.Customer')"
 # → CustomerId, Email  (no DebugPayload)
-# index IX_Customer_Email is present
+../lab-sql.sh sqlserver cookbook_r1_prod "SELECT name FROM sys.indexes WHERE object_id=OBJECT_ID('dbo.Customer') AND name IS NOT NULL"
+# → PK_Customer, IX_Customer_Email
+../lab-sql.sh postgres cookbook_r1_prod "SELECT column_name FROM information_schema.columns WHERE table_name='customer' ORDER BY ordinal_position"
+../lab-sql.sh postgres cookbook_r1_prod "SELECT indexname FROM pg_indexes WHERE tablename='customer'"
+../lab-sql.sh mysql cookbook_r1_prod "SELECT column_name FROM information_schema.columns WHERE table_schema='cookbook_r1_prod' AND table_name='Customer' ORDER BY ordinal_position"
+../lab-sql.sh mysql cookbook_r1_prod "SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema='cookbook_r1_prod' AND table_name='Customer'"
+../lab-sql.sh mariadb cookbook_r1_prod "SELECT column_name FROM information_schema.columns WHERE table_schema='cookbook_r1_prod' AND table_name='Customer' ORDER BY ordinal_position"
+../lab-sql.sh mariadb cookbook_r1_prod "SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema='cookbook_r1_prod' AND table_name='Customer'"
 ```
 
 ## Step 3: Deploy the SAME package to non-prod
 
 ```bash
-cd <engine>       # back into the engine folder
+# from course4-recipe-01/<engine>
 schemaquench --ConfigFile:nonprod.settings.json
 ```
 
 Now the calls flip — the perf index is **skipped**, the diagnostic column **is** added:
 
 ```bash
-# PostgreSQL
-cd ..            # back to the lab folder
+# from course4-recipe-01
+../lab-sql.sh sqlserver cookbook_r1_nonprod "SELECT name FROM sys.columns WHERE object_id=OBJECT_ID('dbo.Customer')"
+../lab-sql.sh sqlserver cookbook_r1_nonprod "SELECT name FROM sys.indexes WHERE object_id=OBJECT_ID('dbo.Customer') AND name IS NOT NULL"
 ../lab-sql.sh postgres cookbook_r1_nonprod "SELECT column_name FROM information_schema.columns WHERE table_name='customer' ORDER BY ordinal_position"
 # → customerid, email, debugpayload
 ../lab-sql.sh postgres cookbook_r1_nonprod "SELECT indexname FROM pg_indexes WHERE tablename='customer'"
 # → pk_customer  (no ix_customer_email)
+../lab-sql.sh mysql cookbook_r1_nonprod "SELECT column_name FROM information_schema.columns WHERE table_schema='cookbook_r1_nonprod' AND table_name='Customer' ORDER BY ordinal_position"
+../lab-sql.sh mysql cookbook_r1_nonprod "SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema='cookbook_r1_nonprod' AND table_name='Customer'"
+../lab-sql.sh mariadb cookbook_r1_nonprod "SELECT column_name FROM information_schema.columns WHERE table_schema='cookbook_r1_nonprod' AND table_name='Customer' ORDER BY ordinal_position"
+../lab-sql.sh mariadb cookbook_r1_nonprod "SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema='cookbook_r1_nonprod' AND table_name='Customer'"
 ```
 
 Two databases, two physical shapes, one source package. The metadata that decided each one lives on the

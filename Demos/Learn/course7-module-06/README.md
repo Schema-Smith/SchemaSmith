@@ -29,7 +29,7 @@ Each engine folder ships a `baseline/` package (the established fleet state, inc
 Land the `baseline/` package fleet-wide so every tenant starts at the same known state:
 
 ```bash
-cd sqlserver
+# from course7-module-06/<engine>
 schemaquench --ConfigFile:quench.settings.baseline.json
 ```
 
@@ -40,6 +40,7 @@ All five tenants deploy cleanly, exit `0`.
 Before you touch a single tenant, ask SchemaQuench what the rollout would do without doing it. `quench.settings.after.whatif.json` — already shipped in every engine folder — is the same `after/` config with one flag added, `"WhatIfONLY": true`. Run it against the fleet exactly as it stands after Step 1 — clean baseline, no drift staged yet:
 
 ```bash
+# from course7-module-06/<engine>
 schemaquench --ConfigFile:quench.settings.after.whatif.json --report:./out/whatif-summary --BottleneckThresholdMs=800
 ```
 
@@ -90,12 +91,14 @@ This runs the same way on all four engines — PostgreSQL, MySQL, and MariaDB ea
 
 ## Step 3: Stage the one failure
 
-Plant duplicate emails in a single tenant so the rollout's new unique index fails there — and nowhere else:
+Plant duplicate emails in a single tenant so the rollout's new unique index fails there — and nowhere else. Run the line for your engine:
 
 ```bash
-cd ..            # back to the lab folder
+# from course7-module-06
 ../lab-sql.sh sqlserver fleet_tenant_003 --file sqlserver/drift-tenant-003.sql
-cd sqlserver     # back into the engine folder
+../lab-sql.sh postgres fleet_tenant_003 --file postgres/drift-tenant-003.sql
+../lab-sql.sh mysql fleet_tenant_003 --file mysql/drift-tenant-003.sql
+../lab-sql.sh mariadb fleet_tenant_003 --file mariadb/drift-tenant-003.sql
 ```
 
 ## Step 4: Run the rollout and write the report
@@ -103,6 +106,7 @@ cd sqlserver     # back into the engine folder
 Deploy `after/` fleet-wide, and pin the report where the sandbox can read it. `--report:` takes a base path with no extension — SchemaSmith writes both `.json` and `.md`. Attach the value with `:` or `=`, never a space: a bare `--report` carries no value, so the report falls back to the default location (the executable's own directory) and `out/` never appears. The lab lowers `BottleneckThresholdMs` far below its 30-second default so a fast five-tenant run still surfaces a long pole:
 
 ```bash
+# from course7-module-06/<engine>
 schemaquench --ConfigFile:quench.settings.after.json --report:./out/deploy-summary --BottleneckThresholdMs=800
 ```
 
@@ -123,9 +127,15 @@ Read the report top to bottom — it's built to be read in that order:
 Reset the one tenant and re-run to watch the summary go all-green:
 
 ```bash
-cd ..            # back to the lab folder
+# from course7-module-06
 ../lab-sql.sh sqlserver fleet_tenant_003 --file sqlserver/reset-tenant-003.sql
-cd sqlserver     # back into the engine folder
+../lab-sql.sh postgres fleet_tenant_003 --file postgres/reset-tenant-003.sql
+../lab-sql.sh mysql fleet_tenant_003 --file mysql/reset-tenant-003.sql
+../lab-sql.sh mariadb fleet_tenant_003 --file mariadb/reset-tenant-003.sql
+```
+
+```bash
+# from course7-module-06/<engine>
 schemaquench --ConfigFile:quench.settings.after.json --report:./out/deploy-summary --BottleneckThresholdMs=800
 ```
 
@@ -133,33 +143,14 @@ Exit `0`, `outcome: "Success"`, empty `failures[]`, and `objectChanges` now show
 
 ## Step 7: Do it on PostgreSQL, MySQL, and MariaDB
 
-Same steps in `postgres/`, `mysql/`, and `mariadb/`. The report shape is identical; only the dialect in the names and errors changes. Stage the drift with each engine's client:
-
-**PostgreSQL:**
-
-```bash
-../lab-sql.sh postgres fleet_tenant_003 --file postgres/drift-tenant-003.sql
-```
-
-**MySQL:**
-
-```bash
-../lab-sql.sh mysql fleet_tenant_003 --file mysql/drift-tenant-003.sql
-```
-
-**MariaDB:**
-
-```bash
-../lab-sql.sh mariadb fleet_tenant_003 --file mariadb/drift-tenant-003.sql
-```
-
-Then run the `after` deploy from that engine's folder with the same `--report` switch, and read its `objectChanges`. The counts move a little per engine — the phase where the failing tenant dies, and how each engine orders its object-script slot, shift a bucket or two — which is exactly the point: every run's summary is that run's own certified record, not a fixed script.
+Same steps in `postgres/`, `mysql/`, and `mariadb/`. The report shape is identical; only the dialect in the names and errors changes. The drift and reset lines in Steps 3 and 6 already carry each engine's own file. Run the `after` deploy from that engine's folder with the same `--report` switch, and read its `objectChanges`. The counts move a little per engine — the phase where the failing tenant dies, and how each engine orders its object-script slot, shift a bucket or two — which is exactly the point: every run's summary is that run's own certified record, not a fixed script.
 
 ## Cleanup
 
 The report and artifacts live under each engine folder — remove them when you're done:
 
 ```bash
+# from course7-module-06
 rm -rf sqlserver/out sqlserver/artifacts
 rm -rf postgres/out postgres/artifacts
 rm -rf mysql/out mysql/artifacts

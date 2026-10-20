@@ -31,6 +31,11 @@ This lab ships one product, `BillingService`, on all four engines. Each engine f
 Open `<engine>/Package/Product.json`. The `ScriptTokens` block declares three tokens (SQL Server
 shown):
 
+```bash
+# from level2-module-04/<engine>
+cat Package/Product.json
+```
+
 ```json
 "ScriptTokens": {
   "Environment": "Development",
@@ -45,6 +50,11 @@ time.
 
 Now compare the two settings files. `dev.settings.json` has no `ScriptTokens` section — it uses the
 package defaults. `prod.settings.json` overrides the two static tokens:
+
+```bash
+# from level2-module-04/<engine>
+cat dev.settings.json prod.settings.json
+```
 
 ```json
 "ScriptTokens": {
@@ -61,7 +71,7 @@ duplicating a row for an environment that's already stamped.
 ## Step 2: Deploy with the dev settings
 
 ```bash
-cd <engine>
+# from level2-module-04/<engine>
 schemaquench --ConfigFile:dev.settings.json
 ```
 
@@ -87,6 +97,7 @@ its version before any script ran.
 No file edits. Just a different settings file:
 
 ```bash
+# from level2-module-04/<engine>
 schemaquench --ConfigFile:prod.settings.json
 ```
 
@@ -102,12 +113,21 @@ schemaquench --ConfigFile:prod.settings.json
 Read the table back — two rows, written by one package:
 
 ```bash
-# SQL Server (from a SQL client):
-#   SELECT Environment, ProductName, ReleaseVersion, EngineVersion FROM dbo.DeploymentLog ORDER BY Environment;
+# from level2-module-04
+../lab-sql.sh sqlserver learn "SELECT Environment, ProductName, ReleaseVersion, EngineVersion FROM dbo.DeploymentLog ORDER BY Environment"
 ../lab-sql.sh postgres learn "SELECT environment, product_name, release_version, engine_version FROM public.deploymentlog ORDER BY environment"
+../lab-sql.sh mysql learn "SELECT Environment, ProductName, ReleaseVersion, EngineVersion FROM DeploymentLog ORDER BY Environment"
+../lab-sql.sh mariadb learn "SELECT Environment, ProductName, ReleaseVersion, EngineVersion FROM DeploymentLog ORDER BY Environment"
 ```
 
-SQL Server result:
+PostgreSQL prints the two rows pipe-separated:
+
+```
+Development|BillingService|2.4.0-dev|16.13
+Production|BillingService|2.4.0|16.13
+```
+
+SQL Server result, from a SQL client:
 
 ```
 Environment    ProductName       ReleaseVersion    EngineVersion
@@ -126,12 +146,14 @@ Re-run either deploy and no new row appears: the stamp is idempotent per environ
 Same package, no settings edit — override a token from the shell, the way a CI pipeline would:
 
 ```bash
+# from level2-module-04/<engine>
 # Linux/macOS
 export SmithySettings_ScriptTokens__ReleaseVersion="2.4.0-ci.99"
 schemaquench --ConfigFile:dev.settings.json
 ```
 
 ```powershell
+# from level2-module-04/<engine>
 # Windows (PowerShell)
 $env:SmithySettings_ScriptTokens__ReleaseVersion = "2.4.0-ci.99"
 schemaquench --ConfigFile:dev.settings.json

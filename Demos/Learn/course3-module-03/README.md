@@ -57,6 +57,7 @@ you.*
 - The target database exists. Run the Course 3 setup once (idempotent — safe to re-run):
 
   ```bash
+  # from course3-module-03
   pwsh ../course3-setup/setup-environments.ps1     # or: ../course3-setup/setup-environments.sh
   ```
 
@@ -83,10 +84,14 @@ The four steps, conceptually:
 4. **Deploy `v1`** — apply the rollback. SchemaQuench computes the same delta: it drops the FK and the
    `Customer.PromotionId` column, and recycles the now-removed `Promotion` table into the recyclebin.
 
-### SQL Server
+### Run it
+
+All four commands run from your engine's `v1` folder (`v1/sqlserver`, `v1/postgres`, `v1/mysql`, or
+`v1/mariadb`); only the package path and the WhatIf flag change. Use the same engine name in the `v2`
+package path.
 
 ```bash
-cd v1/sqlserver        # all four commands run from here; only the package path and WhatIf flag change
+# from course3-module-03/v1/<engine>
 
 # 1. deploy v1 (known-good release)
 SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
@@ -94,7 +99,7 @@ SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
 
 # 2. deploy v2 (the next release)
 SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
-SmithySettings_SchemaPackagePath=../../v2/sqlserver/Package \
+SmithySettings_SchemaPackagePath=../../v2/<engine>/Package \
   schemaquench --ConfigFile:./base.settings.json
 
 # 3. WhatIf v1 — preview the rollback (changes NOTHING)
@@ -110,10 +115,10 @@ SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
 PowerShell equivalent (set the vars, run, then clear them):
 
 ```powershell
-cd v1\sqlserver
+# from course3-module-03/v1/<engine>
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_dev'
 schemaquench --ConfigFile:.\base.settings.json                                   # 1. v1
-$env:SmithySettings_SchemaPackagePath = '..\..\v2\sqlserver\Package'
+$env:SmithySettings_SchemaPackagePath = '..\..\v2\<engine>\Package'
 schemaquench --ConfigFile:.\base.settings.json                                   # 2. v2
 Remove-Item Env:SmithySettings_SchemaPackagePath
 $env:SmithySettings_WhatIfONLY = 'true'
@@ -122,8 +127,8 @@ Remove-Item Env:SmithySettings_WhatIfONLY
 schemaquench --ConfigFile:.\base.settings.json                                   # 4. v1 (rollback)
 ```
 
-For **PostgreSQL**, **MySQL**, or **MariaDB**, swap `sqlserver` for `postgres`, `mysql`, or `mariadb`
-in the `cd` and in the `SchemaPackagePath`. Everything else is identical — that's the whole point.
+On every engine the commands are identical apart from the engine folder and the matching
+`SchemaPackagePath` — that's the whole point.
 
 ## What you'll see — the rollback preview (Step 3)
 
@@ -226,17 +231,32 @@ So with the recyclebin installed you can roll back with auto-drop **on** and los
 ### Roll back and watch the data survive
 
 The Step 4 rollback already recycles `Promotion` — auto-drop is on by default, so there's no flag to set.
-To watch the data make the round trip, seed a row *before* you roll back. The SQL Server form is shown —
-swap `sqlserver` for your engine.
+To watch the data make the round trip, seed a row *before* you roll back. First deploy v1, then v2 (as
+before), from your engine's `v1` folder:
 
 ```bash
-cd v1/sqlserver
-# 1-2. deploy v1, then v2 (as before), then seed a row into the new table:
-cd ../..                                                                          # back to the lab folder
-../lab-sql.sh sqlserver ordersservice_dev "INSERT INTO dbo.Promotion(Name, Discount) VALUES('Summer Sale', 10.00)"
-cd v1/sqlserver                                                                   # back to the engine folder
+# from course3-module-03/v1/<engine>
+SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
+  schemaquench --ConfigFile:./base.settings.json
+SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
+SmithySettings_SchemaPackagePath=../../v2/<engine>/Package \
+  schemaquench --ConfigFile:./base.settings.json
+```
 
-# 3. roll back to v1 — Promotion is recycled (not destroyed), data and all
+Seed a row into the new table, from the lab folder:
+
+```bash
+# from course3-module-03
+../lab-sql.sh sqlserver ordersservice_dev "INSERT INTO dbo.Promotion(Name, Discount) VALUES('Summer Sale', 10.00)"
+../lab-sql.sh postgres ordersservice_dev "INSERT INTO public.\"Promotion\"(\"Name\", \"Discount\") VALUES('Summer Sale', 10.00)"
+../lab-sql.sh mysql ordersservice_dev "INSERT INTO Promotion(Name, Discount) VALUES('Summer Sale', 10.00)"
+../lab-sql.sh mariadb ordersservice_dev "INSERT INTO Promotion(Name, Discount) VALUES('Summer Sale', 10.00)"
+```
+
+Then roll back to v1, from the engine folder — `Promotion` is recycled (not destroyed), data and all:
+
+```bash
+# from course3-module-03/v1/<engine>
 SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
   schemaquench --ConfigFile:./base.settings.json
 ```
@@ -251,12 +271,14 @@ Server the line reads like an ordinary drop — the hook does its work silently:
 
 PostgreSQL, MySQL, and MariaDB announce it outright — e.g. `Table public.Promotion recycled as
 recyclebin.public_Promotion with a retention of 90 days.` Either way `Promotion` is gone from its
-schema, but its rows are sitting in the recyclebin — confirm it:
+schema, but its rows are sitting in the recyclebin — confirm it, from the lab folder:
 
 ```bash
-cd ../..                              # back to the lab folder
+# from course3-module-03
 ../lab-sql.sh sqlserver ordersservice_dev "SELECT Name, Discount FROM recyclebin.dbo_Promotion; SELECT OriginalName, RecycledName FROM recyclebin.Registry"
-cd v1/sqlserver                       # back to the engine folder
+../lab-sql.sh postgres ordersservice_dev "SELECT \"Name\", \"Discount\" FROM recyclebin.\"public_Promotion\"; SELECT original_name, recycled_name FROM recyclebin.registry"
+../lab-sql.sh mysql ordersservice_dev "SELECT Name, Discount FROM recyclebin_Promotion; SELECT OriginalName, RecycledName FROM recyclebin_Registry"
+../lab-sql.sh mariadb ordersservice_dev "SELECT Name, Discount FROM recyclebin_Promotion; SELECT OriginalName, RecycledName FROM recyclebin_Registry"
 ```
 
 The recycled name follows an `originalschema_table` convention so two recycled copies never collide:
@@ -269,8 +291,9 @@ Now deploy `v2` again. `Promotion` is back in the package, so SchemaQuench goes 
 `CustomTableRestore` intercepts and restores the recycled copy instead of an empty table:
 
 ```bash
+# from course3-module-03/v1/<engine>
 SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
-SmithySettings_SchemaPackagePath=../../v2/sqlserver/Package \
+SmithySettings_SchemaPackagePath=../../v2/<engine>/Package \
   schemaquench --ConfigFile:./base.settings.json
 ```
 
@@ -286,12 +309,15 @@ single hand-written backup script.
 ### Retention and cleanup
 
 A recycled table isn't kept forever. Each registry row carries a retention window (90 days by default);
-`CleanupJob` drops everything past it:
+`CleanupJob` drops everything past it. Run it from the lab folder (on MySQL and MariaDB it runs with the
+target database selected, which `lab-sql.sh` does for you):
 
-```sql
-EXEC recyclebin.CleanupJob;      -- SQL Server
-CALL recyclebin.cleanup_job();   -- PostgreSQL
-CALL recyclebin_CleanupJob();    -- MySQL, MariaDB (run with the target database selected)
+```bash
+# from course3-module-03
+../lab-sql.sh sqlserver ordersservice_dev "EXEC recyclebin.CleanupJob;"
+../lab-sql.sh postgres ordersservice_dev "CALL recyclebin.cleanup_job();"
+../lab-sql.sh mysql ordersservice_dev "CALL recyclebin_CleanupJob();"
+../lab-sql.sh mariadb ordersservice_dev "CALL recyclebin_CleanupJob();"
 ```
 
 `CleanupJob` ships as a procedure on all four engines but is **not** scheduled for you — wire it to
@@ -304,9 +330,10 @@ a MySQL/MariaDB `CREATE EVENT`. Until then it's a manual, idempotent call you ca
 
 ## Confirm it by hand
 
-At any point, check the catalog yourself.
+At any point, check the catalog yourself, from the lab folder.
 
 ```bash
+# from course3-module-03
 # SQL Server
 ../lab-sql.sh sqlserver ordersservice_dev "SELECT name FROM sys.foreign_keys WHERE name='FK_Customer_Promotion'"
 

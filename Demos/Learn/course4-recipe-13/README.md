@@ -20,6 +20,7 @@ package never declares its columns — only the indexes you want on it.
 This is the part you do not control. Run it once per engine:
 
 ```bash
+# from course4-recipe-13
 for e in sqlserver postgres mysql mariadb; do
   ../lab-sql.sh $e cookbook_r13 "$(cat vendor-schema/create-vendor-table.$e.sql)"
 done
@@ -53,6 +54,7 @@ It is a **template-level** switch, not a per-table one — the whole template ru
 Deploy:
 
 ```bash
+# from course4-recipe-13
 cd <engine> && schemaquench --ConfigFile:deploy.settings.json ; cd ..
 # exit 0 on all four engines
 ```
@@ -69,15 +71,23 @@ Watch the log line, because it changes shape to tell you which mode you are in:
 This is the assertion that matters. The indexes landed:
 
 ```bash
+# from course4-recipe-13
 ../lab-sql.sh sqlserver cookbook_r13 "SELECT i.name FROM sys.indexes i JOIN sys.tables t ON t.object_id=i.object_id WHERE t.name='vendor_order' AND i.name IS NOT NULL ORDER BY i.name"
 # → IX_vendor_order_customer_placed, IX_vendor_order_status, PK__vendor_o__...
+../lab-sql.sh postgres cookbook_r13 "SELECT indexname FROM pg_indexes WHERE tablename='vendor_order' ORDER BY indexname"
+../lab-sql.sh mysql cookbook_r13 "SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema='cookbook_r13' AND table_name='vendor_order' ORDER BY index_name"
+../lab-sql.sh mariadb cookbook_r13 "SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema='cookbook_r13' AND table_name='vendor_order' ORDER BY index_name"
 ```
 
 And the vendor's columns are exactly as the vendor left them:
 
 ```bash
+# from course4-recipe-13
 ../lab-sql.sh sqlserver cookbook_r13 "SELECT STRING_AGG(name,',') FROM sys.columns WHERE object_id=OBJECT_ID('dbo.vendor_order')"
 # → order_id,customer_ref,placed_at,status
+../lab-sql.sh postgres cookbook_r13 "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='public' AND table_name='vendor_order'"
+../lab-sql.sh mysql cookbook_r13 "SELECT GROUP_CONCAT(column_name ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='cookbook_r13' AND table_name='vendor_order'"
+../lab-sql.sh mariadb cookbook_r13 "SELECT GROUP_CONCAT(column_name ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='cookbook_r13' AND table_name='vendor_order'"
 ```
 
 Four columns, unchanged, in the vendor's order. **Do not take the clean exit code as proof of that** —
@@ -109,6 +119,7 @@ explicitly.
 ## Cleanup
 
 ```bash
+# from course4-recipe-13
 for e in sqlserver mysql mariadb; do ../lab-sql.sh $e cookbook_r13 "DROP TABLE IF EXISTS vendor_order"; done
 ../lab-sql.sh postgres cookbook_r13 "DROP TABLE IF EXISTS public.vendor_order"
 ```

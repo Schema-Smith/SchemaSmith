@@ -1,22 +1,20 @@
-# Course 10 bonus recipe — XML data delivery for the legacy tier
+# Course 10 bonus recipe — XML data delivery, on purpose
+
+<!-- TRAINING-RELEASE-PIN 2.8.0 (JSON delivery below compatibility level 130): delete the "On 2.7.x" callouts, bump the pre-flight to 2.8.0 -->
+<!-- TRAINING-RELEASE-PIN #573 (JSON extract at compatibility level 100): delete the Part 4 known-issue note and show the no-switch extract from learn_2008 -->
 
 Course 10's oldest SQL Server tier (`learn_2008`, compatibility level 100) is where
-SchemaSmith's own model ingest quietly switches from JSON to XML — you never see it, because
-it's the *engine's* choice (see [Module 4](../course10-module-04/README.md)). This recipe is
-about the one knob that puts the same choice in **your** hands: `DataDelivery.ContentEncoding`.
+SchemaSmith's own model ingest switches from JSON to XML, because `OPENJSON` needs level 130
+(see [Module 4](../course10-module-04/README.md)). From 2.8 your seed data crosses the same cliff
+the same way: a plain JSON `DataDelivery` aimed at a below-130 database is converted to the XML row
+shape as it is read, and all its rows land. So this recipe is about the one knob that is still yours,
+`DataDelivery.ContentEncoding`, and when declaring `"Xml"` is the right call now that it isn't needed
+for reach.
 
-There's only **one product** here, `RefData`, and its `dbo.CountryCode` table. You'll deploy it
-twice: first as it's naturally authored — a default JSON `DataDelivery` — and watch that delivery
-hit a wall on the legacy tier; then with one property changed, `"ContentEncoding": "Xml"`, and
-watch the identical data land everywhere. `sqlserver/json-attempt/` and `sqlserver/package/` are
-NOT two products — they're the *same* `RefData` product, before and after that one-line fix, the
-same edit-and-redeploy idiom Module 3 used for gating.
-
-A `DataDelivery` block defaults to JSON, shredded with `OPENJSON` — which needs SQL Server
-compatibility level 130+. Below that, `OPENJSON` doesn't degrade gracefully; it parse-errors.
-Set `"ContentEncoding": "Xml"` on the delivery and SchemaSmith shreds the payload with the XML
-data-type methods (`.nodes()`/`.value()`) instead — a path that works at *every* compatibility
-level, including the oldest tier in the fleet.
+There's only **one product** here, `RefData`, and its `dbo.CountryCode` table. `sqlserver/json/`
+and `sqlserver/package/` are NOT two products — they're the *same* `RefData` product with its seed
+data in two encodings: a default JSON `DataDelivery`, and the same delivery declared
+`"ContentEncoding": "Xml"` with an XML payload file.
 
 > **Engine floor:** this lab deploys into the `learn_2022` tier, which is a database at **compatibility level 160** — a level only **SQL Server 2022+** offers. On an older engine [`course10-setup`](../course10-setup/README.md) cannot provision that tier and the lab stops with *"No database targets discovered"*. The sandbox default is 2022, so this only applies if you have pointed `MSSQL_IMAGE` at an older release. The other engines in this lab are unaffected.
 
@@ -25,66 +23,109 @@ level, including the oldest tier in the fleet.
 - The four-engine sandbox is up (`Demos/Learn/docker`).
 - **Run [`course10-setup`](../course10-setup/README.md) first** so the mixed fleet is standing:
   `learn_2022` (compat 160) and `learn_2008` (compat 100) on the shared SQL Server instance
-  (`localhost,11433`), and current-tier PostgreSQL 16 (`localhost:15432`).
-- `schemaquench --version` answers **2.7.0 or later**.
+  (`localhost,11433`), and current-tier PostgreSQL 16 (`localhost:15432`). MySQL (`localhost:13306`)
+  and MariaDB (`localhost:13307`) use the sandbox's `learn` database.
+- `schemaquench --version` answers **2.7.0 or later**. Part 1 describes 2.8; on 2.7.x read its callout.
 
-## Part 1 — the problem: JSON delivery hits the compat-130 cliff
+## Part 1 — a JSON delivery lands on the floor
 
-`sqlserver/json-attempt` is the `RefData` product as you'd naturally author it: `dbo.CountryCode`
-with a plain JSON `DataDelivery` — no `ContentEncoding`, so it defaults to `Json` — pointed at a
-JSON `.tabledata` array. Deploy it to `learn_2008`:
+`sqlserver/json` is the `RefData` product as you'd naturally author it: `dbo.CountryCode` with a
+plain JSON `DataDelivery` — no `ContentEncoding`, so it defaults to `Json` — pointed at a JSON
+`.tabledata` array whose `JP` row carries `"Continent": null`. Deploy it to `learn_2008`:
 
+```bash
+# from course10-xml-data-delivery/sqlserver
+schemaquench --ConfigFile:quench.settings.json.legacy.json --LogPath:"$PWD/logs"
 ```
-cd sqlserver
-schemaquench --ConfigFile:quench.settings.json-attempt.json --LogPath:"$PWD/logs"
-```
-
-The table itself deploys fine — only the *data delivery* hits the cliff. Under the default
-`warn` policy, SchemaQuench skips just that delivery with a clear message and leaves the table
-empty, rather than failing the whole run:
 
 ```
 [localhost,11433].[learn_2008]   [learn_2008] detected SQL Server version 16.0.4260.1 (compatibility level 100)
 [localhost,11433].[learn_2008]   [learn_2008] model ingest encoding: Xml (auto)
 [localhost,11433].[learn_2008]   Delivering table data
-[localhost,11433].[learn_2008]     [SKIPPED - requires compatibility level 130 for JSON delivery] JSON data delivery for dbo.CountryCode requires SQL Server compatibility level 130 (target is at 100); re-encode this delivery as XML ("ContentEncoding": "Xml") to deploy it on a legacy-compat target.
+[localhost,11433].[learn_2008]     Delivering dbo.CountryCode (converted to Xml for compatibility level 100)
 [localhost,11433].[learn_2008] Successfully Quenched
 ```
 
-Read the second line. SchemaQuench has already switched *its own* model ingest to
-XML for this compat-100 database — automatically, and it tells you so. Your delivery gets no such
-switch: the payload is your data, so its encoding is yours to declare. That is the gap this recipe
-closes.
+Exit code `0`. Two lines tell the story. The model ingest switched to XML for this database, as in
+Module 4, and the delivery line says the same happened to your data: the JSON file was converted to
+the XML row shape as it was read and went through the XML merge. Read the rows back:
 
-Exit code `0` — `warn` skips and the run still succeeds. Row count after: `0` — the table was
-created, but the delivery that would have populated it never ran.
-
-Now flip the policy. `quench.settings.json-attempt-fail.json` is identical except it sets
-`"UnsupportedFeaturePolicy": "fail"` under `Target`. Same package, same target, same JSON
-delivery — this time SchemaQuench aborts the run instead of skipping:
-
-```
-schemaquench --ConfigFile:quench.settings.json-attempt-fail.json --LogPath:"$PWD/logs"
+```bash
+# from course10-xml-data-delivery
+../lab-sql.sh sqlserver learn_2008 "SELECT Code, Name, Continent FROM dbo.CountryCode ORDER BY Code;"
 ```
 
 ```
-[localhost,11433].[learn_2008] FAILED to quench:
-JSON data delivery for dbo.CountryCode requires SQL Server compatibility level 130 (target is at 100); re-encode this delivery as XML ("ContentEncoding": "Xml") to deploy it on a legacy-compat target.
-[localhost,11433].[learn_2008] *** FAILED [Template:Main] ***
-Template 'Main' had 1 failed work unit(s)
+Code  Name            Continent
+----  --------------  -------------
+CA    Canada          North America
+DE    Germany         Europe
+GB    United Kingdom  Europe
+JP    Japan           NULL
+US    United States   North America
 ```
 
-Exit code `2`.
+Five rows, on a tier where `OPENJSON` can't even parse. `JP`'s JSON `null` arrived as `NULL`.
 
-Both outcomes are the built-in degrade behavior for a JSON-encoded delivery aimed at a
-below-130 target — `warn` (the default) skips the delivery and lets the rest of the deploy
-proceed; `fail` aborts before any deployment work begins. Neither one lands the reference data
-on the legacy tier. That's the fix this recipe teaches.
+> **On 2.7.x** this delivery doesn't land. Under the default `warn` policy it is skipped —
+> `[SKIPPED - requires compatibility level 130 for JSON delivery] JSON data delivery for dbo.CountryCode requires SQL Server compatibility level 130 (target is at 100); re-encode this delivery as XML ("ContentEncoding": "Xml") to deploy it on a legacy-compat target.`
+> — the run still exits `0`, and the table is empty. Under `fail` (next step) the run stops with
+> that message and exits `2`. Upgrade, or deploy the XML package from Part 3.
 
-## Part 2 — the fix: `ContentEncoding: "Xml"`
+Now set the policy to `fail`. `quench.settings.json.legacy-fail.json` is identical except it sets
+`"UnsupportedFeaturePolicy": "fail"` under `Target`:
 
-`sqlserver/package` is the *same* `RefData` product, redeployed with one change: `dbo.CountryCode`
-is unchanged, but its `DataDelivery` is:
+```bash
+# from course10-xml-data-delivery/sqlserver
+schemaquench --ConfigFile:quench.settings.json.legacy-fail.json --LogPath:"$PWD/logs"
+grep -E '"outcome"|"unsupportedDowngrade"' "logs/SchemaQuench - Summary.json"
+```
+
+```
+    "outcome": "Success",
+      "outcome": "Success",
+  "unsupportedDowngrade": null
+```
+
+The same lines as before, exit `0`, and the summary records no downgrade. The policy has nothing to
+say because nothing was degraded: a conversion loses nothing, so there is nothing to warn about or
+refuse.
+
+## Part 2 — one JSON package, every tier
+
+Deploy the same `sqlserver/json` package to `learn_2022` (compat 160):
+
+```bash
+# from course10-xml-data-delivery/sqlserver
+schemaquench --ConfigFile:quench.settings.json.modern.json --LogPath:"$PWD/logs"
+```
+
+```
+[localhost,11433].[learn_2022]   Delivering table data
+[localhost,11433].[learn_2022]     Delivering dbo.CountryCode
+[localhost,11433].[learn_2022] Successfully Quenched
+```
+
+No conversion here: the target reads JSON with `OPENJSON` directly. The readback is identical:
+
+```bash
+# from course10-xml-data-delivery
+../lab-sql.sh sqlserver learn_2022 "SELECT Code, Name, Continent FROM dbo.CountryCode ORDER BY Code;"
+```
+
+One JSON package covers the whole SQL Server fleet. You don't keep an XML copy for the laggard.
+
+## Part 3 — when you'd still declare `Xml`, and what the file looks like
+
+`ContentEncoding` describes the file. It is never inferred and never rewritten: a `Json` file
+below level 130 is converted on read, and an `Xml` file is shipped as written on every tier. So
+declare `Xml` when the file **is** XML:
+
+- **DataTongs wrote it from a SQL Server source older than 2017.** There, an unset
+  `DeliveryEncoding` extracts XML (Part 4).
+- **Someone handed you a file in that shape**, or a consumer of the file wants XML.
+
+`sqlserver/package` is the same `RefData` product with that declaration:
 
 ```json
 "DataDelivery": {
@@ -110,16 +151,15 @@ documented XML shape — one `<c>` element per column, named by an `n` attribute
 
 Notice the last row: `JP` has no `<c n="Continent">` element at all. **An absent `<c>` is
 `NULL`** — not an empty string, not a parse error. That's the documented contract for the XML
-encoding, and it's the row this recipe uses to prove it.
+encoding (it's also what Part 1's conversion did with `JP`'s JSON `null`).
 
-Deploy the XML package to `learn_2008`:
+Deploy the XML package to both tiers:
 
-```
+```bash
+# from course10-xml-data-delivery/sqlserver
 schemaquench --ConfigFile:quench.settings.legacy.json --LogPath:"$PWD/logs"
+schemaquench --ConfigFile:quench.settings.modern.json --LogPath:"$PWD/logs"
 ```
-
-This time the delivery isn't gated on anything — `.nodes()`/`.value()` shredding works at
-compatibility level 100, so all five rows land, including `JP` with a `NULL` continent:
 
 ```
 [localhost,11433].[learn_2008]   Delivering table data
@@ -127,138 +167,22 @@ compatibility level 100, so all five rows land, including `JP` with a `NULL` con
 [localhost,11433].[learn_2008] Successfully Quenched
 ```
 
-Exit code `0`. Read the rows back and confirm the `NULL`:
+Exit code `0` on each, with no conversion note: the file is already XML. Read both tiers back and
+you get the same five rows as Parts 1 and 2, `JP` still `NULL`:
 
-```
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -d learn_2008 -Q "SELECT Code, Name, Continent FROM dbo.CountryCode ORDER BY Code;"
-```
-
-```
-Code  Name            Continent
-----  --------------  -------------
-CA    Canada          North America
-DE    Germany         Europe
-GB    United Kingdom  Europe
-JP    Japan           NULL
-US    United States   North America
+```bash
+# from course10-xml-data-delivery
+../lab-sql.sh sqlserver learn_2008 "SELECT Code, Name, Continent FROM dbo.CountryCode ORDER BY Code;"
+../lab-sql.sh sqlserver learn_2022 "SELECT Code, Name, Continent FROM dbo.CountryCode ORDER BY Code;"
 ```
 
-`JP.Continent` is `NULL` — the absent-`<c>` contract, holding on a tier `OPENJSON` can't even
-parse. That's the money shot: the same reference data your JSON attempt couldn't get past the
-compat-130 cliff now lands cleanly, on the oldest tier in the fleet.
+## Part 4 — where an XML file comes from
 
-## Part 3 — portable: the same XML package on the modern tier
+Five country codes are fine to type. A real reference table, two hundred rows and fifteen columns,
+is not. **DataTongs writes the file**, told which encoding you want:
 
-`ContentEncoding: "Xml"` isn't a legacy-only mode — it's just a different shred path, and it
-works everywhere SQL Server does. Deploy the *same* `sqlserver/package` to `learn_2022`
-(compat 160):
-
-```
-schemaquench --ConfigFile:quench.settings.modern.json --LogPath:"$PWD/logs"
-```
-
-```
-[localhost,11433].[learn_2022]   Delivering table data
-[localhost,11433].[learn_2022]     Delivering dbo.CountryCode
-[localhost,11433].[learn_2022] Successfully Quenched
-```
-
-```
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -d learn_2022 -Q "SELECT Code, Name, Continent FROM dbo.CountryCode ORDER BY Code;"
-```
-
-```
-Code  Name            Continent
-----  --------------  -------------
-CA    Canada          North America
-DE    Germany         Europe
-GB    United Kingdom  Europe
-JP    Japan           NULL
-US    United States   North America
-```
-
-Row-for-row identical to the `learn_2008` readback. One package, one `DataDelivery` block, both
-tiers — you don't maintain a JSON copy for modern targets and an XML copy for the old one.
-
-## Part 4 — parity: XML is accepted everywhere, for different reasons
-
-The interesting part isn't that all four engines take the encoding — it's *why* you would ask for
-it, which is not the same question on each:
-
-| Engine | How the XML is shredded | What declaring `Xml` buys you |
-| --- | --- | --- |
-| SQL Server | Natively, `.nodes()`/`.value()` | **Version reach.** Below compatibility level 130 there is no `OPENJSON`, so XML is the only wire format the legacy tier can read at all. |
-| PostgreSQL | Natively, `xmltable()` | Nothing on its own — PostgreSQL shreds JSON at every supported version. |
-| MySQL / MariaDB | Converted to JSON once, up front, then through the unchanged JSON row source | Nothing on its own — neither engine has a cliff either. |
-
-So on three of the four engines the encoding buys **authoring uniformity, not version reach**: one
-`DataDelivery` block, one payload file, shared across a package that has to serve SQL Server's
-legacy tier as well. Without that, a shared package needed an XML declaration for SQL Server and a
-JSON one for its siblings — the exact divergence this course keeps warning about.
-
-`postgres/package` declares `public.countrycode` with the same `ContentEncoding: "Xml"` block,
-lowercase-named for PostgreSQL. Deploy it:
-
-```
-cd ../postgres
-schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
-```
-
-```
-[localhost].[learn]         Create new table public.countrycode
-[localhost].[learn]         Add missing Constraint public.countrycode.pk_countrycode
-[localhost].[learn]       Add missing Product ownership to tables
-[localhost].[learn]   Delivering table data
-[localhost].[learn]     Delivering public.countrycode
-[localhost].[learn] Successfully Quenched
-```
-
-Exit code `0`. Read it back:
-
-```
-PGPASSWORD="Learn!Passw0rd" psql -h localhost -p 15432 -U postgres -d learn -c "SELECT * FROM public.countrycode ORDER BY code;"
-```
-
-```
- code |      name      |   continent
-------+----------------+---------------
- CA   | Canada         | North America
- DE   | Germany        | Europe
- GB   | United Kingdom | Europe
- JP   | Japan          |
- US   | United States  | North America
-```
-
-The same five rows the two SQL Server tiers hold, from the same payload file — including `JP`'s
-NULL continent, which survives the round trip through `xmltable()` rather than arriving as the
-string `"NULL"`.
-
-**MySQL and MariaDB take the same declaration.** They reject dynamic XPath outright, so SchemaSmith
-converts the payload to JSON once before shredding it through the ordinary JSON row source — the
-result is identical, and the difference is invisible in the package. There is no separate lab
-package for those two here; the declaration is the same block, with the schema dropped (on
-MySQL/MariaDB, schema *is* database).
-
-**When should you actually declare `Xml`?** Only when the package has to reach SQL Server below
-compatibility level 130. If nothing in your fleet is that old, omit `ContentEncoding` and ship JSON
-— it is the default, it is what every engine reads most directly, and the payload is easier to read
-in a diff.
-
-## Part 5 — where that payload actually comes from
-
-Look back at Part 2. You were handed an XML content file and told what shape it takes: a `rows`
-root, one `row` per record, one `c` per column with an `n` attribute naming it, and a column
-whose `c` is **absent** meaning NULL. Five country codes — fine to type by hand.
-
-Now picture a real reference table. Two hundred rows, fifteen columns, three of them nullable.
-Nobody hand-types that, and a recipe that stops here has taught you a technique you can't
-actually use.
-
-**DataTongs writes the file.** It is the same tool that casts your reference data into a content
-file in the first place — it just needs telling which encoding you want:
-
-```
-cd ../sqlserver
+```bash
+# from course10-xml-data-delivery/sqlserver
 datatongs --ConfigFile:tongs.settings.json --DeliveryEncoding:Xml
 ```
 
@@ -274,23 +198,128 @@ Open `extracted/dbo.CountryCode.tabledata`:
 <rows><row><c n="Code">CA</c><c n="Continent">North America</c><c n="Name">Canada</c></row><row><c n="Code">DE</c><c n="Continent">Europe</c><c n="Name">Germany</c></row><row><c n="Code">GB</c><c n="Continent">Europe</c><c n="Name">United Kingdom</c></row><row><c n="Code">JP</c><c n="Name">Japan</c></row><row><c n="Code">US</c><c n="Continent">North America</c><c n="Name">United States</c></row></rows>
 ```
 
-**Find the `JP` row.** It has a `Code` and a `Name` and no `Continent` element at all — exactly the
-convention Part 2 told you to follow. You didn't configure that. NULL-as-absent-element isn't a
-rule you have to remember when authoring by hand; it's what the extractor emits, because it's how
-the shred reads the file at the other end. The hand-written payload in Part 2 was written to match
-*this*, not the other way round.
+**Find the `JP` row.** It has a `Code` and a `Name` and no `Continent` element — the convention
+Part 3 told you to follow, emitted without being asked. The hand-written payload was written to
+match the extractor, not the other way round.
 
-`--DeliveryEncoding` is the switch that decides what a consumer can run. Don't reach for
+**Without the switch, DataTongs chooses by the source server's version.** A SQL Server source older
+than 2017 extracts XML, because the JSON extraction needs `FOR JSON` and `STRING_AGG`, and it says so:
+
+```
+  Delivery data is extracted as Xml: the source is SQL Server <version>, and the Json extraction needs SQL Server 2017. Set DeliveryEncoding to choose.
+```
+
+Ask for `Json` against such a source and the run is refused with exit `2`:
+
+```
+FAILED: DeliveryEncoding is Json, but the source is SQL Server <version>, and the Json extraction needs SQL Server 2017 or later. Set DeliveryEncoding to Xml, or leave it unset to choose automatically.
+```
+
+The sandbox can't show those two — every tier in it is one SQL Server 2022 instance. It does show
+the other half of the rule: the choice follows the **server**, not the database's compatibility
+level. `tongs.settings.legacy.json` extracts from `learn_2008`, and with no switch it would pick JSON,
+because the server is 2022. That's the case to pass the switch:
+
+```bash
+# from course10-xml-data-delivery/sqlserver
+datatongs --ConfigFile:tongs.settings.legacy.json --DeliveryEncoding:Xml
+```
+
+```
+    Casting data for: dbo.CountryCode
+    Extracted 5 row(s) from dbo.CountryCode.
+    Writing contents to : ./extracted\dbo.CountryCode.tabledata
+```
+
+> **Known issue ([#573](https://github.com/Schema-Smith/SchemaSmith/issues/573)):** a JSON extract
+> from a database at compatibility level 100 fails — `Error processing table dbo.CountryCode:
+> Incorrect syntax near '('.`, exit `2` — so leaving the switch off here fails. Until it's fixed,
+> pass `--DeliveryEncoding:Xml` when you extract from a database below level 110.
+
+`--DeliveryEncoding` is the switch that decides what DataTongs writes. Don't reach for
 `Source:CompatEncoding` here — it sounds related, but it only chooses how DataTongs reads a SQL
 Server source's catalog while building its output; the files and scripts come out the same either way.
 
-`--DeliveryEncoding` takes `Json` (the default) or `Xml`, and **both work on every source engine.**
-SQL Server builds the XML natively; PostgreSQL, MySQL and MariaDB extract their normal JSON and
-convert it to this identical dialect, so the file you get does not betray which engine it came
-from. Try it against the PostgreSQL tier you deployed in Part 4:
+### Close the loop
+
+Extract the XML again, copy it over the payload in `package/Templates/Main/data/`, and redeploy to
+the compat-100 tier. The rows land unchanged, `JP` still NULL:
+
+```bash
+# from course10-xml-data-delivery/sqlserver
+datatongs --ConfigFile:tongs.settings.json --DeliveryEncoding:Xml
+cp extracted/dbo.CountryCode.tabledata package/Templates/Main/data/dbo.CountryCode.xml.tabledata
+schemaquench --ConfigFile:quench.settings.legacy.json --LogPath:"$PWD/logs"
+```
+
+That's the round trip closed: **extract as XML → deploy as XML**, no hand-editing anywhere in it.
+
+## Part 5 — the other engines
+
+PostgreSQL, MySQL and MariaDB have no compatibility cliff: each shreds JSON at every version
+SchemaSmith supports. They accept an XML file too, so a file DataTongs wrote from an old SQL Server
+deploys there unchanged — but declaring `Xml` buys nothing on them, and on MySQL and MariaDB it costs
+something.
+
+| Engine | How an `Xml` file is shredded |
+| --- | --- |
+| SQL Server | Natively, `.nodes()`/`.value()` |
+| PostgreSQL | Natively, `xmltable()` |
+| MySQL / MariaDB | Converted to JSON once, up front, then through the ordinary JSON row source |
+
+`postgres/package`, `mysql/package` and `mariadb/package` declare `countrycode` with the same
+`ContentEncoding: "Xml"` block and lowercase names. Deploy each from its engine folder:
+
+```bash
+# from course10-xml-data-delivery/postgres
+schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
+```
+
+```bash
+# from course10-xml-data-delivery/mysql
+schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
+```
+
+```bash
+# from course10-xml-data-delivery/mariadb
+schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
+```
 
 ```
-cd ../postgres
+[localhost].[learn]         Create new table public.countrycode
+[localhost].[learn]         Add missing Constraint public.countrycode.pk_countrycode
+[localhost].[learn]       Add missing Product ownership to tables
+[localhost].[learn]   Delivering table data
+[localhost].[learn]     Delivering public.countrycode
+[localhost].[learn] Successfully Quenched
+```
+
+Exit code `0` on each (PostgreSQL shown). Read them back from the lab folder:
+
+```bash
+# from course10-xml-data-delivery
+../lab-sql.sh postgres learn "SELECT * FROM public.countrycode ORDER BY code;"
+../lab-sql.sh mysql learn "SELECT * FROM countrycode ORDER BY code;"
+../lab-sql.sh mariadb learn "SELECT * FROM countrycode ORDER BY code;"
+```
+
+```
+ code |      name      |   continent
+------+----------------+---------------
+ CA   | Canada         | North America
+ DE   | Germany        | Europe
+ GB   | United Kingdom | Europe
+ JP   | Japan          |
+ US   | United States  | North America
+```
+
+The same five rows on every engine, `JP`'s continent NULL rather than the string `"NULL"`.
+
+DataTongs writes the same dialect from these engines: it extracts their normal JSON and converts it,
+so the file doesn't betray which engine it came from.
+
+```bash
+# from course10-xml-data-delivery/postgres
 datatongs --ConfigFile:tongs.settings.json --DeliveryEncoding:Xml
 ```
 
@@ -300,18 +329,48 @@ datatongs --ConfigFile:tongs.settings.json --DeliveryEncoding:Xml
 
 Same shape, lowercase names because that's what PostgreSQL calls those columns.
 
-### Close the loop
+**The cost on MySQL and MariaDB.** DataTongs can also write merge *scripts* alongside the content
+file, and by default those scripts are tokenized: they read the content file with `JSON_TABLE` when
+they're deployed. Nothing converts an XML file on that path, so DataTongs refuses the combination.
+`mysql/tongs.settings.scripts.json` asks for scripts:
 
-The file DataTongs just wrote is a drop-in for the one you were given. Copy it over the payload in
-`package/Templates/Main/data/`, redeploy to the compat-100 tier, and the rows land unchanged —
-`JP` still NULL:
+```bash
+# from course10-xml-data-delivery/mysql
+datatongs --ConfigFile:tongs.settings.scripts.json --DeliveryEncoding:Xml
+```
 
 ```
-cd ../sqlserver
-schemaquench --ConfigFile:quench.settings.legacy.json --LogPath:"$PWD/logs"
+    Writing contents to : ./extracted\countrycode.tabledata
+    Cannot wire the '{{countrycode.tabledata}}' token for countrycode: ContentPath './extracted' is not within a template. The generated script will not deploy without manual ScriptTokens configuration.
+  Error processing table countrycode: DeliveryEncoding is Xml, but MySQL and MariaDB merge scripts read their content file with JSON_TABLE, so tokenized scripts cannot deploy an Xml file. Use DeliveryEncoding Json, or set ShouldCast:TokenizeScripts to false to embed the data in each script.
+=== DataTongs Summary ===
+  Tables processed: 0
+  Errors: 1
 ```
 
-That's the round trip closed: **extract as XML → deploy as XML**, no hand-editing anywhere in it.
+Exit code `2`: the content file is written, the script is refused. (The `Cannot wire` warning is
+about where this lab extracts to — `extracted/` sits outside any template, so even a JSON script
+would need its token wired by hand. Extract into a template's folder and DataTongs wires it.) A
+`DataDelivery` is unaffected, as the deploys above showed.
+
+> **On 2.7.x** there's no refusal: DataTongs writes the XML file and the scripts, and each script
+> fails with `Invalid JSON text` when it's deployed.
+
+`mysql/tongs.settings.json` writes content files only. Leave the switch off and you get JSON:
+
+```bash
+# from course10-xml-data-delivery/mysql
+datatongs --ConfigFile:tongs.settings.json
+head -c 80 extracted/countrycode.tabledata; echo
+```
+
+```
+[{"code": "CA", "name": "Canada", "continent": "North America"}, {"code": "DE", 
+```
+
+**So when should you declare `Xml`?** When the file is XML. If you're producing the file yourself
+from a 2017-or-later SQL Server, PostgreSQL, MySQL or MariaDB source, omit `ContentEncoding` and
+ship JSON: it reaches every tier now, and it's easier to read in a diff.
 
 ### Two things to know before you rely on it
 
@@ -329,40 +388,41 @@ alone. **This is not an XML thing** — a JSON payload from those engines loses 
 inherited the gap rather than caused it.
 
 It usually self-heals: a *typed* column (`geometry(Point,4326)`) coerces the incoming value to its
-declared SRID, so the round trip is lossless. Where it bites is an **untyped** spatial column holding
-a non-default SRID — that comes back as SRID 0, coordinates intact, no error. Right numbers, wrong
-reference system, silently. Extract spatial data from SQL Server, type the destination column, or set
-the SRID yourself. Every other column type — including binary, dates, booleans and NULLs — is fully
-portable.
+declared SRID, so the round trip is lossless, and a MySQL column restricted with an `SRID` attribute
+does the same. Where it bites is an **untyped** spatial column holding a non-default SRID — that
+comes back as SRID 0, coordinates intact, no error. Right numbers, wrong reference system, silently.
+Extract spatial data from SQL Server, type the destination column, or set the SRID yourself. Every
+other column type — including binary, dates, booleans and NULLs — is fully portable.
 
 ## Cleanup
 
-```
-cd ../sqlserver
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -d learn_2022 -Q "DROP TABLE IF EXISTS dbo.CountryCode;"
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -d learn_2008 -Q "DROP TABLE IF EXISTS dbo.CountryCode;"
-
-cd ../postgres
-PGPASSWORD="Learn!Passw0rd" psql -h localhost -p 15432 -U postgres -d learn -c "DROP TABLE IF EXISTS public.countrycode;"
+```bash
+# from course10-xml-data-delivery
+../lab-sql.sh sqlserver learn_2022 "DROP TABLE IF EXISTS dbo.CountryCode;"
+../lab-sql.sh sqlserver learn_2008 "DROP TABLE IF EXISTS dbo.CountryCode;"
+../lab-sql.sh postgres learn "DROP TABLE IF EXISTS public.countrycode;"
+../lab-sql.sh mysql learn "DROP TABLE IF EXISTS countrycode;"
+../lab-sql.sh mariadb learn "DROP TABLE IF EXISTS countrycode;"
 ```
 
 ## What's in here
 
 | Path | Purpose |
 | --- | --- |
-| `sqlserver/package/` | Product `RefData`, the fix — `dbo.CountryCode` with `ContentEncoding: "Xml"`, deployed to both `learn_2008` and `learn_2022`. |
-| `sqlserver/json-attempt/` | The *same* product `RefData`, the problem — `dbo.CountryCode` with a default-JSON `DataDelivery`, which hits the compat-130 cliff on `learn_2008`. Not a second product; SchemaSmith's ownership guard would reject two products claiming the same table. |
-| `sqlserver/quench.settings.legacy.json` / `…modern.json` | The XML-encoded `RefData` deployed to `learn_2008` (compat 100) and `learn_2022` (compat 160). |
-| `sqlserver/quench.settings.json-attempt.json` / `…json-attempt-fail.json` | The JSON-encoded `RefData` attempt under the default `warn` policy and under `Target:UnsupportedFeaturePolicy=fail`. |
-| `postgres/package/` | The same XML delivery on `Platform: PostgreSQL`, used in Part 4 to show the encoding is accepted there too — natively, via `xmltable()`. |
-| `sqlserver/tongs.settings.json` / `postgres/tongs.settings.json` | Part 5 — DataTongs extraction of `CountryCode`, run with `--DeliveryEncoding:Xml` to write the payload instead of hand-typing it. Output lands in `extracted/` and is not tracked. |
+| `sqlserver/json/` | Product `RefData` with a default-JSON `DataDelivery`. Converted to XML on read below level 130 (Part 1), read with `OPENJSON` above it (Part 2). |
+| `sqlserver/package/` | The *same* product `RefData` with `ContentEncoding: "Xml"` and an XML payload (Part 3). Not a second product; SchemaSmith's ownership guard would reject two products claiming the same table. |
+| `sqlserver/quench.settings.json.legacy.json` / `…json.legacy-fail.json` / `…json.modern.json` | The JSON package to `learn_2008` under `warn` and `fail`, and to `learn_2022`. |
+| `sqlserver/quench.settings.legacy.json` / `…modern.json` | The XML package to `learn_2008` (compat 100) and `learn_2022` (compat 160). |
+| `sqlserver/tongs.settings.json` / `…legacy.json` | Part 4 — DataTongs extraction of `CountryCode` from `learn_2022` and from `learn_2008`. Output lands in `extracted/` and is not tracked. |
+| `postgres/package/`, `mysql/package/`, `mariadb/package/` | The same XML delivery on each of the other engines (Part 5). |
+| `postgres/tongs.settings.json` | DataTongs extraction from PostgreSQL. |
+| `mysql/tongs.settings.json` / `mariadb/tongs.settings.json` / `mysql/tongs.settings.scripts.json` | DataTongs extraction, content files only; the `scripts` file also writes merge scripts, for the tokenized-script refusal in Part 5. |
 
-Editor JSON-schema files (`.json-schemas/`) for all three packages are generated by the CLI's
+Editor JSON-schema files (`.json-schemas/`) for every package are generated by the CLI's
 `--WriteSchemasOnly` switch and are not hand-authored.
 
 ## Up next
 
 Back to [Module 4](../course10-module-04/README.md) if you haven't read it yet — it's the
-companion story: the engine's own model ingest makes this same JSON-vs-XML choice
-*automatically*, with no flag, no package change. This recipe is the one place SchemaSmith
-leaves that choice to you, and only for the payload that's your data, not the engine's model.
+companion story: the engine's own model ingest makes the same JSON-vs-XML choice for its model,
+with no flag and no package change.

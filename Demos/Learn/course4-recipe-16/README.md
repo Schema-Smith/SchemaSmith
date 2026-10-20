@@ -2,7 +2,7 @@
 
 Goal: extract a database you inherited, rebuild it from the package, and prove nothing was lost, widened or
 reshuffled on the way. "Extract what you have and trust the result" is how most people adopt SchemaSmith — it is
-the whole premise of Course 5 — so the round trip has to be exact. This lab checks the three places it was not
+the whole premise of Course 5 — so the round trip has to be exact. This lab checks the four places it was not
 before 2.7.0:
 
 | Before 2.7.0 | What it cost |
@@ -25,6 +25,7 @@ Everything runs against `cookbook_r16`, on PostgreSQL, MySQL and MariaDB.
 Nobody wrote a package for this one — it was built by hand. Run each engine's script once:
 
 ```bash
+# from course4-recipe-16
 for e in postgres mysql mariadb; do ../lab-sql.sh $e cookbook_r16 --file $e/inherited.sql; done
 ```
 
@@ -36,6 +37,7 @@ created **out of name order** — `ix_zeta` before `ix_alpha`, `fk_zeta` before 
 ## Step 2: Extract it
 
 ```bash
+# from course4-recipe-16
 for e in postgres mysql mariadb; do (cd $e && schematongs --ConfigFile:SchemaTongs.settings.json); done
 ```
 
@@ -66,6 +68,7 @@ changes. `Product:ObjectOrder` still decides the **column** sequence, which is a
 Throw the hand-built tables away and let the package build them:
 
 ```bash
+# from course4-recipe-16
 ../lab-sql.sh postgres cookbook_r16 "DROP TABLE public.device"
 for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r16 "DROP TABLE order_line; DROP TABLE customer"; done
 for e in postgres mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.json); done
@@ -74,6 +77,7 @@ for e in postgres mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.s
 Check the PostgreSQL column types the package produced:
 
 ```bash
+# from course4-recipe-16
 ../lab-sql.sh postgres cookbook_r16 "SELECT attname, format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.device'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum"
 # → device_id|integer
 # → flags|bit(8)
@@ -85,12 +89,18 @@ Check the PostgreSQL column types the package produced:
 anywhere said so. Deploy once more with `--report:./rerun` and `rerun.md` reports zero changes on all three
 engines — the package describes the database exactly.
 
+```bash
+# from course4-recipe-16
+for e in postgres mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.json --report:./rerun); done
+```
+
 ## Step 4: Re-extract, and expect nothing
 
 The everyday loop is to extract again into the same package after someone changes the database, and commit
 the diff. That only works if an **unchanged** database produces **no** diff:
 
 ```bash
+# from course4-recipe-16
 for e in postgres mysql mariadb; do (cd $e && cp -r extracted before && schematongs --ConfigFile:SchemaTongs.settings.json && diff -r before extracted && echo "$e: identical"); done
 # → postgres: identical
 # → mysql: identical
@@ -105,6 +115,7 @@ real change is the only thing that shows up in the diff.
 ## Cleanup
 
 ```bash
+# from course4-recipe-16
 ../lab-sql.sh postgres cookbook_r16 "DROP TABLE IF EXISTS public.device"
 for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r16 "DROP TABLE IF EXISTS order_line; DROP TABLE IF EXISTS customer"; done
 for e in postgres mysql mariadb; do rm -rf $e/extracted $e/before $e/rerun.*; done

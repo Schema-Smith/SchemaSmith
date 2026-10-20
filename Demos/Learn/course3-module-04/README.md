@@ -58,6 +58,7 @@ you.*
 - The target databases exist. Run the Course 3 setup once (idempotent — safe to re-run):
 
   ```bash
+  # from course3-module-04
   pwsh ../course3-setup/setup-environments.ps1     # or: ../course3-setup/setup-environments.sh
   ```
 
@@ -81,11 +82,12 @@ Environment-variable mapping follows the standard convention: prefix `SmithySett
 (double underscore) for nesting. So `ScriptTokens:TargetDb` -> `SmithySettings_ScriptTokens__TargetDb`,
 `WhatIfONLY` -> `SmithySettings_WhatIfONLY`.
 
-Pick an engine. The SQL Server form is shown — for **PostgreSQL**, **MySQL**, or **MariaDB**, swap
-`sqlserver` for `postgres`, `mysql`, or `mariadb` in the `cd`. Everything else is identical.
+Pick an engine and run all three deploys from its `package` folder (`package/sqlserver`,
+`package/postgres`, `package/mysql`, or `package/mariadb`); only `TargetDb` changes. Everything else is
+identical.
 
 ```bash
-cd package/sqlserver        # all three deploys run from here; only TargetDb changes
+# from course3-module-04/package/<engine>
 
 # 1. deploy to dev
 SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
@@ -103,7 +105,7 @@ SmithySettings_ScriptTokens__TargetDb=ordersservice_prod \
 PowerShell equivalent:
 
 ```powershell
-cd package\sqlserver
+# from course3-module-04/package/<engine>
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_dev';     schemaquench --ConfigFile:.\base.settings.json
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_staging'; schemaquench --ConfigFile:.\base.settings.json
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_prod';    schemaquench --ConfigFile:.\base.settings.json
@@ -118,9 +120,11 @@ command pointed at different databases.
 
 ### Confirm promotion by hand
 
+From the lab folder:
+
 ```bash
+# from course3-module-04
 # SQL Server (repeat for ordersservice_staging / ordersservice_prod)
-cd ../..                              # back to the lab folder
 ../lab-sql.sh sqlserver ordersservice_dev "SELECT name FROM sys.tables ORDER BY name; SELECT name FROM sys.indexes WHERE name='IX_Customer_Email'; SELECT name FROM sys.foreign_keys WHERE name='FK_OrderHeader_Customer'"
 
 # PostgreSQL
@@ -159,20 +163,27 @@ dev to the `package/` state, which is the starting point `expand/` builds on).
 index is still on `Email` — expand changes nothing about how the column is read.
 
 ```bash
-cd expand/sqlserver
+# from course3-module-04/expand/<engine>
 SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
   schemaquench --ConfigFile:./base.settings.json
 ```
 
 After this, the catalog shows **both** `Email` and `ContactEmail` on `Customer`, and
-`IX_Customer_Email` is still present. Seed a row so the backfill has something to copy, then confirm:
+`IX_Customer_Email` is still present. Seed a row so the backfill has something to copy, then confirm —
+from the lab folder:
 
 ```bash
-# SQL Server — seed a Customer with an Email but no ContactEmail
-cd ../..                              # back to the lab folder
+# from course3-module-04
+# seed a Customer with an Email but no ContactEmail
 ../lab-sql.sh sqlserver ordersservice_dev "INSERT INTO dbo.Customer(Name, Email) VALUES('Ada Lovelace', 'ada@example.com')"
+../lab-sql.sh postgres ordersservice_dev "INSERT INTO public.\"Customer\"(\"Name\", \"Email\") VALUES('Ada Lovelace', 'ada@example.com')"
+../lab-sql.sh mysql ordersservice_dev "INSERT INTO Customer(Name, Email) VALUES('Ada Lovelace', 'ada@example.com')"
+../lab-sql.sh mariadb ordersservice_dev "INSERT INTO Customer(Name, Email) VALUES('Ada Lovelace', 'ada@example.com')"
 
 ../lab-sql.sh sqlserver ordersservice_dev "SELECT Name, Email, ContactEmail FROM dbo.Customer"
+../lab-sql.sh postgres ordersservice_dev "SELECT \"Name\", \"Email\", \"ContactEmail\" FROM public.\"Customer\""
+../lab-sql.sh mysql ordersservice_dev "SELECT Name, Email, ContactEmail FROM Customer"
+../lab-sql.sh mariadb ordersservice_dev "SELECT Name, Email, ContactEmail FROM Customer"
 ```
 
 `ContactEmail` reads `NULL` — the new column is there but empty. That's the expand state.
@@ -180,9 +191,10 @@ cd ../..                              # back to the lab folder
 ### Step 2 — Backfill (copy Email into ContactEmail)
 
 The backfill is a one-time **data** step, not a schema change — so it's a plain `UPDATE`, not part of
-any package. Run it once after expand:
+any package. Run it once after expand, from the lab folder:
 
 ```bash
+# from course3-module-04
 # SQL Server
 ../lab-sql.sh sqlserver ordersservice_dev "UPDATE dbo.Customer SET ContactEmail = Email WHERE ContactEmail IS NULL"
 
@@ -199,7 +211,11 @@ any package. Run it once after expand:
 Confirm the data copied — `ContactEmail` now equals `Email` for the seeded row:
 
 ```bash
+# from course3-module-04
 ../lab-sql.sh sqlserver ordersservice_dev "SELECT Name, Email, ContactEmail FROM dbo.Customer"
+../lab-sql.sh postgres ordersservice_dev "SELECT \"Name\", \"Email\", \"ContactEmail\" FROM public.\"Customer\""
+../lab-sql.sh mysql ordersservice_dev "SELECT Name, Email, ContactEmail FROM Customer"
+../lab-sql.sh mariadb ordersservice_dev "SELECT Name, Email, ContactEmail FROM Customer"
 ```
 
 In production you'd run the backfill in batches for a large table and verify it before contracting.
@@ -216,7 +232,7 @@ Dropping a column is destructive — preview it first. Run the same deploy with 
 to see exactly what `contract/` will do without touching a row:
 
 ```bash
-cd contract/sqlserver
+# from course3-module-04/contract/<engine>
 # preview the destructive contract (changes NOTHING)
 SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
 SmithySettings_WhatIfONLY=true \
@@ -229,16 +245,18 @@ there's nothing to lose; the preview is where you confirm that before you pull t
 it for real:
 
 ```bash
+# from course3-module-04/contract/<engine>
 SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
   schemaquench --ConfigFile:./base.settings.json
 ```
 
 After contract, the catalog shows `Email` **gone**, `ContactEmail` retaining the backfilled data,
-`IX_Customer_Email` gone, and `IX_Customer_ContactEmail` present on `ContactEmail`:
+`IX_Customer_Email` gone, and `IX_Customer_ContactEmail` present on `ContactEmail` — check from the lab
+folder:
 
 ```bash
+# from course3-module-04
 # SQL Server
-cd ../..                              # back to the lab folder
 ../lab-sql.sh sqlserver ordersservice_dev "SELECT name FROM sys.columns WHERE object_id=OBJECT_ID('dbo.Customer') ORDER BY name; SELECT name FROM sys.indexes WHERE object_id=OBJECT_ID('dbo.Customer') AND name LIKE 'IX_%'; SELECT Name, ContactEmail FROM dbo.Customer"
 
 # PostgreSQL

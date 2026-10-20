@@ -165,6 +165,6 @@ The mixed-version fleet is ready. One package will deploy across every tier belo
   All engines: user as in Demos/Learn/README.md, password Learn!Passw0rd, database learn
   (SQL Server tiers use learn_2022 / learn_2016 / learn_2008 instead of learn).
 
-Next: Module 1 reads the detected version of every target with the pre-flight pair.
+Next: Module 1, let the engine adapt: author a feature the floor tier cannot take and watch it degrade.
 '@ | Write-Host
 exit 0

@@ -1,5 +1,7 @@
 # Course 6, Module 6 — Lint before you deploy: the `--Validate` semantic linter (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (SS-STALE-001 on 2.7.x boards): delete the "On 2.7.x" callouts -->
+
 **Goal:** catch the cross-object errors JSON Schema can't express — a dangling foreign key, an ungated duplicate column, an undefined token, a stale editor schema, a drifted file name — with a single static command that needs no database, no credentials, and no running engine. Read a broken package's findings board, fix each error to green, prove the linter is *semantic* (not dumb), surface a misnamed-file warning that never gates the exit code, clear an induced staleness finding, then wire it in as a CI gate. SQL Server, PostgreSQL, MySQL, and MariaDB.
 
 ## The scenario
@@ -18,10 +20,11 @@ Structural validation (Module 3) catches the typo — a missing `DataType`, a mi
 
 ## Scenario 1 — read the board
 
-Run the linter against the broken SQL Server package (swap `sqlserver` for `postgres` / `mysql` / `mariadb` — the same board reproduces on every engine):
+Run the linter against your engine's broken package — the same board reproduces on every engine; SQL Server's is shown:
 
-```
-schemaquench --Validate --SchemaPackagePath:./sqlserver/Package
+```bash
+# from course6-module-06
+schemaquench --Validate --SchemaPackagePath:./<engine>/Package
 ```
 
 It exits `2` and prints two errors and a warning:
@@ -32,6 +35,8 @@ ERROR [SS-TOK-001] .../dbo.Customer.json: References undefined token '{{IncludeP
 WARN [SS-FK-002] Template 'Main' / Table '[OrderItem]' / FK '[FK_OrderItem_Supplier]': RelatedTable '[Supplier]' does not resolve to any table in the package (resolved schema 'dbo'). The deploy succeeds only if it already exists on the target.
 2 error(s), 1 warning(s)
 ```
+
+> **On 2.7.x** the board carries one more error, `ERROR [SS-STALE-001] .../tables.sqlserver.schema: Committed .json-schemas are stale - regenerate via --WriteSchemasOnly. Structural validation used the current model merged with this file's authored custom-property governance.`, and counts `3 error(s), 1 warning(s)` (PostgreSQL flags `tables`, `domaintypes` and `sequences`: `5 error(s), 1 warning(s)`); it stays on every board until Scenario 5 regenerates the schemas, so Scenario 2 reads `1 error(s), 0 warning(s)` (`3 error(s)` on PostgreSQL) and exits `2` instead of `PASS`. Scenario 5 is where it clears.
 
 > **Your `SS-TOK-001` will show the real path where you cloned the repo** in place of the `...` above. Every
 > finding is prefixed with where it lives — a file path for file-scoped checks, the object's position in the
@@ -53,10 +58,17 @@ Fix both errors, and the mistake behind the warning, then re-run. Three edits:
 2. **`SS-FK-002`** — in the same file, remove the `[SupplierId]` column *and* the `[FK_OrderItem_Supplier]` foreign key (the `[Supplier]` table was never part of this package).
 3. **`SS-TOK-001`** — in `sqlserver/Package/Product.json`, add `"IncludePiiColumns": "1"` to `ScriptTokens` to declare the token the `[Email]` column references.
 
+On the other engines the table file is `postgres/Package/Templates/Main/Tables/orderitem.json` or `<engine>/Package/Templates/Main/Tables/OrderItem.json` (MySQL, MariaDB), and the names carry that engine's quoting (`quantity`, `supplierid`, `fk_orderitem_supplier` on PostgreSQL; `` `Quantity` ``, `` `SupplierId` ``, `FK_OrderItem_Supplier` on MySQL and MariaDB). MySQL and MariaDB also declare the index that backs the foreign key, `FK_OrderItem_Supplier` under `Indexes`: remove it too, or `SS-IDX-001` reports its column missing. The token edit is the same in every engine's `Product.json`.
+
 Re-run:
 
-```
-schemaquench --Validate --SchemaPackagePath:./sqlserver/Package
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/dbo.OrderItem.json" remove Columns '{"Name": "[Quantity]", "DataType": "INT", "ShouldApplyExpression": "", "OldName": "", "VariantName": "", "Collation": "", "DataMaskFunction": "", "EncryptionType": "NONE", "EncryptionKey": "", "EncryptionAlgorithm": ""}' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/dbo.OrderItem.json" remove-where Columns 'Name=[SupplierId]' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/dbo.OrderItem.json" remove-where ForeignKeys 'Name=[FK_OrderItem_Supplier]' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set ScriptTokens.IncludePiiColumns '"1"' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/orderitem.json" remove Columns '{"Name": "quantity", "DataType": "int4", "ShouldApplyExpression": "", "OldName": "", "VariantName": ""}' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/orderitem.json" remove-where Columns 'Name=supplierid' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/orderitem.json" remove-where ForeignKeys 'Name=fk_orderitem_supplier' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set ScriptTokens.IncludePiiColumns '"1"' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/OrderItem.json" remove Columns '{"Name": "`Quantity`", "DataType": "int", "ShouldApplyExpression": "", "OldName": "", "VariantName": ""}' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/OrderItem.json" remove-where Columns 'Name=`SupplierId`' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/OrderItem.json" remove-where ForeignKeys 'Name=FK_OrderItem_Supplier' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/OrderItem.json" remove-where Indexes 'Name=FK_OrderItem_Supplier' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set ScriptTokens.IncludePiiColumns '"1"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/OrderItem.json" remove Columns '{"Name": "`Quantity`", "DataType": "int", "ShouldApplyExpression": "", "OldName": "", "VariantName": ""}' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/OrderItem.json" remove-where Columns 'Name=`SupplierId`' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/OrderItem.json" remove-where ForeignKeys 'Name=FK_OrderItem_Supplier' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/OrderItem.json" remove-where Indexes 'Name=FK_OrderItem_Supplier' && python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set ScriptTokens.IncludePiiColumns '"1"' -->
+```bash
+# from course6-module-06
+schemaquench --Validate --SchemaPackagePath:./<engine>/Package
 ```
 
 ```
@@ -80,16 +92,26 @@ Both are gated on the **defined** `{{Edition}}` token, and each carries a distin
 
 You met the warning tier in Scenario 1: a warning never gates the exit code. Here it is on its own, on a package that is otherwise clean. Induce it:
 
-1. Rename `sqlserver/Package/Templates/Main/Tables/dbo.OrderItem.json` to `sqlserver/Package/Templates/Main/Tables/orderitem-legacy.json`.
+1. Rename `sqlserver/Package/Templates/Main/Tables/dbo.OrderItem.json` to `sqlserver/Package/Templates/Main/Tables/orderitem-legacy.json` (on PostgreSQL rename `orderitem.json`, on MySQL and MariaDB `OrderItem.json`, to the same `orderitem-legacy.json`).
 2. Re-run:
-   ```
-   schemaquench --Validate --SchemaPackagePath:./sqlserver/Package
+   <!-- walk[sqlserver]: mv "<engine>/Package/Templates/Main/Tables/dbo.OrderItem.json" "<engine>/Package/Templates/Main/Tables/orderitem-legacy.json" -->
+   <!-- walk[postgres]: mv "<engine>/Package/Templates/Main/Tables/orderitem.json" "<engine>/Package/Templates/Main/Tables/orderitem-legacy.json" -->
+   <!-- walk[mysql]: mv "<engine>/Package/Templates/Main/Tables/OrderItem.json" "<engine>/Package/Templates/Main/Tables/orderitem-legacy.json" -->
+   <!-- walk[mariadb]: mv "<engine>/Package/Templates/Main/Tables/OrderItem.json" "<engine>/Package/Templates/Main/Tables/orderitem-legacy.json" -->
+   ```bash
+   # from course6-module-06
+   schemaquench --Validate --SchemaPackagePath:./<engine>/Package
    ```
    ```
    WARN [SS-FILE-NAME-003] .../orderitem-legacy.json: Table file 'orderitem-legacy.json' does not match its canonical name 'dbo.OrderItem.json' (from Schema/Name/VariantName). Identity is content, so this is a naming lean, not an error - rename to keep the file a reliable pointer to its table.
    ```
    Exit `0`. The count line reads `0 error(s), 1 warning(s)` — a warning-only board still passes.
-3. Rename the file back to `dbo.OrderItem.json`. This is an induced scenario — the committed package files stay canonical.
+3. Rename the file back to `dbo.OrderItem.json` (`orderitem.json` on PostgreSQL, `OrderItem.json` on MySQL and MariaDB). This is an induced scenario — the committed package files stay canonical.
+
+<!-- walk[sqlserver]: mv "<engine>/Package/Templates/Main/Tables/orderitem-legacy.json" "<engine>/Package/Templates/Main/Tables/dbo.OrderItem.json" -->
+<!-- walk[postgres]: mv "<engine>/Package/Templates/Main/Tables/orderitem-legacy.json" "<engine>/Package/Templates/Main/Tables/orderitem.json" -->
+<!-- walk[mysql]: mv "<engine>/Package/Templates/Main/Tables/orderitem-legacy.json" "<engine>/Package/Templates/Main/Tables/OrderItem.json" -->
+<!-- walk[mariadb]: mv "<engine>/Package/Templates/Main/Tables/orderitem-legacy.json" "<engine>/Package/Templates/Main/Tables/OrderItem.json" -->
 
 Identity lives in the table's *content* (`Schema` / `Name` / `VariantName`), never its filename — a misnamed file still deploys correctly. The canonical name is there for you: it keeps a table's variants sorted together in source control and keeps the filename a reliable pointer to the table inside it. Canonical shape is `<schema>.<table>[.<VariantName>].json`. This scenario is database-free like every other one in this lab, and it works the same on all four engines — on PostgreSQL, MySQL, and MariaDB the canonical name is schema-less (`<table>.json`); on SQL Server it keeps the schema segment (`dbo.<table>.json`).
 
@@ -97,15 +119,21 @@ Identity lives in the table's *content* (`Schema` / `Name` / `VariantName`), nev
 
 The editor `.json-schemas` that give you red-squiggle validation in your IDE are generated from the domain model. If the model changes and nobody regenerates them, they lie. `--Validate` catches that too. Induce it:
 
-1. Hand-edit `sqlserver/Package/.json-schemas/tables.sqlserver.schema` — narrow any `"maxLength": 128` to `"maxLength": 1`, so it no longer matches fresh generation.
+1. Hand-edit `sqlserver/Package/.json-schemas/tables.sqlserver.schema` (on the other engines, `tables.postgresql.schema`, `tables.mysql.schema` or `tables.mariadb.schema` in that engine's `Package/.json-schemas`) — narrow any `"maxLength": 128` to `"maxLength": 1`, so it no longer matches fresh generation.
 2. Re-run `--Validate`:
+   <!-- walk: sed -i '0,/"maxLength": 128/s//"maxLength": 1/' <engine>/Package/.json-schemas/tables.*.schema -->
+   ```bash
+   # from course6-module-06
+   schemaquench --Validate --SchemaPackagePath:./<engine>/Package
+   ```
    ```
    ERROR [SS-STALE-001] .../tables.sqlserver.schema: Committed .json-schemas are stale - regenerate via --WriteSchemasOnly. Structural validation used the current model merged with this file's authored custom-property governance.
    ```
    Exit `2`.
 3. Regenerate (database-free), from inside the `Package` directory:
-   ```
-   cd sqlserver/Package && schematongs --WriteSchemasOnly && cd ../..
+   ```bash
+   # from course6-module-06
+   cd <engine>/Package && schematongs --WriteSchemasOnly && cd ../..
    ```
    ```
    Regenerating .json-schemas for Shop (SqlServer)...
@@ -113,6 +141,10 @@ The editor `.json-schemas` that give you red-squiggle validation in your IDE are
    All package files already reference their schema.
    ```
 4. Re-run `--Validate` → `PASS - no issues found`, exit `0`. The staleness finding is gone.
+   ```bash
+   # from course6-module-06
+   schemaquench --Validate --SchemaPackagePath:./<engine>/Package
+   ```
 
 The second sentence matters. Any `Extensions` governance you authored into that file — the kind
 [Module 3](../course6-module-03) has you write — is recovered from it and merged with the current model,
@@ -127,13 +159,20 @@ nothing to recover, and validation falls back to a freshly generated schema that
 rules.
 
 Induce it. Replace `sqlserver/Package/.json-schemas/tables.sqlserver.schema` with something that is not
-JSON at all:
+JSON at all (`tables.*.schema` matches the one table schema in your engine's package):
 
+<!-- walk: printf '{ "not valid json\n' > <engine>/Package/.json-schemas/tables.*.schema -->
 ```bash
-printf '{ "not valid json\n' > sqlserver/Package/.json-schemas/tables.sqlserver.schema
+# from course6-module-06
+printf '{ "not valid json\n' > <engine>/Package/.json-schemas/tables.*.schema
 ```
 
 Re-run `--Validate`:
+
+```bash
+# from course6-module-06
+schemaquench --Validate --SchemaPackagePath:./<engine>/Package
+```
 
 ```
 ERROR [SS-STALE-002] .../tables.sqlserver.schema: Committed .json-schemas file is malformed - validated
@@ -144,7 +183,8 @@ against a freshly generated schema instead, so any custom-property governance au
 Exit `2`. Clear it the way the finding says — regenerate:
 
 ```bash
-cd sqlserver/Package && schematongs --WriteSchemasOnly && cd ../..
+# from course6-module-06
+cd <engine>/Package && schematongs --WriteSchemasOnly && cd ../..
 ```
 
 ```

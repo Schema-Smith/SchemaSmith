@@ -34,19 +34,21 @@ Catalog currently carries three shipping regions: `NA`, `EMEA`, and `LEGACY`. Th
 
 ## Step 1 — Deploy all three baselines
 
-Start with every service at its initial state. These three deploys are independent of each other and can run in any order.
+Start with every service at its initial state. These three deploys are independent of each other and can run in any order. Every deploy in this module runs from its service's engine folder (`postgres` for Catalog, `sqlserver` for Orders, `mysql` for Sessions); the comment on each block names it.
+
+This module is the same three products as the earlier modules, so each baseline deploy drops whatever an earlier module's package left in that service's database (on SQL Server, for example, `Dropping table [dbo].Customer`).
 
 ### Catalog (PostgreSQL)
 
 macOS / Linux:
 ```bash
-cd postgres
+# from course9-module-05/postgres
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-cd postgres
+# from course9-module-05/postgres
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD\logs"
 ```
 
@@ -56,13 +58,13 @@ This creates the canonical `public.shipping_region` with NA, EMEA, and LEGACY. D
 
 macOS / Linux:
 ```bash
-cd sqlserver
+# from course9-module-05/sqlserver
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-cd sqlserver
+# from course9-module-05/sqlserver
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD\logs"
 ```
 
@@ -72,17 +74,26 @@ This creates `dbo.valid_region` — Orders' own copy of the valid regions — de
 
 macOS / Linux:
 ```bash
-cd mysql
+# from course9-module-05/mysql
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-cd mysql
+# from course9-module-05/mysql
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD\logs"
 ```
 
 This creates `valid_region` — Sessions' own copy — delivered with the same three regions.
+
+Check all three copies from the lab folder. Each prints `EMEA`, `LEGACY`, `NA`:
+
+```bash
+# from course9-module-05
+../lab-sql.sh postgres catalog "SELECT region_code FROM public.shipping_region ORDER BY region_code"
+../lab-sql.sh sqlserver orders "SELECT RegionCode FROM dbo.valid_region ORDER BY RegionCode"
+../lab-sql.sh mysql sessions "SELECT RegionCode FROM valid_region ORDER BY RegionCode"
+```
 
 ## Step 2 — Expand: Catalog alone adds APAC
 
@@ -90,17 +101,24 @@ Catalog ships its expand release. This is a release for **one service only** —
 
 macOS / Linux:
 ```bash
-cd postgres
+# from course9-module-05/postgres
 schemaquench --ConfigFile:quench.settings.expand.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-cd postgres
+# from course9-module-05/postgres
 schemaquench --ConfigFile:quench.settings.expand.json --LogPath:"$PWD\logs"
 ```
 
 The expand package uses `MergeType: "Insert/Update"`. DataDelivery inserts the APAC row and updates the others — LEGACY is still in the file, so it survives. After this deploy, `shipping_region` has four rows: NA, EMEA, LEGACY, APAC. APAC is now official; LEGACY is still valid for anyone who hasn't migrated. Nothing in Orders or Sessions changes. The window is open for consumers to migrate.
+
+```bash
+# from course9-module-05
+../lab-sql.sh postgres catalog "SELECT region_code FROM public.shipping_region ORDER BY region_code"
+```
+
+Prints `APAC`, `EMEA`, `LEGACY`, `NA`.
 
 ## Step 3 — Adopt: each consumer on its own cadence
 
@@ -110,13 +128,13 @@ Each consumer re-syncs its own `valid_region` copy whenever it's ready. Orders a
 
 macOS / Linux:
 ```bash
-cd sqlserver
+# from course9-module-05/sqlserver
 schemaquench --ConfigFile:quench.settings.adopt.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-cd sqlserver
+# from course9-module-05/sqlserver
 schemaquench --ConfigFile:quench.settings.adopt.json --LogPath:"$PWD\logs"
 ```
 
@@ -126,17 +144,25 @@ The adopt package re-delivers `dbo.valid_region` with NA, EMEA, and APAC. `Inser
 
 macOS / Linux:
 ```bash
-cd mysql
+# from course9-module-05/mysql
 schemaquench --ConfigFile:quench.settings.adopt.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-cd mysql
+# from course9-module-05/mysql
 schemaquench --ConfigFile:quench.settings.adopt.json --LogPath:"$PWD\logs"
 ```
 
 Same change to Sessions' own copy: NA, EMEA, APAC. Sessions has migrated off LEGACY independently of Orders — they don't coordinate.
+
+Check both consumer copies from the lab folder. Each prints `APAC`, `EMEA`, `NA`:
+
+```bash
+# from course9-module-05
+../lab-sql.sh sqlserver orders "SELECT RegionCode FROM dbo.valid_region ORDER BY RegionCode"
+../lab-sql.sh mysql sessions "SELECT RegionCode FROM valid_region ORDER BY RegionCode"
+```
 
 ## Step 4 — Contract: Catalog removes LEGACY
 
@@ -144,17 +170,24 @@ Only run this **after** both consumers have adopted. Once nobody's copy carries 
 
 macOS / Linux:
 ```bash
-cd postgres
+# from course9-module-05/postgres
 schemaquench --ConfigFile:quench.settings.contract.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-cd postgres
+# from course9-module-05/postgres
 schemaquench --ConfigFile:quench.settings.contract.json --LogPath:"$PWD\logs"
 ```
 
-The contract package uses `MergeType: "Insert/Update/Delete"` and the tabledata contains only NA, EMEA, and APAC. DataDelivery deletes the LEGACY row. The retire is complete.
+The contract package uses `MergeType: "Insert/Update/Delete"` and the tabledata contains only NA, EMEA, and APAC. DataDelivery deletes the LEGACY row. The retire is complete:
+
+```bash
+# from course9-module-05
+../lab-sql.sh postgres catalog "SELECT region_code FROM public.shipping_region ORDER BY region_code"
+```
+
+Prints `APAC`, `EMEA`, `NA`.
 
 This is a release for **one service only**. Orders and Sessions are unaffected — their copies already dropped LEGACY at adopt time.
 
@@ -163,7 +196,7 @@ This is a release for **one service only**. Orders and Sessions are unaffected �
 - **Expand is safe at any time.** Run step 2 before or after consumers are ready — it doesn't matter. The additive MergeType means nothing is removed. LEGACY stays until the contract explicitly removes it.
 - **The order that matters is expand before contract.** Consumers must adopt the new region before Catalog contracts. The sequence within consumers is flexible — Orders can adopt before Sessions, or after, or on the same day. But nobody contracts before everyone adopts.
 - **Each service's copy is its declaration of what it accepts.** The expand / contract sequence works because each consumer controls its own reference copy. Catalog never dictates when consumers move — it only controls when it's safe to retire the old value from the canonical source.
-- **Artifacts show the convergence plan.** After each deploy, open `logs/` and review the artifact files. For the baseline, adopt, and contract runs, `Insert/Update/Delete` generates a delete for any row not in the file. For the expand run, no deletes appear — the additive mode leaves existing rows alone.
+- **The table holds the convergence result, not the log.** Each run's log names the delivery (`Delivering table data`, then `Delivering public.shipping_region` on Catalog, `Delivering dbo.valid_region` on Orders, `Delivering valid_region` on Sessions) but does not list rows, and the run writes no SQL files. The `lab-sql.sh` checks after each step are where you see it: after the baseline, adopt, and contract runs, `Insert/Update/Delete` has removed any row not in the file; after the expand run, every existing row is still there — the additive mode leaves them alone.
 
 ## The discipline
 

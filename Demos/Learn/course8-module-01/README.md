@@ -9,15 +9,28 @@ One induced failure on one database (`diag_blackbox`), read end to end. Module 0
 
 ## Step 1 — create the sandbox database
 
-**macOS / Linux:** `cd Demos/Learn/course8-module-01 && bash setup-databases.sh`
-**Windows:** `cd Demos\Learn\course8-module-01 ; .\setup-databases.ps1`
+**macOS / Linux**
 
-Prints `PASS` per engine once `diag_blackbox` exists. Re-running is safe (guarded `CREATE`).
+```bash
+# from course8-module-01
+bash setup-databases.sh --reset
+```
+
+**Windows (PowerShell)**
+
+```powershell
+# from course8-module-01
+.\setup-databases.ps1 -Reset
+```
+
+`--reset` (`-Reset`) drops `diag_blackbox` and recreates it empty, so every attempt — the first or a retake — starts from the same clean state. Prints `PASS (reset)` per engine. Only a database the labs created is ever dropped.
 
 ## Step 2 — deploy the baseline (green)
 
-```
-cd sqlserver            # or postgres, mysql, or mariadb
+Change into your engine's folder (`sqlserver`, `postgres`, `mysql`, or `mariadb`) for Steps 2–4:
+
+```bash
+# from course8-module-01/<engine>
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
@@ -27,7 +40,8 @@ Exits `0` and forges the `Shop` schema into `diag_blackbox`, then a run-once see
 
 `after/` is the baseline with one edit: `IX_Customer_Email` flipped to **unique**. Deploy it over the duplicate emails:
 
-```
+```bash
+# from course8-module-01/<engine>
 schemaquench --ConfigFile:quench.settings.after.json --LogPath:"$PWD/logs"
 ```
 
@@ -52,11 +66,11 @@ Context (last 25 lines):   [trail abbreviated here — the full 25-line context 
 | **SQL Server** | `The CREATE UNIQUE INDEX statement terminated because a duplicate key was found for the object name 'dbo.Customer' and the index name 'IX_Customer_Email'. The duplicate key value is (ana.f@shop.test).` (error `1505`) |
 | **PostgreSQL** | `23505: could not create unique index "ix_customer_email"` |
 | **MySQL** | `Duplicate entry 'ana.f@shop.test' for key 'Customer.IX_Customer_Email'` (error `1062`) |
-| **MariaDB** | `Duplicate entry 'ana.f@shop.test' for key 'Customer.IX_Customer_Email'` (error `1062`) |
+| **MariaDB** | `Duplicate entry 'ana.f@shop.test' for key 'IX_Customer_Email'` (error `1062`) — MariaDB names the key without the table prefix |
 
 > *MariaDB is a fourth platform in the MySQL family — its own `Platform: MariaDb` selection and native package, not the MySQL package retargeted. Its dialect matches MySQL except for a few DDL specifics (invisible indexes, check-constraint drops, column-default reporting) that SchemaSmith handles for you.*
 
-The line just above it points at the artifact: `Resolved SQL written to: ./artifacts/SchemaQuench - Quench Indexes ….sql`. That file is **copy-runnable** — a single proc call:
+The line just below the error points at the artifact (SQL Server also prints it just above the block): `Resolved SQL written to: ./artifacts/SchemaQuench - Quench Indexes ….sql`. That file is **copy-runnable** — a single proc call:
 
 ```sql
 EXEC [diag_blackbox].SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName = 'Shop', @WhatIf = 0
@@ -68,16 +82,20 @@ Paste it into your client and the phase fails identically, by hand — that's yo
 
 ## Step 4 — fix the data, redeploy
 
-The index definition is right; the *data* isn't unique yet. Give the duplicate its own address:
+The index definition is right; the *data* isn't unique yet. Give the duplicate its own address (from the lab folder):
 
-```sql
--- SQL Server (PG / MySQL / MariaDB analogous)
-UPDATE dbo.Customer SET Email = 'ana.f7@shop.test' WHERE CustomerId = 7;
+```bash
+# from course8-module-01
+../lab-sql.sh sqlserver diag_blackbox "UPDATE dbo.Customer SET Email = 'ana.f7@shop.test' WHERE CustomerId = 7;"
+../lab-sql.sh postgres diag_blackbox "UPDATE public.customer SET email = 'ana.f7@shop.test' WHERE customerid = 7;"
+../lab-sql.sh mysql diag_blackbox "UPDATE Customer SET Email = 'ana.f7@shop.test' WHERE CustomerId = 7;"
+../lab-sql.sh mariadb diag_blackbox "UPDATE Customer SET Email = 'ana.f7@shop.test' WHERE CustomerId = 7;"
 ```
 
-Then redeploy the same change:
+Then, back in your engine's folder, redeploy the same change:
 
-```
+```bash
+# from course8-module-01/<engine>
 schemaquench --ConfigFile:quench.settings.after.json --LogPath:"$PWD/logs"
 ```
 

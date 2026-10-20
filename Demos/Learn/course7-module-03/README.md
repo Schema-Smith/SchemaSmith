@@ -13,7 +13,16 @@ and 2 first.
 
 - The [sandbox](../docker) is up and verified (all four engines healthy).
 - The fleet exists — run [`../course7-setup`](../course7-setup) once (creates `fleet_tenant_001`…`005`).
-- `fleet_tenant_006` does **not** exist yet (that's the point). If a Module 1 run left it, drop it first.
+- `fleet_tenant_006` does **not** exist yet (that's the point). If a Module 1 run left it, drop it first
+  (each line is safe when it's already gone):
+
+  ```bash
+  # from course7-module-03
+  ../lab-sql.sh sqlserver master "IF DB_ID('fleet_tenant_006') IS NOT NULL BEGIN ALTER DATABASE [fleet_tenant_006] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [fleet_tenant_006] END"
+  ../lab-sql.sh postgres postgres "DROP DATABASE IF EXISTS fleet_tenant_006"
+  ../lab-sql.sh mysql information_schema "DROP DATABASE IF EXISTS fleet_tenant_006"
+  ../lab-sql.sh mariadb information_schema "DROP DATABASE IF EXISTS fleet_tenant_006"
+  ```
 - The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 Each engine folder ships the same native `Shop` `Package/` as Modules 1–2, plus three settings files —
@@ -31,7 +40,7 @@ Point at the `skip` roster. `006` doesn't exist and `CreateIfMissing` is absent,
 alone:
 
 ```bash
-cd sqlserver
+# from course7-module-03/<engine>
 schemaquench --ConfigFile:quench.settings.skip.json
 ```
 
@@ -49,6 +58,7 @@ Turn `CreateIfMissing` on, but run under WhatIf first. SchemaSmith tells you exa
 provision — and touches nothing:
 
 ```bash
+# from course7-module-03/<engine>
 schemaquench --ConfigFile:quench.settings.whatif.json
 ```
 
@@ -69,6 +79,7 @@ Now the real thing. `quench.settings.onboard.json` carries the roster plus `Crea
 ```
 
 ```bash
+# from course7-module-03/<engine>
 schemaquench --ConfigFile:quench.settings.onboard.json
 ```
 
@@ -77,13 +88,15 @@ schemaquench --ConfigFile:quench.settings.onboard.json
 ```
 
 SchemaSmith creates `fleet_tenant_006` on the admin connection, kindles the forge in it, and strikes the
-whole `Shop` schema — four tables — into the fresh database. `001` is a no-op. Confirm:
+whole `Shop` schema — four tables — into the fresh database. `001` is a no-op. Confirm — the line for your
+engine reports `4`:
 
 ```bash
-cd ..            # back to the lab folder
+# from course7-module-03
 ../lab-sql.sh sqlserver fleet_tenant_006 "SELECT COUNT(*) FROM sys.tables WHERE name IN ('Customer','Product','SalesOrder','OrderItem')"
-# → 4
-cd sqlserver     # back into the engine folder
+../lab-sql.sh postgres fleet_tenant_006 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('customer','product','salesorder','orderitem')"
+../lab-sql.sh mysql fleet_tenant_006 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('Customer','Product','SalesOrder','OrderItem')"
+../lab-sql.sh mariadb fleet_tenant_006 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('Customer','Product','SalesOrder','OrderItem')"
 ```
 
 Onboarding a tenant went from "run this DDL, then run the deploy" down to one deploy. Add the tenant to
@@ -92,6 +105,7 @@ the roster, quench, done.
 ## Step 4: Idempotent — re-run changes nothing
 
 ```bash
+# from course7-module-03/<engine>
 schemaquench --ConfigFile:quench.settings.onboard.json
 ```
 
@@ -104,11 +118,50 @@ is safe to leave on permanently — it only ever fills gaps.
 
 Creating a database is a high-privilege operation, and SchemaSmith says so plainly when the deploy account
 can't. Run the onboard as a principal that can *see* the fleet but lacks the create right, and the run
-fails fast with an actionable message — it does not silently skip:
+fails fast with an actionable message — it does not silently skip.
+
+Set it up. First drop `fleet_tenant_006` again, so there is something to provision, then create a
+`fleet_reader` principal that can read the catalog but not create databases (the lines for your engine):
+
+```bash
+# from course7-module-03
+../lab-sql.sh sqlserver master "IF DB_ID('fleet_tenant_006') IS NOT NULL BEGIN ALTER DATABASE [fleet_tenant_006] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [fleet_tenant_006] END"
+../lab-sql.sh sqlserver master "IF SUSER_ID('fleet_reader') IS NULL CREATE LOGIN fleet_reader WITH PASSWORD = 'FleetReader_2026', CHECK_POLICY = OFF"
+../lab-sql.sh postgres postgres "DROP DATABASE IF EXISTS fleet_tenant_006"
+../lab-sql.sh postgres postgres "CREATE ROLE fleet_reader LOGIN PASSWORD 'FleetReader_2026' NOCREATEDB"
+../lab-sql.sh mysql information_schema "DROP DATABASE IF EXISTS fleet_tenant_006"
+../lab-sql.sh mysql information_schema "CREATE USER IF NOT EXISTS 'fleet_reader'@'%' IDENTIFIED BY 'FleetReader_2026'; GRANT SELECT ON *.* TO 'fleet_reader'@'%'"
+../lab-sql.sh mariadb information_schema "DROP DATABASE IF EXISTS fleet_tenant_006"
+../lab-sql.sh mariadb information_schema "CREATE USER IF NOT EXISTS 'fleet_reader'@'%' IDENTIFIED BY 'FleetReader_2026'; GRANT SELECT ON *.* TO 'fleet_reader'@'%'"
+```
+
+Then point the onboard at it: in your engine's `quench.settings.onboard.json`, set `Target.User` to
+`fleet_reader` and `Target.Password` to `FleetReader_2026`, and run the onboard again:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.onboard.json" set Target.User '"fleet_reader"' && python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.onboard.json" set Target.Password '"FleetReader_2026"' -->
+```json
+"User": "fleet_reader",
+"Password": "FleetReader_2026",
+```
+
+```bash
+# from course7-module-03/<engine>
+schemaquench --ConfigFile:quench.settings.onboard.json
+```
 
 ```
 [localhost,11433] Database provisioning FAILED for 'fleet_tenant_006' (template 'Main'): Failed to provision database 'fleet_tenant_006'. The connecting account must have CREATE DATABASE permission on the admin database (master). Underlying error: CREATE DATABASE permission denied in database 'master'.
 ```
+
+The run exits `2`, and `fleet_tenant_001` fails as well: this principal can read the catalog but cannot deploy into any tenant. The provisioning line above is the one this step is about.
+
+Put `Target.User` and `Target.Password` back to the admin account the file shipped with (`sa` /
+`postgres` / `root`, password `Learn!Passw0rd`) before you go on.
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.onboard.json" set Target.User '"sa"' && python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.onboard.json" set Target.Password '"Learn!Passw0rd"' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.onboard.json" set Target.User '"postgres"' && python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.onboard.json" set Target.Password '"Learn!Passw0rd"' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.onboard.json" set Target.User '"root"' && python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.onboard.json" set Target.Password '"Learn!Passw0rd"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.onboard.json" set Target.User '"root"' && python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.onboard.json" set Target.Password '"Learn!Passw0rd"' -->
 
 The account that onboards tenants needs the create right on the admin database. What that grant is called
 differs by engine:
@@ -138,7 +191,8 @@ read the fleet but can't create — the realistic reader-without-`CREATE` case.
 
 ## Step 6: Do it on PostgreSQL, MySQL, and MariaDB
 
-Same five steps in `postgres/`, `mysql/`, and `mariadb/`. The `CreateIfMissing` config is identical on
+Same five steps from `postgres/`, `mysql/`, and `mariadb/` — every command above carries a line per
+engine or runs from your engine's folder. The `CreateIfMissing` config is identical on
 all four engines; only the create DDL SchemaSmith emits differs (`[fleet_tenant_006]` on SQL Server,
 `"fleet_tenant_006"` on PostgreSQL, `` `fleet_tenant_006` `` on MySQL and MariaDB). Each one skips by
 default, dry-runs, provisions + forges in one run, re-runs clean, and fails fast without the create
@@ -146,14 +200,19 @@ grant.
 
 ## Cleanup
 
-Drop `fleet_tenant_006` on each engine to return to the five-tenant baseline:
+Drop `fleet_tenant_006` (if it exists) and the `fleet_reader` principal on each engine to return to the
+five-tenant baseline:
 
 ```bash
-cd ..            # back to the lab folder
-../lab-sql.sh sqlserver master "ALTER DATABASE [fleet_tenant_006] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [fleet_tenant_006]"
+# from course7-module-03
+../lab-sql.sh sqlserver master "IF DB_ID('fleet_tenant_006') IS NOT NULL BEGIN ALTER DATABASE [fleet_tenant_006] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [fleet_tenant_006] END"
+../lab-sql.sh sqlserver master "IF SUSER_ID('fleet_reader') IS NOT NULL DROP LOGIN fleet_reader"
 ../lab-sql.sh postgres postgres "DROP DATABASE IF EXISTS fleet_tenant_006"
+../lab-sql.sh postgres postgres "DROP ROLE IF EXISTS fleet_reader"
 ../lab-sql.sh mysql information_schema "DROP DATABASE IF EXISTS fleet_tenant_006"
+../lab-sql.sh mysql information_schema "DROP USER IF EXISTS 'fleet_reader'@'%'"
 ../lab-sql.sh mariadb information_schema "DROP DATABASE IF EXISTS fleet_tenant_006"
+../lab-sql.sh mariadb information_schema "DROP USER IF EXISTS 'fleet_reader'@'%'"
 ```
 
 ## The principle

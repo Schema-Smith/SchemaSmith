@@ -46,6 +46,7 @@ Environment-variable mapping follows the standard convention: prefix `SmithySett
 - The target databases exist. Run the Course 3 setup once (idempotent — safe to re-run):
 
   ```bash
+  # from course3-module-02
   pwsh ../course3-setup/setup-environments.ps1     # or: ../course3-setup/setup-environments.sh
   ```
 
@@ -57,12 +58,12 @@ Environment-variable mapping follows the standard convention: prefix `SmithySett
 Pick your engine and shell. The scripts are real twins — same flow, native to each shell:
 
 ```bash
-cd pipeline/<engine>      # sqlserver | postgres | mysql | mariadb
+# from course3-module-02/pipeline/<engine>
 ./pipeline.sh             # bash (Git Bash, Linux, macOS)
 ```
 
 ```powershell
-cd pipeline\<engine>
+# from course3-module-02/pipeline/<engine>
 .\pipeline.ps1            # PowerShell
 ```
 
@@ -85,8 +86,8 @@ The PR check runs the full deploy logic and reports the change without touching 
 Server, the preview includes the exact DDL:
 
 ```
-[localhost,11433].[ordersservice_staging]   Creating index [dbo].[Customer].[IX_Customer_Email]
-[localhost,11433].[ordersservice_staging]   CREATE NONCLUSTERED INDEX [IX_Customer_Email] ON [dbo].[Customer] ([Email]) WITH (DATA_COMPRESSION=NONE);
+[localhost,11433].[ordersservice_staging]       RAISERROR('  Creating index [dbo].[Customer].[IX_Customer_Email]', 10, 100) WITH NOWAIT;
+[localhost,11433].[ordersservice_staging]       CREATE NONCLUSTERED INDEX [IX_Customer_Email] ON [dbo].[Customer] ([Email]) WITH (DATA_COMPRESSION=NONE);
 [localhost,11433].[ordersservice_staging] Successfully Quenched
 ```
 
@@ -110,9 +111,10 @@ PR check fails *here*, before anything merges.
 
 ## Confirm it by hand
 
-Want to verify the catalog yourself at any point:
+Want to verify the catalog yourself at any point? Run these from the lab folder:
 
 ```bash
+# from course3-module-02
 # SQL Server
 ../lab-sql.sh sqlserver ordersservice_prod "SELECT name FROM sys.indexes WHERE name='IX_Customer_Email'"
 

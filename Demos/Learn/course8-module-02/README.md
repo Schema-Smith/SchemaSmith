@@ -12,15 +12,28 @@ phase, read the error, recover.
 
 ## Step 1 — create the sandbox database
 
-**macOS / Linux:** `cd Demos/Learn/course8-module-02 && bash setup-databases.sh`
-**Windows:** `cd Demos\Learn\course8-module-02 ; .\setup-databases.ps1`
+**macOS / Linux**
 
-Prints `PASS` per engine once `diag_structure` exists. Re-running is safe (guarded `CREATE`).
+```bash
+# from course8-module-02
+bash setup-databases.sh --reset
+```
+
+**Windows (PowerShell)**
+
+```powershell
+# from course8-module-02
+.\setup-databases.ps1 -Reset
+```
+
+`--reset` (`-Reset`) drops `diag_structure` and recreates it empty, so every attempt — the first or a retake — starts from the same clean state. Prints `PASS (reset)` per engine. Only a database the labs created is ever dropped.
 
 ## Step 2 — deploy the baseline (green)
 
-```
-cd sqlserver            # or postgres, mysql, or mariadb
+Change into your engine's folder (`sqlserver`, `postgres`, `mysql`, or `mariadb`) for Beats 1 and 2:
+
+```bash
+# from course8-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
@@ -32,7 +45,8 @@ table is the precondition both incidents need.
 
 Deploy the change that adds a `NOT NULL` column with no default:
 
-```
+```bash
+# from course8-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.beat1-broken.json --LogPath:"$PWD/logs"
 ```
 
@@ -54,7 +68,8 @@ engines choose to fill rather than refuse.)
 **The fix** is what SQL Server / PostgreSQL were asking for: give the new column a `Default`, so the
 rows already in the table get a real value. `beat1-fixed/` does exactly that (`Default 'Standard'`):
 
-```
+```bash
+# from course8-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.beat1-fixed.json --LogPath:"$PWD/logs"
 ```
 
@@ -63,12 +78,13 @@ MariaDB they stay `''`** — the column was already added back in `beat1-broken`
 applies to *new* rows. If MySQL and MariaDB had failed loud like the others, you'd have caught it
 before the blanks landed.
 
-## Beat 2 — narrowing a column that still holds long data (`8152` / `22001` / `1406`)
+## Beat 2 — narrowing a column that still holds long data (`2628` / `22001` / `1406`)
 
 Now a column *alter*. `beat2-broken/` narrows `FullName` from `NVARCHAR(200)` to `NVARCHAR(10)`, but
 `'Ana Fielding-Reyes'` is 18 characters:
 
-```
+```bash
+# from course8-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.beat2-broken.json --LogPath:"$PWD/logs"
 ```
 
@@ -76,19 +92,24 @@ This one fails the **same way on all four** — exit `2` at `Quenching modified 
 
 | Engine | Error |
 | --- | --- |
-| **SQL Server** | `String or binary data would be truncated in table 'diag_structure.dbo.Customer', column 'FullName'.` (error `8152`) |
+| **SQL Server** | `String or binary data would be truncated in table 'diag_structure.dbo.Customer', column 'FullName'. Truncated value: ''.` (error `2628`; `8152`, without the table and value, below compatibility level 150) |
 | **PostgreSQL** | `22001: value too long for type character varying(10)` |
 | **MySQL** | `Data too long for column 'FullName' at row 1` (error `1406`) |
 | **MariaDB** | `Data too long for column 'FullName' at row 1` (error `1406`) |
 
 **The fix is data, not schema** — the existing values are too long for the shape you asked for.
-Shorten them, then redeploy the same change:
+Shorten them (from the lab folder), then redeploy the same change from your engine's folder:
 
+```bash
+# from course8-module-02
+../lab-sql.sh sqlserver diag_structure "UPDATE dbo.Customer SET FullName = LEFT(FullName, 10);"
+../lab-sql.sh postgres diag_structure "UPDATE public.customer SET fullname = LEFT(fullname, 10);"
+../lab-sql.sh mysql diag_structure "UPDATE Customer SET FullName = LEFT(FullName, 10);"
+../lab-sql.sh mariadb diag_structure "UPDATE Customer SET FullName = LEFT(FullName, 10);"
 ```
--- SQL Server (PG / MySQL / MariaDB analogous)
-UPDATE dbo.Customer SET FullName = LEFT(FullName, 10);
-```
-```
+
+```bash
+# from course8-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.beat2-broken.json --LogPath:"$PWD/logs"
 ```
 
@@ -104,7 +125,8 @@ refusing to swing it.
 `beat3-reorder/` declares the same three `Customer` columns in a **different order**: `CustomerId`,
 `FullName`, `Email`, where the deployed table has `Email` second. Column order is not something an
 `ALTER` can change on any of these engines. The only way to get it is to build the table fresh, copy
-the rows, and swap — a **rebuild** — and that is what `RebuildPolicy` governs:
+the rows, and swap — a **rebuild** — and that is what `RebuildPolicy` governs. `beat3-reorder`'s
+`Customer` table file already carries it; nothing to edit:
 
 ```json
 { "RebuildPolicy": { "Mode": "NEVER", "OnOrderMismatch": true } }
@@ -117,22 +139,34 @@ always alter in place), `ALWAYS`, or `THRESHOLD` (rebuild once the pending-chang
 "THRESHOLD: 3" *and* order-mismatch at once. Here `Mode` stays `NEVER`, and order drift alone elects
 the rebuild.
 
-Deploy the baseline, then the reorder, on any engine:
+Deploy the baseline, then the reorder, on any engine — from your engine's folder, then check the column
+order from the lab folder:
 
 ```bash
-cd <engine>
+# from course8-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.baseline.json
 schemaquench --ConfigFile:quench.settings.beat3-reorder.json
 cd ..
 ../lab-sql.sh sqlserver diag_structure "SELECT c.name, c.column_id FROM sys.columns c JOIN sys.tables t ON t.object_id=c.object_id WHERE t.name='Customer' ORDER BY c.column_id"
-# → CustomerId:1  FullName:2  Email:3       and SELECT COUNT(*) FROM Customer still returns 4
+../lab-sql.sh postgres diag_structure "SELECT column_name, ordinal_position FROM information_schema.columns WHERE table_schema='public' AND table_name='customer' ORDER BY ordinal_position"
+../lab-sql.sh mysql diag_structure "SELECT COLUMN_NAME, ORDINAL_POSITION FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='diag_structure' AND TABLE_NAME='Customer' ORDER BY ORDINAL_POSITION"
+../lab-sql.sh mariadb diag_structure "SELECT COLUMN_NAME, ORDINAL_POSITION FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='diag_structure' AND TABLE_NAME='Customer' ORDER BY ORDINAL_POSITION"
+# → CustomerId:1  FullName:2  Email:3 (lowercase on PostgreSQL)   and SELECT COUNT(*) FROM Customer still returns 4
 ```
 
-The log names the two phases doing it:
+On SQL Server and PostgreSQL the log names the two phases doing it:
 
 ```text
       Detect declared-vs-deployed column order drift
       Elect tables for rebuild
+```
+
+MySQL and MariaDB log no `Elect tables for rebuild` line; the rebuild follows the drift check inside
+`ModifiedTableQuench`:
+
+```text
+    ModifiedTableQuench: Detect declared-vs-deployed column order drift
+      Rebuilding table `diag_structure`.`Customer`
 ```
 
 **Try it without the trigger first.** Deploy `beat3-reorder` with `OnOrderMismatch` removed and the run
@@ -148,11 +182,30 @@ order, enable Change Data Capture, and ask for the same reorder. Start over firs
 already happened, so re-running it as-is has nothing left to rebuild and exits 0.
 
 ```bash
+# from course8-module-02
 bash setup-databases.sh --reset          # Windows: .\setup-databases.ps1 -Reset
-cd sqlserver && schemaquench --ConfigFile:quench.settings.baseline.json ; cd ..
+```
+
+Deploy the baseline again, from the `sqlserver` folder:
+
+```bash
+# from course8-module-02/sqlserver
+schemaquench --ConfigFile:quench.settings.baseline.json
+```
+
+Enable CDC on the database and on `Customer`, from the lab folder:
+
+```bash
+# from course8-module-02
 ../lab-sql.sh sqlserver diag_structure "EXEC sys.sp_cdc_enable_db"
 ../lab-sql.sh sqlserver diag_structure "EXEC sys.sp_cdc_enable_table @source_schema='dbo', @source_name='Customer', @role_name=NULL"
-cd sqlserver && schemaquench --ConfigFile:quench.settings.beat3-reorder.json ; cd ..
+```
+
+Then ask for the reorder, from the `sqlserver` folder:
+
+```bash
+# from course8-module-02/sqlserver
+schemaquench --ConfigFile:quench.settings.beat3-reorder.json
 ```
 
 ```text
@@ -174,6 +227,7 @@ cannot be made.
 Clear the blocking state when you are done:
 
 ```bash
+# from course8-module-02
 ../lab-sql.sh sqlserver diag_structure "EXEC sys.sp_cdc_disable_table @source_schema='dbo', @source_name='Customer', @capture_instance='all'; EXEC sys.sp_cdc_disable_db"
 ```
 
@@ -189,7 +243,7 @@ Clear the blocking state when you are done:
 | `baseline/` | Healthy `Shop` + the run-once seed that populates `Customer`. |
 | `beat1-broken/` | Baseline + a `NOT NULL LoyaltyTier` column, **no default** — the `4901`/`23502` incident. |
 | `beat1-fixed/` | `beat1-broken` + `Default 'Standard'` — the recovery. |
-| `beat2-broken/` | `beat1-fixed` + `FullName` narrowed to 10 — the `8152`/`22001`/`1406` incident. |
+| `beat2-broken/` | `beat1-fixed` + `FullName` narrowed to 10 — the `2628`/`22001`/`1406` incident. |
 | `beat3-reorder/` | Baseline with `Customer`'s columns declared in a different order + a table-level `RebuildPolicy` with `OnOrderMismatch` — the rebuild, and the CDC refusal. |
 | `quench.settings.<state>.json` | One per package, all targeting `diag_structure`, lab-local `artifacts`/`checkpoints`. |
 

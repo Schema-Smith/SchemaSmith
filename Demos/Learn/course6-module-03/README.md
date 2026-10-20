@@ -19,11 +19,12 @@ Your schema lives in Git. Before anything reaches a database, you want two guara
 
 ## Scenario 1 — structural validation (the base gate)
 
-Every package ships generated `.json-schemas/*.schema` files — one per content type, per platform. Validate a table file against its schema (SQL Server shown; swap the infix for `postgresql` / `mysql` / `mariadb`):
+Every package ships generated `.json-schemas/*.schema` files — one per content type, per platform. Validate your engine's table files against their schema (each package has exactly one `tables.<platform>.schema`, with the infix `sqlserver` / `postgresql` / `mysql` / `mariadb`):
 
-```
-cp sqlserver/Package/.json-schemas/tables.sqlserver.schema /tmp/tables.json
-npx ajv-cli@5 validate -s /tmp/tables.json -d "sqlserver/Package/Templates/Main/Tables/*.json" --strict=false
+```bash
+# from course6-module-03
+cp <engine>/Package/.json-schemas/tables.*.schema /tmp/tables.json
+npx ajv-cli@5 validate -s /tmp/tables.json -d "<engine>/Package/Templates/Main/Tables/*.json" --strict=false
 ```
 
 Both tables report `valid`. Now break one — remove the `DataType` from a column in `dbo.Customer.json` — and re-run. Validation fails with `must have required property 'DataType'`. No database was touched; a structural typo is caught in seconds.
@@ -64,11 +65,10 @@ Now a PII column shipped without a classification fails the pull request (`/Colu
 
 Regenerate the schemas (database-free):
 
+```bash
+# from course6-module-03
+SmithySettings_Product__Path="$(pwd)/<engine>/Package" schematongs --WriteSchemasOnly
 ```
-SmithySettings_Product__Path="$(pwd)/sqlserver/Package" schematongs --WriteSchemasOnly
-```
-
-(Run the equivalent for the `postgres/Package`, `mysql/Package`, and `mariadb/Package` directories to regenerate those engines.)
 
 Both the **table-level** and **column-level** `Extensions` fragments survive the round-trip — your `OwningTeam` and `DataClassification` rules are still enforced after regeneration. Governance is regeneration-safe at both levels.
 

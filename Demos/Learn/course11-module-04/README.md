@@ -23,6 +23,7 @@ own — storage, IO separation, a retention policy, an audit requirement. You we
 that is normal.
 
 ```bash
+# from course11-module-04
 ../lab-sql.sh postgres vault_m4 "CREATE TABLE public.retaineddocument (docid BIGINT NOT NULL PRIMARY KEY, body TEXT) TABLESPACE vault_ts"
 ../lab-sql.sh postgres vault_m4 "SELECT COALESCE(t.spcname,'pg_default') FROM pg_class c LEFT JOIN pg_tablespace t ON t.oid=c.reltablespace WHERE c.relname='retaineddocument'"
 # → vault_ts
@@ -30,7 +31,8 @@ that is normal.
 
 ## Step 2: Deploy a package that never mentions placement
 
-`unmanaged/` declares the table — columns, primary key — and has **no `Tablespace` key at all**:
+`unmanaged/` declares the table — columns, primary key — and has **no `Tablespace` key at all**
+(the package already looks like this; nothing to edit):
 
 ```json
 {
@@ -42,6 +44,7 @@ that is normal.
 ```
 
 ```bash
+# from course11-module-04
 cd postgres && schemaquench --ConfigFile:quench.settings.unmanaged.json ; cd ..    # exit 0
 ../lab-sql.sh postgres vault_m4 "SELECT COALESCE(t.spcname,'pg_default') FROM pg_class c LEFT JOIN pg_tablespace t ON t.oid=c.reltablespace WHERE c.relname='retaineddocument'"
 # → vault_ts
@@ -56,13 +59,15 @@ triggered by a package that never mentioned tablespaces at all.
 
 ## Step 3: Change exactly one thing
 
-`declared/` is the same file with **one key added**:
+`declared/` is the same file with **one key added** (already in the `declared/` package; nothing to
+edit):
 
 ```json
 { "Tablespace": "pg_default" }
 ```
 
 ```bash
+# from course11-module-04
 cd postgres && schemaquench --ConfigFile:quench.settings.declared.json ; echo "exit=$?" ; cd ..
 ```
 
@@ -102,6 +107,7 @@ declares, and no further.
 ## Cleanup
 
 ```bash
+# from course11-module-04
 ../lab-sql.sh postgres vault_m4 "DROP TABLE IF EXISTS public.retaineddocument"
 ```
 

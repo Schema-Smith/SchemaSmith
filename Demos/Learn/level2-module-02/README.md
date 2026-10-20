@@ -85,7 +85,7 @@ itself, so this lab flips it to `true`. That's the only meaningful change from t
 ## Step 2: Deploy — watch one run fan out across every tenant
 
 ```bash
-cd <engine>
+# from level2-module-02/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
@@ -126,10 +126,8 @@ order they interleave in varies run to run.
 Each tenant now has its own `Customers` and `Contacts`:
 
 ```bash
-# SQL Server (from a SQL client):
-#   SELECT s.name + '.' + t.name FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id
-#     WHERE s.name IN ('acme','beta','globex') ORDER BY 1;
-cd ..                                 # back to the lab folder
+# from level2-module-02
+../lab-sql.sh sqlserver learn "SELECT s.name + '.' + t.name FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name IN ('acme','beta','globex') ORDER BY 1"
 ../lab-sql.sh postgres learn "SELECT table_schema || '.' || table_name FROM information_schema.tables WHERE table_schema IN ('acme','beta','globex') ORDER BY 1"
 ```
 
@@ -139,6 +137,7 @@ identical workspace, declared exactly once in `TenantWorkspace`.
 On PostgreSQL the workspace also declares an enum type and a sequence, and each tenant gets its **own**:
 
 ```bash
+# from level2-module-02
 ../lab-sql.sh postgres learn "SELECT n.nspname || '.' || t.typname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'customer_tier' ORDER BY 1"
 # → acme.customer_tier
 # → beta.customer_tier
@@ -158,10 +157,13 @@ column points at its own type, never a neighbour's — and the column's `'bronze
 This is the heart of the module. Add one tenant row, then run the same command again:
 
 ```bash
-# SQL Server:  INSERT INTO dbo.Tenants ([Name],[DisplayName]) VALUES (N'initech', N'Initech Inc');
+# from level2-module-02
+../lab-sql.sh sqlserver learn "INSERT INTO dbo.Tenants ([Name],[DisplayName]) VALUES (N'initech', N'Initech Inc')"
 ../lab-sql.sh postgres learn "INSERT INTO public.tenants (name, display_name) VALUES ('initech','Initech Inc')"
+```
 
-cd <engine>
+```bash
+# from level2-module-02/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
 

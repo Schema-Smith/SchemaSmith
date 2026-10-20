@@ -19,16 +19,10 @@ off. This stands in for state an app or an operator already put on the server �
 schema package.
 
 ```bash
-# SQL Server
+# from course4-recipe-03
 ../lab-sql.sh sqlserver cookbook_r3 --file sqlserver/seed-server.sql
-
-# PostgreSQL
 ../lab-sql.sh postgres cookbook_r3 --file postgres/seed-server.sql
-
-# MySQL
 ../lab-sql.sh mysql cookbook_r3 --file mysql/seed-server.sql
-
-# MariaDB
 ../lab-sql.sh mariadb cookbook_r3 --file mariadb/seed-server.sql
 ```
 
@@ -50,7 +44,7 @@ row. `[ALWAYS]` means it runs on every quench, not once.
 ## Step 3: Deploy — the package reads the server
 
 ```bash
-cd <engine>
+# from course4-recipe-03/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
@@ -58,26 +52,43 @@ SchemaSmith runs the query against `cookbook_r3` just before the script, substit
 after-script records it:
 
 ```bash
-# SQL Server
-cd ..            # back to the lab folder
+# from course4-recipe-03
 ../lab-sql.sh sqlserver cookbook_r3 "SELECT ActiveFeatures FROM dbo.DeployLog"
 # → Billing,Reporting
+../lab-sql.sh postgres cookbook_r3 "SELECT activefeatures FROM public.deploylog ORDER BY loggedat"
+../lab-sql.sh mysql cookbook_r3 "SELECT ActiveFeatures FROM DeployLog ORDER BY LoggedAt"
+../lab-sql.sh mariadb cookbook_r3 "SELECT ActiveFeatures FROM DeployLog ORDER BY LoggedAt"
 ```
 
 ## Step 4: Change the server, re-deploy — the value follows
 
-Switch on `BetaSearch` on the server and quench again:
+Switch on `BetaSearch` on the server:
 
 ```bash
-# PostgreSQL
-cd ..            # back to the lab folder
+# from course4-recipe-03
+../lab-sql.sh sqlserver cookbook_r3 "UPDATE dbo.FeatureFlag SET Enabled=1 WHERE FlagName='BetaSearch'"
 ../lab-sql.sh postgres cookbook_r3 "UPDATE public.featureflag SET enabled=true WHERE flagname='BetaSearch'"
-cd postgres       # back into the engine folder
+../lab-sql.sh mysql cookbook_r3 "UPDATE FeatureFlag SET Enabled=1 WHERE FlagName='BetaSearch'"
+../lab-sql.sh mariadb cookbook_r3 "UPDATE FeatureFlag SET Enabled=1 WHERE FlagName='BetaSearch'"
+```
+
+Quench again:
+
+```bash
+# from course4-recipe-03/<engine>
 schemaquench --ConfigFile:deploy.settings.json
-cd ..            # back to the lab folder
+```
+
+Read the log back:
+
+```bash
+# from course4-recipe-03
+../lab-sql.sh sqlserver cookbook_r3 "SELECT ActiveFeatures FROM dbo.DeployLog ORDER BY LoggedAt"
 ../lab-sql.sh postgres cookbook_r3 "SELECT activefeatures FROM public.deploylog ORDER BY loggedat"
 # → Billing,Reporting
 #   BetaSearch,Billing,Reporting
+../lab-sql.sh mysql cookbook_r3 "SELECT ActiveFeatures FROM DeployLog ORDER BY LoggedAt"
+../lab-sql.sh mariadb cookbook_r3 "SELECT ActiveFeatures FROM DeployLog ORDER BY LoggedAt"
 ```
 
 The second deploy re-ran the query against the live server and recorded the new feature set. Nothing in the

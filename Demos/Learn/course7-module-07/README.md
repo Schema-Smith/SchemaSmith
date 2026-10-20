@@ -16,11 +16,16 @@ points at is itself a table you query, not a literal value.
 - The [sandbox](../docker) is up and verified (all four engines healthy).
 - The fleet exists — run [`../course7-setup`](../course7-setup) once (creates `fleet_tenant_001`…`005` on
   each engine).
-- The registries exist — run [`./setup-registry.sh`](./setup-registry.sh) once. It creates
+- The registries exist — run [`./setup-registry.sh`](./setup-registry.sh) once (safe to re-run). It creates
   `FleetRegistry_Dev`, `FleetRegistry_Prod`, and `FleetRegistry_Empty` (lowercase `fleetregistry_*` on
   PostgreSQL, MySQL, and MariaDB) on each engine and seeds each one's
   `Tenants` table (Dev and Prod list all five tenants — Dev has `005` inactive, Prod has it active; Empty
-  gets the table with zero rows).
+  gets the table with zero rows):
+
+  ```bash
+  # from course7-module-07
+  ./setup-registry.sh
+  ```
 - The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
 
 Each engine folder ships the same native `Shop` `Package/` — its `Template.json` now carries
@@ -39,12 +44,11 @@ Nothing in `quench.settings.json` overrides `ControlDb`, so the token resolves f
 default (`Product.json`) — the roster still comes from the registry table, not a literal list:
 
 ```bash
-cd sqlserver
+# from course7-module-07/<engine>
 schemaquench --ConfigFile:quench.settings.json
 ```
 
 ```
-Version: 2.7.2.0
   Product Script Tokens:
     ControlDb: FleetRegistry_Dev
 ```
@@ -57,7 +61,10 @@ Template 'Main': 4 units - db: DatabaseIdentificationScript; schema: (regular te
 ```
 
 Each tenant then: `Kindling the forge` → tables quenched → `Successfully Quenched`; the run ends
-`Completed quench of Shop`. Re-run the same command and it comes back a clean no-op — same four tenants
+`Completed quench of Shop`. If you ran Module 6 on this fleet first, this deploy also drops what Module 6's
+`after/` package added and this package does not declare — the `ShipmentEvent` table, the
+`UQ_Customer_Email` index, and the `Customer.Region` column — on every tenant the dev roster reaches.
+Re-run the same command and it comes back a clean no-op — same four tenants
 dispatched, no `Adding`/`Creating` lines, all four `Successfully Quenched` again. The registry read is
 idempotent exactly like discovery and config-driven rosters are.
 
@@ -68,6 +75,7 @@ token re-targets the very same `IdentificationDatabase` query at `FleetRegistry_
 active:
 
 ```bash
+# from course7-module-07/<engine>
 schemaquench --ConfigFile:quench.settings.prod.json --PreviewTargets
 ```
 
@@ -85,15 +93,20 @@ changed which registry database the identification query ran against.
 
 ## Step 3: Deactivate a tenant — a registry row, not a redeploy
 
-Flip one row in the registry, no config or package change at all:
+Flip one row in the dev registry, no config or package change at all. Run the line for your engine:
 
-```sql
-UPDATE dbo.Tenants SET Active = 0 WHERE DbName = 'fleet_tenant_004'
+```bash
+# from course7-module-07
+../lab-sql.sh sqlserver FleetRegistry_Dev "UPDATE dbo.Tenants SET Active = 0 WHERE DbName = 'fleet_tenant_004'"
+../lab-sql.sh postgres fleetregistry_dev "UPDATE public.tenants SET active = false WHERE dbname = 'fleet_tenant_004'"
+../lab-sql.sh mysql fleetregistry_dev "UPDATE Tenants SET Active = 0 WHERE DbName = 'fleet_tenant_004'"
+../lab-sql.sh mariadb fleetregistry_dev "UPDATE Tenants SET Active = 0 WHERE DbName = 'fleet_tenant_004'"
 ```
 
 Re-run the dev deploy and the roster shrinks on its own:
 
 ```bash
+# from course7-module-07/<engine>
 schemaquench --ConfigFile:quench.settings.json
 ```
 
@@ -103,7 +116,17 @@ Template 'Main': 3 units - db: DatabaseIdentificationScript; schema: (regular te
 
 **Four units became three** — `fleet_tenant_004` dropped off with no `TemplateTargets` edit and no
 settings-file edit, just an `UPDATE` against the control plane. The count in the rollup is the roster;
-which tenants it resolved to is one entry per target in the deployment summary report. (Restore it to `Active = 1` afterward to get back to the four-tenant baseline.)
+which tenants it resolved to is one entry per target in the deployment summary report. Restore the row to
+get back to the four-tenant baseline:
+
+```bash
+# from course7-module-07
+../lab-sql.sh sqlserver FleetRegistry_Dev "UPDATE dbo.Tenants SET Active = 1 WHERE DbName = 'fleet_tenant_004'"
+../lab-sql.sh postgres fleetregistry_dev "UPDATE public.tenants SET active = true WHERE dbname = 'fleet_tenant_004'"
+../lab-sql.sh mysql fleetregistry_dev "UPDATE Tenants SET Active = 1 WHERE DbName = 'fleet_tenant_004'"
+../lab-sql.sh mariadb fleetregistry_dev "UPDATE Tenants SET Active = 1 WHERE DbName = 'fleet_tenant_004'"
+```
+
 The deactivation statement's shape differs slightly by engine:
 
 | Engine | Statement |
@@ -117,6 +140,7 @@ The `Empty` registry has the `Tenants` table but zero rows. Point at it and the 
 touching anything, rather than silently deploying to nothing:
 
 ```bash
+# from course7-module-07/<engine>
 schemaquench --ConfigFile:quench.settings.empty.json
 ```
 
@@ -136,7 +160,9 @@ cross-database-query. Blank it out in `postgres/Package/Templates/Main/Template.
 `"{{ControlDb}}"`) and the enumeration query runs against whatever database the connection is already on
 — the sandbox's init database, `postgres` — where the registry table doesn't exist:
 
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Template.json" set IdentificationDatabase '""' -->
 ```bash
+# from course7-module-07/postgres
 schemaquench --ConfigFile:quench.settings.json --PreviewTargets
 ```
 
@@ -152,6 +178,8 @@ Restore `IdentificationDatabase: "{{ControlDb}}"` and the same preview resolves 
 `DatabaseIdentificationScript` that cross-database-queries the registry directly (three-part naming) and
 skip `IdentificationDatabase` — but on PostgreSQL, `IdentificationDatabase` is the only door in.
 
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Template.json" set IdentificationDatabase '"{{ControlDb}}"' -->
+
 ## Step 6: Do it on PostgreSQL, MySQL, and MariaDB
 
 Same six steps in `postgres/`, `mysql/`, and `mariadb/` — host prefix `[localhost]` with no port (SQL
@@ -161,8 +189,8 @@ Server is the only engine that logs a port, `[localhost,11433]`). MySQL runs on 
 is lowercase and boolean (`SELECT dbname FROM public.tenants WHERE active = true`); MySQL/MariaDB use
 `SELECT DbName FROM Tenants WHERE Active = 1`.
 
-The sandbox's MySQL still has a leftover `fleet_tenant_006` database from an earlier module — but it's not
-a row in `FleetRegistry_Dev`, so it never appears in the roster. That's the registry-driven proof in one
+If a `fleet_tenant_006` database is still around from an earlier module, it never appears in the roster
+either — it's not a row in `FleetRegistry_Dev`. That's the registry-driven proof in one
 sentence: the registry decides, not the catalog.
 
 ## Cleanup
@@ -170,12 +198,14 @@ sentence: the registry decides, not the catalog.
 Reset the three registries back to their seeded baseline:
 
 ```bash
+# from course7-module-07
 ./setup-registry.sh --reset
 ```
 
 Or drop them by hand on any one engine:
 
 ```bash
+# from course7-module-07
 ../lab-sql.sh sqlserver master "DROP DATABASE FleetRegistry_Dev"
 ../lab-sql.sh sqlserver master "DROP DATABASE FleetRegistry_Prod"
 ../lab-sql.sh sqlserver master "DROP DATABASE FleetRegistry_Empty"

@@ -28,15 +28,28 @@ end — so `FAILED to quench:` alone doesn't mean "mechanical." The **per-item l
 
 ## Step 1 — create the sandbox database
 
-**macOS / Linux:** `cd Demos/Learn/course8-module-04 && bash setup-databases.sh`
-**Windows:** `cd Demos\Learn\course8-module-04 ; .\setup-databases.ps1`
+**macOS / Linux**
 
-Prints `PASS` per engine once `diag_scripts` exists. Re-running is safe (guarded `CREATE`).
+```bash
+# from course8-module-04
+bash setup-databases.sh --reset
+```
+
+**Windows (PowerShell)**
+
+```powershell
+# from course8-module-04
+.\setup-databases.ps1 -Reset
+```
+
+`--reset` (`-Reset`) drops `diag_scripts` and recreates it empty, so every attempt — the first or a retake — starts from the same clean state. Prints `PASS (reset)` per engine. Only a database the labs created is ever dropped.
 
 ## Step 2 — deploy the baseline (green)
 
-```
-cd sqlserver            # or postgres, mysql, or mariadb
+Change into your engine's folder (`sqlserver`, `postgres`, `mysql`, or `mariadb`); every `schemaquench` below runs there:
+
+```bash
+# from course8-module-04/<engine>
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
@@ -51,7 +64,8 @@ trip on.
 migrated from a legacy CRM in two batches: an idempotent name-tidy, then one `INSERT` of the migrated
 rows. The last row is missing its email — and `Email` is `NOT NULL`:
 
-```
+```bash
+# from course8-module-04/<engine>
 schemaquench --ConfigFile:quench.settings.beat1-broken.json --LogPath:"$PWD/logs"
 ```
 
@@ -77,13 +91,23 @@ blew up:
 
 That is a *user-supplied* failure: the engine ran your script verbatim and your data broke a rule.
 
-**Recover — fix the source, redeploy.** Give row 13 a real email in `02_backfill_customers.sql`:
+**Recover — fix the source, redeploy.** Give row 13 a real email: in
+`<engine>/beat1-broken/Templates/Main/After Scripts/02_backfill_customers.sql`, replace the `NULL` on
+the `(13, …)` row so it reads:
 
-```
+<!-- walk: sed -i "s/(13, NULL,                'Gil Overton')/(13, 'gil.o@shop.test',   'Gil Overton')/" "<engine>/beat1-broken/Templates/Main/After Scripts/02_backfill_customers.sql" -->
+```text
   (13, 'gil.o@shop.test',   'Gil Overton');
 ```
 
-Redeploy the same config. A failed script is **never** marked complete, so a plain redeploy retries
+Redeploy the same config:
+
+```bash
+# from course8-module-04/<engine>
+schemaquench --ConfigFile:quench.settings.beat1-broken.json --LogPath:"$PWD/logs"
+```
+
+A failed script is **never** marked complete, so a plain redeploy retries
 it — no `--ResumeQuench` needed (that's Module 5). Exits `0`; `Customer` now holds all seven rows.
 (The `INSERT` is a single atomic statement, so the first, failed run committed *nothing* — which is
 exactly why the retry doesn't collide.)
@@ -94,7 +118,8 @@ exactly why the retry doesn't collide.)
 `data/….SalesOrder.tabledata`. Three orders; one (`OrderId 103`) references `CustomerId 999`, who
 was never seeded — an **orphan**:
 
-```
+```bash
+# from course8-module-04/<engine>
 schemaquench --ConfigFile:quench.settings.beat2-broken.json --LogPath:"$PWD/logs"
 ```
 
@@ -117,8 +142,24 @@ into your client and it fails identically. No ordering or retry can save a row w
 isn't there — the fix is in the data you shipped.
 
 **Recover — fix the content, redeploy.** Reparent the orphan in the `.tabledata` file (`999` → a real
-customer, e.g. `1`), then redeploy. `DataDelivery` re-runs every deploy (idempotent MERGE), so the
-corrected content lands clean — exit `0`, all three orders delivered.
+customer, e.g. `1`): in `<engine>/beat2-broken/Templates/Main/data/` (`dbo.SalesOrder.tabledata`,
+`public.salesorder.tabledata`, or `SalesOrder.tabledata` on MySQL and MariaDB), set the `CustomerId`
+of order `103` to `1`, then redeploy:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "sqlserver/beat2-broken/Templates/Main/data/dbo.SalesOrder.tabledata" set "[OrderId=103].CustomerId" '1' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "postgres/beat2-broken/Templates/Main/data/public.salesorder.tabledata" set "[orderid=103].customerid" '1' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "mysql/beat2-broken/Templates/Main/data/SalesOrder.tabledata" set "[OrderId=103].CustomerId" '1' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "mariadb/beat2-broken/Templates/Main/data/SalesOrder.tabledata" set "[OrderId=103].CustomerId" '1' -->
+```bash
+# from course8-module-04/<engine>
+schemaquench --ConfigFile:quench.settings.beat2-broken.json --LogPath:"$PWD/logs"
+```
+
+`DataDelivery` re-runs every deploy (idempotent MERGE), so the corrected content lands clean — exit
+`0`, all three orders delivered.
+
+Both fixes edit the lab's own package files. To retake the module, put them back
+(`git checkout -- course8-module-04`, from `Demos/Learn`) and re-run Step 1.
 
 ## Where this leaves you
 

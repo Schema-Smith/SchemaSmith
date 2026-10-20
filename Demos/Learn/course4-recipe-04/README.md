@@ -2,7 +2,7 @@
 
 Goal: ship a **binary asset** (a logo) and a **reference dataset** (category rows) *inside* the package, and
 have them land correctly on every engine with no per-engine editing. The same `logo.png` becomes the
-platform's own binary literal — `0x…` on SQL Server and MySQL, `E'\x…'::bytea` on PostgreSQL — automatically.
+platform's own binary literal — `0x…` on SQL Server and MySQL, `E'\\x…'::bytea` on PostgreSQL — automatically.
 
 Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships the full `Package/` (including
 `Package/resources/logo.png` and `Package/resources/seed-categories.sql`) plus `deploy.settings.json`,
@@ -34,7 +34,7 @@ reference-data file with `{{SeedCategories}}` — no external file handling at d
 ## Step 2: Deploy
 
 ```bash
-cd <engine>
+# from course4-recipe-04/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
 
@@ -43,18 +43,10 @@ schemaquench --ConfigFile:deploy.settings.json
 Read the stored image back and confirm it's byte-for-byte the file you shipped (69 bytes):
 
 ```bash
-cd ..            # back to the lab folder
-
-# SQL Server
+# from course4-recipe-04
 ../lab-sql.sh sqlserver cookbook_r4 "SELECT DATALENGTH(Image), LOWER(CONVERT(VARCHAR(MAX), Image, 2)) FROM dbo.BrandAssets WHERE AssetName='Default'"
-
-# PostgreSQL
 ../lab-sql.sh postgres cookbook_r4 "SELECT octet_length(image), encode(image,'hex') FROM public.brandassets WHERE assetname='Default'"
-
-# MySQL
 ../lab-sql.sh mysql cookbook_r4 "SELECT LENGTH(Image), LOWER(HEX(Image)) FROM cookbook_r4.BrandAssets WHERE AssetName='Default'"
-
-# MariaDB
 ../lab-sql.sh mariadb cookbook_r4 "SELECT LENGTH(Image), LOWER(HEX(Image)) FROM cookbook_r4.BrandAssets WHERE AssetName='Default'"
 ```
 
@@ -62,8 +54,12 @@ All four return length `69` and the same hex (`89504e47…ae426082` — the PNG 
 `resources/logo.png`). And the reference data is in:
 
 ```bash
+# from course4-recipe-04
+../lab-sql.sh sqlserver cookbook_r4 "SELECT STRING_AGG(CategoryName, ',') WITHIN GROUP (ORDER BY CategoryName) FROM dbo.Category"
 ../lab-sql.sh postgres cookbook_r4 "SELECT string_agg(categoryname,',' ORDER BY categoryname) FROM public.category"
 # → Books,Electronics,Garden
+../lab-sql.sh mysql cookbook_r4 "SELECT GROUP_CONCAT(CategoryName ORDER BY CategoryName SEPARATOR ',') FROM Category"
+../lab-sql.sh mariadb cookbook_r4 "SELECT GROUP_CONCAT(CategoryName ORDER BY CategoryName SEPARATOR ',') FROM Category"
 ```
 
 ## Per-engine notes

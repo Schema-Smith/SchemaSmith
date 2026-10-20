@@ -12,15 +12,28 @@ you assemble everything into a team diagnostic runbook.
 
 ## Step 1 — create the sandbox database
 
-**macOS / Linux:** `cd Demos/Learn/course8-module-06 && bash setup-databases.sh`
-**Windows:** `cd Demos\Learn\course8-module-06 ; .\setup-databases.ps1`
+**macOS / Linux**
 
-Prints `PASS` per engine once `diag_dialects` exists.
+```bash
+# from course8-module-06
+bash setup-databases.sh --reset
+```
+
+**Windows (PowerShell)**
+
+```powershell
+# from course8-module-06
+.\setup-databases.ps1 -Reset
+```
+
+`--reset` (`-Reset`) drops `diag_dialects` and recreates it empty, so every attempt — the first or a retake — starts from the same clean state. Prints `PASS (reset)` per engine. Only a database the labs created is ever dropped.
 
 ## Step 2 — deploy the baseline (green)
 
-```
-cd sqlserver            # or postgres, mysql, or mariadb
+Change into your engine's folder (`sqlserver`, `postgres`, `mysql`, or `mariadb`); every `schemaquench` below runs there:
+
+```bash
+# from course8-module-06/<engine>
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
@@ -33,7 +46,8 @@ failure we'll read three ways.
 `channels-broken/` flips `IX_Customer_Email` to **unique**. Deploying over the duplicates fails at the
 index phase — the *same* failure on every engine, surfaced differently:
 
-```
+```bash
+# from course8-module-06/<engine>
 schemaquench --ConfigFile:quench.settings.channels-broken.json --LogPath:"$PWD/logs"
 ```
 
@@ -44,7 +58,7 @@ Read the `Progress.log` **and** the `Errors.log` on each engine:
 | **SQL Server** | `The CREATE UNIQUE INDEX statement terminated… duplicate key… (ana.f@shop.test)` | **populated** — same message + `at Line: 2` |
 | **PostgreSQL** | `23505: could not create unique index "ix_customer_email"` | **empty** |
 | **MySQL** | `Duplicate entry 'ana.f@shop.test' for key 'Customer.IX_Customer_Email'` (`1062`) | **empty** |
-| **MariaDB** | `Duplicate entry 'ana.f@shop.test' for key 'Customer.IX_Customer_Email'` (`1062`) | **empty** |
+| **MariaDB** | `Duplicate entry 'ana.f@shop.test' for key 'IX_Customer_Email'` (`1062`) — no table prefix on the key | **empty** |
 
 That's the headline: **only SQL Server populates `Errors.log`** (with the fault + line number). On
 PostgreSQL, MySQL, and MariaDB the detail is in the `Progress.log`, and `Errors.log` is empty. *Where
@@ -54,7 +68,13 @@ you look for the fault is engine-specific.* Three doors:
 - **PostgreSQL** — a `Notice` stream. The SQLSTATE (`23505`) is printed literally; `Errors.log` stays empty.
 - **MySQL and MariaDB** — no async event at all. Progress rides a **`SchemaSmith_StatusMessages`**
   sidecar table that a monitor polls every ~200 ms, because neither engine can push a notice on the busy
-  line over a single connection. Confirm it's there: `DESCRIBE diag_dialects.SchemaSmith_StatusMessages`.
+  line over a single connection. Confirm it's there with the lines below.
+
+```bash
+# from course8-module-06
+../lab-sql.sh mysql diag_dialects "DESCRIBE SchemaSmith_StatusMessages;"
+../lab-sql.sh mariadb diag_dialects "DESCRIBE SchemaSmith_StatusMessages;"
+```
 
 > *MariaDB is a fourth platform in the MySQL family — its own `Platform: MariaDb` selection and native package, not the MySQL package retargeted. Its dialect matches MySQL except for a few DDL specifics (invisible indexes, check-constraint drops, column-default reporting) that SchemaSmith handles for you.*
 
@@ -65,7 +85,8 @@ SQL Server user scripts love to talk — `PRINT` statements, low-severity warnin
 (top-level config, default `false`, **SQL-Server-only**). The `verbose/` package adds a script that
 `PRINT`s a line every deploy. Deploy it twice:
 
-```
+```bash
+# from course8-module-06/<engine>
 schemaquench --ConfigFile:quench.settings.verbose.json --LogPath:"$PWD/logs-plain"
 schemaquench --ConfigFile:quench.settings.verbose.json --LogPath:"$PWD/logs-verbose" --VerboseLogging=true
 ```

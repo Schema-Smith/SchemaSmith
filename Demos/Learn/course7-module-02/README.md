@@ -43,7 +43,7 @@ Open `sqlserver/quench.settings.dev.json`. The roster lives in the config now, n
 Preview it — read-only:
 
 ```bash
-cd sqlserver
+# from course7-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.dev.json --PreviewTargets
 ```
 
@@ -58,6 +58,7 @@ Two tenants — even though the catalog holds five. `DatabaseIdentificationScrip
 config **replaced** discovery. Deploy it:
 
 ```bash
+# from course7-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.dev.json
 ```
 
@@ -82,6 +83,7 @@ ship one canonical package everywhere, let each environment's config declare its
 roster:
 
 ```bash
+# from course7-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.prod.json
 ```
 
@@ -95,24 +97,53 @@ Five work units this time. Same package, different roster — the config is the 
 
 There's one rule worth knowing before you strip discovery entirely. A `Databases` override **still**
 requires the template to declare *some* `DatabaseIdentificationScript` — it's how SchemaSmith knows the
-template fans out on the database axis. Remove that line from `Package/Templates/Main/Template.json` and
-deploy the dev roster, and the run refuses before it touches anything:
+template fans out on the database axis. Delete the `DatabaseIdentificationScript` line from your engine's
+`Package/Templates/Main/Template.json` and deploy the dev roster, and the run refuses before it touches
+anything:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" del DatabaseIdentificationScript -->
+```bash
+# from course7-module-02/<engine>
+schemaquench --ConfigFile:quench.settings.dev.json
+```
 
 ```
 SchemaQuench.TemplateTargetValidationException: TemplateTargets.Main.Databases requires Template 'Main' to declare a DatabaseIdentificationScript. Add a placeholder script (e.g., SELECT 'CONFIG-DRIVEN' AS DatabaseName WHERE 1=0) to mark this template as database-fan-out.
 ```
 
 When your deployment system is the *sole* authority and there's no naming convention to discover, use the
-placeholder the error names:
+placeholder the error names. Put the line back in the same `Template.json`, with the placeholder as its
+value:
 
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript '"SELECT '\''CONFIG-DRIVEN'\'' AS DatabaseName WHERE 1=0"' -->
 ```json
 "DatabaseIdentificationScript": "SELECT 'CONFIG-DRIVEN' AS DatabaseName WHERE 1=0"
 ```
 
 Deploy again — the override drives the fan-out exactly as before, and the placeholder query is never run
-(the config bypasses it). The shipped package here keeps the **real** catalog script, so you can see the
-override win over a live discovery result; the placeholder is the form to reach for when there's nothing
-to discover.
+(the config bypasses it):
+
+```bash
+# from course7-module-02/<engine>
+schemaquench --ConfigFile:quench.settings.dev.json
+```
+
+The shipped package here keeps the **real** catalog script, so you can see the override win over a live
+discovery result; the placeholder is the form to reach for when there's nothing to discover. Restore the
+real script now — Step 4 needs discovery back. In `Template.json`, set `DatabaseIdentificationScript` back
+to your engine's catalog query (the table in Module 1, Step 5):
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript '"SELECT [Name] FROM sys.databases WHERE [Name] LIKE '\''fleet[_]tenant[_]%'\''"' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript '"SELECT datname FROM pg_database WHERE datname LIKE '\''fleet\\_tenant\\_%'\''"' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript '"SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME LIKE '\''fleet\\_tenant\\_%'\''"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set DatabaseIdentificationScript '"SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME LIKE '\''fleet\\_tenant\\_%'\''"' -->
+```json
+"DatabaseIdentificationScript": "SELECT [Name] FROM sys.databases WHERE [Name] LIKE 'fleet[_]tenant[_]%'"
+"DatabaseIdentificationScript": "SELECT datname FROM pg_database WHERE datname LIKE 'fleet\\_tenant\\_%'"
+"DatabaseIdentificationScript": "SELECT SCHEMA_NAME FROM information_schema.schemata WHERE SCHEMA_NAME LIKE 'fleet\\_tenant\\_%'"
+```
+
+The first line is SQL Server's, the second PostgreSQL's, the third MySQL's and MariaDB's.
 
 ## Step 4: A canary — narrow one run with a scope filter
 
@@ -125,6 +156,7 @@ whatever was discovered (or overridden) to a subset, for this run only. Open
 ```
 
 ```bash
+# from course7-module-02/<engine>
 schemaquench --ConfigFile:quench.settings.canary.json --PreviewTargets
 schemaquench --ConfigFile:quench.settings.canary.json
 ```
@@ -133,15 +165,31 @@ One work unit — `fleet_tenant_001`. Discovery still ran and returned five; the
 to your canary. Deploy the canary, confirm it's healthy, then drop the filter and run the full roster.
 
 The filter fails fast on a typo — name a tenant that isn't there and the run stops before any work, and
-tells you what *was* available:
+tells you what *was* available. In `quench.settings.canary.json`, change the `Target.Databases` entry to
+`fleet_tenant_999` and run the canary again:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.canary.json" set Target.Databases '["fleet_tenant_999"]' -->
+```json
+"Databases": [ "fleet_tenant_999" ]
+```
+
+```bash
+# from course7-module-02/<engine>
+schemaquench --ConfigFile:quench.settings.canary.json
+```
 
 ```
 Target filter rejection for template 'Main': One or more Target.* filter values do not match the discovered work-unit set. Target.Databases value(s) not discovered: [fleet_tenant_999]. Available: [fleet_tenant_001,fleet_tenant_002,fleet_tenant_003,fleet_tenant_004,fleet_tenant_005].
 ```
 
+Put `fleet_tenant_001` back in `Target.Databases` when you're done.
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/quench.settings.canary.json" set Target.Databases '["fleet_tenant_001"]' -->
+
 ## Step 5: Do it on PostgreSQL, MySQL, and MariaDB
 
-Same four steps in `postgres/`, `mysql/`, and `mariadb/`. The `TemplateTargets` and `Target.Databases`
+Same four steps from `postgres/`, `mysql/`, and `mariadb/` — every command above runs from your engine's
+folder. The `TemplateTargets` and `Target.Databases`
 config is **identical** on all four engines — only the (retained) catalog dialect in `Template.json`
 differs, and that's only consulted when you *don't* override. Each engine replaces discovery with a
 dev/prod roster,

@@ -34,6 +34,7 @@ END $$;
 Run it, then look at what landed:
 
 ```bash
+# from course4-recipe-11
 ../lab-sql.sh postgres cookbook_r11 "$(cat postgres/scripted-before/email_address.sql)"
 ../lab-sql.sh postgres cookbook_r11 "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conname LIKE '%email%'"
 # → email_address_has_at|CHECK (((VALUE)::text ~~ '%@%'::text))
@@ -43,6 +44,7 @@ Now **edit the CHECK** in that file — change `VALUE LIKE '%@%'` to `VALUE LIKE
 after the `@` — and run the exact same file again:
 
 ```bash
+# from course4-recipe-11
 ../lab-sql.sh postgres cookbook_r11 "$(cat postgres/scripted-before/email_address.sql)"
 # → DO
 ../lab-sql.sh postgres cookbook_r11 "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conname LIKE '%email%'"
@@ -56,6 +58,7 @@ so nothing told you. This is the failure mode the declarative form exists to rem
 Put the file back to `'%@%'` before moving on, and clear the hand-made domain so the package starts clean:
 
 ```bash
+# from course4-recipe-11
 ../lab-sql.sh postgres cookbook_r11 "DROP DOMAIN IF EXISTS public.email_address CASCADE"
 ```
 
@@ -80,17 +83,19 @@ They are ordinary declarations:
 Deploy:
 
 ```bash
-cd postgres
+# from course4-recipe-11/postgres
 schemaquench --ConfigFile:deploy.settings.json      # exit 0
 schemaquench --ConfigFile:deploy.settings.json      # exit 0, and nothing changes -- it is idempotent
-cd ..
 ```
 
 ## Step 3: Change the model — this time it takes
 
-Add a value to the enum. Append `"returned"` to `Values` in `public.order_status.json` and re-quench:
+Add a value to the enum. Append `"returned"` to `Values` in
+`postgres/Package/Templates/Main/Enum Types/public.order_status.json` and re-quench:
 
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Enum Types/public.order_status.json" append Values '"returned"' -->
 ```bash
+# from course4-recipe-11
 cd postgres && schemaquench --ConfigFile:deploy.settings.json ; cd ..
 #     Add enum value returned to public.order_status
 ../lab-sql.sh postgres cookbook_r11 "SELECT e.enumsortorder, e.enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid WHERE t.typname='order_status' ORDER BY 1"
@@ -100,10 +105,13 @@ cd postgres && schemaquench --ConfigFile:deploy.settings.json ; cd ..
 It landed, **in the order you declared it** — not appended wherever the engine felt like putting it.
 Compare that to Step 1: same kind of edit, same kind of object, opposite outcome.
 
-Now make the edit that Step 1 could not. In `public.email_address.json`, change the CHECK's
+Now make the edit that Step 1 could not. In
+`postgres/Package/Templates/Main/Domain Types/public.email_address.json`, change the CHECK's
 `Expression` to `VALUE LIKE '%@%.%'` — same name, new rule — and re-quench:
 
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Domain Types/public.email_address.json" set "CheckConstraints[Name=email_address_has_at].Expression" "\"VALUE LIKE '%@%.%'\"" -->
 ```bash
+# from course4-recipe-11
 cd postgres && schemaquench --ConfigFile:deploy.settings.json ; cd ..
 #         Altering constraint email_address_has_at on domain type public.email_address
 ../lab-sql.sh postgres cookbook_r11 "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conname LIKE '%email%'"
@@ -112,9 +120,13 @@ cd postgres && schemaquench --ConfigFile:deploy.settings.json ; cd ..
 
 The exact edit the guarded script swallowed in Step 1 lands here, because nothing guards a declaration
 from being compared. The rest of the domain converges the same way. Set `"NotNull": false` and add
-`"Default": "'unknown@example.com'"`, re-quench, and check:
+`"Default": "'unknown@example.com'"` (both top-level keys in the same `public.email_address.json`),
+re-quench, and check:
 
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Domain Types/public.email_address.json" set NotNull false && python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Domain Types/public.email_address.json" set Default "\"'unknown@example.com'\"" -->
 ```bash
+# from course4-recipe-11
+cd postgres && schemaquench --ConfigFile:deploy.settings.json ; cd ..
 ../lab-sql.sh postgres cookbook_r11 "SELECT typname, typnotnull, typdefault FROM pg_type WHERE typname='email_address'"
 # → email_address|f|'unknown@example.com'::character varying
 ```
@@ -126,7 +138,13 @@ database follows it in either direction.
 
 A declarative tool that converges everything would be dangerous. Two changes are refused by name.
 
-**A base-type change.** Set the domain's `"DataType"` to `"text"` and re-quench:
+**A base-type change.** Set the domain's `"DataType"` to `"text"` in `public.email_address.json` and re-quench:
+
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Domain Types/public.email_address.json" set NotNull true && python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Domain Types/public.email_address.json" del Default && python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Domain Types/public.email_address.json" set DataType '"text"' -->
+```bash
+# from course4-recipe-11/postgres
+schemaquench --ConfigFile:deploy.settings.json
+```
 
 ```
 P0001: Domain type public.email_address declares base type "text", but is currently deployed as
@@ -138,7 +156,13 @@ Exit **2**. PostgreSQL has no `ALTER DOMAIN … TYPE` — it is a syntax error, 
 operation — so the only way to deliver it is to drop the domain, which drops every column typed by it.
 SchemaSmith names both types and stops. Put it back to `VARCHAR(256)`.
 
-**Removing an enum value.** Take `"returned"` back out of `Values` and re-quench:
+**Removing an enum value.** Take `"returned"` back out of `Values` in `public.order_status.json` and re-quench:
+
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Domain Types/public.email_address.json" set DataType '"VARCHAR(256)"' && python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Enum Types/public.order_status.json" remove Values '"returned"' -->
+```bash
+# from course4-recipe-11/postgres
+schemaquench --ConfigFile:deploy.settings.json
+```
 
 ```
 Enum type public.order_status has value 'returned' which the package no longer declares. PostgreSQL
@@ -152,6 +176,7 @@ exactly what the model and the database disagree about, and left to decide.
 ## Cleanup
 
 ```bash
+# from course4-recipe-11
 ../lab-sql.sh postgres cookbook_r11 "DROP TABLE IF EXISTS public.customer_order CASCADE; DROP DOMAIN IF EXISTS public.email_address CASCADE; DROP TYPE IF EXISTS public.order_status CASCADE; DROP SEQUENCE IF EXISTS public.order_number CASCADE"
 ```
 

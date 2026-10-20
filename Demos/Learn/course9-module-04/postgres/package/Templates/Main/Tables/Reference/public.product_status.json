@@ -1,5 +1,6 @@
 {
   "$schema": "../../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
   "Name": "product_status",
   "Columns": [
     {

@@ -28,10 +28,11 @@ The whole module turns on one line in `sqlserver/Package/Templates/Main/Template
 "DatabaseIdentificationScript": "SELECT [Name] FROM sys.databases WHERE [Name] LIKE 'fleet[_]tenant[_]%'"
 ```
 
-That query — run against the server's catalog — *is* the roster. Preview it without deploying anything:
+That query — run against the server's catalog — *is* the roster (each engine's `Template.json` carries its
+own dialect; see Step 5). Preview it without deploying anything:
 
 ```bash
-cd sqlserver
+# from course7-module-01/<engine>
 schemaquench --ConfigFile:quench.settings.json --PreviewTargets
 ```
 
@@ -50,6 +51,7 @@ Five tenants, discovered live. No database name appears anywhere in the package.
 ## Step 2: Deploy — one run, the whole fleet
 
 ```bash
+# from course7-module-01/<engine>
 schemaquench --ConfigFile:quench.settings.json
 ```
 
@@ -67,20 +69,21 @@ unit. [Module 6](../course7-module-06) reads that report. At five tenants a line
 fine; at the thousand this feature exists for it was three thousand lines of audit data in a progress
 stream, which is why it lives in the report now.
 
-Confirm the `Shop` schema landed in every tenant:
+Confirm the `Shop` schema landed in every tenant. Each line checks all five tenants on one engine, and each
+tenant reports `4`:
 
 ```bash
-cd ..            # back to the lab folder
-for n in 001 002 003 004 005; do
-  ../lab-sql.sh sqlserver fleet_tenant_$n "SELECT COUNT(*) FROM sys.tables WHERE name IN ('Customer','Product','SalesOrder','OrderItem')"
-done
-# → each tenant reports 4
-cd sqlserver     # back into the engine folder
+# from course7-module-01
+for n in 001 002 003 004 005; do ../lab-sql.sh sqlserver fleet_tenant_$n "SELECT COUNT(*) FROM sys.tables WHERE name IN ('Customer','Product','SalesOrder','OrderItem')"; done
+for n in 001 002 003 004 005; do ../lab-sql.sh postgres fleet_tenant_$n "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('customer','product','salesorder','orderitem')"; done
+for n in 001 002 003 004 005; do ../lab-sql.sh mysql fleet_tenant_$n "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('Customer','Product','SalesOrder','OrderItem')"; done
+for n in 001 002 003 004 005; do ../lab-sql.sh mariadb fleet_tenant_$n "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('Customer','Product','SalesOrder','OrderItem')"; done
 ```
 
 ## Step 3: Prove idempotence — run it again
 
 ```bash
+# from course7-module-01/<engine>
 schemaquench --ConfigFile:quench.settings.json
 ```
 
@@ -89,28 +92,42 @@ five-way no-op. Re-running the whole fleet is always safe.
 
 ## Step 4: Onboard a new tenant — no package change
 
-A new customer signs up. Stand up their database:
+A new customer signs up. Stand up their database (the line for your engine):
 
 ```bash
-cd ..            # back to the lab folder
+# from course7-module-01
 ../lab-sql.sh sqlserver master "CREATE DATABASE [fleet_tenant_006]"
-cd sqlserver     # back into the engine folder
+../lab-sql.sh postgres postgres "CREATE DATABASE fleet_tenant_006"
+../lab-sql.sh mysql information_schema "CREATE DATABASE IF NOT EXISTS fleet_tenant_006"
+../lab-sql.sh mariadb information_schema "CREATE DATABASE IF NOT EXISTS fleet_tenant_006"
 ```
 
 Deploy again — you edit nothing:
 
 ```bash
+# from course7-module-01/<engine>
 schemaquench --ConfigFile:quench.settings.json
 ```
 
 Discovery now returns **six**. Only `fleet_tenant_006` is forged; `001`–`005` are no-ops. The roster is
-the catalog, so onboarding is a `CREATE DATABASE`, not a package edit. (Clean up with
-`DROP DATABASE [fleet_tenant_006]` when you're done, to return to the five-tenant baseline.)
+the catalog, so onboarding is a `CREATE DATABASE`, not a package edit.
+
+Now drop `fleet_tenant_006` to return to the five-tenant baseline. Don't skip this: Module 2 counts five
+tenants, and Module 3 onboards `006` itself, so it must not exist when you start it.
+
+```bash
+# from course7-module-01
+../lab-sql.sh sqlserver master "IF DB_ID('fleet_tenant_006') IS NOT NULL BEGIN ALTER DATABASE [fleet_tenant_006] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [fleet_tenant_006] END"
+../lab-sql.sh postgres postgres "DROP DATABASE IF EXISTS fleet_tenant_006"
+../lab-sql.sh mysql information_schema "DROP DATABASE IF EXISTS fleet_tenant_006"
+../lab-sql.sh mariadb information_schema "DROP DATABASE IF EXISTS fleet_tenant_006"
+```
 
 ## Step 5: Do it on PostgreSQL, MySQL, and MariaDB
 
-Same five steps in `postgres/`, `mysql/`, and `mariadb/`. The package is native per engine, and only the
-catalog the `DatabaseIdentificationScript` reads differs:
+Every command above already carries a line per engine, so run the same steps from `postgres/`, `mysql/`,
+and `mariadb/`. The package is native per engine, and only the catalog the `DatabaseIdentificationScript`
+reads differs:
 
 | | SQL Server | PostgreSQL | MySQL |
 | --- | --- | --- | --- |

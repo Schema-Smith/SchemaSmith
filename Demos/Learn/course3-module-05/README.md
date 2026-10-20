@@ -54,10 +54,17 @@ the data never moves. Everything else — columns, keys, the recyclebin — is i
 - The target databases exist. Run the Course 3 setup once (idempotent — safe to re-run):
 
   ```bash
-  pwsh ../course3-setup/setup-environments.ps1     # or: ../course3-setup/setup-environments.sh
+  # from course3-module-05
+  bash ../course3-setup/setup-environments.sh --reset
   ```
 
-  It creates the twelve `ordersservice_{dev,staging,prod}` databases and reports `PASS` for each. This
+  ```powershell
+  # from course3-module-05
+  ../course3-setup/setup-environments.ps1 -Reset
+  ```
+
+  It drops and recreates the twelve `ordersservice_{dev,staging,prod}` databases empty, so the earlier modules'
+  changes are gone, and reports `PASS` for each. This
   lab uses **all three** — dev, staging, and prod.
 - The CLI is reachable. The commands below assume `schemaquench` is on your PATH
   (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later). If you'd rather not put it on
@@ -66,9 +73,9 @@ the data never moves. Everything else — columns, keys, the recyclebin — is i
 
 ## The flow
 
-Six beats, run in order. Pick an engine — the SQL Server form is fully worked below; the other three
-engines follow with the same commands, just a different folder and a different engine name passed to
-`lab-sql.sh`.
+Six beats, run in order. Pick an engine — the commands are the same on all four; only the engine
+folder (`sqlserver`, `postgres`, `mysql`, or `mariadb`) and the engine name passed to `lab-sql.sh`
+change.
 
 1. **Establish** — deploy `v1` to `ordersservice_dev`.
 2. **Promote** — the SAME `v1` package to `ordersservice_staging`, then `ordersservice_prod` (cross-link
@@ -83,10 +90,12 @@ engines follow with the same commands, just a different folder and a different e
    `v2-bad` is a single `OldName` line, and it changes everything: SchemaQuench renames `OrderHeader` to
    `SalesOrder` *in place*, data intact, nothing recycled.
 
-### SQL Server
+### Run it
+
+Steps 1-2 run from your engine's `v1` folder:
 
 ```bash
-cd v1/sqlserver        # steps 1-2 run from here
+# from course3-module-05/v1/<engine>
 
 # 1. Establish: deploy v1 to dev
 SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
@@ -97,15 +106,22 @@ SmithySettings_ScriptTokens__TargetDb=ordersservice_staging \
   schemaquench --ConfigFile:./base.settings.json
 SmithySettings_ScriptTokens__TargetDb=ordersservice_prod \
   schemaquench --ConfigFile:./base.settings.json
-
-# seed prod with real orders
-cd ../..                              # back to the lab folder
-../lab-sql.sh sqlserver ordersservice_prod --file v1/sqlserver/seed-prod.sql
-cd v1/sqlserver                       # back to the engine folder
 ```
 
+Seed prod with real orders, from the lab folder:
+
 ```bash
-cd ../../v2-bad/sqlserver   # steps 3-4 run from here
+# from course3-module-05
+../lab-sql.sh sqlserver ordersservice_prod --file v1/sqlserver/seed-prod.sql
+../lab-sql.sh postgres ordersservice_prod --file v1/postgres/seed-prod.sql
+../lab-sql.sh mysql ordersservice_prod --file v1/mysql/seed-prod.sql
+../lab-sql.sh mariadb ordersservice_prod --file v1/mariadb/seed-prod.sql
+```
+
+Steps 3-4 run from the engine's `v2-bad` folder:
+
+```bash
+# from course3-module-05/v2-bad/<engine>
 
 # 3. Ship the change: v2-bad to dev, then staging — both look clean
 SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
@@ -118,8 +134,31 @@ SmithySettings_ScriptTokens__TargetDb=ordersservice_prod \
   schemaquench --ConfigFile:./base.settings.json
 ```
 
+Check prod now, from the lab folder (what this shows is under Step 4 in *What you'll see*):
+
 ```bash
-cd ../../v1/sqlserver   # step 5 runs from here — rolling back to the known-good package
+# from course3-module-05
+# SQL Server — SalesOrder is empty, OrderHeader shows up recycled in the registry
+../lab-sql.sh sqlserver ordersservice_prod \
+  "SELECT COUNT(*) FROM dbo.SalesOrder; SELECT OriginalName, RecycledName FROM recyclebin.Registry"
+
+# PostgreSQL
+../lab-sql.sh postgres ordersservice_prod \
+  "SELECT COUNT(*) FROM public.\"SalesOrder\"; SELECT original_name, recycled_name FROM recyclebin.registry"
+
+# MySQL
+../lab-sql.sh mysql ordersservice_prod \
+  "SELECT COUNT(*) FROM ordersservice_prod.SalesOrder; SELECT OriginalName, RecycledName FROM ordersservice_prod.recyclebin_Registry"
+
+# MariaDB
+../lab-sql.sh mariadb ordersservice_prod \
+  "SELECT COUNT(*) FROM ordersservice_prod.SalesOrder; SELECT OriginalName, RecycledName FROM ordersservice_prod.recyclebin_Registry"
+```
+
+Step 5 runs from the engine's `v1` folder — rolling back to the known-good package:
+
+```bash
+# from course3-module-05/v1/<engine>
 
 # 5a. WhatIf first — preview the rollback, changes NOTHING
 SmithySettings_ScriptTokens__TargetDb=ordersservice_prod \
@@ -131,8 +170,27 @@ SmithySettings_ScriptTokens__TargetDb=ordersservice_prod \
   schemaquench --ConfigFile:./base.settings.json
 ```
 
+Check the restore, from the lab folder (Step 5b in *What you'll see*):
+
 ```bash
-cd ../../v2-fixed/sqlserver   # step 6 runs from here — the same rename, done right
+# from course3-module-05
+# SQL Server
+../lab-sql.sh sqlserver ordersservice_prod "SELECT COUNT(*) FROM dbo.OrderHeader"
+
+# PostgreSQL
+../lab-sql.sh postgres ordersservice_prod 'SELECT COUNT(*) FROM public."OrderHeader"'
+
+# MySQL
+../lab-sql.sh mysql ordersservice_prod "SELECT COUNT(*) FROM ordersservice_prod.OrderHeader"
+
+# MariaDB
+../lab-sql.sh mariadb ordersservice_prod "SELECT COUNT(*) FROM ordersservice_prod.OrderHeader"
+```
+
+Step 6 runs from the engine's `v2-fixed` folder — the same rename, done right:
+
+```bash
+# from course3-module-05/v2-fixed/<engine>
 
 # 6. Ship it the right way: v2-fixed to dev, staging, then prod — in-place rename, data preserved
 SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
@@ -143,10 +201,21 @@ SmithySettings_ScriptTokens__TargetDb=ordersservice_prod \
   schemaquench --ConfigFile:./base.settings.json
 ```
 
+Check prod again, from the lab folder (Step 6 in *What you'll see*):
+
+```bash
+# from course3-module-05
+# SalesOrder carries the data straight across the rename
+../lab-sql.sh sqlserver ordersservice_prod "SELECT COUNT(*) FROM dbo.SalesOrder"
+../lab-sql.sh postgres ordersservice_prod 'SELECT COUNT(*) FROM public."SalesOrder"'
+../lab-sql.sh mysql ordersservice_prod "SELECT COUNT(*) FROM ordersservice_prod.SalesOrder"
+../lab-sql.sh mariadb ordersservice_prod "SELECT COUNT(*) FROM ordersservice_prod.SalesOrder"
+```
+
 PowerShell equivalent (set the vars, run, then clear them):
 
 ```powershell
-cd v1\sqlserver
+# from course3-module-05/v1/<engine>
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_dev'
 schemaquench --ConfigFile:.\base.settings.json                                   # 1. establish (dev)
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_staging'
@@ -154,10 +223,10 @@ schemaquench --ConfigFile:.\base.settings.json                                  
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_prod'
 schemaquench --ConfigFile:.\base.settings.json                                   # 2b. promote (prod)
 cd ..\..                                                                          # back to the lab folder
-..\lab-sql.ps1 sqlserver ordersservice_prod --file v1\sqlserver\seed-prod.sql
-cd v1\sqlserver                                                                   # back to the engine folder
+..\lab-sql.ps1 <engine> ordersservice_prod --file v1\<engine>\seed-prod.sql
+cd v1\<engine>                                                                    # back to the engine folder
 
-cd ..\..\v2-bad\sqlserver
+cd ..\..\v2-bad\<engine>
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_dev'
 schemaquench --ConfigFile:.\base.settings.json                                   # 3a. ship (dev) — looks clean
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_staging'
@@ -165,13 +234,13 @@ schemaquench --ConfigFile:.\base.settings.json                                  
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_prod'
 schemaquench --ConfigFile:.\base.settings.json                                   # 4. ship (prod) — OrderHeader dropped, SalesOrder empty
 
-cd ..\..\v1\sqlserver
+cd ..\..\v1\<engine>
 $env:SmithySettings_WhatIfONLY = 'true'
 schemaquench --ConfigFile:.\base.settings.json                                   # 5a. WhatIf rollback (prod) — preview only
 Remove-Item Env:SmithySettings_WhatIfONLY
 schemaquench --ConfigFile:.\base.settings.json                                   # 5b. apply rollback (prod) — auto-restore
 
-cd ..\..\v2-fixed\sqlserver
+cd ..\..\v2-fixed\<engine>
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_dev'
 schemaquench --ConfigFile:.\base.settings.json                                   # 6a. right way (dev) — in-place rename
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_staging'
@@ -179,19 +248,6 @@ schemaquench --ConfigFile:.\base.settings.json                                  
 $env:SmithySettings_ScriptTokens__TargetDb = 'ordersservice_prod'
 schemaquench --ConfigFile:.\base.settings.json                                   # 6c. right way (prod) — data intact, nothing recycled
 Remove-Item Env:SmithySettings_ScriptTokens__TargetDb
-```
-
-### PostgreSQL, MySQL, MariaDB
-
-Same six beats, same commands — swap `sqlserver` for `postgres`, `mysql`, or `mariadb` in every `cd`,
-and pass that engine's name to `lab-sql.sh` for the prod seed and any manual verification.
-
-For example, seeding prod on PostgreSQL:
-
-```bash
-cd v1/postgres
-cd ../..                               # back to the lab folder
-../lab-sql.sh postgres ordersservice_prod --file v1/postgres/seed-prod.sql
 ```
 
 Everything else — the six beats, the env vars, the WhatIf-then-apply rollback, the `v2-fixed` in-place
@@ -207,27 +263,7 @@ was nothing to lose. This is exactly why the mistake ships: it passes everywhere
 **Step 4 (prod):** the same clean-looking deploy — SchemaQuench reports success, no error. But
 `OrderHeader`, with its 4 orders, is gone from the schema, and `SalesOrder` exists with 0 rows. The
 recyclebin's `CustomTableDrop` hook caught the drop on the way out, so the data isn't destroyed — it's
-just not where the application expects it anymore. Verify both halves of that:
-
-```bash
-# SQL Server — SalesOrder is empty, OrderHeader shows up recycled in the registry
-cd ../..                              # back to the lab folder
-../lab-sql.sh sqlserver ordersservice_prod \
-  "SELECT COUNT(*) FROM dbo.SalesOrder; SELECT OriginalName, RecycledName FROM recyclebin.Registry"
-
-# PostgreSQL
-../lab-sql.sh postgres ordersservice_prod \
-  "SELECT COUNT(*) FROM public.\"SalesOrder\"; SELECT original_name, recycled_name FROM recyclebin.registry"
-
-# MySQL
-../lab-sql.sh mysql ordersservice_prod \
-  "SELECT COUNT(*) FROM ordersservice_prod.SalesOrder; SELECT OriginalName, RecycledName FROM ordersservice_prod.recyclebin_Registry"
-
-# MariaDB
-../lab-sql.sh mariadb ordersservice_prod \
-  "SELECT COUNT(*) FROM ordersservice_prod.SalesOrder; SELECT OriginalName, RecycledName FROM ordersservice_prod.recyclebin_Registry"
-cd v2-bad/sqlserver                   # back to the engine folder
-```
+just not where the application expects it anymore. The check after Step 4 in *Run it* shows both halves:
 
 `SalesOrder` reads `0`. The registry lists `OrderHeader` as the recycled table — its 4 rows are sitting
 there intact, just under a different name in a different schema. Dev and staging are green. Prod is
@@ -240,23 +276,8 @@ reverting delta — `SalesOrder` gets dropped (empty, nothing lost), `OrderHeade
 recyclebin's `CustomTableRestore` hook is the operation that will bring it back — without touching a row.
 
 **Step 5b (apply):** the real rollback. SchemaQuench recreates `OrderHeader` — but instead of an empty
-table, `CustomTableRestore` intercepts and restores the recycled copy: rows and all. Confirm the payoff:
-
-```bash
-# SQL Server
-cd ../..                              # back to the lab folder
-../lab-sql.sh sqlserver ordersservice_prod "SELECT COUNT(*) FROM dbo.OrderHeader"
-
-# PostgreSQL
-../lab-sql.sh postgres ordersservice_prod 'SELECT COUNT(*) FROM public."OrderHeader"'
-
-# MySQL
-../lab-sql.sh mysql ordersservice_prod "SELECT COUNT(*) FROM ordersservice_prod.OrderHeader"
-
-# MariaDB
-../lab-sql.sh mariadb ordersservice_prod "SELECT COUNT(*) FROM ordersservice_prod.OrderHeader"
-cd v1/sqlserver                       # back to the engine folder
-```
+table, `CustomTableRestore` intercepts and restores the recycled copy: rows and all. The check after Step 5b in *Run it*
+shows the payoff:
 
 `OrderHeader` is back with all **4** rows, `SalesOrder` is gone, and prod matches the known-good `v1`
 package again — data intact, no hand-written recovery script, no restore from backup.
@@ -272,13 +293,7 @@ Handle Table Renames
 ```
 
 No drop, no data to restore — `SalesOrder` simply *is* the old `OrderHeader`, all 4 rows carried across.
-Confirm it on prod:
-
-```bash
-# SQL Server — SalesOrder carries the data straight across the rename
-cd ../..                              # back to the lab folder
-../lab-sql.sh sqlserver ordersservice_prod "SELECT COUNT(*) FROM dbo.SalesOrder"
-```
+The check after Step 6 in *Run it* confirms it on prod:
 
 `SalesOrder` reads `4`. Unlike step 4, nothing data-bearing hit the recyclebin this time — `OrderHeader`
 wasn't dropped, it was *renamed*, so its rows never left the table. (The bin still holds the empty
@@ -318,6 +333,7 @@ After a cert pass, remove disposable build/run output before you're done — a c
 disposable output is gone:
 
 ```bash
+# from course3-module-05
 git clean -fdX
 # or, more targeted:
 rm -rf _certcli publish-* **/checkpoints

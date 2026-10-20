@@ -19,34 +19,28 @@ Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) ships `inst
 ## Step 1: Deploy, then install the hooks
 
 ```bash
-cd <engine>
+# from course4-recipe-06/<engine>
 schemaquench --ConfigFile:deploy.settings.json     # creates Keeper + Promotion, and kindles SchemaSmith
 ```
 
 Then install the recyclebin hooks (kindling created the `SchemaSmith` schema they live in) — run the one for your engine:
 
 ```bash
-cd ..            # back to the lab folder
-
-# SQL Server
+# from course4-recipe-06
 ../lab-sql.sh sqlserver cookbook_r6 --file sqlserver/install-recyclebin.sql
-
-# PostgreSQL
 ../lab-sql.sh postgres cookbook_r6 --file postgres/install-recyclebin.sql
-
-# MySQL
 ../lab-sql.sh mysql cookbook_r6 --file mysql/install-recyclebin.sql
-
-# MariaDB
 ../lab-sql.sh mariadb cookbook_r6 --file mariadb/install-recyclebin.sql
-
-cd <engine>       # back into the engine folder
 ```
 
 ## Step 2: Put data in the table
 
-```sql
-INSERT INTO Promotion (PromotionId, Code, DiscountPct) VALUES (1, 'SAVE10', 10), (2, 'SAVE20', 20);
+```bash
+# from course4-recipe-06
+../lab-sql.sh sqlserver cookbook_r6 "INSERT INTO dbo.Promotion (PromotionId, Code, DiscountPct) VALUES (1, 'SAVE10', 10), (2, 'SAVE20', 20)"
+../lab-sql.sh postgres cookbook_r6 "INSERT INTO public.promotion (promotionid, code, discountpct) VALUES (1, 'SAVE10', 10), (2, 'SAVE20', 20)"
+../lab-sql.sh mysql cookbook_r6 "INSERT INTO Promotion (PromotionId, Code, DiscountPct) VALUES (1, 'SAVE10', 10), (2, 'SAVE20', 20)"
+../lab-sql.sh mariadb cookbook_r6 "INSERT INTO Promotion (PromotionId, Code, DiscountPct) VALUES (1, 'SAVE10', 10), (2, 'SAVE20', 20)"
 ```
 
 ## Step 3: Remove the table from the product — the drop hook archives it
@@ -55,14 +49,19 @@ Deploy the package that no longer defines `Promotion`. Normally SchemaQuench wou
 with it). With the hook installed, the drop is routed through `CustomTableDrop`, which renames the table aside:
 
 ```bash
+# from course4-recipe-06/<engine>
 schemaquench --ConfigFile:remove-promotion.settings.json
 ```
 
+The table is gone under its own name, but its rows are safe in the aside copy:
+
 ```bash
-# the table is gone under its own name, but its rows are safe in the aside copy
-cd ..            # back to the lab folder
+# from course4-recipe-06
+../lab-sql.sh sqlserver cookbook_r6 "SELECT COUNT(*) FROM dbo.__recyclebin__Promotion"
 ../lab-sql.sh postgres cookbook_r6 "SELECT count(*) FROM public.__recyclebin__promotion"
 # → 2
+../lab-sql.sh mysql cookbook_r6 "SELECT COUNT(*) FROM __recyclebin__Promotion"
+../lab-sql.sh mariadb cookbook_r6 "SELECT COUNT(*) FROM __recyclebin__Promotion"
 ```
 
 ## Step 4: Bring it back — the restore hook returns the data
@@ -71,12 +70,18 @@ Deploy the package that defines `Promotion` again. `CustomTableRestore` fires fi
 back, and the engine — seeing the table now exists — does **not** recreate it empty:
 
 ```bash
-cd <engine>       # back into the engine folder
+# from course4-recipe-06/<engine>
 schemaquench --ConfigFile:deploy.settings.json
-cd ..            # back to the lab folder
+```
+
+```bash
+# from course4-recipe-06
+../lab-sql.sh sqlserver cookbook_r6 "SELECT PromotionId, Code FROM dbo.Promotion ORDER BY PromotionId"
 ../lab-sql.sh postgres cookbook_r6 "SELECT promotionid, code FROM public.promotion ORDER BY promotionid"
 # → 1 SAVE10
 #   2 SAVE20
+../lab-sql.sh mysql cookbook_r6 "SELECT PromotionId, Code FROM Promotion ORDER BY PromotionId"
+../lab-sql.sh mariadb cookbook_r6 "SELECT PromotionId, Code FROM Promotion ORDER BY PromotionId"
 ```
 
 The original rows survived the round-trip. The data was never dropped — it was set aside and brought back.

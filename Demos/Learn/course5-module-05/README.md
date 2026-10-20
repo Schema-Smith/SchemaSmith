@@ -24,6 +24,7 @@ diff your own extract against it.
 ## Step 1: Look at the pile
 
 ```bash
+# from course5-module-05
 ls before/
 # → 000_init.sql  001_create_customer.sql  002_create_product.sql  003_orders.sql  004_add_status.sql
 ```
@@ -37,14 +38,19 @@ remembered — that inconsistency is exactly what you're leaving behind.
 
 ## Step 2: Extract — name the tables you keep
 
-Open `sqlserver/SchemaTongs.settings.json`. The whitelist is the whole trick:
-
-```json
-"ShouldCast": { "ObjectList": "dbo.Customer,dbo.Product,dbo.SalesOrder,dbo.OrderItem" }
-```
+Open your engine folder's `SchemaTongs.settings.json`. The whitelist is the whole trick — the
+`ObjectList` under `ShouldCast`, already set for you (nothing to edit). Print it:
 
 ```bash
-cd sqlserver
+# from course5-module-05/<engine>
+grep '"ObjectList"' SchemaTongs.settings.json
+```
+
+On SQL Server it names `dbo.Customer,dbo.Product,dbo.SalesOrder,dbo.OrderItem` (the other engines'
+forms are in Step 4). Then extract:
+
+```bash
+# from course5-module-05/<engine>
 schematongs --ConfigFile:SchemaTongs.settings.json
 ls Package/Templates/Main/Tables/
 ```
@@ -63,6 +69,7 @@ the steps.
 ## Step 3: Quench — adopt, then prove the no-op
 
 ```bash
+# from course5-module-05/<engine>
 schemaquench --ConfigFile:quench.settings.json
 ```
 
@@ -70,16 +77,20 @@ The first run adopts your existing tables (stamps them as managed, stands up Sch
 bookkeeping in a separate `SchemaSmith` schema). Run it a second time and nothing happens — a clean
 no-op. Idempotency is now the engine's job, not a guard you hand-write into each script.
 
+Confirm `schema_version` is still there, untouched — drop it whenever you like. From the lab folder:
+
 ```bash
-# confirm schema_version is still there, untouched — drop it whenever you like
-cd ..            # back to the lab folder
+# from course5-module-05
 ../lab-sql.sh sqlserver shop_from_scripts "SELECT name FROM sys.tables WHERE name='schema_version'"
+../lab-sql.sh postgres shop_from_scripts "SELECT tablename FROM pg_tables WHERE tablename='schema_version'"
+../lab-sql.sh mysql shop_from_scripts "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_scripts' AND TABLE_NAME='schema_version'"
+../lab-sql.sh mariadb shop_from_scripts "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='shop_from_scripts' AND TABLE_NAME='schema_version'"
 # → schema_version  (left exactly where it was)
 ```
 
 ## Step 4: Do it on PostgreSQL, MySQL, and MariaDB
 
-Same three steps in `postgres/`, `mysql/`, and `mariadb/`. The `before/` scripts are shown in their SQL
+The steps above run the same in `postgres/`, `mysql/`, and `mariadb/`. The `before/` scripts are shown in their SQL
 Server form; the PostgreSQL, MySQL, and MariaDB sandbox databases were seeded to the identical end
 state, so the extract works the same on each. Only the whitelist's dialect differs:
 

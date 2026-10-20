@@ -43,27 +43,21 @@ index gate reads `dbo.RolloutControl`. If that table doesn't exist, the `EXISTS`
 to bind ("Invalid object name 'dbo.RolloutControl'"). So the control table is infrastructure you
 establish **before any deploy** — seeded to `Pending` in every tenant:
 
-```
-cd sqlserver
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -i bootstrap/init-rollout.sql
+```bash
+# from course10-module-03
+../lab-sql.sh sqlserver master --file sqlserver/bootstrap/init-rollout.sql
 ```
 
 This creates `dbo.RolloutControl` and a `CustomerActivityIndex = 'Pending'` row in `learn_2022`,
 `learn_2016`, and `learn_2008`. It does **not** create databases (course10-setup already did) and
 it never overwrites a row you've flipped to `Ready` — safe to re-run.
 
-```
-$ sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -i bootstrap/init-rollout.sql
-(1 rows affected)
-(1 rows affected)
-(1 rows affected)
-```
-
 ---
 
 ## Part A — two shapes, converging automatically (detectable)
 
-`dbo.OrderSummary` declares two variants of one index, `IX_OrderSummary_Placed`:
+`dbo.OrderSummary` declares two variants of one index, `IX_OrderSummary_Placed`. The package's
+`Tables/dbo.OrderSummary.json` already carries them; nothing to edit:
 
 ```json
 "Indexes": [
@@ -88,8 +82,8 @@ converges on the modern shape on its own as each database's compatibility level 
 
 ### Deploy to `learn_2022` (compat 160) — the modern shape
 
-```
-cd sqlserver
+```bash
+# from course10-module-03/sqlserver
 schemaquench --ConfigFile:quench.settings.2022.json --LogPath:"$PWD/logs"     # macOS / Linux
 schemaquench --ConfigFile:quench.settings.2022.json --LogPath:"$PWD\logs"     # Windows
 ```
@@ -102,7 +96,8 @@ schemaquench --ConfigFile:quench.settings.2022.json --LogPath:"$PWD\logs"     # 
 
 ### Deploy to `learn_2016` (compat 130) — the legacy shape
 
-```
+```bash
+# from course10-module-03/sqlserver
 schemaquench --ConfigFile:quench.settings.2016.json --LogPath:"$PWD/logs"     # macOS / Linux
 ```
 
@@ -128,7 +123,8 @@ that decision lives in a change ticket, a customer email, a scheduling spreadshe
 the answer where the deploy can read it: a `dbo.RolloutControl` row.
 
 `dbo.CustomerActivity` carries an index with **no version floor** — it would build on any tier.
-The only thing holding it back is state:
+The only thing holding it back is state. `Tables/dbo.CustomerActivity.json` already carries the
+gate; nothing to edit:
 
 ```json
 {
@@ -142,7 +138,8 @@ already stood it up in Step 0, seeded to `Pending` in every tenant.
 
 ### Deploy while Pending — the construct stays absent
 
-```
+```bash
+# from course10-module-03/sqlserver
 schemaquench --ConfigFile:quench.settings.stategate.json --LogPath:"$PWD/logs"
 ```
 
@@ -158,10 +155,17 @@ No `IX_CustomerActivity_LastSeen` line — the `EXISTS` gate read `status='Pendi
 
 ### Flip the row, re-deploy — the construct appears
 
-Someone signs off on the window. You flip the tenant's row and re-run the *same* package:
+Someone signs off on the window. You flip the tenant's row, from the lab folder:
 
+```bash
+# from course10-module-03
+../lab-sql.sh sqlserver learn_2008 "UPDATE dbo.RolloutControl SET status = 'Ready' WHERE feature = 'CustomerActivityIndex';"
 ```
-sqlcmd -S localhost,11433 -U sa -P "Learn!Passw0rd" -C -d learn_2008 -Q "UPDATE dbo.RolloutControl SET status = 'Ready' WHERE feature = 'CustomerActivityIndex';"
+
+Then re-run the *same* package, from the `sqlserver` folder:
+
+```bash
+# from course10-module-03/sqlserver
 schemaquench --ConfigFile:quench.settings.stategate.json --LogPath:"$PWD/logs"
 ```
 

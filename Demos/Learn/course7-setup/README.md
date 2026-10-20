@@ -22,14 +22,14 @@ and verify it is healthy before continuing.
 **macOS / Linux**
 
 ```bash
-cd Demos/Learn/course7-setup
+# from course7-setup
 bash setup-databases.sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-cd Demos\Learn\course7-setup
+# from course7-setup
 .\setup-databases.ps1
 ```
 
@@ -52,6 +52,7 @@ Each engine's catalog is the fleet roster — the same query Module 1's `Databas
 runs. To confirm the five tenants are present:
 
 ```bash
+# from course7-setup
 # SQL Server
 ../lab-sql.sh sqlserver master "SELECT name FROM sys.databases WHERE name LIKE 'fleet[_]tenant[_]%' ORDER BY name"
 
@@ -76,10 +77,12 @@ exist. To return the fleet to its original empty state — for example, after ex
 fan-out deploy — reset it:
 
 ```bash
+# from course7-setup
 bash setup-databases.sh --reset
 ```
 
 ```powershell
+# from course7-setup
 .\setup-databases.ps1 -Reset
 ```
 

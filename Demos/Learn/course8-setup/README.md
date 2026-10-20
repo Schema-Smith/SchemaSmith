@@ -24,14 +24,14 @@ The `diag_` prefix keeps this course's databases clear of Course 6's `shop_tenan
 **macOS / Linux**
 
 ```bash
-cd Demos/Learn/course8-setup
+# from course8-setup
 bash setup-databases.sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-cd Demos\Learn\course8-setup
+# from course8-setup
 .\setup-databases.ps1
 ```
 
@@ -40,20 +40,21 @@ guarded.
 
 ## Step 2 — deploy the Shop baseline (the green run)
 
-Pick an engine, change into its folder, and quench. `--LogPath` is passed as an **absolute** path so
-the base logs land next to the package (a relative `--LogPath` leaves them in the tool directory):
+Pick an engine, change into its folder (`sqlserver`, `postgres`, `mysql`, or `mariadb`), and quench.
+`--LogPath` is passed as an **absolute** path so the base logs land next to the package (a relative
+`--LogPath` leaves them in the tool directory):
 
 **macOS / Linux**
 
 ```bash
-cd sqlserver          # or postgres, mysql, or mariadb
+# from course8-setup/<engine>
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-cd sqlserver          # or postgres, mysql, or mariadb
+# from course8-setup/<engine>
 schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD\logs"
 ```
 
@@ -84,10 +85,12 @@ Want `diag_baseline` back to empty — say, after experimenting with the schema 
 for a clean slate — reset it:
 
 ```bash
+# from course8-setup
 bash setup-databases.sh --reset
 ```
 
 ```powershell
+# from course8-setup
 .\setup-databases.ps1 -Reset
 ```
 

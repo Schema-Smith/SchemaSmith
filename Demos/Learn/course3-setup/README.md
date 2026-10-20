@@ -14,18 +14,18 @@ and verify it is healthy before continuing.
 **macOS / Linux**
 
 ```bash
-cd Demos/Learn/course3-setup
+# from course3-setup
 bash setup-environments.sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-cd Demos\Learn\course3-setup
+# from course3-setup
 .\setup-environments.ps1
 ```
 
-Both scripts print `PASS` or `FAIL` for each of the twelve databases:
+Both scripts print `PASS` or `FAIL` for each of the 12 databases:
 
 ```
 SQL Server
@@ -45,7 +45,7 @@ MariaDB
   ordersservice_staging      PASS
   ordersservice_prod         PASS
 
-All twelve databases are ready.
+All 12 databases are ready.
 ```
 
 ## Databases created
@@ -86,10 +86,12 @@ and its registry behind, and an earlier module's package still converges — the
 genuinely clean slate, or when an interrupted run left a database somewhere you'd rather not debug:
 
 ```bash
+# from course3-setup
 bash setup-environments.sh --reset
 ```
 
 ```powershell
+# from course3-setup
 .\setup-environments.ps1 -Reset
 ```
 

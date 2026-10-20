@@ -125,7 +125,7 @@ function Invoke-LabSql {
         $server = $env:LEARN_SERVER; $port = $env:LEARN_PORT
         $user = $env:LEARN_USER; $password = $env:LEARN_PASSWORD
         switch ($Engine) {
-            'sqlserver' { $out = & sqlcmd -S (Get-LabSqlTarget) @(Get-LabSqlAuth) -C -b -d $Database -h -1 -W -Q "SET NOCOUNT ON; $Sql" 2>&1 }
+            'sqlserver' { $out = & sqlcmd -S (Get-LabSqlTarget) @(Get-LabSqlAuth) -C -I -b -d $Database -h -1 -W -Q "SET NOCOUNT ON; $Sql" 2>&1 }
             'postgres'  { $env:PGPASSWORD = $password
                           $out = & psql -h $server -p $port -U $user -d $Database -w -v ON_ERROR_STOP=1 --no-psqlrc -tAc $Sql 2>&1 }
             default     { $env:MYSQL_PWD = $password
@@ -135,7 +135,7 @@ function Invoke-LabSql {
     else {
         $container = Get-LabContainer $Engine
         switch ($Engine) {
-            'sqlserver' { $sc = Get-LabContainerSqlcmd $container; $out = docker exec $container $sc -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d $Database -h -1 -W -Q "SET NOCOUNT ON; $Sql" 2>&1 }
+            'sqlserver' { $sc = Get-LabContainerSqlcmd $container; $out = docker exec $container $sc -S localhost -U sa -P 'Learn!Passw0rd' -C -I -b -d $Database -h -1 -W -Q "SET NOCOUNT ON; $Sql" 2>&1 }
             'postgres'  { $out = docker exec $container psql -U postgres -d $Database -v ON_ERROR_STOP=1 -tAc $Sql 2>&1 }
             'mysql'     { $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container mysql -uroot -N -s -D $Database -e $Sql 2>&1 }
             'mariadb'   { $mc = Get-LabContainerMariaClient -Container $container; $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container $mc -uroot -N -s -D $Database -e $Sql 2>&1 }
@@ -144,7 +144,7 @@ function Invoke-LabSql {
     $streams = Split-LabStreams $out
     if ($LASTEXITCODE -ne 0) {
         $detail = if ($streams.Error) { $streams.Error } else { $streams.Output }
-        throw "LAB-SQL: could not reach $Engine at $(Get-LabEndpointLabel $Engine) [database '$Database'] -- $detail"
+        throw "LAB-SQL: $Engine at $(Get-LabEndpointLabel $Engine) [database '$Database'] failed -- $detail"
     }
     return $streams.Output
 }
@@ -165,7 +165,7 @@ function Invoke-LabSqlFile {
         $server = $env:LEARN_SERVER; $port = $env:LEARN_PORT
         $user = $env:LEARN_USER; $password = $env:LEARN_PASSWORD
         switch ($Engine) {
-            'sqlserver' { $out = & sqlcmd -S (Get-LabSqlTarget) @(Get-LabSqlAuth) -C -b -d $Database -i $Path 2>&1 }
+            'sqlserver' { $out = & sqlcmd -S (Get-LabSqlTarget) @(Get-LabSqlAuth) -C -I -b -d $Database -i $Path 2>&1 }
             'postgres'  { $env:PGPASSWORD = $password
                           $out = & psql -h $server -p $port -U $user -d $Database -w -v ON_ERROR_STOP=1 --no-psqlrc -f $Path 2>&1 }
             default     { $env:MYSQL_PWD = $password
@@ -179,7 +179,7 @@ function Invoke-LabSqlFile {
             throw "LAB-SQL: could not stage '$([System.IO.Path]::GetFileName($Path))' into $container."
         }
         switch ($Engine) {
-            'sqlserver' { $sc = Get-LabContainerSqlcmd $container; $out = docker exec $container $sc -S localhost -U sa -P 'Learn!Passw0rd' -C -b -d $Database -i /tmp/lab-seed.sql 2>&1 }
+            'sqlserver' { $sc = Get-LabContainerSqlcmd $container; $out = docker exec $container $sc -S localhost -U sa -P 'Learn!Passw0rd' -C -I -b -d $Database -i /tmp/lab-seed.sql 2>&1 }
             'postgres'  { $out = docker exec $container psql -U postgres -d $Database -v ON_ERROR_STOP=1 -f /tmp/lab-seed.sql 2>&1 }
             'mysql'     { $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container sh -c "mysql -uroot -D $Database < /tmp/lab-seed.sql" 2>&1 }
             'mariadb'   { $mc = Get-LabContainerMariaClient -Container $container; $out = docker exec -e MYSQL_PWD=Learn!Passw0rd $container sh -c "$mc -uroot -D $Database < /tmp/lab-seed.sql" 2>&1 }

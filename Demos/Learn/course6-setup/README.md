@@ -25,20 +25,20 @@ and verify it is healthy before continuing.
 **macOS / Linux**
 
 ```bash
-cd Demos/Learn/course6-setup
+# from course6-setup
 bash setup-databases.sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-cd Demos\Learn\course6-setup
+# from course6-setup
 .\setup-databases.ps1
 ```
 
 Both scripts print `PASS` or `FAIL` for each database (`PASS` only after a shop table is confirmed):
 
-```
+```text
 SQL Server
   shop_tenant_a              PASS
   shop_tenant_b              PASS
@@ -92,44 +92,14 @@ the exercise.
 
 After running the setup, confirm the defect is present and equal across all three tenants.
 
-**SQL Server** — run against each of `shop_tenant_a`, `shop_tenant_b`, `shop_tenant_c`:
+Each line counts the bad batch in all three tenants on one engine (MariaDB runs the same query as MySQL):
 
-```sql
-SELECT COUNT(*) AS bad_batch_rows
-FROM   dbo.OrderItem  oi
-JOIN   dbo.SalesOrder so ON so.OrderId = oi.OrderId
-WHERE  so.OrderDate >= '2026-05-01'
-  AND  so.OrderDate  < '2026-06-01';
-```
-
-**PostgreSQL** — run against each tenant database:
-
-```sql
-SELECT COUNT(*) AS bad_batch_rows
-FROM   orderitem  oi
-JOIN   salesorder so ON so.orderid = oi.orderid
-WHERE  so.orderdate >= '2026-05-01'
-  AND  so.orderdate  < '2026-06-01';
-```
-
-**MySQL** — run against each tenant database:
-
-```sql
-SELECT COUNT(*) AS bad_batch_rows
-FROM   `OrderItem`  oi
-JOIN   `SalesOrder` so ON so.OrderId = oi.OrderId
-WHERE  so.OrderDate >= '2026-05-01'
-  AND  so.OrderDate  < '2026-06-01';
-```
-
-**MariaDB** — run against each tenant database (same query as MySQL):
-
-```sql
-SELECT COUNT(*) AS bad_batch_rows
-FROM   `OrderItem`  oi
-JOIN   `SalesOrder` so ON so.OrderId = oi.OrderId
-WHERE  so.OrderDate >= '2026-05-01'
-  AND  so.OrderDate  < '2026-06-01';
+```bash
+# from course6-setup
+for db in shop_tenant_a shop_tenant_b shop_tenant_c; do ../lab-sql.sh sqlserver "$db" "SELECT COUNT(*) AS bad_batch_rows FROM dbo.OrderItem oi JOIN dbo.SalesOrder so ON so.OrderId = oi.OrderId WHERE so.OrderDate >= '2026-05-01' AND so.OrderDate < '2026-06-01'"; done
+for db in shop_tenant_a shop_tenant_b shop_tenant_c; do ../lab-sql.sh postgres "$db" "SELECT COUNT(*) AS bad_batch_rows FROM orderitem oi JOIN salesorder so ON so.orderid = oi.orderid WHERE so.orderdate >= '2026-05-01' AND so.orderdate < '2026-06-01'"; done
+for db in shop_tenant_a shop_tenant_b shop_tenant_c; do ../lab-sql.sh mysql "$db" "SELECT COUNT(*) AS bad_batch_rows FROM OrderItem oi JOIN SalesOrder so ON so.OrderId = oi.OrderId WHERE so.OrderDate >= '2026-05-01' AND so.OrderDate < '2026-06-01'"; done
+for db in shop_tenant_a shop_tenant_b shop_tenant_c; do ../lab-sql.sh mariadb "$db" "SELECT COUNT(*) AS bad_batch_rows FROM OrderItem oi JOIN SalesOrder so ON so.OrderId = oi.OrderId WHERE so.OrderDate >= '2026-05-01' AND so.OrderDate < '2026-06-01'"; done
 ```
 
 Expected result: **10 rows** in every tenant on every engine (5 May-2026 orders × 2 items each,
@@ -150,10 +120,12 @@ tenants. The `datafix_user` role isn't dropped; it's simply reconfirmed against 
 databases (grants are idempotent):
 
 ```bash
+# from course6-setup
 bash setup-databases.sh --reset
 ```
 
 ```powershell
+# from course6-setup
 .\setup-databases.ps1 -Reset
 ```
 
