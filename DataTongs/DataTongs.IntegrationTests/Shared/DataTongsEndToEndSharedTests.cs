@@ -659,6 +659,46 @@ public abstract class DataTongsEndToEndSharedTests
         }
     }
 
+    // The rows were aggregated on the server, and an aggregate longer than max_allowed_packet comes back NULL with only a
+    // warning, so the table was extracted as empty: a MergeDelete delivery of that file deletes every row. The table is
+    // built past the server's own packet size; on a server whose packet is too large to pass cheaply it is skipped.
+    [Test]
+    public void Extraction_OfATableLargerThanMaxAllowedPacket_IsComplete()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT @@GLOBAL.max_allowed_packet";
+        var packet = Convert.ToInt64(command.ExecuteScalar());
+        if (packet > 16 * 1048576) Assert.Ignore($"max_allowed_packet is {packet}; passing it would take a table this test should not build.");
+        var rows = (int)(packet / 50000) + 20;
+        var table = $"_e2e_pkt_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (id INT PRIMARY KEY, v LONGTEXT NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{table}` (id, v) VALUES (@id, REPEAT('x', 50000))";
+            var id = command.CreateParameter();
+            id.ParameterName = "@id";
+            command.Parameters.Add(id);
+            for (var i = 1; i <= rows; i++)
+            {
+                id.Value = i;
+                command.ExecuteNonQuery();
+            }
+            command.Parameters.Clear();
+
+            var json = _dataTongs.GetTableDataJson(command, null, _testDb, table, "`id`", null);
+
+            Assert.That(json.Length, Is.GreaterThan(packet), "the extract must pass max_allowed_packet for this to test anything");
+            Assert.That(JsonText.ParseArray(json).Count, Is.EqualTo(rows), "every row is extracted");
+        }
+        finally
+        {
+            command.Parameters.Clear();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     // Fractional seconds were formatted away ('%s' with no '%f'): DATETIME(6) 10:11:12.123456 extracted as 10:11:12.
     // A whole-second column must still extract without a fraction, so existing files do not change.
     [Test]

@@ -873,57 +873,35 @@ SELECT JSON_AGG(ROW_TO_JSON(tbl))
 
         var qualifiedTable = $"`{Identifier.EscapeDelimited(databaseName, Platform.MySQL)}`.`{Identifier.EscapeDelimited(tableName, Platform.MySQL)}`";
 
-        // GROUP_CONCAT, and MariaDB's JSON_ARRAYAGG which is built on it, are cut off at group_concat_max_len (1 MiB by
-        // default) with only a warning, which left a large table's extracted JSON unterminated. Raise it to the
-        // max_allowed_packet ceiling first.
-        cmd.CommandText = "SET SESSION group_concat_max_len = 1073741824";
-        cmd.ExecuteNonQuery();
-
-        // The rows are ordered inside the aggregate: an ORDER BY on the one-row result orders nothing. MySQL's
-        // JSON_ARRAYAGG takes no ORDER BY, so MySQL aggregates with GROUP_CONCAT, joined the way JSON_ARRAYAGG prints
-        // there (", "), and so does MariaDB 10.2-10.4, which has no JSON_ARRAYAGG (empty table -> '[]').
-        if (!isMariaDb || !SupportsJsonArrayAgg(cmd))
-        {
-            var separator = isMariaDb ? "," : ", ";
-            cmd.CommandText = $@"
-SELECT COALESCE(CONCAT('[', GROUP_CONCAT(
-        JSON_OBJECT(
-            {jsonObjectClause}
-        ) ORDER BY {orderColumns} SEPARATOR '{separator}'), ']'), '[]') AS json_data
-FROM {qualifiedTable}
-{whereClause};";
-            return cmd.ExecuteScalar()?.ToString() ?? "[]";
-        }
-
+        // One row per read, joined here the way each engine's JSON_ARRAYAGG prints an array. Aggregated on the server, the
+        // rows came back NULL, with only a warning, once they passed max_allowed_packet (4 MiB by default on MySQL 5.7), and
+        // a NULL was written as an empty table.
         cmd.CommandText = $@"
-SELECT JSON_ARRAYAGG(
-        JSON_OBJECT(
+SELECT JSON_OBJECT(
             {jsonObjectClause}
-        ) ORDER BY {orderColumns}
-    ) AS json_data
+        ) AS row_json
 FROM {qualifiedTable}
-{whereClause};";
-
-        var result = cmd.ExecuteScalar();
-        return result?.ToString() ?? "[]";
+{whereClause}
+ORDER BY {orderColumns};";
+        var separator = isMariaDb ? "," : ", ";
+        var json = new StringBuilder("[");
+        using (var reader = cmd.ExecuteReader())
+        {
+            var first = true;
+            while (reader.Read())
+            {
+                if (!first) json.Append(separator);
+                json.Append(reader.GetValue(0)?.ToString());
+                first = false;
+            }
+        }
+        return json.Append(']').ToString();
     }
 
     private static bool IsMariaDb(IDbCommand cmd)
     {
         cmd.CommandText = "SELECT VERSION()";
         return (cmd.ExecuteScalar()?.ToString() ?? "").Contains("MariaDB", StringComparison.OrdinalIgnoreCase);
-    }
-
-    // JSON_ARRAYAGG is available on MySQL 5.7.22+ (our 5.7 floor is well past that in practice) and MariaDB 10.5+.
-    // MariaDB 10.2-10.4 lack it, so callers fall back to a GROUP_CONCAT-based aggregation there.
-    private static bool SupportsJsonArrayAgg(IDbCommand cmd)
-    {
-        cmd.CommandText = "SELECT VERSION()";
-        var version = cmd.ExecuteScalar()?.ToString() ?? "";
-        if (version.IndexOf("MariaDB", StringComparison.OrdinalIgnoreCase) < 0) return true;
-        var parts = version.Split('.');
-        return parts.Length >= 2 && int.TryParse(parts[0], out var major) && int.TryParse(parts[1], out var minor)
-               && (major > 10 || (major == 10 && minor >= 5));
     }
 
     #region Table Data XML Extraction (SQL Server, B1 slice 3)
