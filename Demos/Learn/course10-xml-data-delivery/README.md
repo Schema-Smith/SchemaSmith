@@ -1,6 +1,7 @@
 # Course 10 bonus recipe — XML data delivery, on purpose
 
 <!-- TRAINING-RELEASE-PIN 2.8.0 (JSON delivery below compatibility level 130): delete the "On 2.7.x" callouts, bump the pre-flight to 2.8.0 -->
+<!-- TRAINING-RELEASE-PIN #573 (JSON extract at compatibility level 100): delete the Part 4 known-issue note and show the no-switch extract from learn_2008 -->
 
 Course 10's oldest SQL Server tier (`learn_2008`, compatibility level 100) is where
 SchemaSmith's own model ingest switches from JSON to XML, because `OPENJSON` needs level 130
