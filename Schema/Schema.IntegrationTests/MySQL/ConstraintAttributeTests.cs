@@ -14,9 +14,9 @@ namespace Schema.IntegrationTests.MySQL;
 
 /// <summary>
 /// A MySQL check constraint's <c>Enforced</c> is <c>TABLE_CONSTRAINTS.ENFORCED</c>. It is read on extraction and
-/// deployed as <c>NOT ENFORCED</c>; a change drops and re-creates the constraint. MariaDB has no such state, so this
-/// fixture is MySQL only. Every assertion reads the catalog, never the file. Uses the suite's kindled database and
-/// isolates by object name.
+/// deployed as <c>NOT ENFORCED</c>; a declared change drops and re-creates the constraint, and an omitted one leaves it as
+/// it is. MariaDB has no such state, so this fixture is MySQL only, and MySQL keeps checks from 8.0.16. Every assertion
+/// reads the catalog, never the file. Uses the suite's kindled database and isolates by object name.
 /// </summary>
 [Category("MySQL")]
 [Category("Integration")]
@@ -36,6 +36,8 @@ public class ConstraintAttributeTests
         _db = FixtureSetup.MainDb;
         _connection = DbConnectionFactory.ForPlatform(Platform.MySQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         _connection.Open();
+        if ((VersionHelper.ParsePatchComparable(Str("SELECT VERSION()"), Platform.MySQL) ?? 0) < 80016)
+            Assert.Ignore("MySQL keeps check constraints from 8.0.16.");
         DropOwnObjects();
     }
 
@@ -115,6 +117,24 @@ public class ConstraintAttributeTests
         Assert.That(Enforced(), Is.EqualTo("YES"));
     }
 
+    // A package written before Enforced existed must not re-create a check someone made NOT ENFORCED: the re-create
+    // re-checks the rows, and fails on any that violate it.
+    [Test]
+    public void AnOmittedEnforced_LeavesANotEnforcedCheckAsItIs()
+    {
+        Deploy(Package(", \"Enforced\": false"));
+        Exec($"INSERT INTO `{_db}`.`{Table}` (id, qty) VALUES (1, -5)");
+        ClearAudit();
+
+        Deploy(Package());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Enforced(), Is.EqualTo("NO"));
+            Assert.That(Audits("dropped") + Audits("created"), Is.Zero);
+        });
+    }
+
     [Test]
     public void AnEnforcedChange_DropsAndRecreates_InBothDirections()
     {
@@ -131,15 +151,15 @@ public class ConstraintAttributeTests
 
         Exec($"INSERT INTO `{_db}`.`{Table}` (id, qty) VALUES (1, -5)");
         ClearAudit();
-        var ex = Assert.Catch<DbException>(() => Deploy(Package()), "re-creating the check enforced re-checks the rows, and a violating row must fail it, not be skipped");
+        var ex = Assert.Catch<DbException>(() => Deploy(Package(", \"Enforced\": true")), "re-creating the check enforced re-checks the rows, and a violating row must fail it, not be skipped");
         Assert.That(ex!.Message, Does.Contain(Ck));
 
         Exec($"DELETE FROM `{_db}`.`{Table}` WHERE id = 1");
         ClearAudit();
-        Deploy(Package());
+        Deploy(Package(", \"Enforced\": true"));
         Assert.Multiple(() =>
         {
-            Assert.That(Enforced(), Is.EqualTo("YES"), "an omitted Enforced is true");
+            Assert.That(Enforced(), Is.EqualTo("YES"), "a declared Enforced true is applied");
             Assert.That(Audits("created"), Is.EqualTo(1));
         });
     }
@@ -158,7 +178,7 @@ public class ConstraintAttributeTests
         var ck = (MySqlCheckConstraint)Extract().CheckConstraints.Single();
         Assert.That(ck.Enforced, Is.False);
 
-        Deploy(Package());
+        Deploy(Package(", \"Enforced\": true"));
         ck = (MySqlCheckConstraint)Extract().CheckConstraints.Single();
         Assert.That(ck.Enforced, Is.True);
     }

@@ -922,6 +922,7 @@ public static class ForgeKindler
                 // compares through the engine's own rendering. In call order: the last calls the first two.
                 new("SchemaSmith_IsExpressionDefault.sql"),
                 new("SchemaSmith_ExpressionDefaultText.sql"),
+                new("SchemaSmith_CleanCheckClause.sql"),
                 new("SchemaSmith_ExpressionDefaultsEqual.sql"),
                 new("SchemaSmith_ColumnOnUpdateClause.sql"),
                 new("SchemaSmith_IndexIsVisible.sql"),

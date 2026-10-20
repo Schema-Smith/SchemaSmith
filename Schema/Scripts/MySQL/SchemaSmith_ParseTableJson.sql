@@ -340,9 +340,8 @@ BEGIN
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].AutoIncrement'))), 0) AS IsAutoIncrement,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].GenerationExpression'))) AS GeneratedExpression,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Generated'))) AS GeneratedType,
-                    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-                        NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].CheckExpression')))), ''),
-                        '_utf8mb4', ''), '_utf8mb3', ''), '_utf8', ''), '_latin1', ''), '_binary', ''), '\\''', '''') AS CheckExpression,
+                    SchemaSmith_CleanCheckClause(
+                        NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].CheckExpression')))), '')) AS CheckExpression,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].CharacterSet'))) AS CharacterSet,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Collation'))) AS Collation,
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Invisible'))), 0) AS IsInvisible,
@@ -535,7 +534,8 @@ BEGIN
     WHERE CharacterSet IS NOT NULL OR Collation IS NOT NULL;
 
     -- A bare length-taking type takes its default length, which is what the catalog reports. Whatever follows the
-    -- keyword (DECIMAL UNSIGNED, CHAR BINARY) is kept after it.
+    -- keyword (DECIMAL UNSIGNED, CHAR BINARY) is kept after it. A length written after a space (DECIMAL (10,2)) is not
+    -- bare: the type is left as written.
     UPDATE _SchemaSmith_Columns
     SET DataType =
         CONCAT(CASE UPPER(SUBSTRING_INDEX(TRIM(DataType), ' ', 1))
@@ -545,7 +545,8 @@ BEGIN
                    WHEN 'BINARY' THEN 'BINARY(1)'
                END,
                SUBSTRING(TRIM(DataType), LENGTH(SUBSTRING_INDEX(TRIM(DataType), ' ', 1)) + 1))
-    WHERE UPPER(SUBSTRING_INDEX(TRIM(DataType), ' ', 1)) IN ('DECIMAL', 'CHAR', 'BIT', 'BINARY');
+    WHERE UPPER(SUBSTRING_INDEX(TRIM(DataType), ' ', 1)) IN ('DECIMAL', 'CHAR', 'BIT', 'BINARY')
+      AND LEFT(TRIM(SUBSTRING(TRIM(DataType), LENGTH(SUBSTRING_INDEX(TRIM(DataType), ' ', 1)) + 1)), 1) <> '(';
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Identify new columns');
 
@@ -1011,7 +1012,8 @@ BEGIN
         ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Expression TEXT NOT NULL,
         -- 0 declares NOT ENFORCED (MySQL 8.0.16+; MariaDB has no such state). Omitted is enforced.
-        Enforced TINYINT NOT NULL DEFAULT 1,
+        -- NULL when omitted: an existing check's enforcement is converged only when the package declares it.
+        Enforced TINYINT NULL,
         ShouldApply TINYINT DEFAULT 1,
         ShouldApplyExpression VARCHAR(4000) DEFAULT NULL,
         VariantName VARCHAR(128) DEFAULT NULL,
@@ -1030,22 +1032,15 @@ BEGIN
                 SELECT
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].Name')))) AS TableName,
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Name')))) AS ConstraintName,
-                    -- Strip MySQL charset introducers (_utf8mb4, _utf8, etc.) and backslash-escaped quotes
-                    -- from CHECK_CLAUSE expressions. MySQL's INFORMATION_SCHEMA stores these internally
-                    -- but they're not needed in DDL and cause PREPARE failures. Nested REPLACE (not
-                    -- REGEXP_REPLACE, which is MySQL 8.0+) keeps this version-agnostic down to the 5.7 floor;
-                    -- the longer introducers must be stripped before their prefixes (_utf8mb4/_utf8mb3 before
-                    -- _utf8), so they are the innermost. (_utf8mb3 is emitted by MySQL 8.0.30+ for legacy
-                    -- 3-byte utf8; kept in sync with GenerateTableJson's regex list.)
-                    REPLACE(
-                        REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-                            SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Expression'))),
-                            '_utf8mb4', ''), '_utf8mb3', ''), '_utf8', ''), '_latin1', ''), '_binary', ''),
-                        '\\''', '''') AS Expression,
+                    -- Strip the charset introducers and backslash-escaped quotes an extracted CHECK_CLAUSE carries:
+                    -- not needed in DDL, and they cause PREPARE failures. SchemaSmith_CleanCheckClause removes only an
+                    -- introducer that opens a literal, so a name or text ending in one (`raw_binary`) is kept.
+                    SchemaSmith_CleanCheckClause(
+                        SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Expression')))) AS Expression,
                     1 AS ShouldApply,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].ShouldApplyExpression')))), '') AS ShouldApplyExpression,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].VariantName')))), '') AS VariantName,
-                    IF(LOWER(COALESCE(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Enforced'))), 'true')) = 'false', 0, 1) AS Enforced;
+                    IF(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Enforced'))) IS NULL, NULL, IF(LOWER(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Enforced')))) = 'false', 0, 1)) AS Enforced;
             END IF;
             SET v_ChkInnerIdx = v_ChkInnerIdx + 1;
         END WHILE;

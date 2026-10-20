@@ -19,10 +19,10 @@ public abstract class TableQuench_ExpressionMapAdoptSharedTests : BaseTableQuenc
     // MariaDB keeps a check written on a column as that column's own; MySQL makes every check table-level.
     private bool ColumnLevelCheck => Platform == Platform.MariaDb;
 
-    private string Create(string t, string check = "`Id` > 0 AND `Tag` <> 'x'") => $"""
+    private string Create(string t, string check = "`Id` > 0 AND `Tag` <> 'x'", string generated = "CONCAT(`Tag`, '-x')", string codeDefault = "CONCAT('a', 'b')") => $"""
         CREATE TABLE `{_mainDb}`.`{t}` (`Id` INT NOT NULL, `Tag` VARCHAR(50) NULL, `Qty` INT NULL{(ColumnLevelCheck ? " CHECK (`Qty` >= 0)" : "")},
-          `Label` VARCHAR(60) GENERATED ALWAYS AS (CONCAT(`Tag`, '-x')) STORED,
-          `Code` VARCHAR(20) NULL DEFAULT (CONCAT('a', 'b')),
+          `Label` VARCHAR(60) GENERATED ALWAYS AS ({generated}) STORED,
+          `Code` VARCHAR(20) NULL DEFAULT ({codeDefault}),
           PRIMARY KEY (`Id`), CONSTRAINT `ck_{t}` CHECK ({check}))
         """;
 
@@ -115,6 +115,25 @@ public abstract class TableQuench_ExpressionMapAdoptSharedTests : BaseTableQuenc
             Exec(cmd, Create(t, check: "`Id` > 5 AND `Tag` <> 'x'"));
             RunTableQuenchProc(cmd, Json(t));
             Assert.That(Audits(cmd, t), Is.EqualTo("constraint:created, constraint:dropped"), "the CHECK, and only it, is re-applied");
+        });
+    }
+
+    // The verification must not bless a difference: a generated column or default that is not the declared one is applied.
+    [Test]
+    public void ARealDifference_InAGeneratedColumnAndADefault_IsStillReApplied()
+    {
+        var t = $"adoptcol_{Guid.NewGuid():N}"[..20];
+        WithTable(t, cmd =>
+        {
+            Exec(cmd, Create(t, generated: "CONCAT(`Tag`, '-y')", codeDefault: "CONCAT('a', 'c')"));
+            RunTableQuenchProc(cmd, Json(t));
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar(cmd, $"SELECT GENERATION_EXPRESSION FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{t}' AND COLUMN_NAME = 'Label'"),
+                    Does.Contain("-x"), "the declared generation expression is applied");
+                Assert.That(Scalar(cmd, $"SELECT COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{t}' AND COLUMN_NAME = 'Code'").Replace("\\'", "'"),
+                    Does.Contain("'b'").And.Not.Contain("'c'"), "the declared default is applied");
+            });
         });
     }
 

@@ -4,7 +4,8 @@
 -- a table-level check that shares a column's name (MDEV-24598). That name is the rule here rather than
 -- CHECK_CONSTRAINTS.LEVEL, which is 10.5+ and would be fatal to mention in a function body below it. The predicate is
 -- returned as the package declares it: without the charset introducers and backslash-escaped quotes the catalog adds,
--- the same cleaning the table-level extraction applies.
+-- the same cleaning the table-level extraction applies. An introducer is an underscore word that opens a quoted literal
+-- and is not the tail of a longer word: `raw_binary` and 'a_latin1' are names and text, not introducers.
 DELIMITER //
 DROP FUNCTION IF EXISTS SchemaSmith_ColumnLevelCheck//
 CREATE FUNCTION SchemaSmith_ColumnLevelCheck(
@@ -32,8 +33,6 @@ BEGIN
     IF v_Clause IS NULL THEN
         RETURN NULL;
     END IF;
-    RETURN REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(v_Clause,
-               '_utf8mb4', ''), '_utf8mb3', ''), '_utf8', ''), '_latin1', ''), '_binary', ''),
-           '\\''', '''');
+    RETURN SchemaSmith_CleanCheckClause(v_Clause);
 END //
 DELIMITER ;

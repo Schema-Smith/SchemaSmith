@@ -112,6 +112,49 @@ VALUES ('{_productName}', '', '{_mainDb}', 'CHECK CONSTRAINT', '{table}.{ck}');"
     }
 
 
+    // The declared expression had every _utf8mb4 / _binary / _latin1 removed, wherever it fell: a check on `raw_binary`
+    // was created on `raw`, a different column, and a literal lost part of its text.
+    [Test]
+    public void TableQuench_ACheckOnNamesAndTextEndingInACharsetName_DeploysAsDeclared_AndARedeployLeavesIt()
+    {
+        if (!TargetSupportsCheckConstraints())
+            Assert.Ignore("CHECK constraints require MySQL 8.0.16; skipped below the floor.");
+        var table = $"TblChkIntro_{Guid.NewGuid().ToString("N")[..8]}";
+        var json = $$"""
+[{ "Name": "{{table}}",
+   "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "raw_binary", "DataType": "INT", "Nullable": true },
+                { "Name": "raw", "DataType": "INT", "Nullable": true }, { "Name": "note", "DataType": "VARCHAR(20)", "Nullable": true } ],
+   "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" } ],
+   "CheckConstraints": [ { "Name": "CK_{{table}}", "Expression": "`raw_binary` > 0 AND `note` <> 'x_latin1'" } ] }]
+""";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            RunTableQuenchProc(cmd, json);
+            cmd.CommandText = $"SELECT CHECK_CLAUSE FROM INFORMATION_SCHEMA.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '{_mainDb}' AND CONSTRAINT_NAME = 'CK_{table}'";
+            var clause = cmd.ExecuteScalar()?.ToString() ?? "";
+            Assert.Multiple(() =>
+            {
+                Assert.That(clause, Does.Contain("`raw_binary`"), "the check reads the column it was declared on");
+                Assert.That(clause, Does.Contain("x_latin1"), "and keeps the literal's text");
+            });
+
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            ReQuenchChecks(cmd, json);
+            Assert.That(CountMessages(cmd, "Drop modified check constraint:", table), Is.EqualTo(0), "a redeploy leaves it");
+        }
+        finally
+        {
+            Cleanup(cmd, table);
+        }
+        conn.Close();
+    }
+
     private static int CountMessages(System.Data.IDbCommand cmd, string messagePrefix, string table)
     {
         cmd.CommandText = $@"SELECT COUNT(*) FROM SchemaSmith_StatusMessages

@@ -165,6 +165,27 @@ public class ColumnCheckTests
         });
     }
 
+    [Test]
+    public void ACheckOnAColumnWhoseNameEndsInACharsetName_DeploysAsDeclared_AndARedeployLeavesIt()
+    {
+        var package = "[{ \"Name\": \"`" + Table + "`\", \"Engine\": \"InnoDB\", \"Columns\": ["
+                      + " { \"Name\": \"`id`\", \"DataType\": \"INT\", \"Nullable\": false },"
+                      + " { \"Name\": \"`raw_binary`\", \"DataType\": \"INT\", \"Nullable\": true, \"CheckExpression\": \"`raw_binary` > 0\" },"
+                      + " { \"Name\": \"`raw`\", \"DataType\": \"INT\", \"Nullable\": true } ],"
+                      + " \"Indexes\": [ { \"Name\": \"`pk_" + Table + "`\", \"IndexColumns\": \"`id`\", \"PrimaryKey\": true, \"Unique\": true } ] }]";
+        Deploy(package);
+        ClearAudit();
+        Deploy(package);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Checks(), Is.EqualTo("raw_binary=`raw_binary` > 0"), "the check reads the column it was declared on");
+            Assert.That(Count($"SELECT COUNT(*) FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ActionType = 'modified' AND ObjectName LIKE '%{Table}%'"),
+                Is.Zero, "a redeploy changes nothing");
+            Assert.That(((MariaDbColumn)Extract().Columns.Single(c => c.Name == "`raw_binary`")).CheckExpression, Is.EqualTo("`raw_binary` > 0"));
+        });
+    }
+
     private MariaDbTable Extract()
     {
         using var cmd = _connection.CreateCommand();

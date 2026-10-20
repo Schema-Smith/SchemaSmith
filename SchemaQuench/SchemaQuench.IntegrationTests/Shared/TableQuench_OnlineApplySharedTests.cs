@@ -356,6 +356,32 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
         finally { Drop(cmd, "onl_ord"); }
     }
 
+    // Below MySQL 8.0.13 an expression default is skipped, but the in-place reorder restated every declared column, the
+    // default with it, and the server refused the statement mid-deploy. Such a table now takes the rebuild path, as it
+    // does without OnlineApply, which refuses it up front and says why; the rows are untouched.
+    [Test]
+    public void Prefer_ADriftedTableWithAnExpressionDefaultTheServerCannotHold_IsRefusedAsWithoutOnlineApply()
+    {
+        if (Platform != Platform.MySQL || VersionPatch() >= 80013) Assert.Ignore("Expression defaults are skipped only below MySQL 8.0.13.");
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            Seed(cmd, "onl_exprdef", ", c INT NULL");
+            var c = """{ "Name": "c", "DataType": "INT", "Nullable": true, "Default": "(1 + 1)" }""";
+            var json = Table("onl_exprdef", string.Join(", ", Col("id", nullable: false), Col("b"), c, Col("a")), OrderPolicy);
+            var prefer = Assert.Catch(() => Deploy(cmd, json, "PREFER"));
+            var off = Assert.Catch(() => Deploy(cmd, json, "OFF"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(prefer!.Message, Does.Contain("DEFAULT expression requires MySQL 8.0.13"), "refused, naming why, not a syntax error");
+                Assert.That(prefer.Message, Is.EqualTo(off!.Message), "the same answer as without OnlineApply");
+                Assert.That(Scalar(cmd, $"SELECT COUNT(*) FROM `{_mainDb}`.`onl_exprdef`"), Is.EqualTo(2L), "the rows are all there");
+            });
+        }
+        finally { Drop(cmd, "onl_exprdef"); }
+    }
+
     [Test]
     public void Off_StillRebuildsADriftedTable()
     {
@@ -439,6 +465,42 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
             });
         }
         finally { Drop(cmd, "onl_type"); }
+    }
+
+    // A key column's type change drops the foreign key first. Require refused only at the MODIFY, after the drop had
+    // committed, so the key was gone and every rerun refused again with it gone.
+    [Test]
+    public void Require_ATypeChangeOnAForeignKeyColumn_IsRefusedBeforeTheKeyIsDropped()
+    {
+        if (Platform == Platform.MariaDb && VersionPatch() >= 110200) Assert.Ignore("MariaDB 11.2+ changes the type online.");
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        string Keys() => Scalar(cmd, $"SELECT COALESCE(GROUP_CONCAT(CONSTRAINT_NAME), '') FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '{_mainDb}' AND TABLE_NAME = 'onl_fkc'")?.ToString();
+        string Package(string type) =>
+            $$"""[{ "Name": "onl_fkp", "Columns": [{{Col("id", type, nullable: false)}}], "Indexes": [{ "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "id" }] },""" +
+            $$""" { "Name": "onl_fkc", "Columns": [{{Col("id", nullable: false)}}, {{Col("pid", type)}}], "Indexes": [{ "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "id" }, { "Name": "ix_pid", "IndexColumns": "pid" }],""" +
+            $$""" "ForeignKeys": [{ "Name": "fk_onl_fkc", "Columns": "pid", "RelatedTable": "onl_fkp", "RelatedColumns": "id" }] }]""";
+        try
+        {
+            Sql(cmd, $"DROP TABLE IF EXISTS `{_mainDb}`.`onl_fkc`; DROP TABLE IF EXISTS `{_mainDb}`.`onl_fkp`");
+            Deploy(cmd, Package("INT"), "OFF");
+            Assert.That(Keys(), Is.EqualTo("fk_onl_fkc"));
+
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                var refusal = Assert.Catch(() => Deploy(cmd, Package("BIGINT"), "REQUIRE"));
+                Assert.Multiple(() =>
+                {
+                    Assert.That(refusal!.Message, Does.Contain("OnlineApply is Require"));
+                    Assert.That(Keys(), Is.EqualTo("fk_onl_fkc"), "the refusal comes before the key is dropped, on every attempt");
+                    Assert.That(Scalar(cmd, $"SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = 'onl_fkc' AND COLUMN_NAME = 'pid'")?.ToString(), Is.EqualTo("int"));
+                });
+            }
+
+            Deploy(cmd, Package("BIGINT"), "PREFER");
+            Assert.That(Keys(), Is.EqualTo("fk_onl_fkc"), "Prefer changes the type and puts the key back");
+        }
+        finally { Sql(cmd, $"DROP TABLE IF EXISTS `{_mainDb}`.`onl_fkc`; DROP TABLE IF EXISTS `{_mainDb}`.`onl_fkp`"); }
     }
 
     [Test]

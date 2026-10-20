@@ -127,6 +127,42 @@ public abstract class GenerateTableJsonSharedTests
         }
     }
 
+    // The catalog prefixes a check's string literals with a charset introducer, which extraction removes. Removing every
+    // _utf8mb4 / _binary / _latin1 it found also cut them out of names and text: `raw_binary` came out as `raw`.
+    [Test]
+    public void GenerateTableJSON_ACheckReadingNamesThatEndInACharsetName_KeepsThem_AndLosesOnlyTheIntroducer()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'information_schema' AND TABLE_NAME = 'CHECK_CONSTRAINTS'";
+        if (Convert.ToInt32(command.ExecuteScalar()) == 0) Assert.Ignore("This server keeps no check constraints.");
+        var table = $"ck_{Guid.NewGuid():N}"[..16];
+        command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (Id INT PRIMARY KEY, raw_binary INT, note_latin1 VARCHAR(20), " +
+                              $"CONSTRAINT `{table}_ck` CHECK (raw_binary > 0 AND note_latin1 <> _utf8mb4'x_binary'))";
+        command.ExecuteNonQuery();
+        try
+        {
+            command.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_testDb}', '{table}')";
+            var json = "";
+            using (var reader = command.ExecuteReader())
+                while (reader.Read())
+                    json += reader[0];
+
+            var expression = ((MySqlTable)PlatformDeserializer.DeserializeTable(json, Platform)).CheckConstraints.Single().Expression;
+            Assert.Multiple(() =>
+            {
+                Assert.That(expression, Does.Contain("`raw_binary`"));
+                Assert.That(expression, Does.Contain("`note_latin1`"));
+                Assert.That(expression, Does.Contain("'x_binary'"));
+                Assert.That(expression, Does.Not.Contain("_utf8mb4"), "the introducer is the catalog's, not the declaration's");
+            });
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void GenerateTableJSON_ActorTable_HasPrimaryKey()
     {

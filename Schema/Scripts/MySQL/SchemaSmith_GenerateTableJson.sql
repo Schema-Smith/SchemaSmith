@@ -435,7 +435,7 @@ BEGIN
         SET @v_ccSql = CONCAT('SELECT CONCAT(''['', IFNULL(GROUP_CONCAT(
     JSON_OBJECT(
         ''Name'', cc.CONSTRAINT_NAME,
-        ''Expression'', REPLACE(REGEXP_REPLACE(cc.CHECK_CLAUSE, ''_utf8mb4|_utf8mb3|_utf8|_latin1|_binary'', ''''), ''\\\\'''''', '''''''')', IF(VERSION() LIKE '%MariaDB%', '', ', ''Enforced'', CASE WHEN tc.ENFORCED = ''YES'' THEN TRUE ELSE FALSE END'), '
+        ''Expression'', SchemaSmith_CleanCheckClause(cc.CHECK_CLAUSE)', IF(VERSION() LIKE '%MariaDB%', '', ', ''Enforced'', CASE WHEN tc.ENFORCED = ''YES'' THEN TRUE ELSE FALSE END'), '
     )
     ORDER BY cc.CONSTRAINT_NAME SEPARATOR '',''
 ), ''''), '']'') INTO @v_ccResult

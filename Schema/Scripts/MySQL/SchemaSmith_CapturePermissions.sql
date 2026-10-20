@@ -13,7 +13,7 @@ DROP PROCEDURE IF EXISTS SchemaSmith_CapturePermissions//
 --
 -- Routine grants live only in mysql.procs_priv (INFORMATION_SCHEMA has no view of them). When the deploy user may
 -- not read that table the result is NULL and the run says why, rather than failing a deploy over something it
--- cannot see.
+-- cannot see. A MariaDB role is a grantee with no host, named on its own: 'role'@'' is a user that does not exist.
 CREATE PROCEDURE SchemaSmith_CapturePermissions(
     IN p_Db VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     IN p_Name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
@@ -35,7 +35,8 @@ BEGIN
                       IF(FIND_IN_SET('Execute', pp.Proc_priv) > 0, 'EXECUTE', NULL),
                       IF(FIND_IN_SET('Alter Routine', pp.Proc_priv) > 0, 'ALTER ROUTINE', NULL)),
                     ' ON ', p_Kind, ' `', REPLACE(p_Db, '`', '``'), '`.`', REPLACE(p_Name, '`', '``'), '` TO ''',
-                    REPLACE(CONVERT(pp.User USING utf8mb4), '''', ''''''), '''@''', REPLACE(CONVERT(pp.Host USING utf8mb4), '''', ''''''), '''',
+                    REPLACE(CONVERT(pp.User USING utf8mb4), '''', ''''''), '''',
+                    IF(pp.Host = '' AND VERSION() LIKE '%MariaDB%', '', CONCAT('@''', REPLACE(CONVERT(pp.Host USING utf8mb4), '''', ''''''), '''')),
                     IF(FIND_IN_SET('Grant', pp.Proc_priv) > 0, ' WITH GRANT OPTION', ''), ';')
              ORDER BY pp.User, pp.Host SEPARATOR '\n')
       INTO v_Script

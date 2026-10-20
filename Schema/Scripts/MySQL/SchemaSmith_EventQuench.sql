@@ -61,6 +61,7 @@ BEGIN
         Comment TEXT,
         TimeZone VARCHAR(64),
         SqlMode VARCHAR(1024),
+        SqlModeCanonical VARCHAR(2048),
         ShouldApply TINYINT DEFAULT 1,
         Changed TINYINT DEFAULT 0,
         DdlScript LONGTEXT
@@ -141,12 +142,34 @@ BEGIN
              THEN CONCAT(' COMMENT ''', REPLACE(Comment, '''', ''''''), '''') ELSE '' END,
         ' DO ', COALESCE(Definition, ''));
 
+    -- A combination mode (TRADITIONAL, ANSI) is stored as the flags it stands for, so the declared mode is compared as
+    -- the server spells it: set on this session, read back, and the session's own put back. Compared as written, an
+    -- event declared TRADITIONAL never matched and was re-created, its schedule reset, on every deploy. A mode the
+    -- server refuses fails here, before any event is touched.
+    SET @ss_ev_saved_mode = @@SESSION.sql_mode;
+    BEGIN
+        DECLARE v_ModeId INT DEFAULT 0;
+        DECLARE v_ModeNext INT;
+        DECLARE v_ModeText VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+        mode_loop: LOOP
+            SET v_ModeNext = NULL;
+            SELECT MIN(Id) INTO v_ModeNext FROM _SchemaSmith_Events WHERE SqlMode IS NOT NULL AND Id > v_ModeId;
+            IF v_ModeNext IS NULL THEN LEAVE mode_loop; END IF;
+            SELECT SqlMode INTO v_ModeText FROM _SchemaSmith_Events WHERE Id = v_ModeNext;
+            SET SESSION sql_mode = v_ModeText;
+            SET @ss_ev_mode = @@SESSION.sql_mode;
+            SET SESSION sql_mode = @ss_ev_saved_mode;
+            UPDATE _SchemaSmith_Events SET SqlModeCanonical = @ss_ev_mode WHERE Id = v_ModeNext;
+            SET v_ModeId = v_ModeNext;
+        END LOOP;
+    END;
+
     -- Decide "changed" ONCE and store it. Calling the comparison inline in four places would re-evaluate
     -- it against a catalog that the earlier statements have already altered.
     UPDATE _SchemaSmith_Events
     SET Changed = CASE WHEN SchemaSmith_EventMatches(p_DatabaseName, Name, ScheduleType, `Interval`,
                                                      ExecuteAt, Starts, Ends, Status, Preserve,
-                                                     Comment, Definition, TimeZone, SqlMode) = 1 THEN 0 ELSE 1 END;
+                                                     Comment, Definition, TimeZone, SqlModeCanonical) = 1 THEN 0 ELSE 1 END;
 
     -- ---- create or replace ------------------------------------------------------------------------
     -- Converging means DROP then CREATE: ALTER EVENT cannot change every attribute and CREATE OR REPLACE
@@ -162,15 +185,13 @@ BEGIN
         -- twice in a single statement -- error 1137, "Can't reopen table" -- so the obvious single
         -- query is not available here.
         --
-        -- Seq is Id*100 + phase, which keeps each event's DROP, pins, CREATE, restores, ownership and audit ADJACENT.
+        -- Seq is Id*100 + phase, which keeps each event's pins, DROP, CREATE, restores, ownership and audit ADJACENT.
         -- Ordering by phase across all events instead would be wrong in a specific and nasty way: if a
         -- CREATE failed partway, every later event would already have been DROPPED and never recreated.
-        INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
-            SELECT Id * 100 + 10, CONCAT('DROP EVENT IF EXISTS `', p_DatabaseName, '`.`', Name, '`')
-              FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1;
-
+        --
         -- The schedule is read in the event's zone and the body is parsed and run under its mode, so both are
-        -- pinned on the session around the CREATE and restored after it (the session is the deploy's own).
+        -- pinned on the session around the CREATE and restored after it (the session is the deploy's own). The pins
+        -- come before the DROP: a zone or mode the server refuses fails the deploy with the event still in place.
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
             SELECT Id * 100 + 20, 'SET @ss_saved_time_zone = @@SESSION.time_zone'
               FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND NULLIF(TimeZone, '') IS NOT NULL;
@@ -183,6 +204,10 @@ BEGIN
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
             SELECT Id * 100 + 23, CONCAT('SET SESSION sql_mode = ''', REPLACE(SqlMode, '''', ''''''), '''')
               FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND SqlMode IS NOT NULL;
+
+        INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
+            SELECT Id * 100 + 25, CONCAT('DROP EVENT IF EXISTS `', p_DatabaseName, '`.`', Name, '`')
+              FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1;
 
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
             SELECT Id * 100 + 30, DdlScript

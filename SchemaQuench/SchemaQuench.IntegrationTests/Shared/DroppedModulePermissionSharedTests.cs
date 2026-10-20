@@ -41,7 +41,7 @@ public abstract class DroppedModulePermissionSharedTests : ObjectScriptDeployFix
         foreach (var drop in DropStatements) Exec(drop);
     }
 
-    private void WriteProcedure(string body)
+    protected void WriteProcedure(string body)
     {
         WritePackage("""{ "FolderPath": "Procedures", "QuenchSlot": "Objects", "ObjectType": "Procedures" }""", "Procedures");
         WriteFile("Procedures", "p_perm.sql", ProcedureScript(body));

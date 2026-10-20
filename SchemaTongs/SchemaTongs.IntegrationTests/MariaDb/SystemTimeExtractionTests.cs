@@ -43,6 +43,9 @@ public class SystemTimeExtractionTests
         using (var conn = Open())
         using (var cmd = conn.CreateCommand())
         {
+            cmd.CommandText = "SELECT VERSION()";
+            if ((VersionHelper.ParsePatchComparable(cmd.ExecuteScalar()?.ToString(), Platform) ?? 0) < 100300)
+                Assert.Ignore("System-versioned tables are MariaDB 10.3.");
             Run(cmd, $"CREATE DATABASE `{_sourceDb}`");
             conn.ChangeDatabase(_sourceDb);
             Run(cmd, "CREATE TABLE h_list (id INT NOT NULL PRIMARY KEY) WITH SYSTEM VERSIONING PARTITION BY SYSTEM_TIME LIMIT 1000 " +

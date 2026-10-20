@@ -22,4 +22,27 @@ public class DroppedModulePermissionTests : DroppedModulePermissionSharedTests
     protected override string ExecuteGrantCount => MySqlFamilyDroppedModule.ExecuteGrantCount(MainDb);
     protected override string[] DropStatements => MySqlFamilyDroppedModule.DropStatements;
     protected override string AuditedName => MySqlFamilyDroppedModule.AuditedName;
+
+    // A role is a grantee with no host. Rendered 'perm_role'@'', the grant named a user that does not exist, and the
+    // re-apply failed the deploy.
+    [Test]
+    public void ARedeployOfADroppedModule_PutsARolesGrantBack()
+    {
+        Exec("CREATE ROLE IF NOT EXISTS perm_role");
+        try
+        {
+            Deploy();
+            Exec($"GRANT EXECUTE ON PROCEDURE `{MainDb}`.`p_perm` TO perm_role");
+            WriteProcedure("SELECT 2");
+
+            var second = Deploy();
+
+            Assert.That(Count($"SELECT COUNT(*) FROM mysql.procs_priv WHERE Db = '{MainDb}' AND User = 'perm_role' AND Host = '' AND Routine_name = 'p_perm'"),
+                Is.EqualTo(1), "the role holds EXECUTE again: " + second.Describe());
+        }
+        finally
+        {
+            Exec("DROP ROLE IF EXISTS perm_role");
+        }
+    }
 }

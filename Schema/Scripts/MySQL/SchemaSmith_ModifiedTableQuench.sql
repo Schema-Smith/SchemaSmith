@@ -1105,10 +1105,14 @@ BEGIN
                COALESCE(f.HasOrderMismatch, 0) AS HasOrderMismatch,
                COALESCE(t.DropColumnsRemovedFromProduct, 1) AS TableDropColumns,
                -- MA-057: under OnlineApply the columns are moved in place (STEP 4.5) instead. A generated column or a
-               -- system-versioned table needs more than its declared column script to MODIFY, so those still rebuild.
+               -- system-versioned table needs more than its declared column script to MODIFY, so those still rebuild,
+               -- as does a table with an expression default this server cannot hold (below MySQL 8.0.13), which the
+               -- declared column script would restate.
                IF(t.OnlineMode <> 'OFF' AND t.IsSystemVersioned = 0
                   AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Columns gc
-                                   WHERE gc.TableName = t.TableName AND COALESCE(TRIM(gc.GeneratedExpression), '') <> ''), 1, 0) AS ReorderOnline
+                                   WHERE gc.TableName = t.TableName
+                                     AND (COALESCE(TRIM(gc.GeneratedExpression), '') <> ''
+                                          OR (gc.IsAutoIncrement = 0 AND gc.DefaultValue IS NOT NULL AND TRIM(gc.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0))), 1, 0) AS ReorderOnline
         FROM _SchemaSmith_Tables t
         LEFT JOIN _SchemaSmith_RebuildFacts f ON f.TableName = t.TableName
         WHERE t.NewTable = 0
@@ -1153,7 +1157,9 @@ BEGIN
       AND COALESCE(IF(COALESCE(t.RebuildPolicySpecified, 0) = 1, t.RebuildPolicyOnOrderMismatch,
                       CAST(@ss_rebuild_policy_on_order_mismatch AS SIGNED)), 0) = 1
       AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Columns gc
-                       WHERE gc.TableName = t.TableName AND COALESCE(TRIM(gc.GeneratedExpression), '') <> '')
+                       WHERE gc.TableName = t.TableName
+                         AND (COALESCE(TRIM(gc.GeneratedExpression), '') <> ''
+                              OR (gc.IsAutoIncrement = 0 AND gc.DefaultValue IS NOT NULL AND TRIM(gc.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)))
       AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_RebuildElection e
                        WHERE e.TableName = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) COLLATE utf8mb4_bin);
 
@@ -1355,6 +1361,65 @@ BEGIN
                       AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
                  WHERE c.NewColumn = 0
                    AND SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1;
+            END IF;
+
+            -- OnlineApply REQUIRE: a key column's type or collation change rewrites the table on this engine (only MariaDB
+            -- 11.2+ copies without a lock, and widening a VARCHAR or VARBINARY is in place), so it is refused here, before
+            -- a key is dropped. Refused at the MODIFY instead, the drops had committed, and every rerun refused with the
+            -- keys gone.
+            IF EXISTS (SELECT 1 FROM _SchemaSmith_ColumnCollationFKsToDrop)
+               AND NOT (VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1102) THEN
+                CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+                -- A scalar subquery, for the reason the undeclared-key check below gives.
+                SET @ss_online_refuse = (SELECT CONCAT(CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4), _utf8mb4'.',
+                                                       CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4))
+                  FROM _SchemaSmith_Columns c
+                  INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName AND t.OnlineMode = 'REQUIRE'
+                  INNER JOIN _SchemaSmith_CatColumns isc ON isc.TableKey = c.TableKey AND isc.ColumnKey = c.ColumnKey
+                 WHERE c.NewColumn = 0
+                   AND ((c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation)
+                        OR (SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1
+                            AND NOT (SUBSTRING_INDEX(LOWER(isc.COLUMN_TYPE), '(', 1) IN ('varchar', 'varbinary')
+                                     AND SUBSTRING_INDEX(LOWER(isc.COLUMN_TYPE), '(', 1) = SUBSTRING_INDEX(LOWER(TRIM(c.CompareDataType)), '(', 1))))
+                   AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+                                WHERE kcu.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA) = v_DbKey
+                                  AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+                                  AND ((SchemaSmith_IdentifierKey(kcu.TABLE_NAME) = c.TableKey AND SchemaSmith_NameKeyCI(kcu.COLUMN_NAME) = c.ColumnKey)
+                                       OR (SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = c.TableKey AND SchemaSmith_NameKeyCI(kcu.REFERENCED_COLUMN_NAME) = c.ColumnKey)))
+                 ORDER BY c.TableName, c.ColumnName
+                 LIMIT 1);
+                IF @ss_online_refuse IS NOT NULL THEN
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  OnlineApply is Require, and changing ', @ss_online_refuse,
+                                                    ' rewrites its table and needs its foreign keys dropped first; nothing was changed'));
+                    SET @ss_online_msg = LEFT(CONCAT('OnlineApply is Require, and ', @ss_online_refuse, ' cannot change online: its type change rewrites the table'), 128);
+                    SIGNAL SQLSTATE 'HY000' SET MESSAGE_TEXT = @ss_online_msg;
+                END IF;
+            END IF;
+
+            -- The foreign-key phase puts back only the keys the package declares, so a key it does not declare (another
+            -- product's, or one made by hand) was dropped here and never restored. The deploy stops, naming it, before
+            -- anything is dropped, as it does on the other engines.
+            -- Scalar subqueries, not SELECT ... INTO: no row would raise NOT FOUND, which the cursor's handler in this block
+            -- takes as the end of the drop loop. Not one aggregate either: 5.7 refuses MIN over a CONCAT of these columns.
+            SET @ss_undeclared_fk_table = (SELECT d.TableName FROM _SchemaSmith_ColumnCollationFKsToDrop d
+                                            WHERE NOT EXISTS (SELECT 1 FROM _SchemaSmith_ForeignKeys f
+                                                               WHERE f.TableKey = SchemaSmith_IdentifierKey(d.TableName)
+                                                                 AND f.KeyNameKey = SchemaSmith_NameKeyCI(d.ConstraintName))
+                                            ORDER BY d.TableName, d.ConstraintName LIMIT 1);
+            SET @ss_undeclared_fk_name = (SELECT d.ConstraintName FROM _SchemaSmith_ColumnCollationFKsToDrop d
+                                           WHERE d.TableName = @ss_undeclared_fk_table
+                                             AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_ForeignKeys f
+                                                              WHERE f.TableKey = SchemaSmith_IdentifierKey(d.TableName)
+                                                                AND f.KeyNameKey = SchemaSmith_NameKeyCI(d.ConstraintName))
+                                           ORDER BY d.ConstraintName LIMIT 1);
+            SET @ss_undeclared_fk = IF(@ss_undeclared_fk_table IS NULL, NULL, CONCAT(@ss_undeclared_fk_table, '.', @ss_undeclared_fk_name));
+            IF @ss_undeclared_fk IS NOT NULL THEN
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('  Foreign key ', @ss_undeclared_fk, ' blocks a column type or collation change and is not in the package,',
+                                                ' so it would be dropped and not put back. Declare it in the package, or drop it before the deploy.'));
+                SET @ss_msg = LEFT(CONCAT('Foreign key ', @ss_undeclared_fk, ' blocks a column change and is not in the package'), 128);
+                SIGNAL SQLSTATE 'HY000' SET MESSAGE_TEXT = @ss_msg;
             END IF;
 
             OPEN cur_ColCollFks;

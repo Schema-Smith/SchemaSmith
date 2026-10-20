@@ -32,11 +32,12 @@ public class DeclaredSequenceTests : ObjectScriptDeployFixture
         Exec("DROP SEQUENCE IF EXISTS `order_seq`");
     }
 
+    // Below 10.3 there are no sequences, and DROP SEQUENCE is a syntax error, so the teardown failed the fixture.
     [OneTimeTearDown]
     public void DropObjects()
     {
         Exec("DROP TABLE IF EXISTS `seq_orders`");
-        Exec("DROP SEQUENCE IF EXISTS `order_seq`");
+        if (Convert.ToInt32(Scalar("SELECT SchemaSmith_ServerVersionNum()")) >= 1003) Exec("DROP SEQUENCE IF EXISTS `order_seq`");
     }
 
     private void WriteSequencePackage(int start)

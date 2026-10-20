@@ -59,6 +59,12 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
     [TestCase("NUMERIC", TestName = "Synonym_NUMERIC_DoesNotChurn")]           // -> decimal(10,0)
     [TestCase("DEC", TestName = "Synonym_bare_DEC_DoesNotChurn")]              // -> decimal(10,0)
     [TestCase("FIXED", TestName = "Synonym_bare_FIXED_DoesNotChurn")]          // -> decimal(10,0)
+    // A length after a space is not a bare type: it was given the default length too, a syntax error on deploy.
+    [TestCase("DECIMAL (10,2)", TestName = "Spaced_DECIMAL_DoesNotChurn")]    // -> decimal(10,2)
+    [TestCase("DEC (10,2)", TestName = "Spaced_DEC_DoesNotChurn")]            // -> decimal(10,2)
+    [TestCase("CHAR (10)", TestName = "Spaced_CHAR_DoesNotChurn")]            // -> char(10)
+    [TestCase("BINARY (4)", TestName = "Spaced_BINARY_DoesNotChurn")]         // -> binary(4)
+    [TestCase("BIT (3)", TestName = "Spaced_BIT_DoesNotChurn")]               // -> bit(3)
     [TestCase("DECIMAL UNSIGNED", TestName = "Synonym_DECIMAL_UNSIGNED_DoesNotChurn")] // -> decimal(10,0) unsigned
     [TestCase("DEC UNSIGNED", TestName = "Synonym_DEC_UNSIGNED_DoesNotChurn")] // -> decimal(10,0) unsigned
     [TestCase("FIXED UNSIGNED", TestName = "Synonym_FIXED_UNSIGNED_DoesNotChurn")] // -> decimal(10,0) unsigned

@@ -619,6 +619,10 @@ END");
             Run(cmd, "CREATE PACKAGE BODY pkg_def FUNCTION seven() RETURNS INT BEGIN RETURN 7; END; END");
             Run(cmd, "CREATE PACKAGE pkg_spec FUNCTION unused() RETURNS INT; END");
         }
+        // tr1 and tr2 come first: the order of BEFORE INSERT triggers is creation order, and a multi-event trigger made
+        // ahead of them (12.0+) would be tr1's predecessor, so tr1 would rightly be extracted FOLLOWS it.
+        Run(cmd, "CREATE TRIGGER tr1 BEFORE INSERT ON t FOR EACH ROW SET NEW.x = COALESCE(NEW.x, 0)");
+        Run(cmd, "CREATE TRIGGER tr2 BEFORE INSERT ON t FOR EACH ROW FOLLOWS tr1 SET NEW.w = 1");
         if (IsMariaDb && AtLeast(100800))
             Run(cmd, "CREATE FUNCTION f_out (IN a INT, OUT b INT) RETURNS INT DETERMINISTIC BEGIN SET b = a * 2; RETURN a; END");
         if (IsMariaDb && AtLeast(110700))
@@ -630,9 +634,6 @@ END");
         }
         if (IsMariaDb && AtLeast(120000))
             Run(cmd, "CREATE TRIGGER tr_multi BEFORE INSERT OR UPDATE ON t FOR EACH ROW SET NEW.w = 2");
-
-        Run(cmd, "CREATE TRIGGER tr1 BEFORE INSERT ON t FOR EACH ROW SET NEW.x = COALESCE(NEW.x, 0)");
-        Run(cmd, "CREATE TRIGGER tr2 BEFORE INSERT ON t FOR EACH ROW FOLLOWS tr1 SET NEW.w = 1");
 
         Run(cmd, "SET SESSION time_zone = '+05:00'");
         Run(cmd, "CREATE EVENT e_tz ON SCHEDULE EVERY 1 DAY STARTS '2030-01-01 00:00:00' ENDS '2031-01-01 00:00:00' ON COMPLETION PRESERVE DISABLE DO SELECT 2");

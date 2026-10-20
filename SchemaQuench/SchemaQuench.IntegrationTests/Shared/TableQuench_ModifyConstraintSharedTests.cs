@@ -490,6 +490,45 @@ VALUES ('{_productName}', '', '{TestSchema}', 'FOREIGN KEY', 'ModFKCascUpd.FK_Mo
     }
 
 
+    // A key the package does not declare -- here on a table it does not declare at all -- was dropped for the column change
+    // and never put back, since the foreign-key phase re-adds only declared keys. The deploy now stops, naming it.
+    [Test]
+    public void TableQuench_ColumnChangeBlockedByAnUndeclaredForeignKey_StopsNamingIt_AndDropsNothing()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        var schema = CreatePrivateDdlDatabase(cmd, "undecl");
+        var product = $"UndeclFkProduct_{Guid.NewGuid():N}"[..24];
+        const string parent = "undecl_fk_parent";
+        const string stranger = "undecl_fk_stranger";
+        var json = $$"""
+        [ { "Name": "{{parent}}",
+            "Columns": [ { "Name": "Code", "DataType": "VARCHAR(20)", "Nullable": false, "Collation": "utf8mb4_unicode_ci" } ],
+            "Indexes": [ { "Name": "PK_{{parent}}", "PrimaryKey": true, "Unique": true, "IndexColumns": "Code" } ] } ]
+        """;
+        try
+        {
+            cmd.CommandText = $@"CREATE TABLE `{schema}`.`{parent}` (Code VARCHAR(20) COLLATE utf8mb4_general_ci NOT NULL, CONSTRAINT PK_{parent} PRIMARY KEY (Code))";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $@"CREATE TABLE `{schema}`.`{stranger}` (Id INT NOT NULL PRIMARY KEY, Code VARCHAR(20) COLLATE utf8mb4_general_ci NOT NULL,
+                                  CONSTRAINT FK_{stranger} FOREIGN KEY (Code) REFERENCES `{schema}`.`{parent}`(Code))";
+            cmd.ExecuteNonQuery();
+
+            var ex = Assert.Catch(() => RunFullQuench(cmd, json, product, schema));
+            Assert.That(ex!.Message, Does.Contain($"FK_{stranger}"));
+
+            cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '{schema}' AND CONSTRAINT_NAME = 'FK_{stranger}'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the key is still there");
+        }
+        finally
+        {
+            DropPrivateDdlDatabase(cmd, schema, product);
+        }
+        conn.Close();
+    }
+
     /// <summary>
     /// A private target database for a test that runs DDL.
     /// <para>The fixture's six read-only tests happily share <c>TestSchema</c>, but the two collation

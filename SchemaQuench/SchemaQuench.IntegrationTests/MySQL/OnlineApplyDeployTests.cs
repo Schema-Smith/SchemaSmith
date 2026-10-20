@@ -70,7 +70,8 @@ public class OnlineApplyDeployTests
                 config["OnlineApply"] = "Prefer";
                 _environment.ClearReceivedCalls();
                 Program.Main(["SkipKindlingForge"]);
-                _environment.DidNotReceive().Exit(Arg.Is<int>(code => code != 0));
+                // 1 is a finished run that reported a downgrade, which this package has below MySQL 8.0.16 (its checks).
+                _environment.DidNotReceive().Exit(Arg.Is<int>(code => code >= 2));
 
                 var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
                 var details = (JArray)summary.SelectToken("objectChanges.details")!;
