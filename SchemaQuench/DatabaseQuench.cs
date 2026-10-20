@@ -264,7 +264,8 @@ public class DatabaseQuench
     private int _mySqlServerVersionNum; // 0 until detected (major*100+minor); only meaningful for MySQL/MariaDb
     private int _sqlServerCompatibilityLevel; // 0 until detected; SQL-Server-only; gates JSON data delivery below 130 (B1 slice 2)
     private bool _skipUnchangedObjects = true; // Target:SkipUnchangedObjects (default true)
-    private bool _tablesChangedThisRun;
+    private readonly HashSet<string> _tablesChangedThisRun = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _tablesChangedGate = new();
     private bool _stampWriteFailureLogged;
     private string _unsupportedFeaturePolicy; // Target:UnsupportedFeaturePolicy (warn | fail, default warn); general all-engine policy, not just the MySQL data-delivery gate
 
@@ -2848,19 +2849,77 @@ SET NOCOUNT ON
     }
 
     // A view takes its table's columns when it is created (SELECT * is expanded then, or its metadata fixed), so after a
-    // table change its text and its rendering can both match the stamp while it still describes the old table. When this
-    // run changed a table or a column, every view skipped as unchanged goes back to the after-tables pass, and no view is
-    // skipped from here on.
+    // table change its text and its rendering can both match the stamp while it still describes the old table. A view
+    // skipped as unchanged whose text names a table this run changed, or names such a view, goes back to the
+    // after-tables pass, and none is skipped from here on. They go to the end of their list with each after the views it
+    // reads, since a view re-created ahead of the one it reads would take that one's old shape.
     private void RequeueViewsOverChangedTables(IReadOnlyList<ChangeAuditRow> rows)
     {
-        if (!rows.Any(r => r.ObjectType is "table" or "column" && r.Action is "created" or "modified" or "dropped" or "renamed" or "rebuilt")) return;
-        _tablesChangedThisRun = true;
-        foreach (var script in _iteration.ObjectScripts.Concat(_iteration.AfterTablesObjectScripts)
-                     .Where(s => s.Outcome == ScriptOutcome.Unchanged && ModuleScriptIdentity.Parse(s.Batches, _product.Platform) is { Kind: ModuleKind.View }))
+        var changed = rows.Where(r => r.ObjectType is "table" or "column" && r.Action is "created" or "modified" or "dropped" or "renamed" or "rebuilt")
+            .Select(r => TableNameOf(r.ObjectType, r.ObjectName)).Where(n => n != null).ToList();
+        if (changed.Count == 0) return;
+        lock (_tablesChangedGate)
         {
-            script.HasBeenQuenched = false;
-            script.Outcome = ScriptOutcome.Applied;
-            ChangeAudit?.Retract(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged");
+            _tablesChangedThisRun.UnionWith(changed);
+            var skippedViews = _iteration.ObjectScripts.Concat(_iteration.AfterTablesObjectScripts)
+                .Where(s => s.Outcome == ScriptOutcome.Unchanged)
+                .Select(s => (Script: s, Identity: ModuleScriptIdentity.Parse(s.Batches, _product.Platform)))
+                .Where(v => v.Identity is { Kind: ModuleKind.View }).ToList();
+            var requeued = new List<(SqlScript Script, ModuleScriptIdentity Identity)>();
+            List<(SqlScript Script, ModuleScriptIdentity Identity)> found;
+            do
+            {
+                found = skippedViews.Where(v => v.Script.Outcome == ScriptOutcome.Unchanged && NamesAChangedTable(v.Script)).ToList();
+                foreach (var view in found)
+                {
+                    view.Script.HasBeenQuenched = false;
+                    view.Script.Outcome = ScriptOutcome.Applied;
+                    ChangeAudit?.Retract(ObjectScriptClassifier.Classify(view.Script.LogPath), view.Script.LogPath, "unchanged");
+                    _tablesChangedThisRun.Add(view.Identity.Name);
+                    requeued.Add(view);
+                }
+            } while (found.Count > 0);
+
+            foreach (var view in ReadersLast(requeued))
+                foreach (var list in new[] { _iteration.ObjectScripts, _iteration.AfterTablesObjectScripts }.Where(l => l.Remove(view)))
+                    list.Add(view);
+        }
+    }
+
+    private static List<SqlScript> ReadersLast(List<(SqlScript Script, ModuleScriptIdentity Identity)> views)
+    {
+        var ordered = new List<SqlScript>();
+        var remaining = views.ToList();
+        while (remaining.Count > 0)
+        {
+            var next = remaining.FirstOrDefault(v => !remaining.Any(other => other != v && Mentions(string.Join("\n", v.Script.Batches), other.Identity.Name)));
+            if (next.Script == null) next = remaining[0];
+            ordered.Add(next.Script);
+            remaining.Remove(next);
+        }
+        return ordered;
+    }
+
+    private static bool Mentions(string text, string name) =>
+        Regex.IsMatch(text, $@"(?<![\w$#@]){Regex.Escape(name)}(?![\w$#@])", RegexOptions.IgnoreCase);
+
+    private static readonly Regex AuditNamePart = new(@"\[([^\]]+)\]|""([^""]+)""|`([^`]+)`|([^.\s\[\]""`]+)", RegexOptions.Compiled);
+
+    // A table row names [schema.]table, a column row [schema.]table.column; the table is the bare name either way.
+    private static string TableNameOf(string objectType, string objectName)
+    {
+        var parts = AuditNamePart.Matches(objectName.Split(" (")[0]).Select(m => m.Groups.Values.Skip(1).First(g => g.Success).Value).ToList();
+        var index = objectType == "column" ? parts.Count - 2 : parts.Count - 1;
+        return index >= 0 ? parts[index] : null;
+    }
+
+    private bool NamesAChangedTable(SqlScript script)
+    {
+        lock (_tablesChangedGate)
+        {
+            if (_tablesChangedThisRun.Count == 0) return false;
+            var text = string.Join("\n", script.Batches);
+            return _tablesChangedThisRun.Any(name => Mentions(text, name));
         }
     }
 
@@ -3101,7 +3160,7 @@ SET NOCOUNT ON
             {
                 if (reader.Read()) { storedText = reader.GetString(0); storedDefinition = reader.GetString(1); }
             }
-            if (storedText == textHash && !(_tablesChangedThisRun && identity.Kind == ModuleKind.View))
+            if (storedText == textHash && !(identity.Kind == ModuleKind.View && NamesAChangedTable(script)))
             {
                 var rendering = ModuleDefinitionReader.Read(destCmd, _product.Platform, identity);
                 unchanged = rendering != null && Sha256(rendering) == storedDefinition;

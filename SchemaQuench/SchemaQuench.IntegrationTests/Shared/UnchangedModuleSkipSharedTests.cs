@@ -32,6 +32,7 @@ public abstract class UnchangedModuleSkipSharedTests : ObjectScriptDeployFixture
     [SetUp]
     public void SetUp()
     {
+        Exec(DropOverView);
         foreach (var drop in DropStatements) Exec(drop);
         WritePackage(Scripts);
     }
@@ -39,6 +40,7 @@ public abstract class UnchangedModuleSkipSharedTests : ObjectScriptDeployFixture
     [OneTimeTearDown]
     public void DropObjects()
     {
+        Exec(DropOverView);
         foreach (var drop in DropStatements) Exec(drop);
     }
 
@@ -88,28 +90,70 @@ public abstract class UnchangedModuleSkipSharedTests : ObjectScriptDeployFixture
         var starView = Scripts["Views"].Replace("SELECT x FROM", "SELECT * FROM").Replace("select `x` from", "select * from");
         Assert.That(starView, Is.Not.EqualTo(Scripts["Views"]), "setup: the view must read every column");
         var scripts = new Dictionary<string, string>(Scripts) { ["Views"] = starView };
-        var schema = Platform switch { Platform.SqlServer => "dbo", Platform.PostgreSQL => "public", _ => MainDb };
-        long ViewColumns() => Count($"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = 'v_unchanged'");
 
         WritePackage(scripts);
         Deploy();
         Assert.That(Deploy().Outcomes["Views"], Is.EqualTo(ScriptOutcome.Unchanged), "setup: the view is stamped");
-        Assert.That(ViewColumns(), Is.EqualTo(2), "setup");
+        Assert.That(ViewColumns("v_unchanged"), Is.EqualTo(2), "setup");
 
-        var widened = Regex.Replace(TableJson, @"\{ ""Name"": ""(\[?`?)w(\]?`?)"", ""DataType"": ""([^""]+)"", ""Nullable"": true \}",
-            m => m.Value + $@", {{ ""Name"": ""{m.Groups[1].Value}z{m.Groups[2].Value}"", ""DataType"": ""{m.Groups[3].Value}"", ""Nullable"": true }}");
-        Assert.That(widened, Is.Not.EqualTo(TableJson), "setup: the table gains a column");
-        WritePackage(scripts, tableJson: widened);
+        WritePackage(scripts, tableJson: WidenedTableJson());
         var third = Deploy();
         Assert.Multiple(() =>
         {
-            Assert.That(ViewColumns(), Is.EqualTo(3), "the view shows the column its table gained: " + third.Describe());
+            Assert.That(ViewColumns("v_unchanged"), Is.EqualTo(3), "the view shows the column its table gained: " + third.Describe());
             Assert.That(third.Outcomes["Views"], Is.EqualTo(ScriptOutcome.Applied));
         });
 
         var fourth = Deploy().Outcomes;
         Assert.That(fourth.Values, Is.All.EqualTo(ScriptOutcome.Unchanged), "the re-run view is stamped again: " + Describe(fourth));
     }
+
+    // A view over that view keeps the old column list too, though its text may name no table the deploy changed. One that
+    // also reads the table is found with the view it reads, and it sorts first: it must still be re-created after it.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AViewOverASelectStarView_PicksUpTheColumnToo(bool readsTheTableToo)
+    {
+        var starView = Scripts["Views"].Replace("SELECT x FROM", "SELECT * FROM").Replace("select `x` from", "select * from");
+        var tableRef = Platform switch { Platform.SqlServer => "dbo.unchanged_t", Platform.PostgreSQL => "public.unchanged_t", _ => "`unchanged_t`" };
+        var viewRef = tableRef.Replace("unchanged_t", "v_unchanged");
+        var overView = Regex.Replace(starView.Replace("v_unchanged", "v_unchanged_over"), @"\* FROM " + Regex.Escape(tableRef),
+            $"v.* FROM {viewRef} v" + (readsTheTableToo ? $" WHERE EXISTS (SELECT 1 FROM {tableRef})" : ""), RegexOptions.IgnoreCase);
+        Assert.That(overView, Does.Contain($"FROM {viewRef} v"), "setup: the second view reads the first");
+        var scripts = new Dictionary<string, string>(Scripts) { ["Views"] = starView };
+
+        WritePackage(scripts);
+        WriteFile("Views", "v_unchanged_over.sql", overView);
+        Deploy();
+        Deploy();
+        Assert.That(ViewColumns("v_unchanged_over"), Is.EqualTo(2), "setup");
+
+        WritePackage(scripts, tableJson: WidenedTableJson());
+        WriteFile("Views", "v_unchanged_over.sql", overView);
+        var third = Deploy();
+        Assert.That(ViewColumns("v_unchanged_over"), Is.EqualTo(3), "the view over the view shows the column too: " + third.Describe());
+    }
+
+    private string WidenedTableJson()
+    {
+        var widened = Regex.Replace(TableJson, @"\{ ""Name"": ""(\[?`?)w(\]?`?)"", ""DataType"": ""([^""]+)"", ""Nullable"": true \}",
+            m => m.Value + $@", {{ ""Name"": ""{m.Groups[1].Value}z{m.Groups[2].Value}"", ""DataType"": ""{m.Groups[3].Value}"", ""Nullable"": true }}");
+        Assert.That(widened, Is.Not.EqualTo(TableJson), "setup: the table gains a column");
+        return widened;
+    }
+
+    private long ViewColumns(string view)
+    {
+        var schema = Platform switch { Platform.SqlServer => "dbo", Platform.PostgreSQL => "public", _ => MainDb };
+        return Count($"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{view}'");
+    }
+
+    private string DropOverView => Platform switch
+    {
+        Platform.SqlServer => "DROP VIEW IF EXISTS [dbo].[v_unchanged_over]",
+        Platform.PostgreSQL => "DROP VIEW IF EXISTS public.v_unchanged_over",
+        _ => "DROP VIEW IF EXISTS `v_unchanged_over`"
+    };
 
     [Test]
     public void AlwaysMarker_Sentinel_RunScriptsTwice_AndTheSettingOff_RunEveryTime()
