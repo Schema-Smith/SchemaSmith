@@ -1,0 +1,23 @@
+{
+  "Target": {
+    "Server": "localhost",
+    "Port": "13306",
+    "User": "root",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": {},
+    "Databases": [
+      "diag_hygiene"
+    ]
+  },
+  "WhatIfONLY": false,
+  "SchemaPackagePath": "./package",
+  "KindleTheForge": true,
+  "ArtifactPath": "./artifacts",
+  "CheckpointDirectory": "./checkpoints",
+  "LogHygiene": {
+    "ScrubTokens": [
+      "DeployKey"
+    ],
+    "LogTokens": false
+  }
+}

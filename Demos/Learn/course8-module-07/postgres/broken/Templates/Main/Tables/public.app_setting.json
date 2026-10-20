@@ -1,0 +1,36 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "app_setting",
+  "Columns": [
+    {
+      "Name": "setting_name",
+      "DataType": "varchar(64)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "setting_value",
+      "DataType": "varchar(400)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_app_setting",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "setting_name",
+      "ShouldApplyExpression": "",
+      "VariantName": ""
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": ""
+}

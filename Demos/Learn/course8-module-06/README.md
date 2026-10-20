@@ -1,6 +1,6 @@
-# Course 8 · Module 6 — Per-engine dialects & your runbook (finale)
+# Course 8 · Module 6 — Per-engine dialects & your runbook
 
-The **finale** of Course 8. You've read SQL Server logs all course. Now the same failure lands on
+The last of Course 8's failure modules. You've read SQL Server logs all course. Now the same failure lands on
 PostgreSQL, MySQL, and MariaDB — and the error isn't where you expected, because **each database hands
 it back through a different door**. This module shows all three doors (MariaDB rides MySQL's), then has
 you assemble everything into a team diagnostic runbook.
@@ -109,8 +109,8 @@ evidence table, the per-platform error codes, and the recovery decision tree —
 log to grow over time. Copy it into your own repo. That's the deliverable: a one-page answer to
 "the deploy failed — now what?" on any of the four engines.
 
-## Course 8 complete
+## The method, on every engine
 
 You can now locate any failure's phase, read its artifact, name whose problem it is, and recover it —
 on SQL Server, PostgreSQL, MySQL, or MariaDB. For the lookup tables, see the SchemaSmith end-user
-reference (error codes & reporting channels). That's the course.
+reference (error codes & reporting channels). One module left: [Module 7](../course8-module-07/README.md) checks what a log gives away before you attach it to a ticket.

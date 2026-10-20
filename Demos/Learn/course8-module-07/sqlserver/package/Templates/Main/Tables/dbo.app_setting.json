@@ -1,0 +1,51 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[app_setting]",
+  "Columns": [
+    {
+      "Name": "[setting_name]",
+      "DataType": "VARCHAR(64)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
+      "EncryptionType": "NONE",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    },
+    {
+      "Name": "[setting_value]",
+      "DataType": "NVARCHAR(400)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
+      "EncryptionType": "NONE",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_app_setting]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "[setting_name]",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "CompressionType": "NONE",
+      "Clustered": true
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": "",
+  "Schema": "[dbo]",
+  "CompressionType": "NONE",
+  "XmlIndexes": [],
+  "Statistics": []
+}
