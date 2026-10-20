@@ -901,6 +901,12 @@ DDL runs, naming the table:
 > what the package asked for. Add the filegroup in a migration script, supplying the environment-specific path
 > through [script tokens](script-tokens.md), or drop `MemoryOptimized`.
 
+> **SQL Server 2014.** Only Enterprise, Developer and Evaluation editions host memory-optimized tables there, and
+> their In-Memory OLTP has no foreign keys, `CHECK` or `UNIQUE` constraints and no `(max)` columns on such a table
+> (2016 adds them; computed columns come in 2017). A 2014 memory-optimized table cannot be altered at all, so they
+> could not be added later either. A table that declares one is refused before anything changes, naming the table
+> and what it declares.
+
 ### Indexes are inline
 
 SQL Server rejects `CREATE INDEX` against a memory-optimized table, so every index is emitted inside the

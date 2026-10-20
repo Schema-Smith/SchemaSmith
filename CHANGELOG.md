@@ -78,6 +78,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Fixed
 
+- **SQL Server 2014: a memory-optimized table declaring what 2014 cannot carry is refused up front.** A foreign key, `CHECK` or `UNIQUE` constraint, `(max)` column (all 2016) or computed column (2017) on a `MemoryOptimized` table reached the engine and failed mid-deploy, on a table 2014 cannot alter afterwards. The deploy now refuses before any change, naming each table and what it declares.
 - **MySQL/MariaDB: the Deployment Summary missed columns dropped because the package no longer declared them — #572.** No change was recorded for the drop, nor its `wouldDrop` preview under `WhatIf`, so the summary counted none. Each is now recorded, as on the other engines.
 - **SQL Server: the Deployment Summary missed indexes created or dropped by an `IndexOnlyTableQuenches` template — #565.** The index-only path recorded no change for a regular index, primary key or unique constraint it created or dropped, or for an XML index it created, so the summary counted none of them. It now records each one, with its `wouldCreate` / `wouldDrop` preview under `WhatIf`.
 - **SQL Server: a nonclustered columnstore index declared with `IndexColumns` was silently not created — #555.** Its `CREATE` was built from `IncludeColumns` alone, so with that empty the statement came out empty and the deploy went on without the index. Either list now creates it, and a redeploy leaves it alone. Packages extracted by SchemaTongs, which writes `IncludeColumns`, were not affected.

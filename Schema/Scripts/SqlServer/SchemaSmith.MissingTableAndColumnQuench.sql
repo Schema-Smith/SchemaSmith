@@ -48,6 +48,40 @@ BEGIN TRY
     RAISERROR('Table %s is memory-optimized, but this database cannot host one: it needs In-Memory OLTP support (SERVERPROPERTY(''IsXTPSupported'') = 1) and a MEMORY_OPTIMIZED_DATA filegroup. SchemaSmith creates neither and does not degrade a memory-optimized table to a disk table (that would change its durability). Add the filegroup / use a supporting edition, or drop MemoryOptimized.', 16, 1, @v_MoTable)
   END
 
+  -- SS-125. SQL Server 2014's In-Memory OLTP has no foreign keys, CHECK or UNIQUE constraints and no (max) columns on a
+  -- memory-optimized table (all 2016), and no computed columns (2017); and 2014 cannot ALTER such a table at all, so
+  -- none can be added afterwards. Deploying the table without them would drop integrity the package declares, so the
+  -- table is refused here, naming each one, before any DDL.
+  IF SchemaSmith.fn_ServerMajorVersion() < 14 AND EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) WHERE t.[MemoryOptimized] = 1)
+  BEGIN
+    DECLARE @v_MoMajor INT = SchemaSmith.fn_ServerMajorVersion()
+    DECLARE @v_MoRefused NVARCHAR(MAX) =
+      STUFF((SELECT '; ' + f.[Table] + ' (' + STUFF(f.[Features], 1, 2, '') + ')'
+               FROM (SELECT t.[Schema] + '.' + t.[Name] AS [Table],
+                            CASE WHEN @v_MoMajor < 13 AND EXISTS (SELECT 1 FROM #ForeignKeys fk WITH (NOLOCK) WHERE fk.[Schema] = t.[Schema] AND fk.[TableName] = t.[Name])
+                                 THEN ', foreign keys' ELSE '' END +
+                            CASE WHEN @v_MoMajor < 13 AND (EXISTS (SELECT 1 FROM #CheckConstraints ck WITH (NOLOCK) WHERE ck.[Schema] = t.[Schema] AND ck.[TableName] = t.[Name])
+                                                           OR EXISTS (SELECT 1 FROM #Columns cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name]
+                                                                         AND RTRIM(ISNULL(cc.[CheckExpression], '')) <> ''))
+                                 THEN ', CHECK constraints' ELSE '' END +
+                            CASE WHEN @v_MoMajor < 13 AND EXISTS (SELECT 1 FROM #Indexes ix WITH (NOLOCK) WHERE ix.[Schema] = t.[Schema] AND ix.[TableName] = t.[Name]
+                                                                     AND ix.[PrimaryKey] = 0 AND (ix.[Unique] = 1 OR ix.[UniqueConstraint] = 1))
+                                 THEN ', UNIQUE indexes or constraints' ELSE '' END +
+                            CASE WHEN @v_MoMajor < 13 AND EXISTS (SELECT 1 FROM #Columns cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name]
+                                                                     AND cc.[DataType] LIKE '%(MAX)%')
+                                 THEN ', max-length columns' ELSE '' END +
+                            CASE WHEN EXISTS (SELECT 1 FROM #Columns cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name]
+                                                 AND RTRIM(ISNULL(cc.[ComputedExpression], '')) <> '')
+                                 THEN ', computed columns' ELSE '' END AS [Features]
+                       FROM #Tables t WITH (NOLOCK)
+                      WHERE t.[MemoryOptimized] = 1) f
+              WHERE f.[Features] <> ''
+              ORDER BY f.[Table]
+              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+    IF @v_MoRefused IS NOT NULL
+      RAISERROR('A memory-optimized table on SQL Server %d cannot carry what these declare: %s. Memory-optimized tables gain them in SQL Server 2016 (computed columns in 2017), and an existing one cannot be altered to add them on 2014; deploy to a later version, or leave them out of the package.', 16, 1, @v_MoMajor, @v_MoRefused)
+  END
+
   -- Partition placement (#partitioning, K1). Three checks, all BEFORE any DDL, because each one produces
   -- either a wrong physical layout or an engine error that names nothing useful.
   --

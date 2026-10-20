@@ -54,6 +54,8 @@ public class CapabilityDocumentationTests
         ["SqlServer/columnstore-nonclustered"] = "**Nonclustered columnstore index**",
         ["SqlServer/spatial-auto-grid"] = "**Spatial index AUTO_GRID tessellation**",
         ["SqlServer/spatial-compression"] = "**Spatial index compression**",
+        ["SqlServer/memory-optimized-constraints"] = "**Memory-optimized constraints**",
+        ["SqlServer/memory-optimized-computed"] = "**Memory-optimized computed columns**",
         ["SqlServer/online-index"] = "**Online index build**",
         ["SqlServer/online-alter-column"] = "**Online column change**",
         ["SqlServer/resumable-index"] = "**Resumable index build**",

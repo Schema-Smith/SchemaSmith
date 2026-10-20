@@ -77,6 +77,12 @@ namespace Schema.Capabilities
             // OnlineApply Prefer: below these, or on an edition without online operations (Standard, Web, Express at any
             // version), the statement runs plain and the audit's Mode says "unavailable"; Require refuses instead. No
             // manifest row: nothing declared is changed, only how it is built.
+            // SS-125: a memory-optimized table declaring what 2014's In-Memory OLTP lacks is refused by name, because 2014
+            // cannot alter such a table to add it later.
+            rows.Add(new("memory-optimized-constraints", "Foreign keys, CHECK, UNIQUE and (max) columns on a memory-optimized table", Platform.SqlServer,
+                13, "SQL Server 2016", null, DegradeKind.Refused, null));
+            rows.Add(new("memory-optimized-computed", "Computed columns on a memory-optimized table", Platform.SqlServer,
+                14, "SQL Server 2017", null, DegradeKind.Refused, null));
             rows.Add(new("online-index", "Online index build", Platform.SqlServer,
                 11, "SQL Server 2012", null, DegradeKind.Reduced, null));
             rows.Add(new("online-alter-column", "Online column change", Platform.SqlServer,
