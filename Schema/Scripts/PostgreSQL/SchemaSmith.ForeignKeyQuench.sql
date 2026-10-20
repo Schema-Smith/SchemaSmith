@@ -43,8 +43,8 @@ BEGIN
                     CASE WHEN NULLIF(fk."MatchType", '') IS NOT NULL THEN ' MATCH ' || fk."MatchType" ELSE '' END ||
                     -- The referential actions precede DEFERRABLE in the grammar; after it they are a syntax error.
                     CASE WHEN NULLIF(fk."DeleteAction", '') IS NOT NULL THEN ' ON DELETE ' || fk."DeleteAction" ELSE '' END ||
-                    -- The subset SET NULL applies to (15+); a plain SET NULL sets every key column.
-                    CASE WHEN fk."DeleteAction" = 'SET NULL' AND NULLIF(fk."SetNullColumns", '') IS NOT NULL THEN ' (' || "SchemaSmith"."QuoteColumnList"(fk."SetNullColumns") || ')' ELSE '' END ||
+                    -- The subset SET NULL or SET DEFAULT applies to (15+); without it every key column is set.
+                    CASE WHEN fk."DeleteAction" IN ('SET NULL', 'SET DEFAULT') AND NULLIF(fk."SetNullColumns", '') IS NOT NULL THEN ' (' || "SchemaSmith"."QuoteColumnList"(fk."SetNullColumns") || ')' ELSE '' END ||
                     CASE WHEN NULLIF(fk."UpdateAction", '') IS NOT NULL THEN ' ON UPDATE ' || fk."UpdateAction" ELSE '' END ||
                     CASE WHEN fk."Deferrable" THEN ' DEFERRABLE' ELSE '' END ||
                     CASE WHEN fk."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE '' END ||

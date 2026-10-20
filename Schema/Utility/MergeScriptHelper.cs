@@ -1366,6 +1366,7 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
         var jsonValue = tokenizeScripts
             ? $"{{{{{contentToken}}}}}"
             : tableData?.Replace("'", "''");
+        var tag = PostgreSqlDataBlockTag(jsonValue);
 
         var modernDelete = pgServerVersionNum == 0 || pgServerVersionNum >= 17;
         // PostgreSQL MERGE is a v15 feature; below 15 the upsert is emitted as INSERT ... ON CONFLICT
@@ -1392,7 +1393,7 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
 
         mergeSQL = (string.IsNullOrEmpty(unsupportedComments) ? "" : unsupportedComments + "\n")
             + (string.IsNullOrEmpty(disableRuleStatements) ? "" : disableRuleStatements + "\n") + $@"
-DO $$
+DO {tag}
 DECLARE
 {jsonDeclareLine}  nextval BIGINT;
 BEGIN
@@ -1457,7 +1458,7 @@ WHEN MATCHED AND ({updateCompare}) THEN
 {(disableTriggers ? $"ALTER TABLE {(updateDescendents ? "" : "ONLY ")}\"{destSchema}\".\"{tableName}\" ENABLE TRIGGER ALL;" : "")}
 {(!string.IsNullOrEmpty(identAndSeq) ? $"SELECT SETVAL('{identAndSeq.Split("=")[1]}', (SELECT MAX(\"{identAndSeq.Split("=")[0]}\") FROM \"{destSchema}\".\"{tableName}\")) INTO nextval;" : "")}
 
-END $$ LANGUAGE plpgsql;
+END {tag} LANGUAGE plpgsql;
 " + (string.IsNullOrEmpty(enableRuleStatements) ? "" : "\n" + enableRuleStatements);
         }
 
@@ -1515,6 +1516,17 @@ DELETE FROM {(updateDescendents ? "" : "ONLY ")}""{destSchema}"".""{tableName}""
     /// re-seed, changed-only compare (IS DISTINCT FROM, with xml/json text/jsonb casts), and rule
     /// disable/enable wrapping.
     /// </summary>
+    // The data sits inside a dollar-quoted block, so a row value carrying the block's tag ($$ in a text column) would
+    // end the block mid-literal. The tag is one no PostgreSQL value is likely to hold, and one the inlined data does not.
+    internal static string PostgreSqlDataBlockTag(string content)
+    {
+        var tag = "$SchemaSmithData$";
+        var n = 0;
+        while (content != null && content.Contains(tag, StringComparison.Ordinal))
+            tag = $"$SchemaSmithData{++n}$";
+        return tag;
+    }
+
     private static string BuildPostgreSqlLegacyUpsert(IDbCommand cmd, string tableSchema, string tableName,
         string destSchema, bool updateDescendents, bool mergeUpdate, bool disableTriggers, string jsonValue,
         string jsonColumns, string keyColumns, string identAndSeq,
@@ -1569,9 +1581,10 @@ UPDATE {only}""{destSchema}"".""{tableName}"" AS ""Target""
             : $"OVERRIDING {identAndSeq.Split("=")[2]} VALUE\n  ";
 
         var jsonDeclareLine = isXml ? "" : $"  v_json JSON = '{jsonValue}';\n";
+        var tag = PostgreSqlDataBlockTag(jsonValue);
         return (string.IsNullOrEmpty(unsupportedComments) ? "" : unsupportedComments + "\n")
             + (string.IsNullOrEmpty(disableRuleStatements) ? "" : disableRuleStatements + "\n") + $@"
-DO $$
+DO {tag}
 DECLARE
 {jsonDeclareLine}  nextval BIGINT;
 BEGIN
@@ -1584,7 +1597,7 @@ INSERT INTO ""{destSchema}"".""{tableName}"" (
    WHERE NOT EXISTS (SELECT 1 FROM {only}""{destSchema}"".""{tableName}"" AS ""Target"" WHERE {matchColumns});
 {(disableTriggers ? $"ALTER TABLE {only}\"{destSchema}\".\"{tableName}\" ENABLE TRIGGER ALL;" : "")}
 {(!string.IsNullOrEmpty(identAndSeq) ? $"SELECT SETVAL('{identAndSeq.Split("=")[1]}', (SELECT MAX(\"{identAndSeq.Split("=")[0]}\") FROM \"{destSchema}\".\"{tableName}\")) INTO nextval;" : "")}
-END $$ LANGUAGE plpgsql;
+END {tag} LANGUAGE plpgsql;
 " + (string.IsNullOrEmpty(enableRuleStatements) ? "" : "\n" + enableRuleStatements);
     }
 

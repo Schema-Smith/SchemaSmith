@@ -743,8 +743,8 @@ public class MergeScriptHelperTests
         Assert.That(result, Does.Contain("JSON_ARRAY_ELEMENTS"));
         Assert.That(result, Does.Contain("WHEN NOT MATCHED"));
         Assert.That(result, Does.Contain("INSERT"));
-        Assert.That(result, Does.Contain("DO $$"));
-        Assert.That(result, Does.Contain("END $$ LANGUAGE plpgsql"));
+        Assert.That(result, Does.Contain("DO $SchemaSmithData$"));
+        Assert.That(result, Does.Contain("END $SchemaSmithData$ LANGUAGE plpgsql"));
     }
 
     [Test]
@@ -1681,9 +1681,9 @@ public class MergeScriptHelperTests
         Assert.That(result, Does.Contain("ENABLE RULE \"rule_insert_p1\""));
         Assert.That(result, Does.Contain("ENABLE RULE \"rule_insert_p2\""));
         // Disable statements should be outside the DO $$ block (before it)
-        Assert.That(result.IndexOf("DISABLE RULE"), Is.LessThan(result.IndexOf("DO $$")));
+        Assert.That(result.IndexOf("DISABLE RULE"), Is.LessThan(result.IndexOf("DO $SchemaSmithData$")));
         // Enable statements should be outside the DO $$ block (after it)
-        Assert.That(result.IndexOf("ENABLE RULE"), Is.GreaterThan(result.IndexOf("END $$ LANGUAGE plpgsql")));
+        Assert.That(result.IndexOf("ENABLE RULE"), Is.GreaterThan(result.IndexOf("END $SchemaSmithData$ LANGUAGE plpgsql")));
     }
 
     [Test]

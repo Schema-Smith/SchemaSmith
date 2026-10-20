@@ -150,6 +150,43 @@ public class DescriptionTests
         });
     }
 
+    // The comments were joined to ordinary tables only, so a partitioned table, its columns and its indexes never got one.
+    [Test]
+    public void DeclaredDescriptions_AreApplied_ToAPartitionedTable()
+    {
+        OnDb(cmd =>
+        {
+            Exec2(cmd, $"CREATE TABLE public.{Table} (id integer NOT NULL, v integer) PARTITION BY RANGE (id)");
+            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"" + Table + "\", \"Description\": \"all the orders\", \"Columns\": ["
+                        + " { \"Name\": \"id\", \"DataType\": \"integer\", \"Nullable\": false, \"Description\": \"the key\" },"
+                        + " { \"Name\": \"v\", \"DataType\": \"integer\", \"Nullable\": true } ],"
+                        + " \"Indexes\": [ { \"Name\": \"ix_" + Table + "_v\", \"IndexColumns\": \"v\", \"Description\": \"the lookup\" } ] }]");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Str(cmd, $"SELECT relkind::text FROM pg_class WHERE oid = 'public.{Table}'::regclass"), Is.EqualTo("p"), "setup: partitioned");
+                Assert.That(TableComment(cmd), Is.EqualTo("all the orders"));
+                Assert.That(ColumnComment(cmd), Is.EqualTo("the key"));
+                Assert.That(IndexComment(cmd, "ix_" + Table + "_v"), Is.EqualTo("the lookup"));
+            });
+        });
+    }
+
+    // The quench runs its statements inside a dollar-quoted block, and a $$ in a description ended it mid-statement.
+    [Test]
+    public void ADescriptionCarryingDollarQuotes_IsApplied()
+    {
+        OnDb(cmd =>
+        {
+            Deploy(cmd, Package(table: "costs $$ only", id: "it's $1"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(TableComment(cmd), Is.EqualTo("costs $$ only"));
+                Assert.That(ColumnComment(cmd), Is.EqualTo("it's $1"));
+            });
+        });
+    }
+
     [Test]
     public void AChangedDescription_IsUpdatedInPlace_AndAnUnchangedOne_IsNotTouched()
     {

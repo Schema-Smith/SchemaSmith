@@ -336,16 +336,17 @@ public sealed class CoherenceCheck : ISchemaCheck
             yield return new Finding(Severity.Error, CardinalityCode, Category, location,
                 $"Columns has {fkColumns.Count} entries but RelatedColumns has {fkRelatedColumns.Count} — FK column lists must be the same length.");
 
-        // SetNullColumns is the subset ON DELETE SET NULL applies to: it needs that action, and names only key columns.
+        // SetNullColumns is the subset ON DELETE SET NULL or SET DEFAULT applies to: it needs one of those actions, and
+        // names only key columns.
         if (fk is PostgreSqlForeignKey { SetNullColumns: not null } pgFk && !string.IsNullOrWhiteSpace(pgFk.SetNullColumns))
         {
-            if (!string.Equals(NormalizeAction(fk.DeleteAction), "SET NULL", StringComparison.OrdinalIgnoreCase))
+            if (NormalizeAction(fk.DeleteAction)?.ToUpperInvariant() is not ("SET NULL" or "SET DEFAULT"))
                 yield return new Finding(Severity.Error, SetNullColumnsCode, Category, location,
-                    $"SetNullColumns is set but DeleteAction is '{fk.DeleteAction ?? "NO ACTION"}': the subset applies to ON DELETE SET NULL alone, so set DeleteAction to SET NULL or remove SetNullColumns.");
+                    $"SetNullColumns is set but DeleteAction is '{fk.DeleteAction ?? "NO ACTION"}': the subset applies to ON DELETE SET NULL or SET DEFAULT alone, so set one of those or remove SetNullColumns.");
             var keyColumns = fkColumns.Select(NormalizeIdentifier).ToHashSet(StringComparer.Ordinal);
             foreach (var column in SplitNames(pgFk.SetNullColumns).Where(column => !keyColumns.Contains(NormalizeIdentifier(column))))
                 yield return new Finding(Severity.Error, SetNullColumnsCode, Category, location,
-                    $"SetNullColumns names '{column}', which is not one of the key's Columns: only a key column can be set to NULL on delete.");
+                    $"SetNullColumns names '{column}', which is not one of the key's Columns: only a key column can be set on delete.");
         }
 
         var (schema, name) = ResolveRelatedTarget(table, fk);

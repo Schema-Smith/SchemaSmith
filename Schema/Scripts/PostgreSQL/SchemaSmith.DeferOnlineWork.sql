@@ -20,3 +20,32 @@ BEGIN
       VALUES (p_Description, p_Statement, p_CleanupIndex, p_FollowUp);
   END IF;
 END $$;
+
+-- An index whose build is queued is not in the catalog until the queue runs, so a statement that names it (CLUSTER ON,
+-- REPLICA IDENTITY USING INDEX) is queued behind the build rather than run now. Only a build names a CleanupIndex.
+CREATE OR REPLACE FUNCTION "SchemaSmith"."OnlineBuildQueued"(p_Schema TEXT, p_Index TEXT) RETURNS BOOLEAN
+    LANGUAGE plpgsql
+  SET jit = 'off'
+AS $$
+DECLARE
+  v_queued BOOLEAN;
+BEGIN
+  IF to_regclass('pg_temp.temp_deferred_online_work') IS NULL THEN
+    RETURN FALSE;
+  END IF;
+  EXECUTE 'SELECT EXISTS (SELECT 1 FROM pg_temp.temp_deferred_online_work WHERE "CleanupIndex" = $1)'
+     INTO v_queued USING "SchemaSmith"."QuoteName"(p_Schema) || '.' || "SchemaSmith"."QuoteName"(p_Index);
+  RETURN v_queued;
+END $$;
+
+-- The statement as it is run: now, or queued behind the build of the index it names.
+CREATE OR REPLACE FUNCTION "SchemaSmith"."AfterOnlineBuild"(p_Schema TEXT, p_Index TEXT, p_Description TEXT, p_Statement TEXT) RETURNS TEXT
+    LANGUAGE plpgsql
+  SET jit = 'off'
+AS $$
+BEGIN
+  IF p_Index IS NULL OR NOT "SchemaSmith"."OnlineBuildQueued"(p_Schema, p_Index) THEN
+    RETURN p_Statement;
+  END IF;
+  RETURN 'CALL "SchemaSmith"."DeferOnlineWork"(' || quote_literal(p_Description) || ', ' || quote_literal(p_Statement) || ', NULL, NULL);';
+END $$;

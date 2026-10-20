@@ -349,10 +349,10 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
         {
             Seed(s, "onl_nv");
             s.Sql("ALTER TABLE public.onl_nv ADD CONSTRAINT ck_onl_nv_id CHECK (id > 0) NOT VALID");
-            Deploy(s, Table("onl_nv", IdAndA, """, "CheckConstraints": [{ "Name": "ck_onl_nv_id", "Expression": "id > 0" }]"""), "PREFER");
+            Deploy(s, Table("onl_nv", IdAndA, """, "CheckConstraints": [{ "Name": "ck_onl_nv_id", "Expression": "id > 0", "Validated": true }]"""), "PREFER");
             Assert.Multiple(() =>
             {
-                Assert.That(ConstraintDef(s, "ck_onl_nv_id"), Is.EqualTo("CHECK ((id > 0))"));
+                Assert.That(ConstraintDef(s, "ck_onl_nv_id"), Is.EqualTo("CHECK ((id > 0))"), "the declared Validated true validates it");
                 Assert.That(Mode(s, "public.onl_nv.ck_onl_nv_id", "modified"), Is.EqualTo("online"));
             });
         }
@@ -397,6 +397,26 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
             });
         }
         finally { s.Sql($"DROP TABLE IF EXISTS public.{table} CASCADE"); }
+    }
+
+    // Index names are per schema. The drop of an index the package moved to another table waited for the end of the
+    // pass, while that table's plain build ran inside it and found the name taken.
+    [Test]
+    public void Prefer_IndexOnly_AnIndexMovedToATableBuiltInThePass_IsDroppedFirst()
+    {
+        using var s = Open();
+        try
+        {
+            Seed(s, "onl_mv_a");
+            Seed(s, "onl_mv_b");
+            s.Sql("CREATE INDEX ix_onl_mv ON public.onl_mv_a (a)");
+            var json = "[" + Table("onl_mv_a", IdAndA, """, "Indexes": []""") + ", "
+                           + Table("onl_mv_b", IdAndA, """, "Indexes": [{ "Name": "ix_onl_mv", "IndexColumns": "a" }]""", tableOnline: "Off") + "]";
+            Assert.DoesNotThrow(() => Deploy(s, json, "PREFER", indexOnly: true, dropUnknownIndexes: true));
+            Assert.That(s.Scalar("SELECT tc.relname FROM pg_class i JOIN pg_index idx ON idx.indexrelid = i.oid JOIN pg_class tc ON tc.oid = idx.indrelid WHERE i.relname = 'ix_onl_mv'")?.ToString(),
+                Is.EqualTo("onl_mv_b"));
+        }
+        finally { s.Sql("DROP TABLE IF EXISTS public.onl_mv_a CASCADE; DROP TABLE IF EXISTS public.onl_mv_b CASCADE"); }
     }
 
     [Test]

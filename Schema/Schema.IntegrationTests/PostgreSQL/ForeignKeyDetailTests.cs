@@ -81,7 +81,7 @@ public class ForeignKeyDetailTests
         Exec("CALL \"SchemaSmith\".\"TableQuench\"('" + Product + "', $ss$" + json + "$ss$, false, false, false)");
 
     /// <param name="fk">Keys appended to the foreign key, e.g. <c>, "SetNullColumns": "parent_id"</c>.</param>
-    private static string Package(string fk = "") =>
+    private static string Package(string fk = "", string deleteAction = "SET NULL") =>
         "[{ \"Schema\": \"public\", \"Name\": \"" + Parent + "\", \"Columns\": ["
         + " { \"Name\": \"id\", \"DataType\": \"integer\", \"Nullable\": false },"
         + " { \"Name\": \"code\", \"DataType\": \"integer\", \"Nullable\": false } ],"
@@ -91,7 +91,7 @@ public class ForeignKeyDetailTests
         + " { \"Name\": \"parent_id\", \"DataType\": \"integer\", \"Nullable\": true },"
         + " { \"Name\": \"parent_code\", \"DataType\": \"integer\", \"Nullable\": true } ],"
         + " \"Indexes\": [ { \"Name\": \"pk_" + Table + "\", \"IndexColumns\": \"id\", \"PrimaryKey\": true, \"Unique\": true } ],"
-        + " \"ForeignKeys\": [ { \"Name\": \"" + Fk + "\", \"Columns\": \"parent_id,parent_code\", \"RelatedTableSchema\": \"public\", \"RelatedTable\": \"" + Parent + "\", \"RelatedColumns\": \"id,code\", \"DeleteAction\": \"SET NULL\"" + fk + " } ] }]";
+        + " \"ForeignKeys\": [ { \"Name\": \"" + Fk + "\", \"Columns\": \"parent_id,parent_code\", \"RelatedTableSchema\": \"public\", \"RelatedTable\": \"" + Parent + "\", \"RelatedColumns\": \"id,code\", \"DeleteAction\": \"" + deleteAction + "\"" + fk + " } ] }]";
 
     /// <summary>The key's definition as the engine prints it, its match type, and its oid.</summary>
     private (string Def, char Match, long Oid) Key()
@@ -136,6 +136,27 @@ public class ForeignKeyDetailTests
             Assert.That(plain.Def, Does.EndWith("ON DELETE SET NULL"), "every column, as a plain SET NULL does");
             Assert.That(plain.Oid, Is.Not.EqualTo(first.Oid), "a changed subset is a drop and re-create");
             Assert.That(Extracted().SetNullColumns, Is.Null.Or.Empty);
+        });
+    }
+
+    // The subset was emitted for SET NULL alone: a SET DEFAULT key lost it whenever it was re-created, then churned.
+    [Test]
+    public void SetDefaultColumns_Deploy_KeepTheirSubsetWhenTheKeyIsRecreated_AndThenStayPut()
+    {
+        if (ServerMajor() < 15) Assert.Ignore("ON DELETE SET DEFAULT (columns) is PostgreSQL 15+");
+
+        Deploy(Package(", \"SetNullColumns\": \"parent_code\"", "SET DEFAULT"));
+        Assert.That(Key().Def, Does.EndWith("ON DELETE SET DEFAULT (parent_code)"));
+
+        Deploy(Package(", \"SetNullColumns\": \"parent_code\", \"UpdateAction\": \"CASCADE\"", "SET DEFAULT"));
+        var recreated = Key();
+        Assert.That(recreated.Def, Does.Contain("ON DELETE SET DEFAULT (parent_code)"), "re-created for its update action, the subset kept");
+
+        Deploy(Package(", \"SetNullColumns\": \"parent_code\", \"UpdateAction\": \"CASCADE\"", "SET DEFAULT"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(Key().Oid, Is.EqualTo(recreated.Oid), "an unchanged key is not re-created");
+            Assert.That(Extracted().SetNullColumns, Is.EqualTo("parent_code"));
         });
     }
 

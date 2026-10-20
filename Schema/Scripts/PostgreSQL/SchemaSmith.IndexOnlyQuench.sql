@@ -384,12 +384,13 @@ BEGIN
 
     RAISE NOTICE 'Drop Unknown, Removed, and Modified Indexes';
     -- OnlineApply: an index the package no longer declares is dropped CONCURRENTLY after this procedure. A changed one
-    -- is dropped here, because the add pass below builds it again only once it is gone.
+    -- is dropped here, because the add pass below builds it again only once it is gone -- and so is one whose name the
+    -- package now gives an index on another table: names are per schema, so that build would find the name taken.
     UPDATE temp_indexes_to_drop ti
        SET "Online" = TRUE
      WHERE NOT ti."IsConstraint"
        AND NOT EXISTS (SELECT 1 FROM temp_indexes i
-                        WHERE i."TableSchema" = ti."TableSchema" AND i."TableName" = ti."TableName" AND i."Name" = ti."IndexName")
+                        WHERE i."TableSchema" = ti."TableSchema" AND i."Name" = ti."IndexName")
        AND "SchemaSmith"."OnlineApplyForm"(p_OnlineApply, ti."TableSchema", ti."TableName", 'index') = 'online';
     SELECT STRING_AGG(CASE WHEN ti."Online"
                            THEN 'RAISE NOTICE ''  Dropping Index ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ' (online, after this pass)'';' || CHR(10) ||
@@ -519,10 +520,11 @@ BEGIN
 
     RAISE NOTICE 'Fixup Table Cluster';
     SELECT STRING_AGG('RAISE NOTICE ''  Fixing up attributes for ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
-                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
-                      CASE WHEN new_clust."NewCluster" IS NOT NULL 
-                           THEN 'CLUSTER ON ' || "SchemaSmith"."QuoteName"("NewCluster")
-                           ELSE 'SET WITHOUT CLUSTER' END || ';', CHR(10))
+                      "SchemaSmith"."AfterOnlineBuild"(t."Schema", new_clust."NewCluster", 'Clustering ' || t."Schema" || '.' || t."Name" || ' on ' || new_clust."NewCluster",
+                        'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
+                        CASE WHEN new_clust."NewCluster" IS NOT NULL
+                             THEN 'CLUSTER ON ' || "SchemaSmith"."QuoteName"("NewCluster")
+                             ELSE 'SET WITHOUT CLUSTER' END || ';'), CHR(10))
       INTO sql_script
       FROM temp_tables t
       LEFT JOIN (SELECT ti."TableSchema", ti."TableName", ti."Name" AS "NewCluster"

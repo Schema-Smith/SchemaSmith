@@ -17,11 +17,11 @@ public class PostgreSqlOnlineWorkTests
     private const string DropInvalid = "DROP INDEX CONCURRENTLY IF EXISTS \"public\".\"ix\"";
 
     // A command whose queue holds one build, and which fails that build the given number of times.
-    private static (IDbCommand Command, List<string> Executed) Queue(int failures, string cleanup = Cleanup)
+    private static (IDbCommand Command, List<string> Executed) Queue(int failures, string cleanup = Cleanup, bool leavesInvalidIndex = true)
     {
         var command = Substitute.For<IDbCommand>();
         command.Parameters.Returns(Substitute.For<IDataParameterCollection>());
-        command.ExecuteScalar().Returns(true);
+        command.ExecuteScalar().Returns(_ => !command.CommandText.Contains("indisvalid") || leavesInvalidIndex);
         var reader = Substitute.For<IDataReader>();
         reader.Read().Returns(true, false);
         reader.GetString(0).Returns("Building Index public.t.ix concurrently");
@@ -64,6 +64,15 @@ public class PostgreSqlOnlineWorkTests
 
         Assert.Throws<BuildFailedException>(() => PostgreSqlOnlineWork.Run(command, _ => { }, _ => { }));
         Assert.That(executed, Is.EqualTo(new[] { Build, DropInvalid, Build, DropInvalid }));
+    }
+
+    [Test]
+    public void ABuildWhoseNameIsTakenByAValidIndex_FailsAtOnce_AndLeavesThatIndexAlone()
+    {
+        var (command, executed) = Queue(failures: 1, leavesInvalidIndex: false);
+
+        Assert.Throws<BuildFailedException>(() => PostgreSqlOnlineWork.Run(command, _ => { }, _ => { }));
+        Assert.That(executed, Is.EqualTo(new[] { Build }), "a valid index of the same name belongs to another table; dropping it loses it");
     }
 
     [Test]

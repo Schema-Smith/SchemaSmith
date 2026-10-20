@@ -247,10 +247,11 @@ BEGIN
 
   RAISE NOTICE 'Fixup Table Cluster';
   SELECT STRING_AGG('RAISE NOTICE ''  Fixing up attributes for ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
-                    'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
-                    CASE WHEN new_clust."NewCluster" IS NOT NULL 
-                         THEN 'CLUSTER ON ' || "SchemaSmith"."QuoteName"(new_clust."NewCluster")
-                         ELSE 'SET WITHOUT CLUSTER' END || ';', CHR(10))
+                    "SchemaSmith"."AfterOnlineBuild"(t."Schema", new_clust."NewCluster", 'Clustering ' || t."Schema" || '.' || t."Name" || ' on ' || new_clust."NewCluster",
+                      'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
+                      CASE WHEN new_clust."NewCluster" IS NOT NULL
+                           THEN 'CLUSTER ON ' || "SchemaSmith"."QuoteName"(new_clust."NewCluster")
+                           ELSE 'SET WITHOUT CLUSTER' END || ';'), CHR(10))
     INTO sql_script
     FROM temp_tables t
     LEFT JOIN (SELECT ti."TableSchema", ti."TableName", ti."Name" AS "NewCluster"

@@ -110,6 +110,144 @@ public class OnlineApplyDeployTests
         }
     }
 
+    [Test]
+    public void OnlineApplyPrefer_ANewIndexThatClustersTheTableAndCarriesItsReplicaIdentity_IsBuiltFirst_AndEveryDeploySucceeds()
+    {
+        WithDeployedPackage((tempDir, cmd, config) =>
+        {
+            EditKeeper(tempDir, root =>
+            {
+                ((JArray)root["Indexes"]!).Add(JObject.Parse("""{ "Name": "UX_KeeperTable_Id", "Unique": true, "Clustered": true, "IndexColumns": "Id" }"""));
+                root["ReplicaIdentity"] = "INDEX";
+                root["ReplicaIdentityIndex"] = "UX_KeeperTable_Id";
+            });
+            config["OnlineApply"] = "Prefer";
+            for (var deploy = 1; deploy <= 2; deploy++)
+            {
+                _environment.ClearReceivedCalls();
+                Program.Main(["SkipKindlingForge"]);
+                _environment.DidNotReceive().Exit(Arg.Is<int>(code => code != 0));
+            }
+
+            cmd.CommandText = "SELECT idx.indisvalid::text || '|' || idx.indisclustered::text || '|' || idx.indisreplident::text " +
+                              "FROM pg_class i JOIN pg_index idx ON idx.indexrelid = i.oid WHERE i.relname = 'UX_KeeperTable_Id'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("true|true|true"), "the index is valid, clusters the table and carries its replica identity");
+        });
+    }
+
+    [Test]
+    public void OnlineApplyPrefer_AnIndexWhoseNameAnotherTablesIndexHolds_FailsTheDeploy_AndLeavesThatIndexInPlace()
+    {
+        WithDeployedPackage((tempDir, cmd, config) =>
+        {
+            cmd.CommandText = "CREATE INDEX \"IX_Taken\" ON public.\"ProtectedTable\" (\"Id\")";
+            cmd.ExecuteNonQuery();
+            EditKeeper(tempDir, root => ((JArray)root["Indexes"]!).Add(JObject.Parse("""{ "Name": "IX_Taken", "IndexColumns": "Notes" }""")));
+            config["OnlineApply"] = "Prefer";
+            _environment.ClearReceivedCalls();
+            Program.Main(["SkipKindlingForge"]);
+
+            _environment.Received().Exit(Arg.Is<int>(code => code != 0));
+            cmd.CommandText = "SELECT tc.relname || '|' || idx.indisvalid::text FROM pg_class i JOIN pg_index idx ON idx.indexrelid = i.oid " +
+                              "JOIN pg_class tc ON tc.oid = idx.indrelid WHERE i.relname = 'IX_Taken'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("ProtectedTable|true"), "the other table keeps its index; the name clash fails the deploy, as it does without OnlineApply");
+        });
+    }
+
+    // The templates are loaded and checked before the product's Before scripts run, so a target naming no template stops
+    // the deploy with the database as it was. Engine-independent: the order is the product run's, tested on one engine.
+    [Test]
+    public void ATargetNamingNoTemplate_StopsTheDeploy_BeforeTheProductsBeforeScriptsRun()
+    {
+        WithDeployedPackage((tempDir, cmd, config) =>
+        {
+            var product = Path.Join(tempDir, "Product.json");
+            var root = JObject.Parse(File.ReadAllText(product));
+            root["ScriptFolders"] = JArray.Parse("""[{ "FolderPath": "Before", "QuenchSlot": "Before" }]""");
+            File.WriteAllText(product, root.ToString());
+            Directory.CreateDirectory(Path.Join(tempDir, "Before"));
+            // A product script runs on the server's own database, not the template's.
+            File.WriteAllText(Path.Join(tempDir, "Before", "marker.sql"), "CREATE TABLE IF NOT EXISTS public.\"BeforeRanMarker\" (id int);");
+            using var server = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+            server.Open();
+            using var serverCmd = server.CreateCommand();
+            const string marker = "SELECT to_regclass('public.\"BeforeRanMarker\"') IS NOT NULL";
+            _environment.ClearReceivedCalls();
+            Program.Main(["SkipKindlingForge"]);
+            serverCmd.CommandText = marker;
+            Assert.That(serverCmd.ExecuteScalar(), Is.True, "setup: a deploy runs the Before script, or the check below proves nothing");
+            serverCmd.CommandText = "DROP TABLE public.\"BeforeRanMarker\"";
+            serverCmd.ExecuteNonQuery();
+
+            const string unknownTarget = "Target:TemplateTargets:NoSuchTemplate:Databases:0";
+            config[unknownTarget] = "x";
+            try
+            {
+                _environment.ClearReceivedCalls();
+                Program.Main(["SkipKindlingForge"]);
+                _environment.Received().Exit(Arg.Is<int>(code => code >= 2));
+            }
+            finally
+            {
+                config[unknownTarget] = null;
+            }
+
+            serverCmd.CommandText = marker;
+            var ran = serverCmd.ExecuteScalar();
+            serverCmd.CommandText = "DROP TABLE IF EXISTS public.\"BeforeRanMarker\"";
+            serverCmd.ExecuteNonQuery();
+            Assert.That(ran, Is.False, "the Before script must not have run");
+        });
+    }
+
+    private void WithDeployedPackage(Action<string, System.Data.IDbCommand, IConfigurationRoot> body)
+    {
+        var tempDir = Path.Join(Path.GetTempPath(), $"OnlineApplyPg_{Guid.NewGuid():N}");
+        lock (FactoryContainer.SharedLockObject)
+        {
+            _environment.ClearReceivedCalls();
+            FactoryContainer.Register(_environment);
+            LogFactory.Register("ErrorLog", _errorLog);
+            LogFactory.Register("ProgressLog", _progressLog);
+            CopyDirectory(TestHelper.GetTestProductPath("PostgreSQL", "StickyPreventDrop"), tempDir);
+
+            using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+            conn.Open();
+            conn.ChangeDatabase(_mainDb);
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 300;
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            try
+            {
+                config["SchemaPackagePath"] = tempDir;
+                Program.Main(["SkipKindlingForge"]);
+                _environment.DidNotReceive().Exit(Arg.Is<int>(code => code != 0));
+                cmd.CommandText = "INSERT INTO public.\"KeeperTable\" (\"Id\", \"Notes\") SELECT g, 'n' || g FROM generate_series(1, 100) g";
+                cmd.ExecuteNonQuery();
+                body(tempDir, cmd, config);
+            }
+            finally
+            {
+                config["OnlineApply"] = string.Empty;
+                config["SchemaPackagePath"] = string.Empty;
+                cmd.CommandText = "DROP TABLE IF EXISTS public.\"RemovableTable\" CASCADE; DROP TABLE IF EXISTS public.\"ProtectedTable\" CASCADE; DROP TABLE IF EXISTS public.\"KeeperTable\" CASCADE;";
+                cmd.ExecuteNonQuery();
+                conn.Close();
+                Directory.Delete(tempDir, true);
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+            }
+        }
+    }
+
+    private static void EditKeeper(string tempDir, Action<JObject> edit)
+    {
+        var keeper = Path.Join(tempDir, "Templates", "Main", "Tables", "public.KeeperTable.json");
+        var root = JObject.Parse(File.ReadAllText(keeper));
+        edit(root);
+        File.WriteAllText(keeper, root.ToString());
+    }
+
     private static void CopyDirectory(string src, string dest)
     {
         Directory.CreateDirectory(dest);

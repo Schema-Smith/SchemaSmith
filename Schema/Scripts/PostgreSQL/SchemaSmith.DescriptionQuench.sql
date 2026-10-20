@@ -25,7 +25,7 @@ BEGIN
                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                    'VALUES (pg_backend_pid(), ''table'', ''' || REPLACE(t."Schema" || '.' || t."Name", '''', '''''') || ''', ''modified'');' AS stmt
               FROM temp_tables t
-              JOIN pg_class c ON c.relname = t."Name" AND c.relkind = 'r'
+              JOIN pg_class c ON c.relname = t."Name" AND c.relkind IN ('r', 'p')
                              AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t."Schema")
              WHERE t."Description" IS NOT NULL
                AND COALESCE(OBJ_DESCRIPTION(c.oid, 'pg_class'), '') IS DISTINCT FROM t."Description"
@@ -37,7 +37,7 @@ BEGIN
                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                    'VALUES (pg_backend_pid(), ''column'', ''' || REPLACE(tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name", '''', '''''') || ''', ''modified'');'
               FROM temp_columns tc
-              JOIN pg_class c ON c.relname = tc."TableName" AND c.relkind = 'r'
+              JOIN pg_class c ON c.relname = tc."TableName" AND c.relkind IN ('r', 'p')
                              AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = tc."TableSchema")
               JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = tc."Name" AND a.attnum > 0 AND NOT a.attisdropped
              WHERE tc."Description" IS NOT NULL
@@ -54,7 +54,7 @@ BEGIN
                     'VALUES (pg_backend_pid(), ''index'', ''' || REPLACE(ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name", '''', '''''') || ''', ''modified'');', CHR(10))
     INTO sql_script
     FROM temp_indexes ti
-    JOIN pg_class tc ON tc.relname = ti."TableName" AND tc.relkind = 'r'
+    JOIN pg_class tc ON tc.relname = ti."TableName" AND tc.relkind IN ('r', 'p')
                     AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
     JOIN pg_index idx ON idx.indrelid = tc.oid
     JOIN pg_class i ON i.oid = idx.indexrelid AND i.relname = ti."Name"

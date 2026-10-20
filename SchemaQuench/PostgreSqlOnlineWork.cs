@@ -12,7 +12,8 @@ namespace SchemaQuench;
 /// procedure is one, so the procedures queue them (<c>SchemaSmith.DeferOnlineWork</c>) and this runs the queue on the
 /// same session once the procedure has returned: each statement alone, then its follow-up. A build that fails leaves
 /// its index behind, invalid, so that index is dropped and the build tried once more; a second failure is the deploy's,
-/// with the invalid index dropped first so the next deploy starts clean.
+/// with the invalid index dropped first so the next deploy starts clean. A build that fails without leaving an invalid
+/// index (the name is taken by a valid index on another table) fails at once, and that index is left alone.
 /// </summary>
 internal static class PostgreSqlOnlineWork
 {
@@ -53,7 +54,7 @@ internal static class PostgreSqlOnlineWork
         {
             Execute(command, item.Statement);
         }
-        catch (DbException) when (item.CleanupIndex != null)
+        catch (DbException) when (item.CleanupIndex != null && IsInvalidIndex(command, item.CleanupIndex))
         {
             log($"    The build stopped and left {item.CleanupIndex} invalid; dropping it and building once more");
             DropInvalidIndex(command, item.CleanupIndex);
@@ -63,7 +64,8 @@ internal static class PostgreSqlOnlineWork
             }
             catch (DbException)
             {
-                DropInvalidIndex(command, item.CleanupIndex);
+                if (IsInvalidIndex(command, item.CleanupIndex))
+                    DropInvalidIndex(command, item.CleanupIndex);
                 throw;
             }
         }
@@ -73,6 +75,12 @@ internal static class PostgreSqlOnlineWork
             logStatement(item.FollowUp);
             Execute(command, item.FollowUp);
         }
+    }
+
+    private static bool IsInvalidIndex(IDbCommand command, string index)
+    {
+        command.CommandText = $"SELECT EXISTS (SELECT 1 FROM pg_index WHERE indexrelid = to_regclass('{index.Replace("'", "''")}') AND NOT indisvalid)";
+        return Convert.ToBoolean(command.ExecuteScalar());
     }
 
     private static void DropInvalidIndex(IDbCommand command, string index) =>

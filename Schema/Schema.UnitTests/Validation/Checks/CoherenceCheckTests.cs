@@ -271,6 +271,13 @@ public class CoherenceCheckTests
         Assert.That(RunOnPgTable(PgChild("parent_id")).Where(f => f.Code == "SS-FK-007"), Is.Empty);
     }
 
+    // Extraction reads the subset for either action, so a SET DEFAULT (col) key it writes must validate.
+    [Test]
+    public void SetNullColumns_OverASubsetOfTheKey_WithSetDefault_IsClean()
+    {
+        Assert.That(RunOnPgTable(PgChild("parent_id", deleteAction: "SET DEFAULT")).Where(f => f.Code == "SS-FK-007"), Is.Empty);
+    }
+
     [Test]
     public void SetNullColumns_WithoutSetNull_IsError()
     {
