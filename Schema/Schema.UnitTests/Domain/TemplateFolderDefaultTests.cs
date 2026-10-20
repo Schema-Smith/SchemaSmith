@@ -424,9 +424,52 @@ namespace Schema.UnitTests.Domain
         public void PostgreSQL_AddDefaultScriptFolders_MatchesGetDefaultTemplateFolders()
         {
             var template = RepositoryHelper.CreateDefaultTemplate("Test", Platform.PostgreSQL);
-            var expected = Template.GetDefaultTemplateFolders(Platform.PostgreSQL);
+            var expected = Template.GetDefaultTemplateFolders(Platform.PostgreSQL)
+                .Where(f => !RepositoryHelper.FoldersWrittenOnUse.Contains(f.ObjectType)).ToList();
 
             AssertFolderListsMatch(expected, template.ScriptFolders);
+        }
+
+        // The five PostgreSQL kinds added in 2.8 are newer than releases still deploying packages, which refuse a
+        // Template.json naming a type they do not know, so a package that uses none of them declares none of them.
+        [TestCase("Range Types", ScriptObjectType.RangeTypes, TemplateQuenchSlot.Objects)]
+        [TestCase("Text Search Configurations", ScriptObjectType.TextSearchConfigurations, TemplateQuenchSlot.Objects)]
+        [TestCase("Operators", ScriptObjectType.Operators, TemplateQuenchSlot.Objects)]
+        [TestCase("Casts", ScriptObjectType.Casts, TemplateQuenchSlot.Objects)]
+        [TestCase("Event Triggers", ScriptObjectType.EventTriggers, TemplateQuenchSlot.AfterTablesObjects)]
+        public void PostgreSQL_A2Point8Kind_HasItsFolder_ButAWrittenDefaultTemplateDeclaresItOnlyOnUse(string folderPath, ScriptObjectType type, TemplateQuenchSlot slot)
+        {
+            var folder = Template.GetDefaultTemplateFolders(Platform.PostgreSQL).Single(f => f.ObjectType == type);
+            var written = RepositoryHelper.CreateDefaultTemplate("Test", Platform.PostgreSQL);
+            Assert.Multiple(() =>
+            {
+                Assert.That(folder.FolderPath, Is.EqualTo(folderPath));
+                Assert.That(folder.QuenchSlot, Is.EqualTo(slot));
+                Assert.That(written.ScriptFolders.Select(f => f.ObjectType), Has.None.EqualTo(type));
+                Assert.That(RepositoryHelper.FoldersWrittenOnUse, Does.Contain(type));
+            });
+        }
+
+        // Event triggers belong to the last folder of their slot, so they do not fire on the package's own views.
+        [Test]
+        public void PostgreSQL_EventTriggers_DeployAfterEveryOtherObjectFolderOfTheirSlot()
+        {
+            var afterTables = Template.GetDefaultTemplateFolders(Platform.PostgreSQL).Where(f => f.QuenchSlot == TemplateQuenchSlot.AfterTablesObjects).ToList();
+            Assert.That(afterTables[^1].ObjectType, Is.EqualTo(ScriptObjectType.EventTriggers), string.Join(", ", afterTables.Select(f => f.FolderPath)));
+        }
+
+        [Test]
+        public void PostgreSQL_SchemaTemplate_ExcludesCastsAndEventTriggers_KeepsTheSchemaScopedKinds()
+        {
+            var types = Template.GetDefaultTemplateFolders(Platform.PostgreSQL, isSchemaTemplate: true).Select(f => f.ObjectType).ToList();
+            Assert.Multiple(() =>
+            {
+                Assert.That(types, Has.None.EqualTo(ScriptObjectType.Casts), "a cast has no schema");
+                Assert.That(types, Has.None.EqualTo(ScriptObjectType.EventTriggers), "an event trigger has no schema");
+                Assert.That(types, Has.Some.EqualTo(ScriptObjectType.RangeTypes));
+                Assert.That(types, Has.Some.EqualTo(ScriptObjectType.TextSearchConfigurations));
+                Assert.That(types, Has.Some.EqualTo(ScriptObjectType.Operators));
+            });
         }
 
         [Test]

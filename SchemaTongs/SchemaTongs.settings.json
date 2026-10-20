@@ -75,6 +75,11 @@
         "MaterializedViews": true,
         "Collations": true, // CREATE COLLATION objects
         "Publications": true, // Logical-replication publications
+        "RangeTypes": true, // CREATE TYPE ... AS RANGE
+        "TextSearchConfigurations": true, // with the dictionaries they map to
+        "Operators": true,
+        "Casts": true,
+        "EventTriggers": true, // deploying one needs a superuser
 
         // All platforms
         "Functions": true,

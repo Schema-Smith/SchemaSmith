@@ -280,8 +280,27 @@ Control exactly what gets cast from the database. Each object type can be indivi
 | `Sequences` | `true` | Sequence objects |
 | `Rules` | `true` | Rules attached to tables and views |
 | `MaterializedViews` | `true` | Materialized view definitions as JSON files |
+| `Collations` | `true` | `CREATE COLLATION` objects |
+| `Publications` | `true` | Logical-replication publications |
+| `RangeTypes` | `true` | `CREATE TYPE ... AS RANGE` types, to `Range Types/` |
+| `TextSearchConfigurations` | `true` | Text search configurations and the dictionaries they map to, to `Text Search Configurations/` |
+| `Operators` | `true` | User-defined operators, to `Operators/` |
+| `Casts` | `true` | User-defined casts, to `Casts/` |
+| `EventTriggers` | `true` | Event triggers, to `Event Triggers/` |
+
+The last five folders are added to `Template.json` the first time something is extracted into them, so a package with none of them stays loadable by releases before 2.8.
 
 **What the PostgreSQL scripts carry.** A trigger script is `DROP TRIGGER IF EXISTS` followed by the engine's own definition (`pg_get_triggerdef`), with an `ALTER TABLE ... DISABLE TRIGGER`, `ENABLE REPLICA TRIGGER` or `ENABLE ALWAYS TRIGGER` line when the trigger is in that state, so it deploys on every version from 12 and a constraint trigger deploys again. A view is `CREATE OR REPLACE VIEW` with its options (`security_barrier`, `security_invoker`, `check_option`) in the `WITH` clause. An aggregate is written in the shape `pg_dump` uses, with every support function schema-qualified and the initial condition quoted. Composite-type attributes are quoted and carry a `COLLATE` that differs from the type's default. Collations and publications are written from the columns the server version has: a collation's locale, `RULES` (16+) and provider (`libc`, `icu`, or `builtin` on 17+); a publication's `publish_via_partition_root` (13+), row filter, column list and `TABLES IN SCHEMA` (15+), and `publish_generated_columns` (18+). A package extracted from a newer server deploys to an older one only where those clauses exist there.
+
+**Range types, text search configurations, operators, casts and event triggers.** Each is written in the shape `pg_dump` uses:
+
+- **Range type** -- the subtype, an operator class or collation only where it differs from the subtype's default, the `CANONICAL` and `SUBTYPE_DIFF` functions, and on 14+ a multirange type name the engine would not have chosen. The functions and multirange casts the engine creates with a range type are not extracted; they come back with it.
+- **Text search configuration** -- its parser and every token-to-dictionaries mapping. Any dictionary it maps to outside `pg_catalog` is created in the same script. A re-run replaces every mapping, so a mapping changed by hand is put back.
+- **Operator** -- one file per signature, named `schema.op(left, right).sql` with `NONE` for a missing side, with its function, argument types, commutator, negator, estimators and `HASHES` / `MERGES`.
+- **Cast** -- named by its two types (`app.cents AS integer.sql`), `WITH FUNCTION`, `WITH INOUT` or `WITHOUT FUNCTION`, and `AS ASSIGNMENT` or `AS IMPLICIT`.
+- **Event trigger** -- `DROP EVENT TRIGGER IF EXISTS` and its definition with the `WHEN TAG IN` list, then its enabled state. `Event Triggers/` is the last folder of the `AfterTablesObjects` slot, so the package's own views are not DDL the triggers fire on. Creating an event trigger needs a superuser.
+
+Range types, operators and casts are created where they are missing and left alone where they exist, like a composite type: PostgreSQL cannot alter a range type or a cast, and an operator only in part. To change one, write the change as a [migration script](schemaquench.md#migration-script-tracking). A text search configuration's parser is likewise create-time. Operators and casts write no line in an orphan cleanup script, because their file names cannot be read back into the signature a `DROP` needs; the orphan is still reported.
 
 ### MySQL and MariaDB
 
@@ -693,6 +712,7 @@ SchemaTongs automatically excludes the platform's system schemas and internal in
 - **FileTables and external tables** (SQL Server) -- a FileTable's shape comes from its FILESTREAM share and an external table's from its external data source, so a table file of their columns would deploy as an ordinary table. Each is named in a warning and counted as skipped. Create them with a script in the template's `After` slot.
 - **Numbered procedures** (SQL Server) -- `dbo.p;2` and later numbers of a procedure, deprecated since SQL Server 2008. SchemaTongs extracts `dbo.p` itself, which is `;1`, and names each later number in a warning, counted as skipped.
 - **Extension members** (PostgreSQL) -- Every object an installed extension owns (`pg_trgm`'s functions, PostGIS's `spatial_ref_sys`, an extension's types, operators and views). They belong to the extension, which is a prerequisite of the target database, not to the package. The run log says how many were skipped per extension.
+- **Inheritance children and typed tables** (PostgreSQL) -- table inheritance (`INHERITS`) and typed tables (`OF type`) are not modelled, so each is refused at extraction by name, and its triggers and rules are left out with it. Written as a plain table, a child would lose the columns it inherits and a typed table its type. The parent is extracted, and DataTongs reads only its own rows (`FROM ONLY`).
 - **Triggers on partitioned tables and their partitions** (PostgreSQL) -- PostgreSQL declarative partitioning is not modelled, so the partitioned table and its partitions are refused at extraction, and a trigger on either (including the copies the engine clones onto each partition) is left out with them rather than written against a table the package does not contain.
 
 ---
@@ -805,6 +825,7 @@ These `ShouldCast` flags are forced off in schema-template extraction mode becau
 |---|---|---|
 | `ShouldCast:Schemas` | `false` | "schema objects ARE the iteration unit" |
 | `ShouldCast:Publications` | `false` | "publications are database-scoped" |
+| `ShouldCast:Casts`, `ShouldCast:EventTriggers` | `false` | "casts and event triggers are database-scoped and have no schema" |
 
 The warning fires when the flag was `true` (or at its default-true value). A quiet skip would be too surprising -- if you have `ShouldCast:Schemas: true` in your config and nothing appears under `Schemas/`, you deserve an explanation.
 

@@ -45,6 +45,11 @@ namespace Schema.UnitTests.Domain
         [TestCase(ScriptObjectType.Collations, "Collations")]
         [TestCase(ScriptObjectType.Publications, "Publications")]
         [TestCase(ScriptObjectType.Events, "Events")]
+        [TestCase(ScriptObjectType.RangeTypes, "RangeTypes")]
+        [TestCase(ScriptObjectType.TextSearchConfigurations, "TextSearchConfigurations")]
+        [TestCase(ScriptObjectType.Operators, "Operators")]
+        [TestCase(ScriptObjectType.Casts, "Casts")]
+        [TestCase(ScriptObjectType.EventTriggers, "EventTriggers")]
         public void AllValues_RoundTripThroughJsonSerialization(ScriptObjectType value, string expectedString)
         {
             var json = JsonConvert.SerializeObject(value);

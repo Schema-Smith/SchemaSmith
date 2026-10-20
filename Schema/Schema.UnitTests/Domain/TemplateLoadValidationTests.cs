@@ -206,6 +206,23 @@ namespace Schema.UnitTests.Domain
             Assert.That(ex!.Message, Does.Contain("Publications").And.Contain("database-scoped"));
         }
 
+        [TestCase("Casts")]
+        [TestCase("EventTriggers")]
+        public void SchemaTemplate_APostgreSqlKindWithNoSchema_IsRejected(string objectType)
+        {
+            var (templateFile, tablesPath) = Paths();
+            var json = "{ \"Name\": \"TenantBody\", \"SchemaIdentificationScript\": \"SELECT 'tenant_a'\", " +
+                       "\"ScriptFolders\": [ { \"FolderPath\": \"Kind\", \"QuenchSlot\": \"Objects\", \"ObjectType\": \"" + objectType + "\" } ] }";
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(json);
+            _mockDirectory.Exists(tablesPath).Returns(false);
+            _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
+
+            var ex = Assert.Throws<PackageException>(() =>
+                Template.Load("Main", MakeProduct(Platform.PostgreSQL)));
+            Assert.That(ex!.Message, Does.Contain(objectType).And.Contain("database-scoped"));
+        }
+
         [Test]
         public void SchemaTemplate_FullTextStopListsScriptFolder_Rejected()
         {

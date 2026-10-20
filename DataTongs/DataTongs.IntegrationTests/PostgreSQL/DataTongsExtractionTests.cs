@@ -189,6 +189,31 @@ INSERT INTO public.""{tableName}"" VALUES
         Assert.That(json, Does.Contain("LastName"));
     }
 
+    // PG-008. A child table is refused at extraction, so its rows are not the parent's to deliver.
+    [Test]
+    public void GetTableDataJson_AnInheritanceParent_ReadsOnlyItsOwnRows()
+    {
+        var parent = $"InhParent_{Guid.NewGuid():N}"[..30];
+        using var command = _connection.CreateCommand();
+        command.CommandText = $@"
+CREATE TABLE public.""{parent}"" (""code"" VARCHAR(20) NOT NULL PRIMARY KEY);
+CREATE TABLE public.""{parent}_c"" (""extra"" INT) INHERITS (public.""{parent}"");
+INSERT INTO public.""{parent}"" VALUES ('PARENT');
+INSERT INTO public.""{parent}_c"" VALUES ('CHILD', 1);";
+        command.ExecuteNonQuery();
+        try
+        {
+            var selectColumns = _dataTongs.GetSelectColumns(command, "public", parent);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, "public", parent, "\"code\"", null);
+            Assert.That(json, Does.Contain("PARENT").And.Not.Contain("CHILD"), json);
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS public.\"{parent}\" CASCADE";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void GetTableDataJson_WithFilter_AppliesFilter()
     {

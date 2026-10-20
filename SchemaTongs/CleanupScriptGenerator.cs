@@ -77,6 +77,12 @@ public static class CleanupScriptGenerator
             ScriptObjectType.SchemaBoundFunctions => "DROP FUNCTION",
             ScriptObjectType.Collations => "DROP COLLATION",
             ScriptObjectType.Publications => "DROP PUBLICATION",
+            ScriptObjectType.RangeTypes => "DROP TYPE",
+            ScriptObjectType.TextSearchConfigurations => "DROP TEXT SEARCH CONFIGURATION",
+            ScriptObjectType.EventTriggers => "DROP EVENT TRIGGER",
+            // The DROP needs the argument types, which the file name does not carry in a form that can be read back.
+            ScriptObjectType.Operators => null,
+            ScriptObjectType.Casts => null,
             ScriptObjectType.Schemas => null,
             _ => null
         };

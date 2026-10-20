@@ -341,7 +341,9 @@ namespace Schema.Domain
             ScriptObjectType.DDLTriggers,
             ScriptObjectType.FullTextCatalogs,
             ScriptObjectType.FullTextStopLists,
-            ScriptObjectType.Publications
+            ScriptObjectType.Publications,
+            ScriptObjectType.Casts,
+            ScriptObjectType.EventTriggers
         };
 
         /// <summary>
@@ -737,6 +739,8 @@ namespace Schema.Domain
         /// <item><see cref="ScriptObjectType.Publications"/> — <c>CREATE PUBLICATION</c> has no schema
         /// qualifier on PostgreSQL, so it is database-scoped for the same reason as the SQL Server trio
         /// above.</item>
+        /// <item><see cref="ScriptObjectType.Casts"/>, <see cref="ScriptObjectType.EventTriggers"/> — PostgreSQL
+        /// objects with no schema.</item>
         /// </list>
         /// MySQL has no schema-template path; the parameter is ignored on MySQL.
         /// </summary>
@@ -784,21 +788,29 @@ namespace Schema.Domain
                     new TemplateFolder { FolderPath = "Domain Types", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.DomainTypes },
                     new TemplateFolder { FolderPath = "Enum Types", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.EnumTypes },
                     new TemplateFolder { FolderPath = "Composite Types", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.CompositeTypes },
+                    new TemplateFolder { FolderPath = "Range Types", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.RangeTypes },
                     // Collations are schema-scoped (like Domain/Enum/Composite Types above), so this folder
                     // fans out per schema in schema-template mode the same as those three — no exclusion needed.
                     new TemplateFolder { FolderPath = "Collations", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Collations },
+                    new TemplateFolder { FolderPath = "Text Search Configurations", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.TextSearchConfigurations },
                     new TemplateFolder { FolderPath = "Functions", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Functions },
                     new TemplateFolder { FolderPath = "Trigger Functions", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.TriggerFunctions },
                     new TemplateFolder { FolderPath = "Window Functions", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.WindowFunctions },
                     new TemplateFolder { FolderPath = "Aggregates", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Aggregates },
                     new TemplateFolder { FolderPath = "Procedures", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Procedures },
                     new TemplateFolder { FolderPath = "Sequences", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Sequences },
+                    // Operators and casts are created over functions and types; the slot re-runs a script whose
+                    // dependency is not there yet, so their place among the other folders does not matter.
+                    new TemplateFolder { FolderPath = "Operators", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Operators },
+                    new TemplateFolder { FolderPath = "Casts", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Casts },
                     // Publications are database-scoped (CREATE PUBLICATION has no schema qualifier), so —
                     // like Schemas above — this folder is excluded from schema-template fan-out below.
                     new TemplateFolder { FolderPath = "Publications", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Publications },
                     new TemplateFolder { FolderPath = "Rules", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.Rules },
                     new TemplateFolder { FolderPath = "Triggers", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.Triggers },
                     new TemplateFolder { FolderPath = "Views", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.Views },
+                    // Last of its slot, so the package's own views are not DDL its event triggers fire on.
+                    new TemplateFolder { FolderPath = "Event Triggers", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.EventTriggers },
                     new TemplateFolder { FolderPath = "Table Data", QuenchSlot = TemplateQuenchSlot.TableData },
                     new TemplateFolder { FolderPath = "After Scripts", QuenchSlot = TemplateQuenchSlot.After },
                 ],
@@ -834,7 +846,9 @@ namespace Schema.Domain
                 f.ObjectType != ScriptObjectType.DDLTriggers &&
                 f.ObjectType != ScriptObjectType.FullTextCatalogs &&
                 f.ObjectType != ScriptObjectType.FullTextStopLists &&
-                f.ObjectType != ScriptObjectType.Publications).ToList();
+                f.ObjectType != ScriptObjectType.Publications &&
+                f.ObjectType != ScriptObjectType.Casts &&
+                f.ObjectType != ScriptObjectType.EventTriggers).ToList();
         }
 
         /// <summary>

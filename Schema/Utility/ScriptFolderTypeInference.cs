@@ -33,6 +33,11 @@ public static class ScriptFolderTypeInference
         ["Rules"] = ScriptObjectType.Rules,
         ["Collations"] = ScriptObjectType.Collations,
         ["Publications"] = ScriptObjectType.Publications,
+        ["Range Types"] = ScriptObjectType.RangeTypes,
+        ["Text Search Configurations"] = ScriptObjectType.TextSearchConfigurations,
+        ["Operators"] = ScriptObjectType.Operators,
+        ["Casts"] = ScriptObjectType.Casts,
+        ["Event Triggers"] = ScriptObjectType.EventTriggers,
         ["Events"] = ScriptObjectType.Events,
     };
 

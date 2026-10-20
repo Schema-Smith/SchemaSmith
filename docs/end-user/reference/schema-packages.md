@@ -327,17 +327,22 @@ When `Template.json` does not declare its own `ScriptFolders`, SchemaSmith fills
 | `Domain Types/` | Objects | DomainTypes |
 | `Enum Types/` | Objects | EnumTypes |
 | `Composite Types/` | Objects | CompositeTypes |
+| `Range Types/` | Objects | RangeTypes |
 | `Collations/` | Objects | Collations |
+| `Text Search Configurations/` | Objects | TextSearchConfigurations |
 | `Functions/` | Objects | Functions |
 | `Trigger Functions/` | Objects | TriggerFunctions |
 | `Window Functions/` | Objects | WindowFunctions |
 | `Aggregates/` | Objects | Aggregates |
 | `Procedures/` | Objects | Procedures |
 | `Sequences/` | Objects | Sequences |
+| `Operators/` | Objects | Operators |
+| `Casts/` | Objects | Casts |
 | `Publications/` | Objects | Publications |
 | `Rules/` | AfterTablesObjects | Rules |
 | `Triggers/` | AfterTablesObjects | Triggers |
 | `Views/` | AfterTablesObjects | Views |
+| `Event Triggers/` | AfterTablesObjects | EventTriggers |
 | `Table Data/` | TableData | — |
 | `After Scripts/` | After | — |
 

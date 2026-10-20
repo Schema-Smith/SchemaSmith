@@ -129,6 +129,16 @@ public static class SettingsKeys
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string Publications = "ShouldCast:Publications";
         [ReadBy(SettingsTool.SchemaTongs)]
+        public const string RangeTypes = "ShouldCast:RangeTypes";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string TextSearchConfigurations = "ShouldCast:TextSearchConfigurations";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string Operators = "ShouldCast:Operators";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string Casts = "ShouldCast:Casts";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string EventTriggers = "ShouldCast:EventTriggers";
+        [ReadBy(SettingsTool.SchemaTongs)]
         public const string Rules = "ShouldCast:Rules";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string SaveInvalidScripts = "ShouldCast:SaveInvalidScripts";

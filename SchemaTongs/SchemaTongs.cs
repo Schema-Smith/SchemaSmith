@@ -98,6 +98,11 @@ public class SchemaTongs
     private bool _includeMaterializedViews;
     private bool _includeCollations;
     private bool _includePublications;
+    private bool _includeRangeTypes;
+    private bool _includeTextSearchConfigurations;
+    private bool _includeOperators;
+    private bool _includeCasts;
+    private bool _includeEventTriggers;
 
     // MySQL specific
     private bool _includeEvents;
@@ -607,6 +612,11 @@ public class SchemaTongs
                 _includeMaterializedViews = config[SettingsKeys.ShouldCast.MaterializedViews]?.ToLower() != "false";
                 _includeCollations = config[SettingsKeys.ShouldCast.Collations]?.ToLower() != "false";
                 _includePublications = config[SettingsKeys.ShouldCast.Publications]?.ToLower() != "false";
+                _includeRangeTypes = config[SettingsKeys.ShouldCast.RangeTypes]?.ToLower() != "false";
+                _includeTextSearchConfigurations = config[SettingsKeys.ShouldCast.TextSearchConfigurations]?.ToLower() != "false";
+                _includeOperators = config[SettingsKeys.ShouldCast.Operators]?.ToLower() != "false";
+                _includeCasts = config[SettingsKeys.ShouldCast.Casts]?.ToLower() != "false";
+                _includeEventTriggers = config[SettingsKeys.ShouldCast.EventTriggers]?.ToLower() != "false";
                 break;
 
             case Platform.MySQL:
@@ -680,6 +690,14 @@ public class SchemaTongs
                                   "(publications are database-scoped — CREATE PUBLICATION has no schema " +
                                   "qualifier). Move them to a regular template earlier in TemplateOrder.");
                 _includePublications = false;
+            }
+            if (_includeCasts || _includeEventTriggers)
+            {
+                _progressLog.Warn("ShouldCast.Casts and ShouldCast.EventTriggers are ignored in schema-template extraction mode " +
+                                  "(casts and event triggers are database-scoped and have no schema). Move them to a regular " +
+                                  "template earlier in TemplateOrder.");
+                _includeCasts = false;
+                _includeEventTriggers = false;
             }
         }
     }
@@ -1057,6 +1075,11 @@ public class SchemaTongs
                 if (_includeMaterializedViews) folders.Add("Materialized Views");
                 if (_includeCollations) folders.Add(ResolveFolderName("Collations", ScriptObjectType.Collations));
                 if (_includePublications) folders.Add(ResolveFolderName("Publications", ScriptObjectType.Publications));
+                if (_includeRangeTypes) folders.Add(ResolveFolderName("Range Types", ScriptObjectType.RangeTypes));
+                if (_includeTextSearchConfigurations) folders.Add(ResolveFolderName("Text Search Configurations", ScriptObjectType.TextSearchConfigurations));
+                if (_includeOperators) folders.Add(ResolveFolderName("Operators", ScriptObjectType.Operators));
+                if (_includeCasts) folders.Add(ResolveFolderName("Casts", ScriptObjectType.Casts));
+                if (_includeEventTriggers) folders.Add(ResolveFolderName("Event Triggers", ScriptObjectType.EventTriggers));
                 break;
 
             case Platform.MySQL:
@@ -2689,6 +2712,11 @@ SELECT s.name AS SchemaName, v.name AS ViewName
             if (_includeMaterializedViews) CastPostgreSqlMaterializedViews(command);
             if (_includeCollations) CastPostgreSqlCollations(command);
             if (_includePublications) CastPostgreSqlPublications(command);
+            if (_includeRangeTypes) CastPostgreSqlRangeTypes(command);
+            if (_includeTextSearchConfigurations) CastPostgreSqlTextSearchConfigurations(command);
+            if (_includeOperators) CastPostgreSqlOperators(command);
+            if (_includeCasts) CastPostgreSqlCasts(command);
+            if (_includeEventTriggers) CastPostgreSqlEventTriggers(command);
             LogPostgreSqlExtensionMembersSkipped(command);
         }
         finally
@@ -2702,6 +2730,11 @@ SELECT s.name AS SchemaName, v.name AS ViewName
     // deployed as if the package owned them. Every enumeration query below carries this predicate for its catalog.
     private static string PostgreSqlNotExtensionMember(string classRegclass, string oidExpression) =>
         $"NOT EXISTS (SELECT 1 FROM pg_depend xd WHERE xd.classid = '{classRegclass}'::regclass AND xd.objid = {oidExpression} AND xd.deptype = 'e')";
+
+    // Also not what the engine created along with another object (deptype 'i'): a range type's constructor functions
+    // (LANGUAGE internal) and its multirange casts come back with the type.
+    private static string PostgreSqlNotEngineOwned(string classRegclass, string oidExpression) =>
+        $"NOT EXISTS (SELECT 1 FROM pg_depend xd WHERE xd.classid = '{classRegclass}'::regclass AND xd.objid = {oidExpression} AND xd.deptype IN ('e', 'i'))";
 
     private void LogPostgreSqlExtensionMembersSkipped(IDbCommand command)
     {
@@ -2739,7 +2772,13 @@ SELECT e.extname, COUNT(*) AS members
         // relpersistence 'u' is an UNLOGGED table, which the model carries as Persistence: Unlogged; only a temporary
         // table ('t') is left out.
         command.CommandText = $@"
-SELECT t.schemaname, t.tablename, c.relkind, c.relispartition
+SELECT t.schemaname, t.tablename, c.relkind, c.relispartition,
+       CASE WHEN c.reloftype <> 0 THEN FORMAT_TYPE(c.reloftype, NULL) END AS of_type,
+       CASE WHEN NOT c.relispartition THEN (SELECT STRING_AGG(pn.nspname || '.' || p.relname, ', ' ORDER BY i.inhseqno)
+                                              FROM pg_inherits i
+                                              JOIN pg_class p ON p.oid = i.inhparent
+                                              JOIN pg_namespace pn ON pn.oid = p.relnamespace
+                                             WHERE i.inhrelid = c.oid) END AS inherits_from
   FROM pg_tables t
   JOIN pg_class c ON c.relname = t.tablename
                  AND c.relnamespace = (SELECT n.oid FROM pg_namespace n WHERE n.nspname = t.schemaname)
@@ -2750,14 +2789,21 @@ SELECT t.schemaname, t.tablename, c.relkind, c.relispartition
 ";
 
         _progressLog.Info("Casting Table Structures");
-        var tables = new List<(string Schema, string Table, string RelKind, bool IsPartitionChild)>();
+        var tables = new List<(string Schema, string Table, string RelKind, bool IsPartitionChild, string Refusal)>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
             {
                 var sch = reader["schemaname"].ToString();
                 if (!ShouldExtractFromSchema(sch)) continue;
-                tables.Add((sch, reader["tablename"].ToString(), reader["relkind"].ToString(), Convert.ToBoolean(reader["relispartition"])));
+                // PG-008. Neither shape is modelled: written as a plain table, a child would lose the parent's columns
+                // and a typed table its type.
+                var refusal = reader["of_type"] is string ofType
+                    ? $"is a typed table (OF {ofType}) — typed tables are not modeled; skipped rather than emitted as a table that no longer follows its type."
+                    : reader["inherits_from"] is string parents
+                        ? $"inherits from {parents} — table inheritance is not modeled; skipped rather than emitted as an unrelated standalone table. The parent is extracted, and DataTongs reads only its own rows."
+                        : null;
+                tables.Add((sch, reader["tablename"].ToString(), reader["relkind"].ToString(), Convert.ToBoolean(reader["relispartition"]), refusal));
             }
         }
 
@@ -2765,9 +2811,16 @@ SELECT t.schemaname, t.tablename, c.relkind, c.relispartition
         DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
         var resolver = new TableFileResolver(castPath, _platform, _isSchemaTemplate, IsVariantActive);
 
-        foreach (var (schema, table, relKind, isPartitionChild) in tables)
+        foreach (var (schema, table, relKind, isPartitionChild, refusal) in tables)
         {
             if (_objectsToCast.Length > 0 && !_objectsToCast.Contains($"{schema}.{table}".ToLower()) && !_objectsToCast.Contains(table.ToLower())) continue;
+
+            if (refusal != null)
+            {
+                _progressLog.Error($"    ERROR: {schema}.{table} {refusal}");
+                _stats.TableErrors++;
+                continue;
+            }
 
             // SchemaSmith does not model PostgreSQL declarative partitioning (see the growth-up spike
             // findings) and the generator query cannot see a partitioned parent at all (relkind = 'p'
@@ -3115,7 +3168,7 @@ SELECT CASE p.prokind
                      AND n.nspname NOT LIKE 'pg_temp_%'
                      AND n.nspname NOT LIKE 'pg_toast_temp_%'
   WHERE p.prokind IN ('f', 'w')
-    AND " + PostgreSqlNotExtensionMember("pg_proc", "p.oid") + @";
+    AND " + PostgreSqlNotEngineOwned("pg_proc", "p.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Functions");
     }
@@ -3316,6 +3369,167 @@ SELECT 'Publications' AS Folder,
         PerformPostgreSqlCasting(command, "Publications");
     }
 
+    // pg_dump's shape: the operator class and collation only where they differ from the subtype's defaults, the
+    // support functions, and (14+) a multirange type not named by the engine's rule (the first "range" becomes
+    // "multirange", or "_multirange" is appended). CREATE TYPE has no IF NOT EXISTS, so the create is guarded; ALTER TYPE
+    // cannot change a range type, so an existing one is left as it is.
+    private void CastPostgreSqlRangeTypes(IDbCommand command)
+    {
+        var multirange = PostgreSqlServerVersionNum(command) >= 140000
+            ? @"COALESCE((SELECT ', MULTIRANGE_TYPE_NAME = ' || QUOTE_IDENT(mn.nspname) || '.' || QUOTE_IDENT(mt.typname)
+                   FROM pg_type mt JOIN pg_namespace mn ON mn.oid = mt.typnamespace
+                  WHERE mt.oid = r.rngmultitypid
+                    AND (mt.typnamespace <> t.typnamespace
+                         OR mt.typname <> CASE WHEN STRPOS(t.typname, 'range') > 0 THEN REGEXP_REPLACE(t.typname, 'range', 'multirange') ELSE t.typname || '_multirange' END)), '')"
+            : "''";
+        command.CommandText = $@"
+SELECT 'Range Types' AS Folder,
+       n.nspname || '.' || t.typname AS FullName,
+       E'DO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = ' || QUOTE_LITERAL(n.nspname) || ' AND t.typname = ' || QUOTE_LITERAL(t.typname) || E') THEN\n        CREATE TYPE ' ||
+       QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(t.typname) || ' AS RANGE (SUBTYPE = ' || FORMAT_TYPE(r.rngsubtype, NULL) ||
+       CASE WHEN NOT oc.opcdefault THEN ', SUBTYPE_OPCLASS = ' || QUOTE_IDENT(ocn.nspname) || '.' || QUOTE_IDENT(oc.opcname) ELSE '' END ||
+       CASE WHEN r.rngcollation <> 0 AND r.rngcollation <> st.typcollation
+            THEN ', COLLATION = ' || QUOTE_IDENT(cn.nspname) || '.' || QUOTE_IDENT(co.collname) ELSE '' END ||
+       COALESCE(', CANONICAL = ' || (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = r.rngcanonical), '') ||
+       COALESCE(', SUBTYPE_DIFF = ' || (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = r.rngsubdiff), '') ||
+       {multirange} ||
+       E');\n    END IF;\nEND\n$$;' AS Code
+  FROM pg_range r
+  JOIN pg_type t ON t.oid = r.rngtypid
+  JOIN pg_namespace n ON n.oid = t.typnamespace
+  JOIN pg_type st ON st.oid = r.rngsubtype
+  JOIN pg_opclass oc ON oc.oid = r.rngsubopc
+  JOIN pg_namespace ocn ON ocn.oid = oc.opcnamespace
+  LEFT JOIN pg_collation co ON co.oid = r.rngcollation
+  LEFT JOIN pg_namespace cn ON cn.oid = co.collnamespace
+ WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
+   AND n.nspname NOT LIKE 'pg_temp_%'
+   AND n.nspname NOT LIKE 'pg_toast_temp_%'
+   AND {PostgreSqlNotExtensionMember("pg_type", "t.oid")};
+";
+        PerformPostgreSqlCasting(command, "Range Types");
+    }
+
+    // A configuration is a parser and a token-to-dictionaries map. The script creates any dictionary it maps to outside
+    // pg_catalog (each guarded, so two configurations sharing one are fine), creates the configuration where it is
+    // missing, then replaces every mapping, so a re-run puts back a mapping changed by hand. The parser is create-time.
+    private void CastPostgreSqlTextSearchConfigurations(IDbCommand command)
+    {
+        command.CommandText = @"
+SELECT 'Text Search Configurations' AS Folder,
+       n.nspname || '.' || c.cfgname AS FullName,
+       COALESCE((SELECT STRING_AGG(E'DO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_ts_dict d JOIN pg_namespace n ON n.oid = d.dictnamespace WHERE n.nspname = ' || QUOTE_LITERAL(dn.nspname) || ' AND d.dictname = ' || QUOTE_LITERAL(d.dictname) || E') THEN\n        CREATE TEXT SEARCH DICTIONARY ' ||
+                                   QUOTE_IDENT(dn.nspname) || '.' || QUOTE_IDENT(d.dictname) || ' (TEMPLATE = ' || QUOTE_IDENT(tn.nspname) || '.' || QUOTE_IDENT(tp.tmplname) ||
+                                   COALESCE(', ' || d.dictinitoption, '') || E');\n    END IF;\nEND\n$$;\n', '' ORDER BY dn.nspname, d.dictname)
+                   FROM pg_ts_dict d
+                   JOIN pg_namespace dn ON dn.oid = d.dictnamespace
+                   JOIN pg_ts_template tp ON tp.oid = d.dicttemplate
+                   JOIN pg_namespace tn ON tn.oid = tp.tmplnamespace
+                  WHERE dn.nspname <> 'pg_catalog'
+                    AND d.oid IN (SELECT m.mapdict FROM pg_ts_config_map m WHERE m.mapcfg = c.oid)), '') ||
+       E'DO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_ts_config c JOIN pg_namespace n ON n.oid = c.cfgnamespace WHERE n.nspname = ' || QUOTE_LITERAL(n.nspname) || ' AND c.cfgname = ' || QUOTE_LITERAL(c.cfgname) || E') THEN\n        CREATE TEXT SEARCH CONFIGURATION ' ||
+       QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.cfgname) || ' (PARSER = ' || QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.prsname) || E');\n    END IF;\nEND\n$$;\n' ||
+       'ALTER TEXT SEARCH CONFIGURATION ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.cfgname) || ' DROP MAPPING IF EXISTS FOR ' ||
+       (SELECT STRING_AGG(QUOTE_IDENT(tt.alias), ', ' ORDER BY tt.tokid) FROM TS_TOKEN_TYPE(c.cfgparser) tt) || E';\n' ||
+       COALESCE((SELECT STRING_AGG('ALTER TEXT SEARCH CONFIGURATION ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.cfgname) || ' ADD MAPPING FOR ' || g.tokens || ' WITH ' || g.dicts || E';\n', '' ORDER BY g.first_token)
+                   FROM (SELECT STRING_AGG(QUOTE_IDENT(tt.alias), ', ' ORDER BY tt.tokid) AS tokens, MIN(tt.tokid) AS first_token, md.dicts
+                           FROM (SELECT m.maptokentype,
+                                        STRING_AGG(QUOTE_IDENT(dn.nspname) || '.' || QUOTE_IDENT(d.dictname), ', ' ORDER BY m.mapseqno) AS dicts
+                                   FROM pg_ts_config_map m
+                                   JOIN pg_ts_dict d ON d.oid = m.mapdict
+                                   JOIN pg_namespace dn ON dn.oid = d.dictnamespace
+                                  WHERE m.mapcfg = c.oid
+                                  GROUP BY m.maptokentype) md
+                           JOIN TS_TOKEN_TYPE(c.cfgparser) tt ON tt.tokid = md.maptokentype
+                          GROUP BY md.dicts) g), '') AS Code
+  FROM pg_ts_config c
+  JOIN pg_namespace n ON n.oid = c.cfgnamespace
+  JOIN pg_ts_parser p ON p.oid = c.cfgparser
+  JOIN pg_namespace pn ON pn.oid = p.prsnamespace
+ WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
+   AND n.nspname NOT LIKE 'pg_temp_%'
+   AND n.nspname NOT LIKE 'pg_toast_temp_%'
+   AND " + PostgreSqlNotExtensionMember("pg_ts_config", "c.oid") + @";
+";
+        PerformPostgreSqlCasting(command, "Text Search Configurations");
+    }
+
+    // One file per signature, named schema.op(left, right) with NONE for a missing side. CREATE OPERATOR has no IF NOT
+    // EXISTS; the guard looks for a real operator, not the shell another operator's COMMUTATOR or NEGATOR leaves, because
+    // CREATE OPERATOR fills a shell in. An existing operator is left as it is (ALTER OPERATOR changes only some options).
+    private void CastPostgreSqlOperators(IDbCommand command)
+    {
+        command.CommandText = @"
+SELECT 'Operators' AS Folder,
+       n.nspname || '.' || o.oprname || '(' || CASE WHEN o.oprleft = 0 THEN 'NONE' ELSE FORMAT_TYPE(o.oprleft, NULL) END || ', ' || CASE WHEN o.oprright = 0 THEN 'NONE' ELSE FORMAT_TYPE(o.oprright, NULL) END || ')' AS FullName,
+       E'DO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_operator o JOIN pg_namespace n ON n.oid = o.oprnamespace WHERE n.nspname = ' || QUOTE_LITERAL(n.nspname) || ' AND o.oprname = ' || QUOTE_LITERAL(o.oprname) ||
+       ' AND o.oprleft = ' || CASE WHEN o.oprleft = 0 THEN '0' ELSE QUOTE_LITERAL(FORMAT_TYPE(o.oprleft, NULL)) || '::regtype' END ||
+       ' AND o.oprright = ' || CASE WHEN o.oprright = 0 THEN '0' ELSE QUOTE_LITERAL(FORMAT_TYPE(o.oprright, NULL)) || '::regtype' END ||
+       E' AND o.oprcode <> 0) THEN\n        CREATE OPERATOR ' || QUOTE_IDENT(n.nspname) || '.' || o.oprname || ' (FUNCTION = ' ||
+       (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = o.oprcode) ||
+       CASE WHEN o.oprleft <> 0 THEN ', LEFTARG = ' || FORMAT_TYPE(o.oprleft, NULL) ELSE '' END ||
+       CASE WHEN o.oprright <> 0 THEN ', RIGHTARG = ' || FORMAT_TYPE(o.oprright, NULL) ELSE '' END ||
+       COALESCE((SELECT ', COMMUTATOR = OPERATOR(' || QUOTE_IDENT(cn.nspname) || '.' || co.oprname || ')' FROM pg_operator co JOIN pg_namespace cn ON cn.oid = co.oprnamespace WHERE co.oid = o.oprcom), '') ||
+       COALESCE((SELECT ', NEGATOR = OPERATOR(' || QUOTE_IDENT(nn.nspname) || '.' || ng.oprname || ')' FROM pg_operator ng JOIN pg_namespace nn ON nn.oid = ng.oprnamespace WHERE ng.oid = o.oprnegate), '') ||
+       COALESCE((SELECT ', RESTRICT = ' || QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = o.oprrest), '') ||
+       COALESCE((SELECT ', JOIN = ' || QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = o.oprjoin), '') ||
+       CASE WHEN o.oprcanhash THEN ', HASHES' ELSE '' END ||
+       CASE WHEN o.oprcanmerge THEN ', MERGES' ELSE '' END ||
+       E');\n    END IF;\nEND\n$$;' AS Code
+  FROM pg_operator o
+  JOIN pg_namespace n ON n.oid = o.oprnamespace
+ WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
+   AND n.nspname NOT LIKE 'pg_temp_%'
+   AND n.nspname NOT LIKE 'pg_toast_temp_%'
+   AND o.oprcode <> 0
+   AND " + PostgreSqlNotExtensionMember("pg_operator", "o.oid") + @";
+";
+        PerformPostgreSqlCasting(command, "Operators");
+    }
+
+    // A cast has no schema; it is named by its two types. Only user casts (past the bootstrap oid range) and not the
+    // multirange casts the engine creates with a range type. CREATE CAST has no IF NOT EXISTS, so the create is guarded.
+    private void CastPostgreSqlCasts(IDbCommand command)
+    {
+        command.CommandText = @"
+SELECT 'Casts' AS Folder,
+       FORMAT_TYPE(c.castsource, NULL) || ' AS ' || FORMAT_TYPE(c.casttarget, NULL) AS FullName,
+       E'DO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_cast WHERE castsource = ' || QUOTE_LITERAL(FORMAT_TYPE(c.castsource, NULL)) || '::regtype AND casttarget = ' || QUOTE_LITERAL(FORMAT_TYPE(c.casttarget, NULL)) ||
+       E'::regtype) THEN\n        CREATE CAST (' || FORMAT_TYPE(c.castsource, NULL) || ' AS ' || FORMAT_TYPE(c.casttarget, NULL) || ') ' ||
+       CASE c.castmethod
+            WHEN 'f' THEN 'WITH FUNCTION ' || (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) || '(' || OIDVECTORTYPES(p.proargtypes) || ')' FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = c.castfunc)
+            WHEN 'i' THEN 'WITH INOUT'
+            ELSE 'WITHOUT FUNCTION' END ||
+       CASE c.castcontext WHEN 'a' THEN ' AS ASSIGNMENT' WHEN 'i' THEN ' AS IMPLICIT' ELSE '' END ||
+       E';\n    END IF;\nEND\n$$;' AS Code
+  FROM pg_cast c
+ WHERE c.oid >= 16384
+   AND " + PostgreSqlNotEngineOwned("pg_cast", "c.oid") + @";
+";
+        PerformPostgreSqlCasting(command, "Casts");
+    }
+
+    // Dropped and re-created on every deploy, like table triggers, then set to its enabled state, which is not part of
+    // the definition. Creating one needs a superuser.
+    private void CastPostgreSqlEventTriggers(IDbCommand command)
+    {
+        command.CommandText = @"
+SELECT 'Event Triggers' AS Folder,
+       e.evtname AS FullName,
+       'DROP EVENT TRIGGER IF EXISTS ' || QUOTE_IDENT(e.evtname) || E';\nCREATE EVENT TRIGGER ' || QUOTE_IDENT(e.evtname) || ' ON ' || QUOTE_IDENT(e.evtevent) ||
+       COALESCE(' WHEN TAG IN (' || (SELECT STRING_AGG(QUOTE_LITERAL(u.tag), ', ' ORDER BY u.ord) FROM UNNEST(e.evttags) WITH ORDINALITY AS u(tag, ord)) || ')', '') ||
+       E'\n    EXECUTE FUNCTION ' || (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = e.evtfoid) || '();' ||
+       CASE e.evtenabled
+            WHEN 'D' THEN E'\nALTER EVENT TRIGGER ' || QUOTE_IDENT(e.evtname) || ' DISABLE;'
+            WHEN 'R' THEN E'\nALTER EVENT TRIGGER ' || QUOTE_IDENT(e.evtname) || ' ENABLE REPLICA;'
+            WHEN 'A' THEN E'\nALTER EVENT TRIGGER ' || QUOTE_IDENT(e.evtname) || ' ENABLE ALWAYS;'
+            ELSE '' END AS Code
+  FROM pg_event_trigger e
+ WHERE " + PostgreSqlNotExtensionMember("pg_event_trigger", "e.oid") + @";
+";
+        PerformPostgreSqlCasting(command, "Event Triggers");
+    }
+
     private void CastPostgreSqlRules(IDbCommand command)
     {
         command.CommandText = @"
@@ -3329,6 +3543,8 @@ SELECT 'Rules' AS Folder,
     AND ns.nspname NOT LIKE 'pg_temp_%'
     AND ns.nspname NOT LIKE 'pg_toast_temp_%'
     AND r.rulename != '_RETURN'
+    AND c.reloftype = 0
+    AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid)
     AND " + PostgreSqlNotExtensionMember("pg_rewrite", "r.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Rules");
@@ -3361,6 +3577,8 @@ SELECT 'Triggers' AS Folder,
     -- does not contain.
     AND tbl.relkind <> 'p'
     AND NOT tbl.relispartition
+    AND tbl.reloftype = 0
+    AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = tbl.oid)
     AND " + PostgreSqlNotExtensionMember("pg_trigger", "t.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Triggers");
@@ -3494,6 +3712,12 @@ SELECT mv.schemaname, mv.matviewname
             var objectType = ScriptFolderTypeInference.InferFromFolderName(folderName);
             ValidateAndHandleScript(command.Connection, fileName, body, objectType);
             IncrementStatForFolder(folderName);
+        }
+
+        foreach (var (castPath, folderName) in records.Select(r => (r.CastPath, r.FolderName)).Distinct())
+        {
+            var objectType = ScriptFolderTypeInference.InferFromFolderName(folderName);
+            if (RepositoryHelper.FoldersWrittenOnUse.Contains(objectType)) DeclareFolderWrittenOnUse(objectType, castPath);
         }
     }
 
@@ -4415,6 +4639,11 @@ SELECT [name], type_desc AS kind FROM sys.indexes
             case "Materialized Views": _stats.MaterializedViews++; break;
             case "Collations": _stats.Collations++; break;
             case "Publications": _stats.Publications++; break;
+            case "Range Types": _stats.RangeTypes++; break;
+            case "Text Search Configurations": _stats.TextSearchConfigurations++; break;
+            case "Operators": _stats.Operators++; break;
+            case "Casts": _stats.Casts++; break;
+            case "Event Triggers": _stats.EventTriggers++; break;
         }
     }
 
@@ -4482,6 +4711,11 @@ SELECT [name], type_desc AS kind FROM sys.indexes
                 LogIfPositive("  MatViews:   ", _stats.MaterializedViews);
                 LogIfPositive("  Collations: ", _stats.Collations);
                 LogIfPositive("  Publications:", _stats.Publications);
+                LogIfPositive("  Range Types:", _stats.RangeTypes);
+                LogIfPositive("  Text Search Configurations:", _stats.TextSearchConfigurations);
+                LogIfPositive("  Operators:  ", _stats.Operators);
+                LogIfPositive("  Casts:      ", _stats.Casts);
+                LogIfPositive("  Event Triggers:", _stats.EventTriggers);
                 break;
 
             case Platform.MySQL:
@@ -4542,5 +4776,10 @@ SELECT [name], type_desc AS kind FROM sys.indexes
         public int SecurityPolicies { get; set; }
         public int Collations { get; set; }
         public int Publications { get; set; }
+        public int RangeTypes { get; set; }
+        public int TextSearchConfigurations { get; set; }
+        public int Operators { get; set; }
+        public int Casts { get; set; }
+        public int EventTriggers { get; set; }
     }
 }

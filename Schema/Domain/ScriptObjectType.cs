@@ -42,6 +42,12 @@ namespace Schema.Domain
         // MySQL
         Events,
         // SQL Server, after the rest so no existing value moves.
-        SecurityPolicies
+        SecurityPolicies,
+        // PostgreSQL, likewise.
+        RangeTypes,
+        TextSearchConfigurations,
+        Operators,
+        Casts,
+        EventTriggers
     }
 }

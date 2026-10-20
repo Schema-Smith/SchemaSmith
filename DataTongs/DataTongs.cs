@@ -840,7 +840,7 @@ SELECT {selectColumns}
         cmd.CommandText = $@"
 SELECT JSON_AGG(ROW_TO_JSON(tbl))
   FROM(SELECT {selectColumns}
-         FROM ""{Identifier.EscapeDelimited(tableSchema, Platform.PostgreSQL)}"".""{Identifier.EscapeDelimited(tableName, Platform.PostgreSQL)}""
+         FROM ONLY ""{Identifier.EscapeDelimited(tableSchema, Platform.PostgreSQL)}"".""{Identifier.EscapeDelimited(tableName, Platform.PostgreSQL)}""
 {(string.IsNullOrWhiteSpace(filter) ? "" : $"         WHERE {filter}")}
          ORDER BY {orderColumns}) tbl
 ";

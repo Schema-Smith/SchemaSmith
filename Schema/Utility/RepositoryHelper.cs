@@ -726,5 +726,9 @@ public static class RepositoryHelper
     /// than releases still deploying packages, which refuse a Template.json naming a type they do not know, so a package
     /// that uses none of them stays loadable there.
     /// </summary>
-    public static readonly IReadOnlySet<ScriptObjectType> FoldersWrittenOnUse = new HashSet<ScriptObjectType> { ScriptObjectType.SecurityPolicies };
+    public static readonly IReadOnlySet<ScriptObjectType> FoldersWrittenOnUse = new HashSet<ScriptObjectType>
+    {
+        ScriptObjectType.SecurityPolicies, ScriptObjectType.RangeTypes, ScriptObjectType.TextSearchConfigurations,
+        ScriptObjectType.Operators, ScriptObjectType.Casts, ScriptObjectType.EventTriggers
+    };
 }
