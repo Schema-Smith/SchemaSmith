@@ -14,7 +14,10 @@ CREATE OR REPLACE PROCEDURE "SchemaSmith"."TableQuench"
    -- exactly as before and can never elect a rebuild.
    p_RebuildPolicyMode TEXT = 'NEVER',
    p_RebuildPolicyThreshold INT = NULL,
-   p_RebuildPolicyOnOrderMismatch BOOLEAN = FALSE)
+   p_RebuildPolicyOnOrderMismatch BOOLEAN = FALSE,
+   -- Forwarded to every pass that builds an index or constraint. The CONCURRENTLY statements those passes queue run
+   -- outside any transaction, so a caller of this procedure runs the queue (temp_deferred_online_work) itself.
+   p_OnlineApply TEXT = 'OFF')
   LANGUAGE plpgsql
   -- LLVM compilation is never worth it for this work, and the planner has no way to know that.
   --
@@ -46,14 +49,15 @@ BEGIN
   CALL "SchemaSmith"."MissingTableAndColumnQuench"(p_WhatIf);
   CALL "SchemaSmith"."ValidateTableOwnership"(p_ProductName, p_WhatIf);
   CALL "SchemaSmith"."ModifiedTableQuench"(p_WhatIf := p_WhatIf, p_DropUnknownIndexes := p_DropUnknownIndexes, p_DropTablesRemovedFromProduct := p_DropTablesRemovedFromProduct,
-                                           p_RebuildPolicyMode := p_RebuildPolicyMode, p_RebuildPolicyThreshold := p_RebuildPolicyThreshold, p_RebuildPolicyOnOrderMismatch := p_RebuildPolicyOnOrderMismatch);
-  CALL "SchemaSmith"."MissingIndexesAndConstraintsQuench"(p_WhatIf);
+                                           p_RebuildPolicyMode := p_RebuildPolicyMode, p_RebuildPolicyThreshold := p_RebuildPolicyThreshold, p_RebuildPolicyOnOrderMismatch := p_RebuildPolicyOnOrderMismatch,
+                                           p_OnlineApply := p_OnlineApply);
+  CALL "SchemaSmith"."MissingIndexesAndConstraintsQuench"(p_WhatIf, p_OnlineApply);
   -- After the passes above: a description is a property of an object that must already exist.
   CALL "SchemaSmith"."DescriptionQuench"(p_WhatIf);
   CALL "SchemaSmith"."ReplicaIdentityQuench"(p_WhatIf);
-  CALL "SchemaSmith"."ForeignKeyQuench"(p_WhatIf);
+  CALL "SchemaSmith"."ForeignKeyQuench"(p_WhatIf, p_OnlineApply);
   -- After the keys exist: enforcement and validation are state on a constraint that must already be there.
-  CALL "SchemaSmith"."ConstraintStateQuench"(p_WhatIf);
+  CALL "SchemaSmith"."ConstraintStateQuench"(p_WhatIf, p_OnlineApply);
   CALL "SchemaSmith"."FixupTableOwnership"(p_ProductName, p_WhatIf);
   CALL "SchemaSmith"."FixupIndexOwnership"(p_ProductName, p_WhatIf);
   -- #242: last, so anything the passes above created is recorded on this run rather than churning once more.

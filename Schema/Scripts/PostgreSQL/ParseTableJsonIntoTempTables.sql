@@ -62,7 +62,9 @@
            elem #>> '{RebuildPolicy,Mode}' AS "RebuildPolicyMode",
            (elem #>> '{RebuildPolicy,Threshold}')::INT AS "RebuildPolicyThreshold",
            (elem #>> '{RebuildPolicy,OnOrderMismatch}')::BOOLEAN AS "RebuildPolicyOnOrderMismatch",
-           COALESCE(JSON_TYPEOF(elem -> 'RebuildPolicy') = 'object', FALSE) AS "RebuildPolicySpecified"
+           COALESCE(JSON_TYPEOF(elem -> 'RebuildPolicy') = 'object', FALSE) AS "RebuildPolicySpecified",
+           -- The table's OnlineApply (OFF, PREFER, REQUIRE) over the deploy's; NULL inherits (OnlineApplyMode).
+           UPPER(NULLIF(TRIM(elem ->> 'OnlineApply'), '')) AS "OnlineApply"
     FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem;
 
     -- ShouldApply scoped by "_RowId" so each generated DELETE targets exactly the source row.

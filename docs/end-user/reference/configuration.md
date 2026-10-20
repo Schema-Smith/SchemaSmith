@@ -784,7 +784,7 @@ deploy use them, per environment, with a per-table override.
 |---|---|
 | `Off` (default) | The plain statements, exactly as a deploy has always run them. |
 | `Prefer` | The online form wherever the engine's version and edition allow it, and the plain form otherwise. |
-| `Require` | The online form, or the deploy is refused, naming each statement that could not run online. The refusal comes before anything on the table changes. |
+| `Require` | The online form, or the deploy is refused, naming each statement that could not run online. The refusal comes before any existing index, key or column on the table changes (a column the deploy adds is added first). |
 
 It is off by default because each online form costs something you did not ask for: an online index build takes about
 twice the space and the time, and a resumable one leaves its progress behind if the deploy's session ends. Those are
@@ -828,6 +828,29 @@ own settings: it resumes the build when the package still declares the index, an
 | Scope | Where to set | Default |
 |---|---|---|
 | Environment | `OnlineApplyMaxDuration` in `SchemaQuench.settings.json` (or `SmithySettings_OnlineApplyMaxDuration`, or `--OnlineApplyMaxDuration=60`) | _unset_ |
+
+### PostgreSQL
+
+Every supported version has these forms, and PostgreSQL has no editions. A `CONCURRENTLY` statement cannot run inside
+a transaction, and each step of a deploy is one, so SchemaQuench runs them as soon as the step that needs them has
+finished, each on its own. The progress log marks each one `(online, after this pass)`.
+
+| Change on an existing table | Under `Prefer` or `Require` |
+|---|---|
+| A new index, or one built again because it changed | `CREATE INDEX CONCURRENTLY` |
+| A new primary key or unique constraint | its unique index built `CONCURRENTLY`, then `ADD CONSTRAINT … USING INDEX` |
+| An index the package no longer declares | `DROP INDEX CONCURRENTLY` |
+| A new check constraint or foreign key | added `NOT VALID`, then `VALIDATE CONSTRAINT` on its own |
+| A constraint declared validated that is `NOT VALID` on the server | `VALIDATE CONSTRAINT` on its own |
+| An exclusion constraint, a `WITHOUT OVERLAPS` key, or any index on a partitioned table | built the plain way: PostgreSQL has no concurrent build for them |
+| A foreign key on a partitioned table, before PostgreSQL 18 | added the plain way: `NOT VALID` is refused there |
+
+A changed index is still dropped inside its step and built again after it, so the table is without that index between
+the two. A concurrent build that fails (a unique index over duplicate rows, a lock that timed out) leaves an invalid
+index behind: SchemaQuench drops it and builds once more, and a second failure fails the deploy with the invalid index
+removed. A validation the rows fail fails the deploy as a plain add would, and leaves the constraint `NOT VALID`; the
+next deploy validates it again. A `Require` refusal rolls back the step it stops. `OnlineApplyMaxDuration` does not
+apply to PostgreSQL.
 
 ## System-versioned tables (MariaDB)
 

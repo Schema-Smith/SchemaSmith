@@ -793,6 +793,11 @@ public static class ForgeKindler
                 new("SchemaSmith.ValidateTableOwnership.sql"),
                 new("SchemaSmith.FixupTableOwnership.sql"),
                 new("SchemaSmith.FixupIndexOwnership.sql"),
+                // OnlineApply: the form a statement takes, the queue its CONCURRENTLY statements wait in until the
+                // procedure returns, and the REQUIRE refusal. Read by the table and index quenches below.
+                new("SchemaSmith.OnlineApplyForm.sql"),
+                new("SchemaSmith.DeferOnlineWork.sql"),
+                new("SchemaSmith.RefuseUnmetOnlineRequire.sql"),
                 new("SchemaSmith.MissingTableAndColumnQuench.sql"),
                 new("SchemaSmith.BuildExistingIndexesSnapshot.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
@@ -1300,6 +1305,13 @@ public static class ForgeKindler
             // overloads can satisfy, which resolves as "procedure is not unique" rather than picking one.
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ModifiedTableQuench\"(boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean)",
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"TableQuench\"(varchar, text, boolean, boolean, boolean, boolean)",
+            // The pre-OnlineApply arities, for the same reason.
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ModifiedTableQuench\"(boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, text, integer, boolean)",
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"TableQuench\"(varchar, text, boolean, boolean, boolean, boolean, text, integer, boolean)",
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"IndexOnlyQuench\"(varchar, text, boolean, boolean, boolean, boolean, boolean)",
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"MissingIndexesAndConstraintsQuench\"(boolean)",
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ForeignKeyQuench\"(boolean)",
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ConstraintStateQuench\"(boolean)",
         ];
         foreach (var sql in drops)
         {

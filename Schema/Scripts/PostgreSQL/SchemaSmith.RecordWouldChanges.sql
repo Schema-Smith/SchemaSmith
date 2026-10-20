@@ -14,11 +14,12 @@ DECLARE
 BEGIN
     FOR m IN
         SELECT regexp_matches(COALESCE(p_Script, ''),
-            'INSERT INTO "SchemaSmith"\."ChangeAudit"\s*\("SessionId",\s*"ObjectType",\s*"ObjectName",\s*"ActionType"\)\s*VALUES\s*\(pg_backend_pid\(\),\s*''((?:[^'']|'''')*)'',\s*''((?:[^'']|'''')*)'',\s*''(created|modified|dropped)''\)',
+            'INSERT INTO "SchemaSmith"\."ChangeAudit"\s*\("SessionId",\s*"ObjectType",\s*"ObjectName",\s*"ActionType"(?:,\s*"Mode")?\)\s*VALUES\s*\(pg_backend_pid\(\),\s*''((?:[^'']|'''')*)'',\s*''((?:[^'']|'''')*)'',\s*''(created|modified|dropped)''(?:,\s*(?:''([a-z]+)''|NULL))?\)',
             'g')
     LOOP
-        INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+        -- The form the statement takes (OnlineApply) rides along when the row names one.
+        INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode")
             VALUES (pg_backend_pid(), REPLACE(m[1], '''''', ''''), REPLACE(m[2], '''''', ''''),
-                    CASE m[3] WHEN 'created' THEN 'wouldCreate' WHEN 'modified' THEN 'wouldModify' ELSE 'wouldDrop' END);
+                    CASE m[3] WHEN 'created' THEN 'wouldCreate' WHEN 'modified' THEN 'wouldModify' ELSE 'wouldDrop' END, m[4]);
     END LOOP;
 END $$;

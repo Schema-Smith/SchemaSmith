@@ -1701,7 +1701,7 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"
 CALL ""SchemaSmith"".""ValidateTableOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
-CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnknownIndexes}, p_WhatIf := {_whatIfOnly}, p_DropTablesRemovedFromProduct := {_dropRemovedTables}, p_DropColumnsRemovedFromProduct := {_dropRemovedColumns}, p_DropForeignKeysRemovedFromProduct := {_dropRemovedForeignKeys}, p_DropCheckConstraintsRemovedFromProduct := {_dropRemovedCheckConstraints}, p_DropExcludeConstraintsRemovedFromProduct := {_dropRemovedExcludeConstraints}, p_DropStatisticsRemovedFromProduct := {_dropRemovedStatistics}, p_DropIndexesRemovedFromProduct := {_dropRemovedIndexes}, p_CaptureWouldDrop := {FormatBooleanFlag(CaptureWouldDrop)}, p_RebuildPolicyMode := '{RebuildPolicyMode}', p_RebuildPolicyThreshold := {RebuildPolicyThreshold}, p_RebuildPolicyOnOrderMismatch := {RebuildPolicyOnOrderMismatch});";
+CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnknownIndexes}, p_WhatIf := {_whatIfOnly}, p_DropTablesRemovedFromProduct := {_dropRemovedTables}, p_DropColumnsRemovedFromProduct := {_dropRemovedColumns}, p_DropForeignKeysRemovedFromProduct := {_dropRemovedForeignKeys}, p_DropCheckConstraintsRemovedFromProduct := {_dropRemovedCheckConstraints}, p_DropExcludeConstraintsRemovedFromProduct := {_dropRemovedExcludeConstraints}, p_DropStatisticsRemovedFromProduct := {_dropRemovedStatistics}, p_DropIndexesRemovedFromProduct := {_dropRemovedIndexes}, p_CaptureWouldDrop := {FormatBooleanFlag(CaptureWouldDrop)}, p_RebuildPolicyMode := '{RebuildPolicyMode}', p_RebuildPolicyThreshold := {RebuildPolicyThreshold}, p_RebuildPolicyOnOrderMismatch := {RebuildPolicyOnOrderMismatch}, p_OnlineApply := '{OnlineApply}');";
                 break;
             case Platform.MySQL:
             {
@@ -1733,6 +1733,7 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Modified Tables"), tableCommand.CommandText);
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
+        RunDeferredOnlineWork(tableCommand);
     }
 
     // #242. The mapping is an optimisation over a working comparison: failing to record must never fail a deploy
@@ -1845,12 +1846,12 @@ EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
             case Platform.PostgreSQL:
                 tableCommand.CommandText = _template.IndexOnlyTableQuenches
                     ? $@"
-CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_TableDefinitions := '{EscapeSqlLiteral(IterationTableSchema)}', p_DropUnknownIndexes := {_dropUnknownIndexes}, p_DropIndexesRemovedFromProduct := {_dropRemovedIndexes}, p_WhatIf := {_whatIfOnly}, p_UpdateFillFactor := {_template.UpdateFillFactor.ToString().ToLower()}, p_CaptureWouldDrop := {FormatBooleanFlag(CaptureWouldDrop)});
+CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_TableDefinitions := '{EscapeSqlLiteral(IterationTableSchema)}', p_DropUnknownIndexes := {_dropUnknownIndexes}, p_DropIndexesRemovedFromProduct := {_dropRemovedIndexes}, p_WhatIf := {_whatIfOnly}, p_UpdateFillFactor := {_template.UpdateFillFactor.ToString().ToLower()}, p_CaptureWouldDrop := {FormatBooleanFlag(CaptureWouldDrop)}, p_OnlineApply := '{OnlineApply}');
 CALL ""SchemaSmith"".""ReplicaIdentityQuench""(p_WhatIf := {_whatIfOnly});
 CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
 "
                     : $@"
-CALL ""SchemaSmith"".""MissingIndexesAndConstraintsQuench""(p_WhatIf := {_whatIfOnly});
+CALL ""SchemaSmith"".""MissingIndexesAndConstraintsQuench""(p_WhatIf := {_whatIfOnly}, p_OnlineApply := '{OnlineApply}');
 CALL ""SchemaSmith"".""DescriptionQuench""(p_WhatIf := {_whatIfOnly});
 CALL ""SchemaSmith"".""ReplicaIdentityQuench""(p_WhatIf := {_whatIfOnly});
 CALL ""SchemaSmith"".""FixupTableOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
@@ -1880,6 +1881,7 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Indexes"), tableCommand.CommandText);
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
+        RunDeferredOnlineWork(tableCommand);
     }
 
     // MySQL threads the no-drop-protection capture signal via a connection session variable rather
@@ -1921,8 +1923,8 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
                 tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ForeignKeyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}\nIF [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.fn_ServerMajorVersion() >= 15 EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.EdgeConstraintQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ConstraintStateQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExtendedPropertyQuench @WhatIf = {_whatIfOnly}";
                 break;
             case Platform.PostgreSQL:
-                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ForeignKeyQuench""(p_WhatIf := {_whatIfOnly});
-CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly});";
+                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ForeignKeyQuench""(p_WhatIf := {_whatIfOnly}, p_OnlineApply := '{OnlineApply}');
+CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_OnlineApply := '{OnlineApply}');";
                 break;
             case Platform.MySQL:
             {
@@ -1939,6 +1941,21 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly});";
 
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Foreign Keys"), tableCommand.CommandText);
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
+        _debugFileLocation = "";
+        RunDeferredOnlineWork(tableCommand);
+    }
+
+    // PostgreSQL OnlineApply: what the pass just queued runs now, outside its transaction (PostgreSqlOnlineWork). Skipped
+    // when neither the environment nor any table asks for it, so an Off deploy sends exactly what it always did.
+    private void RunDeferredOnlineWork(IDbCommand tableCommand)
+    {
+        if (_product.Platform.GetBasePlatform() != Platform.PostgreSQL || _whatIfOnly == FormatBooleanFlag(true) ||
+            (OnlineApply == "OFF" && !_template.Tables.Exists(t => !string.IsNullOrWhiteSpace(t.OnlineApply) &&
+                                                                   !t.OnlineApply.Trim().Equals("Off", StringComparison.OrdinalIgnoreCase))))
+            return;
+
+        PostgreSqlOnlineWork.Run(tableCommand, SafeProgressLog,
+            sql => _debugFileLocation = LogSqlScript(GetDebugFileName("Online Work"), sql));
         _debugFileLocation = "";
     }
 

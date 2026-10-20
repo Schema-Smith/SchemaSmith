@@ -115,6 +115,10 @@ namespace Schema.Capabilities
             // are not kept (13+ converts it in place with DROP EXPRESSION).
             rows.Add(new("drop-expression", "Removing a column's generation, keeping its values", Platform.PostgreSQL,
                 13, "PostgreSQL 13", null, DegradeKind.Reduced, "un-generated column, values not kept (PG13)"));
+            // OnlineApply: below 18 a foreign key on a partitioned table cannot be added NOT VALID, so Prefer adds it plain
+            // and records the change's Mode as unavailable; Require refuses it.
+            rows.Add(new("online-foreign-key-partitioned", "Online foreign key on a partitioned table", Platform.PostgreSQL,
+                18, "PostgreSQL 18", null, DegradeKind.Reduced, null));
             rows.Add(new("nulls-not-distinct", "Unique index NULLS NOT DISTINCT", Platform.PostgreSQL,
                 15, "PostgreSQL 15", null, DegradeKind.Skip, "NULLS NOT DISTINCT (PG15)"));
             rows.Add(new("unlogged-sequence", "Unlogged sequence", Platform.PostgreSQL,

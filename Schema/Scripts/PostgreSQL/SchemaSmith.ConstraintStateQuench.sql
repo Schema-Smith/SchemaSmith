@@ -9,7 +9,9 @@
 -- constraint changes nothing: PostgreSQL cannot un-validate. An omitted attribute is its default, so a package that
 -- says nothing enforces and validates. Below 18, NOT ENFORCED follows UnsupportedFeaturePolicy: 'fail' aborts naming
 -- the constraints, 'warn' records a downgraded manifest row per constraint and leaves it enforced.
-CREATE OR REPLACE PROCEDURE "SchemaSmith"."ConstraintStateQuench"(p_WhatIf BOOLEAN)
+-- OnlineApply (OFF, PREFER, REQUIRE; a table's own value over it): on an existing table a validation runs after this
+-- procedure (DeferOnlineWork), alone, so it scans under VALIDATE's own weaker lock rather than inside this transaction.
+CREATE OR REPLACE PROCEDURE "SchemaSmith"."ConstraintStateQuench"(p_WhatIf BOOLEAN, p_OnlineApply TEXT = 'OFF')
     LANGUAGE plpgsql
   SET jit = 'off'
 AS $$
@@ -53,14 +55,28 @@ BEGIN
                 WHEN s."ObjectType" = 'foreignKey' AND s."Enforced" AND NOT s."LiveEnforced" THEN
                   'RAISE NOTICE ''  Enforcing ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''';' || CHR(10) ||
                   'ALTER TABLE ' || "SchemaSmith"."QuoteName"(s."TableSchema") || '.' || "SchemaSmith"."QuoteName"(s."TableName") || ' ALTER CONSTRAINT ' || "SchemaSmith"."QuoteName"(s."Name") || ' ENFORCED;'
+                WHEN v."Online" AND NOT p_WhatIf THEN
+                  'RAISE NOTICE ''  Validating ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ' (online, after this pass)'';' || CHR(10) ||
+                  'CALL "SchemaSmith"."DeferOnlineWork"(' || quote_literal('Validating constraint ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name") || ', ' ||
+                  quote_literal(v."Validate") || ', NULL, ' || quote_literal(v."Audit") || ');'
                 ELSE
-                  'RAISE NOTICE ''  Validating ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''';' || CHR(10) ||
-                  'ALTER TABLE ' || "SchemaSmith"."QuoteName"(s."TableSchema") || '.' || "SchemaSmith"."QuoteName"(s."TableName") || ' VALIDATE CONSTRAINT ' || "SchemaSmith"."QuoteName"(s."Name") || ';'
-           END || CHR(10) ||
-           'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || s."ObjectType" || ''', ''' ||
-           s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''', ''modified'');', CHR(10))
+                  'RAISE NOTICE ''  Validating ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || CASE WHEN v."Online" THEN ' (online, after this pass)' ELSE '' END || ''';' || CHR(10) ||
+                  v."Validate"
+           END ||
+           CASE WHEN v."Online" AND NOT p_WhatIf THEN ''
+                WHEN v."Online" THEN CHR(10) || v."Audit"
+                ELSE CHR(10) || 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || s."ObjectType" || ''', ''' ||
+                     s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''', ''modified'');' END, CHR(10))
     INTO sql_script
     FROM temp_constraint_states s
+    -- Only the validation arm is deferred; enforcing or not enforcing a key changes no rows' lock.
+    CROSS JOIN LATERAL (SELECT NOT ((s."ObjectType" = 'foreignKey' AND NOT s."Enforced" AND s."LiveEnforced" AND v_pg18)
+                                    OR (s."ObjectType" = 'foreignKey' AND s."Enforced" AND NOT s."LiveEnforced"))
+                               AND "SchemaSmith"."OnlineApplyForm"(p_OnlineApply, s."TableSchema", s."TableName", 'check') = 'online' AS "Online",
+                               'ALTER TABLE ' || "SchemaSmith"."QuoteName"(s."TableSchema") || '.' || "SchemaSmith"."QuoteName"(s."TableName") ||
+                               ' VALIDATE CONSTRAINT ' || "SchemaSmith"."QuoteName"(s."Name") || ';' AS "Validate",
+                               'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''' || s."ObjectType" || ''', ''' ||
+                               s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''', ''modified'', ''online'');' AS "Audit") v
     WHERE (s."ObjectType" = 'foreignKey' AND NOT s."Enforced" AND s."LiveEnforced" AND v_pg18)
        OR (s."ObjectType" = 'foreignKey' AND s."Enforced" AND NOT s."LiveEnforced")
        OR (s."Enforced" AND s."Validated" AND s."LiveEnforced" AND NOT s."LiveValidated");

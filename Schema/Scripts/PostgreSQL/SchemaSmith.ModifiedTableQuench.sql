@@ -24,7 +24,10 @@ CREATE OR REPLACE PROCEDURE "SchemaSmith"."ModifiedTableQuench"
    -- elect a rebuild.
    p_RebuildPolicyMode TEXT = 'NEVER',
    p_RebuildPolicyThreshold INT = NULL,
-   p_RebuildPolicyOnOrderMismatch BOOLEAN = FALSE)
+   p_RebuildPolicyOnOrderMismatch BOOLEAN = FALSE,
+   -- OnlineApply (OFF, PREFER, REQUIRE), a table's own value over it: an index dropped because the package no longer
+   -- declares it goes CONCURRENTLY after this procedure (DeferOnlineWork), and REQUIRE refuses a build that cannot.
+   p_OnlineApply TEXT = 'OFF')
   LANGUAGE plpgsql
   -- JIT off: see the measurement in SchemaSmith.TableQuench.sql. Every procedure carries this, not just
   -- the ones that look like entry points -- the product CALLs ModifiedTableQuench and its siblings
@@ -1038,7 +1041,8 @@ BEGIN
       SELECT ei."TableSchema",
              ei."TableName",
              ei."IndexName",
-             ei."PrimaryKey" OR ei."UniqueConstraint" AS "IsConstraint"
+             ei."PrimaryKey" OR ei."UniqueConstraint" AS "IsConstraint",
+             FALSE AS "Online"
         FROM temp_existing_indexes ei
         WHERE NOT EXISTS (SELECT 1 FROM temp_index_renames rn
                           WHERE rn."TableSchema" = ei."TableSchema" AND rn."TableName" = ei."TableName"
@@ -1157,22 +1161,43 @@ BEGIN
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, FALSE);
 
     RAISE NOTICE 'Drop Unknown, Removed, and Modified Indexes';
-    SELECT STRING_AGG('RAISE NOTICE ''  Dropping ' || CASE WHEN "IsConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''';' || CHR(10) ||
-                      CASE WHEN "IsConstraint"
-                           THEN 'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."TableName") || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(ti."IndexName") || ' CASCADE;'
-                           ELSE 'DROP INDEX IF EXISTS ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."IndexName") || ';' END || CHR(10) ||
-                      'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN "IsConstraint" THEN 'constraint' ELSE 'index' END || ''', ''' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''', ''dropped'');', CHR(10))
+    -- OnlineApply: an index the package no longer declares is dropped CONCURRENTLY after this procedure. A changed one
+    -- is dropped here, because the missing-index pass builds it again only once it is gone.
+    UPDATE temp_indexes_to_drop ti
+       SET "Online" = TRUE
+     WHERE NOT ti."IsConstraint"
+       AND NOT EXISTS (SELECT 1 FROM temp_indexes i
+                        WHERE i."TableSchema" = ti."TableSchema" AND i."TableName" = ti."TableName" AND i."Name" = ti."IndexName")
+       AND "SchemaSmith"."OnlineApplyForm"(p_OnlineApply, ti."TableSchema", ti."TableName", 'index') = 'online';
+    SELECT STRING_AGG(CASE WHEN ti."Online"
+                           THEN 'RAISE NOTICE ''  Dropping Index ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ' (online, after this pass)'';' || CHR(10) ||
+                                CASE WHEN p_WhatIf THEN d."Statement"
+                                     ELSE 'CALL "SchemaSmith"."DeferOnlineWork"(' || quote_literal('Dropping Index ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ' concurrently') || ', ' ||
+                                          quote_literal(d."Statement") || ', NULL, ' ||
+                                          quote_literal('INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''index'', ''' ||
+                                                        ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''', ''dropped'', ''online'');') || ');' END
+                           ELSE 'RAISE NOTICE ''  Dropping ' || CASE WHEN "IsConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''';' || CHR(10) ||
+                                CASE WHEN "IsConstraint"
+                                     THEN 'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."TableName") || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(ti."IndexName") || ' CASCADE;'
+                                     ELSE 'DROP INDEX IF EXISTS ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."IndexName") || ';' END || CHR(10) ||
+                                'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN "IsConstraint" THEN 'constraint' ELSE 'index' END || ''', ''' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''', ''dropped'');'
+                      END, CHR(10))
       INTO sql_script
-      FROM temp_indexes_to_drop ti;
+      FROM temp_indexes_to_drop ti
+      CROSS JOIN LATERAL (SELECT 'DROP INDEX CONCURRENTLY IF EXISTS ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."IndexName") || ';' AS "Statement") d;
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     -- #363: WhatIf twin of the embedded 'index'/'constraint' 'dropped' audit above; same source.
     IF p_WhatIf THEN
-      INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+      INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode")
         SELECT pg_backend_pid(), CASE WHEN "IsConstraint" THEN 'constraint' ELSE 'index' END,
-               ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName", 'wouldDrop'
+               ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName", 'wouldDrop',
+               CASE WHEN ti."Online" THEN 'online' END
           FROM temp_indexes_to_drop ti;
     END IF;
+
+    -- Every drop has run, so a declared index or constraint missing now is one this deploy builds.
+    CALL "SchemaSmith"."RefuseUnmetOnlineRequire"(p_OnlineApply, p_WhatIf, FALSE);
 
     -- No-drop protection tier (#270): the column drop pass below is gated inline by
     -- p_DropColumnsRemovedFromProduct (forced FALSE in protected mode), so it drops nothing. Record

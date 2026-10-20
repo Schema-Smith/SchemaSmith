@@ -79,6 +79,7 @@ public class CapabilityDocumentationTests
         ["SqlServer/fulltext-statistical-semantics"] = "**Full-text statistical semantics**",
 
         // ---- PostgreSQL ----
+        ["PostgreSQL/online-foreign-key-partitioned"] = "**Online foreign key on a partitioned table**",
         ["PostgreSQL/nulls-not-distinct"] = "**`NULLS NOT DISTINCT`**",
         ["PostgreSQL/temporal-key"] = "**`WITHOUT OVERLAPS`**",
         ["PostgreSQL/set-null-columns"] = "**`ON DELETE SET NULL (columns)`**",

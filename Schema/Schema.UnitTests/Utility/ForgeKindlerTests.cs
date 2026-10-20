@@ -400,7 +400,7 @@ public class ForgeKindlerTests
         //   the create pass; policy-routed below 13).
         // +1 = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
         // +1 = IdentityOptionChanges (an identity column's declared sequence options, compared and applied).
-        Assert.That(postgres.Length, Is.EqualTo(68));
+        Assert.That(postgres.Length, Is.EqualTo(71));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
@@ -1118,7 +1118,7 @@ public class ForgeKindlerTests
 
         ForgeKindler.DropSupersededPostgreSqlOverloads(mockCmd);
 
-        Assert.That(executed, Has.Count.EqualTo(7));
+        Assert.That(executed, Has.Count.EqualTo(13));
         Assert.That(executed, Has.All.StartsWith("DROP PROCEDURE IF EXISTS"));
         Assert.That(executed.Any(s => s.Contains("\"ValidateTableOwnership\"(varchar, boolean)")));
         Assert.That(executed.Any(s => s.Contains("\"FixupTableOwnership\"(varchar)")));
@@ -1131,6 +1131,17 @@ public class ForgeKindlerTests
             "The 10-boolean ModifiedTableQuench must be dropped, or the 13-argument replacement is ambiguous with it.");
         Assert.That(executed.Any(s => s.Contains("\"TableQuench\"(varchar, text, boolean, boolean, boolean, boolean)")),
             "The 6-argument TableQuench must be dropped, or the 9-argument replacement is ambiguous with it.");
+        // The pre-OnlineApply arities, each of which gained a defaulted p_OnlineApply.
+        foreach (var signature in new[]
+                 {
+                     "\"ModifiedTableQuench\"(boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, text, integer, boolean)",
+                     "\"TableQuench\"(varchar, text, boolean, boolean, boolean, boolean, text, integer, boolean)",
+                     "\"IndexOnlyQuench\"(varchar, text, boolean, boolean, boolean, boolean, boolean)",
+                     "\"MissingIndexesAndConstraintsQuench\"(boolean)",
+                     "\"ForeignKeyQuench\"(boolean)",
+                     "\"ConstraintStateQuench\"(boolean)",
+                 })
+            Assert.That(executed.Any(s => s.EndsWith(signature)), $"{signature} must be dropped, or its OnlineApply replacement is ambiguous with it.");
     }
 
     [Test]
