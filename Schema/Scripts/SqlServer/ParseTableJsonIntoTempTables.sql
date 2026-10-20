@@ -1136,10 +1136,7 @@
                                   FROM STRING_SPLIT([RelatedColumns], ',')
                                  WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [DeleteAction]      = ISNULL(NULLIF(RTRIM([DeleteAction]), ''), 'NO ACTION'),
-         [UpdateAction]      = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION'),
-         [Enforced]          = ISNULL([Enforced], 1),
-         [Validated]         = ISNULL([Validated], 1),
-         [NotForReplication] = ISNULL([NotForReplication], 0);
+         [UpdateAction]      = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION');
 
   IF EXISTS (SELECT 1 FROM #ForeignKeys WITH (NOLOCK)
                WHERE [RelatedTableSchema] IS NULL OR [RelatedTableSchema] IN ('[]', '[ ]', ''))
@@ -1164,7 +1161,7 @@
   INSERT INTO #CheckConstraints ([_RowId], [Schema], [TableName], [ConstraintName], [Expression], [ShouldApplyExpression], [VariantName], [Enforced], [Validated], [NotForReplication])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], c.[ConstraintName], c.[Expression], c.[ShouldApplyExpression], c.[VariantName],
-         ISNULL(c.[Enforced], 1), ISNULL(c.[Validated], 1), ISNULL(c.[NotForReplication], 0)
+         c.[Enforced], c.[Validated], c.[NotForReplication]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(CheckConstraints) WITH (
       [ConstraintName] NVARCHAR(500) '$.Name',

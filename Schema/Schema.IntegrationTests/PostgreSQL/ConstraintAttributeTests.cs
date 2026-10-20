@@ -161,12 +161,12 @@ public class ConstraintAttributeTests
         Assert.That(State(Ck).Validated, Is.False, "setup: created NOT VALID over a violating row");
         ClearAudit();
 
-        var ex = Assert.Catch<DbException>(() => Deploy(Package()), "validating a constraint the rows violate must fail, not silently skip");
+        var ex = Assert.Catch<DbException>(() => Deploy(Package(ck: ", \"Validated\": true")), "validating a constraint the rows violate must fail, not silently skip");
         Assert.That(ex!.Message, Does.Contain(Ck));
         Assert.That(State(Ck).Validated, Is.False, "still NOT VALID after the failed validation");
 
         Exec($"DELETE FROM public.{Table} WHERE id = 1");
-        Deploy(Package());
+        Deploy(Package(ck: ", \"Validated\": true"));
         Assert.Multiple(() =>
         {
             Assert.That(State(Ck).Validated, Is.True, "with the violation gone, the rows validate");
@@ -182,12 +182,32 @@ public class ConstraintAttributeTests
         Deploy(Package(fk: ", \"Validated\": false"));
         Assert.That(State(Fk).Validated, Is.False, "setup: created NOT VALID over an orphan row");
 
-        var ex = Assert.Catch<DbException>(() => Deploy(Package()));
+        var ex = Assert.Catch<DbException>(() => Deploy(Package(fk: ", \"Validated\": true")));
         Assert.That(ex!.Message, Does.Contain(Fk));
 
         Exec($"DELETE FROM public.{Table} WHERE id = 1");
-        Deploy(Package());
+        Deploy(Package(fk: ", \"Validated\": true"));
         Assert.That(State(Fk).Validated, Is.True);
+    }
+
+    // A package written before Validated existed must not validate a constraint created NOT VALID: the validation fails
+    // on any row that violates it, and the deploy with it.
+    [Test]
+    public void AnOmittedValidated_LeavesANotValidConstraintAsItIs()
+    {
+        Deploy(Package(withCheck: false, withFk: false));
+        Exec($"INSERT INTO public.{Table} (id, parent_id, qty) VALUES (1, 99, -5)");
+        Deploy(Package(fk: ", \"Validated\": false", ck: ", \"Validated\": false"));
+        ClearAudit();
+
+        Deploy(Package());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(State(Fk).Validated, Is.False, "the orphan row is left alone, and so is the key");
+            Assert.That(State(Ck).Validated, Is.False);
+            Assert.That(Audits("foreignKey", "modified", Fk) + Audits("constraint", "modified", Ck), Is.Zero);
+        });
     }
 
     [Test]
@@ -247,10 +267,10 @@ public class ConstraintAttributeTests
             Deploy(Package(fk: ", \"Enforced\": false", ck: ", \"Enforced\": false"));
             Assert.That(Audits("foreignKey", "modified", Fk) + Audits("constraint", "modified", Ck) + Audits("constraint", "dropped", Ck), Is.Zero, "a redeploy touches nothing");
 
-            Deploy(Package());
+            Deploy(Package(fk: ", \"Enforced\": true", ck: ", \"Enforced\": true"));
             Assert.Multiple(() =>
             {
-                Assert.That(FkState(), Is.EqualTo((true, true)), "an omitted Enforced is true, and enforcing re-checks the rows");
+                Assert.That(FkState(), Is.EqualTo((true, true)), "a declared Enforced true enforces, and enforcing re-checks the rows");
                 Assert.That(State(Ck), Is.EqualTo((true, false, true)));
             });
             return;
@@ -277,7 +297,7 @@ public class ConstraintAttributeTests
         Deploy(Package(ck: ", \"Validated\": false"));
         ClearAudit();
 
-        Deploy(Package(), whatIf: true);
+        Deploy(Package(ck: ", \"Validated\": true"), whatIf: true);
 
         Assert.Multiple(() =>
         {
@@ -302,7 +322,7 @@ public class ConstraintAttributeTests
             Assert.That(ck.Expression, Does.Not.Contain("NOT VALID").And.Not.Contain("NO INHERIT"), "the suffixes are attributes now, not expression text: " + ck.Expression);
         });
 
-        Deploy(Package());
+        Deploy(Package(fk: ", \"Validated\": true"));
         table = (PostgreSqlTable)PlatformDeserializer.DeserializeTable(Str($"SELECT \"SchemaSmith\".\"GenerateTableJSON\"('public', '{Table}')"), Platform.PostgreSQL);
         Assert.Multiple(() =>
         {
@@ -328,11 +348,14 @@ public class ConstraintAttributeTests
             Assert.That(dom.CheckConstraints.Single().Expression, Does.Not.Contain("NOT VALID"));
         });
 
-        var ex = Assert.Catch<DbException>(() => DeployDomain(DomainPackage()));
+        DeployDomain(DomainPackage());
+        Assert.That(DomainValidated(), Is.False, "an omitted Validated leaves the constraint NOT VALID");
+
+        var ex = Assert.Catch<DbException>(() => DeployDomain(DomainPackage(", \"Validated\": true")));
         Assert.That(ex!.Message, Does.Contain("violate"), "PostgreSQL names the column, not the domain constraint, when a domain validation fails: " + ex.Message);
 
         Exec($"DELETE FROM public.{Table}");
-        DeployDomain(DomainPackage());
+        DeployDomain(DomainPackage(", \"Validated\": true"));
         Assert.That(DomainValidated(), Is.True);
     }
 }

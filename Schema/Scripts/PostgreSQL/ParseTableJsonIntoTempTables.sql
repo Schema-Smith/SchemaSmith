@@ -358,6 +358,9 @@
            COALESCE((celem ->> 'InitiallyDeferred')::BOOLEAN, false) AS "InitiallyDeferred",
            COALESCE((celem ->> 'Enforced')::BOOLEAN, true) AS "Enforced",
            COALESCE((celem ->> 'Validated')::BOOLEAN, true) AS "Validated",
+           -- NULL when omitted: an existing constraint's state is converged only when the package declares it.
+           (celem ->> 'Enforced')::BOOLEAN AS "EnforcedDeclared",
+           (celem ->> 'Validated')::BOOLEAN AS "ValidatedDeclared",
            COALESCE((celem ->> 'NoInherit')::BOOLEAN, false) AS "NoInherit",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName"
@@ -394,6 +397,9 @@
            celem ->> 'MatchType' AS "MatchType",
            COALESCE((celem ->> 'Enforced')::BOOLEAN, true) AS "Enforced",
            COALESCE((celem ->> 'Validated')::BOOLEAN, true) AS "Validated",
+           -- NULL when omitted: an existing constraint's state is converged only when the package declares it.
+           (celem ->> 'Enforced')::BOOLEAN AS "EnforcedDeclared",
+           (celem ->> 'Validated')::BOOLEAN AS "ValidatedDeclared",
            -- ON DELETE SET NULL (columns) is PostgreSQL 15: the effective list drives compare + emit (empty below 15,
            -- where a plain SET NULL sets every column, so an old target neither churns nor emits the clause); the
            -- declared one drives the unsupported-feature policy. Written as the catalog reads it back: no spaces.

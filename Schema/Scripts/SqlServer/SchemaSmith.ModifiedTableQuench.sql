@@ -2518,7 +2518,8 @@ BEGIN TRY
     WHERE ek.FKScript <> '(' + [Columns] + ') REFERENCES ' + [RelatedTableSchema] + '.' + [RelatedTable] + ' (' + [RelatedColumns] + ')' +
                          ' ON DELETE ' + [DeleteAction] +
                          ' ON UPDATE ' + [UpdateAction] +
-                         CASE WHEN ISNULL(fk.[NotForReplication], 0) = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
+                         -- An omitted NotForReplication is the live key's, so an older package never re-creates a key for it.
+                         CASE WHEN ISNULL(fk.[NotForReplication], CASE WHEN ek.FKScript LIKE '% NOT FOR REPLICATION' THEN 1 ELSE 0 END) = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
   
   RAISERROR('Drop Modified Foreign Keys', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping Foreign Key ' + fc.[Schema] + '.' + fc.[TableName] + '.' + fc.[FKName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -2663,8 +2664,8 @@ BEGIN TRY
       WHERE (ec.[CheckDefinition] <> SchemaSmith.fn_NormalizeCheckExpression(cc.[Expression])
              AND SchemaSmith.fn_ExpressionMapUnchanged(ec.[Schema], ec.[TableName], 'CHECK', ec.[CheckName],
                    'expression', cc.[Expression], ec.[LiveDefinition]) = 0)
-         -- NOT FOR REPLICATION is create-time state: a change is a drop and re-create.
-         OR ec.[NotForReplication] <> ISNULL(cc.[NotForReplication], 0)
+         -- NOT FOR REPLICATION is create-time state: a declared change is a drop and re-create; an omitted one is left.
+         OR ec.[NotForReplication] <> cc.[NotForReplication]
   
   RAISERROR('Drop Modified Check Constraints', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping check constraint ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[CheckName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +

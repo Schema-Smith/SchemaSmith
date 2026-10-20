@@ -132,8 +132,11 @@ public class ConstraintAttributeTests
             "the same declaration a second time must touch nothing");
     }
 
+    // A package that says nothing about these attributes leaves the live state alone: one written before they existed must
+    // not start re-validating constraints created WITH NOCHECK (which fails on violating rows), re-enabling ones someone
+    // disabled, or stripping NOT FOR REPLICATION. A new constraint is still created enforced and trusted.
     [Test]
-    public void OmittedAttributes_AreTheDefaults_AndReEnableAConstraintDisabledByHand()
+    public void OmittedAttributes_CreateTheDefaults_AndLeaveAConstraintChangedByHandAsItIs_UntilTheyAreDeclared()
     {
         Deploy(Package());
         Assert.Multiple(() =>
@@ -147,14 +150,65 @@ public class ConstraintAttributeTests
         ClearAudit();
 
         Deploy(Package());
-
         Assert.Multiple(() =>
         {
-            Assert.That(FkState(), Is.EqualTo((false, false, false)), "an omitted Enforced is true, and enabling validates the rows, so the key is trusted again");
+            Assert.That(FkState(), Is.EqualTo((true, true, false)), "an omitted Enforced leaves the key disabled");
+            Assert.That(CkState(), Is.EqualTo((true, true, false)));
+            Assert.That(Count($"SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND REPLACE(REPLACE(ObjectName, '[', ''), ']', '') LIKE 'dbo.{Table}.%'"), Is.Zero);
+        });
+
+        ClearAudit();
+        const string converge = ", \"Enforced\": true, \"Validated\": true";
+        Deploy(Package(fk: converge, ck: converge));
+        Assert.Multiple(() =>
+        {
+            Assert.That(FkState(), Is.EqualTo((false, false, false)), "declared, enabling validates the rows, so the key is trusted again");
             Assert.That(CkState(), Is.EqualTo((false, false, false)));
             Assert.That(Audits("foreignKey", "modified", Fk), Is.EqualTo(1));
             Assert.That(Audits("constraint", "modified", Ck), Is.EqualTo(1));
             Assert.That(Audits("foreignKey", "dropped", Fk) + Audits("constraint", "dropped", Ck), Is.Zero, "converged in place, not re-created");
+        });
+
+        Exec($"ALTER TABLE dbo.{Table} NOCHECK CONSTRAINT [{Fk}]; ALTER TABLE dbo.{Table} WITH NOCHECK CHECK CONSTRAINT [{Fk}];");
+        Exec($"ALTER TABLE dbo.{Table} NOCHECK CONSTRAINT [{Ck}]; ALTER TABLE dbo.{Table} WITH NOCHECK CHECK CONSTRAINT [{Ck}];");
+        Assert.That(FkState(), Is.EqualTo((false, true, false)), "setup: re-enabled by hand without checking the rows");
+
+        Deploy(Package());
+        Assert.Multiple(() =>
+        {
+            Assert.That(FkState(), Is.EqualTo((false, true, false)), "an omitted Validated leaves an enabled key untrusted");
+            Assert.That(CkState(), Is.EqualTo((false, true, false)));
+        });
+    }
+
+    // SQL Server never trusts a NOT FOR REPLICATION constraint, so validating one ran WITH CHECK CHECK on every deploy.
+    [Test]
+    public void NotForReplicationWithValidatedTrue_IsNotRevalidatedOnEveryDeploy()
+    {
+        const string attrs = ", \"NotForReplication\": true, \"Validated\": true";
+        Deploy(Package(fk: attrs, ck: attrs));
+        Assert.That(FkState().Untrusted, Is.True, "setup: the engine does not trust a NOT FOR REPLICATION key");
+        ClearAudit();
+
+        Deploy(Package(fk: attrs, ck: attrs));
+
+        Assert.That(Count($"SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND REPLACE(REPLACE(ObjectName, '[', ''), ']', '') LIKE 'dbo.{Table}.%'"), Is.Zero,
+            "a redeploy touches nothing");
+    }
+
+    [Test]
+    public void AnOmittedNotForReplication_LeavesTheConstraintAsItIs()
+    {
+        Deploy(Package(fk: ", \"NotForReplication\": true", ck: ", \"NotForReplication\": true"));
+        ClearAudit();
+
+        Deploy(Package());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FkState().NotForReplication, Is.True, "not re-created to strip it");
+            Assert.That(CkState().NotForReplication, Is.True);
+            Assert.That(Audits("foreignKey", "dropped", Fk) + Audits("constraint", "dropped", Ck), Is.Zero);
         });
     }
 
@@ -165,7 +219,7 @@ public class ConstraintAttributeTests
         Assert.That(CkState().Disabled, Is.True, "setup");
         Exec($"INSERT dbo.{Parent} (Id) VALUES (1); INSERT dbo.{Table} (Id, ParentId, Qty) VALUES (1, 1, -5)");
 
-        Deploy(Package(ck: ", \"Validated\": false"));
+        Deploy(Package(ck: ", \"Enforced\": true, \"Validated\": false"));
 
         Assert.That(CkState(), Is.EqualTo((false, true, false)), "enabled for new rows, the violating row left unchecked, so untrusted");
     }
@@ -179,12 +233,12 @@ public class ConstraintAttributeTests
         Assert.That(CkState(), Is.EqualTo((false, true, false)), "setup: created WITH NOCHECK over a violating row");
         ClearAudit();
 
-        var ex = Assert.Throws<SqlException>(() => Deploy(Package()), "validating a constraint the rows violate must fail, not silently skip");
+        var ex = Assert.Throws<SqlException>(() => Deploy(Package(ck: ", \"Validated\": true")), "validating a constraint the rows violate must fail, not silently skip");
         Assert.That(ex!.Message, Does.Contain(Ck));
         Assert.That(CkState().Untrusted, Is.True, "still untrusted after the failed validation");
 
         Exec($"DELETE dbo.{Table} WHERE Id = 1");
-        Deploy(Package());
+        Deploy(Package(ck: ", \"Validated\": true"));
         Assert.Multiple(() =>
         {
             Assert.That(CkState(), Is.EqualTo((false, false, false)), "with the violation gone, the rows validate and the constraint is trusted");
@@ -238,7 +292,7 @@ public class ConstraintAttributeTests
         Exec($"ALTER TABLE dbo.{Table} NOCHECK CONSTRAINT [{Fk}]");
         ClearAudit();
 
-        Deploy(Package(), whatIf: true);
+        Deploy(Package(fk: ", \"Enforced\": true"), whatIf: true);
 
         Assert.Multiple(() =>
         {

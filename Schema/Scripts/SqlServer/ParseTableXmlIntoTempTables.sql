@@ -404,7 +404,7 @@
          [DeleteAction] = ISNULL(NULLIF(RTRIM([DeleteAction]), ''), 'NO ACTION'),
          [UpdateAction] = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION'),
          f.[ShouldApplyExpression], f.[VariantName],
-         [Enforced] = CONVERT(BIT, ISNULL(f.[Enforced], 1)), [Validated] = CONVERT(BIT, ISNULL(f.[Validated], 1)), [NotForReplication] = CONVERT(BIT, ISNULL(f.[NotForReplication], 0))
+         [Enforced] = CONVERT(BIT, f.[Enforced]), [Validated] = CONVERT(BIT, f.[Validated]), [NotForReplication] = CONVERT(BIT, f.[NotForReplication])
     INTO #ForeignKeys
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/ForeignKeys') AS Y(fk)
@@ -479,7 +479,7 @@
   IF OBJECT_ID('tempdb..#CheckConstraints') IS NOT NULL DROP TABLE #CheckConstraints
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], c.[ConstraintName], c.[Expression], c.[ShouldApplyExpression], c.[VariantName],
-         [Enforced] = CONVERT(BIT, ISNULL(c.[Enforced], 1)), [Validated] = CONVERT(BIT, ISNULL(c.[Validated], 1)), [NotForReplication] = CONVERT(BIT, ISNULL(c.[NotForReplication], 0))
+         [Enforced] = CONVERT(BIT, c.[Enforced]), [Validated] = CONVERT(BIT, c.[Validated]), [NotForReplication] = CONVERT(BIT, c.[NotForReplication])
     INTO #CheckConstraints
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/CheckConstraints') AS Y(cc)

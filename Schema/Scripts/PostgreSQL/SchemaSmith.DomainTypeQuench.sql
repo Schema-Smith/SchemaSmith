@@ -66,7 +66,8 @@ BEGIN
   SELECT t."Schema", t."Name",
          c ->> 'Name' AS "ConstraintName",
          c ->> 'Expression' AS "Expression",
-         COALESCE((c ->> 'Validated')::BOOLEAN, true) AS "Validated"
+         -- NULL when omitted: an existing constraint created NOT VALID is validated only when the package declares it.
+         (c ->> 'Validated')::BOOLEAN AS "Validated"
     FROM temp_domain_types t,
          JSON_ARRAY_ELEMENTS(COALESCE(t."CheckConstraints", '[]'::JSON)) AS c;
 
@@ -224,7 +225,7 @@ BEGIN
   RAISE NOTICE 'Add Missing Domain Constraints';
   SELECT STRING_AGG('RAISE NOTICE ''  Add constraint ' || ck."ConstraintName" || ' on domain type ' || ck."Schema" || '.' || ck."Name" || ''';' || CHR(10) ||
                     'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(ck."Schema") || '.' || "SchemaSmith"."QuoteName"(ck."Name") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(ck."ConstraintName") ||
-                    ' CHECK (' || ck."Expression" || ')' || CASE WHEN NOT ck."Validated" THEN ' NOT VALID' ELSE '' END || ';' || CHR(10) ||
+                    ' CHECK (' || ck."Expression" || ')' || CASE WHEN NOT COALESCE(ck."Validated", true) THEN ' NOT VALID' ELSE '' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                     'VALUES (pg_backend_pid(), ''domain constraint'', ''' || ck."Schema" || '.' || ck."Name" || '.' || ck."ConstraintName" || ''', ''created'');', CHR(10))
     INTO sql_script

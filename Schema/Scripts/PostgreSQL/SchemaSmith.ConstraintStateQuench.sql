@@ -6,8 +6,9 @@
 -- CHECK constraint's enforceability, so for a check that is create-time state and ModifiedTableQuench converges it by
 -- drop and re-create, as it does NoInherit. Validated true over a constraint created NOT VALID validates it (VALIDATE
 -- CONSTRAINT), which fails when rows violate it -- the engine reporting the truth. Validated false over a validated
--- constraint changes nothing: PostgreSQL cannot un-validate. An omitted attribute is its default, so a package that
--- says nothing enforces and validates. Below 18, NOT ENFORCED follows UnsupportedFeaturePolicy: 'fail' aborts naming
+-- constraint changes nothing: PostgreSQL cannot un-validate. An omitted attribute leaves the live state alone, so a
+-- package written before the attributes existed never validates a constraint created NOT VALID nor enforces one made
+-- NOT ENFORCED by hand; a package converges what it declares. Below 18, NOT ENFORCED follows UnsupportedFeaturePolicy: 'fail' aborts naming
 -- the constraints, 'warn' records a downgraded manifest row per constraint and leaves it enforced.
 -- OnlineApply (OFF, PREFER, REQUIRE; a table's own value over it): on an existing table a validation runs after this
 -- procedure (DeferOnlineWork), alone, so it scans under VALIDATE's own weaker lock rather than inside this transaction.
@@ -22,12 +23,14 @@ BEGIN
   RAISE NOTICE 'Converge constraint enforcement and validation';
   DROP TABLE IF EXISTS temp_constraint_states;
   CREATE TEMPORARY TABLE temp_constraint_states AS
-    SELECT d."ObjectType", d."TableSchema", d."TableName", d."Name", d."Enforced", d."Validated",
+    SELECT d."ObjectType", d."TableSchema", d."TableName", d."Name",
+           COALESCE(d."EnforcedDeclared", "SchemaSmith"."ConstraintEnforced"(con.oid)) AS "Enforced",
+           COALESCE(d."ValidatedDeclared", con.convalidated) AS "Validated",
            "SchemaSmith"."ConstraintEnforced"(con.oid) AS "LiveEnforced",
            con.convalidated AS "LiveValidated"
-      FROM (SELECT 'constraint' AS "ObjectType", "TableSchema", "TableName", "Name", "Enforced", "Validated" FROM temp_checks
+      FROM (SELECT 'constraint' AS "ObjectType", "TableSchema", "TableName", "Name", "EnforcedDeclared", "ValidatedDeclared" FROM temp_checks
             UNION ALL
-            SELECT 'foreignKey', "TableSchema", "TableName", "Name", "Enforced", "Validated" FROM temp_fks) d
+            SELECT 'foreignKey', "TableSchema", "TableName", "Name", "EnforcedDeclared", "ValidatedDeclared" FROM temp_fks) d
       JOIN pg_catalog.pg_constraint con
         ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(d."TableSchema") || '.' || "SchemaSmith"."QuoteName"(d."TableName"))
        AND con.conname = d."Name"

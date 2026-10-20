@@ -7,8 +7,11 @@ GO
 -- the existing rows when Validated is true and not when it is false; Validated true over a constraint the engine does
 -- not trust re-checks the rows (WITH CHECK CHECK CONSTRAINT), which fails when rows violate it -- the engine reporting
 -- the truth. Validated false over a trusted constraint changes nothing: SQL Server cannot un-validate. An omitted
--- attribute is its default, so a package that says nothing re-enables a constraint someone disabled by hand.
--- NotForReplication is create-time state; ModifiedTableQuench converges it by drop and re-create.
+-- attribute leaves the live state alone, so a package written before the attributes existed never re-validates a
+-- constraint created WITH NOCHECK nor re-enables one someone disabled; a package converges what it declares.
+-- NotForReplication is create-time state; ModifiedTableQuench converges it by drop and re-create. SQL Server never
+-- trusts a NOT FOR REPLICATION constraint, so one is not re-validated: the check would run on every deploy and change
+-- nothing.
 CREATE PROCEDURE SchemaSmith.ConstraintStateQuench
   @WhatIf BIT = 0
 AS
@@ -17,18 +20,20 @@ BEGIN
   DECLARE @v_SQL NVARCHAR(MAX)
 
   IF OBJECT_ID('tempdb..#ConstraintStates') IS NOT NULL DROP TABLE #ConstraintStates
-  SELECT d.[ObjectType], d.[Schema], d.[Table], d.[Name], d.[Enforced], d.[Validated], o.is_disabled, o.is_not_trusted
+  SELECT d.[ObjectType], d.[Schema], d.[Table], d.[Name],
+         ISNULL(d.[Enforced], CASE WHEN o.is_disabled = 1 THEN 0 ELSE 1 END) AS [Enforced],
+         ISNULL(d.[Validated], CASE WHEN o.is_not_trusted = 1 THEN 0 ELSE 1 END) AS [Validated], o.is_disabled, o.is_not_trusted, o.is_not_for_replication
     INTO #ConstraintStates
     FROM (SELECT 'foreignKey' AS [ObjectType], SchemaSmith.fn_StripBracketWrapping(k.[Schema]) AS [Schema], SchemaSmith.fn_StripBracketWrapping(k.[TableName]) AS [Table],
-                 SchemaSmith.fn_StripBracketWrapping(k.[KeyName]) AS [Name], ISNULL(k.[Enforced], 1) AS [Enforced], ISNULL(k.[Validated], 1) AS [Validated]
+                 SchemaSmith.fn_StripBracketWrapping(k.[KeyName]) AS [Name], k.[Enforced], k.[Validated]
             FROM #ForeignKeys k WITH (NOLOCK)
           UNION ALL
           SELECT 'constraint', SchemaSmith.fn_StripBracketWrapping(c.[Schema]), SchemaSmith.fn_StripBracketWrapping(c.[TableName]),
-                 SchemaSmith.fn_StripBracketWrapping(c.[ConstraintName]), ISNULL(c.[Enforced], 1), ISNULL(c.[Validated], 1)
+                 SchemaSmith.fn_StripBracketWrapping(c.[ConstraintName]), c.[Enforced], c.[Validated]
             FROM #CheckConstraints c WITH (NOLOCK)) d
-    JOIN (SELECT parent_object_id, [name], is_disabled, is_not_trusted FROM sys.foreign_keys
+    JOIN (SELECT parent_object_id, [name], is_disabled, is_not_trusted, is_not_for_replication FROM sys.foreign_keys
           UNION ALL
-          SELECT parent_object_id, [name], is_disabled, is_not_trusted FROM sys.check_constraints) o
+          SELECT parent_object_id, [name], is_disabled, is_not_trusted, is_not_for_replication FROM sys.check_constraints) o
       ON o.parent_object_id = OBJECT_ID(QUOTENAME(d.[Schema]) + '.' + QUOTENAME(d.[Table]), 'U')
      AND o.[name] COLLATE DATABASE_DEFAULT = d.[Name]
 
@@ -49,7 +54,7 @@ BEGIN
                              ELSE 'WITH NOCHECK CHECK' END AS [Clause]) x
     WHERE (s.[Enforced] = 0 AND s.is_disabled = 0)
        OR (s.[Enforced] = 1 AND s.is_disabled = 1)
-       OR (s.[Enforced] = 1 AND s.[Validated] = 1 AND s.is_not_trusted = 1)
+       OR (s.[Enforced] = 1 AND s.[Validated] = 1 AND s.is_not_trusted = 1 AND s.is_not_for_replication = 0)
     ORDER BY s.[ObjectType], s.[Schema], s.[Table], s.[Name]
     FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)

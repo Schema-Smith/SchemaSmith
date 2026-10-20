@@ -797,7 +797,7 @@ BEGIN
                             -- enforceability): a change is a drop and re-create. Below 18 a check is always enforced, so a
                             -- declared false is the degrade, not a difference.
                             AND ec."NoInherit" = c."NoInherit"
-                            AND ec."Enforced" = (c."Enforced" OR "SchemaSmith"."ServerVersionNum"() < 18)
+                            AND (c."EnforcedDeclared" IS NULL OR ec."Enforced" = (c."Enforced" OR "SchemaSmith"."ServerVersionNum"() < 18))
                             AND (ec."Expression" = c."Expression"
                                  -- #242: PostgreSQL rewrites what it stores, so ask what was applied before calling the text a change.
                                  OR "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'CHECK', c."Name",
