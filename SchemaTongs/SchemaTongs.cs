@@ -2721,6 +2721,7 @@ SELECT s.name AS SchemaName, v.name AS ViewName
             if (_includeCasts) CastPostgreSqlCasts(command);
             if (_includeEventTriggers) CastPostgreSqlEventTriggers(command);
             LogPostgreSqlExtensionMembersSkipped(command);
+            LogPostgreSqlDeclinedKinds(command);
         }
         finally
         {
@@ -2738,6 +2739,47 @@ SELECT s.name AS SchemaName, v.name AS ViewName
     // (LANGUAGE internal) and its multirange casts come back with the type.
     private static string PostgreSqlNotEngineOwned(string classRegclass, string oidExpression) =>
         $"NOT EXISTS (SELECT 1 FROM pg_depend xd WHERE xd.classid = '{classRegclass}'::regclass AND xd.objid = {oidExpression} AND xd.deptype IN ('e', 'i'))";
+
+    // PG-009's declined kinds need support functions compiled into a server library, so a package cannot create one on an
+    // empty database. They are named rather than silently absent; an extension's own are in its line above.
+    private void LogPostgreSqlDeclinedKinds(IDbCommand command)
+    {
+        const string userSchema = "n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith') AND n.nspname NOT LIKE 'pg_temp_%' AND n.nspname NOT LIKE 'pg_toast_temp_%'";
+        command.CommandText = $@"
+SELECT 'base type' AS Kind, n.nspname AS SchemaName, t.typname AS Name
+  FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+ WHERE t.typtype = 'b' AND {userSchema} AND {PostgreSqlNotEngineOwned("pg_type", "t.oid")}
+UNION ALL
+SELECT 'operator class', n.nspname, c.opcname || ' (' || am.amname || ')'
+  FROM pg_opclass c JOIN pg_namespace n ON n.oid = c.opcnamespace JOIN pg_am am ON am.oid = c.opcmethod
+ WHERE {userSchema} AND {PostgreSqlNotExtensionMember("pg_opclass", "c.oid")}
+UNION ALL
+SELECT 'operator family', n.nspname, f.opfname || ' (' || am.amname || ')'
+  FROM pg_opfamily f JOIN pg_namespace n ON n.oid = f.opfnamespace JOIN pg_am am ON am.oid = f.opfmethod
+ WHERE {userSchema} AND {PostgreSqlNotExtensionMember("pg_opfamily", "f.oid")}
+   -- An operator class created without FAMILY makes a family of its own name, which the class's line already covers.
+   AND NOT EXISTS (SELECT 1 FROM pg_opclass c WHERE c.opcfamily = f.oid AND c.opcname = f.opfname AND c.opcnamespace = f.opfnamespace)
+UNION ALL
+SELECT 'text search parser', n.nspname, p.prsname
+  FROM pg_ts_parser p JOIN pg_namespace n ON n.oid = p.prsnamespace
+ WHERE {userSchema} AND {PostgreSqlNotExtensionMember("pg_ts_parser", "p.oid")}
+UNION ALL
+SELECT 'text search template', n.nspname, tp.tmplname
+  FROM pg_ts_template tp JOIN pg_namespace n ON n.oid = tp.tmplnamespace
+ WHERE {userSchema} AND {PostgreSqlNotExtensionMember("pg_ts_template", "tp.oid")}
+ ORDER BY 1, 2, 3;
+";
+        var declined = new List<(string Kind, string Name)>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                if (ShouldExtractFromSchema(reader.GetString(1)))
+                    declined.Add((reader.GetString(0), $"{reader.GetString(1)}.{reader.GetString(2)}"));
+        foreach (var (kind, name) in declined)
+        {
+            _progressLog.Warn($"  Skipping {kind} {name}: it needs support functions compiled into a server library, so a package cannot create it");
+            _stats.SkippedObjects++;
+        }
+    }
 
     private void LogPostgreSqlExtensionMembersSkipped(IDbCommand command)
     {

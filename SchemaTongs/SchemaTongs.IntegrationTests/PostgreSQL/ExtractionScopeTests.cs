@@ -135,6 +135,25 @@ public class ExtractionScopeTests
         Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(2), "both overloads deploy from their own files");
     }
 
+    // PG-009's declined kinds need compiled support functions, so they are named in a warning rather than silently absent.
+    [Test]
+    public void BaseTypesOperatorClassesAndTextSearchParsersAndTemplates_AreNamedInAWarning()
+    {
+        var skipped = _log.Where(l => l.Contains("Skipping") && l.Contains("compiled into a server library")).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(skipped.Any(l => l.Contains("base type x.mytext")), Is.True, string.Join(" | ", skipped));
+            Assert.That(skipped.Any(l => l.Contains("operator class x.int4_alt (btree)")), Is.True, string.Join(" | ", skipped));
+            Assert.That(skipped.Any(l => l.Contains("operator family x.fam (btree)")), Is.True, string.Join(" | ", skipped));
+            Assert.That(skipped.Any(l => l.Contains("operator class x.int4_own (btree)")), Is.True, string.Join(" | ", skipped));
+            Assert.That(skipped.Where(l => l.Contains("operator family x.int4_own")), Is.Empty, "the family a class made for itself is the class's line: " + string.Join(" | ", skipped));
+            Assert.That(skipped.Any(l => l.Contains("text search parser x.prs")), Is.True, string.Join(" | ", skipped));
+            Assert.That(skipped.Any(l => l.Contains("text search template x.tmpl")), Is.True, string.Join(" | ", skipped));
+            Assert.That(skipped.Where(l => l.Contains("_mytext") || l.Contains("ct2") || l.Contains("trgm")), Is.Empty,
+                "an array type, a composite type and an extension's members are not declined base types: " + string.Join(" | ", skipped));
+        });
+    }
+
     [Test]
     public void ASerialColumn_IsExtractedAsSerial_WithNoDefault_AndAnIdentityColumnStaysIdentity()
     {
@@ -222,6 +241,17 @@ public class ExtractionScopeTests
             CREATE TABLE public.pp1 PARTITION OF public.pp FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
             CREATE TABLE public.pp2 PARTITION OF public.pp FOR VALUES FROM ('2025-01-01') TO ('2026-01-01');
             CREATE TRIGGER pp_tr AFTER INSERT ON public.pp FOR EACH ROW EXECUTE FUNCTION public.row_fn();
+            CREATE TYPE x.mytext;
+            CREATE FUNCTION x.mytext_in(cstring) RETURNS x.mytext LANGUAGE internal IMMUTABLE STRICT AS 'textin';
+            CREATE FUNCTION x.mytext_out(x.mytext) RETURNS cstring LANGUAGE internal IMMUTABLE STRICT AS 'textout';
+            CREATE TYPE x.mytext (INPUT = x.mytext_in, OUTPUT = x.mytext_out, LIKE = text);
+            CREATE OPERATOR FAMILY x.fam USING btree;
+            CREATE OPERATOR CLASS x.int4_alt FOR TYPE int4 USING btree FAMILY x.fam AS
+              OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4, int4);
+            CREATE OPERATOR CLASS x.int4_own FOR TYPE int4 USING btree AS
+              OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4, int4);
+            CREATE TEXT SEARCH PARSER x.prs (START = prsd_start, GETTOKEN = prsd_nexttoken, END = prsd_end, LEXTYPES = prsd_lextype);
+            CREATE TEXT SEARCH TEMPLATE x.tmpl (INIT = dsimple_init, LEXIZE = dsimple_lexize);
             """;
         cmd.ExecuteNonQuery();
     }
