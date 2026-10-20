@@ -39,6 +39,13 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 13
              WHERE [object_id] = @v_ObjectId AND temporal_type_desc <> ''NON_TEMPORAL_TABLE'')
     RETURN ''system versioning is enabled (temporal table)''
 '
+-- A ledger table (SQL Server 2022) keeps its digest and history with the table itself; a shadow copy is an ordinary
+-- table, so the ledger would be gone. sys.tables.ledger_type is 2022, gated the same way as temporal_type_desc.
+IF SchemaSmith.fn_ServerMajorVersion() >= 16
+  SET @v_TemporalCheck = @v_TemporalCheck + '
+  IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = @v_ObjectId AND ledger_type <> 0)
+    RETURN ''the table is a ledger table''
+'
 
 DECLARE @v_Create NVARCHAR(MAX) = '
 CREATE FUNCTION SchemaSmith.fn_RebuildBlockedReason(@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128))

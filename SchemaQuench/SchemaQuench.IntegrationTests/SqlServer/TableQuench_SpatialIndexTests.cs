@@ -155,6 +155,24 @@ public class TableQuench_SpatialIndexTests : BaseTableQuenchTests
         }, table);
     }
 
+    // Each declared attribute is compared, not only the cells per object: a changed box, grid level or fill factor that
+    // compared equal would leave the old index in place.
+    [TestCase("\"XMax\": 500", "\"XMax\": 600", "SX_Shape:GEOMETRY_GRID:600:LOW:64:80", TestName = "AChangedBoundingBox_RecreatesTheIndex")]
+    [TestCase("\"Level2\": \"LOW\"", "\"Level2\": \"HIGH\"", "SX_Shape:GEOMETRY_GRID:500:HIGH:64:80", TestName = "AChangedGridLevel_RecreatesTheIndex")]
+    [TestCase("\"FillFactor\": 80", "\"FillFactor\": 70", "SX_Shape:GEOMETRY_GRID:500:LOW:64:70", TestName = "AChangedFillFactor_RecreatesTheIndex")]
+    public void AChangedSpatialAttribute_RecreatesTheIndex(string before, string after, string expected)
+    {
+        const string table = "SpatialAttr";
+        WithTables(cmd =>
+        {
+            RunTableQuenchProc(cmd, Json(table, GeometryGrid));
+            var changed = GeometryGrid.Replace(before, after);
+            Assert.That(changed, Is.Not.EqualTo(GeometryGrid), "setup: the declaration changes");
+            RunTableQuenchProc(cmd, Json(table, changed));
+            Assert.That(Shape(cmd, table), Is.EqualTo(expected));
+        }, table);
+    }
+
     private static string Compression(IDbCommand cmd, string table, string index)
     {
         cmd.CommandText = $"""

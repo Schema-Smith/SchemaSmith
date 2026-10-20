@@ -419,6 +419,30 @@ IF OBJECT_ID('dbo.RebuildFkParent', 'U') IS NOT NULL DROP TABLE dbo.RebuildFkPar
 
     // ---- refusal ------------------------------------------------------------
 
+    // A shadow copy is an ordinary table, so rebuilding a ledger table would leave its ledger behind. Its own database:
+    // a dropped ledger table stays behind in the catalog.
+    [Test]
+    public void Rebuild_OfALedgerTable_IsRefused()
+    {
+        using var conn = OpenMainDb();
+        using var cmd = conn.CreateCommand();
+        if (Int(cmd, "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))") < 16) Assert.Ignore("Ledger tables are SQL Server 2022.");
+        var db = $"RebuildLedger_{Guid.NewGuid():N}"[..30];
+        Exec(cmd, $"CREATE DATABASE [{db}]");
+        try
+        {
+            conn.ChangeDatabase(db);
+            Schema.Utility.ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
+            Exec(cmd, "CREATE TABLE dbo.Ledgered (Id INT NOT NULL PRIMARY KEY, Val NVARCHAR(50) NULL) WITH (LEDGER = ON (APPEND_ONLY = ON))");
+            Assert.That(Scalar(cmd, "SELECT SchemaSmith.fn_RebuildBlockedReason(N'dbo', N'Ledgered')")?.ToString(), Is.EqualTo("the table is a ledger table"));
+        }
+        finally
+        {
+            conn.ChangeDatabase("master");
+            Exec(cmd, $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]");
+        }
+    }
+
     [Test]
     public void Rebuild_CdcTrackedTable_IsRefused_AndTheErrorNamesTheReasonAndTheTable()
     {
@@ -611,6 +635,34 @@ EXEC sp_addextendedproperty 'MS_Description', 'kept column', 'SCHEMA', 'dbo', 'T
             Assert.That(AuditRows(cmd, "RebuildKeepsGrants", "reapplied"), Is.EqualTo(1),
                 "The run manifest has to say the permissions were put back.");
         });
+    }
+
+    // The column's grant and description were put back on a replacement that no longer has the column: "Invalid column
+    // name", the rebuild rolled back, and so did every deploy after it.
+    [Test]
+    public void Rebuild_RemovingAColumnThatCarriesAGrantAndADescription_Succeeds_AndKeepsTheTablesOwn()
+    {
+        using var conn = OpenMainDb();
+        using var cmd = conn.CreateCommand();
+        CreateGrantedTable(cmd, "RebuildDropsGrantedColumn");
+        var json = """
+            {
+                "Schema": "[dbo]",
+                "Name": "[RebuildDropsGrantedColumn]",
+                "Columns": [ {"Name": "[Id]", "DataType": "INT", "Nullable": false} ]
+            }
+            """;
+
+        Rebuild(cmd, json, "RebuildDropsGrantedColumn");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Int(cmd, "SELECT COUNT(*) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.RebuildDropsGrantedColumn') AND [name] = 'Val'"), Is.Zero);
+            Assert.That(GrantsFor(cmd, "RebuildDropsGrantedColumn", "rb_perm_user"), Has.Count.EqualTo(3), "the table's own GRANT, grant option and DENY are put back");
+            Assert.That(ExtendedPropertiesOf(cmd, "RebuildDropsGrantedColumn"), Has.Count.EqualTo(1), "and its own description");
+            Assert.That(AuditRows(cmd, "RebuildDropsGrantedColumn", "reapplied"), Is.EqualTo(1));
+        });
+        Exec(cmd, "DROP TABLE IF EXISTS dbo.RebuildDropsGrantedColumn");
     }
 
     [Test]

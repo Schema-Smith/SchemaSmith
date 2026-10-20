@@ -11,7 +11,8 @@ GO
 --
 -- Aggregated with FOR XML PATH rather than STRING_AGG so the one procedure serves every compatibility level,
 -- including the XML-encoded path below the OPENJSON cliff. An extended property is written through an EXISTS guard
--- because the quench adds its own ownership property to a re-created view before the reapply runs.
+-- because the quench adds its own ownership property to a re-created view before the reapply runs. What belongs to a
+-- column is put back only if the replacement still has that column: a rebuild that removes it removes its grants too.
 CREATE PROCEDURE [SchemaSmith].[CapturePermissions]
   @Schema NVARCHAR(128),
   @Name NVARCHAR(128),
@@ -34,7 +35,9 @@ BEGIN
 
   -- GRANT and DENY, with the grant option, on the object and on each column, to each principal.
   DECLARE @v_Permissions NVARCHAR(MAX) = (
-    SELECT CASE p.[state] WHEN 'D' THEN 'DENY ' ELSE 'GRANT ' END
+    SELECT CASE WHEN c.[name] IS NULL THEN ''
+                ELSE 'IF COLUMNPROPERTY(OBJECT_ID(' + @v_QualifiedLiteral + '), N''' + REPLACE(c.[name], '''', '''''') + ''', ''ColumnId'') IS NOT NULL ' END
+         + CASE p.[state] WHEN 'D' THEN 'DENY ' ELSE 'GRANT ' END
          + p.permission_name COLLATE DATABASE_DEFAULT
          + ISNULL(' (' + QUOTENAME(c.[name]) + ')', '')
          + ' ON OBJECT::' + @v_Qualified
@@ -57,7 +60,10 @@ BEGIN
   -- replacement. The value is written as text: every documentation property (MS_Description included) is one, and
   -- sp_addextendedproperty takes it as given.
   DECLARE @v_Properties NVARCHAR(MAX) = (
-    SELECT 'IF NOT EXISTS (SELECT 1 FROM sys.extended_properties WHERE class = 1 AND major_id = OBJECT_ID(' + @v_QualifiedLiteral + ') AND minor_id = '
+    SELECT 'IF '
+         + CASE WHEN c.[name] IS NULL THEN ''
+                ELSE 'COLUMNPROPERTY(OBJECT_ID(' + @v_QualifiedLiteral + '), N''' + REPLACE(c.[name], '''', '''''') + ''', ''ColumnId'') IS NOT NULL AND ' END
+         + 'NOT EXISTS (SELECT 1 FROM sys.extended_properties WHERE class = 1 AND major_id = OBJECT_ID(' + @v_QualifiedLiteral + ') AND minor_id = '
          + CASE WHEN c.[name] IS NULL THEN '0' ELSE 'ISNULL(COLUMNPROPERTY(OBJECT_ID(' + @v_QualifiedLiteral + '), N''' + REPLACE(c.[name], '''', '''''') + ''', ''ColumnId''), -1)' END
          + ' AND [name] = N''' + REPLACE(ep.[name], '''', '''''') + ''')' + @v_CrLf
          + '  EXEC sp_addextendedproperty N''' + REPLACE(ep.[name], '''', '''''') + ''', N''' + REPLACE(CONVERT(NVARCHAR(MAX), ep.[value]), '''', '''''') + ''''
