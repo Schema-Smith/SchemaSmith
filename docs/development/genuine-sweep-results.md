@@ -401,3 +401,21 @@ The 2017 and 2019 failures were all in the tests (ledger tables, a resumable CRE
 | SQL Server 2012 (major 11) @ 14331 | Passed!  - Failed:     0, Passed:    15, Skipped:     6, Total:    21, Duration: 1 m 31 s - Schema.IntegrationTests.dll (net10.0) | 15 passed / 6 skipped |
 | SQL Server 2014 (major 12) @ 14332 | Passed!  - Failed:     0, Passed:    15, Skipped:     6, Total:    21, Duration: 14 m 23 s - Schema.IntegrationTests.dll (net10.0) | 15 passed / 6 skipped |
 | SQL Server 2016 (major 13) @ 14333 | Passed!  - Failed:     0, Passed:    16, Skipped:     5, Total:    21, Duration: 5 m 35 s - Schema.IntegrationTests.dll (net10.0) | 16 passed / 5 skipped |
+
+## 2026-10-21T21:34:24Z - commit 39f9a01c3
+
+| Target | Result | Expected |
+|---|---|---|
+| SQL Server 2008 R2 (major 10) @ 14330 | Passed!  - Failed:     0, Passed:    15, Skipped:     6, Total:    21, Duration: 3 m 48 s - Schema.IntegrationTests.dll (net10.0) | 15 passed / 6 skipped |
+| SQL Server 2012 (major 11) @ 14331 | Passed!  - Failed:     0, Passed:    15, Skipped:     6, Total:    21, Duration: 3 m 14 s - Schema.IntegrationTests.dll (net10.0) | 15 passed / 6 skipped |
+| SQL Server 2014 (major 12) @ 14332 | Passed!  - Failed:     0, Passed:    15, Skipped:     6, Total:    21, Duration: 3 m 32 s - Schema.IntegrationTests.dll (net10.0) | 15 passed / 6 skipped |
+| SQL Server 2016 (major 13) @ 14333 | Passed!  - Failed:     0, Passed:    16, Skipped:     5, Total:    21, Duration: 8 m 24 s - Schema.IntegrationTests.dll (net10.0) | 16 passed / 5 skipped |
+
+## 2026-10-21T22:59:34Z - commit ee0784123
+
+| Target | Result | Expected |
+|---|---|---|
+| SQL Server 2008 R2 (major 10) @ 14330 | Passed!  - Failed:     0, Passed:    15, Skipped:     6, Total:    21, Duration: 1 m 34 s - Schema.IntegrationTests.dll (net10.0) | 15 passed / 6 skipped |
+| SQL Server 2012 (major 11) @ 14331 | Passed!  - Failed:     0, Passed:    15, Skipped:     6, Total:    21, Duration: 1 m 57 s - Schema.IntegrationTests.dll (net10.0) | 15 passed / 6 skipped |
+| SQL Server 2014 (major 12) @ 14332 | Passed!  - Failed:     0, Passed:    15, Skipped:     6, Total:    21, Duration: 1 m 57 s - Schema.IntegrationTests.dll (net10.0) | 15 passed / 6 skipped |
+| SQL Server 2016 (major 13) @ 14333 | Passed!  - Failed:     0, Passed:    16, Skipped:     5, Total:    21, Duration: 2 m 2 s - Schema.IntegrationTests.dll (net10.0) | 16 passed / 5 skipped |
