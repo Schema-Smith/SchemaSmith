@@ -37,7 +37,7 @@ public class DroppedModulePermissionTests : DroppedModulePermissionSharedTests
 
             var second = Deploy();
 
-            Assert.That(Count($"SELECT COUNT(*) FROM mysql.procs_priv WHERE Db = '{MainDb}' AND User = 'perm_role' AND Host = '' AND Routine_name = 'p_perm'"),
+            Assert.That(Count($"SELECT COUNT(*) FROM mysql.procs_priv WHERE CONVERT(Db USING utf8mb4) COLLATE utf8mb4_general_ci = '{MainDb}' AND User = 'perm_role' AND Host = '' AND Routine_name = 'p_perm'"),
                 Is.EqualTo(1), "the role holds EXECUTE again: " + second.Describe());
         }
         finally

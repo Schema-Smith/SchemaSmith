@@ -125,7 +125,8 @@ public class ExplicitSystemTimeColumnTests : BaseTableQuenchTests
                     "the keys without the ROW END column MariaDB adds");
             });
 
-            var json = Newtonsoft.Json.JsonConvert.SerializeObject(new[] { extracted }).Replace($"`{table}`", $"`{copy}`");
+            // Extraction names the table as the server stores it: lowercased under lower_case_table_names = 1.
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(new[] { extracted }).Replace($"`{table}`", $"`{copy}`", StringComparison.OrdinalIgnoreCase);
             RunTableQuenchProc(cmd, json);
             Assert.Multiple(() =>
             {
