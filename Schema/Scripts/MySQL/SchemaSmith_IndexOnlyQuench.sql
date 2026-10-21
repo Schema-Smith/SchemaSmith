@@ -877,7 +877,7 @@ BEGIN
         INSERT IGNORE INTO _SchemaSmith_DeferredIndexSwaps (TableName, IndexName) SELECT TableName, IndexName FROM _SchemaSmith_ModifiedIndexes;
     END IF;
     DELETE s FROM _SchemaSmith_IdxExist s
-      JOIN _SchemaSmith_DeferredIndexSwaps d ON d.TableName = s.TableName AND d.IndexName = s.IndexName;
+      JOIN _SchemaSmith_DeferredIndexSwaps d ON s.TableKey = SchemaSmith_IdentifierKey(d.TableName) AND s.IndexKey = SchemaSmith_NameKeyCI(d.IndexName);
     IF p_WhatIf = 1 THEN
         DELETE FROM _SchemaSmith_DeferredIndexSwaps;
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing indexes');

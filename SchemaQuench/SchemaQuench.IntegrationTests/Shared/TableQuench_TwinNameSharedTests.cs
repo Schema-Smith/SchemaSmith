@@ -178,16 +178,19 @@ public abstract class TableQuench_TwinNameSharedTests : BaseTableQuenchTests
         }
         """;
 
+    // The table's name as the catalog stores it: lowercased under lower_case_table_names = 1.
+    private static string StoredName(string table) => $"IF(@@lower_case_table_names = 1, LOWER('{table}'), '{table}')";
+
     private string ColumnType(IDbCommand cmd, string table, string column) => Scalar(cmd,
         $"SELECT CONCAT(DATA_TYPE, IFNULL(CONCAT('(', CHARACTER_MAXIMUM_LENGTH, ')'), '')) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '{_mainDb}' "
-        + $"AND BINARY TABLE_NAME = BINARY '{table}' AND BINARY COLUMN_NAME = BINARY '{column}'");
+        + $"AND BINARY TABLE_NAME = BINARY {StoredName(table)} AND BINARY COLUMN_NAME = BINARY '{column}'");
 
     private string IndexShape(IDbCommand cmd, string table, string index) => Scalar(cmd,
         "SELECT CONCAT(MIN(NON_UNIQUE), ':', GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX)) FROM information_schema.STATISTICS "
-        + $"WHERE TABLE_SCHEMA = '{_mainDb}' AND BINARY TABLE_NAME = BINARY '{table}' AND BINARY INDEX_NAME = BINARY '{index}'");
+        + $"WHERE TABLE_SCHEMA = '{_mainDb}' AND BINARY TABLE_NAME = BINARY {StoredName(table)} AND BINARY INDEX_NAME = BINARY '{index}'");
 
     private string TableCount(IDbCommand cmd, string table) => Scalar(cmd,
-        $"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '{_mainDb}' AND BINARY TABLE_NAME = BINARY '{table}'");
+        $"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '{_mainDb}' AND BINARY TABLE_NAME = BINARY {StoredName(table)}");
 
     private static string Owned(IDbCommand cmd, string product) => Scalar(cmd,
         "SELECT GROUP_CONCAT(ObjectName ORDER BY BINARY ObjectName) FROM SchemaSmith_ProductOwnership "

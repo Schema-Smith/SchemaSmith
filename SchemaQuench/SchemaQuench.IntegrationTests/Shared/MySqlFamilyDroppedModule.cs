@@ -13,7 +13,7 @@ public static class MySqlFamilyDroppedModule
     public static string GrantExecute(string db) => $"GRANT EXECUTE ON PROCEDURE `{db}`.`p_perm` TO 'perm_user'@'%'";
 
     public static string ExecuteGrantCount(string db) =>
-        $"SELECT COUNT(*) FROM mysql.procs_priv WHERE Db = '{db}' AND User = 'perm_user' AND Routine_name = 'p_perm' AND FIND_IN_SET('Execute', Proc_priv) > 0";
+        $"SELECT COUNT(*) FROM mysql.procs_priv WHERE CONVERT(Db USING utf8mb4) COLLATE utf8mb4_general_ci = '{db}' AND User = 'perm_user' AND Routine_name = 'p_perm' AND FIND_IN_SET('Execute', Proc_priv) > 0";
 
     public static readonly string[] DropStatements = ["DROP PROCEDURE IF EXISTS `p_perm`"];
 

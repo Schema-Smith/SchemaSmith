@@ -92,7 +92,8 @@ public abstract class ScriptObjectFidelitySharedTests
     public void View_CrossDatabaseReferenceStaysQualified()
     {
         var script = Script("Views", "v_cross");
-        Assert.That(script, Does.Contain($"`{_otherDb}`.`o`"), script);
+        // The server spells the database as it stores it: lowercased under lower_case_table_names = 1.
+        Assert.That(script, Does.Contain($"`{_otherDb}`.`o`").IgnoreCase, script);
     }
 
     [Test]
