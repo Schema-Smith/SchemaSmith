@@ -101,9 +101,13 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
 
     private static void SimulateEditionWithoutOnlineBuilds(IDbCommand cmd)
     {
-        cmd.CommandText = "DECLARE @c VARBINARY(128) = 0x53534F56 + CONVERT(BINARY(4), 16) + 0x5353454401; SET CONTEXT_INFO @c";
+        cmd.CommandText = "DECLARE @c VARBINARY(128) = 0x53534F56 + CONVERT(BINARY(4), CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))) + 0x5353454401; SET CONTEXT_INFO @c";
         cmd.ExecuteNonQuery();
     }
+
+    // A resumable CREATE INDEX is SQL Server 2019 (major 15); 2017 only resumes a rebuild.
+    private static bool ResumableCreate(IDbCommand cmd) =>
+        Convert.ToInt32(Scalar(cmd, "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))")) >= 15;
 
     private static object Scalar(IDbCommand cmd, string sql)
     {
@@ -429,12 +433,15 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
             var printed = Printed(conn, cmd, v2, "PREFER", maxDuration: 5);
             ClearAudit(cmd);
             Quench(cmd, v2, "PREFER", maxDuration: 5);
+            var resumable = ResumableCreate(cmd);
             Assert.Multiple(() =>
             {
-                Assert.That(printed.Split('\n').Any(l => l.Contains($"INDEX [IX_{t}]") && l.Contains("ONLINE = ON, RESUMABLE = ON, MAX_DURATION = 5 MINUTES")), Is.True, printed);
+                Assert.That(printed.Split('\n').Any(l => l.Contains($"INDEX [IX_{t}]") && (resumable
+                    ? l.Contains("ONLINE = ON, RESUMABLE = ON, MAX_DURATION = 5 MINUTES")
+                    : l.Contains("ONLINE = ON") && !l.Contains("RESUMABLE"))), Is.True, printed);
                 Assert.That(printed.Split('\n').Any(l => l.Contains($"INDEX [IXC_{t}]") && l.Contains("ONLINE = ON") && !l.Contains("RESUMABLE")), Is.True,
                     "SQL Server refuses a resumable build over a computed key (10644)");
-                Assert.That(Audits(cmd, t), Is.SupersetOf(new[] { $"[dbo].[{t}].[IX_{t}]|created|resumable", $"[dbo].[{t}].[IXC_{t}]|created|online" }));
+                Assert.That(Audits(cmd, t), Is.SupersetOf(new[] { $"[dbo].[{t}].[IX_{t}]|created|{(resumable ? "resumable" : "online")}", $"[dbo].[{t}].[IXC_{t}]|created|online" }));
             });
         });
     }
@@ -452,6 +459,7 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
         var gone = Unique("OnPauseGone");
         WithTable(gone, (_, _) => WithTable(kept, (_, cmd) =>
         {
+            if (!ResumableCreate(cmd)) Assert.Ignore("A resumable CREATE INDEX needs SQL Server 2019 (major 15).");
             string Both(string keptIndexes) => "[" + Json(kept, Pk(kept) + keptIndexes).Replace("\"VARCHAR(10)\"", "\"VARCHAR(20)\"").Trim().TrimStart('[').TrimEnd(']') +
                                                 "," + Json(gone, Pk(gone)).Replace("\"VARCHAR(10)\"", "\"VARCHAR(20)\"").Trim().TrimStart('[').TrimEnd(']') + "]";
             Quench(cmd, Json(kept, Pk(kept)));

@@ -329,6 +329,14 @@ public class DeployPathTableFeatureTests
     [Test]
     public void AnEdgeConstraint_IsCreatedByARealDeploy()
     {
+        // Edge constraints are SQL Server 2019 (major 15). Below it the edge table deploys without one, as a recorded skip.
+        bool supported;
+        using (var conn = OpenMaster())
+        using (var probe = conn.CreateCommand())
+        {
+            probe.CommandText = "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))";
+            supported = Convert.ToInt32(probe.ExecuteScalar()) >= 15;
+        }
         const string setup = "CREATE TABLE dbo.ProbePerson ([Id] INT NOT NULL) AS NODE; CREATE TABLE dbo.ProbeCity ([Id] INT NOT NULL) AS NODE;";
         RunScenario("DeployEdgeConstraint", setup, (deploy, db, cmd) =>
         {
@@ -337,9 +345,16 @@ public class DeployPathTableFeatureTests
                   "Columns": [ { "Name": "[Since]", "DataType": "DATE", "Nullable": true } ],
                   "EdgeConstraints": [ { "Name": "[EC_DeployProbe]", "Clauses": [ { "FromTable": "[dbo].[ProbePerson]", "ToTable": "[dbo].[ProbeCity]" } ], "DeleteAction": "CASCADE" } ] }
                 """);
+            if (!supported)
+            {
+                cmd.CommandText = "SELECT is_edge FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe')";
+                Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the edge table still deploys");
+                _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Edge constraint skipped: requires SQL Server 2019")));
+                return;
+            }
             cmd.CommandText = "SELECT [name] COLLATE DATABASE_DEFAULT + ':' + delete_referential_action_desc COLLATE DATABASE_DEFAULT FROM sys.edge_constraints WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("EC_DeployProbe:CASCADE"), "the declared edge constraint reaches the database");
-        }, freshDatabase: true);
+        }, expectIncomplete: !supported, freshDatabase: true);
     }
 
     [Test]

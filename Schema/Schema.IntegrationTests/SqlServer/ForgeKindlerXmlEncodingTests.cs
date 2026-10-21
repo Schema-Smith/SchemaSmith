@@ -456,6 +456,8 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
+        cmd.CommandText = "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) < 16) Assert.Ignore("Ledger tables need SQL Server 2022 (major 16).");
         try
         {
             var json = "[{\"Schema\": \"[dbo]\", \"Name\": \"[XmlLedger]\", \"Ledger\": \"Updatable\", \"LedgerView\": {\"Name\": \"[XmlLedgerView]\", \"OperationTypeColumn\": \"[Op]\"},"

@@ -74,6 +74,8 @@ public class TableQuench_LedgerNameTests : BaseTableQuenchTests
         ((SqlConnection)conn).InfoMessage += (_, e) => messages.Add(e.Message);
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
+        cmd.CommandText = "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) < 16) Assert.Ignore("Ledger tables need SQL Server 2022 (major 16).");
         try { body(cmd, messages); }
         finally
         {
