@@ -55,6 +55,14 @@ Most deployment failures fall into one of these categories:
 - **Permission.** The deploy login lacks the right to create or alter the object. Check the login's rights against the target database and grant what is needed.
 - **Delivery constraint.** A merge script hit a FK, unique, or check constraint. Open the artifact and look at the VALUES being inserted or the JOIN logic — the data being delivered conflicts with existing rows or references a row that doesn't exist. Fix the source data, adjust the delivery filter, or reorder your delivery scripts.
 
+**PostgreSQL hides the failing row by default.** Its driver redacts an error's detail line, so a constraint failure reads `DETAIL: Detail redacted as it may contain sensitive data.` To see the row, add the driver's own switch to the connection properties for the run you are debugging:
+
+```json
+"Target": { "ConnectionProperties": { "Include Error Detail": "true" } }
+```
+
+The same failure then reads `DETAIL: Failing row contains (1, null).` The detail is real data, so it lands in the logs; turn the switch off again before the logs go anywhere shared.
+
 ### 5. Do not share it
 
 The file holds the real values, and says so in its header. It is for reproducing the failure on your own machine. Do not attach it to a support ticket or a CI build artifact: share the progress log instead, where sensitive values are masked. (`ScrubArtifacts` is deprecated and does nothing. Masking values inside SQL either leaves a value in place or leaves SQL that runs and writes the placeholder.)
@@ -160,7 +168,7 @@ If `KindleTheForge` is already `true` but the helper objects look wrong (someone
 
 **Symptom:** The progress log shows `**CONNECTION FAILED**` and the error log contains a connection exception.
 
-**Cause:** SchemaQuench couldn't connect to the target server.
+**Cause:** SchemaQuench couldn't connect to the target server. The line names the engine the package targets -- `Unable to connect to SQL Server at localhost with user postgres` -- so if that is not the engine your settings point at, the package's `Platform` and the settings disagree, and no setting below will fix it.
 
 **Fix:** Walk through the connection settings:
 
