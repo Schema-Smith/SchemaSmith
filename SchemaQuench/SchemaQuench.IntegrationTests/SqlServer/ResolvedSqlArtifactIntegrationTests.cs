@@ -637,6 +637,57 @@ public class ResolvedSqlArtifactIntegrationTests
 
     // ----- Helpers -------------------------------------------------------------------------------
 
+    // A failed data delivery wrote its file but the failure roll-up said "Debug SQL: n/a"; without the switch the
+    // "how to get it" line was printed twice, once by the delivery and once by the work unit.
+    [TestCase(true)]
+    [TestCase(false)]
+    public void ADataDeliveryFailure_PointsTheRollUpAtItsFile_OrSaysOnceHowToGetIt(bool writeDebugSql)
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var progressLogLines = new List<string>();
+            SetupSharedMocks(progressLogLines, null);
+            var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
+            cfg["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "DeliveryArtifactProbeProduct");
+            cfg["ArtifactPath"] = _artifactDir;
+            cfg["WriteDebugSql"] = writeDebugSql ? "true" : null;
+
+            try
+            {
+                RunSchemaQuench();
+
+                _environment.Received(1).Exit(2);
+                var summary = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+                var artifactPath = summary.SelectToken("failures[0].artifactPath")?.ToString();
+                if (writeDebugSql)
+                {
+                    Assert.That(artifactPath, Is.Not.Null, "the roll-up names the file: " + summary.SelectToken("failures"));
+                    Assert.That(artifactPath, Does.Contain("Failed DataDelivery"));
+                    Assert.That(File.Exists(artifactPath), Is.True);
+                }
+                else
+                {
+                    Assert.That(Directory.GetFiles(_artifactDir, "*.sql"), Is.Empty);
+                    Assert.That(progressLogLines.Count(l => l.Contains("Rerun with --WriteDebugSql")), Is.EqualTo(1),
+                        string.Join(" | ", progressLogLines));
+                }
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
+                cfg["SchemaPackagePath"] = null;
+                using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"DROP TABLE IF EXISTS [{_mainDb}].[dbo].[DeliveryArtifactProbe]";
+                cmd.ExecuteNonQuery();
+            }
+        }
+    }
+
     private void SetupSharedMocks(List<string> progressCapture, List<string> errorCapture)
     {
         _progressLog.ClearReceivedCalls();

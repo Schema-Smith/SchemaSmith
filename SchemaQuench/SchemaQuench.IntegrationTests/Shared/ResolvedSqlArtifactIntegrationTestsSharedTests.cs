@@ -410,18 +410,6 @@ public abstract class ResolvedSqlArtifactIntegrationTestsSharedTests
     /// wording as user-script / data-delivery failures — not the legacy "Debug Script:" wording —
     /// and the failure must still produce a written artifact.
     /// </summary>
-    /// <remarks>
-    /// Coverage limit (documented per #327 S4.2, no silent cap): unlike SQL Server/PostgreSQL, MySQL's
-    /// generated-DDL pipeline stages the resolved table JSON into session temp tables via a separate
-    /// <c>SchemaSmith_ParseTableJson</c> call (whose own debug artifact IS scrub-aware and contains the
-    /// sensitive-token marker), then the actually-failing statement is a scalar
-    /// <c>CALL SchemaSmith_IndexOnlyQuench(...)</c> with no embedded JSON. So the specific artifact
-    /// referenced by THIS failure's "Resolved SQL written to:" line never contains the marker on MySQL,
-    /// and asserting scrub-masking against it would be asserting against the wrong file. The
-    /// scrub-vs-unscrub behavior of <c>LogSqlScript</c> itself is platform-agnostic and is proven by the
-    /// deterministic unit tests (<c>LogSqlScript_ScrubEnabled...</c> / <c>LogSqlScript_ScrubDisabled...</c>
-    /// in DatabaseQuenchTests.cs) plus the SQL Server/PostgreSQL integration coverage above.
-    /// </remarks>
     [Test]
     public void GeneratedDdlFailure_SurfacesUnifiedWording_AndWritesArtifact()
     {

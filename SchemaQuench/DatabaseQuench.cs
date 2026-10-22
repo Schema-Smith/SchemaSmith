@@ -918,6 +918,7 @@ public class DatabaseQuench
                                     if (!DebugSql.Enabled)
                                     {
                                         SafeProgressLogError($"    {DebugSql.HowToGetIt(ResolveArtifactDirectory())}");
+                                        _debugSqlHintLogged = true;
                                         return;
                                     }
                                     try
@@ -929,6 +930,7 @@ public class DatabaseQuench
                                             new List<string> { sql }, failingBatchIndex: 0, label,
                                             safeLabel => GetDebugFileName($"Failed DataDelivery {safeLabel}"));
                                         SafeProgressLogError($"    Resolved SQL written to: {path}");
+                                        _dataDeliveryArtifact ??= path;
                                     }
                                     catch (Exception artifactEx)
                                     {
@@ -1118,7 +1120,7 @@ public class DatabaseQuench
             SafeProgressLogError($"FAILED to quench:\r\n{e.Message}");
             if (!string.IsNullOrWhiteSpace(_debugFileLocation))
                 SafeProgressLogError($"Resolved SQL written to: {_debugFileLocation}");
-            else if (!DebugSql.Enabled && e is not ScriptQuenchException)
+            else if (!DebugSql.Enabled && e is not ScriptQuenchException && !_debugSqlHintLogged)
                 SafeProgressLogError(DebugSql.HowToGetIt(ResolveArtifactDirectory()));
 
             // #338 refinement: for a user-script failure, surface the specific per-script error +
@@ -1134,7 +1136,7 @@ public class DatabaseQuench
             else
             {
                 LastFailure = FailureCtx.ToRecord(e.Message,
-                    string.IsNullOrWhiteSpace(_debugFileLocation) ? null : _debugFileLocation);
+                    string.IsNullOrWhiteSpace(_debugFileLocation) ? _dataDeliveryArtifact : _debugFileLocation);
             }
             // Terse greppable scope marker; the error text is on the inline "FAILED to quench" line
             // above and in the end-of-run roll-up, so it is not restated here (avoids duplicating
@@ -3608,6 +3610,10 @@ SET NOCOUNT ON
     }
 
     private bool _explicitTimestampDefaultsReadOnlyReported;
+
+    // A failed data delivery writes its own file and says how to get it; the work unit's failure line and roll-up use them.
+    private string _dataDeliveryArtifact;
+    private bool _debugSqlHintLogged;
 
     // A TIMESTAMP column must be created with the default it declares. With explicit_defaults_for_timestamp off the
     // engine invents one, so the table steps run with it on and give the session its own value back afterwards. User
