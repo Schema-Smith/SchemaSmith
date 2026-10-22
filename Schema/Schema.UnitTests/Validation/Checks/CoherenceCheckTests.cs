@@ -3091,4 +3091,61 @@ public class CoherenceCheckTests
     [Test]
     public void DistinctFkNames_AreNotReported() =>
         Assert.That(RunFkReuse(Platform.MySQL, null!, ("", "Orders", "fk_orders_parent"), ("", "Invoices", "fk_invoices_parent")), Is.Empty);
+
+    // #569: a partition's Values is the boundary alone -- the deploy writes VALUES LESS THAN (...) / VALUES IN (...) itself,
+    // so a Values carrying its own clause passed --Validate and failed the deploy with a syntax error.
+    [TestCase("RANGE", "LESS THAN (2025)", true)]
+    [TestCase("RANGE", "less than maxvalue", true)]
+    [TestCase("RANGE", "VALUES LESS THAN (2025)", true)]
+    [TestCase("LIST", "IN (1, 2)", true)]
+    [TestCase("LIST", "in(1,2)", true)]
+    [TestCase("RANGE", "2025", false)]
+    [TestCase("RANGE", "MAXVALUE", false)]
+    [TestCase("LIST", "1, 2", false)]
+    [TestCase("RANGE COLUMNS", "'2025-01-01', MAXVALUE", false)]
+    public void APartitionValuesCarryingItsOwnClause_IsError(string method, string values, bool expected)
+    {
+        var table = new Schema.Domain.MySQL.MySqlTable
+        {
+            Name = "Sales",
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning
+            {
+                Method = method, Expression = "id",
+                Partitions = { new Schema.Domain.MySQL.MySqlPartition { Name = "p0", Values = values } }
+            },
+            Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "id", DataType = "int" } }
+        };
+
+        var finding = RunOnMy(table).SingleOrDefault(f => f.Code == "SS-PART-011");
+
+        Assert.That(finding?.Severity, Is.EqualTo(expected ? Severity.Error : (Severity?)null));
+        if (expected) Assert.That(finding!.Message, Does.Contain("p0").And.Contain(values));
+    }
+
+    // #568: MariaDB refuses a period over a column the table does not have, and a second application-time period; both
+    // passed --Validate and failed the deploy.
+    [Test]
+    public void AMariaDbPeriodOverAMissingColumn_IsError()
+    {
+        var table = MariaRates("`id`", withoutOverlaps: false, withPeriod: false);
+        table.Periods.Add(new Schema.Domain.MariaDb.TablePeriod { Name = "`app_time`", StartColumn = "`s`", EndColumn = "`NoSuchCol`" });
+
+        var finding = RunOnMaria(table).Single(f => f.Code == "SS-PER-001");
+
+        Assert.That(finding.Severity, Is.EqualTo(Severity.Error));
+        Assert.That(finding.Message, Does.Contain("NoSuchCol").And.Contain("app_time"));
+    }
+
+    [Test]
+    public void TwoMariaDbPeriods_IsError_AndOneOverExistingColumns_IsClean()
+    {
+        var two = MariaRates("`id`", withoutOverlaps: false);
+        two.Periods.Add(new Schema.Domain.MariaDb.TablePeriod { Name = "`q`", StartColumn = "`s`", EndColumn = "`e`" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunOnMaria(two).Single(f => f.Code == "SS-PER-002").Severity, Is.EqualTo(Severity.Error));
+            Assert.That(RunOnMaria(MariaRates("`id`", withoutOverlaps: false)).Where(f => f.Code.StartsWith("SS-PER")), Is.Empty);
+        });
+    }
 }

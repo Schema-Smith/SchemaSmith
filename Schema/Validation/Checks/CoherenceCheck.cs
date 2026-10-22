@@ -95,6 +95,9 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string PartitionedForeignKeyCode = "SS-PART-008";
     private const string PartitionColumnRenamedCode = "SS-PART-009";
     private const string PartitionCountMismatchCode = "SS-PART-010";
+    private const string MyPartitionValuesClauseCode = "SS-PART-011";
+    private const string PeriodColumnMissingCode = "SS-PER-001";
+    private const string SecondPeriodCode = "SS-PER-002";
     private const string MemoryOptimizedPlacementCode = "SS-XTP-001";
     private const string Category = "Coherence";
 
@@ -178,6 +181,9 @@ public sealed class CoherenceCheck : ISchemaCheck
         [PartitionedForeignKeyCode] = ErrorLevel,
         [PartitionColumnRenamedCode] = ErrorOrWarningLevel,
         [PartitionCountMismatchCode] = ErrorLevel,
+        [MyPartitionValuesClauseCode] = ErrorLevel,
+        [PeriodColumnMissingCode] = ErrorLevel,
+        [SecondPeriodCode] = ErrorLevel,
         [MemoryOptimizedPlacementCode] = ErrorLevel,
     };
 
@@ -260,6 +266,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckCompressionOptions(table, location));
             findings.AddRange(CheckPartitionPlacement(table, location));
             findings.AddRange(CheckMyPartitioning(table, location, ctx.Product));
+            findings.AddRange(CheckMariaDbPeriods(table, location));
             findings.AddRange(CheckPartitionedForeignKeys(table, location, tablesByKey));
             findings.AddRange(CheckMemoryOptimizedPlacement(table, location));
         }
@@ -1471,6 +1478,14 @@ public sealed class CoherenceCheck : ISchemaCheck
                     "Values boundary. HASH/KEY assign rows by hashing and have no boundary — drop the Values, " +
                     "or use RANGE/LIST if you meant to define boundaries.");
 
+        // #569: the deploy writes VALUES LESS THAN (...) / VALUES IN (...) around Values, so a Values carrying its own clause
+        // failed with a syntax error.
+        if (isRangeList && hasNamedPartitions)
+            foreach (var part in p.Partitions.Where(pt => ValuesClausePrefix.IsMatch(pt.Values ?? "")))
+                yield return new Finding(Severity.Error, MyPartitionValuesClauseCode, Category, tableLocation,
+                    $"Partition '{part.Name}' of table '{table.Name}' has Values '{part.Values}', which carries its own clause: " +
+                    "Values is the boundary alone (2025, MAXVALUE, 1, 2) and the deploy writes VALUES LESS THAN or VALUES IN around it.");
+
         foreach (var finding in CheckMyPartitionKeys(mySqlTable, method, p.Expression, tableLocation))
             yield return finding;
 
@@ -1511,6 +1526,25 @@ public sealed class CoherenceCheck : ISchemaCheck
                     "removing the partitioning, or keep the name.");
             }
         }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ValuesClausePrefix =
+        new(@"^\s*(LESS\s+THAN\b|VALUES\b|IN\s*\()", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    // #568: MariaDB refuses a period over a column the table does not have, and allows one application-time period per
+    // table; both failed the deploy after --Validate passed them.
+    private static IEnumerable<Finding> CheckMariaDbPeriods(Table table, string tableLocation)
+    {
+        if (table is not MariaDbTable mariaDb || mariaDb.Periods is not { Count: > 0 } periods) yield break;
+        var columns = table.Columns.Select(c => NormalizeIdentifier(c.Name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var period in periods)
+            foreach (var column in new[] { period.StartColumn, period.EndColumn }.Where(c => !columns.Contains(NormalizeIdentifier(c ?? ""))))
+                yield return new Finding(Severity.Error, PeriodColumnMissingCode, Category, tableLocation,
+                    $"Period '{NormalizeIdentifier(period.Name)}' of table '{table.Name}' names column '{NormalizeIdentifier(column ?? "")}', " +
+                    "which the table does not declare: MariaDB refuses the period.");
+        if (periods.Count > 1)
+            yield return new Finding(Severity.Error, SecondPeriodCode, Category, tableLocation,
+                $"Table '{table.Name}' declares {periods.Count} periods: MariaDB allows one application-time period per table.");
     }
 
     // InnoDB has no foreign keys on a partitioned table, on either side: MySQL refuses both with 1506, MariaDB the child
